@@ -18,7 +18,7 @@
     return url;
   }
   function navState(extra){
-    var st = { v: state.view, section: state.section, sectionType: state.sectionType, sectionLabel: state.sectionLabel, showKey: state.showKey, showSlug: state.showSlug, showSeason: state.showSeason, showEpisode: state.showEpisode, movieId: state.movieId, movieSlug: state.movieSlug, collectionId: state.collectionId, settingsSection: state.settingsSection, playTab: state.playTab, searchQuery: state.searchQuery, player: !!document.getElementById('player-overlay') };
+    var st = { v: state.view, section: state.section, sectionType: state.sectionType, sectionLabel: state.sectionLabel, showKey: state.showKey, showSlug: state.showSlug, showSeason: state.showSeason, showEpisode: state.showEpisode, movieId: state.movieId, movieSlug: state.movieSlug, collectionId: state.collectionId, settingsSection: state.settingsSection, playTab: state.playTab, sectionSystem: state.sectionSystem || '', sectionSystemSlug: state.sectionSystemSlug || null, gamePath: state.gamePath || null, searchQuery: state.searchQuery, player: !!document.getElementById('player-overlay') };
     if (extra) Object.keys(extra).forEach(function(k){ st[k]=extra[k]; });
     return st;
   }
@@ -967,8 +967,10 @@
     openPlayer._deskPlayStarted = false;
     openPlayer._deskRecoverTries = 0;
     openPlayer._deskRecovering = false;
+    if (play && play.media_kind === 'rom' && item && item.game_path) state.gamePath = item.game_path;
     pushNav({ player:true, itemId: item.id });
     var overlay = h('div', { className:'player-overlay player-simple', id:'player-overlay' });
+    if (state.gamePath) overlay.appendChild(shareButton(function(){ return routePath(); }, 'Copy link to this game'));
     overlay.appendChild(h('button', {
       className:'player-close', id:'player-back', text:'\u00d7', title:'Back',
       onClick: function(){ try { history.back(); } catch (e) { closePlayer(); } }
@@ -1299,6 +1301,7 @@
 
   function closePlayer(opts){
     opts = opts || {};
+    state.gamePath = null;
     if (!opts.preserveLobby) {
       try { lobbyEndHostSession(); } catch (eLobbyEnd) {}
     }
@@ -1350,6 +1353,7 @@
     state.showSeason = st.showSeason != null ? st.showSeason : null; state.showEpisode = st.showEpisode != null ? st.showEpisode : null;
     if (st.settingsSection != null) state.settingsSection = st.settingsSection;
     if (st.playTab != null) state.playTab = st.playTab;
+    if (st.sectionSystem != null) { state.sectionSystem = st.sectionSystem; state.sectionSystemSlug = st.sectionSystemSlug || null; }
     if (st.searchQuery != null) state.searchQuery = st.searchQuery;
     render();
     _navSilent = false;
@@ -2870,7 +2874,30 @@ try {
       }
     } catch (eCss) {}
 
-    bootInstance();
+    /* Check the ROM download before starting EmulatorJS (a failed fetch is a black screen).
+       If nginx cannot serve it (folder access, X-Accel), ask the server to stream it through PHP. */
+    function probeRom(url){
+      if (typeof fetch !== 'function') return Promise.resolve({ ok:true });
+      return fetch(url, { credentials:'same-origin', headers:{ Range:'bytes=0-15' }, cache:'no-store' }).then(function(r){
+        try { if (r.body && r.body.cancel) r.body.cancel(); } catch (eC) {}
+        return { ok: R.romResponseOk(r.status, r.headers.get('Content-Type')), status: r.status, type: r.headers.get('Content-Type') || '' };
+      }).catch(function(e){ return { ok:false, status:0, type:'', error:String(e && e.message || e) }; });
+    }
+    probeRom(gameUrl).then(function(first){
+      if (session !== _emuSessionId) return;
+      if (first.ok) { bootInstance(); return; }
+      var direct = R.withDirect(gameUrl);
+      probeRom(direct).then(function(second){
+        if (session !== _emuSessionId) return;
+        if (second.ok) {
+          gameUrl = direct;
+          if (play && play.bios_url) play.bios_url = R.withDirect(play.bios_url);
+          bootInstance();
+          return;
+        }
+        fail('The game file could not be loaded (' + (second.status ? 'HTTP ' + second.status : (second.error || 'network error')) + (second.type && second.status ? ', ' + second.type.split(';')[0] : '') + '). Check that the games folder is still available to the server, then try again.');
+      });
+    });
   }
 
   var APP_VERSION = window.__STREAM_VERSION__;
@@ -2926,7 +2953,8 @@ try {
   var R = window.VaultcastRoutes;
   function routePath(extra){
     extra = extra || {};
-    return R.build({ view: state.view, movieSlug: state.movieSlug, movieId: state.movieId, showSlug: state.showSlug, showKey: state.showKey,
+    if (state.gamePath && !extra.live) return R.build({ view:'play', gamePath: state.gamePath });
+    return R.build({ systemSlug: state.view === 'play' && state.sectionSystem ? (state.sectionSystemSlug || null) : null, view: state.view, movieSlug: state.movieSlug, movieId: state.movieId, showSlug: state.showSlug, showKey: state.showKey,
       season: state.showSeason, episode: state.showEpisode, liveCh: extra.live || null, playTab: state.playTab, section: state.section,
       collectionId: state.collectionId, searchQuery: state.searchQuery, settingsSection: state.settingsSection, adminTab: state.adminTab });
   }
@@ -2955,11 +2983,24 @@ try {
       });
     }
     if (r.view === 'live') { state.view = 'live'; if (r.liveCh) state._openLiveCh = r.liveCh; return Promise.resolve(); }
-    if (r.view === 'play') {
-      state.view = 'play'; state.playTab = r.playTab;
+    if (r.view === 'play' || r.view === 'game') {
+      state.view = 'play'; state.playTab = r.playTab || 'games';
       var rs = romsSection();
       if (rs) { state.section = rs.id; state.sectionType = 'roms'; state.sectionLabel = rs.label; }
-      return Promise.resolve();
+      state.sectionSystem = ''; state.sectionSystemSlug = null;
+      if (!r.resolve) return Promise.resolve();
+      return api('/resolve?path=' + encodeURIComponent('/' + rel.split('?')[0])).then(function(j){
+        if (!j || !j.ok) { toast((j && j.error) || 'Page not found', { kind:'bad' }); return; }
+        if (j.view === 'games_system') { state.sectionSystem = j.system || ''; state.sectionSystemSlug = j.system ? j.system_slug : null; return; }
+        if (j.view === 'game' && j.item_id) {
+          return api('/items/' + encodeURIComponent(j.item_id) + '?synopsis=0').then(function(d){
+            var it = d && (d.item || d);
+            if (!it || !it.id) { toast('Game not found', { kind:'bad' }); return; }
+            if (it.system) { state.sectionSystem = it.system; state.sectionSystemSlug = String(it.game_path || '').split('/')[0] || null; }
+            state._openGameItem = it;
+          });
+        }
+      });
     }
     if (r.view === 'settings') {
       state.view = 'settings';
@@ -4267,7 +4308,7 @@ try {
       elEpg.innerHTML = '';
       if (lp.guideOpen) paintGuideList();
       if (lp.epgOpen) paintFullEpg();
-      try { history.replaceState(Object.assign({}, history.state || {}, { live: lp.ch.id }), '', location.href); } catch (e) {}
+      try { history.replaceState(Object.assign({}, history.state || {}, { live: lp.ch.id }), '', navUrl({ live: lp.ch.id })); } catch (e) {}
       if (lp.ch.kind === 'iptv') tuneIptv(); else tuneRelay(0);
       wake();
     }
@@ -5103,6 +5144,7 @@ try {
   }
   function selectConsoleSystem(id, system){
     state.sectionSystem = system || '';
+    state.sectionSystemSlug = system ? ((state._systemSlugs || {})[system] || null) : null;
     state.sectionLetter = '';
     state.sectionPage = 1;
     loadSection(id, state.sectionQ || '', { system: state.sectionSystem });
@@ -5133,6 +5175,11 @@ try {
 
     function paintSectionPayload(j){
       state.sectionLoadingMore = false;
+      if (j && j.system_slugs) {
+        state._systemSlugs = Object.assign(state._systemSlugs || {}, j.system_slugs);
+        if (state.sectionSystem && !state.sectionSystemSlug && j.system_slugs[state.sectionSystem]) { state.sectionSystemSlug = j.system_slugs[state.sectionSystem]; replaceNav(); }
+        else if (state.view === 'play' && state.sectionSystem) syncUrl();
+      }
       var root = $('#section-view');
       if (!root) return;
       var total = j.total||0;
@@ -12299,6 +12346,8 @@ function viewCollectionDetail(){
         if (state.view === 'search' && state.searchQuery) { runGlobalSearch(state.searchQuery); replaceNav(); return; }
         _navSilent = true; render(); _navSilent = false;
         replaceNav();
+        /* Deep link to a game: list page underneath (so Back/close returns to it), then start the game. */
+        if (state._openGameItem) { var g = state._openGameItem; state._openGameItem = null; playItem(g); }
       });
 });
   }

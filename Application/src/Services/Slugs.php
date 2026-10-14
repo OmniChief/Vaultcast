@@ -11,7 +11,7 @@ declare(strict_types=1);
 final class Slugs
 {
     const DOC = 'slugs';
-    const KINDS = ['movie', 'show'];
+    const KINDS = ['movie', 'show', 'game'];
 
     /** @var array|null kind => slug => id */
     private static $reg = null;
@@ -106,6 +106,29 @@ final class Slugs
     {
         $b = self::base($title);
         return self::forId('show', $showKey, $b, $year ? self::base($title, $year) : null);
+    }
+
+    /** Readable console names by EmulatorJS core, used when the ROM folder gives no system name. */
+    const CORE_SYSTEMS = ['segaMD' => 'genesis', 'nes' => 'nes', 'snes' => 'snes', 'n64' => 'n64', 'gb' => 'gameboy',
+        'gba' => 'gba', 'nds' => 'nds', 'psx' => 'playstation', 'segaGG' => 'gamegear', 'sms' => 'mastersystem',
+        'sega32x' => 'sega-32x', 'segaCD' => 'sega-cd', 'pce' => 'pc-engine', '3ds' => '3ds'];
+
+    /** /games/<system> slug: from the console folder name, else the emulator core, else "games". */
+    public static function systemSlug(?string $system, ?string $core = null): string
+    {
+        $s = self::slugify((string)$system);
+        if ($s !== '' && !in_array($s, ['roms', 'rom', 'games', 'game', 'lobby'], true)) return $s;
+        if ($core !== null && isset(self::CORE_SYSTEMS[$core])) return self::CORE_SYSTEMS[$core];
+        return 'games';
+    }
+
+    /** Stable "<system>/<game>" path for a ROM item (/games/<system>/<game>). */
+    public static function game(array $it): string
+    {
+        $sys = self::systemSlug($it['system'] ?? null, $it['emu_core'] ?? null);
+        $b = self::slugify((string)($it['title'] ?? ''));
+        if ($b === '') $b = 'untitled';
+        return self::forId('game', (string)($it['id'] ?? ''), $sys . '/' . $b);
     }
 
     /** slug (or raw id) => id */

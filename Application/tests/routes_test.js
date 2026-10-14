@@ -43,5 +43,22 @@ check(R.absolute('movies/a', { origin:'https://h', base:'/rk/' }) === 'https://h
 check(R.absolute('movies/a', { publicBase:'https://media.example.com/', origin:'http://198.51.100.2', base:'/' }) === 'https://media.example.com/movies/a', 'public base URL wins');
 check(R.absolute('movies/a', { publicBase:'not a url', origin:'http://h', base:'/' }) === 'http://h/movies/a', 'invalid public base is ignored');
 
+// Games: clean, shareable routes
+check(R.build({ view:'play', gamePath:'genesis/sonic-the-hedgehog-2' }) === 'games/genesis/sonic-the-hedgehog-2', 'game path');
+check(R.build({ view:'play', systemSlug:'genesis' }) === 'games/genesis', 'console list path');
+check(R.build({ view:'play', playTab:'lobby', gamePath:'x/y' }) === 'games/lobby', 'lobby wins over game');
+check(R.build({ view:'play', gamePath:'snes/a b' }) === 'games/snes/a%20b', 'game path segments are encoded');
+check(eq(R.parse('games/genesis/sonic-the-hedgehog-2'), { view:'game', system:'genesis', slug:'sonic-the-hedgehog-2', resolve:true }), 'parse game');
+check(eq(R.parse('games/genesis'), { view:'play', playTab:'games', systemSlug:'genesis', resolve:true }), 'parse console list');
+check(eq(R.parse('games'), { view:'play', playTab:'games' }) && eq(R.parse('games/lobby'), { view:'play', playTab:'lobby' }), 'games and lobby unchanged');
+check(R.parse(R.build({ view:'play', gamePath:'genesis/sonic-2' })).slug === 'sonic-2', 'game route round-trips');
+check(R.absolute('games/genesis/sonic-2', { origin:'http://192.0.2.5:9999', base:'/' }) === 'http://192.0.2.5:9999/games/genesis/sonic-2', 'game share link uses the current origin');
+
+// ROM delivery helpers
+check(R.withDirect('/api/stream/rom/abc/Sonic.md') === '/api/stream/rom/abc/Sonic.md?direct=1', 'direct=1 added to a path URL');
+check(R.withDirect('/api/stream/play?t=1') === '/api/stream/play?t=1&direct=1' && R.withDirect('/x?direct=1') === '/x?direct=1', 'direct=1 added once');
+check(R.romResponseOk(206, 'application/octet-stream') && R.romResponseOk(200, ''), 'ROM response accepted');
+check(!R.romResponseOk(403, 'text/html') && !R.romResponseOk(404, 'application/octet-stream') && !R.romResponseOk(200, 'text/html; charset=UTF-8') && !R.romResponseOk(200, 'application/json'), 'errors and HTML/JSON pages rejected');
+
 console.log(fails ? fails + ' failed' : 'all passed');
 process.exit(fails ? 1 : 0);

@@ -52,7 +52,7 @@ class Stream {
             }
             $relForCore = (string)($item['rel'] ?? basename($path));
             $extForCore = strtolower((string)($item['ext'] ?? pathinfo($path, PATHINFO_EXTENSION)));
-            $core = Catalogue::guessEmuCore($extForCore, $relForCore);
+            $core = Catalogue::guessEmuCore($extForCore, $relForCore, $path);
             if ($core) $item['emu_core'] = $core;
         }
 

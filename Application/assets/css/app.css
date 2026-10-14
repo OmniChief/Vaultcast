@@ -316,6 +316,7 @@ body.mode-tv .card:focus {
 /* simple DirectPlay player — no fancy overlay chrome */
 .player-overlay.player-simple { padding:0; }
 .player-overlay.player-simple .player-close { position: absolute; z-index: 10; color: #fff; font-size: 28px; cursor: pointer; }
+.player-overlay.player-simple > .share-btn { position: absolute; z-index: 10; top: 12px; right: 72px; }
 .player-overlay.player-simple video,
 .player-overlay.player-simple audio {
   width:100%; height:100%; max-height:none; flex:1; background:#000; display:block;
