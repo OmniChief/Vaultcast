@@ -1037,7 +1037,15 @@
     });
     media.addEventListener('playing', function(){ openPlayer._deskPlayStarted = true; openPlayer._deskRecoverTries = 0; });
     media.addEventListener('waiting', function(){ if (openPlayer._deskPlayStarted) toast('Buffering…'); });
+    var directTried = false;
     media.addEventListener('error', function(){
+      /* Failed before playing: retry once with PHP delivery (nginx could not serve the file). */
+      var cur = media.currentSrc || media.src || '';
+      if (!openPlayer._deskPlayStarted && !directTried && cur.indexOf('/stream/play') >= 0 && cur.indexOf('direct=1') < 0) {
+        directTried = true;
+        try { media.src = cur + (cur.indexOf('?') >= 0 ? '&' : '?') + 'direct=1'; media.play(); } catch (eD) {}
+        return;
+      }
       /* soft mid-play recover (token refresh + seek) before convert toast */
       if (openPlayer._deskPlayStarted && !openPlayer._deskRecovering && (openPlayer._deskRecoverTries||0) < 3) {
         openPlayer._deskRecovering = true;
@@ -1046,6 +1054,7 @@
         toast('Reconnecting stream…');
         api('/items/'+item.id+'/play', { method:'POST', body: {} }).then(function(nj){
           var nsrc = (nj && nj.ok && nj.url) ? streamPlayUrl(nj.url) : src;
+          if (directTried && nsrc && nsrc.indexOf('direct=1') < 0) nsrc += (nsrc.indexOf('?') >= 0 ? '&' : '?') + 'direct=1';
           try { media.src = nsrc; } catch (e1) {}
           var done = false;
           function resume(){
