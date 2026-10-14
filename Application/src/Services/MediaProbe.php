@@ -69,6 +69,7 @@ class MediaProbe {
             'audio_count' => count($tracks),
             'multi_audio' => count($tracks) > 1,
             'video_codec' => self::codec($data ?? []),
+            'duration' => ($d = (float)($data['format']['duration'] ?? 0)) > 0 ? $d : null,
             'probed' => $data !== null,
             'cached' => $data['_cached'] ?? false,
         ];
