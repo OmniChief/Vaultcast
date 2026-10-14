@@ -1457,7 +1457,8 @@ class Catalogue {
             }
             if ($name !== $showName) continue;
             $it = self::enrichItemArt($it);
-            $ep = self::publicItem($it);
+            // Show pages list every episode: never ffprobe here (one probe per episode blocked the worker).
+            $ep = self::publicItem($it, true, false);
             $ep['show_key'] = $meta['show_key'];
             $ep['available'] = true;
             $ep['status'] = 'available';
@@ -2101,7 +2102,7 @@ class Catalogue {
         return $continue;
     }
 
-    public static function publicItem(array $it, bool $checkPosterFiles = true): array {
+    public static function publicItem(array $it, bool $checkPosterFiles = true, bool $probe = true): array {
         $it = self::enrichItemArt($it);
         $hasPoster = !empty($it['poster']);
         $type = $it['type'] ?? '';
@@ -2169,7 +2170,7 @@ class Catalogue {
             'system' => $it['system'] ?? null,
             'has_poster' => $hasPoster,
             'kind' => 'item',
-            'needs_convert' => self::needsConvert($it, $checkPosterFiles),
+            'needs_convert' => self::needsConvert($it, $checkPosterFiles && $probe),
         ];
     }
 
