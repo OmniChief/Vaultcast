@@ -206,13 +206,11 @@ final class Installer
             $sections = [];
             foreach (['movies' => 'Films', 'tv' => 'TV shows', 'anime' => 'Anime', 'music' => 'Music', 'roms' => 'Games'] as $type => $label) {
                 if (empty($input['enable_' . $type])) continue;
-                $path = trim((string)($input['path_' . $type] ?? ''));
-                if (strlen($path) >= 2 && $path[0] === '"' && substr($path, -1) === '"') $path = substr($path, 1, -1);
-                clearstatcache();
-                $real = $path !== '' ? \Vaultcast\Paths::real($path) : false;
-                if (!$real || !is_dir($real) || !is_readable($real)) {
-                    throw new SetupInputException($label . ': cannot open this folder. Enter its full path on the server. For a network folder, use its network path and ensure the server has access to the share. Your entries have been kept; correct the path and try again.', 2);
+                $check = \Vaultcast\Paths::check((string)($input['path_' . $type] ?? ''));
+                if (!$check['ok']) {
+                    throw new SetupInputException($label . ': ' . $check['message'] . ' Your entries have been kept; correct the path and try again.', 2);
                 }
+                $real = $check['path'];
                 $sections[] = ['id' => $type, 'label' => $label, 'type' => $type, 'path' => str_replace('\\', '/', $real), 'enabled' => true, 'order' => count($sections), 'exclude_paths' => []];
             }
             // An empty library is valid; folders can be added in Settings later.

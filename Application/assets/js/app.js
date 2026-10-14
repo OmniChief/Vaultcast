@@ -7016,6 +7016,41 @@ try {
     return wrap;
   }
 
+  // Server-side folder picker for library paths: lists drives/subfolders via /admin/folders.
+  function folderPicker(inputId){
+    var panel = h('div', { className:'folder-picker', hidden:true });
+    function load(path){
+      panel.innerHTML = '';
+      panel.appendChild(h('p', { className:'muted', text:'Loading folders…' }));
+      api('/admin/folders?path='+encodeURIComponent(path||'')).then(function(r){
+        panel.innerHTML = '';
+        var here = r.path || '';
+        panel.appendChild(h('div', { className:'folder-picker-path', text: here || 'Drives and roots' }));
+        if (!r.ok) panel.appendChild(h('p', { className:'folder-picker-error', role:'alert', text: r.error || 'Cannot open this folder.' }));
+        var list = h('ul', { className:'folder-picker-list' });
+        if (r.parent) list.appendChild(h('li', {}, [ h('button', { type:'button', className:'btn ghost', text:'↑ Up', onClick: function(){ load(r.parent); } }) ]));
+        if (here && r.parent == null) list.appendChild(h('li', {}, [ h('button', { type:'button', className:'btn ghost', text:'↑ Drives', onClick: function(){ load(''); } }) ]));
+        (r.folders||[]).forEach(function(f){
+          list.appendChild(h('li', {}, [ h('button', { type:'button', className:'btn ghost', text:f.name, onClick: function(){ load(f.path); } }) ]));
+        });
+        if (r.ok && here && !(r.folders||[]).length) list.appendChild(h('li', { className:'muted', text:'No subfolders.' }));
+        panel.appendChild(list);
+        if (r.truncated) panel.appendChild(h('p', { className:'muted', text:'Showing the first 1000 folders.' }));
+        panel.appendChild(h('div', { className:'row-actions' }, [
+          h('button', { type:'button', className:'btn primary', text:'Use this folder', disabled: !(r.ok && here), onClick: function(){
+            var input = $('#'+inputId); if (input) input.value = here; panel.hidden = true;
+          }}),
+          h('button', { type:'button', className:'btn ghost', text:'Close', onClick: function(){ panel.hidden = true; } })
+        ]));
+      });
+    }
+    var button = h('button', { type:'button', className:'btn ghost', text:'Browse server folders…', onClick: function(){
+      panel.hidden = !panel.hidden;
+      if (!panel.hidden) load((($('#'+inputId)||{}).value||'').trim());
+    }});
+    return h('div', { className:'stack' }, [ h('div', { className:'row-actions' }, [ button ]), panel ]);
+  }
+
   function renderSectionsEditor(s){
     var wrap = h('div', { className:'stack' });
     wrap.appendChild(h('p', { className:'muted', text:'Configure library folders (Movies, TV, Anime, Disney, ROMs, …). Changes save to settings; run Scan afterwards.' }));
@@ -7030,6 +7065,7 @@ try {
           ]),
           fieldEl('sec_label_'+idx, 'Label', sec.label||''),
           fieldEl('sec_path_'+idx, 'Path', sec.path||''),
+          folderPicker('sec_path_'+idx),
           h('label', {}, ['Media type', h('select', {id:'sec_type_'+idx}, [['movies','Films'],['tv','TV shows'],['anime','Anime'],['music','Music'],['roms','Games'],['disney','Films (legacy collection)']].map(function(t){return h('option',{value:t[0],text:t[1],selected:sec.type===t[0]});}))]),
           fieldEl('sec_order_'+idx, 'Order', sec.order||0, 'number'),
           fieldEl('sec_excl_'+idx, 'Exclude paths (comma)', (sec.exclude_paths||[]).join(', ')),

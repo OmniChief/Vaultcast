@@ -16,6 +16,13 @@ if ($path === '/admin/player-assets') {
         json_error($error->getMessage(), 400);
     }
 }
+// Folder picker for library paths (admin only: every /admin/ route passes Auth::requireAdmin()).
+if ($path === '/admin/folders' && $method === 'GET') {
+    json_out(\Vaultcast\Paths::browse((string)($_GET['path'] ?? '')));
+}
+if ($path === '/admin/folders/check' && $method === 'GET') {
+    json_out(\Vaultcast\Paths::check((string)($_GET['path'] ?? '')));
+}
 if ($path === '/admin/settings' && $method === 'GET') {
     $out = Store::settings();
     // Conversion threads: stored value (existing installs: 1) and this server's CPU count as the limit.
@@ -44,6 +51,20 @@ if ($path === '/admin/settings' && $method === 'POST') {
             $t = Convert::validThreadCount($b['convert']['threads'], $max);
             if ($t === null) json_error('Conversion threads must be a whole number from 1 to ' . $max . ' (this server\'s CPU count).');
             $b['convert']['threads'] = $t;
+        }
+    }
+    if (isset($b['sections']) && is_array($b['sections'])) {
+        // Validate only new or changed folders, so an offline share does not block other edits.
+        $known = [];
+        foreach (Store::settings()['sections'] ?? [] as $old) $known[(string)($old['id'] ?? '')] = (string)($old['path'] ?? '');
+        foreach ($b['sections'] as $i => $sec) {
+            if (!is_array($sec)) continue;
+            $raw = (string)($sec['path'] ?? '');
+            if (($known[(string)($sec['id'] ?? '')] ?? null) === $raw) continue;
+            if (trim($raw) === '' && empty($sec['enabled'])) continue;
+            $check = \Vaultcast\Paths::check($raw);
+            if (!$check['ok']) json_error(((string)($sec['label'] ?? 'Library')) . ': ' . $check['message'], 400);
+            $b['sections'][$i]['path'] = $check['path'];
         }
     }
     $cur = Store::settings();
