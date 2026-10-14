@@ -44,6 +44,13 @@ Keep the new password in a root-only (mode 600) client option file.
 - **FFmpeg / ffprobe:** TOS already provides both, and Vaultcast uses them as they are.
 - Vaultcast needs no cron jobs or background workers.
 
+## Media folder access (broad)
+TOS enforces shared-folder permissions through its own ACL system (`tmacl`), so standard `setfacl` grants don't work. By default the installer adds the `vaultcast` user to the TOS **admin** group, after backing up `/etc/group` to `$VAULTCAST_DIR/etc/`. That gives Vaultcast read/write access to **every share that grants the admin group**, which is broad access. Folders that don't grant admin stay inaccessible.
+
+To limit access, set `VAULTCAST_ADMIN_GROUP=no`. Then grant individual shares to a TOS user in Control Panel > Shared Folders and run the services as that user.
+
+To undo: `gpasswd -d vaultcast admin`, then `systemctl restart vaultcast-php-fpm vaultcast-netplay`.
+
 Rerunning the installer on an existing installation only adds missing optional features.
 
 ## Uninstall

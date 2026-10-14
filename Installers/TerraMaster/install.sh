@@ -276,5 +276,17 @@ else
         echo 'and rerun, or enter it in Settings > Downloads. Transmission settings were not changed.'
     fi
 fi
+# ---- Media access: TOS enforces share permissions through its own ACL system (tmacl), so POSIX
+# setfacl grants don't take effect. Adding the service user to the TOS "admin" group gives it
+# read/write on every share that grants admin. This is BROAD access (all admin-granted shares).
+# Opt out with VAULTCAST_ADMIN_GROUP=no and grant shares in TOS Control Panel instead.
+if [ "${VAULTCAST_ADMIN_GROUP:-yes}" = yes ] && getent group admin >/dev/null; then
+    if id -nG "$U" | tr ' ' '\n' | grep -qx admin; then echo "$U is already in group admin."
+    else
+        cp -a /etc/group "$APP/etc/group.backup-$(date +%Y%m%d-%H%M%S)"
+        usermod -aG admin "$U" && echo "Added $U to group admin (read/write on admin-granted shares)."
+        systemctl restart vaultcast-netplay.service 2>/dev/null || true
+    fi
+fi
 systemctl restart vaultcast-php-fpm.service
 echo "Open http://<your-nas>:$PORT to finish setup."
