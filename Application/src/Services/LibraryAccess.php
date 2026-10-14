@@ -28,7 +28,7 @@ final class LibraryAccess {
             return self::failure('The folder does not exist or Vaultcast cannot open it.');
         }
         // Network shares use their own share permissions; leave their ACLs alone.
-        if (str_starts_with($folder, '\\\\')) return ['ok' => true];
+        if (strncmp($folder, '\\\\', 2) === 0) return ['ok' => true];
         $icacls = (getenv('SystemRoot') ?: 'C:\\Windows') . '\\System32\\icacls.exe';
         $process = proc_open([$icacls, $folder, '/grant', '*S-1-5-19:(OI)(CI)RX', '/C', '/Q'],
             [0 => ['file', 'NUL', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, null, null, ['bypass_shell' => true]);
