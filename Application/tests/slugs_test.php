@@ -50,6 +50,27 @@ $r = UrlRoutes::resolve('/tvshows/the-office/season-0/abcdef0123456789', $lookup
 check($r['season'] === 0 && $r['item_id'] === 'abcdef0123456789' && $r['episode'] === null, 'unnumbered special by item id');
 check(UrlRoutes::resolve('/tvshows/the-office', $lookup)['season'] === null, 'show only');
 
+// games: /games/<system>/<game> and /games/<system>
+Slugs::reset();
+check(Slugs::systemSlug('Genesis') === 'genesis' && Slugs::systemSlug('Sega Mega Drive') === 'sega-mega-drive', 'console slug from the folder name');
+check(Slugs::systemSlug('ROMs', 'segaMD') === 'genesis' && Slugs::systemSlug('', 'snes') === 'snes' && Slugs::systemSlug(null, null) === 'games', 'console slug from the core when the folder is generic');
+$g = Slugs::game(['id' => 'ffff000000000006', 'title' => 'Sonic The Hedgehog 2', 'system' => 'Genesis', 'emu_core' => 'segaMD']);
+check($g === 'genesis/sonic-the-hedgehog-2', 'game path');
+$g2 = Slugs::game(['id' => 'ffff000000000007', 'title' => 'Sonic the Hedgehog 2', 'system' => 'Genesis']);
+check($g2 === 'genesis/sonic-the-hedgehog-2-2', 'duplicate game gets -2');
+check(Slugs::game(['id' => 'ffff000000000006', 'title' => 'Renamed', 'system' => 'Genesis']) === $g, 'game path is stable');
+check(Slugs::game(['id' => 'ffff000000000008', 'title' => 'Sonic The Hedgehog 2', 'system' => 'Game Gear']) === 'game-gear/sonic-the-hedgehog-2', 'same title on another console is separate');
+$glookup = function ($k, $s) { if ($k === 'system') return $s === 'genesis' ? 'Genesis' : null; return Slugs::resolve($k, $s); };
+$r = UrlRoutes::resolve('/games/genesis/sonic-the-hedgehog-2', $glookup);
+check($r['ok'] && $r['view'] === 'game' && $r['item_id'] === 'ffff000000000006', 'resolve /games/<system>/<game>');
+check(UrlRoutes::resolve('/games/Genesis/SONIC-THE-HEDGEHOG-2', $glookup)['item_id'] === 'ffff000000000006', 'game routes are case-insensitive');
+$r = UrlRoutes::resolve('/games/genesis', $glookup);
+check($r['ok'] && $r['view'] === 'games_system' && $r['system'] === 'Genesis' && $r['system_slug'] === 'genesis', 'resolve /games/<system>');
+check(!UrlRoutes::resolve('/games/genesis/missing', $glookup)['ok'] && !UrlRoutes::resolve('/games/nope', $glookup)['ok'], 'missing game or console');
+check(UrlRoutes::resolve('/games/lobby', $glookup)['view'] === 'unknown', 'lobby is not a console');
+Slugs::flush();
+check(isset($doc['game']['genesis/sonic-the-hedgehog-2']), 'game slugs are persisted');
+
 // dev router + server fallback config
 $router = file_get_contents(__DIR__ . '/../router.php');
 check(strpos($router, "require __DIR__ . '/index.php'") !== false && strpos($router, 'return false') !== false, 'php -S router falls back to index.php and serves static files');

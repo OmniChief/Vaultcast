@@ -577,7 +577,7 @@ class Catalogue {
                 : (in_array($ext, $audioExt, true) ? 'audio' : 'rom'),
         ];
         if ($item['media_kind'] === 'rom') {
-            $item['emu_core'] = self::guessEmuCore($ext, $rel);
+            $item['emu_core'] = self::guessEmuCore($ext, $rel, $full);
             $item['system'] = self::guessSystemFolder($rel);
         }
         $poster = self::findPoster(dirname($full));
@@ -814,15 +814,52 @@ class Catalogue {
      * prefer folder/system path over extension for core.
      * Mega Drive and PlayStation both use .bin — PS1/playstation/psx → psx; mega drive/genesis → segaMD.
      */
-    public static function guessEmuCore(string $ext, string $rel): ?string {
+    public static function guessEmuCore(string $ext, string $rel, ?string $full = null): ?string {
         $folder = strtolower(str_replace('\\', '/', $rel));
         $fromFolder = self::guessEmuCoreFromFolder($folder);
         if ($fromFolder) return $fromFolder;
         $map = self::$romSystems;
         $extCore = (isset($map[$ext]) && $map[$ext]) ? $map[$ext] : null;
         if ($extCore) return $extCore;
+        if ($ext === 'zip' && $full !== null) {
+            // Zipped ROM in a folder with no console name: use the extension of the file inside.
+            foreach (self::zipEntryNames($full) as $name) {
+                $inner = strtolower(pathinfo($name, PATHINFO_EXTENSION));
+                if ($inner !== '' && !empty($map[$inner])) return $map[$inner];
+            }
+        }
         if ($ext === 'zip' || $ext === '7z') return 'nes';
         return null;
+    }
+
+    /** File names in a zip's central directory (pure PHP, reads only the tail of the file). */
+    public static function zipEntryNames(string $path, int $max = 32): array {
+        $fh = @fopen($path, 'rb');
+        if (!$fh) return [];
+        $names = [];
+        try {
+            $size = (int)@filesize($path);
+            if ($size < 22) return [];
+            $tail = min($size, 65557);
+            fseek($fh, $size - $tail);
+            $buf = (string)fread($fh, $tail);
+            $eocd = strrpos($buf, "PK\x05\x06");
+            if ($eocd === false || strlen($buf) < $eocd + 22) return [];
+            $e = unpack('vdisk/vcd_disk/ventries_disk/ventries/Vcd_size/Vcd_offset', substr($buf, $eocd + 4, 16));
+            if (!$e || $e['cd_offset'] <= 0 || $e['cd_offset'] >= $size) return [];
+            fseek($fh, $e['cd_offset']);
+            $cd = (string)fread($fh, min((int)$e['cd_size'], 1048576));
+            $pos = 0;
+            while (count($names) < $max && strlen($cd) >= $pos + 46 && substr($cd, $pos, 4) === "PK\x01\x02") {
+                $h = unpack('vnlen/velen/vclen', substr($cd, $pos + 28, 6));
+                $name = substr($cd, $pos + 46, $h['nlen']);
+                if ($name !== '' && substr($name, -1) !== '/') $names[] = $name;
+                $pos += 46 + $h['nlen'] + $h['elen'] + $h['clen'];
+            }
+        } finally {
+            fclose($fh);
+        }
+        return $names;
     }
 
     /** Prefer specific Sega folder names before generic nes substring matches. */
@@ -2122,6 +2159,7 @@ class Catalogue {
             'show_key' => $isShowEp ? self::showKey($it['section'] ?? '', $it['show']) : null,
             // Clean URLs: /movies/<slug>, /tvshows/<show_slug>/season-<n>/episode-<m>
             'slug' => $isMovie ? Slugs::movie(['id' => $it['id'], 'title' => $displayTitle, 'year' => $it['year'] ?? null]) : null,
+            'game_path' => ($it['media_kind'] ?? '') === 'rom' ? Slugs::game(['id' => $it['id'], 'title' => $displayTitle, 'system' => $it['system'] ?? null, 'emu_core' => $it['emu_core'] ?? null]) : null,
             'show_slug' => $isShowEp ? Slugs::show(self::showKey($it['section'] ?? '', $it['show']), self::fixText((string)$it['show'])) : null,
             'ext' => $it['ext'],
             'size' => $it['size'],
@@ -2168,7 +2206,7 @@ class Catalogue {
                     $cueToBin++;
                 }
             }
-            $core = self::guessEmuCore($ext, $rel !== '' ? $rel : $path);
+            $core = self::guessEmuCore($ext, $rel !== '' ? $rel : $path, $path);
             if ($core && ($it['emu_core'] ?? null) !== $core) {
                 $it['emu_core'] = $core;
                 $coreFixed++;

@@ -20,7 +20,12 @@
       return p;
     }
     if (v === 'live') return st.liveCh ? 'live/' + enc(st.liveCh) : 'live';
-    if (v === 'play') return st.playTab === 'lobby' ? 'games/lobby' : 'games';
+    if (v === 'play') {
+      if (st.playTab === 'lobby') return 'games/lobby';
+      if (st.gamePath) return 'games/' + String(st.gamePath).split('/').map(enc).join('/');
+      if (st.systemSlug) return 'games/' + enc(st.systemSlug);
+      return 'games';
+    }
     if (v === 'section' && st.section) return 'library/' + enc(st.section);
     if (v === 'collection' && st.collectionId) return 'collections/' + enc(st.collectionId);
     if (v === 'collections') return 'collections';
@@ -50,7 +55,11 @@
     if (head === 'tvshows' && parts[1]) return { view:'show', slug:parts[1], resolve:true };
     if (head === 'tvshows') return { view:'home' };
     if (head === 'live') return { view:'live', liveCh: parts[1] || null };
-    if (head === 'games') return { view:'play', playTab: parts[1] === 'lobby' ? 'lobby' : 'games' };
+    if (head === 'games') {
+      if (parts[1] === 'lobby' || !parts[1]) return { view:'play', playTab: parts[1] === 'lobby' ? 'lobby' : 'games' };
+      if (parts[2]) return { view:'game', system: parts[1], slug: parts[2], resolve:true };
+      return { view:'play', playTab:'games', systemSlug: parts[1], resolve:true };
+    }
     if (head === 'library' && parts[1]) return { view:'section', section:parts[1] };
     if (head === 'collections') return parts[1] ? { view:'collection', collectionId:parts[1] } : { view:'collections' };
     if (head === 'search') return { view:'search', searchQuery: params.q || '' };
@@ -97,7 +106,23 @@
     return prefix + String(path || '').replace(/^\/+/, '');
   }
 
-  var api = { build: build, parse: parse, legacyHashToPath: legacyHashToPath, relative: relative, absolute: absolute };
+  /** Same URL asking the server to stream through PHP instead of nginx (X-Accel). */
+  function withDirect(url){
+    url = String(url || '');
+    if (/[?&]direct=1(?:&|#|$)/.test(url)) return url;
+    var hash = '', hi = url.indexOf('#');
+    if (hi >= 0) { hash = url.slice(hi); url = url.slice(0, hi); }
+    return url + (url.indexOf('?') >= 0 ? '&' : '?') + 'direct=1' + hash;
+  }
+
+  /** Did a ROM request return the ROM (not an error or an HTML/JSON page)? */
+  function romResponseOk(status, contentType){
+    if (status !== 200 && status !== 206) return false;
+    var t = String(contentType || '').toLowerCase();
+    return !(t.indexOf('text/html') === 0 || t.indexOf('application/json') === 0);
+  }
+
+  var api = { withDirect: withDirect, romResponseOk: romResponseOk, build: build, parse: parse, legacyHashToPath: legacyHashToPath, relative: relative, absolute: absolute };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.VaultcastRoutes = api;
 })(this);

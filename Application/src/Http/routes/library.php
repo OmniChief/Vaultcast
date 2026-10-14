@@ -7,6 +7,18 @@ if ($path === '/resolve' && $method === 'GET') {
         if ($id !== null) return $id;
         if ($kind === 'movie' && preg_match('/^[a-f0-9]{8,64}$/', $slug) && Catalogue::item($slug)) return $slug;
         if ($kind === 'show' && preg_match('/^[a-f0-9]{8,64}$/', $slug)) return $slug;
+        if ($kind === 'game') {
+            // raw id fallback: /games/<anything>/<itemId>
+            $last = substr($slug, (int)strrpos($slug, '/') + 1);
+            if (preg_match('/^[a-f0-9]{8,64}$/', $last) && Catalogue::item($last)) return $last;
+        }
+        if ($kind === 'system') {
+            if ($slug === 'games') return '';
+            foreach (Catalogue::get()['items'] ?? [] as $it) {
+                if (($it['media_kind'] ?? '') !== 'rom') continue;
+                if (Slugs::systemSlug($it['system'] ?? null, $it['emu_core'] ?? null) === $slug) return (string)($it['system'] ?? '');
+            }
+        }
         return null;
     }));
 }
@@ -168,6 +180,7 @@ if (preg_match('#^/sections/([a-zA-Z0-9_-]+)/items$#', $path, $m) && $method ===
         'letters' => $letters,
         'system' => $system !== '' ? $system : null,
         'systems' => $systems,
+        'system_slugs' => (function () use ($systems) { $o = []; foreach (array_keys(is_array($systems) ? $systems : []) as $n) $o[(string)$n] = Slugs::systemSlug((string)$n); return $o; })(),
         'facets' => $facets,
         'filters' => [
             'genre' => $genre !== '' ? $genre : null,

@@ -30,6 +30,15 @@ final class UrlRoutes
             }
             return $out;
         }
+        if ($head === 'games' && isset($parts[1]) && $parts[1] !== 'lobby') {
+            $sys = strtolower($parts[1]);
+            if (isset($parts[2])) {
+                $id = $lookup('game', $sys . '/' . strtolower($parts[2]));
+                return $id ? ['ok' => true, 'view' => 'game', 'item_id' => $id] : ['ok' => false, 'error' => 'Game not found', 'view' => 'notfound'];
+            }
+            $label = $lookup('system', $sys);
+            return $label !== null ? ['ok' => true, 'view' => 'games_system', 'system' => $label, 'system_slug' => $sys] : ['ok' => false, 'error' => 'Console not found', 'view' => 'notfound'];
+        }
         return ['ok' => false, 'error' => 'Not a slug route', 'view' => 'unknown'];
     }
 }
