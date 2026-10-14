@@ -6,7 +6,8 @@
 #    TOS's own PHP-FPM (PHP74.service, /etc/nginx/php-fpm.conf) is never started, stopped or edited.
 #  * Web: a separate nginx instance (own config, own pid, own logs) on its own port. TOS's nginx.conf
 #    has no http-level include directory, so a separate instance avoids editing any TOS file.
-#  * Database: optional new MariaDB database and user (needs MariaDB admin credentials).
+#  * Database: a new MariaDB database and user in the App Center MySQL app. The installer asks for
+#    admin details (or reads VAULTCAST_DB_ADMIN_CNF, a client option file).
 # Why not apt? TOS pins php-common, php7.4-* and nginx to priority -1
 # (/etc/apt/preferences.d/lock_system_packages.pref); overriding that would change NAS defaults.
 # Multiplayer (Node.js relay) is not set up by this installer.
@@ -137,23 +138,44 @@ systemctl daemon-reload
 systemctl enable --now vaultcast-php-fpm.service
 systemctl enable --now vaultcast-nginx.service
 
-# Optional database: needs MariaDB admin credentials (you are prompted by the mysql client).
-if [ "${VAULTCAST_CREATE_DB:-yes}" = yes ]; then
-    db_user="vc_$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
-    db_password="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
-    if mysql -u "${VAULTCAST_DB_ADMIN:-root}" -p <<SQL
+# Database: use the TOS App Center MySQL/MariaDB app. Nothing is installed here, so TOS stays untouched.
+MYSQL=/Volume1/@apps/mysql/mysql/bin/mysql
+[ -x "$MYSQL" ] || MYSQL="$(command -v mysql || command -v mariadb || true)"
+DB_SOCKET="${VAULTCAST_DB_SOCKET:-/var/lib/mysql/mysql.sock}"
+if [ "${VAULTCAST_CREATE_DB:-yes}" != yes ]; then
+    echo 'Database step skipped; enter database details in the web installer.'
+elif [ -z "$MYSQL" ] || ! { [ -S "$DB_SOCKET" ] || ss -ltn | grep -q ':3306 '; }; then
+    echo 'MariaDB was not found. Install "MySQL" from TOS App Center, then rerun with an empty'
+    echo "$APP or enter database details in the web installer."
+else
+    if [ -n "${VAULTCAST_DB_ADMIN_CNF:-}" ]; then
+        admin=(--defaults-extra-file="$VAULTCAST_DB_ADMIN_CNF")
+    else
+        read -r -p 'MariaDB admin user [root]: ' admin_user; admin_user="${admin_user:-root}"
+        read -r -s -p "MariaDB password for $admin_user: " admin_pw; echo
+        admin_cnf="$(mktemp)"; chmod 600 "$admin_cnf"
+        printf '[client]\nuser=%s\npassword=%s\nsocket=%s\n' "$admin_user" "$admin_pw" "$DB_SOCKET" > "$admin_cnf"
+        unset admin_pw; trap 'rm -f "$admin_cnf"' EXIT
+        admin=(--defaults-extra-file="$admin_cnf")
+    fi
+    if ! "$MYSQL" "${admin[@]}" -e 'SELECT 1' >/dev/null 2>&1; then
+        echo 'Could not log in to MariaDB; enter database details in the web installer instead.'
+    elif [ -n "$("$MYSQL" "${admin[@]}" -N -B -e "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='$DB'")" ]; then
+        echo "Database $DB already exists; it was not reused. Rerun with VAULTCAST_DB=<new name>."
+    else
+        db_user="vc_$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
+        db_password="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
+        "$MYSQL" "${admin[@]}" <<SQL
 CREATE DATABASE \`$DB\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE USER '$db_user'@'localhost' IDENTIFIED BY '$db_password';
 CREATE USER '$db_user'@'127.0.0.1' IDENTIFIED BY '$db_password';
 GRANT ALL PRIVILEGES ON \`$DB\`.* TO '$db_user'@'localhost';
 GRANT ALL PRIVILEGES ON \`$DB\`.* TO '$db_user'@'127.0.0.1';
 SQL
-    then
-        printf '%s\n%s\n%s\n' "$DB" "$db_user" "$db_password" | "$PHPBIN" -n -r '$v=explode("\n",trim(stream_get_contents(STDIN))); $c=["host"=>"127.0.0.1","port"=>3306,"name"=>$v[0],"user"=>$v[1],"password"=>$v[2]]; file_put_contents($argv[1],"<?php return ".var_export($c,true).";\n");' "$APP/app/data/setup-database.php"
+        ( umask 077
+          printf '%s\n%s\n%s\n' "$DB" "$db_user" "$db_password" | "$PHPBIN" -n -r '$v=explode("\n",trim(stream_get_contents(STDIN))); $c=["host"=>"127.0.0.1","port"=>3306,"name"=>$v[0],"user"=>$v[1],"password"=>$v[2]]; file_put_contents($argv[1],"<?php return ".var_export($c,true).";\n");' "$APP/app/data/setup-database.php" )
         chown "$U:$U" "$APP/app/data/setup-database.php"; chmod 600 "$APP/app/data/setup-database.php"
-        echo "Database $DB created; credentials saved to $APP/app/data/setup-database.php (owner $U, mode 600)."
-    else
-        echo 'Database not created; enter database details in the web installer instead.'
+        echo "Database $DB created; the web installer will use it automatically."
     fi
 fi
 echo "Open http://<your-nas>:$PORT to finish setup."
