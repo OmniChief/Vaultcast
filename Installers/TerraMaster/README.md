@@ -22,7 +22,7 @@ Then open `http://<your-nas>:9999`.
 | nginx config | `$VAULTCAST_DIR/etc/nginx/` (a separate nginx instance) |
 | Logs, sessions | `$VAULTCAST_DIR/logs`, `$VAULTCAST_DIR/sessions` |
 | System user | `vaultcast` (no login) |
-| Services | `vaultcast-php-fpm.service`, `vaultcast-nginx.service` |
+| Services | `vaultcast-php-fpm.service`, `vaultcast-nginx.service`, `vaultcast-netplay.service` |
 | Socket | `/run/vaultcast-php/php-fpm.sock` |
 
 ## Forgotten MariaDB root password
@@ -38,11 +38,17 @@ Keep the new password in a root-only (mode 600) client option file.
 - TOS pins `php-common`, `php7.4-*` and `nginx*` to priority -1 in `/etc/apt/preferences.d/lock_system_packages.pref`, so apt can't install PHP without overriding TOS.
 - TOS's `nginx.conf` only includes `conf.d/*.conf` inside its own server blocks, so a new site would mean editing a TOS file.
 
-Multiplayer (Node.js relay) isn't set up here.
+## Optional features (set up automatically)
+- **Multiplayer:** the official Node.js 20 prebuilt (checksum-verified) goes in `$VAULTCAST_DIR/node`, and the relay runs as `vaultcast-netplay.service` on loopback port 3100. It's served at `/netplay/` by Vaultcast's own nginx. Set `VAULTCAST_SKIP_MULTIPLAYER=1` to skip it.
+- **Downloads:** the App Center Transmission is auto-detected (RPC port, download folder, whether login is required) and connected through `data/runtime/transmission.ini`. Transmission's settings are never changed. If RPC login is required, the installer prompts for it or reads `VAULTCAST_TRANSMISSION_USER` / `VAULTCAST_TRANSMISSION_PASSWORD`. The `vaultcast` user joins the group that owns the download folder so it can import finished files.
+- **FFmpeg / ffprobe:** TOS already provides both, and Vaultcast uses them as they are.
+- Vaultcast needs no cron jobs or background workers.
+
+Rerunning the installer on an existing installation only adds missing optional features.
 
 ## Uninstall
 ```sh
-systemctl disable --now vaultcast-nginx vaultcast-php-fpm
-rm /etc/systemd/system/vaultcast-{nginx,php-fpm}.service && systemctl daemon-reload
+systemctl disable --now vaultcast-netplay vaultcast-nginx vaultcast-php-fpm
+rm /etc/systemd/system/vaultcast-{netplay,nginx,php-fpm}.service && systemctl daemon-reload
 rm -rf /Volume1/vaultcast && userdel vaultcast
 ```
