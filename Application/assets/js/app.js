@@ -184,9 +184,10 @@
         if (track.mode === 'showing') selected = id;
         captions.appendChild(h('option',{value:id,text:trackLabel(track,index,'Subtitles')}));
       });
+      if (play.subtitle_search) captions.appendChild(h('option',{value:'__opensubtitles',text:'Search OpenSubtitles…'}));
       captions.value = selected;
-      captions.disabled = !captionTracks.length;
-      captions.title = captionTracks.length ? 'Select subtitles' : 'No subtitles available';
+      captions.disabled = !captionTracks.length && !play.subtitle_search;
+      captions.title = captionTracks.length ? 'Select subtitles' : (play.subtitle_search ? 'Search OpenSubtitles for subtitles' : 'No subtitles available');
     }
     audio.onchange = function(){
       var index = Number(audio.value), result = applyAudioTrack(media,index);
@@ -195,21 +196,46 @@
       refresh();
     };
     captions.onchange = function(){
+      if (captions.value === '__opensubtitles') {
+        refresh();
+        openSubtitleSearch(overlay, play, function(tracks, language){
+          var fresh = addSubtitleTracks(tracks);
+          var pick = fresh.filter(function(t){ return !language || t.language === language; })[0] || fresh[0];
+          if (!pick) return;
+          var select = function(){
+            subtitlePreference = pick.id; subtitlesApplied = true;
+            chooseSubtitle(pick.id); refresh();
+            try { localStorage.setItem(subtitleKey,pick.id); } catch(e) {}
+          };
+          var el = media.querySelector('track[id="'+pick.id+'"]');
+          if (el && el.track) { el.track.mode = 'showing'; refresh(); select(); } else select();
+        });
+        return;
+      }
       subtitlePreference=captions.value; subtitlesApplied=true;
       chooseSubtitle(subtitlePreference);
       try { localStorage.setItem(subtitleKey,subtitlePreference); } catch(e) {}
       refresh();
     };
-    (play.subtitles || []).forEach(function(track){
-      var element = h('track',{id:track.id,kind:'subtitles',label:track.label,src:streamPlayUrl(track.url)});
-      if (track.language) element.srclang=track.language;
-      element.addEventListener('load',refresh);
-      element.addEventListener('error',function(){
-        if (!overlay.isConnected) return;
-        element.remove(); refresh(); toast('Could not load '+track.label,{kind:'bad'});
+    var addedSubtitles = {};
+    function addSubtitleTracks(list){
+      var fresh = [];
+      (list || []).forEach(function(track){
+        if (!track || addedSubtitles[track.id]) return;
+        addedSubtitles[track.id] = true;
+        fresh.push(track);
+        var element = h('track',{id:track.id,kind:'subtitles',label:track.label,src:streamPlayUrl(track.url)});
+        if (track.language) element.srclang=track.language;
+        element.addEventListener('load',refresh);
+        element.addEventListener('error',function(){
+          if (!overlay.isConnected) return;
+          element.remove(); refresh(); toast('Could not load '+track.label,{kind:'bad'});
+        });
+        media.appendChild(element);
       });
-      media.appendChild(element);
-    });
+      return fresh;
+    }
+    addSubtitleTracks(play.subtitles);
     ['loadedmetadata','loadeddata','canplay'].forEach(function(event){media.addEventListener(event,refresh);});
     [media.audioTracks,media.textTracks].forEach(function(list){
       if (!list || !list.addEventListener) return;
@@ -220,6 +246,58 @@
       refresh();
     }).catch(function(){});
     refresh();
+  }
+  /* OpenSubtitles search for the video behind play.token. done(tracks, language) gets the refreshed track list. */
+  function openSubtitleSearch(host, play, done){
+    var existing = $('#subtitle-search-overlay');
+    if (existing) existing.remove();
+    var overlay = h('div', { id:'subtitle-search-overlay', className:'confirm-overlay' });
+    var card = h('div', { className:'confirm-card', style:'max-width:640px;width:92vw;text-align:left' });
+    var lang = h('input', { id:'os_lang', value: (navigator.language || 'en').slice(0,2).toLowerCase(), placeholder:'Languages e.g. en,fr', style:'flex:1' });
+    var status = h('div', { className:'muted', role:'status', text:'' });
+    var list = h('div', { className:'stack', style:'max-height:50vh;overflow:auto;margin-top:12px' });
+    var base = '/stream/subtitles/' + play.token;
+    function close(){ overlay.remove(); }
+    function search(){
+      status.textContent = 'Searching OpenSubtitles…';
+      list.innerHTML = '';
+      api(base + '/search?lang=' + encodeURIComponent(lang.value || '')).then(function(r){
+        if (!r || !r.ok) { status.textContent = (r && r.error) || 'Search failed'; return; }
+        var rows = r.results || [];
+        status.textContent = rows.length ? rows.length + ' result(s). Downloads count towards the daily OpenSubtitles limit.' : 'No subtitles found.';
+        rows.forEach(function(it){
+          var btn = h('button', { className:'btn primary', text:'Use' });
+          btn.onclick = function(){
+            btn.disabled = true; status.textContent = 'Downloading…';
+            api(base + '/download', { method:'POST', body:{ file_id: it.file_id, language: it.language } }).then(function(res){
+              btn.disabled = false;
+              if (!res || !res.ok) { status.textContent = (res && res.error) || 'Download failed'; toast(status.textContent, { kind:'bad' }); return; }
+              toast('Subtitles saved' + (res.remaining != null ? ' · ' + res.remaining + ' download(s) left today' : ''), { kind:'ok' });
+              close();
+              done(res.subtitles || [], it.language);
+            }).catch(function(){ btn.disabled = false; status.textContent = 'Download failed'; });
+          };
+          list.appendChild(h('div', { className:'mm-row' }, [
+            h('div', { style:'flex:1;min-width:0' }, [
+              h('strong', { text: it.release || 'Subtitle' }),
+              h('div', { className:'muted', text: [it.language, it.hash_match ? 'exact file match' : null, it.downloads ? it.downloads + ' downloads' : null,
+                it.hearing_impaired ? 'SDH' : null, it.machine_translated ? 'machine translated' : null].filter(Boolean).join(' · ') })
+            ]),
+            btn
+          ]));
+        });
+      }).catch(function(){ status.textContent = 'Search failed'; });
+    }
+    lang.addEventListener('keydown', function(e){ if (e.key === 'Enter') search(); });
+    card.appendChild(h('h3', { text:'Search OpenSubtitles' }));
+    card.appendChild(h('div', { className:'row-actions' }, [ lang, h('button', { className:'btn primary', text:'Search', onClick: search }) ]));
+    card.appendChild(status);
+    card.appendChild(list);
+    card.appendChild(h('div', { className:'row-actions', style:'margin-top:12px' }, [ h('button', { className:'btn', text:'Close', onClick: close }) ]));
+    overlay.appendChild(card);
+    overlay.addEventListener('click', function(e){ if (e.target === overlay) close(); });
+    (host || document.body).appendChild(overlay);
+    search();
   }
   function openAlternateFinder(opts){
     opts = opts || {};
@@ -6529,6 +6607,30 @@ try {
                 token_ttl_seconds: +$('#token_ttl_seconds').value
               }});
             }})
+          ])
+        ]));
+        var os = s.opensubtitles || {};
+        body.appendChild(h('div', { className:'stack', style:'margin-top:24px' }, [
+          h('h3', { text:'OpenSubtitles' }),
+          h('p', { className:'muted', text:'Adds “Search OpenSubtitles…” to the player’s subtitle menu. Get an API key from your opensubtitles.com account (API consumers). The username and password are optional and raise the daily download limit. Downloaded subtitles are converted to WebVTT and saved next to the video (or in this server’s data folder when the library is read-only), so every user sees them. Keys are stored in the server settings only.' }),
+          h('label', {}, [ h('span', { text:'API key' + (os.api_key_set ? ' (saved; leave blank to keep)' : '') }),
+            h('input', { id:'os_api_key', type:'password', autocomplete:'off', placeholder: os.api_key_set ? '••••••••' : 'API key' }) ]),
+          fieldEl('os_username','Username (optional)', os.username||'', 'text'),
+          h('label', {}, [ h('span', { text:'Password (optional)' + (os.password_set ? ' (saved; leave blank to keep)' : '') }),
+            h('input', { id:'os_password', type:'password', autocomplete:'new-password', placeholder: os.password_set ? '••••••••' : '' }) ]),
+          fieldEl('os_languages','Default languages (comma separated)', os.languages||'en', 'text'),
+          h('label', {}, [ h('input', { id:'os_allow_users', type:'checkbox', checked: !!os.allow_users }), ' Let non-admin users download subtitles (uses the shared daily limit)' ]),
+          h('div', { className:'row-actions' }, [
+            h('button', { className:'btn primary', text:'Save OpenSubtitles', onClick: function(){
+              saveSettings({ opensubtitles: {
+                api_key: $('#os_api_key').value, password: $('#os_password').value,
+                username: $('#os_username').value, languages: $('#os_languages').value,
+                allow_users: $('#os_allow_users').checked
+              }});
+            }}),
+            (os.api_key_set || os.password_set) ? h('button', { className:'btn', text:'Remove saved key and password', onClick: function(){
+              saveSettings({ opensubtitles: { clear_api_key:true, clear_password:true } });
+            }}) : null
           ])
         ]));
       } else if (tab === 'queue') {

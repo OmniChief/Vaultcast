@@ -5,9 +5,58 @@ declare(strict_types=1);
 final class Subtitles {
     private const MAX_BYTES = 2097152;
 
+    /** App-side subtitle store for videos whose folder is read-only (data/subtitles/<hash>/). */
+    public static function storeDir(string $media): string {
+        $real = \Vaultcast\Paths::real($media);
+        $root = defined('STREAM_DATA') ? STREAM_DATA : dirname(__DIR__, 2) . '/data';
+        return rtrim($root, '/\\') . '/subtitles/' . hash('sha256', $real !== false ? $real : $media);
+    }
+
+    /**
+     * Save a WebVTT subtitle for $media: next to the video when its folder is writable
+     * (<stem>.<lang>.<source>.vtt), otherwise in the app store. Returns the saved path.
+     */
+    public static function saveFor(string $media, string $vtt, string $language, string $source): ?string {
+        $language = preg_match('/^[a-z]{2,3}(-[a-z]{2})?$/', $language) ? $language : 'und';
+        $source = preg_replace('/[^a-z0-9]+/', '', strtolower(preg_replace('/-\d+$/', '', $source))) ?: 'download';
+        $stem = pathinfo($media, PATHINFO_FILENAME);
+        $targets = [];
+        $dir = dirname($media);
+        if (is_dir($dir) && is_writable($dir)) $targets[] = $dir . DIRECTORY_SEPARATOR . $stem . '.' . $language . '.' . $source . '.vtt';
+        $targets[] = self::storeDir($media) . DIRECTORY_SEPARATOR . $language . '.' . $source . '.vtt';
+        foreach ($targets as $target) {
+            $folder = dirname($target);
+            if (!is_dir($folder) && !@mkdir($folder, 0775, true)) continue;
+            $tmp = $target . '.tmp' . bin2hex(random_bytes(4));
+            if (@file_put_contents($tmp, $vtt) !== strlen($vtt)) { @unlink($tmp); continue; }
+            if (is_file($target)) @unlink($target);
+            if (!@rename($tmp, $target)) { @unlink($tmp); continue; }
+            return $target;
+        }
+        return null;
+    }
+
+    private static function storeFiles(string $media): array {
+        $directory = self::storeDir($media);
+        if (!is_dir($directory)) return [];
+        $files = [];
+        foreach (new DirectoryIterator($directory) as $entry) {
+            if (!$entry->isFile() || strtolower($entry->getExtension()) !== 'vtt' || $entry->getSize() > self::MAX_BYTES) continue;
+            $name = $entry->getBasename('.vtt');
+            $parts = explode('.', $name);
+            $language = preg_match('/^[a-z]{2,3}$/', $parts[0]) ? $parts[0] : '';
+            $files[hash('sha256', 'store/' . $entry->getFilename())] = [
+                'path' => $entry->getPathname(), 'extension' => 'vtt',
+                'label' => str_replace(['.', '_'], ' ', $name), 'language' => $language,
+            ];
+        }
+        return $files;
+    }
+
     private static function files(string $media): array {
+        $store = self::storeFiles($media);
         $directory = \Vaultcast\Paths::real(dirname($media));
-        if ($directory === false || !is_dir($directory) || !is_readable($directory)) return [];
+        if ($directory === false || !is_dir($directory) || !is_readable($directory)) return $store;
         $stem = pathinfo($media, PATHINFO_FILENAME);
         $files = [];
         foreach (new DirectoryIterator($directory) as $entry) {
@@ -28,6 +77,7 @@ final class Subtitles {
             ];
             if (count($files) >= 50) break;
         }
+        $files += $store;
         uasort($files, function (array $a, array $b): int { return strnatcasecmp($a['label'], $b['label']); });
         return $files;
     }

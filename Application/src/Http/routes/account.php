@@ -31,6 +31,28 @@ if ($path === '/stream/play' && ($method === 'GET' || $method === 'HEAD')) {
 if (preg_match('#^/stream/subtitles/([a-f0-9]{48})/([a-f0-9]{64})\.vtt$#', $path, $m) && in_array($method, ['GET', 'HEAD'], true)) {
     Subtitles::serve($m[1], $m[2]);
 }
+// OpenSubtitles search/download for the video behind a playback token (signed-in users only).
+if (preg_match('#^/stream/subtitles/([a-f0-9]{48})/(search|download)$#', $path, $m)
+    && (($m[2] === 'search' && $method === 'GET') || ($m[2] === 'download' && $method === 'POST'))) {
+    $user = Auth::requireUser();
+    $payload = \Vaultcast\Repository::playbackToken($m[1]);
+    if ($payload === null || ($payload['media_kind'] ?? '') !== 'video') json_error('Playback token expired.', 403);
+    if ((string)($payload['user_id'] ?? '') !== (string)$user['id'] && ($user['role'] ?? '') !== 'admin') json_error('Forbidden', 403);
+    if (!OpenSubtitles::configured()) json_error('OpenSubtitles is not set up. An administrator can add an API key in Settings → Streaming.', 409);
+    if (!OpenSubtitles::allowed($user)) json_error('Only administrators can fetch subtitles from OpenSubtitles.', 403);
+    release_request_locks();
+    $item = Catalogue::item((string)$payload['item_id']) ?: [];
+    $item['path'] = (string)$payload['path'];
+    if ($m[2] === 'search') {
+        $r = OpenSubtitles::search($item, (string)($_GET['lang'] ?? ''));
+        if (!$r['ok']) json_error($r['error'], 502);
+        json_out($r);
+    }
+    $b = body_json();
+    $r = OpenSubtitles::download($item, (int)($b['file_id'] ?? 0), (string)($b['language'] ?? ''));
+    if (!$r['ok']) json_error($r['error'], !empty($r['quota']) ? 429 : 502);
+    json_out(['ok' => true, 'remaining' => $r['remaining'], 'subtitles' => Subtitles::tracks((string)$payload['path'], $m[1])]);
+}
 
 // EmulatorJS cue/bin siblings + optional PS1 BIOS
 if (preg_match('#^/stream/rom/([a-f0-9]{48})/(.+)$#', $path, $m) && ($method === 'GET' || $method === 'HEAD')) {
