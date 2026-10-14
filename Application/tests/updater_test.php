@@ -86,7 +86,7 @@ check(Updater::blobSha('') === 'e69de29bb2d1d6434b8b29ae775ad8c2e48c5391', 'blob
 check(Updater::blobSha("hello\n") === 'ce013625030ba8dba906f756967f9e9ca394464a', 'blob SHA of "hello\\n" matches git hash-object');
 check(Updater::appPath('Application/src/X.php') === 'src/X.php' && Updater::appPath('LICENSE') === 'LICENSE', 'repo paths map to app paths');
 check(Updater::appPath('README.md') === null && Updater::appPath('Installers/Windows/NSIS/Vaultcast.nsi') === null, 'non-app repo files are ignored');
-foreach (['data/config.php', 'config.php', 'netplay/node_modules/x/index.js', 'extra/tool.php', 'data/runtime/transmission.ini', '../index.php', 'src/../../x', 'C:/x', '.user.ini', 'src/.git/config', 'src/a.php.rk-new-abc123'] as $bad) check(!Updater::allowed($bad), "allowlist rejects $bad");
+foreach (['data/config.php', 'config.php', 'netplay/node_modules/x/index.js', 'extra/tool.php', 'data/runtime/transmission.ini', '../index.php', 'src/../../x', 'C:/x', '.user.ini', 'src/.git/config', 'src/a.php.vc-new-abc123', 'src/a.php.rk-old-abc123'] as $bad) check(!Updater::allowed($bad), "allowlist rejects $bad");
 foreach (['index.php', 'VERSION', 'src/Services/A.php', 'assets/js/app.js', 'netplay/server.js', 'LICENSE', 'router.php'] as $good) check(Updater::allowed($good), "allowlist accepts $good");
 check(Updater::compare('v1.10.0', '1.9.9') > 0 && Updater::compare('1.0.0', 'v1.0.0') === 0, 'numeric version comparison');
 $f = "$base/crlf.txt"; file_put_contents($f, "a\r\nb\r\n");
