@@ -45,7 +45,7 @@ final class Updater
     /** Updated only where the install already has them (the Linux script installs no tests/). */
     const OPTIONAL_DIRS = ['tests'];
     /** Never written, whatever the repository contains. */
-    const DENY = ['#(^|/)node_modules(/|$)#', '#(^|/)\.git(/|$)#', '#^data(/|$)#', '#(^|/)config\.php$#i', '#^\.install-#', '#(^|/)\.user\.ini$#i', '#(^|/)php\.ini$#i', '#\.rk-(new|old)-[0-9a-f]+$#'];
+    const DENY = ['#(^|/)node_modules(/|$)#', '#(^|/)\.git(/|$)#', '#^data(/|$)#', '#(^|/)config\.php$#i', '#^\.install-#', '#(^|/)\.user\.ini$#i', '#(^|/)php\.ini$#i', '#\.(vc|rk)-(new|old)-[0-9a-f]+$#'];
 
     /** @var string|null app root override (tests) */
     public static $root = null;
@@ -425,11 +425,11 @@ final class Updater
     {
         $dir = dirname($dst);
         if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) throw new RuntimeException('Cannot create ' . $dir);
-        $tmp = $dst . '.rk-new-' . bin2hex(random_bytes(3));
+        $tmp = $dst . '.vc-new-' . bin2hex(random_bytes(3));
         if (!@copy($src, $tmp)) throw new RuntimeException('Cannot write ' . $dst . ' (permissions or disk full?).');
         $ok = self::retry(function () use ($tmp, $dst) { return @rename($tmp, $dst); });
         if (!$ok && file_exists($dst)) {
-            $aside = $dst . '.rk-old-' . bin2hex(random_bytes(3));
+            $aside = $dst . '.vc-old-' . bin2hex(random_bytes(3));
             if (@rename($dst, $aside)) {
                 $ok = self::retry(function () use ($tmp, $dst) { return @rename($tmp, $dst); });
                 if ($ok) @unlink($aside); else @rename($aside, $dst);
