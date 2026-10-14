@@ -72,3 +72,13 @@ CREATE TABLE IF NOT EXISTS vaultcast_metadata_pins (
     updated_at BIGINT NOT NULL,
     PRIMARY KEY (kind, target_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS vaultcast_media_facts (
+    item_id VARCHAR(64) NOT NULL PRIMARY KEY,
+    sig VARCHAR(48) CHARACTER SET ascii NOT NULL,
+    video_codec VARCHAR(32) NOT NULL DEFAULT '',
+    audio_codec VARCHAR(32) NOT NULL DEFAULT '',
+    needs_convert TINYINT(1) NOT NULL DEFAULT 0,
+    present TINYINT(1) NOT NULL DEFAULT 1,
+    probed_at BIGINT NOT NULL DEFAULT 0
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

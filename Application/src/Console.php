@@ -8,6 +8,7 @@ if ($command === 'help') {
     echo "collections [id]           Match collection entries to library items\n";
     echo "downloads                  Import completed Transmission downloads\n";
     echo "durations                  Fill missing Live channel media durations\n";
+    echo "facts                      Probe new/changed media codecs, store show guides\n";
     exit;
 }
 require __DIR__ . '/bootstrap.php';
@@ -33,6 +34,7 @@ try {
         case 'collections':
         case 'downloads':
         case 'durations':
+        case 'facts':
             $tracked = Maintenance::runCommand($command, $argv[2] ?? null);
             $result = $tracked['ok'] ? ($tracked['job']['result'] ?? $tracked) : $tracked;
             break;

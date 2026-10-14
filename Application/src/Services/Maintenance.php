@@ -5,7 +5,7 @@ final class Maintenance
 {
     private static $active;
     private static $checked = 0.0;
-    const TASKS = ['scan' => 'Scan library folders', 'collections' => 'Match collections', 'downloads' => 'Import completed downloads', 'durations' => 'Fill Live media durations'];
+    const TASKS = ['scan' => 'Scan library folders', 'collections' => 'Match collections', 'downloads' => 'Import completed downloads', 'durations' => 'Fill Live media durations', 'facts' => 'Probe new media codecs and store show guides'];
 
     public static function runCommand(string $task, ?string $target = null): array
     {
@@ -95,7 +95,12 @@ final class Maintenance
             $job['status'] = 'running'; $job['started_at'] = date('c');
             \Vaultcast\Repository::putDocument('maintenance-job:' . $id, $job);
             switch ($job['task']) {
-                case 'scan': $job['result'] = Catalogue::rescan(); break;
+                case 'scan':
+                    $job['result'] = Catalogue::rescan();
+                    // Probe only new/changed files afterwards (queued; waits for this lock).
+                    if (!isset($job['result']['ok']) || $job['result']['ok']) { try { self::start('facts', 'scan'); } catch (Throwable $ignored) {} }
+                    break;
+                case 'facts': $job['result'] = MediaFacts::refresh(function () { self::checkpoint(); }); break;
                 case 'collections': $job['result'] = Collections::rematch($job['target'] ?? null); break;
                 case 'downloads':
                     if (empty(Store::settings()['features']['downloads'])) throw new RuntimeException('Downloads are disabled.');

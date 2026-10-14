@@ -60,3 +60,14 @@ systemctl disable --now vaultcast-netplay vaultcast-nginx vaultcast-php-fpm
 rm /etc/systemd/system/vaultcast-{netplay,nginx,php-fpm}.service && systemctl daemon-reload
 rm -rf /Volume1/vaultcast && userdel vaultcast
 ```
+
+## Media facts (codecs) and show guides
+
+Show, movie, anime and home pages read only from MariaDB. After each library scan a background
+`facts` maintenance job probes new or changed video files (by mtime/size) with ffprobe, stores
+codec / needs-convert data in `vaultcast_media_facts`, and stores each show's TVMaze episode guide
+as a DB document. To backfill an existing library by hand:
+
+    sudo -u vaultcast $VAULTCAST_DIR/bin/php $VAULTCAST_DIR/app/src/Console.php facts
+
+Until a file has been probed its card falls back to the file-extension check.

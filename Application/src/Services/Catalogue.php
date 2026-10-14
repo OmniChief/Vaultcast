@@ -368,7 +368,7 @@ class Catalogue {
     }
 
     /** Enrich missing season/episode/show_poster/season_poster from disk + path. */
-    public static function enrichItemArt(array $it): array {
+    public static function enrichItemArt(array $it, bool $checkDisk = true): array {
         $type = $it['type'] ?? '';
         if ($type !== 'tv' && $type !== 'anime') return $it;
         $rel = (string)($it['rel'] ?? '');
@@ -381,6 +381,7 @@ class Catalogue {
                 $it['episode'] = $parsed['episode'];
             }
         }
+        if (!$checkDisk) return $it; // request path: art paths come from the scan payload
         $showDir = self::showDirFromItem($it);
         if ($showDir && class_exists('Posters')) {
             if (empty($it['show_poster']) || !is_file((string)$it['show_poster'])) {
@@ -706,7 +707,7 @@ class Catalogue {
      * Prefer metadata/NFO/parsed episode title over file basename.
      * Order: stored episode_title → sidecar NFO → parse rel/title.
      */
-    public static function resolveEpisodeTitle(array $it): string {
+    public static function resolveEpisodeTitle(array $it, bool $readNfo = true): string {
         $type = (string)($it['type'] ?? '');
         $isTv = ($type === 'tv' || $type === 'anime') || (!empty($it['show']) && array_key_exists('season', $it));
         if (!$isTv) return '';
@@ -720,7 +721,7 @@ class Catalogue {
         }
 
         $path = (string)($it['path'] ?? '');
-        if ($path !== '') {
+        if ($readNfo && $path !== '') {
             $nfo = self::readEpisodeNfoTitle($path);
             if ($nfo !== '') return $nfo;
         }
@@ -1456,9 +1457,7 @@ class Catalogue {
                 $name = $parts[0] ?: ($it['title'] ?? '');
             }
             if ($name !== $showName) continue;
-            $it = self::enrichItemArt($it);
-            // Show pages list every episode: never ffprobe here (one probe per episode blocked the worker).
-            $ep = self::publicItem($it, true, false);
+            $ep = self::publicItem($it);
             $ep['show_key'] = $meta['show_key'];
             $ep['available'] = true;
             $ep['status'] = 'available';
@@ -1477,7 +1476,8 @@ class Catalogue {
             }
         }
 
-        $tvmaze = class_exists('Posters') ? Posters::tvMazeEpisodeGuide($meta['show_key'], $showName) : null;
+        // Guide stored in MariaDB by the background facts pass; no disk/network on the request.
+        $tvmaze = MediaFacts::guide((string)$meta['show_key']);
         $expected = []; // epKey => meta from tvmaze or gap-fill
         $source = 'local_gaps';
 
@@ -1556,7 +1556,7 @@ class Catalogue {
                 $row['status'] = 'available';
                 if (!empty($metaEp['name'])) $row['episode_title'] = $metaEp['name'];
                 elseif (empty($row['episode_title'])) {
-                    $resolved = self::resolveEpisodeTitle($row);
+                    $resolved = self::resolveEpisodeTitle($row, false);
                     if ($resolved !== '') $row['episode_title'] = $resolved;
                 }
                 if (!empty($metaEp['airdate'])) $row['airdate'] = $metaEp['airdate'];
@@ -1620,6 +1620,12 @@ class Catalogue {
             if ($num > 0) $regularSeasonCount++;
             $seasonLocal = null;
             $showDir = null;
+            $postersOn = class_exists('Posters') && Posters::enabled();
+            if ($postersOn) {
+                // Optimistic (as before): UI requests the season poster endpoint; no disk checks here.
+                $seasonList[] = ['season' => $num, 'label' => $num === 0 ? 'Specials' : ('Season ' . $num), 'episode_count' => count($eps), 'available_count' => $avail, 'missing_count' => $miss, 'has_poster' => true, 'episodes' => $eps];
+                continue;
+            }
             if (!empty($meta['local_poster'])) {
                 $showDir = dirname((string)$meta['local_poster']);
             }
@@ -1671,7 +1677,7 @@ class Catalogue {
                 'available_count' => $availableCount,
                 'missing_count' => $missingCount,
                 'season_count' => $regularSeasonCount > 0 ? $regularSeasonCount : count($seasonList),
-                'has_poster' => $meta['has_poster'] || (class_exists('Posters') && Posters::hasShowPoster(
+                'has_poster' => $meta['has_poster'] || (class_exists('Posters') && Posters::enabled()) || (class_exists('Posters') && Posters::hasShowPoster(
                     $meta['local_poster'] ?? null,
                     $meta['show_key'],
                     !empty($meta['show_dir']) ? (string)$meta['show_dir'] : (!empty($meta['local_poster']) ? dirname((string)$meta['local_poster']) : null)
@@ -2102,12 +2108,14 @@ class Catalogue {
         return $continue;
     }
 
-    public static function publicItem(array $it, bool $checkPosterFiles = true, bool $probe = true): array {
-        $it = self::enrichItemArt($it);
+    public static function publicItem(array $it, bool $checkPosterFiles = true): array {
+        $it = self::enrichItemArt($it, false);
         $hasPoster = !empty($it['poster']);
         $type = $it['type'] ?? '';
         $kind = $it['media_kind'] ?? '';
         $postersOn = class_exists('Posters') && Posters::enabled();
+        // Posters on: the UI lazy-fetches art, so has_poster is optimistic -- skip every per-item file check.
+        if ($postersOn) $hasPoster = true;
         // Always resolve cache hits when possible (home used checkPosterFiles=false and hid CW/TV art).
         if (!$hasPoster && $type && in_array($type, ['tv','anime'], true) && !empty($it['show'])) {
             $key = self::showKey($it['section'] ?? '', $it['show']);
@@ -2134,7 +2142,7 @@ class Catalogue {
         $epTitle = '';
         $isTvItem = in_array($type, ['tv', 'anime'], true) || (!empty($it['show']) && array_key_exists('season', $it));
         if ($isTvItem) {
-            $epTitle = self::resolveEpisodeTitle($it);
+            $epTitle = self::resolveEpisodeTitle($it, false);
         }
         $displayTitle = self::fixText((string)($it['title'] ?? ''));
         $isShowEp = !empty($it['show']) && in_array($it['type'] ?? '', ['tv','anime'], true);
@@ -2170,7 +2178,7 @@ class Catalogue {
             'system' => $it['system'] ?? null,
             'has_poster' => $hasPoster,
             'kind' => 'item',
-            'needs_convert' => self::needsConvert($it, $checkPosterFiles && $probe),
+            'needs_convert' => self::needsConvert($it, false),
         ];
     }
 
@@ -2377,7 +2385,8 @@ class Catalogue {
         // Extension-only: never ffprobe on the detail request (that blocked the whole PHP worker).
         $pub['needs_convert'] = self::needsConvert($it, false);
         $path = (string)($it['path'] ?? '');
-        $pub['file_exists'] = $path !== '' && is_file($path);
+        $facts = MediaFacts::get($it);
+        $pub['file_exists'] = $path !== '' && (!$facts || !empty($facts['present']));
         $pub['path'] = $path; // admin/detail may need for diagnose; public UI can hide
         if (!empty($_GET['probe']) || !empty($_GET['audio'])) {
             $probe = MediaProbe::probeSummary($path);
@@ -2502,6 +2511,9 @@ class Catalogue {
      */
     public static function needsConvert(array $it, bool $allowProbe = true): bool {
         if (($it['media_kind'] ?? '') !== 'video') return false;
+        // Codecs probed once by the background facts pass (MariaDB); no ffprobe/stat per request.
+        $facts = MediaFacts::get($it);
+        if ($facts) return !empty($facts['needs_convert']);
         $path = (string)($it['path'] ?? '');
         if ($allowProbe && $path !== '' && is_file($path) && class_exists('MediaProbe')) {
             $probe = MediaProbe::probeSummary($path, 2, true);
