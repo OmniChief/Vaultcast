@@ -6,7 +6,7 @@
  */
 final class Migrations
 {
-    const VERSION = 3; // 2: library folder access pass for nginx (step 5); 3: re-run it, recording results
+    const VERSION = 4; // 2: library folder access pass for nginx (step 5); 3: re-run it, recording results; 4: media facts table (step 6)
 
     public static function stampFile(): string
     {
@@ -78,6 +78,9 @@ final class Migrations
         // 5. Existing libraries: let nginx (LocalService on Windows) read each library folder.
         //    Idempotent; failures are logged and never block startup.
         $log['library_acl'] = self::grantLibraryAccess();
+        // 6. Codec / needs-convert facts table; the background 'facts' task fills it.
+        MediaFacts::ensureTable($pdo);
+        $log['media_facts_table'] = true;
         error_log('Vaultcast storage migration v' . self::VERSION . ': ' . json_encode($log));
         return $log;
     }

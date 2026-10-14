@@ -31,10 +31,12 @@ class Posters {
         return self::dir() . '/game_' . preg_replace('/[^a-f0-9]/', '', $itemId) . '.jpg';
     }
     public static function enabled(): bool {
+        // Once per request: Store::settings() re-reads runtime ini files, and list/show pages call this per item.
+        static $on = null;
+        if ($on !== null) return $on;
         $s = Store::settings();
         $p = $s['posters'] ?? [];
-        if (isset($p['enabled']) && !$p['enabled']) return false;
-        return true;
+        return $on = !(isset($p['enabled']) && !$p['enabled']);
     }
     /** OMDb API key from settings (empty string when not configured). */
     private static function omdbApiKey(): string {

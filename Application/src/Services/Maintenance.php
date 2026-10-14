@@ -5,7 +5,7 @@ final class Maintenance
 {
     private static $active;
     private static $checked = 0.0;
-    const TASKS = ['scan' => 'Scan library folders', 'collections' => 'Match collections', 'downloads' => 'Import completed downloads', 'durations' => 'Fill Live media durations'];
+    const TASKS = ['scan' => 'Scan library folders', 'collections' => 'Match collections', 'downloads' => 'Import completed downloads', 'durations' => 'Fill Live media durations', 'facts' => 'Probe new media codecs and store show guides'];
 
     public static function runCommand(string $task, ?string $target = null): array
     {
@@ -30,6 +30,12 @@ final class Maintenance
         $php = Store::settings()['tools']['php_cli'] ?? '';
         if ($php === '' || !is_file($php)) {
             $php = PHP_OS_FAMILY === 'Windows' ? dirname(PHP_BINARY) . '/php.exe' : PHP_BINDIR . '/php';
+        }
+        if (!is_file($php) && PHP_OS_FAMILY !== 'Windows') {
+            // Servers whose PHP CLI is not in PHP_BINDIR (e.g. NAS app packages): use php from the service PATH.
+            foreach (explode(PATH_SEPARATOR, (string)getenv('PATH')) as $dir) {
+                if ($dir !== '' && is_file($dir . '/php') && is_executable($dir . '/php')) { $php = $dir . '/php'; break; }
+            }
         }
         if (!is_file($php)) throw new RuntimeException('Configure the PHP CLI path in Settings before starting maintenance.');
         \Vaultcast\Repository::putDocument('maintenance-job:' . $id, $job);
@@ -89,7 +95,12 @@ final class Maintenance
             $job['status'] = 'running'; $job['started_at'] = date('c');
             \Vaultcast\Repository::putDocument('maintenance-job:' . $id, $job);
             switch ($job['task']) {
-                case 'scan': $job['result'] = Catalogue::rescan(); break;
+                case 'scan':
+                    $job['result'] = Catalogue::rescan();
+                    // Probe only new/changed files afterwards (queued; waits for this lock).
+                    if (!isset($job['result']['ok']) || $job['result']['ok']) { try { self::start('facts', 'scan'); } catch (Throwable $ignored) {} }
+                    break;
+                case 'facts': $job['result'] = MediaFacts::refresh(function () { self::checkpoint(); }); break;
                 case 'collections': $job['result'] = Collections::rematch($job['target'] ?? null); break;
                 case 'downloads':
                     if (empty(Store::settings()['features']['downloads'])) throw new RuntimeException('Downloads are disabled.');
