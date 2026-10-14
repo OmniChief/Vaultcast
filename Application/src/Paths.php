@@ -145,6 +145,32 @@ final class Paths {
         return $out(true, 'ok', '', $real ?: $path);
     }
 
+    /**
+     * Let the web server (nginx, which serves media itself) read a library folder, via
+     * LibraryAccess::grantServiceRead when that service exists (Windows installer builds).
+     * Returns ['ok'=>true, 'skipped'=>bool] or ['ok'=>false, 'code'=>'library_acl_failed', 'message'=>...].
+     * $grant overrides the call (tests).
+     */
+    public static function grantWebServerRead(string $path, ?callable $grant = null): array {
+        if ($grant === null) {
+            if (!\class_exists('LibraryAccess', true) && is_file(__DIR__ . '/Services/LibraryAccess.php')) require_once __DIR__ . '/Services/LibraryAccess.php';
+            if (!\class_exists('LibraryAccess', false) || !\method_exists('LibraryAccess', 'grantServiceRead')) return ['ok' => true, 'skipped' => true];
+            $grant = ['LibraryAccess', 'grantServiceRead'];
+        }
+        try {
+            $r = $grant($path);
+        } catch (\Throwable $e) {
+            $r = ['ok' => false, 'code' => 'library_acl_failed', 'error' => $e->getMessage()];
+        }
+        if (is_array($r) && !empty($r['ok'])) return ['ok' => true, 'skipped' => false];
+        $reason = trim((string)(is_array($r) ? ($r['error'] ?? '') : ''));
+        if (is_array($r) && ($r['code'] ?? '') === 'library_acl_failed') {
+            return ['ok' => false, 'code' => 'library_acl_failed', 'message' => 'The web server (nginx) could not be given read access to "' . $path . '", so media there would not play. Reason: ' . ($reason !== '' ? $reason : 'unknown error.')];
+        }
+        return ['ok' => false, 'code' => (string)(is_array($r) ? ($r['code'] ?? 'library_acl_failed') : 'library_acl_failed'), 'message' => 'Could not set read access for the web server on "' . $path . '". Reason: ' . ($reason !== '' ? $reason : 'unknown error.')];
+    }
+
+
     /** Parent folder, or null at a root ("/", "C:/", "//server/share"). */
     public static function parent(string $path): ?string {
         $path = self::normalize($path, []);

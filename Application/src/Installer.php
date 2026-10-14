@@ -211,6 +211,8 @@ final class Installer
                     throw new SetupInputException($label . ': ' . $check['message'] . ' Your entries have been kept; correct the path and try again.', 2);
                 }
                 $real = $check['path'];
+                $acl = \Vaultcast\Paths::grantWebServerRead($real);
+                if (!$acl['ok']) throw new SetupInputException($label . ': ' . $acl['message'] . ' Your entries have been kept; correct the path and try again.', 2);
                 $sections[] = ['id' => $type, 'label' => $label, 'type' => $type, 'path' => str_replace('\\', '/', $real), 'enabled' => true, 'order' => count($sections), 'exclude_paths' => []];
             }
             // An empty library is valid; folders can be added in Settings later.
