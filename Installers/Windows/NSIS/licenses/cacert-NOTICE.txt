@@ -1,0 +1,4 @@
+cacert.pem: CA certificate bundle extracted from Mozilla's NSS certdata.txt by the
+curl project (https://curl.se/docs/caextract.html). Licensed under the Mozilla
+Public License 2.0; see MPL-2.0.txt. Source form (certdata.txt):
+https://hg.mozilla.org/mozilla-central/raw-file/default/security/nss/lib/ckfw/builtins/certdata.txt

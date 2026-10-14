@@ -1,0 +1,461 @@
+<?php
+/** Live channels, guide, IPTV proxy and external-player playlists. */
+declare(strict_types=1);
+
+function live_bridge_action(): ?string {
+    $p = (string) parse_url((string)($_SERVER['REQUEST_URI'] ?? ''), PHP_URL_PATH);
+    if (!preg_match('#/api/live/([a-z0-9_]+)/?$#', $p, $m)) return null; // digits allowed (m3u); actions still whitelisted
+    return $m[1];
+}
+
+function live_bridge_deny(int $code, string $msg): void {
+    header('Cache-Control: no-store');
+    json_error($msg, $code);
+}
+
+function live_bridge_host_blocked(string $host): bool {
+    $host = strtolower(trim($host, "[] \t"));
+    if ($host === '' || $host === 'localhost') return true;
+    foreach (['.local', '.lan', '.internal', '.localdomain', '.home.arpa'] as $sfx) {
+        if (substr($host, -strlen($sfx)) === $sfx) return true;
+    }
+    $ips = [];
+    if (filter_var($host, FILTER_VALIDATE_IP)) {
+        $ips[] = $host;
+    } else {
+        $rec = @gethostbynamel($host);
+        if (is_array($rec)) $ips = $rec;
+    }
+    foreach ($ips as $ip) {
+        if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) return true;
+        $l = ip2long($ip);
+        if ($l !== false && (($l & 0xFFC00000) === (ip2long('100.64.0.0') & 0xFFC00000))) return true; // CGNAT / Tailscale
+    }
+    return false;
+}
+
+function live_bridge_allow_file(string $jar): string {
+    $jar = (string) preg_replace('/[^a-zA-Z0-9]/', '', $jar);
+    if (strlen($jar) < 8) $jar = 'default';
+    return sys_get_temp_dir() . '/iptv_hls_cj/' . substr($jar, 0, 40) . '.hosts';
+}
+
+function live_bridge_lineup_hosts(): array {
+    require_once STREAM_ROOT . '/src/Live/iptv.php';
+    $hosts = [];
+    foreach (iptv_lineup_channels() as $c) {
+        $h = strtolower((string) parse_url((string)($c['url'] ?? ''), PHP_URL_HOST));
+        if ($h !== '') $hosts[$h] = true;
+    }
+    return $hosts;
+}
+
+function live_bridge_require_admin(): void {
+    // Bootstrap Auth without running the rest of the catalogue router.
+    require_once STREAM_ROOT . '/src/bootstrap.php';
+    Auth::requireAdmin();
+}
+
+/** Same-origin IPTV logo (public CSP blocks third-party images). Only exact lineup logo URLs; cached 7 days; raster images only. */
+function live_bridge_logo(): void {
+    $u = trim((string)($_GET['u'] ?? ''));
+    if ($u === '' || !preg_match('#^https?://#i', $u)) live_bridge_deny(400, 'Bad logo url');
+    require_once STREAM_ROOT . '/src/Live/iptv.php';
+    $ok = false;
+    foreach (iptv_lineup_channels() as $c) {
+        if ((string)($c['logo'] ?? '') === $u) { $ok = true; break; }
+    }
+    if (!$ok) live_bridge_deny(403, 'Logo is not in the IPTV lineup');
+    if (live_bridge_host_blocked((string) parse_url($u, PHP_URL_HOST))) live_bridge_deny(403, 'Upstream not allowed');
+    $dir = STREAM_DATA . '/live/iptv_cache/logos';
+    if (!is_dir($dir)) @mkdir($dir, 0775, true);
+    $file = $dir . '/' . md5($u) . '.img';
+    $meta = $file . '.type';
+    if (!is_file($file) || filemtime($file) < time() - 7 * 86400) {
+        if (!function_exists('curl_init')) live_bridge_deny(500, 'curl required');
+        $ch = curl_init($u);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true, CURLOPT_FOLLOWLOCATION => true, CURLOPT_MAXREDIRS => 3,
+            CURLOPT_CONNECTTIMEOUT => 6, CURLOPT_TIMEOUT => 12, CURLOPT_USERAGENT => 'Mozilla/5.0 (Vaultcast logo cache)',
+            CURLOPT_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS, CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
+        ]);
+        $body = curl_exec($ch);
+        $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $ctype = strtolower((string) curl_getinfo($ch, CURLINFO_CONTENT_TYPE));
+        curl_close($ch);
+        $good = is_string($body) && $body !== '' && $code < 400 && strlen($body) <= 1048576
+            && preg_match('#^image/(png|jpe?g|gif|webp|avif|x-icon|vnd\.microsoft\.icon)#', $ctype);
+        if ($good) {
+            @file_put_contents($file, $body, LOCK_EX);
+            @file_put_contents($meta, preg_replace('/[^a-z0-9\/.+-]/', '', explode(';', $ctype)[0]), LOCK_EX);
+        } elseif (!is_file($file)) {
+            live_bridge_deny(502, 'Logo fetch failed');
+        }
+    }
+    $type = is_file($meta) ? trim((string) file_get_contents($meta)) : 'image/png';
+    if (!preg_match('#^image/(png|jpe?g|gif|webp|avif|x-icon|vnd\.microsoft\.icon)$#', $type)) $type = 'image/png';
+    header('Content-Type: ' . $type);
+    header('Cache-Control: public, max-age=86400');
+    header('X-Content-Type-Options: nosniff');
+    header("Content-Security-Policy: default-src 'none'");
+    header('Content-Length: ' . (string) filesize($file));
+    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'HEAD') readfile($file);
+    exit;
+}
+
+/** Channel playlist for external players. */
+function live_bridge_m3u(): void {
+    $root = STREAM_ROOT . '/src/Live';
+    require_once $root . '/store.php';
+    require_once $root . '/schedule.php';
+    $id = (string)($_GET['channel'] ?? '');
+    $station = relay_load_station();
+    $channel = null;
+    foreach ((array)($station['channels'] ?? []) as $c) {
+        if (isset($c['id']) && (string)$c['id'] === $id) { $channel = $c; break; }
+    }
+    if (!$channel) {
+        http_response_code(404);
+        header('Content-Type: text/plain; charset=utf-8');
+        header('Cache-Control: no-store');
+        echo "Unknown channel\n";
+        exit;
+    }
+    // Relative media URLs use the hostname chosen by the viewer.
+    $path = (string) parse_url((string)($_SERVER['REQUEST_URI'] ?? ''), PHP_URL_PATH);
+    $prefix = rtrim(\Vaultcast\Database::basePath(), '/');
+    /* relay_build_m3u() only treats a scheme+host origin correctly; use a placeholder host and strip it below */
+    $origin = 'http://vaultcast.invalid' . $prefix . '/live';
+    $body = relay_build_m3u($station, $id, $origin);
+    /* strip any leftover scheme+host (paranoia) so every media line is path-absolute */
+    $body = preg_replace('#^https?://[^/\s]+(/[^\s]*)$#m', '$1', $body);
+    $dl = isset($_GET['dl']) && $_GET['dl'] !== '' && $_GET['dl'] !== '0';
+    $fname = 'channel-' . preg_replace('/[^A-Za-z0-9_-]/', '', (string)($channel['number'] ?? $id)) . '.m3u';
+    header('Content-Type: audio/x-mpegurl; charset=utf-8');
+    header('Content-Disposition: ' . ($dl ? 'attachment' : 'inline') . '; filename="' . $fname . '"');
+    header('X-Content-Type-Options: nosniff');
+    header('Cache-Control: no-store');
+    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'HEAD') echo $body;
+    exit;
+}
+
+/** XMLTV guide and whole-lineup M3U (Tvheadend-style outputs). */
+function live_bridge_tv_export(string $kind): void {
+    require_once STREAM_ROOT . '/src/Live/store.php';
+    require_once STREAM_ROOT . '/src/Live/tvstudio.php';
+    $station = relay_load_station();
+    $dl = isset($_GET['dl']) && $_GET['dl'] !== '' && $_GET['dl'] !== '0';
+    header('X-Content-Type-Options: nosniff');
+    header('Cache-Control: no-store');
+    if ($kind === 'xmltv') {
+        $days = isset($_GET['days']) ? max(1, min(7, (int)$_GET['days'])) : null;
+        header('Content-Type: application/xml; charset=utf-8');
+        header('Content-Disposition: ' . ($dl ? 'attachment' : 'inline') . '; filename="vaultcast-guide.xml"');
+        $body = tvs_xmltv($station, $days);
+    } else {
+        $prefix = rtrim(\Vaultcast\Database::basePath(), '/') . '/';
+        $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https');
+        $host = preg_replace('/[^A-Za-z0-9.:\[\]-]/', '', (string)($_SERVER['HTTP_HOST'] ?? 'localhost'));
+        header('Content-Type: audio/x-mpegurl; charset=utf-8');
+        header('Content-Disposition: ' . ($dl ? 'attachment' : 'inline') . '; filename="vaultcast-lineup.m3u"');
+        $body = tvs_playlist_m3u($station, ($https ? 'https://' : 'http://') . $host . $prefix);
+    }
+    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'HEAD') echo $body;
+    exit;
+}
+
+$__liveAction = live_bridge_action();
+if ($__liveAction !== null) {
+    if (empty(Store::settings()['features']['live'])) live_bridge_deny(404, 'Live channels are disabled in Settings → Integrations.');
+    $readActions = ['guide', 'now', 'iptv', 'iptv_status', 'file', 'iptv_hls', 'logo', 'station', 'catalogue', 'iptv_browse', 'epg_refresh', 'm3u', 'tv_studio', 'tv_preview', 'tv_health', 'xmltv', 'playlist'];
+    $writeActions = ['station', 'iptv_add', 'iptv_remove', 'iptv_toggle', 'iptv_probe', 'iptv_save', 'epg_refresh', 'tv_studio', 'tv_channels'];
+    $m = $_SERVER['REQUEST_METHOD'] ?? 'GET';
+    $isWrite = ($m === 'POST' || $m === 'PUT' || $m === 'PATCH' || $m === 'DELETE');
+
+    if ($isWrite) {
+        if (!in_array($__liveAction, $writeActions, true)) live_bridge_deny(404, 'Unknown live write action');
+        live_bridge_require_admin();
+    } else {
+        if ($m !== 'GET' && $m !== 'HEAD') live_bridge_deny(405, 'Method not allowed');
+        if (!in_array($__liveAction, $readActions, true)) live_bridge_deny(404, 'Unknown live action');
+    }
+
+    if (in_array($__liveAction, ['tv_studio', 'tv_preview', 'tv_health'], true)) live_bridge_require_admin();
+    if ($__liveAction === 'xmltv' || $__liveAction === 'playlist') live_bridge_tv_export($__liveAction);
+    if ($__liveAction === 'logo') live_bridge_logo();
+    if ($__liveAction === 'm3u') live_bridge_m3u();
+    $_GET['action'] = $__liveAction;
+
+    if ($__liveAction === 'iptv_hls') {
+        $u = (string)($_GET['u'] ?? ($_GET['url'] ?? ''));
+        $host = strtolower((string) parse_url($u, PHP_URL_HOST));
+        if ($host === '' || live_bridge_host_blocked($host)) live_bridge_deny(403, 'Upstream not allowed');
+        $allowFile = live_bridge_allow_file((string)($_GET['jar'] ?? ''));
+        $allowed = live_bridge_lineup_hosts();
+        if (is_file($allowFile)) {
+            foreach ((array) @file($allowFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $h) $allowed[trim((string)$h)] = true;
+        }
+        if (empty($allowed[$host])) live_bridge_deny(403, 'Host is not in the IPTV lineup');
+        ob_start(function ($buf) use ($allowFile, $allowed) {
+            $isPlaylist = false;
+            foreach (headers_list() as $hd) {
+                if (stripos($hd, 'content-type:') === 0 && stripos($hd, 'mpegurl') !== false) { $isPlaylist = true; break; }
+            }
+            if (!$isPlaylist || !is_string($buf) || $buf === '') return $buf;
+            if (preg_match_all('#iptv_hls\?u=([^&"\s]+)#', $buf, $mm)) {
+                $new = [];
+                foreach ($mm[1] as $enc) {
+                    $h = strtolower((string) parse_url(rawurldecode($enc), PHP_URL_HOST));
+                    if ($h !== '' && empty($allowed[$h])) $new[$h] = true;
+                }
+                if ($new && (!is_file($allowFile) || filesize($allowFile) < 65536)) {
+                    @mkdir(dirname($allowFile), 0700, true);
+                    @file_put_contents($allowFile, implode("\n", array_keys($new)) . "\n", FILE_APPEND | LOCK_EX);
+                }
+            }
+            return $buf;
+        });
+    }
+
+header('Cache-Control: no-store');
+require_once STREAM_ROOT . '/src/Live/store.php';
+
+$action = isset($_GET['action']) ? $_GET['action'] : 'station';
+
+try {
+    if ($action === 'file' && ($_SERVER['REQUEST_METHOD'] === 'GET' || $_SERVER['REQUEST_METHOD'] === 'HEAD')) {
+        require_once STREAM_ROOT . '/src/Live/library.php';
+        relay_catalogue_file();
+        exit;
+    }
+    // Serve proxied HLS playlists and media before setting JSON headers.
+    if ($action === 'iptv_hls' && ($_SERVER['REQUEST_METHOD'] === 'GET' || $_SERVER['REQUEST_METHOD'] === 'HEAD')) {
+        require_once STREAM_ROOT . '/src/Live/iptv_hls.php';
+        iptv_hls_proxy_request();
+        exit;
+    }
+    header('Content-Type: application/json; charset=utf-8');
+    if ($action === 'catalogue' && $_SERVER['REQUEST_METHOD'] === 'GET') {
+        require_once STREAM_ROOT . '/src/Live/library.php';
+        echo json_encode(relay_catalogue_query($_GET), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    if ($action === 'station' && $_SERVER['REQUEST_METHOD'] === 'GET') {
+        echo json_encode(relay_load_station());
+        exit;
+    }
+    if ($action === 'station' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        $raw = file_get_contents('php://input');
+        $incoming = json_decode($raw, true);
+        if (!is_array($incoming) || !isset($incoming['channels']) || !isset($incoming['media'])) {
+            http_response_code(400);
+            echo json_encode(array('error' => 'Invalid station payload'));
+            exit;
+        }
+        echo json_encode(relay_save_station($incoming));
+        exit;
+    }
+    if ($action === 'now') {
+        require_once STREAM_ROOT . '/src/Live/schedule.php';
+        $station = relay_load_station();
+        $id = isset($_GET['channel']) ? $_GET['channel'] : '';
+        $now = (int) round(microtime(true) * 1000);
+        // optional ?at=<unix ms> bounded to station timeshift historyDays
+        // so the unified Stream shell can rewind, skip, and advance programmes.
+        if (isset($_GET['at']) && is_numeric($_GET['at'])) {
+            $at = (int) $_GET['at'];
+            $histDays = isset($station['historyDays']) ? max(1, min(14, (int)$station['historyDays'])) : 7;
+            if ($at > $now - $histDays * 86400000 && $at < $now + 86400000) $now = $at;
+        }
+        $b = relay_air_block($station, $id, $now);
+        if (is_array($b)) {
+            // everything the player needs to join at the live edge
+            $b['serverNow'] = (int) round(microtime(true) * 1000);
+            $b['atUnix'] = $now;
+            $b['mediaOffsetMs'] = isset($b['mediaOffsetMs']) ? (int)$b['mediaOffsetMs'] : 0;
+            $b['seekMs'] = $b['mediaOffsetMs'] + max(0, $now - (int)$b['startUnix']); // position inside the file
+        }
+        echo json_encode($b);
+        exit;
+    }
+
+    // --- IPTV (multi-feed .m3u playlists) ---
+    if ($action === 'iptv' && $_SERVER['REQUEST_METHOD'] === 'GET') {
+        require_once STREAM_ROOT . '/src/Live/iptv.php';
+        $state = iptv_load();
+        echo json_encode(array(
+            'ok' => true,
+            'iptv' => $state,
+            'favourites' => iptv_favourites_with_status($state),
+            'lineup' => iptv_lineup_channels($state),
+            'feeds' => $state['feeds'],
+            'activeFeedId' => isset($state['activeFeedId']) ? $state['activeFeedId'] : 'all',
+            'countries' => iptv_countries(),
+            'categories' => iptv_categories(),
+        ), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    if ($action === 'iptv_browse' && $_SERVER['REQUEST_METHOD'] === 'GET') {
+        require_once STREAM_ROOT . '/src/Live/iptv.php';
+        $kind = isset($_GET['kind']) ? $_GET['kind'] : '';
+        $key = isset($_GET['key']) ? $_GET['key'] : (isset($_GET['country']) ? $_GET['country'] : '');
+        if ($kind === 'category' && isset($_GET['category'])) $key = $_GET['category'];
+        if ($kind === 'country' && $key === '') $key = 'uk';
+        $feed = isset($_GET['feed']) ? $_GET['feed'] : '';
+        echo json_encode(iptv_browse(array(
+            'feed' => $feed,
+            'kind' => $kind,
+            'key' => $key,
+            'q' => isset($_GET['q']) ? $_GET['q'] : '',
+            'group' => isset($_GET['group']) ? $_GET['group'] : '',
+            'limit' => isset($_GET['limit']) ? $_GET['limit'] : 80,
+            'offset' => isset($_GET['offset']) ? $_GET['offset'] : 0,
+            'hlsOnly' => !isset($_GET['hlsOnly']) || $_GET['hlsOnly'] !== '0',
+            'activeOnly' => isset($_GET['activeOnly']) && $_GET['activeOnly'] === '1',
+            'country' => $kind === '' ? (string)($_GET['country'] ?? '') : '',
+            'category' => $kind === '' ? (string)($_GET['category'] ?? '') : '',
+            'refresh' => isset($_GET['refresh']) && ($_GET['refresh'] === '1' || $_GET['refresh'] === 'true'),
+        )), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    if ($action === 'iptv_add' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        require_once STREAM_ROOT . '/src/Live/iptv.php';
+        $incoming = json_decode(file_get_contents('php://input'), true);
+        echo json_encode(iptv_add_channel($incoming), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    if ($action === 'iptv_remove' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        require_once STREAM_ROOT . '/src/Live/iptv.php';
+        $incoming = json_decode(file_get_contents('php://input'), true);
+        $id = is_array($incoming) && isset($incoming['id']) ? $incoming['id'] : (isset($_GET['id']) ? $_GET['id'] : '');
+        if ($id === '') {
+            http_response_code(400);
+            echo json_encode(array('error' => 'Missing id'));
+            exit;
+        }
+        echo json_encode(iptv_remove_channel($id), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    if ($action === 'iptv_toggle' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        require_once STREAM_ROOT . '/src/Live/iptv.php';
+        $incoming = json_decode(file_get_contents('php://input'), true);
+        if (!is_array($incoming) || empty($incoming['id'])) {
+            http_response_code(400);
+            echo json_encode(array('error' => 'Missing id'));
+            exit;
+        }
+        $enabled = !isset($incoming['enabled']) || !!$incoming['enabled'];
+        echo json_encode(iptv_toggle_channel($incoming['id'], $enabled), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    if ($action === 'iptv_probe' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        require_once STREAM_ROOT . '/src/Live/iptv.php';
+        $incoming = json_decode(file_get_contents('php://input'), true);
+        if (!is_array($incoming)) $incoming = array();
+        $items = array();
+        if (!empty($incoming['channels']) && is_array($incoming['channels'])) {
+            $items = $incoming['channels'];
+        } elseif (!empty($incoming['ids']) && is_array($incoming['ids'])) {
+            $items = $incoming['ids'];
+        } elseif (!empty($incoming['id']) || !empty($incoming['url'])) {
+            $items = array($incoming);
+        }
+        if (!$items) {
+            http_response_code(400);
+            echo json_encode(array('error' => 'Provide id/url or channels[] (max 25, on-demand only)'));
+            exit;
+        }
+        echo json_encode(iptv_probe_channels($items), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    if ($action === 'iptv_status' && $_SERVER['REQUEST_METHOD'] === 'GET') {
+        require_once STREAM_ROOT . '/src/Live/iptv.php';
+        $state = iptv_load();
+        echo json_encode(array(
+            'ok' => true,
+            'favourites' => iptv_favourites_with_status($state),
+            'cacheEntries' => count(iptv_status_load()['entries']),
+        ), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+        if ($action === 'iptv_save' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        require_once STREAM_ROOT . '/src/Live/iptv.php';
+        $incoming = json_decode(file_get_contents('php://input'), true);
+        if (!is_array($incoming)) {
+            http_response_code(400);
+            echo json_encode(array('error' => 'Invalid payload'));
+            exit;
+        }
+        echo json_encode(iptv_update_meta($incoming), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    // --- TV Studio (weekly calendar, filler, adverts, numbering, DVR, health) ---
+    if ($action === 'tv_studio' && $_SERVER['REQUEST_METHOD'] === 'GET') {
+        require_once STREAM_ROOT . '/src/Live/tvstudio.php';
+        echo json_encode(tvs_admin_payload(), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    if ($action === 'tv_studio' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        require_once STREAM_ROOT . '/src/Live/tvstudio.php';
+        $incoming = json_decode((string) file_get_contents('php://input'), true);
+        if (!is_array($incoming) || !isset($incoming['studio']) || !is_array($incoming['studio'])) {
+            http_response_code(400);
+            echo json_encode(array('error' => 'Invalid studio payload'));
+            exit;
+        }
+        tvs_save($incoming['studio']);
+        echo json_encode(tvs_admin_payload(), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    if ($action === 'tv_channels' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        require_once STREAM_ROOT . '/src/Live/tvstudio.php';
+        $incoming = json_decode((string) file_get_contents('php://input'), true);
+        try {
+            tvs_apply_channel_edits(is_array($incoming) ? ($incoming['channels'] ?? array()) : array());
+        } catch (InvalidArgumentException $e) {
+            http_response_code(400);
+            echo json_encode(array('error' => $e->getMessage()));
+            exit;
+        }
+        echo json_encode(tvs_admin_payload(), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    if ($action === 'tv_preview' && $_SERVER['REQUEST_METHOD'] === 'GET') {
+        require_once STREAM_ROOT . '/src/Live/tvstudio.php';
+        $station = relay_load_station();
+        $from = isset($_GET['from']) && is_numeric($_GET['from']) ? (int)$_GET['from'] : (int) round(microtime(true) * 1000);
+        $hours = max(1, min(168, (int)($_GET['hours'] ?? 24)));
+        $blocks = relay_materialize($station, (string)($_GET['channel'] ?? ''), $from, $from + $hours * 3600000);
+        echo json_encode(array('ok' => true, 'from' => $from, 'hours' => $hours, 'blocks' => $blocks), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    if ($action === 'tv_health' && $_SERVER['REQUEST_METHOD'] === 'GET') {
+        require_once STREAM_ROOT . '/src/Live/tvstudio.php';
+        echo json_encode(tvs_health(relay_load_station()), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    if ($action === 'guide' && $_SERVER['REQUEST_METHOD'] === 'GET') {
+        require_once STREAM_ROOT . '/src/Live/epg.php';
+        $station = relay_load_station();
+        $hours = isset($_GET['hours']) ? (int)$_GET['hours'] : 12;
+        $slim = isset($_GET['slim']) && $_GET['slim'] === '1';
+        echo json_encode(epg_unified_guide($station, $hours, $slim), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    if ($action === 'epg_refresh' && ($_SERVER['REQUEST_METHOD'] === 'POST' || $_SERVER['REQUEST_METHOD'] === 'GET')) {
+        require_once STREAM_ROOT . '/src/Live/epg.php';
+        $force = isset($_GET['force']) ? $_GET['force'] === '1' : true;
+        echo json_encode(epg_refresh($force), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    http_response_code(404);
+    echo json_encode(array('error' => 'Unknown action'));
+} catch (Exception $e) {
+    http_response_code(500);
+    echo json_encode(array('error' => $e->getMessage()));
+}
+
+    exit;
+}
+unset($__liveAction);

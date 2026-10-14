@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <base href="{{BASE_HREF}}">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#0e1420">
+  <meta name="color-scheme" content="dark">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>{{SITE_NAME}}</title>
+  <!-- VAULTCAST_CONFIG -->
+  <link rel="manifest" href="index.php?manifest=1">
+  <link rel="icon" href="assets/img/mark.svg">
+  <link rel="stylesheet" href="assets/css/app.css?v={{ASSET_VERSION}}">
+  <script>
+    window.__STREAM_VERSION__ = '{{VERSION}}';
+    window.__ASSET_VERSION__ = '{{ASSET_VERSION}}';
+    window.__STREAM_NETPLAY_SERVER__ = window.__STREAM_BASE__ + 'netplay';
+    // All screens run the same app. Remote navigation is an input preference.
+    window.__STREAM_TV__ = false;
+    window.__STREAM_ES5__ = false;
+    document.documentElement.className = 'modern';
+  </script>
+  <script src="assets/js/routes.js?v={{ASSET_VERSION}}" defer></script>
+  <script src="assets/js/app.js?v={{ASSET_VERSION}}" defer></script>
+  <script src="assets/js/navigation.js?v={{ASSET_VERSION}}" defer></script>
+</head>
+<body class="boot"><div id="app"><div class="boot-screen"><div class="logo-mark">◈</div><h1>{{SITE_NAME}}</h1><p id="boot-message">Opening your library…</p></div></div><div id="toast" class="toast" hidden></div>
+<noscript><p>Vaultcast needs JavaScript enabled to browse and play your library.</p></noscript>
+<script>if (!window.fetch || !window.Promise || !Object.assign) document.getElementById('boot-message').textContent = 'This browser is too old for Vaultcast. Open your library in an updated browser or streaming device.';</script>
+</body></html>

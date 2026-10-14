@@ -1,0 +1,52 @@
+# Install in nginx's http context. Change root, server_name and PHP socket.
+# Use HTTPS before making the site available outside your trusted LAN.
+map $http_upgrade $vaultcast_connection {
+    default upgrade;
+    '' close;
+}
+server {
+    listen 80;
+    server_name vaultcast.local;
+    root /srv/vaultcast;
+    index index.php;
+    client_max_body_size 16m;
+    autoindex off;
+
+    location ~ /\. { deny all; }
+    location ~* ^/(src|data|deploy|docs|netplay)(/|$) { deny all; }
+    location ~* \.(sql|md|log|sh|ps1|cmd|yaml|yml|lock|bak)$ { deny all; }
+
+    location = /index.html { return 302 /; }
+    location / { try_files $uri $uri/ /index.php; }
+    location = /index.php {
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME $document_root/index.php;
+        fastcgi_pass unix:/run/php/php7.4-fpm.sock;
+    }
+    location = /api { return 302 /api/status; }
+    location ^~ /api/ {
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME $document_root/index.php;
+        fastcgi_param SCRIPT_NAME /index.php;
+        fastcgi_read_timeout 300s;
+        fastcgi_pass unix:/run/php/php7.4-fpm.sock;
+    }
+    # Other PHP entry points are not public; Live uses the authenticated API bridge.
+    location ~* \.php(?:/|$) { deny all; }
+    # PHP only issues this internal redirect after resolving an allowed library file.
+    # nginx serves byte ranges without tying up PHP workers.
+    location ^~ /_vaultcast_media/ {
+        internal;
+        alias /;
+        sendfile on;
+    }
+    location ^~ /netplay/ {
+        proxy_pass http://127.0.0.1:3100/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $vaultcast_connection;
+        proxy_set_header Host $host;
+        proxy_read_timeout 120s;
+    }
+    location = /sw.js { add_header Cache-Control "no-cache"; }
+}

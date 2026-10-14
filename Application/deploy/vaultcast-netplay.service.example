@@ -1,0 +1,18 @@
+[Unit]
+Description=Vaultcast multiplayer relay
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/srv/vaultcast/netplay
+ExecStart=/usr/bin/node server.js
+Environment=NODE_ENV=production
+Environment=NETPLAY_LOG=/srv/vaultcast/data/netplay.log
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

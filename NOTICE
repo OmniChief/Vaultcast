@@ -1,0 +1,114 @@
+Vaultcast
+Required Notice: Copyright (c) 2026 OmniChief
+
+Vaultcast's own code is licensed under the PolyForm Noncommercial License 1.0.0
+(see LICENSE). That licence covers Vaultcast's own code only. It does not cover
+the third-party components listed below. Each component keeps its own licence,
+and nothing in Vaultcast's licence restricts the rights those licences give you.
+
+This notice is an engineering inventory, not legal advice. Have a qualified
+lawyer review it before any commercial or large-scale distribution.
+
+-------------------------------------------------------------------------------
+1. Source repository and release packages (vaultcast-X.Y.Z.zip / .tar.gz)
+-------------------------------------------------------------------------------
+No third-party code is committed. These packages contain only Vaultcast's own
+PHP, HTML, CSS and JavaScript.
+
+Installed by `npm ci` into Application/netplay/node_modules for the multiplayer
+relay. They are not in the repository or the release packages, but the Windows
+Full installer bundles them:
+  express, socket.io, cors                     MIT
+  89 transitive packages: 86 MIT, 2 ISC, 1 BSD-3-Clause
+  (Each package's own LICENSE file is kept in node_modules.)
+
+-------------------------------------------------------------------------------
+2. Downloaded at runtime (only when an administrator chooses to)
+-------------------------------------------------------------------------------
+Settings -> Playback -> Player files either loads these from their CDNs or
+downloads them into data/ on your own server. Vaultcast does not redistribute
+them.
+  EmulatorJS 4.2.1 (cdn.emulatorjs.org)        GPL-3.0
+    The bundled libretro cores have their own licences. Some are GPL, and some
+    are noncommercial-only (for example snes9x, Genesis Plus GX and PicoDrive).
+  hls.js 1.5.17                                Apache-2.0
+  Libretro thumbnail artwork (fetched on demand) belongs to its respective
+    rights holders.
+
+-------------------------------------------------------------------------------
+3. Windows Full installer (Installers/Windows/NSIS)
+-------------------------------------------------------------------------------
+The installer bundles these separate programs. Vaultcast runs them as separate
+processes or services and talks to them over sockets, HTTP or the command
+line. It does not link them into Vaultcast.
+  PHP 8.3 (NTS, x64)                           PHP License 3.01
+  Microsoft Visual C++ Redistributable         Microsoft Software License Terms
+  Node.js LTS                                  MIT (bundled parts under their own licences)
+  MariaDB Server 11.4                          GPL-2.0
+  nginx                                        BSD-2-Clause
+  FFmpeg "essentials" build (gyan.dev)         GPL-3.0 (GPL build: includes libx264/x265)
+  Transmission (extracted from the MSI)        GPL-2.0 / GPL-3.0 (some parts MIT)
+  WinSW 2.12                                   MIT
+  curl CA bundle (cacert.pem, from Mozilla)    MPL-2.0
+  NSIS installer stub and plugins              zlib/libpng
+  Netplay npm packages                         see section 1
+
+Licence texts: the installer installs every component's full licence text into
+the "licenses" folder of the installation (licenses\INDEX.txt lists them). Where a
+package ships its own licence files, build.ps1 takes them from that exact
+package. Otherwise it uses the committed copies in Installers/Windows/NSIS/licenses.
+The multiplayer relay's npm packages are listed with their licence files in
+licenses\netplay-npm.
+
+GPL source (MariaDB, FFmpeg, Transmission): build.ps1 records each component's
+exact bundled version, its binary URL and its exact upstream source tarball or tag
+in licenses\SOURCE.md, inside every installation. Those are unmodified upstream
+builds. General source locations:
+  MariaDB       https://archive.mariadb.org/ , https://github.com/MariaDB/server
+  FFmpeg        https://ffmpeg.org/releases/ , https://github.com/GyanD/codexffmpeg
+  Transmission  https://github.com/transmission/transmission/releases
+  EmulatorJS    https://github.com/EmulatorJS/EmulatorJS
+Written offer: for at least three years after we last distributed a given
+installer version, OmniChief will give anyone who received it
+the complete corresponding source code of these GPL components, including the
+libraries built into the FFmpeg GPL build. It comes on a medium customarily
+used for software interchange, for no more than the cost of physically
+performing the distribution. To ask for it, open an issue titled "GPL source
+request" at https://github.com/OmniChief/Vaultcast/issues and name the
+installer version.
+
+-------------------------------------------------------------------------------
+4. Linux installer (Installers/Linux)
+-------------------------------------------------------------------------------
+This installer redistributes nothing. It installs your distribution's own
+packages through apt: nginx, PHP, MariaDB, transmission-daemon, optionally
+FFmpeg, and Node.js (from the distribution or NodeSource). Those packages come
+under their own licences, which the distribution supplies.
+Each package's licence is in /usr/share/doc/<package>/copyright. Setup copies
+LICENSE and NOTICE into the application directory. The relay's npm packages,
+installed by `npm ci`, keep their own licence files in netplay/node_modules.
+
+-------------------------------------------------------------------------------
+5. Licence compatibility notes (not legal advice)
+-------------------------------------------------------------------------------
+a) GPL programs in the Windows installer. MariaDB, FFmpeg (GPL build) and
+   Transmission run as independent programs alongside Vaultcast. The GPL
+   generally allows this "mere aggregation" with differently licensed
+   software. The conditions are:
+     - the PolyForm Noncommercial licence must not be presented as applying to
+       those programs or to the installer as a whole;
+     - their licence texts must ship with them; and
+     - their corresponding source must be offered (a written offer or a link).
+   Recipients stay free to use those programs commercially under the GPL.
+b) EmulatorJS (GPL-3.0) works with Vaultcast's player page in the browser.
+   Vaultcast does not distribute it today. Bundling it in a package or installer
+   could make the result a combined work, which the GPL would require to be
+   GPL-licensed, and that conflicts with a noncommercial licence. Get legal
+   review before bundling it.
+c) Some libretro cores are noncommercial-only. Their restrictions pass on to
+   users independently of Vaultcast's licence.
+d) The FFmpeg GPL build includes x264/x265, which carry patent considerations
+   in some countries.
+e) The PolyForm Noncommercial licence is not an OSI-approved open-source
+   licence. Commercial use of Vaultcast's own code needs separate permission
+   from the copyright holder.

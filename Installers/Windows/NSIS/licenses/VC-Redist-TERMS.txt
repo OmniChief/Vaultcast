@@ -1,0 +1,8 @@
+Microsoft Visual C++ 2015-2022 Redistributable (x64), vc_redist.x64.exe
+
+This is Microsoft's own installer. It is redistributed unmodified, as allowed by the
+Microsoft Visual Studio "Distributable Code" terms. Microsoft's licence terms are
+shown, and must be accepted, inside that installer when it runs (silent installs
+accept them on the user's behalf). The current terms are also published at:
+  https://visualstudio.microsoft.com/license-terms/vs2022-cruntime/
+  https://learn.microsoft.com/cpp/windows/redistributing-visual-cpp-files

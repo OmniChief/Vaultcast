@@ -1,0 +1,12 @@
+## Written offer
+
+The source links above point at the exact upstream releases bundled in this
+installer. If any link stops working, or if you prefer to receive the source from
+us, then for at least three years after we last distributed this installer
+version, OmniChief will give anyone who received the installer
+the complete corresponding source code for the GPL-licensed components above.
+That includes the source of the libraries built into the FFmpeg GPL build, on
+a medium customarily used for software interchange, for no more than the cost
+of physically performing the distribution. To ask for it, open an issue at
+https://github.com/OmniChief/Vaultcast/issues titled "GPL source request" and
+name the installer version.

@@ -1,0 +1,2432 @@
+<?php
+declare(strict_types=1);
+
+class Acquisition {
+    public static function checkConnection(array $tr): array {
+        if (!function_exists('curl_init')) return ['ok' => false, 'error' => 'PHP cURL is missing. Enable the curl extension and restart PHP.'];
+        $url = trim((string)($tr['url'] ?? ''));
+        $parts = parse_url($url);
+        if (!$parts || !in_array(strtolower($parts['scheme'] ?? ''), ['http','https'], true) || empty($parts['host'])) {
+            return ['ok' => false, 'error' => 'Enter the full HTTP or HTTPS Transmission RPC URL.'];
+        }
+        $tr['url'] = $url;
+        $rpc = self::transmissionRpc($tr, ['method' => 'session-get']);
+        return !empty($rpc['ok'])
+            ? ['ok' => true, 'message' => 'Connected to Transmission. RPC authentication succeeded.']
+            : ['ok' => false, 'error' => 'Cannot authenticate with Transmission. Check that it is running, remote access is enabled, this server is allowed, and the RPC URL and credentials are correct.'];
+    }
+
+    public static function state(): array {
+        $q = Store::get('acquire_queue', []);
+        $settings = Store::settings();
+        $acq = $settings['acquisition'] ?? [];
+        $meta = Store::get('runtime_meta', []);
+        return [
+            'ok' => true,
+            'enabled' => !empty($acq['enabled']),
+            'feeds' => $acq['feeds'] ?? [],
+            'min_interval_seconds' => $acq['min_interval_seconds'] ?? 120,
+            'max_per_hour' => $acq['max_per_hour'] ?? 20,
+            'jitter_seconds' => $acq['jitter_seconds'] ?? 30,
+            'queue' => is_array($q) ? $q : [],
+            'last_fetch_at' => $meta['acq_last_fetch_at'] ?? null,
+            'fetches_this_hour' => self::fetchesThisHour($meta),
+            'transmission' => self::transmissionStatus($acq['transmission'] ?? []),
+        ];
+    }
+
+    /** Public/admin Transmission + local acquire queue snapshot. */
+    public static function downloadStatus(): array {
+        $settings = Store::settings();
+        $acq = $settings['acquisition'] ?? [];
+        $tr = self::transmissionStatus($acq['transmission'] ?? []);
+        $q = Store::get('acquire_queue', []);
+        if (!is_array($q)) $q = [];
+        // Keep last 40 local queue entries, newest first
+        $local = array_slice(array_reverse($q), 0, 40);
+        return [
+            'ok' => true,
+            'transmission' => $tr,
+            'local_queue' => $local,
+        ];
+    }
+
+    public static function transmissionStatus(array $tr): array {
+        $url = $tr['url'] ?? '';
+        $enabled = !empty($tr['enabled']);
+        $reachable = $enabled ? self::transmissionReachable($tr) : false;
+        $torrents = [];
+        $error = null;
+        if ($reachable) {
+            $rpc = self::transmissionRpc($tr, [
+                'method' => 'torrent-get',
+                'arguments' => [
+                    'fields' => [
+                        'id', 'name', 'percentDone', 'eta', 'status',
+                        'rateDownload', 'rateUpload', 'sizeWhenDone', 'leftUntilDone',
+                        'errorString', 'isFinished', 'isStalled',
+                    ],
+                ],
+            ]);
+            if (!empty($rpc['ok']) && is_array($rpc['arguments']['torrents'] ?? null)) {
+                foreach ($rpc['arguments']['torrents'] as $t) {
+                    if (!is_array($t)) continue;
+                    $statusCode = (int)($t['status'] ?? -1);
+                    $torrents[] = [
+                        'id' => $t['id'] ?? null,
+                        'name' => $t['name'] ?? '',
+                        'percent' => round(((float)($t['percentDone'] ?? 0)) * 100, 1),
+                        'eta' => (int)($t['eta'] ?? -1),
+                        'eta_label' => self::formatEta((int)($t['eta'] ?? -1)),
+                        'status' => self::torrentStatusLabel($statusCode, $t),
+                        'status_code' => $statusCode,
+                        'rate_download' => (int)($t['rateDownload'] ?? 0),
+                        'rate_upload' => (int)($t['rateUpload'] ?? 0),
+                        'error' => $t['errorString'] ?? '',
+                        'match' => self::parseEpisodeFromName((string)($t['name'] ?? '')),
+                    ];
+                }
+            } else {
+                $error = $rpc['message'] ?? 'RPC torrent-get failed';
+            }
+        } elseif ($enabled) {
+            $error = 'Transmission RPC unreachable at ' . $url;
+        } else {
+            $error = 'Transmission disabled in settings';
+        }
+        return [
+            'enabled' => $enabled,
+            'url' => $url,
+            'reachable' => $reachable,
+            'offline' => !$reachable,
+            'error' => $error,
+            'torrents' => $torrents,
+            'torrent_count' => count($torrents),
+        ];
+    }
+
+    private static function torrentStatusLabel(int $code, array $t): string {
+        if (!empty($t['errorString'])) return 'error';
+        if (!empty($t['isFinished'])) return 'finished';
+        $map = [
+            0 => 'stopped',
+            1 => 'check_wait',
+            2 => 'checking',
+            3 => 'download_wait',
+            4 => 'downloading',
+            5 => 'seed_wait',
+            6 => 'seeding',
+        ];
+        $label = $map[$code] ?? ('status_'.$code);
+        if (!empty($t['isStalled']) && $label === 'downloading') return 'stalled';
+        return $label;
+    }
+
+    private static function formatEta(int $eta): string {
+        if ($eta < 0) return 'unknown';
+        if ($eta === 0) return 'done';
+        if ($eta < 60) return $eta . 's';
+        if ($eta < 3600) return (int)floor($eta / 60) . 'm';
+        if ($eta < 86400) return (int)floor($eta / 3600) . 'h ' . (int)floor(($eta % 3600) / 60) . 'm';
+        return (int)floor($eta / 86400) . 'd';
+    }
+
+    /** Best-effort SxxExx (+ show guess) from torrent name. */
+    public static function parseEpisodeFromName(string $name): ?array {
+        if (!preg_match('/^(.*?)\bS(\d{1,2})E(\d{1,3})\b/i', $name, $m)) return null;
+        $season = (int)$m[2];
+        $episode = (int)$m[3];
+        $show = trim(preg_replace('/[._]+/', ' ', $m[1]));
+        $show = trim(preg_replace('/\s+/', ' ', $show), " -._");
+        return [
+            'season' => $season,
+            'episode' => $episode,
+            'code' => sprintf('S%02dE%02d', $season, $episode),
+            'show_guess' => $show !== '' ? $show : null,
+        ];
+    }
+
+    private static function transmissionRpc(array $tr, array $payload): array {
+        $url = $tr['url'] ?? '';
+        $session = self::transmissionSession($url, $tr);
+        if ($session === null) {
+            return ['ok' => false, 'message' => 'Transmission RPC unavailable'];
+        }
+        $body = json_encode($payload);
+        $ch = curl_init($url);
+        $headers = ['Content-Type: application/json', 'X-Transmission-Session-Id: ' . $session];
+        if (!empty($tr['username'])) {
+            curl_setopt($ch, CURLOPT_USERPWD, $tr['username'] . ':' . ($tr['password'] ?? ''));
+        }
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT => 8,
+            CURLOPT_POST => true,
+            CURLOPT_POSTFIELDS => $body,
+            CURLOPT_HTTPHEADER => $headers,
+        ]);
+        $resp = curl_exec($ch);
+        $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        if ($code === 409) {
+            // session rotated; one retry
+            $session = self::transmissionSession($url, $tr);
+            if ($session === null) return ['ok' => false, 'message' => 'Session refresh failed'];
+            $ch = curl_init($url);
+            $headers = ['Content-Type: application/json', 'X-Transmission-Session-Id: ' . $session];
+            if (!empty($tr['username'])) {
+                curl_setopt($ch, CURLOPT_USERPWD, $tr['username'] . ':' . ($tr['password'] ?? ''));
+            }
+            curl_setopt_array($ch, [
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_TIMEOUT => 8,
+                CURLOPT_POST => true,
+                CURLOPT_POSTFIELDS => $body,
+                CURLOPT_HTTPHEADER => $headers,
+            ]);
+            $resp = curl_exec($ch);
+            $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            curl_close($ch);
+        }
+        $j = json_decode((string)$resp, true);
+        if ($code === 200 && is_array($j) && ($j['result'] ?? '') === 'success') {
+            return ['ok' => true, 'arguments' => $j['arguments'] ?? []];
+        }
+        return ['ok' => false, 'message' => 'RPC error HTTP '.$code.': '.substr((string)$resp, 0, 180)];
+    }
+
+
+    private static function fetchesThisHour(array $meta): int {
+        $bucket = $meta['acq_hour_bucket'] ?? null;
+        $hour = date('Y-m-d-H');
+        if ($bucket !== $hour) return 0;
+        return (int)($meta['acq_hour_count'] ?? 0);
+    }
+
+    private static function bumpFetchCount(): void {
+        $meta = Store::get('runtime_meta', []);
+        if (!is_array($meta)) $meta = [];
+        $hour = date('Y-m-d-H');
+        if (($meta['acq_hour_bucket'] ?? '') !== $hour) {
+            $meta['acq_hour_bucket'] = $hour;
+            $meta['acq_hour_count'] = 0;
+        }
+        $meta['acq_hour_count'] = (int)$meta['acq_hour_count'] + 1;
+        $meta['acq_last_fetch_at'] = date('c');
+        Store::set('runtime_meta', $meta);
+    }
+
+    public static function canFetchNow(array $opts = []): array {
+        $settings = Store::settings();
+        $acq = $settings['acquisition'] ?? [];
+        $allowFallback = !empty($opts['allow_rss_fallback']) && !empty($acq['rss_fallback_search']);
+        if (empty($acq['enabled']) && !$allowFallback) return ['ok' => false, 'reason' => 'Acquisition disabled'];
+        // Same HTTP batch (multi-quality RSS fallback) reuses one gate.
+        if (!empty($opts['skip_rate_limit'])) return ['ok' => true];
+        $meta = Store::get('runtime_meta', []);
+        if (!is_array($meta)) $meta = [];
+        $min = max(0, (int)($acq['min_interval_seconds'] ?? 120));
+        $jitter = max(0, (int)($acq['jitter_seconds'] ?? 30));
+        // Jitter only when a real min interval is configured (min=0 means "no wait").
+        $need = $min > 0 ? ($min + ($jitter > 0 ? random_int(0, $jitter) : 0)) : 0;
+        $last = isset($meta['acq_last_fetch_ts']) ? (int)$meta['acq_last_fetch_ts'] : 0;
+        $now = time();
+        // Clock skew / future stamp must never block forever.
+        if ($last > $now + 5) {
+            $meta['acq_last_fetch_ts'] = 0;
+            Store::set('runtime_meta', $meta);
+            $last = 0;
+        }
+        $elapsed = $last > 0 ? ($now - $last) : $need;
+        if ($last && $need > 0 && $elapsed < $need) {
+            $retry = max(1, $need - $elapsed);
+            return [
+                'ok' => false,
+                'reason' => 'Rate limited (min interval — retry in ' . $retry . 's)',
+                'retry_in' => $retry,
+                'min_interval_seconds' => $min,
+            ];
+        }
+        $max = max(1, (int)($acq['max_per_hour'] ?? 20));
+        $used = self::fetchesThisHour($meta);
+        if ($used >= $max) {
+            // Hour bucket rolls over at next clock hour — never "forever".
+            $retry = max(1, 3600 - ((int)date('i') * 60 + (int)date('s')));
+            return [
+                'ok' => false,
+                'reason' => 'Rate limited (max ' . $max . '/hour — retry in ~' . $retry . 's)',
+                'retry_in' => $retry,
+                'max_per_hour' => $max,
+                'fetches_this_hour' => $used,
+            ];
+        }
+        return ['ok' => true];
+    }
+
+    /** Count configured search-capable feeds ({query}/{q} or type=search|apibay|json). */
+    public static function countSearchFeeds(array $feeds = null): int {
+        if ($feeds === null) {
+            $feeds = Store::settings()['acquisition']['feeds'] ?? [];
+        }
+        $n = 0;
+        foreach ($feeds as $feed) {
+            $url = is_array($feed) ? ($feed['url'] ?? '') : (string)$feed;
+            if ($url === '') continue;
+            $type = is_array($feed) ? strtolower((string)($feed['type'] ?? '')) : '';
+            if (in_array($type, ['search', 'apibay', 'json'], true)
+                || strpos($url, '{query}') !== false
+                || strpos($url, '{q}') !== false
+                || stripos($url, 'apibay.org') !== false) {
+                $n++;
+            }
+        }
+        return $n;
+    }
+
+    public static function fetchFeeds(): array {
+        $gate = self::canFetchNow();
+        if (!$gate['ok']) return $gate + ['items' => []];
+
+        $settings = Store::settings();
+        $feeds = $settings['acquisition']['feeds'] ?? [];
+        $found = [];
+        foreach ($feeds as $feed) {
+            $url = is_array($feed) ? ($feed['url'] ?? '') : (string)$feed;
+            if ($url === '') continue;
+            $xml = self::httpGet($url);
+            if ($xml === null) continue;
+            $found = array_merge($found, self::parseRss($xml, $url));
+        }
+
+        $meta = Store::get('runtime_meta', []);
+        if (!is_array($meta)) $meta = [];
+        $meta['acq_last_fetch_ts'] = time();
+        Store::set('runtime_meta', $meta);
+        self::bumpFetchCount();
+
+        return ['ok' => true, 'items' => $found, 'count' => count($found)];
+    }
+
+    private static function httpGet(string $url): ?string {
+        if (!preg_match('#^https?://#i', $url)) return null;
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_TIMEOUT => 20,
+            CURLOPT_USERAGENT => 'Vaultcast/' . STREAM_VERSION . ' (+acquire)',
+            CURLOPT_SSL_VERIFYPEER => true,
+        ]);
+        $body = curl_exec($ch);
+        $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        if ($body === false || $code >= 400) return null;
+        return $body;
+    }
+
+    /** Append configured default trackers to a magnet URI. */
+    private static function appendDefaultTrackers(string $magnet): string {
+        if ($magnet === '' || stripos($magnet, 'magnet:?') !== 0) return $magnet;
+        $trackers = Store::settings()['acquisition']['default_trackers'] ?? [];
+        if (!is_array($trackers) || $trackers === []) return $magnet;
+        foreach ($trackers as $tr) {
+            $tr = trim((string)$tr);
+            if ($tr === '') continue;
+            // Avoid duplicating a tracker already present in the magnet
+            if (stripos($magnet, rawurlencode($tr)) !== false || stripos($magnet, $tr) !== false) continue;
+            $magnet .= '&tr=' . rawurlencode($tr);
+        }
+        return $magnet;
+    }
+
+    /** Parse Apibay / ThePirateBay JSON search (`[{name,info_hash,seeders,...}]`). */
+    private static function parseApibayJson(string $json, string $feedUrl): array {
+        $out = [];
+        $data = json_decode($json, true);
+        if (!is_array($data)) return $out;
+        foreach ($data as $row) {
+            if (!is_array($row)) continue;
+            $name = trim((string)($row['name'] ?? ''));
+            $hash = strtolower(trim((string)($row['info_hash'] ?? '')));
+            if ($name === '' || !preg_match('/^[a-f0-9]{40}$/', $hash)) continue;
+            // Apibay sentinel for empty result set
+            if ($hash === '0000000000000000000000000000000000000000') continue;
+            $seeds = isset($row['seeders']) ? (int)$row['seeders'] : null;
+            $magnet = self::appendDefaultTrackers(
+                'magnet:?xt=urn:btih:' . $hash . '&dn=' . rawurlencode($name)
+            );
+            $out[] = [
+                'title' => $name,
+                'link' => 'https://thepiratebay.org/description.php?id=' . rawurlencode((string)($row['id'] ?? '')),
+                'enclosure' => '',
+                'magnet' => $magnet,
+                'guid' => $hash,
+                'feed' => $feedUrl,
+                'seeds' => $seeds,
+                'quality' => self::detectQuality($name),
+                'language' => self::detectLanguage($name),
+            ];
+        }
+        return $out;
+    }
+
+    /** Parse RSS/Atom or JSON search body into normalized hit list. */
+    private static function parseSearchBody(string $body, string $feedUrl, string $type = ''): array {
+        $trim = ltrim($body);
+        $type = strtolower($type);
+        if ($type === 'apibay' || $type === 'json' || $trim !== '' && ($trim[0] === '[' || $trim[0] === '{')) {
+            if ($trim[0] === '[' || (stripos($feedUrl, 'apibay.org') !== false) || $type === 'apibay' || $type === 'json') {
+                $j = self::parseApibayJson($body, $feedUrl);
+                if ($j || $trim[0] === '[') return $j;
+            }
+        }
+        return self::parseRss($body, $feedUrl);
+    }
+
+    private static function parseRss(string $xml, string $feedUrl): array {
+        $out = [];
+        libxml_use_internal_errors(true);
+        $sx = @simplexml_load_string($xml);
+        if ($sx === false) return $out;
+        $items = $sx->channel->item ?? $sx->entry ?? [];
+        foreach ($items as $item) {
+            $title = trim((string)($item->title ?? ''));
+            $link = trim((string)($item->link ?? ''));
+            if ($link === '' && isset($item->link['href'])) $link = (string)$item->link['href'];
+            $enclosure = '';
+            if (isset($item->enclosure['url'])) $enclosure = (string)$item->enclosure['url'];
+            $magnet = '';
+            $guid = trim((string)($item->guid ?? $item->id ?? ''));
+            $desc = trim((string)($item->description ?? $item->summary ?? ''));
+            if (preg_match('#magnet:\?\S+#', $desc . ' ' . $link, $m)) {
+                $magnet = $m[0];
+            }
+            // Nyaa / common torrent RSS infoHash → magnet
+            if ($magnet === '' && is_object($item) && method_exists($item, 'children')) {
+                foreach (['https://nyaa.si/xmlns/nyaa', 'nyaa'] as $ns) {
+                    try {
+                        $kids = $ns === 'nyaa' ? $item->children('nyaa', true) : $item->children($ns);
+                        if ($kids && isset($kids->infoHash)) {
+                            $ih = strtolower(trim((string)$kids->infoHash));
+                            if (preg_match('/^[a-f0-9]{40}$/', $ih)) {
+                                $magnet = 'magnet:?xt=urn:btih:' . $ih . '&dn=' . rawurlencode($title);
+                            }
+                        }
+                    } catch (Throwable $e) { /* ignore */ }
+                }
+            }
+            if ($magnet === '' && preg_match('/\b([a-fA-F0-9]{40})\b/', $desc, $hm)) {
+                $magnet = 'magnet:?xt=urn:btih:' . strtolower($hm[1]) . '&dn=' . rawurlencode($title);
+            }
+            // Ensure configured default trackers are present on every magnet
+            if ($magnet !== '') {
+                $magnet = self::appendDefaultTrackers($magnet);
+            }
+            if ($enclosure === '' && $link !== '' && preg_match('/\.torrent(\?|$)/i', $link)) {
+                $enclosure = $link;
+            }
+            $seeds = self::extractSeeds($item, $desc, $title);
+            $quality = self::detectQuality($title . ' ' . $desc);
+            $lang = self::detectLanguage($title . ' ' . $desc);
+            $out[] = [
+                'title' => $title,
+                'link' => $link,
+                'enclosure' => $enclosure,
+                'magnet' => $magnet,
+                'guid' => $guid,
+                'feed' => $feedUrl,
+                'seeds' => $seeds,
+                'quality' => $quality,
+                'language' => $lang,
+            ];
+        }
+        return $out;
+    }
+
+    public static function enqueue(array $item): array {
+        $q = Store::get('acquire_queue', []);
+        if (!is_array($q)) $q = [];
+        $entry = [
+            'id' => bin2hex(random_bytes(8)),
+            'title' => $item['title'] ?? 'Unknown',
+            'magnet' => $item['magnet'] ?? '',
+            'url' => ($item['enclosure'] ?? '') ?: ($item['link'] ?? ''),
+            'status' => 'queued',
+            'created_at' => date('c'),
+            'message' => '',
+            'query' => $item['query'] ?? null,
+            'show' => $item['show'] ?? null,
+            'season' => $item['season'] ?? null,
+            'episode' => $item['episode'] ?? null,
+            'kind' => $item['kind'] ?? 'manual',
+            'section_id' => $item['section_id'] ?? null,
+        ];
+        if (!empty($entry['magnet']) && preg_match('/btih:([a-fA-F0-9]{40})/', (string)$entry['magnet'], $hm)) {
+            $entry['torrent_hash'] = strtolower($hm[1]);
+        }
+        $q[] = $entry;
+        Store::set('acquire_queue', $q);
+
+        $settings = Store::settings();
+        $tr = $settings['acquisition']['transmission'] ?? [];
+        if (!empty($tr['enabled']) && ($entry['magnet'] || $entry['url'])) {
+            $res = self::addToTransmission($entry['magnet'] ?: $entry['url'], $tr);
+            $entry['status'] = $res['ok'] ? 'sent_transmission' : 'queued_local';
+            $entry['message'] = $res['message'] ?? '';
+            if (!empty($res['id'])) $entry['torrent_id'] = (int)$res['id'];
+            if (!empty($res['hash'])) $entry['torrent_hash'] = strtolower((string)$res['hash']);
+            // update last
+            $q[count($q)-1] = $entry;
+            Store::set('acquire_queue', $q);
+        }
+        return ['ok' => true, 'entry' => $entry];
+    }
+
+    public static function transmissionReachable(array $tr): bool {
+        $url = $tr['url'] ?? '';
+        if ($url === '' || !function_exists('curl_init')) return false;
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT => 3,
+            CURLOPT_POST => true,
+            CURLOPT_POSTFIELDS => '{}',
+            CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+        ]);
+        curl_exec($ch);
+        $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        return $code === 409 || $code === 200 || $code === 401;
+    }
+
+
+    /** Build Transmission seed args from settings. Default: no seeding. */
+    public static function seedingPolicy(array $tr = null): array {
+        if ($tr === null) {
+            $tr = Store::settings()['acquisition']['transmission'] ?? [];
+        }
+        $allow = !empty($tr['allow_seeding']);
+        $ratio = isset($tr['seed_ratio_limit']) ? (float)$tr['seed_ratio_limit'] : 0.0;
+        $idle = isset($tr['seed_idle_minutes']) ? (int)$tr['seed_idle_minutes'] : 0;
+        if (!$allow) {
+            $ratio = 0.0;
+            $idle = 0;
+        }
+        return [
+            'allow_seeding' => $allow,
+            'seed_ratio_limit' => $ratio,
+            'seed_idle_minutes' => max(0, $idle),
+            'apply_to_existing' => !isset($tr['apply_to_existing']) || !empty($tr['apply_to_existing']),
+        ];
+    }
+
+    /**
+     * Apply seeding policy to Transmission session (+ optional existing torrents).
+     * When allow_seeding=false: ratio 0 + idle 0 so torrents stop when download finishes.
+     */
+    public static function applyTransmissionSeedingPolicy(array $opts = []): array {
+        $tr = Store::settings()['acquisition']['transmission'] ?? [];
+        if (isset($tr['enabled']) && !$tr['enabled']) {
+            return ['ok' => false, 'reason' => 'Transmission disabled'];
+        }
+        $policy = self::seedingPolicy($tr);
+        $allow = $policy['allow_seeding'];
+        $ratio = $policy['seed_ratio_limit'];
+        $idle = $policy['seed_idle_minutes'];
+
+        // Session defaults for new torrents that inherit global mode
+        $sessionArgs = [
+            'seedRatioLimited' => $allow ? ($ratio > 0) : true,
+            'seedRatioLimit' => $allow ? max(0.0, $ratio) : 0.0,
+            'idle-seeding-limit-enabled' => $allow ? ($idle > 0) : true,
+            'idle-seeding-limit' => $allow ? max(0, $idle) : 0,
+        ];
+        $session = self::transmissionRpc($tr, [
+            'method' => 'session-set',
+            'arguments' => $sessionArgs,
+        ]);
+        if (empty($session['ok'])) {
+            return ['ok' => false, 'reason' => $session['message'] ?? 'session-set failed', 'policy' => $policy];
+        }
+
+        $updated = 0;
+        $applyExisting = !empty($opts['apply_existing']) || (!isset($opts['apply_existing']) && $policy['apply_to_existing']);
+        if ($applyExisting) {
+            $list = self::transmissionRpc($tr, [
+                'method' => 'torrent-get',
+                'arguments' => ['fields' => ['id']],
+            ]);
+            $ids = [];
+            foreach (($list['arguments']['torrents'] ?? []) as $tor) {
+                if (isset($tor['id'])) $ids[] = (int)$tor['id'];
+            }
+            if ($ids) {
+                // seedRatioMode/seedIdleMode: 0=global 1=single 2=unlimited
+                $setArgs = [
+                    'ids' => $ids,
+                    'seedRatioMode' => $allow ? ($ratio > 0 ? 1 : 2) : 1,
+                    'seedRatioLimit' => $allow ? max(0.0, $ratio) : 0.0,
+                    'seedIdleMode' => $allow ? ($idle > 0 ? 1 : 2) : 1,
+                    'seedIdleLimit' => $allow ? max(0, $idle) : 0,
+                ];
+                $set = self::transmissionRpc($tr, [
+                    'method' => 'torrent-set',
+                    'arguments' => $setArgs,
+                ]);
+                if (!empty($set['ok'])) {
+                    $updated = count($ids);
+                } else {
+                    return [
+                        'ok' => false,
+                        'reason' => $set['message'] ?? 'torrent-set failed',
+                        'policy' => $policy,
+                        'session' => $sessionArgs,
+                    ];
+                }
+            }
+        }
+
+        return [
+            'ok' => true,
+            'policy' => $policy,
+            'session' => $sessionArgs,
+            'torrents_updated' => $updated,
+        ];
+    }
+
+    public static function addToTransmission(string $torrent, array $tr): array {
+        $policy = self::seedingPolicy($tr);
+        $args = [
+            'filename' => $torrent,
+            'download-dir' => Store::settings()['acquisition']['download_path'] ?? '',
+        ];
+        // Per-torrent seed limits (Transmission 3 / RPC 16)
+        if ($args['download-dir'] === '') return ['ok'=>false, 'error'=>'Configure a download directory in Settings first.'];
+        if (!$policy['allow_seeding']) {
+            $args['seedRatioMode'] = 1;   // single
+            $args['seedRatioLimit'] = 0.0; // stop when done
+            $args['seedIdleMode'] = 1;
+            $args['seedIdleLimit'] = 0;
+        } else {
+            $ratio = $policy['seed_ratio_limit'];
+            $idle = $policy['seed_idle_minutes'];
+            if ($ratio > 0) {
+                $args['seedRatioMode'] = 1;
+                $args['seedRatioLimit'] = $ratio;
+            } else {
+                $args['seedRatioMode'] = 2; // unlimited
+            }
+            if ($idle > 0) {
+                $args['seedIdleMode'] = 1;
+                $args['seedIdleLimit'] = $idle;
+            } else {
+                $args['seedIdleMode'] = 2;
+            }
+        }
+        $rpc = self::transmissionRpc($tr, [
+            'method' => 'torrent-add',
+            'arguments' => $args,
+        ]);
+        if (!empty($rpc['ok'])) {
+            $argsOut = $rpc['arguments'] ?? [];
+            $tor = null;
+            $duplicate = false;
+            if (isset($argsOut['torrent-added']) && is_array($argsOut['torrent-added'])) {
+                $tor = $argsOut['torrent-added'];
+            } elseif (isset($argsOut['torrent-duplicate']) && is_array($argsOut['torrent-duplicate'])) {
+                $tor = $argsOut['torrent-duplicate'];
+                $duplicate = true;
+            }
+            return [
+                'ok' => true,
+                'message' => $duplicate ? 'Already in Transmission' : 'Added to Transmission',
+                'seeding' => $policy,
+                'id' => (is_array($tor) && isset($tor['id'])) ? (int)$tor['id'] : null,
+                'hash' => (is_array($tor) && isset($tor['hashString'])) ? strtolower((string)$tor['hashString']) : null,
+                'duplicate' => $duplicate,
+            ];
+        }
+        return ['ok' => false, 'message' => $rpc['message'] ?? 'Transmission add failed'];
+    }
+
+    private static function transmissionSession(string $url, array $tr): ?string {
+        $ch = curl_init($url);
+        if (!empty($tr['username'])) {
+            curl_setopt($ch, CURLOPT_USERPWD, $tr['username'] . ':' . ($tr['password'] ?? ''));
+        }
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HEADER => true,
+            CURLOPT_TIMEOUT => 5,
+            CURLOPT_POST => true,
+            CURLOPT_POSTFIELDS => '{}',
+            CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+        ]);
+        $resp = curl_exec($ch);
+        curl_close($ch);
+        if ($resp && preg_match('/X-Transmission-Session-Id:\\s*(\\S+)/i', $resp, $m)) {
+            return $m[1];
+        }
+        return null;
+    }
+
+    /**
+     * Search configured RSS/Torznab feeds for a query (e.g. "Show Name S02E05").
+     * Feed URLs may include {query} or {q} placeholders. Rate-limited.
+     */
+    public static function searchQuery(string $query, array $opts = []): array {
+        $query = trim($query);
+        if ($query === '') return ['ok' => false, 'reason' => 'Empty query', 'items' => []];
+
+        $settings = Store::settings();
+        $acq = $settings['acquisition'] ?? [];
+        $feeds = $acq['feeds'] ?? [];
+        if (self::countSearchFeeds($feeds) === 0) {
+            return [
+                'ok' => false,
+                'reason' => 'No search feeds configured (add a feed URL with {query} or type apibay/search in Admin → Acquisition)',
+                'items' => [],
+                'query' => $query,
+                'feeds_searched' => 0,
+                'filters' => self::searchFilters($acq),
+            ];
+        }
+
+        $gate = self::canFetchNow($opts);
+        if (!$gate['ok']) return $gate + ['items' => [], 'query' => $query, 'feeds_searched' => 0];
+
+        $found = [];
+        $searched = 0;
+        $errors = 0;
+        foreach ($feeds as $feed) {
+            $url = is_array($feed) ? ($feed['url'] ?? '') : (string)$feed;
+            if ($url === '') continue;
+            $type = is_array($feed) ? strtolower((string)($feed['type'] ?? '')) : '';
+            $isSearch = in_array($type, ['search', 'apibay', 'json'], true)
+                || (strpos($url, '{query}') !== false)
+                || (strpos($url, '{q}') !== false)
+                || stripos($url, 'apibay.org') !== false;
+            if (!$isSearch) continue;
+            $built = str_replace(
+                ['{query}', '{q}', '{QUERY}', '{Q}'],
+                [rawurlencode($query), rawurlencode($query), rawurlencode($query), rawurlencode($query)],
+                $url
+            );
+            // Apibay URLs without placeholder: append q=
+            if (stripos($built, 'apibay.org') !== false && strpos($built, '=') !== false
+                && strpos($url, '{query}') === false && strpos($url, '{q}') === false) {
+                $built .= (strpos($built, '?') === false ? '?' : '&') . 'q=' . rawurlencode($query);
+            }
+            $body = self::httpGet($built);
+            $searched++;
+            if ($body === null) { $errors++; continue; }
+            foreach (self::parseSearchBody($body, $built, $type) as $item) {
+                $item['query'] = $query;
+                $found[] = $item;
+            }
+        }
+
+        // Only consume rate budget when we actually hit a feed.
+        if ($searched > 0 && empty($opts['skip_rate_limit'])) {
+            $meta = Store::get('runtime_meta', []);
+            if (!is_array($meta)) $meta = [];
+            $meta['acq_last_fetch_ts'] = time();
+            Store::set('runtime_meta', $meta);
+            self::bumpFetchCount();
+        }
+
+        $filterOpts = $opts;
+        $filtered = self::filterSearchHits($found, $acq, $filterOpts);
+        return [
+            'ok' => true,
+            'query' => $query,
+            'items' => $filtered,
+            'count' => count($filtered),
+            'raw_count' => count($found),
+            'feeds_searched' => $searched,
+            'feed_errors' => $errors,
+            'filters' => self::searchFilters($acq),
+        ];
+    }
+
+    /** Admin-configurable search filters. */
+    public static function searchFilters(array $acq = null): array {
+        if ($acq === null) {
+            $acq = Store::settings()['acquisition'] ?? [];
+        }
+        $qualities = $acq['preferred_qualities'] ?? ['1080p', '720p'];
+        if (!is_array($qualities)) $qualities = ['1080p', '720p'];
+        $langs = $acq['language_filters'] ?? [];
+        if (!is_array($langs)) $langs = [];
+        $containers = $acq['preferred_containers'] ?? ['mp4'];
+        if (!is_array($containers) || !$containers) $containers = ['mp4'];
+        return [
+            'min_seeds' => (int)($acq['min_seeds'] ?? 1),
+            'preferred_qualities' => array_values(array_filter(array_map('strval', $qualities))),
+            'language_filters' => array_values(array_filter(array_map('strval', $langs))),
+            // Missing movies/TV: DirectPlay-friendly containers only (default mp4)
+            'preferred_containers' => array_values(array_filter(array_map(function ($c) {
+                return strtolower(trim((string)$c));
+            }, $containers))),
+            'rss_fallback_search' => !empty($acq['rss_fallback_search']),
+            'min_interval_seconds' => (int)($acq['min_interval_seconds'] ?? 120),
+            'max_per_hour' => (int)($acq['max_per_hour'] ?? 20),
+        ];
+    }
+
+    /**
+     * User-initiated RSS search for movies/TV/anime with quality preferences.
+     * Appends preferred qualities to the query when configured.
+     */
+    public static function searchRssFallback(string $query, array $opts = []): array {
+        $query = trim($query);
+        if ($query === '') return ['ok' => false, 'reason' => 'Empty query', 'items' => []];
+        $acq = Store::settings()['acquisition'] ?? [];
+        $filters = self::searchFilters($acq);
+        if (empty($filters['rss_fallback_search']) && empty($opts['force'])) {
+            return [
+                'ok' => false,
+                'reason' => 'RSS fallback search disabled in admin settings',
+                'items' => [],
+                'filters' => $filters,
+            ];
+        }
+        if (self::countSearchFeeds($acq['feeds'] ?? []) === 0) {
+            return [
+                'ok' => false,
+                'reason' => 'No search feeds configured (Admin → Acquisition: add URL with {query}, e.g. Nyaa RSS or Apibay)',
+                'items' => [],
+                'filters' => $filters,
+                'feeds_searched' => 0,
+            ];
+        }
+
+        $qualities = $filters['preferred_qualities'] ?: ['1080p', '720p'];
+        // Prefer bare + quality queries first; container token last (many titles omit mp4).
+        $queries = [$query];
+        foreach ($qualities as $qual) {
+            $queries[] = $query . ' ' . $qual;
+        }
+        $tried = [];
+        $all = [];
+        $lastGateFail = null;
+        $feedsSearched = 0;
+        $first = true;
+        foreach ($queries as $qq) {
+            if (isset($tried[$qq])) continue;
+            $tried[$qq] = true;
+            $callOpts = [
+                'allow_rss_fallback' => true,
+                // Soft container: rank mp4 higher, do not hard-drop mkv/etc for UI search.
+                'soft_containers' => true,
+            ];
+            if (!$first) {
+                // One user click = one rate-limit budget; further quality variants reuse it.
+                $callOpts['skip_rate_limit'] = true;
+            }
+            $last = self::searchQuery($qq, $callOpts);
+            $first = false;
+            $feedsSearched = max($feedsSearched, (int)($last['feeds_searched'] ?? 0));
+            if (!($last['ok'] ?? false) && empty($last['items'])) {
+                $lastGateFail = $last;
+                // Keep any prior hits; do not discard as a bare rate-limit error.
+                if ($all) break;
+                return $last + ['filters' => $filters, 'tried' => array_keys($tried)];
+            }
+            foreach ($last['items'] ?? [] as $it) {
+                $key = ($it['magnet'] ?? '') . '|' . ($it['guid'] ?? '') . '|' . ($it['title'] ?? '');
+                if ($key === '||' || isset($all[$key])) continue;
+                $it['search_query'] = $qq;
+                $all[$key] = $it;
+            }
+            if (count($all) >= 25) break;
+        }
+        $items = array_values($all);
+        $containers = array_map('strtolower', $filters['preferred_containers'] ?? ['mp4']);
+        usort($items, function ($a, $b) use ($containers) {
+            $ca = self::containerBoost($a, $containers);
+            $cb = self::containerBoost($b, $containers);
+            if ($ca !== $cb) return $cb - $ca;
+            $qa = self::qualityRank($a['quality'] ?? '');
+            $qb = self::qualityRank($b['quality'] ?? '');
+            if ($qa !== $qb) return $qb - $qa;
+            return ((int)($b['seeds'] ?? 0)) - ((int)($a['seeds'] ?? 0));
+        });
+        $slice = array_slice($items, 0, 40);
+        $out = [
+            'ok' => true,
+            'query' => $query,
+            'items' => $slice,
+            'count' => count($slice),
+            'tried' => array_keys($tried),
+            'filters' => $filters,
+            'feeds_searched' => $feedsSearched,
+        ];
+        if (!$slice && $lastGateFail) {
+            $out['note'] = $lastGateFail['reason'] ?? null;
+        }
+        if (!$slice) {
+            $out['hint'] = 'No torrents matched filters (seeds / quality / language). Feeds responded: '
+                . $feedsSearched . '. Try lowering min seeds or widening qualities.';
+        }
+        return $out;
+    }
+
+    private static function containerBoost(array $item, array $containers): int {
+        if (!$containers) return 0;
+        $blob = strtolower((string)($item['title'] ?? '') . ' ' . (string)($item['description'] ?? ''));
+        foreach ($containers as $want) {
+            if ($want !== '' && strpos($blob, $want) !== false) return 10;
+        }
+        return 0;
+    }
+
+    public static function filterSearchHits(array $found, array $acq, array $opts = []): array {
+        $filters = self::searchFilters($acq);
+        $minSeeds = (int)$filters['min_seeds'];
+        $qualities = array_map('strtolower', $filters['preferred_qualities']);
+        $langs = array_map('strtolower', $filters['language_filters']);
+        $containers = array_map('strtolower', $filters['preferred_containers'] ?? ['mp4']);
+        $softContainers = !empty($opts['soft_containers']);
+        $out = [];
+        foreach ($found as $item) {
+            $seeds = $item['seeds'] ?? null;
+            if ($seeds !== null && $minSeeds > 0 && (int)$seeds < $minSeeds) continue;
+            $titleL = strtolower((string)($item['title'] ?? ''));
+            $descL = strtolower((string)($item['description'] ?? ($item['desc'] ?? '')));
+            $blob = $titleL . ' ' . $descL;
+            if ($containers && !$softContainers) {
+                $okC = false;
+                foreach ($containers as $want) {
+                    if ($want !== '' && strpos($blob, $want) !== false) { $okC = true; break; }
+                }
+                // Reject known non-DirectPlay containers when preferred list is set
+                $bad = ['mkv', 'avi', 'wmv', 'mov', 'ts', 'm2ts', 'mpg', 'mpeg', 'flv', 'divx', 'xvid', 'webm'];
+                $hasBad = false;
+                foreach ($bad as $b) {
+                    if (preg_match('/\b' . preg_quote($b, '/') . '\b/i', $blob)) { $hasBad = true; break; }
+                }
+                if ($hasBad && !$okC) continue;
+                // If title clearly names a container and it is not preferred, skip
+                if (!$okC && preg_match('/\b(mp4|mkv|avi|wmv|mov|m4v|webm)\b/i', $blob)) continue;
+            }
+            $q = strtolower((string)($item['quality'] ?? ''));
+            if ($qualities) {
+                $okQ = false;
+                foreach ($qualities as $want) {
+                    if ($want !== '' && ($q === $want || strpos($titleL, $want) !== false)) {
+                        $okQ = true;
+                        break;
+                    }
+                }
+                // Keep unknown quality; drop only when a *different* known quality is present
+                if (!$okQ && $q !== '' && !in_array($q, $qualities, true)) {
+                    $known = ['2160p','4k','1080p','720p','480p','360p'];
+                    if (in_array($q, $known, true)) continue;
+                }
+            }
+            if ($langs) {
+                $lang = strtolower((string)($item['language'] ?? ''));
+                $okL = false;
+                foreach ($langs as $want) {
+                    if ($want === '') continue;
+                    if ($lang === $want || strpos($titleL, $want) !== false) { $okL = true; break; }
+                }
+                // Only drop when a language was detected and it does not match filters
+                if (!$okL && $lang !== '') continue;
+            }
+            $out[] = $item;
+        }
+        usort($out, function ($a, $b) use ($containers) {
+            $ca = self::containerBoost($a, $containers);
+            $cb = self::containerBoost($b, $containers);
+            if ($ca !== $cb) return $cb - $ca;
+            $qa = self::qualityRank($a['quality'] ?? '');
+            $qb = self::qualityRank($b['quality'] ?? '');
+            if ($qa !== $qb) return $qb - $qa;
+            return ((int)($b['seeds'] ?? 0)) - ((int)($a['seeds'] ?? 0));
+        });
+        return $out;
+    }
+
+    private static function qualityRank(string $q): int {
+        $q = strtolower($q);
+        $map = ['2160p'=>400,'4k'=>400,'1080p'=>300,'720p'=>200,'480p'=>100,'360p'=>50];
+        return $map[$q] ?? 0;
+    }
+
+    private static function extractSeeds($item, string $desc, string $title): ?int {
+        // Torznab attr + Nyaa <nyaa:seeders> when present
+        if (is_object($item) && method_exists($item, 'children')) {
+            foreach (['http://torznab.com/schemas/2014/feed', 'torznab'] as $ns) {
+                try {
+                    $kids = $ns === 'torznab' ? $item->children('torznab', true) : $item->children($ns);
+                    if ($kids && isset($kids->attr)) {
+                        foreach ($kids->attr as $attr) {
+                            $name = strtolower((string)($attr['name'] ?? ''));
+                            if (in_array($name, ['seeders','seeds'], true)) {
+                                return (int)((string)($attr['value'] ?? '0'));
+                            }
+                        }
+                    }
+                } catch (Throwable $e) { /* ignore */ }
+            }
+            foreach (['https://nyaa.si/xmlns/nyaa', 'nyaa'] as $ns) {
+                try {
+                    $kids = $ns === 'nyaa' ? $item->children('nyaa', true) : $item->children($ns);
+                    if ($kids && isset($kids->seeders)) {
+                        return (int)((string)$kids->seeders);
+                    }
+                } catch (Throwable $e) { /* ignore */ }
+            }
+        }
+        if (preg_match('/\bseeders?[\s:=]+(\d+)/i', $desc . ' ' . $title, $m)) {
+            return (int)$m[1];
+        }
+        return null;
+    }
+
+    private static function detectQuality(string $text): string {
+        if (preg_match('/\b(2160p|4k|1080p|720p|480p|360p)\b/i', $text, $m)) {
+            $q = strtolower($m[1]);
+            return $q === '4k' ? '2160p' : $q;
+        }
+        return '';
+    }
+
+    private static function detectLanguage(string $text): string {
+        if (preg_match('/\b(ENG|EN|English|MULTI|VOSTFR|FRENCH|GER|GERMAN|SPA|SPANISH|ITA|JAP|JPN)\b/i', $text, $m)) {
+            return strtoupper($m[1]);
+        }
+        return '';
+    }
+
+    /** Minimal public badge list (no full Transmission dump). */
+    public static function publicDownloadBadges(): array {
+        $full = self::downloadStatus();
+        $badges = [];
+        foreach (($full['transmission']['torrents'] ?? []) as $t) {
+            $m = $t['match'] ?? null;
+            if (!$m) continue;
+            $badges[] = [
+                'show_guess' => $m['show_guess'] ?? null,
+                'season' => $m['season'] ?? null,
+                'episode' => $m['episode'] ?? null,
+                'percent' => $t['percent'] ?? null,
+                'status' => $t['status'] ?? 'downloading',
+                'name' => $t['name'] ?? '',
+            ];
+        }
+        foreach ($full['local_queue'] ?? [] as $e) {
+            if (!empty($e['season']) && !empty($e['episode'])) {
+                $st = $e['status'] ?? 'queued';
+                if (in_array($st, ['cancelled','done','failed'], true)) continue;
+                $badges[] = [
+                    'show_guess' => $e['show'] ?? null,
+                    'season' => $e['season'],
+                    'episode' => $e['episode'],
+                    'percent' => null,
+                    'status' => $st,
+                    'name' => $e['title'] ?? $e['query'] ?? '',
+                    'queue_id' => $e['id'] ?? null,
+                ];
+            }
+        }
+        return [
+            'ok' => true,
+            'downloading' => $badges,
+            'transmission_reachable' => !empty($full['transmission']['reachable']),
+        ];
+    }
+
+    public static function cancelLocal(string $id): array {
+        $q = Store::get('acquire_queue', []);
+        if (!is_array($q)) $q = [];
+        $found = false;
+        foreach ($q as &$e) {
+            if (($e['id'] ?? '') !== $id) continue;
+            $e['status'] = 'cancelled';
+            $e['message'] = 'Cancelled by admin';
+            $e['cancelled_at'] = date('c');
+            $found = true;
+        }
+        unset($e);
+        if (!$found) return ['ok' => false, 'error' => 'Queue entry not found'];
+        Store::set('acquire_queue', $q);
+        return ['ok' => true, 'id' => $id];
+    }
+
+    public static function cancelTransmission(int $torrentId, bool $deleteLocal = false): array {
+        if ($torrentId < 1) return ['ok' => false, 'error' => 'Invalid torrent id'];
+        $tr = Store::settings()['acquisition']['transmission'] ?? [];
+        if (empty($tr['enabled'])) return ['ok' => false, 'error' => 'Transmission disabled'];
+        $rpc = self::transmissionRpc($tr, [
+            'method' => 'torrent-remove',
+            'arguments' => [
+                'ids' => [$torrentId],
+                'delete-local-data' => $deleteLocal,
+            ],
+        ]);
+        if (empty($rpc['ok'])) {
+            return ['ok' => false, 'error' => $rpc['message'] ?? 'torrent-remove failed'];
+        }
+        return ['ok' => true, 'id' => $torrentId, 'delete_local_data' => $deleteLocal];
+    }
+
+    /** Cancel in-progress episode search / matching download by show+SxxExx. */
+    public static function cancelEpisodeSearch(string $showTitle, int $season, int $episode): array {
+        $code = sprintf('S%02dE%02d', $season, $episode);
+        $cancelled = [];
+        $q = Store::get('acquire_queue', []);
+        if (!is_array($q)) $q = [];
+        $showL = strtolower(trim($showTitle));
+        foreach ($q as &$e) {
+            $matchEp = ((int)($e['season'] ?? -1) === $season && (int)($e['episode'] ?? -1) === $episode);
+            $qq = strtoupper((string)($e['query'] ?? $e['title'] ?? ''));
+            $nameHas = strpos($qq, strtoupper($code)) !== false;
+            $showOk = $showL === '' || strpos(strtolower((string)($e['show'] ?? '')), explode(' ', $showL)[0]) !== false
+                || strpos(strtolower((string)($e['query'] ?? '')), explode(' ', $showL)[0]) !== false;
+            if (($matchEp || $nameHas) && $showOk && !in_array($e['status'] ?? '', ['cancelled','done'], true)) {
+                $e['status'] = 'cancelled';
+                $e['message'] = 'Cancelled episode search';
+                $e['cancelled_at'] = date('c');
+                $cancelled[] = ['kind' => 'local', 'id' => $e['id'] ?? null];
+            }
+        }
+        unset($e);
+        Store::set('acquire_queue', $q);
+
+        $tr = Store::settings()['acquisition']['transmission'] ?? [];
+        $st = self::transmissionStatus($tr);
+        if (!empty($st['reachable'])) {
+            foreach ($st['torrents'] as $t) {
+                $m = $t['match'] ?? null;
+                $name = strtoupper((string)($t['name'] ?? ''));
+                $hit = ($m && (int)$m['season'] === $season && (int)$m['episode'] === $episode)
+                    || strpos($name, strtoupper($code)) !== false;
+                if (!$hit) continue;
+                if ($showL) {
+                    $token = explode(' ', $showL)[0];
+                    $guess = strtolower((string)(($m['show_guess'] ?? '') . ' ' . ($t['name'] ?? '')));
+                    if ($token && strpos($guess, $token) === false) continue;
+                }
+                $id = (int)($t['id'] ?? 0);
+                if ($id > 0) {
+                    $r = self::cancelTransmission($id);
+                    if (!empty($r['ok'])) $cancelled[] = ['kind' => 'transmission', 'id' => $id, 'name' => $t['name'] ?? ''];
+                }
+            }
+        }
+        return ['ok' => true, 'cancelled' => $cancelled, 'count' => count($cancelled), 'query_code' => $code];
+    }
+
+    /**
+     * Request a missing episode: search RSS with "Show SxxExx", enqueue best hit
+     * to Transmission if reachable else local queue. If no search feeds configured,
+     * still enqueues a placeholder search request.
+     */
+    public static function requestEpisode(string $showTitle, int $season, int $episode, array $opts = []): array {
+        $showTitle = trim($showTitle);
+        if ($showTitle === '') return ['ok' => false, 'error' => 'show title required'];
+        $code = sprintf('S%02dE%02d', $season, $episode);
+        $query = trim($showTitle . ' ' . $code);
+        if (!empty($opts['query'])) $query = trim((string)$opts['query']);
+
+        $sectionId = $opts['section_id'] ?? null;
+        $optKind = strtolower(trim((string)($opts['kind'] ?? '')));
+        if (in_array($optKind, ['anime', 'tv', 'movie', 'disney'], true)) {
+            $kindIntent = $optKind;
+            $kindHit = $optKind;
+        } else {
+            $kindIntent = 'episode_search';
+            $kindHit = 'episode_hit';
+        }
+
+        $settings = Store::settings();
+        $acq = $settings['acquisition'] ?? [];
+        if (empty($acq['enabled'])) {
+            // Still allow queueing a request so admin can process later
+            $res = self::enqueue([
+                'title' => 'SEARCH: ' . $query,
+                'magnet' => '',
+                'link' => '',
+                'enclosure' => '',
+                'query' => $query,
+                'section_id' => $sectionId,
+                'show' => $showTitle,
+                'season' => $season,
+                'episode' => $episode,
+                'kind' => $kindIntent,
+            ]);
+            return [
+                'ok' => true,
+                'queued' => true,
+                'searched' => false,
+                'reason' => 'Acquisition disabled — queued search request locally',
+                'query' => $query,
+                'section_id' => $sectionId,
+                'entry' => $res['entry'] ?? null,
+            ];
+        }
+
+        $hasSearchFeed = false;
+        foreach ($acq['feeds'] ?? [] as $feed) {
+            $url = is_array($feed) ? ($feed['url'] ?? '') : (string)$feed;
+            if ($url === '') continue;
+            if ((is_array($feed) && (($feed['type'] ?? '') === 'search'))
+                || strpos($url, '{query}') !== false
+                || strpos($url, '{q}') !== false) {
+                $hasSearchFeed = true;
+                break;
+            }
+        }
+
+        $picked = null;
+        $search = null;
+        if ($hasSearchFeed) {
+            $search = self::searchQuery($query);
+            if (!empty($search['items'])) {
+                // Prefer magnet, then enclosure, then link
+                foreach ($search['items'] as $item) {
+                    if (!empty($item['magnet']) || !empty($item['enclosure']) || !empty($item['link'])) {
+                        $picked = $item;
+                        break;
+                    }
+                }
+            } elseif (!($search['ok'] ?? false)) {
+                // Rate limited — queue search intent without remote fetch
+                $res = self::enqueue([
+                    'title' => 'SEARCH: ' . $query,
+                    'magnet' => '',
+                    'link' => '',
+                    'enclosure' => '',
+                    'query' => $query,
+                'section_id' => $sectionId,
+                    'show' => $showTitle,
+                    'season' => $season,
+                    'episode' => $episode,
+                    'kind' => $kindIntent,
+                ]);
+                return [
+                    'ok' => true,
+                    'queued' => true,
+                    'searched' => false,
+                    'reason' => $search['reason'] ?? 'Rate limited',
+                    'retry_in' => $search['retry_in'] ?? null,
+                    'query' => $query,
+                'section_id' => $sectionId,
+                    'entry' => $res['entry'] ?? null,
+                ];
+            }
+        }
+
+        if ($picked) {
+            $res = self::enqueue([
+                'title' => $picked['title'] ?: ('SEARCH: ' . $query),
+                'magnet' => $picked['magnet'] ?? '',
+                'link' => $picked['link'] ?? '',
+                'enclosure' => $picked['enclosure'] ?? '',
+                'query' => $query,
+                'section_id' => $sectionId,
+                'show' => $showTitle,
+                'season' => $season,
+                'episode' => $episode,
+                'kind' => $kindHit,
+            ]);
+            return [
+                'ok' => true,
+                'queued' => true,
+                'searched' => true,
+                'matched' => $picked['title'] ?? null,
+                'query' => $query,
+                'section_id' => $sectionId,
+                'entry' => $res['entry'] ?? null,
+                'search_count' => $search['count'] ?? 0,
+            ];
+        }
+
+        // No hit (or no search feeds) — queue the search intent
+        $res = self::enqueue([
+            'title' => 'SEARCH: ' . $query,
+            'magnet' => '',
+            'link' => '',
+            'enclosure' => '',
+            'query' => $query,
+                'section_id' => $sectionId,
+            'show' => $showTitle,
+            'season' => $season,
+            'episode' => $episode,
+            'kind' => $kindIntent,
+        ]);
+        return [
+            'ok' => true,
+            'queued' => true,
+            'searched' => $hasSearchFeed,
+            'matched' => null,
+            'reason' => $hasSearchFeed ? 'No RSS hit for query' : 'No search feeds configured (use {query} in feed URL)',
+            'query' => $query,
+                'section_id' => $sectionId,
+            'entry' => $res['entry'] ?? null,
+            'search_count' => $search['count'] ?? 0,
+        ];
+    }
+
+    /**
+     * Resolve queued SEARCH intents (empty magnet + query) by searching feeds
+     * and pushing hits to Transmission. Respects min_interval / max_per_hour.
+     * Safe to call from cron or after bulk "fetch missing".
+     */
+    public static function processPendingSearches(array $opts = []): array {
+        $limit = max(1, min(20, (int)($opts['limit'] ?? 3)));
+        $q = Store::get('acquire_queue', []);
+        if (!is_array($q)) $q = [];
+        $processed = [];
+        $skipped = 0;
+        $failed = [];
+        $rateLimited = false;
+        $retryIn = null;
+
+        foreach ($q as $i => $entry) {
+            if (count($processed) >= $limit) break;
+            if (!is_array($entry)) continue;
+            $status = (string)($entry['status'] ?? '');
+            if (!in_array($status, ['queued', 'queued_local'], true)) continue;
+            $magnet = trim((string)($entry['magnet'] ?? ''));
+            $url = trim((string)($entry['url'] ?? ''));
+            $query = trim((string)($entry['query'] ?? ''));
+            // Already has a torrent payload — try Transmission if not yet sent
+            if ($magnet !== '' || $url !== '') {
+                if ($status === 'queued_local' || $status === 'queued') {
+                    $tr = Store::settings()['acquisition']['transmission'] ?? [];
+                    if (!empty($tr['enabled'])) {
+                        $res = self::addToTransmission($magnet !== '' ? $magnet : $url, $tr);
+                        if (!empty($res['ok'])) {
+                            $entry['status'] = 'sent_transmission';
+                            $entry['message'] = $res['message'] ?? '';
+                            if (!empty($res['id'])) $entry['torrent_id'] = (int)$res['id'];
+                            if (!empty($res['hash'])) $entry['torrent_hash'] = strtolower((string)$res['hash']);
+                            $q[$i] = $entry;
+                            Store::set('acquire_queue', $q);
+                            $processed[] = ['id' => $entry['id'] ?? null, 'title' => $entry['title'] ?? '', 'action' => 'sent_transmission'];
+                        }
+                    }
+                }
+                continue;
+            }
+            // Need a search query
+            if ($query === '') {
+                $skipped++;
+                continue;
+            }
+
+            $gate = self::canFetchNow();
+            if (!($gate['ok'] ?? false)) {
+                $rateLimited = true;
+                $retryIn = $gate['retry_in'] ?? null;
+                break;
+            }
+
+            $search = self::searchQuery($query);
+            if (!($search['ok'] ?? false) && empty($search['items'])) {
+                $rateLimited = !empty($search['retry_in']);
+                $retryIn = $search['retry_in'] ?? $retryIn;
+                if ($rateLimited) break;
+                $entry['status'] = 'no_hit';
+                $entry['message'] = $search['reason'] ?? 'No RSS hit for query';
+                $entry['updated_at'] = date('c');
+                $q[$i] = $entry;
+                Store::set('acquire_queue', $q);
+                $failed[] = ['id' => $entry['id'] ?? null, 'query' => $query, 'reason' => $entry['message']];
+                continue;
+            }
+
+            $picked = null;
+            foreach ($search['items'] ?? [] as $item) {
+                if (!empty($item['magnet']) || !empty($item['enclosure']) || !empty($item['link'])) {
+                    $picked = $item;
+                    break;
+                }
+            }
+            if (!$picked) {
+                $entry['status'] = 'no_hit';
+                $entry['message'] = 'No usable magnet/link in search results';
+                $entry['updated_at'] = date('c');
+                $q[$i] = $entry;
+                Store::set('acquire_queue', $q);
+                $failed[] = ['id' => $entry['id'] ?? null, 'query' => $query, 'reason' => $entry['message']];
+                continue;
+            }
+
+            $entry['title'] = $picked['title'] ?: $entry['title'];
+            $entry['magnet'] = $picked['magnet'] ?? '';
+            $entry['url'] = ($picked['enclosure'] ?? '') ?: ($picked['link'] ?? '');
+            if (!empty($entry['magnet']) && preg_match('/btih:([a-fA-F0-9]{40})/', (string)$entry['magnet'], $hm)) {
+                $entry['torrent_hash'] = strtolower($hm[1]);
+            }
+            $entry['updated_at'] = date('c');
+            $entry['message'] = 'Matched: ' . ($picked['title'] ?? '');
+
+            $tr = Store::settings()['acquisition']['transmission'] ?? [];
+            if (!empty($tr['enabled']) && ($entry['magnet'] || $entry['url'])) {
+                $res = self::addToTransmission($entry['magnet'] ?: $entry['url'], $tr);
+                $entry['status'] = !empty($res['ok']) ? 'sent_transmission' : 'queued_local';
+                $entry['message'] = ($entry['message'] . ' — ' . ($res['message'] ?? '')) ?: $entry['message'];
+                if (!empty($res['id'])) $entry['torrent_id'] = (int)$res['id'];
+                if (!empty($res['hash'])) $entry['torrent_hash'] = strtolower((string)$res['hash']);
+            } else {
+                $entry['status'] = 'queued_local';
+                $entry['message'] = ($entry['message'] . ' — Transmission disabled/unreachable') ?: $entry['message'];
+            }
+            $q[$i] = $entry;
+            Store::set('acquire_queue', $q);
+            $processed[] = [
+                'id' => $entry['id'] ?? null,
+                'title' => $entry['title'] ?? '',
+                'query' => $query,
+                'status' => $entry['status'],
+                'action' => 'searched',
+            ];
+        }
+
+        return [
+            'ok' => true,
+            'processed' => count($processed),
+            'items' => $processed,
+            'failed' => $failed,
+            'skipped' => $skipped,
+            'rate_limited' => $rateLimited,
+            'retry_in' => $retryIn,
+        ];
+    }
+
+    /** Queue fetch for every missing episode in a show detail payload. */
+    public static function fetchMissingForShow(array $detail, ?int $onlySeason = null, ?int $onlyEpisode = null): array {
+        $show = $detail['show'] ?? [];
+        $title = $show['title'] ?? '';
+        $queued = [];
+        $errors = [];
+        $sentNow = 0;
+        foreach ($detail['seasons'] ?? [] as $seasonBlock) {
+            $sNum = (int)($seasonBlock['season'] ?? 0);
+            if ($onlySeason !== null && $sNum !== $onlySeason) continue;
+            foreach ($seasonBlock['episodes'] ?? [] as $ep) {
+                if (!empty($ep['available'])) continue;
+                $eNum = $ep['episode'] ?? null;
+                if ($eNum === null) continue;
+                $eNum = (int)$eNum;
+                if ($onlyEpisode !== null && $eNum !== $onlyEpisode) continue;
+                // Skip specials (season 0) unless caller asked for that season explicitly
+                if ($sNum <= 0 && $onlySeason === null) continue;
+                $showSection = (string)($show['section'] ?? '');
+                $typeKind = ($showSection === 'anime' || ($show['type'] ?? '') === 'anime') ? 'anime' : 'tv';
+                $res = self::requestEpisode($title, $sNum, $eNum, [
+                    'kind' => $typeKind,
+                    'section_id' => $showSection !== '' ? $showSection : null,
+                ]);
+                if (!empty($res['entry'])) {
+                    $queued[] = $res['entry'];
+                    if (($res['entry']['status'] ?? '') === 'sent_transmission') $sentNow++;
+                } elseif (!($res['ok'] ?? false)) {
+                    $errors[] = $res;
+                }
+            }
+        }
+
+        // Drain as many pending SEARCH intents as rate limits allow (same request).
+        // Remaining stay queued and are picked up by cron / next processPendingSearches.
+        $drained = self::processPendingSearches(['limit' => 5]);
+        foreach ($drained['items'] ?? [] as $item) {
+            if (($item['status'] ?? '') === 'sent_transmission' || ($item['action'] ?? '') === 'sent_transmission') {
+                $sentNow++;
+            }
+        }
+
+        return [
+            'ok' => true,
+            'show' => $title,
+            'queued' => $queued,
+            'count' => count($queued),
+            'sent_transmission' => $sentNow,
+            'pending_searches' => $drained,
+            'errors' => $errors,
+            'note' => !empty($drained['rate_limited'])
+                ? 'Some episodes are queued as SEARCH intents; they will be searched and sent to Transmission as rate limits allow (every min_interval_seconds). Call processPendingSearches or wait for cron.'
+                : null,
+        ];
+    }
+
+    /**
+     * Remove a download from the local queue and from Transmission.
+     * delete_local_data deletes that torrent's files only when the download
+     * directory is a known download root and not a library section.
+     */
+    public static function removeFromDownloads(array $b): array {
+        $delete = !empty($b['delete_local_data']);
+        $kind = (string)($b['kind'] ?? '');
+        $id = $b['id'] ?? '';
+        $tr = Store::settings()['acquisition']['transmission'] ?? [];
+        $warnings = [];
+        $errors = [];
+        $removedTorrents = [];
+        $removedQueue = [];
+        $targets = [];
+
+        $rpcUp = !empty($tr['enabled']) && self::transmissionReachable($tr);
+        if (!empty($tr['enabled']) && !$rpcUp) {
+            if ($delete) {
+                return ['ok' => false, 'error' => 'Transmission RPC unreachable; refused to delete files', 'delete_local_data' => true];
+            }
+            $warnings[] = 'Transmission RPC unreachable; queue updated but the torrent may still be present';
+        }
+
+        if ($kind === 'local' || $kind === 'queue') {
+            $sid = (string)$id;
+            $entry = self::queueEntryById($sid);
+            if (!$entry) return ['ok' => false, 'error' => 'Queue entry not found'];
+            if ($rpcUp) {
+                foreach (self::listTorrentsRaw($tr) as $tor) {
+                    if (is_array($tor) && self::torrentMatchesEntry($tor, $entry)) $targets[] = $tor;
+                }
+                if (!$targets) $warnings[] = 'No matching Transmission torrent';
+            }
+        } elseif ($kind === 'transmission') {
+            $tid = (int)$id;
+            if ($tid < 1) return ['ok' => false, 'error' => 'Invalid torrent id'];
+            if (empty($tr['enabled'])) return ['ok' => false, 'error' => 'Transmission disabled'];
+            if ($rpcUp) {
+                foreach (self::listTorrentsRaw($tr) as $tor) {
+                    if (is_array($tor) && (int)($tor['id'] ?? 0) === $tid) {
+                        $targets[] = $tor;
+                        break;
+                    }
+                }
+                if (!$targets) $warnings[] = 'Torrent not in Transmission';
+            }
+        } else {
+            return ['ok' => false, 'error' => 'kind must be local|transmission|queue'];
+        }
+
+        foreach ($targets as $tor) {
+            $tid = (int)($tor['id'] ?? 0);
+            if ($tid < 1) continue;
+            if ($delete && !self::downloadDirAllowsDelete((string)($tor['downloadDir'] ?? ''))) {
+                $errors[] = 'Refusing to delete files for "' . ($tor['name'] ?? (string)$tid) . '" (not a download folder)';
+                continue;
+            }
+            $r = self::cancelTransmission($tid, $delete);
+            if (empty($r['ok'])) {
+                $errors[] = $r['error'] ?? ('Failed to remove torrent ' . $tid);
+                continue;
+            }
+            $removedTorrents[] = $tid;
+            $removedQueue = array_merge($removedQueue, self::markQueueRemovedForTorrent($tor, $delete));
+        }
+
+        if ($errors) {
+            return [
+                'ok' => false,
+                'error' => implode('; ', $errors),
+                'warnings' => $warnings,
+                'removed_torrents' => $removedTorrents,
+                'removed_queue' => array_values(array_unique($removedQueue)),
+                'delete_local_data' => $delete,
+            ];
+        }
+
+        if ($kind === 'local' || $kind === 'queue') {
+            $removedQueue = array_merge($removedQueue, self::markQueueRemovedById((string)$id, $delete));
+        }
+
+        self::importLog(
+            'REMOVE kind=' . $kind
+            . ' id=' . (string)$id
+            . ' delete=' . ($delete ? '1' : '0')
+            . ' torrents=' . implode(',', $removedTorrents)
+        );
+
+        return [
+            'ok' => true,
+            'removed_torrents' => $removedTorrents,
+            'removed_queue' => array_values(array_unique(array_filter($removedQueue))),
+            'warnings' => $warnings,
+            'delete_local_data' => $delete,
+        ];
+    }
+
+    public static function requestCancelProcessCompleted(): array {
+        $f = STREAM_DATA . '/process_completed.cancel';
+        @file_put_contents($f, date('c'));
+        return ['ok' => true, 'cancel' => true];
+    }
+
+    /**
+     * Move finished Transmission downloads into the library, then remove the
+     * torrent and its leftover download data. Idempotent via acquire_imports.
+     */
+    public static function processCompletedDownloads(array $opts = []): array {
+        $settings = Store::settings();
+        $acq = $settings['acquisition'] ?? [];
+        $source = (string)($opts['source'] ?? 'manual');
+
+        // Always try to resolve pending SEARCH queue entries (rate-limited).
+        // This is what makes bulk "fetch missing" episodes eventually reach Transmission.
+        $pendingSearches = self::processPendingSearches([
+            'limit' => (int)($opts['search_limit'] ?? ($source === 'cron' ? 2 : 5)),
+        ]);
+
+        $autoOn = !array_key_exists('auto_process_completed', $acq) || !empty($acq['auto_process_completed']);
+        if ($source === 'cron' && !$autoOn && empty($opts['force'])) {
+            return [
+                'ok' => true,
+                'skipped' => true,
+                'reason' => 'auto_process_completed disabled',
+                'processed' => 0,
+                'pending_searches' => $pendingSearches,
+            ];
+        }
+        $tr = $acq['transmission'] ?? [];
+        if (empty($tr['enabled'])) {
+            return ['ok' => false, 'error' => 'Transmission disabled', 'processed' => 0, 'pending_searches' => $pendingSearches];
+        }
+        if (!self::transmissionReachable($tr)) {
+            return ['ok' => false, 'error' => 'Transmission RPC unreachable', 'processed' => 0, 'pending_searches' => $pendingSearches];
+        }
+
+        $lockPath = STREAM_DATA . '/process_completed.lock';
+        $lock = @fopen($lockPath, 'c');
+        if (!$lock || !flock($lock, LOCK_EX | LOCK_NB)) {
+            if ($lock) fclose($lock);
+            return ['ok' => true, 'skipped' => true, 'reason' => 'already running', 'processed' => 0];
+        }
+
+        $cancelFile = STREAM_DATA . '/process_completed.cancel';
+        @unlink($cancelFile);
+
+        $limit = max(1, min(20, (int)($opts['limit'] ?? ($source === 'cron' ? 3 : 8))));
+        $removeTorrent = !array_key_exists('remove_torrent', $opts) || !empty($opts['remove_torrent']);
+        $results = [];
+        $processed = 0;
+        $cancelled = false;
+        $seen = 0;
+
+        try {
+            $raw = self::listTorrentsRaw($tr);
+            $queue = Store::get('acquire_queue', []);
+            if (!is_array($queue)) $queue = [];
+            foreach ($raw as $tor) {
+            Maintenance::checkpoint();
+                if ($processed >= $limit || $seen >= 40) break;
+                if (is_file($cancelFile)) { $cancelled = true; break; }
+                if (!is_array($tor)) continue;
+                $pct = (float)($tor['percentDone'] ?? 0);
+                if ($pct < 0.999) continue;
+                $seen++;
+                $one = self::importFinishedTorrent($tor, $queue, $tr, $removeTorrent, $acq);
+                $results[] = $one;
+                $label = !empty($one['ok']) ? 'OK' : 'SKIP';
+                self::importLog($label . ' ' . ($tor['name'] ?? '') . ' — ' . ($one['message'] ?? $one['error'] ?? ''));
+                if (!empty($one['imported']) || !empty($one['removed'])) $processed++;
+            }
+        } finally {
+            flock($lock, LOCK_UN);
+            fclose($lock);
+            @unlink($cancelFile);
+        }
+
+        return [
+            'ok' => true,
+            'processed' => $processed,
+            'seen' => $seen,
+            'cancelled' => $cancelled,
+            'results' => $results,
+            'source' => $source,
+            'pending_searches' => $pendingSearches ?? null,
+        ];
+    }
+
+    private static function importFinishedTorrent(array $tor, array $queue, array $tr, bool $removeTorrent, array $acq): array {
+        $name = (string)($tor['name'] ?? '');
+        $hash = strtolower((string)($tor['hashString'] ?? ''));
+        $tid = (int)($tor['id'] ?? 0);
+        $key = $hash !== '' ? $hash : ('id:' . $tid);
+        $entry = self::matchQueueEntry($tor, $queue);
+        $records = self::importRecords();
+        $prev = $records[$key] ?? null;
+
+        // Ingest inbox — ask the admin (TV / Movie / Anime + online match) before importing
+        $prevImported = is_array($prev) && ($prev['status'] ?? '') === 'imported';
+        if (!$prevImported && class_exists('Ingest') && Ingest::needsReview($tor, $entry, $acq)) {
+            Ingest::noteAwaiting($tor, $entry);
+            return ['ok' => true, 'imported' => false, 'removed' => false, 'review' => true, 'name' => $name, 'message' => 'Awaiting review in Settings -> Ingest inbox'];
+        }
+
+        $files = self::selectImportFiles($tor, $entry, $acq);
+        if (isset($files['error'])) {
+            return ['ok' => false, 'imported' => false, 'name' => $name, 'error' => $files['error']];
+        }
+        $picked = $files['files'];
+
+        $dests = [];
+        $sources = [];
+        if (is_array($prev) && ($prev['status'] ?? '') === 'imported') {
+            $prevDests = is_array($prev['dests'] ?? null) ? $prev['dests'] : [];
+            $allThere = $prevDests && self::allFilesExist($prevDests);
+            if ($allThere) {
+                $dests = $prevDests;
+                $left = self::otherLargeVideosRemain($tor, []);
+                if ($left) {
+                    return [
+                        'ok' => true,
+                        'imported' => false,
+                        'removed' => false,
+                        'name' => $name,
+                        'message' => 'Already imported; left ' . count($left) . ' other video file(s) in the torrent',
+                        'dests' => $dests,
+                    ];
+                }
+                if ($removeTorrent) {
+                    $rm = self::removeTorrentIfSafe($tor, $tr, $dests);
+                    if (empty($rm['ok'])) {
+                        return ['ok' => false, 'imported' => false, 'removed' => false, 'name' => $name, 'error' => $rm['error'] ?? 'remove failed', 'dests' => $dests];
+                    }
+                    self::saveImportRecord($key, $name, $tid, $hash, 'imported', $dests, !empty($rm['removed']));
+                    self::markQueueDoneForTorrent($tor, $dests);
+                    return ['ok' => true, 'imported' => false, 'removed' => !empty($rm['removed']), 'name' => $name, 'message' => 'Already imported', 'dests' => $dests];
+                }
+                return ['ok' => true, 'imported' => false, 'name' => $name, 'message' => 'Already imported', 'dests' => $dests];
+            }
+        }
+
+        if (!$picked) {
+            return ['ok' => false, 'imported' => false, 'name' => $name, 'error' => 'No media file to import'];
+        }
+
+        $placed = [];
+        foreach ($picked as $file) {
+            $src = $file['path'];
+            $sources[] = $src;
+            $meta = self::metaForFile($src, $entry);
+            if (($meta['kind'] ?? '') === 'tv') {
+                if (empty($meta['show']) || strcasecmp((string)$meta['show'], 'Unknown Show') === 0 || $meta['season'] === null || $meta['episode'] === null) {
+                    return ['ok' => false, 'imported' => false, 'name' => $name, 'error' => 'Could not identify show/episode safely', 'file' => basename($src)];
+                }
+            } else {
+                $title = trim((string)($meta['title'] ?? ''));
+                if ($title === '' || strcasecmp($title, 'Unknown') === 0 || strlen($title) < 2) {
+                    return ['ok' => false, 'imported' => false, 'name' => $name, 'error' => 'Could not identify movie title safely', 'file' => basename($src)];
+                }
+            }
+            $sectionId = self::chooseSection($meta, $entry);
+            if (!$sectionId) {
+                return ['ok' => false, 'imported' => false, 'name' => $name, 'error' => 'No library section for this file', 'file' => basename($src)];
+            }
+            $dup = self::libraryDuplicate($src, $meta);
+            if ($dup) {
+                $dest = (string)($dup['path'] ?? '');
+                if ($dest === '' || !is_file($dest)) {
+                    return ['ok' => false, 'imported' => false, 'name' => $name, 'error' => 'Duplicate match had no file'];
+                }
+                $dests[] = $dest;
+                $placed[] = ['source' => $src, 'dest' => $dest, 'section_id' => $dup['section'] ?? $sectionId, 'moved' => false, 'duplicate' => true];
+                continue;
+            }
+            $place = self::placeImportedFile($src, $meta, $sectionId);
+            if (empty($place['ok'])) {
+                return [
+                    'ok' => false,
+                    'imported' => false,
+                    'name' => $name,
+                    'error' => $place['error'] ?? 'Move failed',
+                    'file' => basename($src),
+                    'dests' => $dests,
+                ];
+            }
+            $dest = (string)($place['dest'] ?? '');
+            if ($dest === '') {
+                return ['ok' => false, 'imported' => false, 'name' => $name, 'error' => 'Move did not return a destination'];
+            }
+            $dests[] = $dest;
+            $placed[] = ['source' => $src, 'dest' => $dest, 'section_id' => $sectionId, 'moved' => !empty($place['moved'])];
+        }
+
+        $removed = false;
+        $left = self::otherLargeVideosRemain($tor, $sources);
+        if ($left) {
+            self::saveImportRecord($key, $name, $tid, $hash, 'imported', $dests, false);
+            self::markQueueDoneForTorrent($tor, $dests);
+            return [
+                'ok' => true,
+                'imported' => true,
+                'removed' => false,
+                'name' => $name,
+                'message' => 'Imported ' . count($dests) . ' file(s); left ' . count($left) . ' other video file(s), so torrent data was not deleted',
+                'dests' => $dests,
+                'placed' => $placed,
+            ];
+        }
+        if ($removeTorrent) {
+            $rm = self::removeTorrentIfSafe($tor, $tr, $dests);
+            if (empty($rm['ok'])) {
+                self::saveImportRecord($key, $name, $tid, $hash, 'imported', $dests, false);
+                self::markQueueDoneForTorrent($tor, $dests);
+                return [
+                    'ok' => false,
+                    'imported' => true,
+                    'removed' => false,
+                    'name' => $name,
+                    'error' => 'Imported but torrent remove failed: ' . ($rm['error'] ?? ''),
+                    'dests' => $dests,
+                    'placed' => $placed,
+                ];
+            }
+            $removed = !empty($rm['removed']);
+        }
+
+        self::saveImportRecord($key, $name, $tid, $hash, 'imported', $dests, $removed);
+        self::markQueueDoneForTorrent($tor, $dests);
+        $msg = 'Imported ' . count($dests) . ' file' . (count($dests) === 1 ? '' : 's');
+        if ($removed) $msg .= ' and removed torrent data';
+        return ['ok' => true, 'imported' => true, 'removed' => $removed, 'name' => $name, 'message' => $msg, 'dests' => $dests, 'placed' => $placed];
+    }
+
+
+    /** Large video files from this torrent that are still on disk and were not the files just imported. */
+    private static function otherLargeVideosRemain(array $tor, array $sources): array {
+        $dir = (string)($tor['downloadDir'] ?? '');
+        if ($dir === '') return [];
+        $taken = [];
+        foreach ($sources as $s) {
+            if (!is_string($s) || $s === '') continue;
+            $real = \Vaultcast\Paths::real($s);
+            $taken[$real !== false ? $real : $s] = true;
+        }
+        $exts = Library::videoExtensions();
+        $left = [];
+        foreach ($tor['files'] ?? [] as $f) {
+            if (!is_array($f)) continue;
+            $rel = str_replace('\\', '/', (string)($f['name'] ?? ''));
+            if ($rel === '' || strpos($rel, '..') !== false) continue;
+            $ext = strtolower(pathinfo($rel, PATHINFO_EXTENSION));
+            if (!in_array($ext, $exts, true)) continue;
+            if (self::isSampleName($rel)) continue;
+            $length = (int)($f['length'] ?? 0);
+            if ($length > 0 && $length < 20 * 1024 * 1024) continue;
+            $full = rtrim($dir, '/') . '/' . $rel;
+            if (!is_file($full)) continue;
+            $real = \Vaultcast\Paths::real($full);
+            if ($real === false) continue;
+            if (isset($taken[$real])) continue;
+            $left[] = $real;
+        }
+        return $left;
+    }
+
+    private static function removeTorrentIfSafe(array $tor, array $tr, array $dests): array {
+        $tid = (int)($tor['id'] ?? 0);
+        $dir = (string)($tor['downloadDir'] ?? '');
+        if ($tid < 1) return ['ok' => false, 'error' => 'Missing torrent id'];
+        if (!self::downloadDirAllowsDelete($dir)) {
+            return ['ok' => false, 'error' => 'Refusing to delete torrent data outside download folders'];
+        }
+        foreach ($dests as $dest) {
+            if (!is_string($dest) || $dest === '') return ['ok' => false, 'error' => 'Missing destination'];
+            if (!is_file($dest)) return ['ok' => false, 'error' => 'Destination missing, not deleting download data'];
+            if (self::pathUnder($dest, $dir)) {
+                return ['ok' => false, 'error' => 'Destination is still inside the download folder'];
+            }
+            if (!self::fileUnderSection($dest)) {
+                return ['ok' => false, 'error' => 'Destination is not inside a library section'];
+            }
+        }
+        $r = self::cancelTransmission($tid, true);
+        if (empty($r['ok'])) return ['ok' => false, 'error' => $r['error'] ?? 'torrent-remove failed'];
+        return ['ok' => true, 'removed' => true];
+    }
+
+
+    /** Same-sized catalogue file whose title matches. Skips creating a second copy. */
+    private static function libraryDuplicate(string $src, array $meta): ?array {
+        $size = @filesize($src) ?: 0;
+        if ($size < 50 * 1024 * 1024) return null;
+        $srcReal = \Vaultcast\Paths::real($src);
+        $want = self::looseName((string)($meta['title'] ?? $meta['show'] ?? ''));
+        if (strlen($want) < 6) return null;
+        $cat = Catalogue::get();
+        foreach ($cat['items'] ?? [] as $it) {
+            if (!is_array($it)) continue;
+            if ((int)($it['size'] ?? 0) !== (int)$size) continue;
+            $p = (string)($it['path'] ?? '');
+            if ($p === '' || !is_file($p)) continue;
+            $pr = \Vaultcast\Paths::real($p);
+            if ($pr !== false && $srcReal !== false && $pr === $srcReal) continue;
+            $have = self::looseName((string)($it['title'] ?? '') . ' ' . (string)($it['show'] ?? '') . ' ' . basename($p));
+            if ($have === '') continue;
+            if ($have === $want || strpos($have, $want) !== false || strpos($want, $have) !== false) {
+                return $it;
+            }
+        }
+        return null;
+    }
+
+    private static function placeImportedFile(string $src, array $meta, string $sectionId): array {
+        $body = [
+            'path' => $src,
+            'section_id' => $sectionId,
+            'show' => $meta['show'] ?? ($meta['title'] ?? ''),
+            'title' => $meta['title'] ?? ($meta['show'] ?? ''),
+            'year' => $meta['year'] ?? null,
+            'season' => $meta['season'] ?? null,
+            'episode' => $meta['episode'] ?? null,
+        ];
+        $preview = Library::preview($body);
+        if (empty($preview['ok'])) return $preview;
+        if (!empty($preview['conflict'])) {
+            $srcSize = @filesize($src) ?: 0;
+            $dstSize = @filesize($preview['dest']) ?: 0;
+            $close = $srcSize > 0 && $dstSize > 0 && abs($srcSize - $dstSize) <= max(65536, (int)($srcSize * 0.02));
+            if (!$close) {
+                return ['ok' => false, 'error' => 'Destination already exists with a different size', 'dest' => $preview['dest']];
+            }
+            return ['ok' => true, 'moved' => false, 'already' => true, 'dest' => $preview['dest'], 'source' => $src];
+        }
+        return Library::apply($body);
+    }
+
+    private static function selectImportFiles(array $tor, ?array $entry, array $acq): array {
+        $dir = (string)($tor['downloadDir'] ?? '');
+        if ($dir === '' || !is_dir($dir)) return ['error' => 'Download directory missing'];
+        if (!self::downloadDirAllowsDelete($dir) && !self::dirIsDownloadRoot($dir)) {
+            return ['error' => 'Torrent download directory is not a known download folder'];
+        }
+        $exts = Library::videoExtensions();
+        $videos = [];
+        foreach ($tor['files'] ?? [] as $f) {
+            if (!is_array($f)) continue;
+            $rel = str_replace('\\', '/', (string)($f['name'] ?? ''));
+            if ($rel === '' || strpos($rel, "\0") !== false || strpos($rel, '../') !== false || strpos($rel, '/..') !== false) continue;
+            $ext = strtolower(pathinfo($rel, PATHINFO_EXTENSION));
+            if (!in_array($ext, $exts, true)) continue;
+            if (self::isSampleName($rel)) continue;
+            $full = rtrim($dir, '/') . '/' . $rel;
+            if (!is_file($full)) continue;
+            $real = \Vaultcast\Paths::real($full);
+            if ($real === false || !self::pathUnder($real, $dir)) continue;
+            $videos[] = [
+                'path' => $real,
+                'name' => $rel,
+                'ext' => $ext,
+                'length' => (int)($f['length'] ?? (@filesize($real) ?: 0)),
+            ];
+        }
+        if (!$videos) return ['files' => []];
+
+        $big = [];
+        foreach ($videos as $v) {
+            if ($v['length'] >= 20 * 1024 * 1024) $big[] = $v;
+        }
+        if ($big) $videos = $big;
+
+        $season = null;
+        $episode = null;
+        if ($entry && isset($entry['season']) && $entry['season'] !== null && $entry['season'] !== ''
+            && isset($entry['episode']) && $entry['episode'] !== null && $entry['episode'] !== '') {
+            $season = (int)$entry['season'];
+            $episode = (int)$entry['episode'];
+        }
+        if ($season !== null && $episode !== null) {
+            $matched = [];
+            foreach ($videos as $v) {
+                if (self::episodeCodeInName($v['name'], $season, $episode)) $matched[] = $v;
+            }
+            if (!$matched) {
+                return ['error' => sprintf('No file matched S%02dE%02d', $season, $episode)];
+            }
+            $best = self::preferContainer($matched, $acq);
+            return ['files' => $best ? [$best] : []];
+        }
+
+        $groups = [];
+        foreach ($videos as $v) {
+            $parsed = Library::parseFilename($v['path']);
+            if (($parsed['kind'] ?? '') === 'tv' && $parsed['season'] !== null && $parsed['episode'] !== null) {
+                $gkey = $parsed['season'] . 'x' . $parsed['episode'];
+            } else {
+                $gkey = '_single';
+            }
+            $groups[$gkey][] = $v;
+        }
+        $picked = [];
+        foreach ($groups as $group) {
+            $best = self::preferContainer($group, $acq);
+            if ($best) $picked[] = $best;
+            if (count($picked) >= 24) break;
+        }
+        return ['files' => $picked];
+    }
+
+    private static function preferContainer(array $files, array $acq): ?array {
+        $pref = [];
+        foreach ($acq['preferred_containers'] ?? ['mp4'] as $c) {
+            $c = strtolower(trim((string)$c, " ."));
+            if ($c !== '') $pref[] = $c;
+        }
+        if (!$pref) $pref = ['mp4'];
+        $pool = [];
+        foreach ($files as $f) {
+            if (in_array($f['ext'], $pref, true)) $pool[] = $f;
+        }
+        if (!$pool) $pool = $files;
+        $best = null;
+        $bestScore = -1;
+        foreach ($pool as $f) {
+            $rank = array_search($f['ext'], $pref, true);
+            $prefScore = ($rank === false) ? 0 : (100 - (int)$rank);
+            if ($f['ext'] === 'mp4' || $f['ext'] === 'm4v') $prefScore += 5;
+            $score = ($prefScore * 100000000000) + (int)$f['length'];
+            if ($score > $bestScore) {
+                $bestScore = $score;
+                $best = $f;
+            }
+        }
+        return $best;
+    }
+
+    private static function metaForFile(string $path, ?array $entry): array {
+        $parsed = Library::parseFilename($path);
+        if (!$entry) return $parsed;
+        $kind = strtolower((string)($entry['kind'] ?? ''));
+        $hasEp = isset($entry['season']) && $entry['season'] !== null && $entry['season'] !== ''
+            && isset($entry['episode']) && $entry['episode'] !== null && $entry['episode'] !== '';
+        if (!empty($entry['show'])) {
+            $parsed['show'] = trim((string)$entry['show']);
+        }
+        if ($hasEp) {
+            $parsed['season'] = (int)$entry['season'];
+            $parsed['episode'] = (int)$entry['episode'];
+            $parsed['kind'] = 'tv';
+            if (!empty($parsed['show'])) $parsed['title'] = $parsed['show'];
+        }
+        if (in_array($kind, ['anime', 'tv', 'episode_hit', 'episode_search'], true) && ($hasEp || ($parsed['kind'] ?? '') === 'tv')) {
+            $parsed['kind'] = 'tv';
+        }
+        if (in_array($kind, ['movie', 'movies', 'disney'], true) && ($parsed['kind'] ?? '') !== 'tv') {
+            $parsed['kind'] = 'movie';
+        }
+        if (($parsed['kind'] ?? '') === 'tv' && (empty($parsed['show']) || $parsed['show'] === 'Unknown Show') && !empty($entry['show'])) {
+            $parsed['show'] = trim((string)$entry['show']);
+        }
+        if (($parsed['kind'] ?? '') !== 'tv') {
+            $clean = self::movieTitleFromBasename(basename($path));
+            if ($clean['title'] !== '') {
+                $parsed['kind'] = 'movie';
+                $parsed['title'] = $clean['title'];
+                if (!empty($clean['year'])) $parsed['year'] = $clean['year'];
+            }
+        }
+        return $parsed;
+    }
+
+    /** Movie title from a release filename. Keeps sequel numbers; drops codec/size tags. */
+    private static function movieTitleFromBasename(string $filename): array {
+        $base = preg_replace('/\.[^.]+$/', '', $filename);
+        $base = str_replace(['.', '_'], ' ', (string)$base);
+        $base = preg_replace('/\[.*?\]/', ' ', (string)$base);
+        $year = null;
+        if (preg_match('/\(((?:19|20)\d{2})\)/', (string)$base, $ym)) {
+            $year = (int)$ym[1];
+        }
+        $base = preg_replace('/\((?:19|20)\d{2}\)/', ' ', (string)$base);
+        if ($year === null && preg_match('/(?:^|[\s\-])((?:19|20)\d{2})(?=[\s\-)]|$)/', (string)$base, $m, PREG_OFFSET_CAPTURE)) {
+            $year = (int)$m[1][0];
+            $base = substr((string)$base, 0, $m[1][1]) . ' ' . substr((string)$base, $m[1][1] + strlen($m[1][0]));
+        }
+        $tags = '2160p|1080p|720p|480p|360p|4k|uhd|hdr10|hdr|bluray|blu ray|bdrip|brrip|webrip|web dl|webdl|hdtv|hdrip|x264|x265|h264|h265|hevc|avc|xvid|divx|aac|dts|truehd|atmos|eac3|ddp|dd|ac3|10bit|8bit|yify|yts|rarbg|imax|remux|proper|repack|extended|multi|dual|amzn|nf|hmax|dsnp|galaxyrg|rmteam|bone|tgx|ethel|psa|sparks|geckos|readnfo|nfo|sample|internal|6ch|2ch|8ch';
+        $base = preg_replace('/\b(?:' . $tags . ')\b/i', ' ', (string)$base);
+        $base = preg_replace('/\b\d+(?:\.\d+)?\s*(?:mb|gb)\b/i', ' ', (string)$base);
+        $base = preg_replace('/\b(?:dd|dts|aac|ddp|eac3|ac3)?\s*[257]\s+1\b/i', ' ', (string)$base);
+        $base = preg_replace('/\b(?:dd|dts|aac|ddp|eac3|ac3)[257]\s+1\b/i', ' ', (string)$base);
+        $base = trim((string)preg_replace('/\s+/', ' ', (string)$base), " .-_");
+        if ($base !== '' && $base === strtolower($base)) {
+            $base = self::titleCaseMedia($base);
+        }
+        return ['title' => $base, 'year' => $year];
+    }
+
+    private static function titleCaseMedia(string $s): string {
+        $small = ['a', 'an', 'the', 'of', 'and', 'or', 'in', 'on', 'for', 'to'];
+        $parts = preg_split('/\s+/', trim($s));
+        if (!is_array($parts)) return $s;
+        $out = [];
+        $n = count($parts);
+        foreach ($parts as $i => $w) {
+            $l = strtolower($w);
+            if ($i > 0 && $i < $n - 1 && in_array($l, $small, true)) $out[] = $l;
+            else $out[] = strtoupper(substr($w, 0, 1)) . substr($l, 1);
+        }
+        return implode(' ', $out);
+    }
+
+    private static function chooseSection(array $meta, ?array $entry): ?string {
+        $enabled = [];
+        foreach (Store::settings()['sections'] ?? [] as $sec) {
+            if (!empty($sec['enabled']) && !empty($sec['id'])) $enabled[$sec['id']] = $sec;
+        }
+        $isTv = ($meta['kind'] ?? '') === 'tv';
+        $explicit = is_array($entry) ? (string)($entry['section_id'] ?? '') : '';
+        if ($explicit !== '' && isset($enabled[$explicit])) {
+            $type = $enabled[$explicit]['type'] ?? '';
+            if ($isTv && in_array($type, ['tv', 'anime'], true)) return $explicit;
+            if (!$isTv && $type === 'movies') return $explicit;
+        }
+        $kind = is_array($entry) ? strtolower((string)($entry['kind'] ?? '')) : '';
+        if ($isTv) {
+            $hit = self::existingShowSection((string)($meta['show'] ?? ''));
+            if ($hit && isset($enabled[$hit])) return $hit;
+            if ($kind === 'anime' && isset($enabled['anime'])) return 'anime';
+            if (isset($enabled['tv'])) return 'tv';
+            if (isset($enabled['anime'])) return 'anime';
+            return null;
+        }
+        $title = trim((string)($meta['title'] ?? ''));
+        $year = $meta['year'] ?? null;
+        $hit = self::existingMovieSection($title, $year);
+        if ($hit && isset($enabled[$hit])) return $hit;
+        if ($kind === 'disney' && isset($enabled['disney'])) return 'disney';
+        if (isset($enabled['movies'])) return 'movies';
+        return null;
+    }
+
+    private static function existingShowSection(string $show): ?string {
+        $want = self::looseName($show);
+        if (strlen($want) < 3) return null;
+        foreach (['anime', 'tv'] as $id) {
+            $root = self::sectionRoot($id);
+            if (!$root || !is_dir($root)) continue;
+            $dh = @opendir($root);
+            if (!$dh) continue;
+            $found = null;
+            while (($name = readdir($dh)) !== false) {
+                if ($name === '.' || $name === '..') continue;
+                if (!is_dir($root . '/' . $name)) continue;
+                if (self::looseName($name) === $want) { $found = $id; break; }
+            }
+            closedir($dh);
+            if ($found) return $found;
+        }
+        return null;
+    }
+
+    private static function existingMovieSection(string $title, $year): ?string {
+        $want = self::looseName($title);
+        if (strlen($want) < 3) return null;
+        foreach (['disney', 'movies'] as $id) {
+            $root = self::sectionRoot($id);
+            if (!$root || !is_dir($root)) continue;
+            $names = [$title];
+            if ($year) $names[] = $title . ' (' . (int)$year . ')';
+            foreach ($names as $n) {
+                if (is_dir($root . '/' . $n)) return $id;
+            }
+            if ($id !== 'disney') continue;
+            $dh = @opendir($root);
+            if (!$dh) continue;
+            $found = null;
+            while (($name = readdir($dh)) !== false) {
+                if ($name === '.' || $name === '..') continue;
+                if (!is_dir($root . '/' . $name)) continue;
+                if (self::looseName($name) === $want) { $found = $id; break; }
+            }
+            closedir($dh);
+            if ($found) return $found;
+        }
+        return null;
+    }
+
+    private static function sectionRoot(string $id): ?string {
+        foreach (Store::settings()['sections'] ?? [] as $sec) {
+            if (($sec['id'] ?? '') === $id && !empty($sec['path'])) return (string)$sec['path'];
+        }
+        return null;
+    }
+
+    private static function looseName(string $s): string {
+        $s = strtolower($s);
+        $s = preg_replace('/[^a-z0-9]+/', '', $s);
+        return is_string($s) ? $s : '';
+    }
+
+    private static function episodeCodeInName(string $name, int $season, int $episode): bool {
+        $pat1 = '/s0*' . $season . 'e0*' . $episode . '(?![0-9])/i';
+        $pat2 = '/(?<![0-9])' . $season . '\\s*x\\s*0*' . $episode . '(?![0-9])/i';
+        return preg_match($pat1, $name) === 1 || preg_match($pat2, $name) === 1;
+    }
+
+    private static function isSampleName(string $name): bool {
+        $base = strtolower(basename(str_replace('\\', '/', $name)));
+        return preg_match('/(^|[._\\-\\s\\[])(sample|trailer)([._\\-\\s\\]]|$)/', $base) === 1;
+    }
+
+
+    public static function torrentsForIngest(): array {
+        $tr = Store::settings()['acquisition']['transmission'] ?? [];
+        return self::listTorrentsRaw($tr);
+    }
+    public static function ingestQueueEntry(array $tor): ?array {
+        $q = Store::get('acquire_queue', []);
+        return self::matchQueueEntry($tor, is_array($q) ? $q : []);
+    }
+    public static function ingestImportRecord(array $tor): ?array {
+        $key = strtolower((string)($tor['hashString'] ?? ''));
+        if ($key === '') $key = 'id:' . (int)($tor['id'] ?? 0);
+        $r = self::importRecords();
+        return isset($r[$key]) && is_array($r[$key]) ? $r[$key] : null;
+    }
+    /** Large, non-sample video files of a torrent still present in the download folder. */
+    public static function ingestVideoFiles(array $tor): array {
+        $dir = (string)($tor['downloadDir'] ?? '');
+        if ($dir === '' || !is_dir($dir)) return [];
+        if (!self::downloadDirAllowsDelete($dir) && !self::dirIsDownloadRoot($dir)) return [];
+        $exts = Library::videoExtensions();
+        $out = [];
+        foreach ($tor['files'] ?? [] as $f) {
+            if (!is_array($f)) continue;
+            $rel = str_replace('\\', '/', (string)($f['name'] ?? ''));
+            if ($rel === '' || strpos($rel, "\0") !== false || strpos($rel, '../') !== false || strpos($rel, '/..') !== false) continue;
+            $ext = strtolower(pathinfo($rel, PATHINFO_EXTENSION));
+            if (!in_array($ext, $exts, true) || self::isSampleName($rel)) continue;
+            $full = rtrim($dir, '/') . '/' . $rel;
+            if (!is_file($full)) continue;
+            $real = \Vaultcast\Paths::real($full);
+            if ($real === false || !self::pathUnder($real, $dir)) continue;
+            $len = (int)($f['length'] ?? (@filesize($real) ?: 0));
+            if ($len > 0 && $len < 20 * 1024 * 1024) continue;
+            $out[] = ['path' => $real, 'rel' => $rel, 'name' => basename($rel), 'ext' => $ext, 'size' => $len];
+        }
+        usort($out, function ($a, $b) { return strnatcasecmp($a['rel'], $b['rel']); });
+        return $out;
+    }
+    /** Record a reviewed ingest, mark queue done and (when nothing else is left) remove the torrent + leftovers. */
+    public static function finishIngest(array $tor, array $dests, bool $removeTorrent = true): array {
+        $name = (string)($tor['name'] ?? '');
+        $hash = strtolower((string)($tor['hashString'] ?? ''));
+        $tid = (int)($tor['id'] ?? 0);
+        $key = $hash !== '' ? $hash : ('id:' . $tid);
+        $prev = self::importRecords()[$key] ?? null;
+        $all = is_array($prev) && is_array($prev['dests'] ?? null) ? array_values(array_unique(array_merge($prev['dests'], $dests))) : $dests;
+        $tr = Store::settings()['acquisition']['transmission'] ?? [];
+        $left = self::otherLargeVideosRemain($tor, []);
+        $removed = false;
+        $msg = 'Imported ' . count($dests) . ' file' . (count($dests) === 1 ? '' : 's');
+        if ($left) {
+            $msg .= '; ' . count($left) . ' other video file(s) left in the torrent';
+        } elseif ($removeTorrent) {
+            $existing = array_values(array_filter($all, function ($p) { return is_string($p) && is_file($p); }));
+            $rm = self::removeTorrentIfSafe($tor, $tr, $existing);
+            $removed = !empty($rm['ok']) && !empty($rm['removed']);
+            if (!$removed) $msg .= '; torrent kept (' . ($rm['error'] ?? 'not removed') . ')';
+            else $msg .= ' and removed torrent data';
+        }
+        self::saveImportRecord($key, $name, $tid, $hash, 'imported', $all, $removed);
+        self::markQueueDoneForTorrent($tor, $dests);
+        self::importLog('INGEST ' . $name . ' — ' . $msg);
+        return ['ok' => true, 'removed' => $removed, 'left' => count($left), 'message' => $msg];
+    }
+    public static function cleanReleaseTitle(string $name): array {
+        $name = (string)preg_replace('/^\s*(?:www\.)?[a-z0-9-]+\.(?:org|com|net|to|se|me|cc|io|ws)\s*[-\x{2013}]+\s*/iu', '', $name);
+        return self::movieTitleFromBasename($name . '.mkv');
+    }
+
+    private static function listTorrentsRaw(array $tr): array {
+        if (empty($tr['enabled'])) return [];
+        $rpc = self::transmissionRpc($tr, [
+            'method' => 'torrent-get',
+            'arguments' => [
+                'fields' => ['id', 'name', 'hashString', 'downloadDir', 'percentDone', 'isFinished', 'status', 'files', 'errorString'],
+            ],
+        ]);
+        if (empty($rpc['ok']) || !is_array($rpc['arguments']['torrents'] ?? null)) return [];
+        return $rpc['arguments']['torrents'];
+    }
+
+    private static function queueEntryById(string $id): ?array {
+        $q = Store::get('acquire_queue', []);
+        if (!is_array($q)) return null;
+        foreach ($q as $e) {
+            if (is_array($e) && (string)($e['id'] ?? '') === $id) return $e;
+        }
+        return null;
+    }
+
+    private static function matchQueueEntry(array $tor, array $queue): ?array {
+        foreach ($queue as $e) {
+            if (is_array($e) && self::torrentMatchesEntry($tor, $e)) return $e;
+        }
+        return null;
+    }
+
+    private static function torrentMatchesEntry(array $tor, array $entry): bool {
+        $eh = strtolower((string)($entry['torrent_hash'] ?? ''));
+        $th = strtolower((string)($tor['hashString'] ?? ''));
+        // the info-hash is authoritative. Transmission ids restart after a daemon restart, so an old
+        // finished entry ("The Rookie S08E08", torrent_id 6) must not claim a new torrent that reuses id 6.
+        if ($eh !== '' && $th !== '') return $eh === $th;
+        $id = (int)($entry['torrent_id'] ?? 0);
+        $closed = in_array((string)($entry['status'] ?? ''), ['done', 'removed', 'cancelled', 'failed'], true);
+        if ($id > 0 && !$closed && (int)($tor['id'] ?? 0) === $id) return true;
+        $en = self::looseName((string)($entry['title'] ?? ''));
+        $tn = self::looseName((string)($tor['name'] ?? ''));
+        if ($en !== '' && $tn !== '' && strlen($en) >= 8 && ($en === $tn || (strlen($en) >= 12 && (strpos($tn, $en) !== false || strpos($en, $tn) !== false)))) {
+            return true;
+        }
+        return false;
+    }
+
+    private static function markQueueRemovedById(string $id, bool $delete): array {
+        $q = Store::get('acquire_queue', []);
+        if (!is_array($q)) return [];
+        $hit = [];
+        foreach ($q as &$e) {
+            if (!is_array($e) || (string)($e['id'] ?? '') !== $id) continue;
+            $e['status'] = $delete ? 'removed' : 'cancelled';
+            $e['message'] = $delete ? 'Removed from queue and Transmission; download data deleted' : 'Removed from queue and Transmission; files kept';
+            $e['cancelled_at'] = date('c');
+            $hit[] = $id;
+        }
+        unset($e);
+        if ($hit) Store::set('acquire_queue', $q);
+        return $hit;
+    }
+
+    private static function markQueueRemovedForTorrent(array $tor, bool $delete): array {
+        $q = Store::get('acquire_queue', []);
+        if (!is_array($q)) return [];
+        $hit = [];
+        foreach ($q as &$e) {
+            if (!is_array($e) || !self::torrentMatchesEntry($tor, $e)) continue;
+            if (in_array($e['status'] ?? '', ['done'], true)) continue;
+            $e['status'] = $delete ? 'removed' : 'cancelled';
+            $e['message'] = $delete ? 'Removed with torrent data deleted' : 'Removed from Transmission; files kept';
+            $e['cancelled_at'] = date('c');
+            $e['torrent_id'] = $e['torrent_id'] ?? ($tor['id'] ?? null);
+            if (!empty($tor['hashString'])) $e['torrent_hash'] = strtolower((string)$tor['hashString']);
+            $hit[] = (string)($e['id'] ?? '');
+        }
+        unset($e);
+        if ($hit) Store::set('acquire_queue', $q);
+        return $hit;
+    }
+
+    private static function markQueueDoneForTorrent(array $tor, array $dests): void {
+        $q = Store::get('acquire_queue', []);
+        if (!is_array($q)) return;
+        $changed = false;
+        foreach ($q as &$e) {
+            if (!is_array($e) || !self::torrentMatchesEntry($tor, $e)) continue;
+            $e['status'] = 'done';
+            $e['message'] = 'Imported to library';
+            $e['processed_at'] = date('c');
+            $e['dest'] = $dests[0] ?? null;
+            $e['torrent_id'] = $e['torrent_id'] ?? ($tor['id'] ?? null);
+            if (!empty($tor['hashString'])) $e['torrent_hash'] = strtolower((string)$tor['hashString']);
+            $changed = true;
+        }
+        unset($e);
+        if ($changed) Store::set('acquire_queue', $q);
+    }
+
+    private static function importRecords(): array {
+        $r = Store::get('acquire_imports', []);
+        return is_array($r) ? $r : [];
+    }
+
+    private static function saveImportRecord(string $key, string $name, int $tid, string $hash, string $status, array $dests, bool $removed): void {
+        $all = self::importRecords();
+        $all[$key] = [
+            'name' => $name,
+            'torrent_id' => $tid,
+            'hash' => $hash,
+            'status' => $status,
+            'dests' => array_values($dests),
+            'removed' => $removed,
+            'at' => date('c'),
+        ];
+        if (count($all) > 400) {
+            $all = array_slice($all, -300, null, true);
+        }
+        Store::set('acquire_imports', $all);
+    }
+
+    private static function allFilesExist(array $paths): bool {
+        foreach ($paths as $p) {
+            if (!is_string($p) || !is_file($p)) return false;
+        }
+        return true;
+    }
+
+    private static function dirIsDownloadRoot(string $dir): bool {
+        // Configured Transmission/download path (e.g. /srv/downloads)
+        $dl = Store::settings()['acquisition']['download_path'] ?? '';
+        if (is_string($dl) && $dl !== '' && self::pathUnder($dir, $dl)) return true;
+        // Also accept library scan roots (legacy / alternate layouts)
+        foreach (Library::defaultScanRoots() as $root) {
+            if (self::pathUnder($dir, $root)) return true;
+        }
+        return false;
+    }
+
+    private static function downloadDirAllowsDelete(string $dir): bool {
+        if ($dir === '') return false;
+        $real = self::realPrefix($dir);
+        if ($real === null || $real === '/' || dirname($real) === $real) return false;
+        foreach (self::blockedDeleteRoots() as $blocked) {
+            $br = self::realPrefix($blocked);
+            if ($br && ($real === $br || strpos($real, $br . '/') === 0)) return false;
+        }
+        // Allow delete only under the configured download path (or known download roots)
+        return self::dirIsDownloadRoot($dir);
+    }
+
+    private static function blockedDeleteRoots(): array {
+        $blocked = [STREAM_ROOT, STREAM_DATA];
+        foreach (Store::settings()['sections'] ?? [] as $sec) {
+            $p = $sec['path'] ?? '';
+            if (is_string($p) && $p !== '') $blocked[] = $p;
+        }
+        return $blocked;
+    }
+
+    private static function fileUnderSection(string $path): ?string {
+        foreach (Store::settings()['sections'] ?? [] as $sec) {
+            $root = $sec['path'] ?? '';
+            if (!is_string($root) || $root === '') continue;
+            if (self::pathUnder($path, $root)) return (string)($sec['id'] ?? $root);
+        }
+        return null;
+    }
+
+    private static function pathUnder(string $path, string $root): bool {
+        $p = self::realPrefix($path);
+        $r = self::realPrefix($root);
+        if ($p === null || $r === null || $r === '' || $r === '/') return false;
+        return $p === $r || strpos($p, $r . '/') === 0;
+    }
+
+    private static function realPrefix(string $path): ?string {
+        if ($path === '') return null;
+        $real = \Vaultcast\Paths::real($path);
+        if ($real === false) return null;
+        return rtrim($real, '/');
+    }
+
+    private static function importLog(string $msg): void {
+        $file = STREAM_DATA . '/acquire_import.log';
+        @file_put_contents($file, date('c') . ' ' . $msg . "\n", FILE_APPEND | LOCK_EX);
+        $sz = @filesize($file);
+        if ($sz !== false && $sz > 524288) {
+            $lines = @file($file);
+            if (is_array($lines) && count($lines) > 400) {
+                @file_put_contents($file, implode('', array_slice($lines, -300)), LOCK_EX);
+            }
+        }
+    }
+}

@@ -1,0 +1,19 @@
+{
+  "name": "Vaultcast",
+  "short_name": "Vaultcast",
+  "description": "Your films, shows, music and games, on every screen",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0b1018",
+  "theme_color": "#101925",
+  "icons": [
+    {
+      "src": "assets/img/mark.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
