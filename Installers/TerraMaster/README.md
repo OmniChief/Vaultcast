@@ -20,6 +20,7 @@ Then open `http://<your-nas>:9999`.
 | App | `$VAULTCAST_DIR/app` (`data/` inside, as the updater expects) |
 | PHP config | `$VAULTCAST_DIR/etc/php/php.ini`, `php-fpm.conf` (php-fpm runs with `-n`, so nothing is read from `/etc/php`) |
 | nginx config | `$VAULTCAST_DIR/etc/nginx/` (a separate nginx instance) |
+| PHP CLI | `$VAULTCAST_DIR/bin/php` (a wrapper on the service PATH, used for library scans and maintenance jobs) |
 | Logs, sessions | `$VAULTCAST_DIR/logs`, `$VAULTCAST_DIR/sessions` |
 | System user | `vaultcast` (no login) |
 | Services | `vaultcast-php-fpm.service`, `vaultcast-nginx.service`, `vaultcast-netplay.service` |

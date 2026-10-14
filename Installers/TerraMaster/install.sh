@@ -75,7 +75,7 @@ listen.mode = 0660
 pm = ondemand
 pm.max_children = 6
 pm.process_idle_timeout = 30s
-env[PATH] = $APP/node/bin:/usr/local/bin:/usr/bin:/bin
+env[PATH] = $APP/bin:$APP/node/bin:/usr/local/bin:/usr/bin:/bin
 php_admin_value[error_log] = $APP/logs/php-error.log
 php_admin_flag[log_errors] = on
 C
@@ -237,7 +237,7 @@ WantedBy=multi-user.target
 C
             systemctl daemon-reload
         fi
-        grep -q '^env\[PATH\]' "$APP/etc/php/php-fpm.conf" || echo "env[PATH] = $APP/node/bin:/usr/local/bin:/usr/bin:/bin" >> "$APP/etc/php/php-fpm.conf"
+        grep -q '^env\[PATH\]' "$APP/etc/php/php-fpm.conf" || echo "env[PATH] = $APP/bin:$APP/node/bin:/usr/local/bin:/usr/bin:/bin" >> "$APP/etc/php/php-fpm.conf"
         systemctl enable --now vaultcast-netplay.service
         echo 'Multiplayer relay running on 127.0.0.1:3100 (proxied at /netplay/).'
     fi
@@ -276,6 +276,14 @@ else
         echo 'and rerun, or enter it in Settings > Downloads. Transmission settings were not changed.'
     fi
 fi
+# ---- PHP CLI for background jobs (library scans, maintenance): a wrapper on the service PATH ----
+if [ ! -x "$APP/bin/php" ]; then
+    mkdir -p "$APP/bin"
+    printf '#!/bin/sh\n# Vaultcast PHP CLI: App Center PHP 7.4 with Vaultcast own php.ini\nexport LD_LIBRARY_PATH=%s/lib\nexec %s -n -c %s/etc/php/php.ini "$@"\n' "$PHPROOT" "$PHPBIN" "$APP" > "$APP/bin/php"
+    chown -R root:root "$APP/bin"; chmod 755 "$APP/bin" "$APP/bin/php"
+fi
+grep -q "^env\[PATH\] = $APP/bin:" "$APP/etc/php/php-fpm.conf" || sed -i "s|^env\[PATH\] = |env[PATH] = $APP/bin:|" "$APP/etc/php/php-fpm.conf"
+
 # ---- Media access: TOS enforces share permissions through its own ACL system (tmacl), so POSIX
 # setfacl grants don't take effect. Adding the service user to the TOS "admin" group gives it
 # read/write on every share that grants admin. This is BROAD access (all admin-granted shares).

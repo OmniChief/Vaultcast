@@ -31,6 +31,12 @@ final class Maintenance
         if ($php === '' || !is_file($php)) {
             $php = PHP_OS_FAMILY === 'Windows' ? dirname(PHP_BINARY) . '/php.exe' : PHP_BINDIR . '/php';
         }
+        if (!is_file($php) && PHP_OS_FAMILY !== 'Windows') {
+            // Servers whose PHP CLI is not in PHP_BINDIR (e.g. NAS app packages): use php from the service PATH.
+            foreach (explode(PATH_SEPARATOR, (string)getenv('PATH')) as $dir) {
+                if ($dir !== '' && is_file($dir . '/php') && is_executable($dir . '/php')) { $php = $dir . '/php'; break; }
+            }
+        }
         if (!is_file($php)) throw new RuntimeException('Configure the PHP CLI path in Settings before starting maintenance.');
         \Vaultcast\Repository::putDocument('maintenance-job:' . $id, $job);
         $log = STREAM_DATA . '/maintenance.log';
