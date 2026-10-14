@@ -126,7 +126,7 @@ Function InstallAppService
   FileWriteUTF16LE $9 '  <workingdirectory>$4</workingdirectory>$\r$\n'
   FileWriteUTF16LE $9 '  <startmode>Automatic</startmode>$\r$\n  <onfailure action="restart" delay="5 sec"/>$\r$\n'
   FileWriteUTF16LE $9 '  <stoptimeout>30 sec</stoptimeout>$\r$\n  <logpath>$5</logpath>$\r$\n  <log mode="roll"/>$\r$\n'
-  StrCpy $0 $SvcId 11
+  StrCpy $0 $SvcId 12
   ${If} $0 == "VaultcastPHP"
     ; PHP runs as LocalSystem so administrator tools in the app can work.
     FileWriteUTF16LE $9 '  <serviceaccount><user>LocalSystem</user></serviceaccount>$\r$\n'
@@ -143,7 +143,7 @@ Function InstallAppService
     !insertmacro RunChecked '"$6" install' "Could not register the $SvcName service."
   ${Else}
     !insertmacro RunChecked '"$6" refresh' "Could not update the $SvcName service."
-    StrCpy $0 $SvcId 11
+    StrCpy $0 $SvcId 12
     ${If} $0 == "VaultcastPHP"
       !insertmacro RunChecked '"$SYSDIR\sc.exe" config $SvcId obj= LocalSystem' "Could not set the PHP service account."
     ${EndIf}
