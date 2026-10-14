@@ -39,13 +39,13 @@ check($out['failed'] === 1, 'exceptions inside the pass do not escape');
 $calls = [];
 Migrations::grantLibraryAccess([['path' => $tmp . '/Films']], $okGrant); Migrations::grantLibraryAccess([['path' => $tmp . '/Films']], $okGrant);
 check(count($calls) === 2, 're-running the pass is harmless (idempotent grant)');
-check(Migrations::VERSION >= 2, 'migration version bumped so existing installs run the pass once');
+check(Migrations::VERSION >= 3, 'migration version bumped so existing installs run the pass once');
 
 // Wiring: setup and Settings call it after the path checks pass.
 $inst = file_get_contents(__DIR__ . '/../src/Installer.php');
 check(strpos($inst, 'Paths::grantWebServerRead($real)') > strpos($inst, 'Paths::check('), 'setup grants access after the path check');
 $set = file_get_contents(__DIR__ . '/../src/Http/routes/admin-settings.php');
-check(strpos($set, 'Paths::grantWebServerRead($check[\'path\'])') > strpos($set, 'Paths::check($raw)'), 'Settings grants access for new/changed paths after the check');
+check(strpos($set, 'MediaAccel::grant($check[\'path\'])') > strpos($set, 'Paths::check($raw)'), 'Settings grants access for new/changed paths after the check');
 
 exec('rm -rf ' . escapeshellarg($tmp));
 echo $fails ? "$fails failed\n" : "all passed\n";

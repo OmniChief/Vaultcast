@@ -6,7 +6,7 @@
  */
 final class Migrations
 {
-    const VERSION = 2; // 2: library folder access pass for nginx (step 5)
+    const VERSION = 3; // 2: library folder access pass for nginx (step 5); 3: re-run it, recording results
 
     public static function stampFile(): string
     {
@@ -41,7 +41,7 @@ final class Migrations
             foreach ($sections as $sec) {
                 $p = is_array($sec) ? (string)($sec['path'] ?? '') : '';
                 if ($p === '' || !@is_dir($p)) { $out['skipped']++; continue; }
-                $r = \Vaultcast\Paths::grantWebServerRead($p, $grant);
+                $r = $grant !== null ? \Vaultcast\Paths::grantWebServerRead($p, $grant) : MediaAccel::grant($p);
                 if (!$r['ok']) { $out['failed']++; error_log('Vaultcast library access: ' . $r['message']); }
                 elseif (!empty($r['skipped'])) $out['skipped']++;
                 else $out['granted']++;

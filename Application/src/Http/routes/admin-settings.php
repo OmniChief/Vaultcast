@@ -65,7 +65,7 @@ if ($path === '/admin/settings' && $method === 'POST') {
             $check = \Vaultcast\Paths::check($raw);
             if (!$check['ok']) json_error(((string)($sec['label'] ?? 'Library')) . ': ' . $check['message'], 400);
             $b['sections'][$i]['path'] = $check['path'];
-            $acl = \Vaultcast\Paths::grantWebServerRead($check['path']);
+            $acl = MediaAccel::grant($check['path']);
             if (!$acl['ok']) json_error(((string)($sec['label'] ?? 'Library')) . ': ' . $acl['message'], 400);
         }
     }

@@ -417,11 +417,19 @@ class Stream {
     public static function toAccelUri(string $realPath): ?string {
         if (empty(Store::settings()['streaming']['nginx_accel'])) return null;
         $realPath = str_replace('\\', '/', $realPath);
+        $direct = !empty($_GET['direct']);
         // Windows nginx maps drive-letter paths only (C:/...); UNC shares stay on PHP sendFile.
         if (DIRECTORY_SEPARATOR === '\\' && !preg_match('#^[A-Za-z]:/#', $realPath)) return null;
         foreach (self::accelMap() as $id => $root) {
             $root = rtrim(str_replace('\\', '/', (string)$root), '/');
-            if (strpos($realPath, $root . '/') === 0 || $realPath === $root) {
+            $win = DIRECTORY_SEPARATOR === '\\';
+            $under = $win ? (stripos($realPath, $root . '/') === 0 || strcasecmp($realPath, $root) === 0)
+                          : (strpos($realPath, $root . '/') === 0 || $realPath === $root);
+            if ($under) {
+                // Player asked for PHP delivery (nginx path failed): remember, and serve via PHP.
+                if ($direct) { MediaAccel::markFailed($root); return null; }
+                // nginx needs read access (Windows ACL); otherwise PHP streams it.
+                if (!MediaAccel::rootUsable($root)) return null;
                 // Keep drive letters (C:/...) so Windows nginx can alias them.
                 $rel = ltrim($realPath, '/');
                 return '/_vaultcast_media/' . implode('/', array_map('rawurlencode', explode('/', $rel)));
