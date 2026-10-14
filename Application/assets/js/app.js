@@ -1564,7 +1564,7 @@
         } catch (eM) {}
         if (match) {
           opts.path = lobbyNetplaySocketPath();
-          if (!opts.transports) opts.transports = ['polling', 'websocket'];
+          if (!opts.transports) opts.transports = ['websocket', 'polling'];
           if (opts.upgrade == null) opts.upgrade = true;
           return orig.call(this, window.location.origin, opts);
         }
@@ -1624,7 +1624,9 @@
       var sockPath = lobbyNetplaySocketPath();
       np.socket = window.io(window.location.origin, {
         path: sockPath,
-        transports: ['polling', 'websocket'],
+        // WebSocket first: per-frame packets over HTTP long-polling add a request round trip
+        // each and caused the lag; polling stays as the fallback when a proxy blocks Upgrade.
+        transports: ['websocket', 'polling'],
         upgrade: true,
         forceNew: true,
         reconnection: false,
@@ -1929,9 +1931,7 @@
     if (np._streamSyncing || np._streamAwaitingState || np._streamAwaitingGo || np._streamHostPaused || np._streamUserPaused) return false;
     if (np.owner) {
       // A slow or backgrounded phone must not accumulate an unbounded queue.
-      return Object.keys(np.players || {}).every(function(id){
-        return id === np.playerID || (np.currentFrame || 0) - ((np._streamAckUsers || {})[id] || 0) < 3;
-      });
+      return window.VaultcastNetplaySync.hostMayRun(np.currentFrame, np.players, np.playerID, np._streamAckUsers);
     }
     var frame = np.currentFrame || 0;
     var bucket = np.inputsData[frame];
@@ -1960,20 +1960,21 @@
       if (nextFrame === np.currentFrame) return;
       np.currentFrame = nextFrame;
       if (np.owner) {
-        var frame = np.currentFrame - 1;
-        if (frame >= 0 && frame !== np._streamLastHostFrame) {
-          np._streamLastHostFrame = frame;
-          var bucket = np.inputsData[frame] || [{ frame: frame }];
-          np.sendMessage({ 'sync-control': bucket, sync_id: np._streamSyncId });
-          np._streamFramesSent = (np._streamFramesSent || 0) + 1;
-          if (frame === 0) lobbyNetplayTrace(emu, 'host_sent_frame_zero');
+        var last = typeof np._streamLastHostFrame === 'number' ? np._streamLastHostFrame : -1;
+        if (np.currentFrame - 1 > last) {
+          var batch = window.VaultcastNetplaySync.hostBucketsToSend(np.inputsData, last, np.currentFrame);
+          np._streamLastHostFrame = np.currentFrame - 1;
+          np.sendMessage({ 'sync-control': batch, sync_id: np._streamSyncId });
+          np._streamFramesSent = (np._streamFramesSent || 0) + (np.currentFrame - 1 - last);
+          if (last < 0) lobbyNetplayTrace(emu, 'host_sent_frame_zero');
         }
       } else {
         np.sendMessage({ frame_ack: np.currentFrame, sync_id: np._streamSyncId });
         lobbyAdvanceGuest(emu);
       }
+      var keepFrom = window.VaultcastNetplaySync.pruneBefore(!!np.owner, np.currentFrame, np._streamLastHostFrame);
       Object.keys(np.inputsData || {}).forEach(function(k){
-        if (Number(k) < np.currentFrame - 2) delete np.inputsData[k];
+        if (Number(k) < keepFrom) delete np.inputsData[k];
       });
     };
     emu.Module.postMainLoop.__streamSafe = true;

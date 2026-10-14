@@ -1,0 +1,43 @@
+/* Vaultcast netplay frame-sync helpers: pure functions shared by app.js and the node tests.
+   The host runs ahead and sends one input bucket per emulated frame; guests run a frame only
+   once its bucket has arrived. */
+(function(root){
+  'use strict';
+  /* How many frames the host may run ahead of the slowest guest's acknowledgement.
+     3 (about 50 ms at 60 fps) stalled the host on every ordinary network/rAF jitter, which
+     halved the frame rate. 10 frames (about 166 ms) absorbs LAN/Wi-Fi jitter while still
+     bounding a backgrounded guest. */
+  var ACK_WINDOW = 10;
+
+  function hostMayRun(currentFrame, players, selfId, acks, windowFrames){
+    var w = windowFrames || ACK_WINDOW;
+    var cur = currentFrame || 0;
+    return Object.keys(players || {}).every(function(id){
+      return id === selfId || cur - ((acks || {})[id] || 0) < w;
+    });
+  }
+
+  /* Every bucket from lastSent+1 to currentFrame-1, oldest first. A core may advance its
+     frame counter by more than one per main-loop tick (catch-up after a slow tick); sending
+     only the newest bucket left guests waiting forever for the skipped frames. */
+  function hostBucketsToSend(inputsData, lastSent, currentFrame){
+    var out = [];
+    var from = (typeof lastSent === 'number' ? lastSent : -1) + 1;
+    for (var f = Math.max(0, from); f <= currentFrame - 1; f++) {
+      var bucket = (inputsData || {})[f];
+      if (bucket && bucket.length) bucket.forEach(function(v){ out.push(v); });
+      else out.push({ frame: f });
+    }
+    return out;
+  }
+
+  /* Buckets safe to drop: host keeps anything not yet sent; guest keeps the last two. */
+  function pruneBefore(isHost, currentFrame, lastSent){
+    if (isHost) return Math.min(currentFrame - 2, (typeof lastSent === 'number' ? lastSent : -1) - 1);
+    return currentFrame - 2;
+  }
+
+  var api = { ACK_WINDOW: ACK_WINDOW, hostMayRun: hostMayRun, hostBucketsToSend: hostBucketsToSend, pruneBefore: pruneBefore };
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+  else root.VaultcastNetplaySync = api;
+})(this);
