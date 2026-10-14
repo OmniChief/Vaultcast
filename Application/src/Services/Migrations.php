@@ -6,7 +6,7 @@
  */
 final class Migrations
 {
-    const VERSION = 1;
+    const VERSION = 2; // 2: library folder access pass for nginx (step 5)
 
     public static function stampFile(): string
     {
@@ -32,6 +32,27 @@ final class Migrations
         }
     }
 
+    /** One pass over configured library folders; returns counts, never throws. */
+    public static function grantLibraryAccess(?array $sections = null, ?callable $grant = null): array
+    {
+        $out = ['granted' => 0, 'skipped' => 0, 'failed' => 0];
+        try {
+            $sections = $sections ?? (Store::settings()['sections'] ?? []);
+            foreach ($sections as $sec) {
+                $p = is_array($sec) ? (string)($sec['path'] ?? '') : '';
+                if ($p === '' || !@is_dir($p)) { $out['skipped']++; continue; }
+                $r = \Vaultcast\Paths::grantWebServerRead($p, $grant);
+                if (!$r['ok']) { $out['failed']++; error_log('Vaultcast library access: ' . $r['message']); }
+                elseif (!empty($r['skipped'])) $out['skipped']++;
+                else $out['granted']++;
+            }
+        } catch (\Throwable $e) {
+            error_log('Vaultcast library access pass failed: ' . $e->getMessage());
+            $out['error'] = $e->getMessage();
+        }
+        return $out;
+    }
+
     /** @return array<string,mixed> what each step did */
     public static function run(PDO $pdo): array
     {
@@ -54,6 +75,9 @@ final class Migrations
             @rename($legacyQueue, $legacyQueue . '.migrated');
             $log['poster_queue_file_retired'] = true;
         }
+        // 5. Existing libraries: let nginx (LocalService on Windows) read each library folder.
+        //    Idempotent; failures are logged and never block startup.
+        $log['library_acl'] = self::grantLibraryAccess();
         error_log('Vaultcast storage migration v' . self::VERSION . ': ' . json_encode($log));
         return $log;
     }

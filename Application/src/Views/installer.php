@@ -11,6 +11,19 @@ $completed = \Vaultcast\Database::installed();
 $checks = \Vaultcast\Installer::checks();
 $optionalChecks = \Vaultcast\Installer::optionalChecks();
 $nativeManaged = \Vaultcast\Installer::nativeManaged();
+// Folder picker for the libraries step. Only before installation, and only with this setup session's token.
+if (!$completed && isset($_GET['setup_folders'])) {
+    header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: no-store');
+    if (!hash_equals($_SESSION['csrf'], (string)($_SERVER['HTTP_X_SETUP_TOKEN'] ?? ''))) {
+        http_response_code(403);
+        echo json_encode(['ok' => false, 'error' => 'The setup session expired. Reload and try again.']);
+        exit;
+    }
+    session_write_close();
+    echo json_encode(\Vaultcast\Paths::browse((string)($_GET['path'] ?? '')));
+    exit;
+}
 if (!$completed && ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
     try {
         if (!hash_equals($_SESSION['csrf'], (string)($_POST['csrf'] ?? ''))) throw new RuntimeException('The setup session expired. Reload and try again.');
@@ -48,7 +61,7 @@ $managed = is_file(dirname(__DIR__, 2) . '/data/setup-database.php');
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Set up Vaultcast</title>
 <style>
 [hidden]{display:none!important}
-:root{color-scheme:dark;font-family:Inter,system-ui,sans-serif;background:#0c1119;color:#f0f3f7}*{box-sizing:border-box}body{margin:0;padding:48px 20px;background:radial-gradient(ellipse at 12% 0,#253043,transparent 60%);min-height:100vh}main{max-width:820px;margin:auto}.eyebrow{color:#f0c58b;text-transform:uppercase;letter-spacing:.18em;font-size:.76rem;font-weight:700}h1{font-size:clamp(2.2rem,6vw,3.8rem);letter-spacing:-.055em;margin:10px 0}h2{letter-spacing:-.03em}p,small{color:#b4c0d1;line-height:1.7}.panel,fieldset{border:1px solid #303b4c;background:#131c28;border-radius:20px;padding:28px;margin:24px 0}fieldset{min-width:0}legend{padding:0 8px;font-size:1.25rem;font-weight:650}label{display:block;margin:18px 0 7px;font-size:.9rem}input:not([type=checkbox]){display:block;width:100%;padding:13px;border:1px solid #3d4c61;border-radius:10px;background:#0d1520;color:inherit;font:inherit}input[type=checkbox]{width:18px;height:18px;accent-color:#e9bd7e;vertical-align:middle;margin-right:9px}button,.button{display:inline-block;padding:13px 23px;border:1px solid transparent;border-radius:11px;background:#e9bd7e;color:#17202a;font:inherit;font-weight:650;cursor:pointer;text-decoration:none;min-height:46px}button.secondary{background:transparent;color:inherit;border-color:#47576c}button:disabled{opacity:.45;cursor:not-allowed}a{color:#f0c58b}:focus-visible{outline:3px solid #f0c58b;outline-offset:4px}.error{border:1px solid #a9575b;padding:16px;border-radius:12px;background:#32212a}.checks{list-style:none;padding:0}.checks li{padding:8px 0;border-bottom:1px solid #263447}.good{color:#90d6bb}.bad{color:#ffaeab}.row{display:grid;grid-template-columns:1fr 1fr;gap:18px}.steps{display:flex;gap:8px;padding:0;list-style:none;flex-wrap:wrap}.steps li{padding:8px 14px;color:#aebacf;border:1px solid #35445a;border-radius:999px;font-size:.85rem}.steps [aria-current=step]{color:#f0c58b;border-color:#e9bd7e}.actions{display:flex;gap:12px;justify-content:flex-end}code{color:#f0c58b;overflow-wrap:anywhere}.hint{font-size:.88rem}details{margin:16px 0}summary{cursor:pointer;padding:8px 0}fieldset[hidden]{display:none}@media(max-width:560px){body{padding:24px 14px}.row{grid-template-columns:1fr}.panel,fieldset{padding:18px}.actions{flex-wrap:wrap}}
+:root{color-scheme:dark;font-family:Inter,system-ui,sans-serif;background:#0c1119;color:#f0f3f7}*{box-sizing:border-box}body{margin:0;padding:48px 20px;background:radial-gradient(ellipse at 12% 0,#253043,transparent 60%);min-height:100vh}main{max-width:820px;margin:auto}.eyebrow{color:#f0c58b;text-transform:uppercase;letter-spacing:.18em;font-size:.76rem;font-weight:700}h1{font-size:clamp(2.2rem,6vw,3.8rem);letter-spacing:-.055em;margin:10px 0}h2{letter-spacing:-.03em}p,small{color:#b4c0d1;line-height:1.7}.panel,fieldset{border:1px solid #303b4c;background:#131c28;border-radius:20px;padding:28px;margin:24px 0}fieldset{min-width:0}legend{padding:0 8px;font-size:1.25rem;font-weight:650}label{display:block;margin:18px 0 7px;font-size:.9rem}input:not([type=checkbox]){display:block;width:100%;padding:13px;border:1px solid #3d4c61;border-radius:10px;background:#0d1520;color:inherit;font:inherit}input[type=checkbox]{width:18px;height:18px;accent-color:#e9bd7e;vertical-align:middle;margin-right:9px}button,.button{display:inline-block;padding:13px 23px;border:1px solid transparent;border-radius:11px;background:#e9bd7e;color:#17202a;font:inherit;font-weight:650;cursor:pointer;text-decoration:none;min-height:46px}button.secondary{background:transparent;color:inherit;border-color:#47576c}button:disabled{opacity:.45;cursor:not-allowed}a{color:#f0c58b}:focus-visible{outline:3px solid #f0c58b;outline-offset:4px}.error{border:1px solid #a9575b;padding:16px;border-radius:12px;background:#32212a}.checks{list-style:none;padding:0}.checks li{padding:8px 0;border-bottom:1px solid #263447}.good{color:#90d6bb}.bad{color:#ffaeab}.row{display:grid;grid-template-columns:1fr 1fr;gap:18px}.steps{display:flex;gap:8px;padding:0;list-style:none;flex-wrap:wrap}.steps li{padding:8px 14px;color:#aebacf;border:1px solid #35445a;border-radius:999px;font-size:.85rem}.steps [aria-current=step]{color:#f0c58b;border-color:#e9bd7e}.actions{display:flex;gap:12px;justify-content:flex-end}code{color:#f0c58b;overflow-wrap:anywhere}.hint{font-size:.88rem}details{margin:16px 0}summary{cursor:pointer;padding:8px 0}fieldset[hidden]{display:none}.pathrow{display:flex;gap:10px}.pathrow input{flex:1}.picker{border:1px solid #303b4c;border-radius:12px;padding:12px;margin-top:10px;background:#0d1520}.picker ul{list-style:none;padding:0;margin:8px 0;max-height:280px;overflow:auto}.picker li button{width:100%;text-align:left;margin:2px 0;min-height:38px;padding:8px 12px}.picker .where{font-family:monospace;overflow-wrap:anywhere;color:#f0c58b}@media(max-width:560px){body{padding:24px 14px}.row{grid-template-columns:1fr}.panel,fieldset{padding:18px}.actions{flex-wrap:wrap}}
 </style></head><body><main>
 <div class="eyebrow">Vaultcast · Your collection, your space</div><h1>A home for your media.</h1><p>Films, shows, music and games. Choose what belongs here; add more whenever you like.</p>
 <?php if ($completed): ?>
@@ -73,7 +86,7 @@ $managed = is_file(dirname(__DIR__, 2) . '/data/setup-database.php');
 <label><input type="checkbox" name="create_database" value="1" <?= !empty($_POST['create_database'])?'checked':'' ?>>Create a new local database and restricted application account</label><p class="hint">For a fresh local MariaDB installation, enter its administrator username and password and select this option. Vaultcast stores a newly generated application password, not the administrator password. For a remote or existing database, provide an account with access to that database and leave this unchecked.</p>
 <?php endif ?></fieldset>
 <fieldset data-step="2"><legend>Choose your libraries</legend><p>Enter folders as seen by the server. Nothing is selected in advance. You can skip this and add folders later in Settings → Libraries.</p>
-<?php foreach(['movies'=>'Films','tv'=>'TV shows','anime'=>'Anime','music'=>'Music','roms'=>'Games'] as $type=>$label): ?><label><input type="checkbox" name="enable_<?= $type ?>" value="1" <?= !empty($_POST['enable_'.$type])?'checked':'' ?>><?= $label ?></label><input name="path_<?= $type ?>" aria-label="<?= $label ?> folder" value="<?= setup_value('path_'.$type) ?>" placeholder="Full path to a readable folder"><?php endforeach ?></fieldset>
+<?php foreach(['movies'=>'Films','tv'=>'TV shows','anime'=>'Anime','music'=>'Music','roms'=>'Games'] as $type=>$label): ?><label><input type="checkbox" name="enable_<?= $type ?>" value="1" <?= !empty($_POST['enable_'.$type])?'checked':'' ?>><?= $label ?></label><div class="pathrow"><input name="path_<?= $type ?>" id="path_<?= $type ?>" aria-label="<?= $label ?> folder" value="<?= setup_value('path_'.$type) ?>" placeholder="<?= PHP_OS_FAMILY === 'Windows' ? 'For example C:\\Users\\Public\\Films' : 'For example /srv/media/Films' ?>"><button type="button" class="secondary browse" data-for="path_<?= $type ?>">Browse…</button></div><div class="picker" data-picker="path_<?= $type ?>" hidden></div><?php endforeach ?><p class="hint">Use Browse to pick a folder the server can read. Paths can be pasted with or without quotes, with either slash style, or using %USERPROFILE% or ~.</p></fieldset>
 <div class="actions"><button type="button" class="secondary" id="previous" hidden>Back</button><button type="button" id="next" hidden>Continue</button><button type="submit" id="install" <?= in_array(false,$checks,true)?'disabled':'' ?>>Create my library</button></div>
 </form>
 <script>
@@ -146,6 +159,41 @@ $managed = is_file(dirname(__DIR__, 2) . '/data/setup-database.php');
         });
     });
     show(<?= (int)$errorStep ?>);
+})();
+
+(function () {
+    var token = <?= json_encode($_SESSION['csrf']) ?>;
+    function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+    function btn(text, cls, fn) { var b = el('button', cls, text); b.type = 'button'; b.onclick = fn; return b; }
+    function load(panel, input, path) {
+        panel.textContent = 'Loading folders…';
+        fetch('?setup_folders=1&path=' + encodeURIComponent(path || ''), {credentials: 'same-origin', headers: {'X-Setup-Token': token}})
+        .then(function (r) { return r.json(); }).then(function (r) {
+            panel.textContent = '';
+            var here = r.path || '';
+            panel.appendChild(el('div', 'where', here || 'Drives and roots'));
+            if (!r.ok) panel.appendChild(el('p', 'bad', r.error || 'Cannot open this folder.'));
+            var list = el('ul');
+            function item(text, target) { var li = el('li'); li.appendChild(btn(text, 'secondary', function () { load(panel, input, target); })); list.appendChild(li); }
+            if (r.parent) item('↑ Up', r.parent); else if (here) item('↑ Drives', '');
+            (r.folders || []).forEach(function (f) { item(f.name, f.path); });
+            panel.appendChild(list);
+            var actions = el('div', 'actions');
+            var use = btn('Use this folder', '', function () { input.value = here; panel.hidden = true; var box = input.closest('fieldset').querySelector('input[name="enable_' + input.name.slice(5) + '"]'); if (box) box.checked = true; });
+            use.disabled = !(r.ok && here);
+            actions.appendChild(btn('Close', 'secondary', function () { panel.hidden = true; }));
+            actions.appendChild(use);
+            panel.appendChild(actions);
+        }).catch(function () { panel.textContent = 'Could not list folders. Reload the page and try again.'; });
+    }
+    document.querySelectorAll('button.browse').forEach(function (b) {
+        b.onclick = function () {
+            var input = document.getElementById(b.dataset.for);
+            var panel = document.querySelector('[data-picker="' + b.dataset.for + '"]');
+            panel.hidden = !panel.hidden;
+            if (!panel.hidden) load(panel, input, input.value.trim());
+        };
+    });
 })();
 </script>
 <?php endif ?></main></body></html>
