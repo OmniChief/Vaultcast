@@ -3426,7 +3426,7 @@ try {
 
 
   /* ------------------------------ Watch Live ------------------------------ */
-  var live = { guide:null, iptv:null, loadedAt:0, filter:'', refreshTimer:null, tickTimer:null, busy:null, lastPaint:0 };
+  var live = { guide:null, iptv:null, loadedAt:0, rev:0, loadedRev:-1, busyRev:-1, filter:'', refreshTimer:null, tickTimer:null, busy:null, lastPaint:0 };
   var LIVE_BASE = BASE + 'live/';
   /* Live backend is reached through /media/api/live/<action> (api/live_bridge.php):
      public HTTPS 404s any *.php under /media/live/, LAN :9999 works either way. */
@@ -3472,17 +3472,49 @@ try {
   /* TV UI prefers episode_title (NFO/parsed) over file basename */
   /* Watch Live / player zap / guide — channel number ascending */
   function liveChannels(){ return sortLiveChannels((live.guide && live.guide.channels) || []); }
+  /* live-cache:start (tests/live_cache_test.js evaluates this block) */
+  /* Watch Live keeps the guide + IPTV lineup in memory for 90 s. Every Live/IPTV write (favourite
+     added, removed, toggled, reordered, feeds or station saved) bumps live.rev so the next read
+     refetches, and tells other open tabs through localStorage so they refresh too. */
   function ensureLiveData(force){
-    if (!force && live.guide && live.iptv && Date.now() - live.loadedAt < 90000) return Promise.resolve();
-    if (live.busy) return live.busy;
-    live.busy = Promise.all([ liveApi('guide', '&hours=3'), liveApi('iptv') ]).then(function(pair){
-      live.busy = null;
+    if (!force && live.guide && live.iptv && live.loadedRev === live.rev && Date.now() - live.loadedAt < 90000) return Promise.resolve();
+    if (live.busy && live.busyRev === live.rev) return live.busy;
+    var rev = live.rev;
+    var req = Promise.all([ liveApi('guide', '&hours=3'), liveApi('iptv') ]).then(function(pair){
+      if (live.busy === req) live.busy = null;
+      if (rev !== live.rev) return ensureLiveData(true); // a write landed while this read was in flight
       if (pair[0] && pair[0].channels) live.guide = pair[0];
       if (pair[1] && pair[1].ok) live.iptv = pair[1];
       live.loadedAt = Date.now();
-    }, function(e){ live.busy = null; throw e; });
-    return live.busy;
+      live.loadedRev = rev;
+    }, function(e){ if (live.busy === req) live.busy = null; throw e; });
+    live.busy = req; live.busyRev = rev;
+    return req;
   }
+  function invalidateLiveData(fromOtherTab){
+    live.rev = (live.rev || 0) + 1;
+    live.loadedAt = 0;
+    if (!fromOtherTab) { try { localStorage.setItem('vaultcast-live-rev', String(Date.now()) + ':' + Math.random()); } catch (e) {} }
+    if (typeof state !== 'undefined' && state.view === 'live' && typeof paintLive === 'function') {
+      ensureLiveData(true).then(function(){ if (state.view === 'live') paintLive(); }).catch(function(){});
+    }
+  }
+  function liveApiPost(action, body){
+    return fetch(LIVE_API + action, {
+      method: 'POST',
+      credentials: 'same-origin',
+      cache: 'no-store',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {})
+    }).then(function(r){
+      return r.json().then(function(j){
+        if (r.ok && j && j.ok !== false && action !== 'iptv_probe') invalidateLiveData(false);
+        return { ok: r.ok, status: r.status, body: j };
+      });
+    });
+  }
+  /* live-cache:end */
+  try { window.addEventListener('storage', function(e){ if (e && e.key === 'vaultcast-live-rev') invalidateLiveData(true); }); } catch (eLs) {}
   function stopLiveTimers(){
     if (live.refreshTimer) { clearInterval(live.refreshTimer); live.refreshTimer = null; }
     if (live.tickTimer) { clearInterval(live.tickTimer); live.tickTimer = null; }
@@ -9880,17 +9912,6 @@ function viewCollectionDetail(){
   var LIVE_KIND_LABEL = { movie: 'Movie', episode: 'TV', commercial: 'Commercial', bumper: 'Bumper' };
   var LIVE_KIND_PLURAL = { movie: 'Movies', episode: 'TV shows', commercial: 'Commercials', bumper: 'Bumpers' };
 
-  function liveApiPost(action, body){
-    return fetch(LIVE_API + action, {
-      method: 'POST',
-      credentials: 'same-origin',
-      cache: 'no-store',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body || {})
-    }).then(function(r){
-      return r.json().then(function(j){ return { ok: r.ok, status: r.status, body: j }; });
-    });
-  }
 
   function liveSetMsg(msg, bad){
     liveSet.status = msg || '';
@@ -10353,7 +10374,12 @@ function viewCollectionDetail(){
   var TVS_DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
   var TVS_PX_PER_MIN = 0.75; /* 18 px per 24 min -> 1080 px per day */
   var TVS_SNAP = 15;
-  function tvsApi(action, opts){ return api('/live/' + action + (opts && opts.query ? opts.query : ''), opts || {}); }
+  function tvsApi(action, opts){
+    return api('/live/' + action + (opts && opts.query ? opts.query : ''), opts || {}).then(function(j){
+      if (opts && opts.method && opts.method !== 'GET' && j && j.ok !== false) invalidateLiveData(false);
+      return j;
+    });
+  }
   function tvsLoad(){
     return tvsApi('tv_studio').then(function(j){
       if (!j || !j.ok) throw new Error((j && j.error) || 'Could not load TV Studio');
@@ -12014,6 +12040,7 @@ function viewCollectionDetail(){
                   liveApiPost('iptv_add', ch).then(function(res){
                     if (!res.ok || !res.body || !res.body.ok) { liveSetMsg((res.body && res.body.error) || 'Add failed', true); return; }
                     liveSet.iptv = null; liveSet.favView = null;
+                    ch.inLineup = true; // browse rows are cached client-side; show "Added" without a re-search
                     liveSetMsg('Added ' + ch.name);
                     liveLoadIptv(true).then(function(){ paintLiveIptv(host); });
                   });
