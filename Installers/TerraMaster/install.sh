@@ -133,9 +133,11 @@ ExecStop=/usr/sbin/nginx -c $APP/etc/nginx/nginx.conf -s quit
 WantedBy=multi-user.target
 C
 
-# Same ownership as Installers/Linux/setup.sh: the app directory and data/ belong to the pool user.
-chown -R root:root "$APP/app" "$APP/etc"; chmod -R go-w "$APP/app"
-chown "$U:$U" "$APP/app" "$APP/app/data" "$APP/logs" "$APP/sessions"
+# The in-app updater (src/Services/Updater.php) rewrites every allowlisted path (index.php, assets/,
+# src/, docs/, deploy/, netplay/, ...) and stages/backs up under data/updates, so the whole app
+# folder belongs to the PHP-FPM pool user. etc/ (PHP/nginx config, secrets) stays root-only.
+chown -R root:root "$APP/etc"; chown -R "$U:$U" "$APP/app"; chmod -R go-w "$APP/app"
+chown "$U:$U" "$APP/logs" "$APP/sessions"
 chmod 755 "$APP/app"; chmod 770 "$APP/app/data"; chmod 750 "$APP/logs"; chmod 700 "$APP/sessions"
 
 fail=0
@@ -213,7 +215,7 @@ else
             cp netplay/server.js netplay/package.json netplay/package-lock.json "$APP/app/netplay/"
             npm_cache="$(mktemp -d)"
             (cd "$APP/app/netplay" && PATH="$APP/node/bin:$PATH" npm ci --omit=dev --no-audit --no-fund --cache "$npm_cache" >/dev/null)
-            rm -rf "$npm_cache"; chown -R root:root "$APP/app/netplay"
+            rm -rf "$npm_cache"; chown -R "$U:$U" "$APP/app/netplay"
         fi
         if [ ! -e $UNITS/vaultcast-netplay.service ]; then
             cat > $UNITS/vaultcast-netplay.service <<C

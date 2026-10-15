@@ -310,7 +310,7 @@ final class Updater
             // 2. Can the web server write the app folder? (Script installs may make it read-only.)
             foreach (array_merge(array_keys($write), $remove) as $rel) {
                 if (!self::writable(self::root() . '/' . $rel)) {
-                    return ['ok' => false, 'error' => 'The web server cannot write ' . $rel . '. Make the application folder writable by the web server user for the update (for example: sudo chown -R www-data ' . self::root() . '), then try again. Nothing was changed.'];
+                    return ['ok' => false, 'error' => 'The web server cannot write ' . $rel . '. Make the application folder writable by the web server user for the update (for example: sudo chown -R ' . self::processUser() . ' ' . self::root() . '), then try again. Nothing was changed.'];
                 }
             }
 
@@ -327,6 +327,18 @@ final class Updater
             flock($lock, LOCK_UN);
             fclose($lock);
         }
+    }
+
+    /** Name of the user this PHP process runs as (for error hints); PHP 7.4-safe with fallbacks. */
+    public static function processUser(): string
+    {
+        if (function_exists('posix_geteuid') && function_exists('posix_getpwuid')) {
+            $pw = @posix_getpwuid(posix_geteuid());
+            if (is_array($pw) && !empty($pw['name'])) return (string)$pw['name'];
+        }
+        if (function_exists('posix_geteuid')) return (string)posix_geteuid(); // numeric uid works with chown
+        $u = (string)getenv(PHP_OS_FAMILY === 'Windows' ? 'USERNAME' : 'USER');
+        return $u !== '' ? $u : 'the-php-fpm-user';
     }
 
     /** A file (or, if absent, its nearest existing folder) is writable. */

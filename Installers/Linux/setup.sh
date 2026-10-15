@@ -116,7 +116,7 @@ configure_transmission() {
 # Install the relay's packages and the vaultcast-netplay service (loopback port 3100). Safe to rerun.
 setup_relay() {
     local dir="$1"
-    [[ -f "$dir/netplay/package.json" ]] || { as_root mkdir -p "$dir/netplay"; as_root cp netplay/server.js netplay/package.json netplay/package-lock.json "$dir/netplay/"; }
+    [[ -f "$dir/netplay/package.json" ]] || { as_root mkdir -p "$dir/netplay"; as_root cp netplay/server.js netplay/package.json netplay/package-lock.json "$dir/netplay/"; as_root chown -R www-data:www-data "$dir/netplay"; }
     [[ -d "$dir/netplay/node_modules" ]] || (cd "$dir/netplay" && as_root npm ci --omit=dev --no-audit --no-fund)
     if [[ ! -f /etc/systemd/system/vaultcast-netplay.service ]]; then
         sed "s|/srv/vaultcast|$dir|g" deploy/vaultcast-netplay.service.example | as_root tee /etc/systemd/system/vaultcast-netplay.service >/dev/null
@@ -212,7 +212,9 @@ as_root cp ../LICENSE ../NOTICE "$destination/"
 as_root mkdir "$destination/netplay"
 as_root cp netplay/server.js netplay/package.json netplay/package-lock.json "$destination/netplay/"
 as_root mkdir -p "$destination/data"
-as_root chown www-data:www-data "$destination" "$destination/data"
+# The in-app updater replaces allowlisted files (index.php, assets/, src/, docs/, deploy/, netplay/, ...)
+# and stages/backs up under data/updates, so the app tree belongs to the PHP-FPM user (www-data).
+as_root chown -R www-data:www-data "$destination"
 as_root chmod 755 "$destination"
 as_root chmod 770 "$destination/data"
 php_version="$(php -r 'echo PHP_MAJOR_VERSION,".",PHP_MINOR_VERSION;')"
