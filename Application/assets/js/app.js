@@ -9800,6 +9800,19 @@ h('div', { className:'cv-find-bar' }, [
               state.adminTab = 'library';
               render();
               setTimeout(function(){ openOrphanEditor(0); }, 200);
+            } }) : null,
+            ent.type!=='dir' ? h('button', { className:'btn danger', text:'Delete', title:'Delete this file from the server', onClick: function(){
+              confirmDialog('Are you sure you want to permanently delete “' + ent.name + '”? Its subtitles, .nfo and artwork are removed too, empty folders are tidied up, and the library entry is removed. This cannot be undone.', { okText:'Delete ' + ent.name, danger:true }).then(function(ok){
+                if (!ok) return;
+                api('/admin/media/files/delete', { method:'POST', body:{ path: ent.path, confirm: ent.name } }).then(function(res){
+                  if (!res || !res.ok) return toast((res && res.error) || 'Delete failed', { kind:'bad' });
+                  toast('Deleted ' + ent.name + ((res.removed_items||[]).length ? ' · removed from the library' : '') + ((res.removed_dirs||[]).length ? ' · ' + res.removed_dirs.length + ' empty folder(s) removed' : ''), { kind:'ok' });
+                  var dirs = res.removed_dirs || [];
+                  var up = r.path;
+                  if (dirs.length) up = dirs[dirs.length - 1].replace(/[\\/][^\\/]*$/, '');
+                  mmBrowseFiles(up);
+                });
+              });
             } }) : null
           ].filter(Boolean))
         ]);

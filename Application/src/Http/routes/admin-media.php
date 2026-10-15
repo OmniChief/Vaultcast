@@ -61,3 +61,15 @@ if ($path === '/admin/media/ingest' && $method === 'POST') {
 if ($path === '/admin/media/roots' && $method === 'GET') {
     json_out(['ok' => true, 'roots' => MediaManager::allowedRoots()]);
 }
+
+// Delete one file from the Media Manager file browser (admin; JSON-only + same-origin like other admin writes).
+if ($path === '/admin/media/files/delete' && $method === 'POST') {
+    if (stripos((string)($_SERVER['CONTENT_TYPE'] ?? ''), 'application/json') === false) json_error('JSON body required', 415);
+    $b = body_json();
+    $target = (string)($b['path'] ?? '');
+    $name = basename(str_replace('\\', '/', $target));
+    if ($name === '' || (string)($b['confirm'] ?? '') !== $name) json_error('Confirm the file name to delete it.', 400);
+    $r = LibraryDelete::delete($target);
+    if (!$r['ok']) json_error($r['error'], 400);
+    json_out($r);
+}
