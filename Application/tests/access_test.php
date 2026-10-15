@@ -58,5 +58,18 @@ check($g('/home', null)[0] === 401, 'signed-out API is refused when login is req
 check($g('/home', null, null, false) === null, 'guest browsing still works when enabled');
 check($g('/live/m3u', null) === null, 'external IPTV players keep cookie-less live access');
 
+
+// regression: Relay/TV Studio channel files (api/live/file -> stream/play) use tokens owned by 'live'.
+// The gate used to look 'live' up as a user and refuse with "This account no longer exists", so the
+// web player errored on every programme and skipped through the schedule.
+$users = ['u1' => ['id' => 'u1', 'role' => 'user'], 'ux' => ['id' => 'ux', 'role' => 'user', 'access' => ['mode' => 'until', 'until' => $now - 5]]];
+$find = function ($id) use ($users) { return $users[$id] ?? null; };
+$liveTok = function () { return ['user_id' => 'live', 'media_kind' => 'video']; };
+check(Access::gate('/stream/play', null, $find, true, $liveTok, $now) === null, 'live channel token plays signed out (external M3U players)');
+check(Access::gate('/stream/play', ['user_id' => 'u1'], $find, true, $liveTok, $now) === null, 'live channel token plays for a signed-in viewer (web player)');
+check((Access::gate('/stream/play', ['user_id' => 'ux'], $find, true, $liveTok, $now)[0] ?? 0) === 403, 'live channel token still refused for an expired signed-in account');
+check((Access::gate('/stream/play', null, $find, true, function () { return ['user_id' => 'gone']; }, $now)[1]['code'] ?? '') === 'access_denied', 'tokens of deleted accounts are still refused');
+$lib = file_get_contents(__DIR__ . '/../src/Live/library.php');
+check(strpos($lib, "Stream::createToken('live',") !== false, 'live file route issues live-owned tokens (matches the gate rule)');
 echo $fails ? "$fails failed\n" : "all passed\n";
 exit($fails ? 1 : 0);
