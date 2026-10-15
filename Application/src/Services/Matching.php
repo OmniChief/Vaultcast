@@ -479,6 +479,13 @@ class Matching {
         $guide = self::guideForShow($showKey, $showName, !empty($opts['refresh']));
         $hasGuide = is_array($guide) && !empty($guide['episodes']);
         $regular = $hasGuide ? self::regularEpisodes($guide) : [];
+        // Per-show numbering mode (Fix Match → Episode numbering): absolute numbers map through the guide
+        $absMode = class_exists('AbsoluteNumbering') && AbsoluteNumbering::effectiveMode($showKey, ['_guide' => $guide]) === 'absolute';
+        if ($absMode && $hasGuide && !empty($guide['id'])) {
+            $ord = AbsoluteNumbering::tmdbAbsoluteOrder((int)$guide['id']);
+            if ($ord) $guide['absolute_order'] = $ord;
+        }
+        $absTable = $absMode ? AbsoluteNumbering::table($hasGuide ? $guide : null) : null;
         $o = self::overrides();
         $rows = [];
         $taken = [];
@@ -510,7 +517,13 @@ class Matching {
                 }
             } else {
                 $matched = false;
-                if ($hasGuide) {
+                $absP = $absMode ? AbsoluteNumbering::parse($base) : null;
+                $absG = $absP ? AbsoluteNumbering::toSeasonEpisode($absTable, $absP['number']) : null;
+                if ($absG) {
+                    $prop = ['season' => $absG['season'], 'episode' => $absG['number'], 'episode_title' => $absG['name'], 'method' => 'absolute', 'confidence' => 95, 'tvmaze_episode_id' => $absG['id']];
+                    $matched = true;
+                }
+                if (!$matched && $hasGuide) {
                     foreach (array_unique(array_filter([$clean, $label])) as $cand) {
                         $bm = self::bestTitleMatch((string)$cand, $guide);
                         if ($bm) {

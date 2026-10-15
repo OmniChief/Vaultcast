@@ -438,6 +438,7 @@
         ])
       ]));
       pq.addEventListener('keydown', function(e){ if (e.key === 'Enter') searchProv(); });
+      host.appendChild(numberingPanel(showKey, function(){ renderShowEditor(host, showKey); }));
 
       // guide datalist
       var dlId = 'nsm-guide-' + showKey;
@@ -539,6 +540,91 @@
         actions.appendChild(bReset);
       }
     });
+  }
+
+  /* Episode numbering: Season/Episode vs Absolute (overall number, typical for anime). */
+  function numberingPanel(showKey, done){
+    var body = h('div', { className: 'nsm-prov-body' });
+    var sum = h('summary', { text: 'Episode numbering' });
+    var det = h('details', { className: 'live-acc nsm-prov nsm-numbering' }, [ sum, body ]);
+    var mode = null, data = null, rows = [];
+    var modeSel = h('select', { title: 'How episodes are numbered in the file names' }, [
+      h('option', { value: 'auto', text: 'Auto-detect' }),
+      h('option', { value: 'season', text: 'Season / Episode (S01E05)' }),
+      h('option', { value: 'absolute', text: 'Absolute (overall episode number)' })
+    ]);
+    var info = h('p', { className: 'muted' });
+    var tableHost = h('div', { className: 'nsm-table-wrap' });
+    var bApply = h('button', { className: 'btn primary', type: 'button', text: 'Apply' });
+    body.appendChild(h('div', { className: 'row-actions' }, [ h('label', {}, [ 'Numbering ', modeSel ]), bApply ]));
+    body.appendChild(info);
+    body.appendChild(tableHost);
+    function mapped(n){
+      var m = data && data.map ? data.map[n] : null;
+      if (n == null || isNaN(n)) return null;
+      if (m) return { s: m[0], e: m[1], t: m[2] || '' };
+      if (data && Object.keys(data.map || {}).length === 0) return { s: 1, e: n, t: '' };
+      return null;
+    }
+    function load(m){
+      clear(tableHost).appendChild(h('p', { className: 'muted', text: 'Reading file names…' }));
+      api('/admin/match/show/' + showKey + '/numbering/preview', { method: 'POST', body: m ? { mode: m } : {} }).then(function(r){
+        if (!r.ok) { clear(tableHost); return toast(r.error || 'Failed', { kind: 'bad' }); }
+        data = r; mode = r.mode; modeSel.value = r.mode;
+        var dt = r.detected || {};
+        sum.textContent = 'Episode numbering: ' + (r.effective === 'absolute' ? 'Absolute' : 'Season / Episode') + (r.mode === 'auto' ? ' (auto)' : '');
+        info.textContent = (r.mode === 'auto' ? 'Detected ' + (dt.mode === 'absolute' ? 'absolute numbering' : 'season/episode numbering') + (dt.reasons && dt.reasons.length ? ' (' + dt.reasons.join(', ') + ')' : '') + '. ' : '')
+          + (r.effective === 'absolute' ? 'Mapping: ' + (r.source === 'none' ? 'no episode guide, so files are numbered as season 1' : r.source) + '. Check the numbers, edit any that are wrong, then Apply. Watch progress stays with each file.'
+             : 'Season/Episode uses the SxxEyy in the file names. Apply restores files changed by an earlier absolute pass.');
+        paint();
+      });
+    }
+    function paint(){
+      clear(tableHost); rows = [];
+      if (data.effective !== 'absolute') return;
+      var all = h('input', { type: 'checkbox', checked: true, onChange: function(e){ rows.forEach(function(r){ r.sel.checked = e.target.checked; }); } });
+      tableHost.appendChild(h('table', { className: 'live-table nsm-table' }, [
+        h('thead', {}, [ h('tr', {}, [ h('th', {}, [all]), h('th', { text: 'File' }), h('th', { text: 'Detected #' }), h('th', { text: 'Maps to' }), h('th', { text: 'Title' }), h('th', { text: 'Now' }) ]) ]),
+        h('tbody', {}, data.rows.map(function(x){
+          var r = { x: x, sel: h('input', { type: 'checkbox', checked: !!x.changed }) };
+          r.n = input({ type: 'number', min: '1', className: 'narrow', value: x.absolute != null ? x.absolute : '', title: x.method ? 'Found by: ' + x.method : 'No number found; type one' });
+          var codeTd = h('td'), titleTd = h('td');
+          function upd(){
+            var m = mapped(num(r.n.value));
+            clear(codeTd).appendChild(m ? document.createTextNode(code(m.s, m.e)) : chip(x.note || 'no match', 'warn'));
+            titleTd.textContent = m ? m.t : '';
+          }
+          r.n.addEventListener('input', function(){ r.sel.checked = true; upd(); });
+          upd(); rows.push(r);
+          return h('tr', { className: x.changed ? 'nsm-changed' : '' }, [ h('td', {}, [r.sel]), h('td', { className: 'nsm-file', text: x.file, title: x.rel }), h('td', {}, [r.n]), codeTd, titleTd,
+            h('td', { className: 'muted', text: (code(x.current.season, x.current.episode) || 'unnumbered') + (x.current.absolute ? ' (#' + x.current.absolute + ')' : '') }) ]);
+        }))
+      ]));
+    }
+    modeSel.addEventListener('change', function(){ load(modeSel.value); });
+    bApply.addEventListener('click', function(){
+      var body = { mode: modeSel.value };
+      if (data && data.effective === 'absolute') {
+        body.rows = rows.filter(function(r){ return r.sel.checked; }).map(function(r){ return { id: r.x.id, absolute: num(r.n.value) }; });
+        if (!body.rows.length) return toast('Select files first');
+      }
+      busy(bApply, true, 'Applying…');
+      api('/admin/match/show/' + showKey + '/numbering', { method: 'POST', body: body }).then(function(res){
+        busy(bApply, false);
+        if (!res.ok) return toast(res.error || 'Failed', { kind: 'bad' });
+        toast(res.effective === 'absolute' ? ('Numbering saved · ' + res.changed + ' episode' + (res.changed === 1 ? '' : 's') + ' updated') : ('Season/Episode numbering saved' + (res.restored ? ' · ' + res.restored + ' restored' : '')), { kind: 'ok' });
+        done();
+      });
+    });
+    det.addEventListener('toggle', function(){ if (det.open && !data) load(null); });
+    // Fetch the mode up front so the summary shows it, and open the panel when absolute applies.
+    api('/admin/match/show/' + showKey + '/numbering/preview', { method: 'POST', body: {} }).then(function(r){
+      if (!r || !r.ok || data) return;
+      data = r; mode = r.mode; modeSel.value = r.mode;
+      sum.textContent = 'Episode numbering: ' + (r.effective === 'absolute' ? 'Absolute' : 'Season / Episode') + (r.mode === 'auto' ? ' (auto)' : '');
+      if (r.effective === 'absolute') { det.open = true; load(r.mode); }
+    }).catch(function(){});
+    return det;
   }
 
   /* =============================================================== REPORTS */
