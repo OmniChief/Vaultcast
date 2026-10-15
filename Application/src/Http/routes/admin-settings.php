@@ -30,7 +30,7 @@ if ($path === '/admin/settings' && $method === 'GET') {
     $cv['max_threads'] = Convert::cpuCount();
     $cv['threads'] = Convert::sanitizeThreadCount($cv['threads'] ?? 1, $cv['max_threads']);
     $out['convert'] = $cv;
-    json_out(['ok' => true, 'settings' => $out]);
+    json_out(['ok' => true, 'settings' => OpenSubtitles::maskSettings($out)]);
 }
 
 if ($path === '/admin/settings' && $method === 'POST') {
@@ -79,6 +79,10 @@ if ($path === '/admin/settings' && $method === 'POST') {
         $cur['features_explicit'] = array_replace(is_array($cur['features_explicit'] ?? null) ? $cur['features_explicit'] : [], ['downloads' => true]);
     }
     unset($b['features_explicit']);
+    if (isset($b['opensubtitles']) && is_array($b['opensubtitles'])) {
+        $cur['opensubtitles'] = OpenSubtitles::mergeSettings($cur, $b['opensubtitles']);
+        unset($b['opensubtitles']);
+    }
     foreach ($b as $k => $v) {
         if (is_string($k) && strlen($k) > 0 && $k[0] === '_') {
             continue; // client-only flags
@@ -106,7 +110,7 @@ if ($path === '/admin/settings' && $method === 'POST') {
     unset($tr);
     Store::saveSettings($cur);
     Store::invalidate();
-    json_out(['ok' => true, 'settings' => $cur]);
+    json_out(['ok' => true, 'settings' => OpenSubtitles::maskSettings($cur)]);
 }
 
 
