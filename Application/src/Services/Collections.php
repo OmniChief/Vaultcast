@@ -38,6 +38,7 @@ class Collections {
                 'description' => $c['description'] ?? '',
                 'source' => $c['source'] ?? null,
                 'source_url' => $c['source_url'] ?? null,
+                'poster_url' => $c['poster_url'] ?? null,
                 'part_count' => count($parts),
                 'available_count' => $present,
                 'missing_count' => count($parts) - $present,

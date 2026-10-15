@@ -7345,6 +7345,7 @@ try {
       h('label', { className:'check-label' }, [ h('input', { id:'poster_en', type:'checkbox', checked: posters.enabled!==false }), ' Enable remote posters' ]),
       fieldEl('poster_provider','Provider', posters.provider||'omdb+tvmaze'),
       fieldEl('poster_omdb','OMDb API key', posters.omdb_api_key||''),
+      fieldEl('poster_tmdb','TMDB API key (optional: Find collections)', posters.tmdb_api_key||''),
       fieldEl('poster_rate','Rate limit / sec', posters.rate_limit_per_sec||2, 'number'),
       h('p', {className:'muted',text:'Artwork cache: data/posters/ (managed by Vaultcast)'}),
       h('button', { className:'btn primary', text:'Save poster settings', onClick: function(){
@@ -7352,6 +7353,7 @@ try {
           enabled: $('#poster_en').checked,
           provider: $('#poster_provider').value,
           omdb_api_key: ($('#poster_omdb').value||'').trim(),
+          tmdb_api_key: ($('#poster_tmdb').value||'').trim(),
           rate_limit_per_sec: +$('#poster_rate').value
         }});
         setTimeout(refreshPosterCoverage, 400);
@@ -9834,6 +9836,7 @@ h('div', { className:'cv-find-bar' }, [
       h('button', { className:'btn ghost', text:'Cancel', onClick: function(){ abortOp('col_online'); toast('Cancelled'); } })
     ]));
     wrap.appendChild(h('div', { id:'col_online_hits', className:'stack' }));
+    wrap.appendChild(findCollectionsPanel(function(){ colRefreshList(); }));
     wrap.appendChild(h('hr'));
     wrap.appendChild(h('div', { className:'row-actions' }, [
       h('input', { id:'col_name', placeholder:'Manual collection name' }),
@@ -9948,11 +9951,49 @@ h('div', { className:'cv-find-bar' }, [
     });
   }
 
+  /* Find collections (admin): resumable job, driven step by step from the page. */
+  function findCollectionsPanel(onChange){
+    var status = h('div', { className:'muted', role:'status' });
+    var bar = h('progress', { max:'100', value:'0', style:'width:100%;display:none' });
+    var running = false;
+    var btn = h('button', { className:'btn primary', type:'button', text:'Find collections', title:'Look up the collections (film series) your films belong to and create or extend them' });
+    var stop = h('button', { className:'btn ghost', type:'button', text:'Stop', style:'display:none' });
+    function paint(p){
+      if (!p) return;
+      var pct = p.total ? Math.round(100 * (p.done || 0) / p.total) : 0;
+      bar.style.display = p.status === 'running' ? '' : 'none';
+      bar.value = pct;
+      var counts = (p.total ? (p.done||0) + '/' + p.total + ' films · ' : '') + (p.found||0) + ' found · ' + (p.created||0) + ' created · ' + (p.updated||0) + ' updated';
+      status.textContent = [p.message || '', p.status && p.status !== 'idle' ? counts : '', p.hint || '', p.last_error ? 'Last error: ' + p.last_error : ''].filter(Boolean).join(' — ');
+      stop.style.display = running ? '' : 'none';
+      btn.disabled = running;
+    }
+    function loop(){
+      if (!running) return;
+      api('/admin/collections/discover', { method:'POST', body:{ action:'step' } }).then(function(p){
+        if (!p || !p.ok) { running = false; status.textContent = (p && p.error) || 'Find collections failed'; paint(null); btn.disabled = false; return; }
+        paint(p);
+        if (p.status === 'running' && running) setTimeout(loop, p.wait_ms || (p.busy ? 1500 : 200));
+        else { running = false; paint(p); if (onChange) onChange(); }
+      }).catch(function(){ running = false; btn.disabled = false; status.textContent = 'Connection lost; press Find collections to resume.'; });
+    }
+    btn.onclick = function(){
+      running = true; btn.disabled = true;
+      api('/admin/collections/discover').then(function(cur){
+        var resume = cur && (cur.status === 'running' || cur.status === 'cancelled') && cur.done < cur.total;
+        return resume ? cur : api('/admin/collections/discover', { method:'POST', body:{ action:'start' } });
+      }).then(function(p){ paint(p); if (p && p.ok && p.status === 'running') loop(); else { running = false; paint(p); if (onChange) onChange(); } });
+    };
+    stop.onclick = function(){ running = false; api('/admin/collections/discover', { method:'POST', body:{ action:'cancel' } }).then(paint); };
+    api('/admin/collections/discover').then(function(p){ if (p && p.ok && p.status && p.status !== 'idle') paint(p); }).catch(function(){});
+    return h('div', { className:'stack find-collections' }, [ h('div', { className:'row-actions' }, [btn, stop]), bar, status ]);
+  }
   function viewCollections(){
     var wrap = h('div', { id:'collections-view', className:'panel panel-collections' }, [
       h('div', { className:'hero' }, [
         h('h1', { text:'Collections' }),
-        h('p', { className:'muted', text:'Film series & show groups — tap a poster to expand its titles' })
+        h('p', { className:'muted', text:'Film series & show groups — tap a poster to expand its titles' }),
+        (state.user && state.user.role === 'admin') ? findCollectionsPanel(function(){ if (state.view === 'collections') render(); }) : null
       ]),
       h('div', { id:'pub_col_list', className:'collections-grid' }, [ h('p', { className:'muted', text:'Loading…' }) ])
     ]);
