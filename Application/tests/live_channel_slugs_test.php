@@ -60,6 +60,7 @@ check(strpos($m3u, 'api/live/m3u?channel=ch-1') !== false && strpos($m3u, 'api/l
 check(strpos($m3u, 'tvg-id="ch-1"') !== false, 'tvg-id matches the channel id');
 $xml = tvs_xmltv($GLOBALS['station'], 1);
 check(strpos($xml, '<channel id="ch-1">') !== false && strpos($xml, 'relay.ch-u8f1qa') === false, 'XMLTV channel ids match the M3U tvg-ids');
+\Vaultcast\Repository::$docs = array(); tvs_playlist_m3u($GLOBALS['station'], 'http://example.local/media/');
 check(isset(\Vaultcast\Repository::$docs['live_channel_aliases']['ch-1']), 'exported slugs are remembered for aliasing');
 
 $route = file_get_contents(__DIR__ . '/../src/Http/routes/live.php');

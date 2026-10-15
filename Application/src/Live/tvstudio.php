@@ -487,8 +487,9 @@ function tvs_xmltv($station, $days = null) {
     $x = array('<?xml version="1.0" encoding="UTF-8"?>', '<!DOCTYPE tv SYSTEM "xmltv.dtd">', '<tv generator-info-name="Vaultcast TV Studio">');
     $progs = array();
     require_once __DIR__ . '/channel_slugs.php';
-    require_once __DIR__ . '/iptv.php';
-    list($slugs) = live_channel_slugs_current($station);
+    // Relay slugs never depend on IPTV (relay wins collisions), so IPTV is only loaded when exported.
+    if ($st['epg']['includeIptv']) list($slugs) = live_channel_slugs_current($station);
+    else $slugs = live_channel_slugs($station['channels'] ?? array(), array());
     $sidx = live_channel_slug_index($slugs);
     foreach ($station['channels'] ?? array() as $ch) {
         if (empty($ch['enabled'])) continue;
