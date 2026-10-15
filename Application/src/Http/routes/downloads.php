@@ -149,6 +149,10 @@ if ($path === '/admin/acquisition' && $method === 'GET') {
     json_out(Acquisition::state());
 }
 
+if ($path === '/admin/acquisition/feed-catalogue' && $method === 'GET') {
+    json_out(['ok' => true, 'feeds' => FeedCatalogue::builtins()]);
+}
+
 if ($path === '/admin/acquisition/fetch' && $method === 'POST') {
     json_out(Acquisition::fetchFeeds());
 }

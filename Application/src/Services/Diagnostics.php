@@ -128,7 +128,7 @@ class Diagnostics {
                     return ['ok' => true, 'detail' => $https ? 'yes' : 'no (LAN HTTP ok)'];
                 case 'acquisition_feeds':
                     $acq = Store::settings()['acquisition'] ?? [];
-                    $feeds = $acq['feeds'] ?? [];
+                    $feeds = FeedCatalogue::active($acq['feeds'] ?? []);
                     $search = 0;
                     foreach ($feeds as $feed) {
                         $url = is_array($feed) ? ($feed['url'] ?? '') : (string)$feed;
