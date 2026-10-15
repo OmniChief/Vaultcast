@@ -624,7 +624,78 @@
     }, 45000);
   }
 
-  function confirmDialog(message, opts){
+  /* Settings → Download sources: checklist of built-in public-domain feeds + custom feeds.
+   Stored format is unchanged (list of {url,name,type?}), plus optional enabled/builtin. */
+function feedValidateCustom(name, url){
+  name = String(name||'').trim(); url = String(url||'').trim();
+  if (!name) return 'Give the feed a name.';
+  if (!/^https?:\/\//i.test(url)) return 'Feed URL must start with http:// or https://';
+  if (/\s/.test(url)) return 'Feed URL must not contain spaces.';
+  try { var u = new URL(url.replace(/\{q(uery)?\}/g, 'x')); if (!u.hostname) throw 0; } catch(e){ return 'Feed URL is not a valid web address.'; }
+  return '';
+}
+function feedSourcesEditor(stored){
+  var list = (Array.isArray(stored) ? stored : []).map(function(f){ return typeof f === 'string' ? { url:f } : Object.assign({}, f); }).filter(function(f){ return f && f.url; });
+  var catalogue = [];
+  var wrap = h('div', { className:'stack feed-sources' });
+  var listEl = h('div', { className:'stack' });
+  var json = h('textarea', { rows:'8', style:'width:100%;font-family:monospace' });
+  var adv = h('details', {}, [ h('summary', { text:'Advanced: edit JSON' }), h('p', { className:'muted', text:'Array of {url, name, type?, enabled?}. Changes here replace the list above when you apply them.' }), json,
+    h('div', { className:'row-actions' }, [ h('button', { className:'btn', text:'Apply JSON', onClick:function(){
+      var v; try { v = JSON.parse(json.value); } catch(e){ return toast('Bad feeds JSON', { kind:'bad' }); }
+      if (!Array.isArray(v)) return toast('Feeds JSON must be an array', { kind:'bad' });
+      list = v.map(function(f){ return typeof f === 'string' ? { url:f } : f; }).filter(function(f){ return f && f.url; }); paint();
+    } }) ]) ]);
+  function isOn(f){ return f.enabled !== false; }
+  function find(url){ for (var i = 0; i < list.length; i++) if (list[i].url === url) return list[i]; return null; }
+  function row(title, desc, url, checked, onToggle, onRemove){
+    return h('div', { className:'tx-row' }, [
+      h('label', { className:'check-label', style:'flex:1;min-width:0' }, [
+        h('input', { type:'checkbox', checked: !!checked, onChange:function(ev){ onToggle(ev.currentTarget.checked); } }),
+        h('span', {}, [ h('strong', { text:title }), h('div', { className:'muted', text:desc }), h('div', { className:'muted', style:'font-size:.8em;word-break:break-all', text:url }) ])
+      ]),
+      onRemove ? h('span', { className:'row-actions' }, [ h('button', { className:'btn ghost danger-outline', text:'Remove', onClick:onRemove }) ]) : null
+    ].filter(Boolean));
+  }
+  function paint(){
+    listEl.innerHTML = '';
+    var builtinUrls = {};
+    catalogue.forEach(function(b){
+      builtinUrls[b.url] = 1;
+      var cur = find(b.url);
+      listEl.appendChild(row(b.name, b.description, b.url, cur && isOn(cur), function(on){
+        var c = find(b.url);
+        if (c) c.enabled = on; else if (on) list.push({ url:b.url, name:b.name, type:b.type, builtin:b.id, enabled:true });
+        json.value = JSON.stringify(list, null, 2);
+      }, null));
+    });
+    var custom = list.filter(function(f){ return !builtinUrls[f.url]; });
+    if (custom.length) listEl.appendChild(h('strong', { text:'Custom feeds' }));
+    custom.forEach(function(f){
+      listEl.appendChild(row(f.name || f.url, f.type ? ('Type: ' + f.type) : 'Custom feed', f.url, isOn(f), function(on){ f.enabled = on; json.value = JSON.stringify(list, null, 2); }, function(){
+        confirmDialog('Remove the custom feed “' + (f.name || f.url) + '”?', { okText:'Remove', danger:true }).then(function(ok){ if (!ok) return; list = list.filter(function(x){ return x !== f; }); paint(); });
+      }));
+    });
+    json.value = JSON.stringify(list, null, 2);
+  }
+  var nameIn = h('input', { type:'text', placeholder:'Name' });
+  var urlIn = h('input', { type:'url', placeholder:'https://example.org/rss?q={query}', style:'flex:2' });
+  var addRow = h('div', { className:'row-actions' }, [ nameIn, urlIn, h('button', { className:'btn', text:'Add custom feed', onClick:function(){
+    var err = feedValidateCustom(nameIn.value, urlIn.value);
+    if (!err && find(urlIn.value.trim())) err = 'That feed is already in the list.';
+    if (err) return toast(err, { kind:'bad' });
+    list.push({ url:urlIn.value.trim(), name:nameIn.value.trim(), enabled:true });
+    nameIn.value = ''; urlIn.value = ''; paint();
+  } }) ]);
+  wrap.appendChild(listEl);
+  wrap.appendChild(h('strong', { text:'Add custom feed' }));
+  wrap.appendChild(addRow);
+  wrap.appendChild(adv);
+  paint();
+  api('/admin/acquisition/feed-catalogue').then(function(r){ catalogue = (r && r.feeds) || []; paint(); }).catch(function(){});
+  return { el: wrap, value: function(){ return list.slice(); } };
+}
+function confirmDialog(message, opts){
     opts = opts || {};
     return new Promise(function(resolve){
       var existing = $('#confirm-overlay');
@@ -6963,8 +7034,7 @@ try {
         paintAdminQueue(true);
       } else if (tab === 'acquisition') {
         var a = s.acquisition || {};
-        var feeds = h('textarea', { id:'feeds_json', rows:'8', style:'width:100%;font-family:monospace' });
-        feeds.value = JSON.stringify(a.feeds||[], null, 2);
+        var feedsUi = feedSourcesEditor(a.feeds || []);
         body.appendChild(h('div', { className:'stack' }, [
           h('label', {}, [ h('input', { id:'acq_en', type:'checkbox', checked: !!a.enabled }), ' Enable RSS acquisition' ]),
           h('label', {}, [ h('input', { id:'rss_fb', type:'checkbox', checked: a.rss_fallback_search!==false }), ' Enable RSS-fallback search (after weak catalogue results)' ]),
@@ -6997,11 +7067,12 @@ try {
           fieldEl('tr_seed_ratio','Seed until ratio (only if seeding allowed; 0 = unlimited)', (a.transmission||{}).seed_ratio_limit!=null?(a.transmission||{}).seed_ratio_limit:0, 'number'),
           fieldEl('tr_seed_idle','Seed idle minutes (only if seeding allowed; 0 = unlimited)', (a.transmission||{}).seed_idle_minutes!=null?(a.transmission||{}).seed_idle_minutes:0, 'number'),
           h('label', { className:'check-label' }, [ h('input', { id:'tr_seed_existing', type:'checkbox', checked: (a.transmission||{}).apply_to_existing!==false }), ' Also apply policy to existing torrents on save' ]),
-          h('p', { className:'muted', text:'Feeds: search templates need {query} (or {q}), or type "apibay"/"search". Examples: Nyaa https://nyaa.si/?page=rss&q={query}&c=0_0&f=0 · Apibay https://apibay.org/q.php?q={query}. User RSS search uses one rate-limit slot per click (quality variants share it). Nothing polls idle.' }),
-          h('label', {}, ['Feeds JSON (array of {url,name,type?})', feeds]),
+          h('h3', { className:'admin-section-title', text:'Feeds' }),
+          h('p', { className:'muted', text:'Tick the sources to use. Only add feeds you have the right to download from. Search feeds need {query} (or {q}) in the URL. A user search uses one rate-limit slot per click, and nothing polls while idle.' }),
+          feedsUi.el,
           h('div', { className:'row-actions' }, [
             h('button', { className:'btn primary', text:'Save', onClick: function(){
-              var feedsArr; try { feedsArr = JSON.parse(feeds.value); } catch(e){ return toast('Bad feeds JSON'); }
+              var feedsArr = feedsUi.value(); if (!feedsArr) return;
               function split(v){ return String(v||'').split(',').map(function(x){return x.trim();}).filter(Boolean); }
               saveSettings({ acquisition: {
                 enabled: $('#acq_en').checked,

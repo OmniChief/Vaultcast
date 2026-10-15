@@ -493,7 +493,7 @@ class Collections {
             $settings = Store::settings();
             $acq = $settings['acquisition'] ?? [];
             $hasSearch = false;
-            foreach ($acq['feeds'] ?? [] as $feed) {
+            foreach (FeedCatalogue::active($acq['feeds'] ?? []) as $feed) {
                 $url = is_array($feed) ? ($feed['url'] ?? '') : (string)$feed;
                 if ($url && (strpos($url, '{query}') !== false || strpos($url, '{q}') !== false
                     || (is_array($feed) && ($feed['type'] ?? '') === 'search'))) {

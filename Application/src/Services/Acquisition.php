@@ -268,6 +268,7 @@ class Acquisition {
         if ($feeds === null) {
             $feeds = Store::settings()['acquisition']['feeds'] ?? [];
         }
+        $feeds = FeedCatalogue::active($feeds);
         $n = 0;
         foreach ($feeds as $feed) {
             $url = is_array($feed) ? ($feed['url'] ?? '') : (string)$feed;
@@ -288,7 +289,7 @@ class Acquisition {
         if (!$gate['ok']) return $gate + ['items' => []];
 
         $settings = Store::settings();
-        $feeds = $settings['acquisition']['feeds'] ?? [];
+        $feeds = FeedCatalogue::active($settings['acquisition']['feeds'] ?? []);
         $found = [];
         foreach ($feeds as $feed) {
             $url = is_array($feed) ? ($feed['url'] ?? '') : (string)$feed;
@@ -425,6 +426,9 @@ class Acquisition {
             if ($enclosure === '' && $link !== '' && preg_match('/\.torrent(\?|$)/i', $link)) {
                 $enclosure = $link;
             }
+            // Internet Archive items: use the Archive's official torrent instead of the direct-file enclosure
+            $iaTorrent = $magnet === '' ? FeedCatalogue::archiveTorrent($link !== '' ? $link : $guid) : '';
+            if ($iaTorrent !== '') $enclosure = $iaTorrent;
             $seeds = self::extractSeeds($item, $desc, $title);
             $quality = self::detectQuality($title . ' ' . $desc);
             $lang = self::detectLanguage($title . ' ' . $desc);
@@ -680,7 +684,7 @@ class Acquisition {
 
         $settings = Store::settings();
         $acq = $settings['acquisition'] ?? [];
-        $feeds = $acq['feeds'] ?? [];
+        $feeds = FeedCatalogue::active($acq['feeds'] ?? []);
         if (self::countSearchFeeds($feeds) === 0) {
             return [
                 'ok' => false,
@@ -1170,7 +1174,7 @@ class Acquisition {
         }
 
         $hasSearchFeed = false;
-        foreach ($acq['feeds'] ?? [] as $feed) {
+        foreach (FeedCatalogue::active($acq['feeds'] ?? []) as $feed) {
             $url = is_array($feed) ? ($feed['url'] ?? '') : (string)$feed;
             if ($url === '') continue;
             if ((is_array($feed) && (($feed['type'] ?? '') === 'search'))

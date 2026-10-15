@@ -83,6 +83,13 @@ if ($path === '/admin/settings' && $method === 'POST') {
         $cur['opensubtitles'] = OpenSubtitles::mergeSettings($cur, $b['opensubtitles']);
         unset($b['opensubtitles']);
     }
+    $newFeeds = null;
+    if (isset($b['acquisition']) && is_array($b['acquisition']) && array_key_exists('feeds', $b['acquisition'])) {
+        $nf = FeedCatalogue::normalize($b['acquisition']['feeds']);
+        if (!$nf['ok']) json_error($nf['error'], 400);
+        $newFeeds = $nf['feeds'];
+        unset($b['acquisition']['feeds']); // replaced wholesale below (a recursive merge would keep removed entries)
+    }
     foreach ($b as $k => $v) {
         if (is_string($k) && strlen($k) > 0 && $k[0] === '_') {
             continue; // client-only flags
@@ -108,6 +115,7 @@ if ($path === '/admin/settings' && $method === 'POST') {
     if (!array_key_exists('seed_idle_minutes', $tr)) $tr['seed_idle_minutes'] = 0;
     if (!array_key_exists('apply_to_existing', $tr)) $tr['apply_to_existing'] = true;
     unset($tr);
+    if ($newFeeds !== null) $cur['acquisition']['feeds'] = $newFeeds;
     Store::saveSettings($cur);
     Store::invalidate();
     json_out(['ok' => true, 'settings' => OpenSubtitles::maskSettings($cur)]);
