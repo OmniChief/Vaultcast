@@ -486,6 +486,13 @@ class Matching {
             if ($ord) $guide['absolute_order'] = $ord;
         }
         $absTable = $absMode ? AbsoluteNumbering::table($hasGuide ? $guide : null) : null;
+        $absTitles = $absMode ? AbsoluteNumbering::showTitles($showKey, $showName, $hasGuide ? $guide : null) : [];
+        $absPrefix = '';
+        if ($absMode) {
+            $bs = [];
+            foreach ($items as $it0) $bs[] = basename(str_replace('\\', '/', (string)($it0['rel'] ?? '')));
+            $absPrefix = AbsoluteNumbering::commonPrefix($bs);
+        }
         $o = self::overrides();
         $rows = [];
         $taken = [];
@@ -517,7 +524,7 @@ class Matching {
                 }
             } else {
                 $matched = false;
-                $absP = $absMode ? AbsoluteNumbering::parse($base) : null;
+                $absP = $absMode ? AbsoluteNumbering::parse($base, $absTitles, $absPrefix) : null;
                 $absG = $absP ? AbsoluteNumbering::toSeasonEpisode($absTable, $absP['number']) : null;
                 if ($absG) {
                     $prop = ['season' => $absG['season'], 'episode' => $absG['number'], 'episode_title' => $absG['name'], 'method' => 'absolute', 'confidence' => 95, 'tvmaze_episode_id' => $absG['id']];

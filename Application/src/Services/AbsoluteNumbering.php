@@ -30,16 +30,29 @@ final class AbsoluteNumbering {
             || preg_match('/\b(?:Season|Series)[\s._-]*\d{1,2}[\s._-]*(?:Episode|Ep)[\s._-]*\d{1,4}\b/i', $base));
     }
 
-    /**
-     * Absolute episode number from a file basename (no extension).
-     * Ignores resolutions, CRC hashes, years, codecs and version suffixes (12v2); returns null for
-     * SxxEyy names and for ranges/batches ("01-12", "01~26", "Batch", "Complete").
-     * @return array{number:int,method:string,fansub:bool}|null
-     */
-    public static function parse(string $base): ?array {
-        $base = trim((string)preg_replace('/\.(mkv|mp4|avi|m4v|webm|ts|mov|wmv)$/i', '', $base));
-        if ($base === '' || self::hasSeasonCode($base)) return null;
-        $fansub = (bool)preg_match('/^\s*\[[^\]]+\]/', $base);
+    /** Lowercase letters+digits only ("Dragon Ball Z: Kai" → "dragonballzkai"). */
+    public static function compact(string $s): string {
+        return strtolower((string)preg_replace('/[^A-Za-z0-9]+/', '', $s));
+    }
+
+    /** Show-name variants to try as a filename prefix (year suffix and leading article dropped). */
+    public static function titleVariants(array $titles): array {
+        $out = [];
+        foreach ($titles as $t) {
+            $t = trim((string)$t);
+            if ($t === '') continue;
+            $noYear = trim((string)preg_replace('/\s*[\(\[]?(?:19|20)\d{2}[\)\]]?\s*$/', '', $t));
+            foreach ([$t, $noYear, (string)preg_replace('/^(?:the|a|an)\s+/i', '', $noYear)] as $v) {
+                $c = self::compact($v);
+                if ($c !== '' && !in_array($c, $out, true)) $out[] = $c;
+            }
+        }
+        usort($out, function ($a, $b) { return strlen($b) <=> strlen($a); }); // longest first
+        return $out;
+    }
+
+    /** Clean a basename for number hunting: drop brackets, tags, codecs, CRCs; null when it must not be parsed. */
+    private static function clean(string $base): ?string {
         $s = str_replace('_', ' ', $base);
         if (preg_match('/\b(batch|complete|全集)\b/iu', $s)) return null;
         // drop bracketed tags: [Group] [1080p] [ABCD1234] (BD 720p) (2004)
@@ -47,15 +60,77 @@ final class AbsoluteNumbering {
         // dots used as spaces (keep "5.1" audio from becoming numbers by removing it first)
         $s = (string)preg_replace('/\b(?:aac|ac3|eac3|ddp?|dts|flac|opus)?\s*[257]\.[01]\b/i', ' ', $s);
         $s = str_replace('.', ' ', $s);
-        // junk tokens
         $s = (string)preg_replace('/\b(?:\d{3,4}[pi]|[48]k|uhd|x26[45]|h\s?26[45]|hevc|avc|av1|xvid|\d{1,2}\s?bits?|hi10p?|bd(?:rip)?|blu\s?ray|web(?:\s?dl|rip)?|dvd(?:rip)?|hdtv|aac|flac|opus|ac3|dual\s?audio|multi\s?subs?|[0-9A-F]{8})\b/i', ' ', $s);
         $s = trim((string)preg_replace('/\s+/', ' ', $s));
         // ranges ("Title - 01-12", "01 ~ 26", "Ep 1-3")
-        if (preg_match('/(?:^|\s|#|ep\s?)\d{1,4}(?:v\d+)?(?:[-–]|\s*(?:~|\bto\b)\s*)\d{1,4}(?:v\d+)?(?:\s|$)/iu', $s)) return null;
-        $pick = function (string $raw, string $method) use ($fansub): ?array {
+        if (preg_match('/(?:^|\s|\(|#|ep\s?)\d{1,4}(?:v\d+)?(?:[-–]|\s*(?:~|\bto\b)\s*)\d{1,4}(?:v\d+)?(?:\s|\)|$)/iu', $s)) return null;
+        return $s;
+    }
+
+    /** Text after a known show-title prefix (compared ignoring case, spaces and punctuation), or null. */
+    private static function afterPrefix(string $s, string $compactTitle) {
+        $acc = '';
+        $len = strlen($s);
+        for ($i = 0; $i < $len; $i++) {
+            $ch = $s[$i];
+            if (!ctype_alnum($ch)) continue;
+            $acc .= strtolower($ch);
+            if (strpos($compactTitle, $acc) !== 0) return null;
+            if ($acc === $compactTitle) {
+                $rest = (string)substr($s, $i + 1);
+                // the title must end at a word boundary ("Kai" must not match "Kaiju")
+                if ($rest !== '' && ctype_alnum($rest[0]) && ctype_alnum($ch) && (ctype_digit($rest[0]) === ctype_digit($ch))) return null;
+                return $rest;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Longest common prefix of the cleaned file names of one show, cut back to a word boundary and
+     * never ending inside a number ("Show 01", "Show 02" → "Show "). Empty when < 2 files.
+     */
+    public static function commonPrefix(array $bases): string {
+        $c = [];
+        foreach ($bases as $b) {
+            $b = trim((string)preg_replace('/\.(mkv|mp4|avi|m4v|webm|ts|mov|wmv)$/i', '', (string)$b));
+            $x = self::clean($b);
+            if ($x !== null && $x !== '') $c[] = $x;
+        }
+        if (count($c) < 2) return '';
+        $p = $c[0];
+        foreach ($c as $x) {
+            $n = min(strlen($p), strlen($x));
+            $i = 0;
+            while ($i < $n && strtolower($p[$i]) === strtolower($x[$i])) $i++;
+            $p = substr($p, 0, $i);
+            if ($p === '') return '';
+        }
+        // back off out of a number and to the last word boundary
+        $p = (string)preg_replace('/\d+$/', '', $p);
+        $p = (string)preg_replace('/[A-Za-z0-9]+$/', '', $p);
+        return trim($p) === '' ? '' : $p;
+    }
+
+    /**
+     * Absolute episode number from a file basename (no extension).
+     * Ignores resolution, CRC hashes, years, codecs and version suffixes (12v2); returns null for
+     * SxxEyy names and for ranges/batches ("01-12", "01~26", "Batch", "Complete").
+     * $titles: known show names/aliases; the first standalone number after the title is used
+     *   ("Dragonball Z Kai 01 Prologue…", "Mob Psycho 100 05 …"), digits inside the title never count.
+     * $prefix: common prefix of all files in the show (see commonPrefix) when the title is unknown.
+     * @return array{number:int,method:string,fansub:bool}|null
+     */
+    public static function parse(string $base, array $titles = [], string $prefix = ''): ?array {
+        $base = trim((string)preg_replace('/\.(mkv|mp4|avi|m4v|webm|ts|mov|wmv)$/i', '', $base));
+        if ($base === '' || self::hasSeasonCode($base)) return null;
+        $fansub = (bool)preg_match('/^\s*\[[^\]]+\]/', $base);
+        $s = self::clean($base);
+        if ($s === null || $s === '') return null;
+        $pick = function (string $raw, string $method, bool $allowYear = false) use ($fansub): ?array {
             $n = (int)$raw;
             if ($n < 1 || $n > 4999) return null;
-            if (strlen(ltrim($raw, '0')) === 4 && $n >= 1900 && $n <= 2099) return null; // a year
+            if (!$allowYear && strlen(ltrim($raw, '0')) === 4 && $n >= 1900 && $n <= 2099) return null; // a year
             return ['number' => $n, 'method' => $method, 'fansub' => $fansub];
         };
         $v = '(?:v\d{1,2})?';
@@ -64,9 +139,30 @@ final class AbsoluteNumbering {
         if (preg_match_all('/\s[-–—]\s+0*(\d{1,4})' . $v . '(?=\s|$)/u', $s, $mm)) {
             for ($i = count($mm[1]) - 1; $i >= 0; $i--) if ($r = $pick($mm[1][$i], 'dash')) return $r;
         }
+        // "Show Title NN Episode title": first standalone number after the known show name
+        $first = '/^[^A-Za-z0-9]*(?:(?:Episode|Ep|E|#)\s?)?(\d{1,4})' . $v . '(?![A-Za-z0-9])/i';
+        foreach (self::titleVariants($titles) as $ct) {
+            $rest = self::afterPrefix($s, $ct);
+            if ($rest === null) continue;
+            if (preg_match($first, $rest, $m) && ($r = $pick($m[1], 'title', true))) return $r;
+        }
         if (preg_match('/(?:^|\s)(\d{1,5})' . $v . '$/', $s, $m) && ($r = $pick($m[1], 'trailing'))) {
             // a bare trailing number needs a fansub-style name or a zero-padded/large number
             if ($fansub || strlen($m[1]) >= 2) return $r;
+        }
+        // consistent prefix across the show's files: leading number of the remainder
+        if ($prefix !== '' && stripos($s, $prefix) === 0) {
+            if (preg_match($first, (string)substr($s, strlen($prefix)), $m) && ($r = $pick($m[1], 'prefix'))) return $r;
+        }
+        // general fallback: first standalone number that is not a year or part of the show name
+        $skip = [];
+        foreach ($titles as $t) if (preg_match_all('/\d+/', (string)$t, $tm)) foreach ($tm[0] as $d) $skip[(int)$d] = true;
+        if ($prefix !== '' && preg_match_all('/\d+/', $prefix, $tm)) foreach ($tm[0] as $d) $skip[(int)$d] = true;
+        if (preg_match_all('/(?<![A-Za-z0-9\'])(\d{1,4})' . $v . '(?![A-Za-z0-9\'])/', $s, $mm)) {
+            foreach ($mm[1] as $raw) {
+                if (isset($skip[(int)$raw])) continue;
+                if ($r = $pick($raw, 'first')) return $r;
+            }
         }
         return null;
     }
@@ -78,13 +174,14 @@ final class AbsoluteNumbering {
      * do not use SxxEyy.
      * @param string[] $bases
      */
-    public static function detect(array $bases, string $type = '', array $genres = []): array {
+    public static function detect(array $bases, string $type = '', array $genres = [], array $titles = []): array {
         $total = count($bases);
         $sxe = 0; $abs = 0; $fan = 0;
+        $prefix = self::commonPrefix($bases);
         foreach ($bases as $b) {
             if (self::hasSeasonCode((string)$b)) { $sxe++; continue; }
-            $p = self::parse((string)$b);
-            if ($p) { $abs++; if ($p['fansub'] || $p['method'] !== 'trailing') $fan++; }
+            $p = self::parse((string)$b, $titles, $prefix);
+            if ($p) { $abs++; if ($p['fansub'] || in_array($p['method'], ['ep', 'hash', 'dash'], true)) $fan++; }
         }
         $reasons = [];
         $anime = false;
@@ -243,8 +340,25 @@ final class AbsoluteNumbering {
         }
         $bases = [];
         foreach ($items as $it) $bases[] = (string)preg_replace('/\.[^.]+$/', '', basename(str_replace('\\', '/', (string)($it['rel'] ?? ''))));
-        $det = self::detect($bases, (string)($items[0]['type'] ?? ''), is_array($guide['genres'] ?? null) ? $guide['genres'] : []);
-        return ['items' => $items, 'show' => $showName, 'guide' => $guide, 'bases' => $bases, 'detect' => $det, 'table' => self::table(is_array($guide) ? $guide : null)];
+        $titles = self::showTitles($showKey, $showName, is_array($guide) ? $guide : null);
+        $det = self::detect($bases, (string)($items[0]['type'] ?? ''), is_array($guide['genres'] ?? null) ? $guide['genres'] : [], $titles);
+        return ['titles' => $titles, 'prefix' => self::commonPrefix($bases), 'items' => $items, 'show' => $showName, 'guide' => $guide, 'bases' => $bases, 'detect' => $det, 'table' => self::table(is_array($guide) ? $guide : null)];
+    }
+
+    /** Known names for a show: library name, its folder name, the guide title and the Fix Match pin name / aliases. */
+    public static function showTitles(string $showKey, string $showName, ?array $guide): array {
+        $t = [$showName];
+        if (is_array($guide)) {
+            if (!empty($guide['name'])) $t[] = (string)$guide['name'];
+            foreach ((array)($guide['aliases'] ?? []) as $a) $t[] = is_array($a) ? (string)($a['name'] ?? '') : (string)$a;
+        }
+        if (class_exists('Matching')) {
+            $pin = Matching::showPin($showKey);
+            if (is_array($pin) && !empty($pin['name'])) $t[] = (string)$pin['name'];
+        }
+        $out = [];
+        foreach ($t as $x) { $x = trim($x); if ($x !== '' && !in_array($x, $out, true)) $out[] = $x; }
+        return $out;
     }
 
     /** Effective mode for a show (stored mode, or detection when auto). */
@@ -272,7 +386,7 @@ final class AbsoluteNumbering {
         $seen = [];
         foreach ($ctx['items'] as $i => $it) {
             $id = (string)$it['id'];
-            $p = self::parse($ctx['bases'][$i]);
+            $p = self::parse($ctx['bases'][$i], $ctx['titles'], $ctx['prefix']);
             $detected = $p ? $p['number'] : null;
             $n = array_key_exists($id, $numbers) ? (($numbers[$id] === null || $numbers[$id] === '') ? null : (int)$numbers[$id]) : $detected;
             $cur = ['season' => $it['season'] ?? null, 'episode' => $it['episode'] ?? null, 'episode_title' => $it['episode_title'] ?? null];
