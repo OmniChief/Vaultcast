@@ -9,6 +9,18 @@ declare(strict_types=1);
  *   .torrent file, that file (with its own announce list) is sent instead of a tracker-less magnet.
  */
 final class TorrentTrackers {
+    /** Public trackers used when Settings has no default_trackers. */
+    const BUILTIN = [
+        'udp://tracker.opentrackr.org:1337/announce',
+        'udp://open.stealth.si:80/announce',
+        'udp://tracker.torrent.eu.org:451/announce',
+        'udp://exodus.desync.com:6969/announce',
+        'udp://open.demonii.com:1337/announce',
+        'udp://tracker.openbittorrent.com:6969/announce',
+        'udp://explodie.org:6969/announce',
+        'udp://tracker.dler.org:6969/announce',
+    ];
+
     /** First magnet URI in a text blob (HTML, CDATA, plain), entity-decoded and trimmed. */
     public static function extractMagnet(string $text): string {
         if (!preg_match('#magnet:\?[^\s"\'<>]+#i', $text, $m)) return '';

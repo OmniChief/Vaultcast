@@ -333,7 +333,20 @@ class Acquisition {
 
     /** Configured default trackers (Settings → acquisition.default_trackers). */
     public static function defaultTrackers(): array {
-        return TorrentTrackers::clean(Store::settings()['acquisition']['default_trackers'] ?? []);
+        $set = TorrentTrackers::clean(Store::settings()['acquisition']['default_trackers'] ?? []);
+        return $set ? $set : TorrentTrackers::BUILTIN;
+    }
+
+    /**
+     * The one way a torrent reaches Transmission: picks magnet vs .torrent (chooseSource) and,
+     * right before torrent-add, gives a tracker-less magnet the default (or built-in) trackers.
+     */
+    public static function sendToTransmission(string $magnet, string $url, array $tr): array {
+        $src = TorrentTrackers::chooseSource($magnet, $url);
+        if (stripos($src, 'magnet:?') === 0 && !TorrentTrackers::trackersOf($src)) {
+            $src = TorrentTrackers::withTrackers($src, self::defaultTrackers());
+        }
+        return self::addToTransmission($src, $tr);
     }
 
     /** Parse Apibay / ThePirateBay JSON search (`[{name,info_hash,seeders,...}]`). */
@@ -471,7 +484,7 @@ class Acquisition {
         $settings = Store::settings();
         $tr = $settings['acquisition']['transmission'] ?? [];
         if (!empty($tr['enabled']) && ($entry['magnet'] || $entry['url'])) {
-            $res = self::addToTransmission(TorrentTrackers::chooseSource((string)$entry['magnet'], (string)$entry['url']), $tr);
+            $res = self::sendToTransmission((string)$entry['magnet'], (string)$entry['url'], $tr);
             $entry['status'] = $res['ok'] ? 'sent_transmission' : 'queued_local';
             $entry['message'] = $res['message'] ?? '';
             if (!empty($res['id'])) $entry['torrent_id'] = (int)$res['id'];
@@ -1324,7 +1337,7 @@ class Acquisition {
                 if ($status === 'queued_local' || $status === 'queued') {
                     $tr = Store::settings()['acquisition']['transmission'] ?? [];
                     if (!empty($tr['enabled'])) {
-                        $res = self::addToTransmission(TorrentTrackers::chooseSource($magnet, $url), $tr);
+                        $res = self::sendToTransmission($magnet, $url, $tr);
                         if (!empty($res['ok'])) {
                             $entry['status'] = 'sent_transmission';
                             $entry['message'] = $res['message'] ?? '';
@@ -1393,7 +1406,7 @@ class Acquisition {
 
             $tr = Store::settings()['acquisition']['transmission'] ?? [];
             if (!empty($tr['enabled']) && ($entry['magnet'] || $entry['url'])) {
-                $res = self::addToTransmission(TorrentTrackers::chooseSource((string)$entry['magnet'], (string)$entry['url']), $tr);
+                $res = self::sendToTransmission((string)$entry['magnet'], (string)$entry['url'], $tr);
                 $entry['status'] = !empty($res['ok']) ? 'sent_transmission' : 'queued_local';
                 $entry['message'] = ($entry['message'] . ' — ' . ($res['message'] ?? '')) ?: $entry['message'];
                 if (!empty($res['id'])) $entry['torrent_id'] = (int)$res['id'];
