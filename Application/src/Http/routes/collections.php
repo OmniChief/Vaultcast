@@ -65,3 +65,19 @@ if ($path === '/admin/collections/import-online' && $method === 'POST') {
     @set_time_limit(90);
     json_out(Collections::importOnline(body_json()));
 }
+
+// Find collections for library films (TMDB with a key, else Wikidata). Short resumable steps.
+if ($path === '/admin/collections/discover' && $method === 'GET') {
+    Auth::requireAdmin();
+    json_out(CollectionDiscovery::progress());
+}
+if ($path === '/admin/collections/discover' && $method === 'POST') {
+    Auth::requireAdmin();
+    $b = body_json();
+    $action = (string)($b['action'] ?? 'step');
+    release_request_locks();
+    @set_time_limit(60);
+    if ($action === 'start') json_out(CollectionDiscovery::start());
+    if ($action === 'cancel') json_out(CollectionDiscovery::cancel());
+    json_out(CollectionDiscovery::step());
+}
