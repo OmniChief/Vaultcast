@@ -28,6 +28,9 @@ if ($path === '/stream/play' && ($method === 'GET' || $method === 'HEAD')) {
     release_request_locks();
     Stream::play();
 }
+if ($path === '/stream/remux' && $method === 'GET') {
+    Remux::serve();
+}
 if (preg_match('#^/stream/subtitles/([a-f0-9]{48})/([a-f0-9]{64})\.vtt$#', $path, $m) && in_array($method, ['GET', 'HEAD'], true)) {
     Subtitles::serve($m[1], $m[2]);
 }

@@ -122,10 +122,11 @@ class Stream {
             'audio_count' => count($audioTracks),
             'preferred_audio' => $pref,
             'directplay_audio_select' => $directPlayAudioSelect,
+            'remux_url' => ($item['media_kind'] ?? '') === 'video' ? ($base . '/api/stream/remux?t=' . $token) : null,
             'video_codec' => $videoCodec,
             'needs_convert_hint' => $needsConvertHint,
             'audio_note' => count($audioTracks) > 1
-                ? 'Multiple audio tracks detected. Prefer selection via player audioTracks when the browser supports it; otherwise DirectPlay serves the container default.'
+                ? 'Multiple audio tracks detected. The player switches tracks with the browser when it can, otherwise through /stream/remux at the current position.'
                 : null,
             'file_missing' => !is_file($path),
         ];

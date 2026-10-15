@@ -132,7 +132,34 @@
     var audioPreference = getAudioPref(item.id), audioApplied = false, subtitlePreference = null, subtitlesApplied = false;
     var subtitleKey = 'vaultcast-subtitles:' + item.id;
     try { subtitlePreference = localStorage.getItem(subtitleKey); } catch (e) {}
-    var probeTracks = [], captionTracks = [];
+    var probeTracks = [], captionTracks = [], probeDuration = 0;
+    /* Audio switching without browser audioTracks: restart a server remux (/stream/remux) at the
+       current position with the chosen track. remux.offset is where that stream starts. */
+    var remux = { active:false, offset:0, track:null, seeking:false };
+    function absTime(){ return (remux.active ? remux.offset : 0) + (media.currentTime || 0); }
+    openPlayer._absTime = absTime;
+    openPlayer._absDuration = function(){ return remux.active ? (probeDuration || 0) : (media.duration || 0); };
+    function remuxSrc(index, at){
+      return streamPlayUrl(play.remux_url) + '&a=' + encodeURIComponent(index) + '&ss=' + Math.max(0, at).toFixed(2);
+    }
+    function switchViaRemux(index, at){
+      if (!play.remux_url) return false;
+      var pos = at != null ? at : absTime();
+      var wasPaused = media.paused && media.currentTime > 0;
+      remux.active = true; remux.offset = pos; remux.track = index; remux.seeking = true;
+      try { media.src = remuxSrc(index, pos); media.load(); if (!wasPaused) { var pr = media.play(); if (pr && pr.catch) pr.catch(function(){}); } } catch (eRm) {}
+      setTimeout(function(){ remux.seeking = false; }, 800);
+      return true;
+    }
+    function inBuffered(t){
+      try { for (var b = 0; b < media.buffered.length; b++) if (t >= media.buffered.start(b) - 0.5 && t <= media.buffered.end(b) + 0.5) return true; } catch (eB) {}
+      return false;
+    }
+    media.addEventListener('seeking', function(){
+      if (!remux.active || remux.seeking) return;
+      var t = media.currentTime || 0;
+      if (!inBuffered(t)) switchViaRemux(remux.track, remux.offset + t);
+    });
     function languageName(language){
       if (!language || language === 'und') return '';
       try { return new Intl.DisplayNames([navigator.language || 'en'], {type:'language'}).of(language); } catch (e) { return language; }
@@ -161,10 +188,19 @@
         audio.disabled = nativeAudio.length < 2;
       } else {
         var defaultTrack = probeTracks.filter(function(t){return t.default;})[0] || probeTracks[0];
-        audio.appendChild(h('option',{value:'',text:defaultTrack ? trackLabel(defaultTrack,0,'Default audio') : 'Default audio'}));
-        audio.disabled = true;
+        if (probeTracks.length > 1 && play.remux_url) {
+          var current = remux.track != null ? remux.track : (defaultTrack ? defaultTrack.relative : 0);
+          probeTracks.forEach(function(t, k){
+            var rel = t.relative != null ? t.relative : k;
+            audio.appendChild(h('option',{value:String(rel),text:trackLabel(t,k,'Track') + (t.codec ? ' · ' + String(t.codec).toUpperCase() : '') + (t.channels ? ' · ' + t.channels + 'ch' : ''),selected: rel === current}));
+          });
+          audio.disabled = false;
+        } else {
+          audio.appendChild(h('option',{value:'',text:defaultTrack ? trackLabel(defaultTrack,0,'Default audio') : 'Default audio'}));
+          audio.disabled = true;
+        }
       }
-      note.textContent = probeTracks.length > 1 && !(nativeAudio && nativeAudio.length > 1) ? 'This browser plays the default audio track; it does not expose track switching.' : '';
+      note.textContent = '';
       captionTracks = [];
       for (var j=0;j<media.textTracks.length;j++) {
         var textTrack = media.textTracks[j];
@@ -189,9 +225,16 @@
       captions.title = captionTracks.length ? 'Select subtitles' : 'No subtitles available';
     }
     audio.onchange = function(){
-      var index = Number(audio.value), result = applyAudioTrack(media,index);
-      if (result.ok) { audioPreference=index; audioApplied=true; setAudioPref(item.id,index); }
-      else toast(result.note,{kind:'bad'});
+      var index = Number(audio.value);
+      var nativeAudio = media.audioTracks;
+      if (nativeAudio && nativeAudio.length > 1) {
+        var result = applyAudioTrack(media,index);
+        if (result.ok) { audioPreference=index; audioApplied=true; setAudioPref(item.id,index); }
+        else toast(result.note,{kind:'bad'});
+      } else if (switchViaRemux(index)) {
+        audioPreference=index; audioApplied=true; setAudioPref(item.id,index);
+        toast('Switching audio…', { ms:1400 });
+      } else toast('Audio switching is not available for this file.',{kind:'bad'});
       refresh();
     };
     captions.onchange = function(){
@@ -217,6 +260,17 @@
     });
     api('/items/'+item.id+'/probe').then(function(probe){
       probeTracks = probe && probe.ok ? (probe.audio_tracks || []) : [];
+      probeDuration = probe && probe.duration ? Number(probe.duration) : 0;
+      /* Saved choice that the browser cannot apply natively: start the remux at the current position. */
+      var nat = media.audioTracks;
+      if (!audioApplied && audioPreference != null && !(nat && nat.length > 1) && probeTracks.length > 1 && audioPreference < probeTracks.length) {
+        var def = probeTracks.filter(function(t){return t.default;})[0] || probeTracks[0];
+        audioApplied = true;
+        if (audioPreference !== (def ? def.relative : 0)) {
+          var go = function(){ switchViaRemux(audioPreference); };
+          if (media.readyState >= 1) go(); else media.addEventListener('loadedmetadata', go, { once:true });
+        }
+      }
       refresh();
     }).catch(function(){});
     refresh();
@@ -1034,7 +1088,7 @@
       if (!resumeDone) return;
       if (!openPlayer._lastSave || Date.now()-openPlayer._lastSave > 5000) {
         openPlayer._lastSave = Date.now();
-        postProgress(item.id, media.currentTime||0, media.duration||0);
+        postProgress(item.id, openPlayer._absTime ? openPlayer._absTime() : (media.currentTime||0), openPlayer._absDuration ? openPlayer._absDuration() : (media.duration||0));
       }
     });
     media.addEventListener('playing', function(){ openPlayer._deskPlayStarted = true; openPlayer._deskRecoverTries = 0; });
@@ -1302,6 +1356,7 @@
   function closePlayer(opts){
     opts = opts || {};
     state.gamePath = null;
+    openPlayer._absTime = null; openPlayer._absDuration = null;
     if (!opts.preserveLobby) {
       try { lobbyEndHostSession(); } catch (eLobbyEnd) {}
     }

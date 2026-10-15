@@ -12,7 +12,7 @@ $__denied = Access::gate($path, Auth::currentSession(), function (string $id) { 
     (Store::settings()['auth']['require_login'] ?? true) !== false,
     function () use ($path) {
         $t = '';
-        if ($path === '/stream/play') $t = (string)($_GET['t'] ?? '');
+        if ($path === '/stream/play' || $path === '/stream/remux') $t = (string)($_GET['t'] ?? '');
         elseif (preg_match('#^/stream/(?:rom|subtitles)/([a-f0-9]{48})/#', $path, $tm)) $t = $tm[1];
         return preg_match('/^[a-f0-9]{48}$/', $t) ? \Vaultcast\Repository::playbackToken($t) : null;
     });
