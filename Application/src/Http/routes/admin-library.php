@@ -112,6 +112,14 @@ if (strpos($path, '/admin/match') === 0 || strpos($path, '/admin/ingest') === 0 
     if (preg_match('#^/admin/match/show/([a-f0-9]{16})/apply$#', $path, $m) && $method === 'POST') {
         json_out(Matching::applyShowProposals($m[1], body_json()));
     }
+    if (preg_match('#^/admin/match/show/([a-f0-9]{16})/numbering/preview$#', $path, $m) && $method === 'POST') {
+        $nb = body_json(); unset($nb['_guide']);
+        json_out(AbsoluteNumbering::preview($m[1], $nb));
+    }
+    if (preg_match('#^/admin/match/show/([a-f0-9]{16})/numbering$#', $path, $m) && $method === 'POST') {
+        $nb = body_json(); unset($nb['_guide']);
+        json_out(AbsoluteNumbering::apply($m[1], $nb));
+    }
     if (preg_match('#^/admin/match/show/([a-f0-9]{16})/pin$#', $path, $m) && $method === 'POST') {
         json_out(Matching::pinShow($m[1], body_json()));
     }
