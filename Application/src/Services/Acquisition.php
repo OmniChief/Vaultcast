@@ -326,22 +326,18 @@ class Acquisition {
     }
 
     /** Append configured default trackers to a magnet URI. */
-    private static function appendDefaultTrackers(string $magnet): string {
+    private static function appendDefaultTrackers(string $magnet, array $feedTrackers = []): string {
         if ($magnet === '' || stripos($magnet, 'magnet:?') !== 0) return $magnet;
-        $trackers = Store::settings()['acquisition']['default_trackers'] ?? [];
-        if (!is_array($trackers) || $trackers === []) return $magnet;
-        foreach ($trackers as $tr) {
-            $tr = trim((string)$tr);
-            if ($tr === '') continue;
-            // Avoid duplicating a tracker already present in the magnet
-            if (stripos($magnet, rawurlencode($tr)) !== false || stripos($magnet, $tr) !== false) continue;
-            $magnet .= '&tr=' . rawurlencode($tr);
-        }
-        return $magnet;
+        return TorrentTrackers::withTrackers($magnet, array_merge($feedTrackers, self::defaultTrackers()));
+    }
+
+    /** Configured default trackers (Settings → acquisition.default_trackers). */
+    public static function defaultTrackers(): array {
+        return TorrentTrackers::clean(Store::settings()['acquisition']['default_trackers'] ?? []);
     }
 
     /** Parse Apibay / ThePirateBay JSON search (`[{name,info_hash,seeders,...}]`). */
-    private static function parseApibayJson(string $json, string $feedUrl): array {
+    private static function parseApibayJson(string $json, string $feedUrl, array $feedTrackers = []): array {
         $out = [];
         $data = json_decode($json, true);
         if (!is_array($data)) return $out;
@@ -354,7 +350,7 @@ class Acquisition {
             if ($hash === '0000000000000000000000000000000000000000') continue;
             $seeds = isset($row['seeders']) ? (int)$row['seeders'] : null;
             $magnet = self::appendDefaultTrackers(
-                'magnet:?xt=urn:btih:' . $hash . '&dn=' . rawurlencode($name)
+                'magnet:?xt=urn:btih:' . $hash . '&dn=' . rawurlencode($name), $feedTrackers
             );
             $out[] = [
                 'title' => $name,
@@ -372,19 +368,19 @@ class Acquisition {
     }
 
     /** Parse RSS/Atom or JSON search body into normalized hit list. */
-    private static function parseSearchBody(string $body, string $feedUrl, string $type = ''): array {
+    private static function parseSearchBody(string $body, string $feedUrl, string $type = '', array $feedTrackers = []): array {
         $trim = ltrim($body);
         $type = strtolower($type);
         if ($type === 'apibay' || $type === 'json' || $trim !== '' && ($trim[0] === '[' || $trim[0] === '{')) {
             if ($trim[0] === '[' || (stripos($feedUrl, 'apibay.org') !== false) || $type === 'apibay' || $type === 'json') {
-                $j = self::parseApibayJson($body, $feedUrl);
+                $j = self::parseApibayJson($body, $feedUrl, $feedTrackers);
                 if ($j || $trim[0] === '[') return $j;
             }
         }
-        return self::parseRss($body, $feedUrl);
+        return self::parseRss($body, $feedUrl, $feedTrackers);
     }
 
-    private static function parseRss(string $xml, string $feedUrl): array {
+    private static function parseRss(string $xml, string $feedUrl, array $feedTrackers = []): array {
         $out = [];
         libxml_use_internal_errors(true);
         $sx = @simplexml_load_string($xml);
@@ -399,9 +395,10 @@ class Acquisition {
             $magnet = '';
             $guid = trim((string)($item->guid ?? $item->id ?? ''));
             $desc = trim((string)($item->description ?? $item->summary ?? ''));
-            if (preg_match('#magnet:\?\S+#', $desc . ' ' . $link, $m)) {
-                $magnet = $m[0];
-            }
+            // Keep every tr= from the source: decode &amp; and stop at quotes/tags in HTML descriptions
+            $magnet = TorrentTrackers::extractMagnet($link . ' ' . $desc);
+            if ($magnet === '' && stripos($enclosure, 'magnet:?') === 0) $magnet = TorrentTrackers::extractMagnet($enclosure);
+            if (stripos($enclosure, 'magnet:?') === 0) $enclosure = '';
             // Nyaa / common torrent RSS infoHash → magnet
             if ($magnet === '' && is_object($item) && method_exists($item, 'children')) {
                 foreach (['https://nyaa.si/xmlns/nyaa', 'nyaa'] as $ns) {
@@ -421,7 +418,7 @@ class Acquisition {
             }
             // Ensure configured default trackers are present on every magnet
             if ($magnet !== '') {
-                $magnet = self::appendDefaultTrackers($magnet);
+                $magnet = self::appendDefaultTrackers($magnet, $feedTrackers);
             }
             if ($enclosure === '' && $link !== '' && preg_match('/\.torrent(\?|$)/i', $link)) {
                 $enclosure = $link;
@@ -474,7 +471,7 @@ class Acquisition {
         $settings = Store::settings();
         $tr = $settings['acquisition']['transmission'] ?? [];
         if (!empty($tr['enabled']) && ($entry['magnet'] || $entry['url'])) {
-            $res = self::addToTransmission($entry['magnet'] ?: $entry['url'], $tr);
+            $res = self::addToTransmission(TorrentTrackers::chooseSource((string)$entry['magnet'], (string)$entry['url']), $tr);
             $entry['status'] = $res['ok'] ? 'sent_transmission' : 'queued_local';
             $entry['message'] = $res['message'] ?? '';
             if (!empty($res['id'])) $entry['torrent_id'] = (int)$res['id'];
@@ -641,8 +638,15 @@ class Acquisition {
                 $tor = $argsOut['torrent-duplicate'];
                 $duplicate = true;
             }
+            // A torrent already in Transmission keeps its old (possibly empty) tracker list: add ours.
+            $trackersAdded = 0;
+            if ($duplicate && is_array($tor) && isset($tor['id'])) {
+                $trackersAdded = self::addMissingTrackers($tr, (int)$tor['id'],
+                    TorrentTrackers::withTrackers($torrent, self::defaultTrackers()));
+            }
             return [
                 'ok' => true,
+                'trackers_added' => $trackersAdded,
                 'message' => $duplicate ? 'Already in Transmission' : 'Added to Transmission',
                 'seeding' => $policy,
                 'id' => (is_array($tor) && isset($tor['id'])) ? (int)$tor['id'] : null,
@@ -651,6 +655,22 @@ class Acquisition {
             ];
         }
         return ['ok' => false, 'message' => $rpc['message'] ?? 'Transmission add failed'];
+    }
+
+    /** torrent-set trackerAdd for the magnet's trackers the torrent does not have yet. */
+    private static function addMissingTrackers(array $tr, int $id, string $magnet): int {
+        $want = TorrentTrackers::trackersOf($magnet);
+        if (!$want) return 0;
+        $get = self::transmissionRpc($tr, ['method' => 'torrent-get', 'arguments' => ['ids' => [$id], 'fields' => ['id', 'trackers']]]);
+        if (empty($get['ok'])) return 0;
+        $have = [];
+        foreach (($get['arguments']['torrents'][0]['trackers'] ?? []) as $t) {
+            if (isset($t['announce'])) $have[] = (string)$t['announce'];
+        }
+        $add = array_values(array_diff($want, $have));
+        if (!$add) return 0;
+        $set = self::transmissionRpc($tr, ['method' => 'torrent-set', 'arguments' => ['ids' => [$id], 'trackerAdd' => $add]]);
+        return !empty($set['ok']) ? count($add) : 0;
     }
 
     private static function transmissionSession(string $url, array $tr): ?string {
@@ -724,7 +744,8 @@ class Acquisition {
             $body = self::httpGet($built);
             $searched++;
             if ($body === null) { $errors++; continue; }
-            foreach (self::parseSearchBody($body, $built, $type) as $item) {
+            $feedTrackers = is_array($feed) ? TorrentTrackers::clean($feed['trackers'] ?? []) : [];
+            foreach (self::parseSearchBody($body, $built, $type, $feedTrackers) as $item) {
                 $item['query'] = $query;
                 $found[] = $item;
             }
@@ -1303,7 +1324,7 @@ class Acquisition {
                 if ($status === 'queued_local' || $status === 'queued') {
                     $tr = Store::settings()['acquisition']['transmission'] ?? [];
                     if (!empty($tr['enabled'])) {
-                        $res = self::addToTransmission($magnet !== '' ? $magnet : $url, $tr);
+                        $res = self::addToTransmission(TorrentTrackers::chooseSource($magnet, $url), $tr);
                         if (!empty($res['ok'])) {
                             $entry['status'] = 'sent_transmission';
                             $entry['message'] = $res['message'] ?? '';
@@ -1372,7 +1393,7 @@ class Acquisition {
 
             $tr = Store::settings()['acquisition']['transmission'] ?? [];
             if (!empty($tr['enabled']) && ($entry['magnet'] || $entry['url'])) {
-                $res = self::addToTransmission($entry['magnet'] ?: $entry['url'], $tr);
+                $res = self::addToTransmission(TorrentTrackers::chooseSource((string)$entry['magnet'], (string)$entry['url']), $tr);
                 $entry['status'] = !empty($res['ok']) ? 'sent_transmission' : 'queued_local';
                 $entry['message'] = ($entry['message'] . ' — ' . ($res['message'] ?? '')) ?: $entry['message'];
                 if (!empty($res['id'])) $entry['torrent_id'] = (int)$res['id'];
