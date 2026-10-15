@@ -107,6 +107,7 @@ if ($path === '/me' && $method === 'GET') {
 
 // Prefs require a real logged-in user
 if ($path === '/me/prefs' && $method === 'POST') {
+    require_once STREAM_ROOT . '/src/Live/formats.php';
     $user = Auth::requireUser();
     $b = body_json();
     if (!empty($b['password']) && (strlen($b['password']) < 12 || strlen($b['password']) > 72)) json_error('Use a password between 12 and 72 bytes.');
@@ -115,6 +116,7 @@ if ($path === '/me/prefs' && $method === 'POST') {
             foreach (['theme','autoplay','default_quality','reduce_motion','tv_mode','language'] as $k) {
                 if (array_key_exists($k, $b)) $prefs[$k] = $b[$k];
             }
+            if (array_key_exists('live_cat_formats', $b)) $prefs['live_cat_formats'] = relay_clean_formats($b['live_cat_formats']);
             $u['prefs'] = $prefs;
             if (!empty($b['display_name'])) $u['display_name'] = trim($b['display_name']);
             if (!empty($b['password']) && strlen($b['password']) >= 6) {

@@ -198,9 +198,14 @@ function relay_catalogue_query($get) {
     }
 
     if ($showParam !== '') {
+        require_once __DIR__ . '/formats.php';
+        $showFormats = relay_clean_formats(isset($get['formats']) ? $get['formats'] : '');
         $eps = array();
         foreach (($cat['items'] ?? array()) as $item) {
             if (!is_array($item)) {
+                continue;
+            }
+            if ($showFormats && !in_array(relay_item_format($item), $showFormats, true)) {
                 continue;
             }
             if ((isset($item['media_kind']) ? $item['media_kind'] : '') !== 'video') {
@@ -284,6 +289,9 @@ function relay_catalogue_query($get) {
         );
     }
 
+    require_once __DIR__ . '/formats.php';
+    $formats = relay_clean_formats(isset($get['formats']) ? $get['formats'] : '');
+    $formatCounts = array();
     $ql = function_exists('mb_strtolower') ? mb_strtolower($q) : strtolower($q);
     $movies = array();
     $shows = array();
@@ -298,6 +306,11 @@ function relay_catalogue_query($get) {
             continue;
         }
         if ($section !== '' && (isset($item['section']) ? (string)$item['section'] : '') !== $section) {
+            continue;
+        }
+        $ext = relay_item_format($item);
+        if ($ext !== '') $formatCounts[$ext] = ($formatCounts[$ext] ?? 0) + 1;
+        if ($formats && !in_array($ext, $formats, true)) {
             continue;
         }
         if ($ql !== '') {
@@ -352,6 +365,8 @@ function relay_catalogue_query($get) {
         'total' => $total,
         'has_more' => ($page * $per) < $total,
         'sections' => $sections,
+        'formats' => relay_format_list($formatCounts),
+        'format_filter' => $formats,
         'items' => $out,
         'grouped' => true,
     );

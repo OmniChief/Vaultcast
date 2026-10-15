@@ -1522,6 +1522,8 @@ input[type=checkbox], input[type=radio], input[type=range] { accent-color: var(-
 .live-hint { margin: 0 0 8px; font-size:.8rem; }
 .live-filter-bar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin: 4px 0 10px; }
 .live-filter-bar .live-filter { flex: 1 1 240px; max-width: 420px; }
+.live-format-chips { display:flex; flex-wrap:wrap; gap:4px; align-items:center; }
+.live-format-chips .sys-chip { cursor:pointer; font: inherit; font-size: .82em; }
 .live-flat .live-lib-grid { padding: 4px 0 0; max-height: min(46vh, 420px); }
 .live-sub { margin: 14px 0 8px; font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; color: var(--muted, #9aa3b5); }
 .live-tree { display:flex; flex-direction:column; gap:6px; max-height: min(60vh, 680px); overflow:auto; padding-right:4px; }
