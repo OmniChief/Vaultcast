@@ -108,11 +108,16 @@ function live_bridge_m3u(): void {
     $root = STREAM_ROOT . '/src/Live';
     require_once $root . '/store.php';
     require_once $root . '/schedule.php';
-    $id = (string)($_GET['channel'] ?? '');
+    require_once $root . '/channel_slugs.php';
     $station = relay_load_station();
+    list($slugs, $aliases) = live_channel_slugs_current($station);
+    $hit = live_channel_resolve((string)($_GET['channel'] ?? ''), $slugs, $aliases);
     $channel = null;
-    foreach ((array)($station['channels'] ?? []) as $c) {
-        if (isset($c['id']) && (string)$c['id'] === $id) { $channel = $c; break; }
+    $id = '';
+    if ($hit && $hit['kind'] === 'relay') {
+        foreach ((array)($station['channels'] ?? []) as $c) {
+            if (isset($c['id']) && (string)$c['id'] === $hit['id']) { $channel = $c; $id = (string)$c['id']; break; }
+        }
     }
     if (!$channel) {
         http_response_code(404);
@@ -167,7 +172,7 @@ function live_bridge_tv_export(string $kind): void {
 $__liveAction = live_bridge_action();
 if ($__liveAction !== null) {
     if (empty(Store::settings()['features']['live'])) live_bridge_deny(404, 'Live channels are disabled in Settings → Integrations.');
-    $readActions = ['guide', 'now', 'iptv', 'iptv_status', 'file', 'iptv_hls', 'logo', 'station', 'catalogue', 'iptv_browse', 'epg_refresh', 'm3u', 'tv_studio', 'tv_preview', 'tv_health', 'xmltv', 'playlist'];
+    $readActions = ['guide', 'now', 'iptv', 'iptv_status', 'file', 'iptv_hls', 'logo', 'station', 'catalogue', 'iptv_browse', 'epg_refresh', 'm3u', 'tv_studio', 'tv_preview', 'tv_health', 'xmltv', 'playlist', 'channels'];
     $writeActions = ['station', 'iptv_add', 'iptv_remove', 'iptv_toggle', 'iptv_probe', 'iptv_save', 'epg_refresh', 'tv_studio', 'tv_channels'];
     $m = $_SERVER['REQUEST_METHOD'] ?? 'GET';
     $isWrite = ($m === 'POST' || $m === 'PUT' || $m === 'PATCH' || $m === 'DELETE');
@@ -184,6 +189,12 @@ if ($__liveAction !== null) {
     if ($__liveAction === 'xmltv' || $__liveAction === 'playlist') live_bridge_tv_export($__liveAction);
     if ($__liveAction === 'logo') live_bridge_logo();
     if ($__liveAction === 'm3u') live_bridge_m3u();
+    if ($__liveAction === 'channels') {
+        require_once STREAM_ROOT . '/src/Live/channel_slugs.php';
+        list($slugs) = live_channel_slugs_current();
+        header('Cache-Control: no-store');
+        json_out(['ok' => true, 'channels' => $slugs]);
+    }
     $_GET['action'] = $__liveAction;
 
     if ($__liveAction === 'iptv_hls') {

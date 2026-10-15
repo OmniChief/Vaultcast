@@ -12120,11 +12120,7 @@ function viewCollectionDetail(){
     host.appendChild(h('div', { className: 'settings-card' }, [
       h('h3', { text: 'Player outputs' }),
       h('p', { className: 'muted', text: 'Watch in an external player: Copy stream URL, then paste it into your player \u2014 ' + PLAYER_PASTE_HINT + '. Starts at the live edge and keeps playing the schedule. Works on any device or network; no plug-ins or custom protocols. To watch in the browser instead, use Watch Live.' }),
-      h('div', { className: 'stack' }, (st.channels || []).slice().sort(function(a,b){ return (Number(a.number)||0)-(Number(b.number)||0); }).map(function(ch){
-        var url = origin + 'm3u?channel=' + encodeURIComponent(ch.id);
-        var label = ((ch.number || '') + ' ' + (ch.name || ch.id)).trim();
-        return playerOutputRow(url, label, 'channel-' + (ch.number || ch.id));
-      }))
+      liveOutputRows(origin, st.channels || [])
     ]));
 
     host.appendChild(h('div', { className: 'settings-card' }, [
@@ -12219,6 +12215,25 @@ function viewCollectionDetail(){
       if (err && err.name === 'AbortError') return;
       copyStreamUrl(url);
     });
+  }
+  /* Player output rows use the channel-number id (?channel=ch-1); the server resolves collisions. */
+  function liveOutputRows(origin, channels){
+    var box = h('div', { className: 'stack' });
+    function paint(slugOf){
+      box.innerHTML = '';
+      channels.slice().sort(function(a,b){ return (Number(a.number)||0)-(Number(b.number)||0); }).forEach(function(ch){
+        var slug = slugOf(ch);
+        var label = ((ch.number || '') + ' ' + (ch.name || ch.id)).trim();
+        box.appendChild(playerOutputRow(origin + 'm3u?channel=' + encodeURIComponent(slug), label, 'channel-' + (ch.number || ch.id)));
+      });
+    }
+    paint(function(ch){ return ch.number != null && ch.number !== '' ? 'ch-' + Number(ch.number) : ch.id; });
+    liveApi('channels').then(function(r){
+      var map = {};
+      ((r && r.channels) || []).forEach(function(c){ if (c.kind === 'relay') map[c.id] = c.slug; });
+      paint(function(ch){ return map[ch.id] || ch.id; });
+    }).catch(function(){});
+    return box;
   }
   function playerOutputRow(url, label, fileBase){
     var copyBtn = h('button', { className: 'btn primary player-copy', type: 'button', text: 'Copy stream URL',

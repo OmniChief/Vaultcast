@@ -531,11 +531,16 @@ function tvs_playlist_m3u($station, $base) {
     $lines = array('#EXTM3U url-tvg="' . $base . 'api/live/xmltv"');
     $chs = $station['channels'] ?? array();
     usort($chs, function ($a, $b) { return (int)$a['number'] - (int)$b['number']; });
+    require_once __DIR__ . '/channel_slugs.php';
+    list($slugs) = live_channel_slugs_current($station);
+    $sidx = live_channel_slug_index($slugs);
     foreach ($chs as $ch) {
         if (empty($ch['enabled'])) continue;
         $c = $st['channels'][$ch['id']] ?? tvs_default_channel();
+        $slug = $sidx['relay'][$ch['id']] ?? $ch['id'];
+        // tvg-id stays the permanent relay.<id> so guide mappings survive renumbering; only the URL is numbered
         $lines[] = '#EXTINF:-1 tvg-id="relay.' . $ch['id'] . '" tvg-chno="' . (int)$ch['number'] . '"' . ($c['logo'] ? ' tvg-logo="' . str_replace('"', '', $c['logo']) . '"' : '') . ' group-title="' . str_replace('"', '', $c['group'] ?: 'Relay') . '",' . str_replace(',', ' ', $ch['name']);
-        $lines[] = $base . 'api/live/m3u?channel=' . rawurlencode($ch['id']);
+        $lines[] = $base . 'api/live/m3u?channel=' . rawurlencode($slug);
     }
     require_once __DIR__ . '/iptv.php';
     foreach (iptv_lineup_channels() as $c) {
