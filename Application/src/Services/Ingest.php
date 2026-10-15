@@ -379,13 +379,22 @@ class Ingest {
     /**
      * body: hash, kind, section_id, show (folder/display), tvmaze_id?, keep_torrent?, files:[{path, skip?, season, episode, episode_title | title, year}]
      */
-    public static function commit(array $b): array {
-        @set_time_limit(600);
+    public static function commit(array $b, ?callable $progress = null): array {
+        @set_time_limit(0);
         $hash = (string)($b['hash'] ?? '');
         $kind = (string)($b['kind'] ?? '');
         if (!in_array($kind, ['tv', 'anime', 'movie'], true)) return ['ok' => false, 'error' => 'kind required'];
+        // Files a previous (interrupted or retried) run already moved: source path -> library path
+        $doneBefore = self::store()['items'][$hash]['done'] ?? [];
+        if (!is_array($doneBefore)) $doneBefore = [];
         $tor = self::findTorrent($hash);
-        if (!$tor) return ['ok' => false, 'error' => 'Torrent not found'];
+        if (!$tor) {
+            $prior = array_filter($doneBefore, function ($d) { return is_string($d) && is_file($d); });
+            if (!$prior) return ['ok' => false, 'error' => 'Torrent not found'];
+            $results = [];
+            foreach ($prior as $src => $d) $results[] = ['path' => $src, 'ok' => true, 'already' => true, 'dest' => $d];
+            return ['ok' => true, 'imported' => 0, 'already' => count($results), 'errors' => [], 'results' => $results, 'finish' => null, 'error' => null];
+        }
         $sectionId = (string)($b['section_id'] ?? '');
         if (!in_array($sectionId, array_column(self::sectionsByKind()[$kind], 'id'), true)) return ['ok' => false, 'error' => 'Library does not fit the chosen type'];
         $allowed = [];
@@ -394,9 +403,22 @@ class Ingest {
         if ($kind !== 'movie' && $show === '') return ['ok' => false, 'error' => 'Show name required'];
         $dests = []; $results = []; $overrideRows = []; $showKeys = [];
         $stopped = false;
-        foreach ((array)($b['files'] ?? []) as $f) {
+        $moved = [];      // [dest, sectionId] for the single catalogue write
+        $pending = [];    // dest => override row, filled in after the catalogue write
+        $fileList = (array)($b['files'] ?? []);
+        $total = count(array_filter($fileList, function ($f) { return is_array($f) && empty($f['skip']); }));
+        $n = 0;
+        $tick = function ($name) use (&$n, $total, $progress) { if ($progress) $progress($n, $total, $name); };
+        $tick('');
+        foreach ($fileList as $f) {
             $path = (string)($f['path'] ?? '');
-            if (!isset($allowed[$path])) { $results[] = ['path' => $path, 'ok' => false, 'error' => 'Not a file of this torrent']; continue; }
+            if (empty($f['skip']) && isset($doneBefore[$path]) && is_string($doneBefore[$path]) && is_file($doneBefore[$path])) {
+                $dests[] = $doneBefore[$path];
+                $results[] = ['path' => $path, 'ok' => true, 'already' => true, 'dest' => $doneBefore[$path]];
+                $n++; $tick(basename($path));
+                continue;
+            }
+            if (!isset($allowed[$path])) { $results[] = ['path' => $path, 'ok' => false, 'error' => 'Not a file of this torrent']; if (empty($f['skip'])) { $n++; $tick(basename($path)); } continue; }
             if (!empty($f['skip'])) { $results[] = ['path' => $path, 'ok' => true, 'skipped' => true]; continue; }
             $body = ['path' => $path, 'section_id' => $sectionId];
             if ($kind === 'movie') {
@@ -411,6 +433,7 @@ class Ingest {
                 $body['season'] = (int)$f['season']; $body['episode'] = (int)$f['episode'];
                 $body['episode_title'] = trim((string)($f['episode_title'] ?? ''));
             }
+            $n++; $tick(basename($path));
             $pv = Library::preview($body);
             if (empty($pv['ok'])) { $results[] = ['path' => $path, 'ok' => false, 'error' => $pv['error'] ?? 'preview failed']; continue; }
             if (!empty($pv['conflict'])) {
@@ -423,19 +446,30 @@ class Ingest {
                 $results[] = ['path' => $path, 'ok' => false, 'error' => 'A different file already exists at ' . $pv['rel']]; continue;
             }
             if (!$stopped) { Acquisition::stopTorrent($tor); $stopped = true; }
-            $ap = Library::apply($body);
+            $ap = Library::apply($body + ['defer_catalogue' => true]);
             if (empty($ap['ok'])) { $results[] = ['path' => $path, 'ok' => false, 'error' => $ap['error'] ?? 'move failed']; continue; }
-            $dests[] = (string)$ap['dest'];
-            $results[] = ['path' => $path, 'ok' => true, 'dest' => $ap['dest'], 'item_id' => $ap['item_id'] ?? null];
-            $iid = (string)($ap['item_id'] ?? '');
-            if ($iid !== '') {
-                if ($kind === 'movie') {
-                    $overrideRows[] = ['id' => $iid, 'title' => $body['title'], 'year' => $body['year'], 'imdb_id' => ($b['match']['source'] ?? '') === 'omdb' ? (string)($b['match']['id'] ?? '') : null];
-                } else {
-                    $overrideRows[] = ['id' => $iid, 'season' => $body['season'], 'episode' => $body['episode'], 'episode_title' => $body['episode_title'] !== '' ? $body['episode_title'] : null];
-                    $it = Catalogue::item($iid);
-                    if ($it && !empty($it['show'])) $showKeys[Catalogue::showKey($sectionId, (string)$it['show'])] = true;
-                }
+            $dest = (string)$ap['dest'];
+            $dests[] = $dest;
+            $moved[] = [$dest, $sectionId];
+            $results[] = ['path' => $path, 'ok' => true, 'dest' => $dest];
+            $pending[$dest] = $kind === 'movie'
+                ? ['title' => $body['title'], 'year' => $body['year'], 'imdb_id' => ($b['match']['source'] ?? '') === 'omdb' ? (string)($b['match']['id'] ?? '') : null]
+                : ['season' => $body['season'], 'episode' => $body['episode'], 'episode_title' => $body['episode_title'] !== '' ? $body['episode_title'] : null];
+            // Remember the move at once so a retry after an interruption reports it as done
+            $st = self::store();
+            $st['items'][$hash]['done'][$path] = $dest;
+            self::save($st);
+        }
+        // One catalogue write for the whole batch, then overrides/artwork
+        if ($moved) {
+            $items = Catalogue::ingestFiles($moved);
+            foreach ($items as $i => $it) {
+                if (!$it) continue;
+                $row = ['id' => (string)$it['id']] + $pending[$moved[$i][0]];
+                $overrideRows[] = $row;
+                if ($kind !== 'movie' && !empty($it['show'])) $showKeys[Catalogue::showKey($sectionId, (string)$it['show'])] = true;
+                foreach ($results as &$res) { if (($res['dest'] ?? '') === $moved[$i][0]) $res['item_id'] = $it['id']; }
+                unset($res);
             }
         }
         if ($overrideRows) Matching::saveItemFields($overrideRows, 'ingest', Matching::actor());
@@ -454,6 +488,7 @@ class Ingest {
             $s['items'][$hash] = array_merge($s['items'][$hash] ?? [], ['name' => (string)($tor['name'] ?? ''), 'status' => 'imported', 'imported_at' => date('c'), 'kind' => $kind, 'section_id' => $sectionId, 'count' => count($dests)]);
             self::save($s);
         }
+        if ($progress) $progress($total, $total, '');
         $errors = array_values(array_filter($results, function ($r) { return empty($r['ok']); }));
         Matching::log('INGEST ' . ($tor['name'] ?? '') . ' kind=' . $kind . ' section=' . $sectionId . ' ok=' . count($dests) . ' errors=' . count($errors));
         return ['ok' => count($errors) === 0, 'imported' => count($dests), 'errors' => $errors, 'results' => $results, 'finish' => $fin, 'error' => $errors ? ($errors[0]['error'] ?? 'Some files failed') : null];

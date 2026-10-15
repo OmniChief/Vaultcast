@@ -177,7 +177,22 @@ if (strpos($path, '/admin/match') === 0 || strpos($path, '/admin/ingest') === 0 
         json_out(Ingest::plan(body_json()));
     }
     if ($path === '/admin/ingest/commit' && $method === 'POST') {
-        json_out(Ingest::commit(body_json()));
+        $b = body_json();
+        // Run as a background job (no PHP/nginx request timeout); inline only if the CLI worker cannot start
+        try {
+            $started = Maintenance::start('ingest', Auth::requireAdmin()['username'], (string)($b['hash'] ?? ''), $b);
+            json_out(['ok' => true, 'job' => $started['job']['id'], 'background' => true]);
+        } catch (RuntimeException $e) {
+            @set_time_limit(600);
+            json_out(Ingest::commit($b) + ['background' => false]);
+        }
+    }
+    if ($path === '/admin/ingest/progress' && $method === 'GET') {
+        $id = (string)($_GET['id'] ?? '');
+        if (!preg_match('/^\d{14}-[a-f0-9]{12}$/D', $id)) json_error('bad id');
+        $job = \Vaultcast\Repository::document('maintenance-job:' . $id);
+        if (!is_array($job) || ($job['task'] ?? '') !== 'ingest') json_error('Import job not found', 404);
+        json_out(['ok' => true, 'status' => $job['status'] ?? 'queued', 'progress' => $job['progress'] ?? null, 'result' => $job['result'] ?? null, 'error' => $job['error'] ?? null]);
     }
     if ($path === '/admin/ingest/status' && $method === 'POST') {
         $b = body_json();

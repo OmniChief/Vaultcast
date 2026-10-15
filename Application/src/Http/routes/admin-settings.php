@@ -118,7 +118,21 @@ if ($path === '/admin/settings' && $method === 'POST') {
     if ($newFeeds !== null) $cur['acquisition']['feeds'] = $newFeeds;
     Store::saveSettings($cur);
     Store::invalidate();
-    json_out(['ok' => true, 'settings' => OpenSubtitles::maskSettings($cur)]);
+    $extra = [];
+    // Keep Transmission's own default folder in step with the Download folder setting
+    if (isset($b['acquisition']) && is_array($b['acquisition']) && array_key_exists('download_path', $b['acquisition'])) {
+        $dl = trim((string)($cur['acquisition']['download_path'] ?? ''));
+        $trs = $cur['acquisition']['transmission'] ?? [];
+        if ($dl !== '' && !empty($trs['enabled'])) {
+            $now = Acquisition::transmissionDownloadDir($trs);
+            if ($now !== null && rtrim(str_replace('\\', '/', $now), '/') !== rtrim(str_replace('\\', '/', $dl), '/')) {
+                $set = Acquisition::setTransmissionDownloadDir($dl, $trs);
+                $extra['transmission_download_dir'] = $set['ok'] ? $dl : null;
+                if (!$set['ok']) $extra['warning'] = 'Saved, but Transmission did not accept the download folder: ' . ($set['error'] ?? '');
+            }
+        }
+    }
+    json_out(['ok' => true, 'settings' => OpenSubtitles::maskSettings($cur)] + $extra);
 }
 
 

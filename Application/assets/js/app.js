@@ -7088,6 +7088,17 @@ try {
       } else if (tab === 'acquisition') {
         var a = s.acquisition || {};
         var feedsUi = feedSourcesEditor(a.feeds || []);
+        setTimeout(function(){
+          var info = $('#dl_dir_info'); if (!info) return;
+          api('/admin/transmission/download-dir').then(function(r){
+            if (!r || !r.ok) return;
+            var parts = ['Saving also sets this as Transmission\u2019s download folder.'];
+            if (r.transmission != null) parts.push('Transmission currently uses: ' + (r.transmission || '(not set)') + '.');
+            if (r.same_volume === false) parts.push('Note: this folder is on a different volume from ' + (r.other_volume || []).join(', ') + ', so imports will copy files (slow, uses double space) instead of moving them. Put downloads on the same drive as the library to make imports instant.');
+            info.textContent = parts.join(' ');
+            if (r.same_volume === false) info.className = 'warn';
+          }).catch(function(){});
+        }, 0);
         body.appendChild(h('div', { className:'stack' }, [
           h('label', {}, [ h('input', { id:'acq_en', type:'checkbox', checked: !!a.enabled }), ' Enable RSS acquisition' ]),
           h('label', {}, [ h('input', { id:'rss_fb', type:'checkbox', checked: a.rss_fallback_search!==false }), ' Enable RSS-fallback search (after weak catalogue results)' ]),
@@ -7098,7 +7109,6 @@ try {
           fieldEl('min_interval_seconds','Min interval (sec; 0=no wait)', a.min_interval_seconds!=null?a.min_interval_seconds:120, 'number'),
           fieldEl('max_per_hour','Max fetches / hour', a.max_per_hour!=null?a.max_per_hour:20, 'number'),
           fieldEl('jitter_seconds','Jitter (sec; only when min interval > 0)', a.jitter_seconds!=null?a.jitter_seconds:30, 'number'),
-          fieldEl('download_path','Download path', a.download_path||''),
           h('label', { className:'check-label' }, [ h('input', { id:'acq_auto_import', type:'checkbox', checked: a.auto_process_completed!==false }), ' Auto-import finished torrents into the library (MP4 preferred; removes torrent and leftover download data)' ]),
           h('h3', { className:'admin-section-title', text:'Transmission (optional download client)' }),
           h('p', { className:'muted', text:'Downloads use Transmission plus PHP cURL; qBittorrent is not supported. The Windows installer and Linux setup install and connect Transmission automatically. On other servers, enter your Transmission RPC URL and credentials below. No download client is needed for your existing library.' }),
@@ -7107,6 +7117,9 @@ try {
           fieldEl('tr_url','RPC URL', (a.transmission||{}).url||''),
           fieldEl('tr_user','Username', (a.transmission||{}).username||''),
           fieldEl('tr_pass','Password', (a.transmission||{}).password||'', 'password'),
+          fieldEl('download_path','Download folder', a.download_path||''),
+          folderPicker('download_path'),
+          h('p', { id:'dl_dir_info', className:'muted', text:'Saving also sets this as Transmission\u2019s download folder.' }),
           h('p', { className:'muted', text:'For a local client the usual RPC URL is http://127.0.0.1:9091/transmission/rpc. The download folder must be accessible to both Transmission and Vaultcast. The connection check uses the values in this form without saving them.' }),
           h('button', { className:'btn', text:'Check Transmission connection', onClick:function(ev){
             var button=ev.currentTarget; button.disabled=true;
@@ -9647,6 +9660,7 @@ h('div', { className:'cv-find-bar' }, [
     api('/admin/settings', { method:'POST', body: patch }).then(function(j){
       if (!j.ok) return toast(j.error||'Failed', { kind:'bad' });
       if (j.settings) state.settings = j.settings;
+      if (j.warning) toast(j.warning, { kind:'warn', ms:6000 });
       if (applySeed) {
         return api('/admin/transmission/seeding', { method:'POST', body:{} }).then(function(r){
           if (r.ok) {

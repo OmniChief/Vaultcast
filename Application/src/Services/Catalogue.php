@@ -2235,43 +2235,57 @@ class Catalogue {
     }
 
     public static function ingestFile(string $fullPath, string $sectionId): ?array {
-        $settings = Store::settings();
-        $section = null;
-        foreach ($settings['sections'] ?? [] as $sec) {
-            if (($sec['id'] ?? '') === $sectionId) { $section = $sec; break; }
-        }
-        if (!$section) return null;
-        $root = $section['path'] ?? '';
-        $rootReal = \Vaultcast\Paths::real($root);
-        $fullReal = \Vaultcast\Paths::real($fullPath);
-        if ($rootReal === false || $fullReal === false || !is_file($fullReal)) return null;
-        if (strpos($fullReal, $rootReal . '/') !== 0 && $fullReal !== $rootReal) {
-            return null;
-        }
+        $r = self::ingestFiles([[$fullPath, $sectionId]]);
+        return $r[0] ?? null;
+    }
 
+    /**
+     * Add/refresh several files in one catalogue write: build items, drop old entries for the same
+     * paths via one lookup map, recount sections, save and clear caches once.
+     * $files: list of [fullPath, sectionId]. Returns items in the same order (null where skipped).
+     */
+    public static function ingestFiles(array $files): array {
+        $settings = Store::settings();
+        $sections = [];
+        foreach ($settings['sections'] ?? [] as $sec) {
+            if (isset($sec['id'])) $sections[(string)$sec['id']] = $sec;
+        }
         $scan = $settings['scan'] ?? [];
         $videoExt = array_map('strtolower', $scan['video_extensions'] ?? ['mp4','mkv','avi','m4v','webm']);
         $audioExt = array_map('strtolower', $scan['audio_extensions'] ?? ['mp3','flac','aac']);
-        $romExt = array_map('strtolower', $scan['rom_extensions'] ?? []);
-        $type = $section['type'] ?? 'movies';
-        $rel = substr($fullReal, strlen($rootReal) + 1);
-        $rel = str_replace('\\', '/', $rel);
-        $item = self::buildItem($fullReal, $rel, $rootReal, $sectionId, $type, $videoExt, $audioExt);
-        $id = $item['id'];
+        $rootReals = [];
+        $built = [];
+        foreach (array_values($files) as $i => $f) {
+            $built[$i] = null;
+            $fullPath = (string)($f[0] ?? ''); $sectionId = (string)($f[1] ?? '');
+            $section = $sections[$sectionId] ?? null;
+            if (!$section || $fullPath === '') continue;
+            if (!array_key_exists($sectionId, $rootReals)) $rootReals[$sectionId] = \Vaultcast\Paths::real((string)($section['path'] ?? ''));
+            $rootReal = $rootReals[$sectionId];
+            $fullReal = \Vaultcast\Paths::real($fullPath);
+            if ($rootReal === false || $fullReal === false || !is_file($fullReal)) continue;
+            if (strpos($fullReal, $rootReal . '/') !== 0 && $fullReal !== $rootReal) continue;
+            $rel = str_replace('\\', '/', substr($fullReal, strlen($rootReal) + 1));
+            $built[$i] = self::buildItem($fullReal, $rel, $rootReal, $sectionId, $section['type'] ?? 'movies', $videoExt, $audioExt);
+        }
+        if (!array_filter($built)) return $built;
 
         $cat = self::get();
         if (!isset($cat['items']) || !is_array($cat['items'])) $cat['items'] = [];
-
-        // Drop any previous catalogue entry that pointed at this exact path (old rel/id)
+        // path -> ids, built once (stored paths are already real paths with forward slashes)
+        $byPath = [];
         foreach ($cat['items'] as $oldId => $old) {
-            $op = $old['path'] ?? '';
-            $or = $op ? \Vaultcast\Paths::real($op) : false;
-            if ($or === $fullReal && $oldId !== $id) {
-                unset($cat['items'][$oldId]);
-            }
+            $op = (string)($old['path'] ?? '');
+            if ($op !== '') $byPath[str_replace('\\', '/', $op)][] = $oldId;
         }
-
-        $cat['items'][$id] = $item;
+        foreach ($built as $item) {
+            if (!$item) continue;
+            $key = str_replace('\\', '/', (string)($item['path'] ?? ''));
+            foreach ($byPath[$key] ?? [] as $oldId) {
+                if ($oldId !== $item['id']) unset($cat['items'][$oldId]);
+            }
+            $cat['items'][$item['id']] = $item;
+        }
         $cat['item_count'] = count($cat['items']);
         $cat['scanned_at'] = $cat['scanned_at'] ?? date('c');
         $cat['updated_at'] = date('c');
@@ -2297,9 +2311,9 @@ class Catalogue {
         }
         unset($sec);
 
-        self::save($cat);
-        Store::invalidate('catalogue'); self::invalidateDerivedCaches();
-        return $item;
+        self::save($cat); // save() clears the derived caches
+        Store::invalidate('catalogue');
+        return $built;
     }
 
 

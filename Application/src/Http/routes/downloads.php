@@ -100,6 +100,11 @@ if ($path === '/admin/transmission/check' && $method === 'POST') {
     json_out(Acquisition::checkConnection(body_json()));
 }
 
+if ($path === '/admin/transmission/download-dir' && $method === 'GET') {
+    $dir = isset($_GET['path']) ? (string)$_GET['path'] : null;
+    json_out(['ok' => true, 'transmission' => Acquisition::transmissionDownloadDir()] + Acquisition::downloadVolumeInfo($dir));
+}
+
 if ($path === '/admin/transmission' && $method === 'GET') {
     json_out(Acquisition::downloadStatus());
 }

@@ -302,10 +302,26 @@
         if (!todo.length) return toast('Nothing selected', { kind: 'bad' });
         if (series && todo.some(function(f){ return f.season == null || f.episode == null; })) return toast('Every selected file needs a season and episode', { kind: 'bad' });
         busy(go, true, 'Importing…');
+        function waitJob(id){
+          return new Promise(function(resolve){
+            var fails = 0;
+            (function poll(){
+              api('/admin/ingest/progress?id=' + encodeURIComponent(id)).then(function(p){
+                fails = 0;
+                var pr = p.progress || {};
+                if (p.status === 'queued') go.textContent = 'Waiting for another task…';
+                else if (pr.total) go.textContent = 'Importing ' + Math.min(pr.done || 0, pr.total) + ' of ' + pr.total + ' files…';
+                if (p.status === 'complete' || p.status === 'failed' || p.status === 'cancelled') {
+                  resolve(p.result || { ok: false, error: p.error || 'Import failed', errors: [{ path: '', error: p.error || 'Import failed' }] });
+                } else setTimeout(poll, 1500);
+              }).catch(function(){ if (++fails > 20) resolve({ ok: false, errors: [{ path: '', error: 'Lost contact with the server' }] }); else setTimeout(poll, 3000); });
+            })();
+          });
+        }
         api('/admin/ingest/commit', { method: 'POST', body: {
           hash: it.hash, kind: W.kind, section_id: W.section, show: series ? showIn.value.trim() : '', files: files,
           tvmaze_id: W.match && W.match.source === 'tvmaze' ? W.match.id : null, match: W.match, keep_torrent: keep.checked
-        }}).then(function(r){
+        }}).then(function(r){ return r && r.background && r.job ? waitJob(r.job) : r; }).then(function(r){
           busy(go, false);
           if (r.imported) toast('Imported ' + r.imported + ' file' + (r.imported === 1 ? '' : 's') + (r.finish && r.finish.message ? ' - ' + r.finish.message : ''), { kind: r.ok ? 'ok' : 'warn', ms: 5000 });
           if (!r.ok) {

@@ -5,6 +5,8 @@ final class Maintenance
 {
     private static $active;
     private static $checked = 0.0;
+    /** Background-only tasks started by the app itself (not listed in the maintenance UI). */
+    const INTERNAL = ['ingest' => 'Import reviewed download'];
     const TASKS = ['scan' => 'Scan library folders', 'collections' => 'Match collections', 'downloads' => 'Import completed downloads', 'durations' => 'Fill Live media durations', 'facts' => 'Probe new media codecs and store show guides'];
 
     public static function runCommand(string $task, ?string $target = null): array
@@ -21,9 +23,9 @@ final class Maintenance
         return ['ok' => true, 'tasks' => self::TASKS, 'jobs' => $jobs];
     }
 
-    public static function start(string $task, string $actor, ?string $target = null): array
+    public static function start(string $task, string $actor, ?string $target = null, ?array $payload = null): array
     {
-        if (!isset(self::TASKS[$task])) throw new InvalidArgumentException('Unknown maintenance task.');
+        if (!isset(self::TASKS[$task]) && !isset(self::INTERNAL[$task])) throw new InvalidArgumentException('Unknown maintenance task.');
         $id = date('YmdHis') . '-' . bin2hex(random_bytes(6));
         $job = ['id' => $id, 'task' => $task, 'target' => $target, 'status' => 'queued', 'requested_by' => $actor, 'created_at' => date('c')];
         $script = STREAM_ROOT . '/src/Console.php';
@@ -38,6 +40,7 @@ final class Maintenance
             }
         }
         if (!is_file($php)) throw new RuntimeException('Configure the PHP CLI path in Settings before starting maintenance.');
+        if ($payload !== null) \Vaultcast\Repository::putDocument($task . '-request:' . $id, $payload);
         \Vaultcast\Repository::putDocument('maintenance-job:' . $id, $job);
         $log = STREAM_DATA . '/maintenance.log';
         if (PHP_OS_FAMILY === 'Windows') {
@@ -105,12 +108,22 @@ final class Maintenance
                 case 'downloads':
                     if (empty(Store::settings()['features']['downloads'])) throw new RuntimeException('Downloads are disabled.');
                     $job['result'] = Acquisition::processCompletedDownloads(['source' => 'admin', 'limit' => 3]); break;
+                case 'ingest':
+                    $req = \Vaultcast\Repository::document('ingest-request:' . $id);
+                    if (!is_array($req)) throw new RuntimeException('Import request missing.');
+                    $job['result'] = Ingest::commit($req, function ($done, $total, $file) use (&$job, $id) {
+                        $job['progress'] = ['done' => (int)$done, 'total' => (int)$total, 'file' => (string)$file, 'at' => date('c')];
+                        \Vaultcast\Repository::putDocument('maintenance-job:' . $id, $job);
+                    });
+                    // Per-file errors are reported in the result; the job itself completed
+                    if (isset($job['result']['ok']) && !$job['result']['ok'] && !empty($job['result']['results'])) $job['result']['partial'] = true;
+                    break;
                 case 'durations':
                     if (empty(Store::settings()['features']['live'])) throw new RuntimeException('Live channels are disabled.');
                     require_once STREAM_ROOT . '/src/Live/durations.php'; relay_run_duration_backfill(); break;
                 default: throw new RuntimeException('Unknown task.');
             }
-            if (isset($job['result']['ok']) && !$job['result']['ok']) {
+            if (isset($job['result']['ok']) && !$job['result']['ok'] && empty($job['result']['partial'])) {
                 throw new RuntimeException($job['result']['error'] ?? $job['result']['reason'] ?? 'The task could not finish.');
             }
             $job['status'] = 'complete';

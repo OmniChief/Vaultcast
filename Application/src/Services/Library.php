@@ -590,10 +590,12 @@ class Library {
         // Best-effort: remove empty leftover dirs under downloads (not section roots)
         self::cleanupEmptyParents($src);
 
-        $item = Catalogue::ingestFile($dest, $preview['section_id']);
+        // Batch callers (imports) add all files to the catalogue in one write afterwards
+        $item = !empty($body['defer_catalogue']) ? null : Catalogue::ingestFile($dest, $preview['section_id']);
         return [
             'ok' => true,
             'moved' => true,
+            'deferred' => !empty($body['defer_catalogue']),
             'method' => $mv['method'] ?? 'rename',
             'source_kept' => !empty($mv['source_kept']),
             'source' => $src,

@@ -2,6 +2,52 @@
 declare(strict_types=1);
 
 class Acquisition {
+    /** Transmission session ids by RPC URL (reused across calls in one request or worker run). */
+    private static $rpcSessions = [];
+
+    /** Transmission's current download-dir (session-get), or null when unreachable. */
+    public static function transmissionDownloadDir(?array $tr = null): ?string {
+        if ($tr === null) $tr = Store::settings()['acquisition']['transmission'] ?? [];
+        if (empty($tr['enabled']) || empty($tr['url'])) return null;
+        $r = self::transmissionRpc($tr, ['method' => 'session-get', 'arguments' => ['fields' => ['download-dir']]]);
+        return !empty($r['ok']) && isset($r['arguments']['download-dir']) ? (string)$r['arguments']['download-dir'] : null;
+    }
+
+    /** session-set download-dir so torrents added elsewhere land in the same folder. */
+    public static function setTransmissionDownloadDir(string $dir, ?array $tr = null): array {
+        if ($tr === null) $tr = Store::settings()['acquisition']['transmission'] ?? [];
+        $dir = trim($dir);
+        if ($dir === '') return ['ok' => false, 'error' => 'Empty download folder'];
+        if (empty($tr['enabled']) || empty($tr['url'])) return ['ok' => false, 'error' => 'Transmission disabled'];
+        $r = self::transmissionRpc($tr, ['method' => 'session-set', 'arguments' => ['download-dir' => $dir]]);
+        return !empty($r['ok']) ? ['ok' => true] : ['ok' => false, 'error' => $r['message'] ?? 'session-set failed'];
+    }
+
+    /**
+     * Library roots on a different volume than the download folder (stat dev). Imports from those copy
+     * instead of renaming. null = cannot tell (folder missing or dev unavailable, e.g. some Windows/SMB).
+     */
+    public static function downloadVolumeInfo(?string $dir = null): array {
+        $settings = Store::settings();
+        if ($dir === null) $dir = (string)($settings['acquisition']['download_path'] ?? '');
+        $out = ['download_path' => $dir, 'other_volume' => [], 'same_volume' => null];
+        $ds = $dir !== '' && is_dir($dir) ? @stat($dir) : false;
+        if (!$ds) return $out;
+        $known = false; $same = true;
+        foreach ($settings['sections'] ?? [] as $sec) {
+            $p = (string)($sec['path'] ?? '');
+            if ($p === '' || empty($sec['enabled']) || !is_dir($p)) continue;
+            $ss = @stat($p);
+            if (!$ss) continue;
+            // Windows reports dev as the drive serial; 0 on both sides is not proof of anything for UNC paths.
+            if ((int)$ds['dev'] === 0 && (int)$ss['dev'] === 0 && (strpos($dir, '//') === 0 || strpos($p, '//') === 0 || strpos($dir, '\\\\') === 0 || strpos($p, '\\\\') === 0)) continue;
+            $known = true;
+            if ((int)$ss['dev'] !== (int)$ds['dev']) { $same = false; $out['other_volume'][] = (string)($sec['label'] ?? $sec['id'] ?? $p); }
+        }
+        $out['same_volume'] = $known ? $same : null;
+        return $out;
+    }
+
     public static function checkConnection(array $tr): array {
         if (!function_exists('curl_init')) return ['ok' => false, 'error' => 'PHP cURL is missing. Enable the curl extension and restart PHP.'];
         $url = trim((string)($tr['url'] ?? ''));
@@ -148,7 +194,9 @@ class Acquisition {
 
     private static function transmissionRpc(array $tr, array $payload): array {
         $url = $tr['url'] ?? '';
-        $session = self::transmissionSession($url, $tr);
+        // One session id per URL for the whole request/batch; refreshed on 409 below.
+        $session = self::$rpcSessions[$url] ?? self::transmissionSession($url, $tr);
+        if ($session !== null) self::$rpcSessions[$url] = $session;
         if ($session === null) {
             return ['ok' => false, 'message' => 'Transmission RPC unavailable'];
         }
@@ -170,8 +218,10 @@ class Acquisition {
         curl_close($ch);
         if ($code === 409) {
             // session rotated; one retry
+            unset(self::$rpcSessions[$url]);
             $session = self::transmissionSession($url, $tr);
             if ($session === null) return ['ok' => false, 'message' => 'Session refresh failed'];
+            self::$rpcSessions[$url] = $session;
             $ch = curl_init($url);
             $headers = ['Content-Type: application/json', 'X-Transmission-Session-Id: ' . $session];
             if (!empty($tr['username'])) {
@@ -1741,6 +1791,8 @@ class Acquisition {
 
         $placed = [];
         $stopped = false;
+        $toCatalogue = [];
+        try {
         foreach ($picked as $file) {
             $src = $file['path'];
             $sources[] = $src;
@@ -1788,6 +1840,11 @@ class Acquisition {
             }
             $dests[] = $dest;
             $placed[] = ['source' => $src, 'dest' => $dest, 'section_id' => $sectionId, 'moved' => !empty($place['moved'])];
+            if (!empty($place['moved'])) $toCatalogue[] = [$dest, $sectionId];
+        }
+        } finally {
+            // One catalogue write for every file moved in this torrent, also when a later file failed
+            if ($toCatalogue) Catalogue::ingestFiles($toCatalogue);
         }
 
         $removed = false;
@@ -1940,7 +1997,7 @@ class Acquisition {
             }
             return ['ok' => true, 'moved' => false, 'already' => true, 'dest' => $preview['dest'], 'source' => $src];
         }
-        return Library::apply($body);
+        return Library::apply($body + ['defer_catalogue' => true]);
     }
 
     private static function selectImportFiles(array $tor, ?array $entry, array $acq): array {
