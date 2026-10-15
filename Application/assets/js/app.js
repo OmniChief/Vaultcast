@@ -7133,6 +7133,12 @@ try {
           fieldEl('tr_seed_ratio','Seed until ratio (only if seeding allowed; 0 = unlimited)', (a.transmission||{}).seed_ratio_limit!=null?(a.transmission||{}).seed_ratio_limit:0, 'number'),
           fieldEl('tr_seed_idle','Seed idle minutes (only if seeding allowed; 0 = unlimited)', (a.transmission||{}).seed_idle_minutes!=null?(a.transmission||{}).seed_idle_minutes:0, 'number'),
           h('label', { className:'check-label' }, [ h('input', { id:'tr_seed_existing', type:'checkbox', checked: (a.transmission||{}).apply_to_existing!==false }), ' Also apply policy to existing torrents on save' ]),
+          h('h3', { className:'admin-section-title', text:'Stalled downloads' }),
+          h('p', { className:'muted', text:'Only torrents Vaultcast queued are checked, each time the download worker runs. A stalled torrent is removed with its data, its hash is blacklisted for that item, and the best-seeded other result is queued instead.' }),
+          h('label', { className:'check-label' }, [ h('input', { id:'stall_en', type:'checkbox', checked: (a.stall||{}).enabled!==false }), ' Replace stalled downloads automatically' ]),
+          fieldEl('stall_min','Stalled after minutes without progress', (a.stall||{}).minutes!=null?(a.stall||{}).minutes:30, 'number'),
+          fieldEl('stall_peer_min','Stalled after minutes with no peers (after metadata)', (a.stall||{}).no_peer_minutes!=null?(a.stall||{}).no_peer_minutes:15, 'number'),
+          fieldEl('stall_max','Max attempts per item', (a.stall||{}).max_attempts!=null?(a.stall||{}).max_attempts:3, 'number'),
           h('h3', { className:'admin-section-title', text:'Feeds' }),
           h('p', { className:'muted', text:'Tick the sources to use. Only add feeds you have the right to download from. Search feeds need {query} (or {q}) in the URL. A user search uses one rate-limit slot per click, and nothing polls while idle.' }),
           feedsUi.el,
@@ -7152,6 +7158,12 @@ try {
                 jitter_seconds: +$('#jitter_seconds').value,
                 download_path: $('#download_path').value,
                 auto_process_completed: $('#acq_auto_import').checked,
+                stall: {
+                  enabled: $('#stall_en').checked,
+                  minutes: Math.max(5, +$('#stall_min').value || 30),
+                  no_peer_minutes: Math.max(5, +$('#stall_peer_min').value || 15),
+                  max_attempts: Math.max(1, +$('#stall_max').value || 3)
+                },
                 feeds: feedsArr,
                 transmission: {
                   enabled: $('#tr_en').checked,

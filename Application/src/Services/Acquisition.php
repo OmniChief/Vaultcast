@@ -288,7 +288,8 @@ class Acquisition {
             $last = 0;
         }
         $elapsed = $last > 0 ? ($now - $last) : $need;
-        if ($last && $need > 0 && $elapsed < $need) {
+        // A person clicking Search is not polling: only the hourly cap applies to them.
+        if (empty($opts['interactive']) && $last && $need > 0 && $elapsed < $need) {
             $retry = max(1, $need - $elapsed);
             return [
                 'ok' => false,
@@ -358,16 +359,95 @@ class Acquisition {
         return ['ok' => true, 'items' => $found, 'count' => count($found)];
     }
 
-    private static function httpGet(string $url): ?string {
-        if (!preg_match('#^https?://#i', $url)) return null;
-        $ch = curl_init($url);
-        curl_setopt_array($ch, [
+    /** Search URL for one feed and query, or null when the feed is not a search feed. */
+    private static function searchFeedUrl($feed, string $query): ?string {
+        $url = is_array($feed) ? (string)($feed['url'] ?? '') : (string)$feed;
+        if ($url === '') return null;
+        $type = is_array($feed) ? strtolower((string)($feed['type'] ?? '')) : '';
+        $isSearch = in_array($type, ['search', 'apibay', 'json'], true)
+            || (strpos($url, '{query}') !== false)
+            || (strpos($url, '{q}') !== false)
+            || stripos($url, 'apibay.org') !== false;
+        if (!$isSearch) return null;
+        $e = rawurlencode($query);
+        $built = str_replace(['{query}', '{q}', '{QUERY}', '{Q}'], [$e, $e, $e, $e], $url);
+        if (stripos($built, 'apibay.org') !== false && strpos($built, '=') !== false
+            && strpos($url, '{query}') === false && strpos($url, '{q}') === false) {
+            $built .= (strpos($built, '?') === false ? '?' : '&') . 'q=' . $e;
+        }
+        return $built;
+    }
+
+    private static function searchCacheFile(string $url): string {
+        $dir = defined('STREAM_SHM') && is_dir(STREAM_SHM) ? STREAM_SHM : (STREAM_DATA . '/cache');
+        if (!is_dir($dir)) @mkdir($dir, 0775, true);
+        return $dir . '/acq_search_' . sha1($url) . '.txt';
+    }
+
+    /** Feed answers are reused for 10 minutes (same query, same feed). */
+    private static function searchCacheGet(string $url): ?string {
+        $f = self::searchCacheFile($url);
+        if (!is_file($f) || filemtime($f) < time() - 600) return null;
+        $b = @file_get_contents($f);
+        return $b === false ? null : $b;
+    }
+
+    private static function searchCachePut(string $url, string $body): void {
+        if (strlen($body) > 4 * 1024 * 1024) return;
+        $f = self::searchCacheFile($url);
+        if (@file_put_contents($f . '.tmp', $body) !== false && !@rename($f . '.tmp', $f)) @unlink($f . '.tmp');
+    }
+
+    /** Parallel GETs with short timeouts. Returns url => body (null on error). */
+    private static function httpGetMulti(array $urls, int $timeout = 8): array {
+        $out = [];
+        $urls = array_values(array_filter($urls, function ($u) { return (bool)preg_match('#^https?://#i', (string)$u); }));
+        if (!$urls) return $out;
+        if (!function_exists('curl_multi_init') || count($urls) === 1) {
+            foreach ($urls as $u) $out[$u] = self::httpGet($u, $timeout);
+            return $out;
+        }
+        $mh = curl_multi_init();
+        $handles = [];
+        foreach ($urls as $u) {
+            $ch = curl_init($u);
+            curl_setopt_array($ch, self::httpOpts($timeout));
+            curl_multi_add_handle($mh, $ch);
+            $handles[$u] = $ch;
+        }
+        $running = 0;
+        do {
+            $st = curl_multi_exec($mh, $running);
+            if ($running && curl_multi_select($mh, 0.5) === -1) usleep(50000);
+        } while ($running > 0 && $st === CURLM_OK);
+        foreach ($handles as $u => $ch) {
+            $body = curl_multi_getcontent($ch);
+            $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $out[$u] = ($body === null || $body === '' || $code >= 400 || $code === 0) ? null : $body;
+            curl_multi_remove_handle($mh, $ch);
+            curl_close($ch);
+        }
+        curl_multi_close($mh);
+        return $out;
+    }
+
+    private static function httpOpts(int $timeout): array {
+        return [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_FOLLOWLOCATION => true,
-            CURLOPT_TIMEOUT => 20,
+            CURLOPT_MAXREDIRS => 4,
+            CURLOPT_CONNECTTIMEOUT => min(4, $timeout),
+            CURLOPT_TIMEOUT => $timeout,
             CURLOPT_USERAGENT => 'Vaultcast/' . STREAM_VERSION . ' (+acquire)',
             CURLOPT_SSL_VERIFYPEER => true,
-        ]);
+            CURLOPT_ENCODING => '',
+        ];
+    }
+
+    private static function httpGet(string $url, int $timeout = 20): ?string {
+        if (!preg_match('#^https?://#i', $url)) return null;
+        $ch = curl_init($url);
+        curl_setopt_array($ch, self::httpOpts($timeout));
         $body = curl_exec($ch);
         $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
@@ -779,43 +859,57 @@ class Acquisition {
             ];
         }
 
-        $gate = self::canFetchNow($opts);
-        if (!$gate['ok']) return $gate + ['items' => [], 'query' => $query, 'feeds_searched' => 0];
-
-        $found = [];
-        $searched = 0;
-        $errors = 0;
-        foreach ($feeds as $feed) {
-            $url = is_array($feed) ? ($feed['url'] ?? '') : (string)$feed;
-            if ($url === '') continue;
-            $type = is_array($feed) ? strtolower((string)($feed['type'] ?? '')) : '';
-            $isSearch = in_array($type, ['search', 'apibay', 'json'], true)
-                || (strpos($url, '{query}') !== false)
-                || (strpos($url, '{q}') !== false)
-                || stripos($url, 'apibay.org') !== false;
-            if (!$isSearch) continue;
-            $built = str_replace(
-                ['{query}', '{q}', '{QUERY}', '{Q}'],
-                [rawurlencode($query), rawurlencode($query), rawurlencode($query), rawurlencode($query)],
-                $url
-            );
-            // Apibay URLs without placeholder: append q=
-            if (stripos($built, 'apibay.org') !== false && strpos($built, '=') !== false
-                && strpos($url, '{query}') === false && strpos($url, '{q}') === false) {
-                $built .= (strpos($built, '?') === false ? '?' : '&') . 'q=' . rawurlencode($query);
+        // All query variants x all search feeds, fetched in parallel; recent answers come from a short cache
+        $variants = isset($opts['variants']) && is_array($opts['variants']) && $opts['variants'] ? array_values(array_unique(array_map('strval', $opts['variants']))) : [$query];
+        $jobs = [];
+        foreach ($variants as $vq) {
+            foreach ($feeds as $feed) {
+                $built = self::searchFeedUrl($feed, $vq);
+                if ($built === null) continue;
+                $jobs[] = ['feed' => $feed, 'url' => $built, 'query' => $vq];
             }
-            $body = self::httpGet($built);
-            $searched++;
+        }
+        $bodies = [];
+        $toFetch = [];
+        foreach ($jobs as $j) {
+            if (array_key_exists($j['url'], $bodies)) continue;
+            $c = empty($opts['no_cache']) ? self::searchCacheGet($j['url']) : null;
+            if ($c !== null) $bodies[$j['url']] = $c; else $toFetch[$j['url']] = true;
+        }
+        if ($toFetch) {
+            $gate = self::canFetchNow($opts);
+            if (!$gate['ok']) {
+                if (!$bodies) return $gate + ['items' => [], 'query' => $query, 'feeds_searched' => 0];
+                $toFetch = []; // answer from cache only
+            }
+        }
+        $fetched = $toFetch ? self::httpGetMulti(array_keys($toFetch)) : [];
+        foreach ($fetched as $u => $b) {
+            $bodies[$u] = $b;
+            if ($b !== null) self::searchCachePut($u, $b);
+        }
+        $found = [];
+        $searched = count($fetched);
+        $errors = 0;
+        $parsed = [];
+        foreach ($jobs as $j) {
+            $body = $bodies[$j['url']] ?? null;
             if ($body === null) { $errors++; continue; }
+            if (isset($parsed[$j['url']])) continue;
+            $parsed[$j['url']] = true;
+            $feed = $j['feed'];
+            $type = is_array($feed) ? strtolower((string)($feed['type'] ?? '')) : '';
             $feedTrackers = is_array($feed) ? TorrentTrackers::clean($feed['trackers'] ?? []) : [];
-            foreach (self::parseSearchBody($body, $built, $type, $feedTrackers) as $item) {
+            foreach (self::parseSearchBody($body, $j['url'], $type, $feedTrackers) as $item) {
                 $item['query'] = $query;
+                $item['search_query'] = $j['query'];
                 $found[] = $item;
             }
         }
+        if (!$searched && $bodies) $searched = count($bodies);
 
         // Only consume rate budget when we actually hit a feed.
-        if ($searched > 0 && empty($opts['skip_rate_limit'])) {
+        if ($fetched && empty($opts['skip_rate_limit'])) {
             $meta = Store::get('runtime_meta', []);
             if (!is_array($meta)) $meta = [];
             $meta['acq_last_fetch_ts'] = time();
@@ -900,10 +994,16 @@ class Acquisition {
         $lastGateFail = null;
         $feedsSearched = 0;
         $first = true;
-        foreach ($queries as $qq) {
+        // One parallel round for every variant (was: one sequential round per variant)
+        $queries = [['variants' => array_values(array_unique($queries))]];
+        foreach ($queries as $qv) {
+            $qq = $query;
+            $variantList = $qv['variants'];
             if (isset($tried[$qq])) continue;
             $tried[$qq] = true;
             $callOpts = [
+                'variants' => $variantList,
+                'interactive' => true,
                 'allow_rss_fallback' => true,
                 // Soft container: rank mp4 higher, do not hard-drop mkv/etc for UI search.
                 'soft_containers' => true,
@@ -919,12 +1019,12 @@ class Acquisition {
                 $lastGateFail = $last;
                 // Keep any prior hits; do not discard as a bare rate-limit error.
                 if ($all) break;
-                return $last + ['filters' => $filters, 'tried' => array_keys($tried)];
+                return $last + ['filters' => $filters, 'tried' => $variantList];
             }
             foreach ($last['items'] ?? [] as $it) {
                 $key = ($it['magnet'] ?? '') . '|' . ($it['guid'] ?? '') . '|' . ($it['title'] ?? '');
                 if ($key === '||' || isset($all[$key])) continue;
-                $it['search_query'] = $qq;
+                if (empty($it['search_query'])) $it['search_query'] = $qq;
                 $all[$key] = $it;
             }
             if (count($all) >= 25) break;
@@ -946,7 +1046,7 @@ class Acquisition {
             'query' => $query,
             'items' => $slice,
             'count' => count($slice),
-            'tried' => array_keys($tried),
+            'tried' => $variantList ?? [$query],
             'filters' => $filters,
             'feeds_searched' => $feedsSearched,
         ];
@@ -1364,6 +1464,95 @@ class Acquisition {
      * and pushing hits to Transmission. Respects min_interval / max_per_hour.
      * Safe to call from cron or after bulk "fetch missing".
      */
+    /** Info hash of a search hit (magnet btih or a 40-hex guid), lower case, or ''. */
+    private static function itemHash(array $item): string {
+        if (preg_match('/btih:([a-fA-F0-9]{40})/', (string)($item['magnet'] ?? ''), $m)) return strtolower($m[1]);
+        $g = strtolower(trim((string)($item['guid'] ?? '')));
+        return preg_match('/^[a-f0-9]{40}$/', $g) ? $g : '';
+    }
+
+    /** Stall settings (Settings -> Acquisition -> Stalled downloads). */
+    public static function stallSettings(): array {
+        $st = Store::settings()['acquisition']['stall'] ?? [];
+        if (!is_array($st)) $st = [];
+        return [
+            'enabled' => !array_key_exists('enabled', $st) || !empty($st['enabled']),
+            'minutes' => max(5, (int)($st['minutes'] ?? 30)),
+            'no_peer_minutes' => max(5, (int)($st['no_peer_minutes'] ?? 15)),
+            'max_attempts' => max(1, (int)($st['max_attempts'] ?? 3)),
+        ];
+    }
+
+    /**
+     * Torrents Vaultcast queued that made no progress for `minutes`, or had no peer sending data for
+     * `no_peer_minutes` after metadata arrived: remove with data, blacklist the hash and search again.
+     */
+    private static function handleStalledTorrents(array $raw, array $tr): array {
+        $cfg = self::stallSettings();
+        if (!$cfg['enabled']) return [];
+        $watch = Store::get('stall_watch', []);
+        if (!is_array($watch)) $watch = [];
+        $q = Store::get('acquire_queue', []);
+        if (!is_array($q)) $q = [];
+        $now = time();
+        $seen = [];
+        $acted = [];
+        foreach ($raw as $tor) {
+            if (!is_array($tor)) continue;
+            $hash = strtolower((string)($tor['hashString'] ?? ''));
+            if ($hash === '' || (float)($tor['percentDone'] ?? 0) >= 0.999) continue;
+            $seen[$hash] = true;
+            $status = (int)($tor['status'] ?? 0);
+            $have = (int)($tor['haveValid'] ?? 0);
+            $w = $watch[$hash] ?? ['have' => $have, 'progress_at' => $now, 'peer_at' => $now];
+            // Only a downloading torrent can stall (stopped/paused or queued by the admin is left alone)
+            if ($status !== 4) { $w['progress_at'] = $now; $w['peer_at'] = $now; $w['have'] = $have; $watch[$hash] = $w; continue; }
+            if ($have > (int)$w['have']) { $w['have'] = $have; $w['progress_at'] = $now; }
+            $meta = (float)($tor['metadataPercentComplete'] ?? 1) >= 1;
+            if (!$meta || (int)($tor['peersSendingToUs'] ?? 0) > 0) $w['peer_at'] = $now;
+            $watch[$hash] = $w;
+            $noProgress = $now - (int)$w['progress_at'] >= $cfg['minutes'] * 60;
+            $noPeers = $meta && $now - (int)$w['peer_at'] >= $cfg['no_peer_minutes'] * 60;
+            if (!$noProgress && !$noPeers) continue;
+            $idx = null;
+            foreach ($q as $i => $e) {
+                if (is_array($e) && strtolower((string)($e['torrent_hash'] ?? '')) === $hash) { $idx = $i; break; }
+            }
+            if ($idx === null) continue; // not ours: never touch torrents Vaultcast did not queue
+            $rm = self::cancelTransmission((int)($tor['id'] ?? 0), true);
+            if (empty($rm['ok'])) continue;
+            unset($watch[$hash]);
+            $e = $q[$idx];
+            $failed = is_array($e['failed_hashes'] ?? null) ? $e['failed_hashes'] : [];
+            if (!in_array($hash, $failed, true)) $failed[] = $hash;
+            $e['failed_hashes'] = $failed;
+            $e['attempts'] = (int)($e['attempts'] ?? 1) + 1;
+            $why = $noPeers ? 'no peers for ' . $cfg['no_peer_minutes'] . ' min' : 'no progress for ' . $cfg['minutes'] . ' min';
+            if ($e['attempts'] > $cfg['max_attempts'] || trim((string)($e['query'] ?? $e['title'] ?? '')) === '') {
+                $e['status'] = 'failed';
+                $e['message'] = 'Stalled (' . $why . '); gave up after ' . ($e['attempts'] - 1) . ' attempt(s)';
+            } else {
+                // Back to a search intent: processPendingSearches picks the best-seeded non-blacklisted hit
+                if (trim((string)($e['query'] ?? '')) === '') $e['query'] = (string)$e['title'];
+                $e['status'] = 'queued';
+                $e['magnet'] = ''; $e['url'] = '';
+                unset($e['torrent_id'], $e['torrent_hash']);
+                $e['message'] = 'Stalled (' . $why . '); searching for another source';
+            }
+            $e['updated_at'] = date('c');
+            $q[$idx] = $e;
+            $acted[] = ['name' => (string)($tor['name'] ?? ''), 'reason' => $why, 'status' => $e['status']];
+            self::importLog('STALL ' . ($tor['name'] ?? '') . ' — ' . $e['message']);
+        }
+        foreach (array_keys($watch) as $h) if (!isset($seen[$h])) unset($watch[$h]);
+        Store::set('stall_watch', $watch);
+        if ($acted) {
+            Store::set('acquire_queue', $q);
+            self::processPendingSearches(['limit' => count($acted)]);
+        }
+        return $acted;
+    }
+
     public static function processPendingSearches(array $opts = []): array {
         $limit = max(1, min(20, (int)($opts['limit'] ?? 3)));
         $q = Store::get('acquire_queue', []);
@@ -1429,11 +1618,14 @@ class Acquisition {
             }
 
             $picked = null;
+            $banned = is_array($entry['failed_hashes'] ?? null) ? $entry['failed_hashes'] : [];
             foreach ($search['items'] ?? [] as $item) {
-                if (!empty($item['magnet']) || !empty($item['enclosure']) || !empty($item['link'])) {
-                    $picked = $item;
-                    break;
-                }
+                if (empty($item['magnet']) && empty($item['enclosure']) && empty($item['link'])) continue;
+                $ih = self::itemHash($item);
+                if ($ih !== '' && in_array($ih, $banned, true)) continue;
+                // Retries after a stall take the best-seeded alternative; first searches keep feed ranking
+                if ($picked === null || ($banned && (int)($item['seeds'] ?? 0) > (int)($picked['seeds'] ?? 0))) $picked = $item;
+                if (!$banned) break;
             }
             if (!$picked) {
                 $entry['status'] = 'no_hit';
@@ -1699,6 +1891,7 @@ class Acquisition {
 
         try {
             $raw = self::listTorrentsRaw($tr);
+            $stalled = self::handleStalledTorrents($raw, $tr);
             $queue = Store::get('acquire_queue', []);
             if (!is_array($queue)) $queue = [];
             foreach ($raw as $tor) {
@@ -1728,6 +1921,7 @@ class Acquisition {
             'cancelled' => $cancelled,
             'results' => $results,
             'source' => $source,
+            'stalled' => $stalled ?? [],
             'pending_searches' => $pendingSearches ?? null,
         ];
     }
@@ -2349,7 +2543,8 @@ class Acquisition {
         $rpc = self::transmissionRpc($tr, [
             'method' => 'torrent-get',
             'arguments' => [
-                'fields' => ['id', 'name', 'hashString', 'downloadDir', 'percentDone', 'isFinished', 'status', 'files', 'errorString'],
+                'fields' => ['id', 'name', 'hashString', 'downloadDir', 'percentDone', 'isFinished', 'status', 'files', 'errorString',
+                    'peersSendingToUs', 'metadataPercentComplete', 'haveValid', 'addedDate'],
             ],
         ]);
         if (empty($rpc['ok']) || !is_array($rpc['arguments']['torrents'] ?? null)) return [];

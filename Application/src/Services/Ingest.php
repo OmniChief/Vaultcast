@@ -488,10 +488,13 @@ class Ingest {
             $s['items'][$hash] = array_merge($s['items'][$hash] ?? [], ['name' => (string)($tor['name'] ?? ''), 'status' => 'imported', 'imported_at' => date('c'), 'kind' => $kind, 'section_id' => $sectionId, 'count' => count($dests)]);
             self::save($s);
         }
+        // Import done: dispatch the next queued download right away instead of waiting for the schedule
+        $next = null;
+        if ($dests) { try { $next = Acquisition::processPendingSearches(['limit' => 1]); } catch (Throwable $e) { $next = null; } }
         if ($progress) $progress($total, $total, '');
         $errors = array_values(array_filter($results, function ($r) { return empty($r['ok']); }));
         Matching::log('INGEST ' . ($tor['name'] ?? '') . ' kind=' . $kind . ' section=' . $sectionId . ' ok=' . count($dests) . ' errors=' . count($errors));
-        return ['ok' => count($errors) === 0, 'imported' => count($dests), 'errors' => $errors, 'results' => $results, 'finish' => $fin, 'error' => $errors ? ($errors[0]['error'] ?? 'Some files failed') : null];
+        return ['ok' => count($errors) === 0, 'imported' => count($dests), 'errors' => $errors, 'results' => $results, 'finish' => $fin, 'next' => $next, 'error' => $errors ? ($errors[0]['error'] ?? 'Some files failed') : null];
     }
 
     public static function setStatus(string $hash, string $status): array {
