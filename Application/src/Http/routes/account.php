@@ -34,6 +34,21 @@ if ($path === '/stream/remux' && $method === 'GET') {
 if (preg_match('#^/stream/subtitles/([a-f0-9]{48})/([a-f0-9]{64})\.vtt$#', $path, $m) && in_array($method, ['GET', 'HEAD'], true)) {
     Subtitles::serve($m[1], $m[2]);
 }
+// Upload a subtitle file (raw request body) for the video behind a playback token.
+if (preg_match('#^/stream/subtitles/([a-f0-9]{48})/upload$#', $path, $m) && $method === 'POST') {
+    $user = Auth::requireUser();
+    $payload = \Vaultcast\Repository::playbackToken($m[1]);
+    if ($payload === null || ($payload['media_kind'] ?? '') !== 'video') json_error('Playback token expired.', 403);
+    if ((string)($payload['user_id'] ?? '') !== (string)$user['id'] && ($user['role'] ?? '') !== 'admin') json_error('Forbidden', 403);
+    if (!Subtitles::uploadAllowed($user)) json_error('Only administrators can add subtitles.', 403);
+    release_request_locks();
+    $len = (int)($_SERVER['CONTENT_LENGTH'] ?? 0);
+    if ($len > 2097152) json_error('Subtitle files can be at most 2 MB.', 413);
+    $raw = (string)file_get_contents('php://input', false, null, 0, 2097153);
+    $r = Subtitles::upload((string)$payload['path'], $raw, (string)($_GET['lang'] ?? ''));
+    if (!$r['ok']) json_error($r['error'], strlen($raw) > 2097152 ? 413 : 422);
+    json_out(['ok' => true, 'format' => $r['format'], 'subtitles' => Subtitles::tracks((string)$payload['path'], $m[1])]);
+}
 // OpenSubtitles search/download for the video behind a playback token (signed-in users only).
 if (preg_match('#^/stream/subtitles/([a-f0-9]{48})/(search|download)$#', $path, $m)
     && (($m[2] === 'search' && $method === 'GET') || ($m[2] === 'download' && $method === 'POST'))) {

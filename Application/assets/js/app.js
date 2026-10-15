@@ -221,8 +221,9 @@
         captions.appendChild(h('option',{value:id,text:trackLabel(track,index,'Subtitles')}));
       });
       if (play.subtitle_search) captions.appendChild(h('option',{value:'__opensubtitles',text:'Search OpenSubtitles…'}));
+      if (play.subtitle_upload) captions.appendChild(h('option',{value:'__upload',text:'Upload subtitle…'}));
       captions.value = selected;
-      captions.disabled = !captionTracks.length && !play.subtitle_search;
+      captions.disabled = !captionTracks.length && !play.subtitle_search && !play.subtitle_upload;
       captions.title = captionTracks.length ? 'Select subtitles' : (play.subtitle_search ? 'Search OpenSubtitles for subtitles' : 'No subtitles available');
     }
     audio.onchange = function(){
@@ -239,10 +240,11 @@
       refresh();
     };
     captions.onchange = function(){
-      if (captions.value === '__opensubtitles') {
+      if (captions.value === '__opensubtitles' || captions.value === '__upload') {
+        var opener = captions.value === '__upload' ? openSubtitleUpload : openSubtitleSearch;
         refresh();
-        openSubtitleSearch(overlay, play, function(tracks, language){
-          var fresh = addSubtitleTracks(tracks);
+        opener(overlay, play, function(tracks, language, replaced){
+          var fresh = addSubtitleTracks(tracks, replaced);
           var pick = fresh.filter(function(t){ return !language || t.language === language; })[0] || fresh[0];
           if (!pick) return;
           var select = function(){
@@ -261,13 +263,18 @@
       refresh();
     };
     var addedSubtitles = {};
-    function addSubtitleTracks(list){
+    function addSubtitleTracks(list, replaced){
       var fresh = [];
       (list || []).forEach(function(track){
-        if (!track || addedSubtitles[track.id]) return;
+        if (!track) return;
+        var reload = replaced && track.language === replaced && addedSubtitles[track.id] && /uploaded/.test(track.label || '');
+        if (reload) { var old = media.querySelector('track[id="'+track.id+'"]'); if (old) old.remove(); }
+        else if (addedSubtitles[track.id]) return;
         addedSubtitles[track.id] = true;
         fresh.push(track);
-        var element = h('track',{id:track.id,kind:'subtitles',label:track.label,src:streamPlayUrl(track.url)});
+        var src = streamPlayUrl(track.url);
+        if (reload) src += (src.indexOf('?') >= 0 ? '&' : '?') + 'v=' + Date.now();
+        var element = h('track',{id:track.id,kind:'subtitles',label:track.label,src:src});
         if (track.language) element.srclang=track.language;
         element.addEventListener('load',refresh);
         element.addEventListener('error',function(){
@@ -300,6 +307,50 @@
       refresh();
     }).catch(function(){});
     refresh();
+  }
+  /* Upload an SRT/VTT/ASS/SSA file for the video behind play.token. done(tracks, language, language) */
+  function openSubtitleUpload(host, play, done){
+    var existing = $('#subtitle-upload-overlay');
+    if (existing) existing.remove();
+    var overlay = h('div', { id:'subtitle-upload-overlay', className:'confirm-overlay' });
+    var card = h('div', { className:'confirm-card', style:'max-width:520px;width:92vw;text-align:left' });
+    var file = h('input', { type:'file', accept:'.srt,.vtt,.ass,.ssa,text/vtt,application/x-subrip,text/plain' });
+    var codes = ['en','fr','de','es','it','pt','nl','sv','da','no','fi','pl','cs','hu','ro','el','tr','ru','uk','ar','he','hi','ja','ko','zh'];
+    var lang = h('select', { 'aria-label':'Subtitle language' }, codes.map(function(c){
+      var name = c; try { name = new Intl.DisplayNames([navigator.language || 'en'], { type:'language' }).of(c) + ' (' + c + ')'; } catch (e) {}
+      return h('option', { value:c, text:name });
+    }));
+    var guess = (navigator.language || 'en').slice(0,2).toLowerCase();
+    lang.value = codes.indexOf(guess) >= 0 ? guess : 'en';
+    file.addEventListener('change', function(){
+      var m = file.files[0] && /\.([a-z]{2,3})\.(?:srt|vtt|ass|ssa)$/i.exec(file.files[0].name);
+      if (m && codes.indexOf(m[1].toLowerCase()) >= 0) lang.value = m[1].toLowerCase();
+    });
+    var status = h('div', { className:'muted', role:'status', text:'SRT, WebVTT or ASS/SSA, up to 2 MB. Saved on the server for everyone.' });
+    function close(){ overlay.remove(); }
+    var send = h('button', { className:'btn primary', text:'Upload' });
+    send.onclick = function(){
+      var f = file.files && file.files[0];
+      if (!f) { status.textContent = 'Choose a subtitle file first.'; return; }
+      if (f.size > 2097152) { status.textContent = 'Subtitle files can be at most 2 MB.'; return; }
+      send.disabled = true; status.textContent = 'Uploading…';
+      fetch(BASE + 'api/stream/subtitles/' + play.token + '/upload?lang=' + encodeURIComponent(lang.value), {
+        method:'POST', credentials:'same-origin', cache:'no-store', headers:{ 'Content-Type':'application/octet-stream' }, body:f
+      }).then(function(r){ return r.json().catch(function(){ return { ok:false, error:'Upload failed (HTTP ' + r.status + ')' }; }); }).then(function(res){
+        send.disabled = false;
+        if (!res || !res.ok) { status.textContent = (res && res.error) || 'Upload failed'; return; }
+        toast('Subtitles added', { kind:'ok' });
+        close();
+        done(res.subtitles || [], lang.value, lang.value);
+      }).catch(function(){ send.disabled = false; status.textContent = 'Upload failed'; });
+    };
+    card.appendChild(h('h3', { text:'Upload subtitle' }));
+    card.appendChild(h('div', { className:'stack' }, [ file, h('label', {}, [ h('span', { text:'Language' }), lang ]) ]));
+    card.appendChild(status);
+    card.appendChild(h('div', { className:'row-actions', style:'margin-top:12px' }, [ send, h('button', { className:'btn', text:'Cancel', onClick: close }) ]));
+    overlay.appendChild(card);
+    overlay.addEventListener('click', function(e){ if (e.target === overlay) close(); });
+    (host || document.body).appendChild(overlay);
   }
   /* OpenSubtitles search for the video behind play.token. done(tracks, language) gets the refreshed track list. */
   function openSubtitleSearch(host, play, done){
@@ -6706,7 +6757,7 @@ try {
           h('label', {}, [ h('span', { text:'Password (optional)' + (os.password_set ? ' (saved; leave blank to keep)' : '') }),
             h('input', { id:'os_password', type:'password', autocomplete:'new-password', placeholder: os.password_set ? '••••••••' : '' }) ]),
           fieldEl('os_languages','Default languages (comma separated)', os.languages||'en', 'text'),
-          h('label', {}, [ h('input', { id:'os_allow_users', type:'checkbox', checked: !!os.allow_users }), ' Let non-admin users download subtitles (uses the shared daily limit)' ]),
+          h('label', {}, [ h('input', { id:'os_allow_users', type:'checkbox', checked: !!os.allow_users }), ' Let non-admin users add subtitles: OpenSubtitles downloads (shared daily limit) and file uploads' ]),
           h('div', { className:'row-actions' }, [
             h('button', { className:'btn primary', text:'Save OpenSubtitles', onClick: function(){
               saveSettings({ opensubtitles: {

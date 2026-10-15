@@ -120,6 +120,7 @@ class Stream {
             'audio_tracks' => $audioTracks,
             'subtitles' => ($item['media_kind'] ?? '') === 'video' ? Subtitles::tracks($path, $token) : [],
             'subtitle_search' => ($item['media_kind'] ?? '') === 'video' && OpenSubtitles::allowed($user),
+            'subtitle_upload' => ($item['media_kind'] ?? '') === 'video' && Subtitles::uploadAllowed($user),
             'audio_count' => count($audioTracks),
             'preferred_audio' => $pref,
             'directplay_audio_select' => $directPlayAudioSelect,
