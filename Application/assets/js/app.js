@@ -1997,23 +1997,26 @@ function confirmDialog(message, opts){
           /* Defer sync so we are not mid postMainLoop / WASM frame (host crash root cause). */
           if (np.owner && typeof np.sync === 'function') {
             /* Re-establish a shared state when a player joins or leaves. */
-            var prev = np._streamLastUserCount || 1;
-            np._streamLastUserCount = ucount;
-            if (ucount !== prev) {
+            var membership = Object.keys(np.players).sort().join('|');
+            var prev = np._streamMembership;
+            np._streamMembership = membership;
+            if (membership !== prev) {
               lobbyLog('sync_schedule', { user_count: ucount, prev: prev, delay_ms: 120 });
-              setTimeout(function(){
+              clearTimeout(np._streamMembershipTimer);
+              np._streamMembershipTimer = setTimeout(function(){
                 if (emu._streamDisposed || !emu.isNetplay) return;
                 np._streamSyncing = false; // Membership changes supersede the old handshake.
                 try { np.sync(); } catch (eS) { lobbyLog('sync_throw', { error: String(eS && eS.message ? eS.message : eS) }); console.warn('lobby users-updated sync', eS); }
               }, 120);
             } else {
-              lobbyLog('sync_skip', { user_count: ucount, prev: prev, reason: 'unchanged_membership_count' });
+              lobbyLog('sync_skip', { user_count: ucount, prev: prev, reason: 'unchanged_membership' });
             }
           }
         } catch (eU) { lobbyLog('users-updated_err', { error: String(eU && eU.message ? eU.message : eU) }); console.warn('lobby users-updated', eU); }
       });
       np.socket.on('disconnect', function(){
         clearTimeout(np._streamSyncWatchdog);
+        clearTimeout(np._streamMembershipTimer);
         np._streamSyncing = false;
         try { if (typeof np.roomLeft === 'function') np.roomLeft(); } catch (eL) {}
         emu.isNetplay = false;
@@ -2161,7 +2164,7 @@ function confirmDialog(message, opts){
     var np = emu.netplay || {};
     var keys = Object.keys(np.inputsData || {}).map(Number).sort(function(a,b){ return a-b; });
     lobbyLog('netplay_trace', {
-      diagnostic_build: 'frame-gate-3', stage: stage,
+      diagnostic_build: 'frame-gate-4', stage: stage,
       session_id: np.extra && np.extra.sessionid,
       owner: !!np.owner, sync_id: np._streamSyncId,
       core: emu.getCore && emu.getCore(), paused: !!emu.paused,
@@ -2214,7 +2217,7 @@ function confirmDialog(message, opts){
         };
         options.postMainLoop = bridge;
         emu._streamFrameBridgeInstalled = true;
-        lobbyLog('frame_bridge_installed', { diagnostic_build: 'frame-gate-3' });
+        lobbyLog('frame_bridge_installed', { diagnostic_build: 'frame-gate-4' });
         return runtime.apply(this, arguments);
       };
       try {
@@ -2250,30 +2253,51 @@ function confirmDialog(message, opts){
     np.syncing = false;
     np.wait = false;
     np._streamLastHostFrame = -1;
+    np._streamFramePermit = null;
     np._streamAckUsers = {};
     try { lobbyLog('frame_reset', { reason: reason || 'reset', abs_frame: abs, owner: !!np.owner, playerID: np.playerID || null }); } catch (eL) {}
   }
   // A bucket labelled F contains inputs used BEFORE host frame F+1 ran.
   // The guest must apply bucket 0 too, before running its first frame.
+  function lobbyApplyFrameInputs(emu, bucket){
+    var np = emu.netplay;
+    np._streamHeldInputs = np._streamHeldInputs || {};
+    (bucket || []).forEach(function(value){
+      if (!value || !value.connected_input || value._streamApplied) return;
+      var input = value.connected_input;
+      emu.gameManager.functions.simulateInput(input[0], input[1], input[2]);
+      np._streamHeldInputs[input[0] + ':' + input[1]] = input.slice();
+      value._streamApplied = true;
+    });
+  }
+  function lobbyRestoreControllerState(emu, inputs){
+    var np = emu.netplay;
+    // Controller latches can outlive a core savestate load. Replace them on BOTH
+    // sides, including buttons held locally before a guest joined the room.
+    for (var slot = 0; slot < 4; slot++) {
+      for (var index = 0; index < 24; index++) emu.gameManager.functions.simulateInput(slot, index, 0);
+    }
+    np._streamHeldInputs = {};
+    lobbyApplyFrameInputs(emu, inputs.map(function(input){ return { connected_input: input }; }));
+  }
   function lobbyBeforeFrame(emu){
     if (emu._streamDisposed) return false;
     var np = emu.netplay;
     if (!np || !emu.isNetplay) return true;
+    np._streamFramePermit = null;
     if (np._streamSyncing || np._streamAwaitingState || np._streamAwaitingGo || np._streamHostPaused || np._streamUserPaused) return false;
-    if (np.owner) {
-      // A slow or backgrounded phone must not accumulate an unbounded queue.
-      return window.VaultcastNetplaySync.hostMayRun(np.currentFrame, np.players, np.playerID, np._streamAckUsers);
-    }
     var frame = np.currentFrame || 0;
+    if (np.owner) {
+      if (!window.VaultcastNetplaySync.hostMayRun(frame, np.players, np.playerID, np._streamAckUsers)) return false;
+      if (!np.inputsData[frame]) np.inputsData[frame] = [];
+    }
     var bucket = np.inputsData[frame];
     np.wait = !bucket;
     if (!bucket) return false;
     emu.paused = false;
-    bucket.forEach(function(value){
-      if (!value || !value.connected_input || value._streamApplied) return;
-      value._streamApplied = true;
-      emu.gameManager.functions.simulateInput(value.connected_input[0], value.connected_input[1], value.connected_input[2]);
-    });
+    // Host and guests apply the same ordered input bucket at the same boundary.
+    lobbyApplyFrameInputs(emu, bucket);
+    np._streamFramePermit = { frame: frame, absolute: lobbyAbsFrameNum(emu) };
     return true;
   }
   function lobbyAdvanceGuest(emu){
@@ -2287,13 +2311,25 @@ function confirmDialog(message, opts){
     emu.Module.postMainLoop = function(){
       np._streamFrameTicks = (np._streamFrameTicks || 0) + 1;
       if (emu._streamDisposed || !emu.isNetplay || np._streamSyncing || np._streamAwaitingState || np._streamAwaitingGo) return;
-      var nextFrame = Math.max(0, lobbyAbsFrameNum(emu) - (np.init_frame || 0));
-      if (nextFrame === np.currentFrame) return;
-      np.currentFrame = nextFrame;
+      var permit = np._streamFramePermit;
+      np._streamFramePermit = null;
+      if (!permit) return;
+      var advanced = lobbyAbsFrameNum(emu) - permit.absolute;
+      if (advanced === 0) return;
+      // A post-loop callback cannot reconstruct input boundaries skipped inside
+      // the native core. Do not fabricate empty frames and silently diverge.
+      if (advanced !== 1 || permit.frame !== np.currentFrame) {
+        np._streamSyncFailure('The emulator skipped a multiplayer frame boundary');
+        return;
+      }
+      np.currentFrame = permit.frame + 1;
       if (np.owner) {
         var last = typeof np._streamLastHostFrame === 'number' ? np._streamLastHostFrame : -1;
         if (np.currentFrame - 1 > last) {
-          var batch = window.VaultcastNetplaySync.hostBucketsToSend(np.inputsData, last, np.currentFrame);
+          var batch = window.VaultcastNetplaySync.hostBucketsToSend(np.inputsData, last, np.currentFrame).map(function(value){
+            // Application markers are local: guests must apply each input themselves.
+            return value.connected_input ? { frame: value.frame, connected_input: value.connected_input.slice() } : { frame: value.frame };
+          });
           np._streamLastHostFrame = np.currentFrame - 1;
           np.sendMessage({ 'sync-control': batch, sync_id: np._streamSyncId });
           np._streamFramesSent = (np._streamFramesSent || 0) + (np.currentFrame - 1 - last);
@@ -2362,9 +2398,10 @@ function confirmDialog(message, opts){
     function syncFailed(message){
       if (emu._streamDisposed) return;
       lobbyLog('sync_failed', { error: message });
-      toast('Netplay: ' + message + '. Please rejoin the lobby.', { kind:'bad', ms: 6000 });
       if (np.socket) np.socket.disconnect();
+      toast('Netplay: ' + message + '. Please rejoin the lobby.', { kind:'bad', ms: 6000 });
     }
+    np._streamSyncFailure = syncFailed;
     function releaseHost(){
       var ids = Object.keys(np.players || {});
       if (!np._streamSyncing || !ids.every(function(id){ return np._streamReadyUsers[id]; })) return;
@@ -2389,6 +2426,12 @@ function confirmDialog(message, opts){
       setTimeout(function(){
         if (emu._streamDisposed || !emu.isNetplay || np._streamSyncId !== syncId) return;
         try {
+          // Include queued changes and remove controls belonging to departed seats.
+          lobbyApplyFrameInputs(emu, np.inputsData[np.currentFrame || 0]);
+          var activeSlots = Object.keys(np.players || {}).map(function(id){ return np.getUserIndex(id); });
+          var held = Object.keys(np._streamHeldInputs || {}).map(function(key){ return np._streamHeldInputs[key]; })
+            .filter(function(input){ return activeSlots.indexOf(input[0]) !== -1 && input[2] !== 0; });
+          lobbyRestoreControllerState(emu, held);
           var bytes = emu.gameManager.getState();
           if (!(bytes instanceof Uint8Array) || !bytes.length) throw new Error('Could not save host state');
           if (bytes.length > 8 * 1024 * 1024) throw new Error('Host state exceeds the 8 MiB transfer limit');
@@ -2396,7 +2439,7 @@ function confirmDialog(message, opts){
           lobbyScheduleSyncTrace(emu);
           np._streamReadyUsers[np.playerID] = true;
           // Preserve binary encoding: JSON number arrays can exceed the relay's 20 MB limit.
-          np.sendMessage({ state: bytes, sync_id: syncId });
+          np.sendMessage({ state: bytes, input_state: held, sync_id: syncId });
           np._streamSyncWatchdog = setTimeout(function(){
             if (np._streamSyncing && np._streamSyncId === syncId) syncFailed('State synchronisation timed out');
           }, 15000);
@@ -2409,7 +2452,9 @@ function confirmDialog(message, opts){
     np.sync.__streamSafe = true;
 
     function flushPendingInputs(){
-      var pending = np._streamPendingInputs || {};
+      // A key may have been held before the snapshot. Reassert physical controls,
+      // including releases received while this client was waiting for the host.
+      var pending = Object.assign({}, np._streamLocalInputs || {}, np._streamPendingInputs || {});
       np._streamPendingInputs = {};
       Object.keys(pending).forEach(function(index){ np.simulateInput(0, Number(index), pending[index]); });
     }
@@ -2426,7 +2471,13 @@ function confirmDialog(message, opts){
           np._streamAwaitingState = false;
           np._streamSyncId = data.sync_id;
           np.setLoading(true);
+          if (!Array.isArray(data.input_state) || data.input_state.some(function(input){
+            return !Array.isArray(input) || input.length !== 3 ||
+              !Number.isInteger(input[0]) || input[0] < 0 || input[0] > 3 ||
+              !Number.isInteger(input[1]) || input[1] < 0 || input[1] > 23 || !Number.isFinite(input[2]);
+          })) throw new Error('Host controller snapshot is invalid; refresh both players');
           emu.gameManager.loadState(bytes);
+          lobbyRestoreControllerState(emu, data.input_state);
           // Core frame counters need not be included in a savestate. Use OUR counter.
           lobbyResetNetplayFrames(emu, 'guest_snapshot');
           lobbyScheduleSyncTrace(emu);
@@ -2465,13 +2516,12 @@ function confirmDialog(message, opts){
               if (!value || !value.connected_input) return;
               if (!np.inputsData[frame]) np.inputsData[frame] = [];
               np.inputsData[frame].push({ frame: frame, connected_input: value.connected_input.slice() });
-              emu.gameManager.functions.simulateInput(value.connected_input[0], value.connected_input[1], value.connected_input[2]);
             });
           } else {
             data['sync-control'].forEach(function(value){
               if (!value || !Number.isInteger(value.frame) || value.frame < frame) return;
               if (!np.inputsData[value.frame]) np.inputsData[value.frame] = [];
-              np.inputsData[value.frame].push(value);
+              np.inputsData[value.frame].push(value.connected_input ? { frame: value.frame, connected_input: value.connected_input.slice() } : { frame: value.frame });
             });
             lobbyAdvanceGuest(emu);
           }
@@ -2494,6 +2544,10 @@ function confirmDialog(message, opts){
     np.simulateInput = function(player, index, value, resp){
       if (emu._streamDisposed || !emu.isNetplay) return;
       if (player !== 0 && !resp) return;
+      // Save/load, rewind and speed shortcuts must never enter a frame bucket.
+      if (!Number.isInteger(index) || index < 0 || index > 23 || !Number.isFinite(value)) return;
+      np._streamLocalInputs = np._streamLocalInputs || {};
+      np._streamLocalInputs[index] = value;
       if (np._streamSyncing || np._streamAwaitingState || np._streamAwaitingGo) {
         np._streamPendingInputs = np._streamPendingInputs || {};
         np._streamPendingInputs[index] = value;
@@ -2506,7 +2560,6 @@ function confirmDialog(message, opts){
       if (np.owner) {
         if (!np.inputsData[frame]) np.inputsData[frame] = [];
         np.inputsData[frame].push({ frame: frame, connected_input: [pidx, index, value] });
-        try { emu.gameManager.functions.simulateInput(pidx, index, value); } catch (eH) {}
       } else {
         try {
           np.sendMessage({
@@ -2520,7 +2573,7 @@ function confirmDialog(message, opts){
       }
     };
     np.simulateInput.__streamSafe = true;
-    np.simulateInput.__streamLockstep = 'vaultcast-lockstep-3';
+    np.simulateInput.__streamLockstep = 'vaultcast-lockstep-4';
     try { lobbyEnsurePostMainLoop(emu); } catch (ePML) { console.warn('lobbyEnsurePostMainLoop', ePML); }
 
     /* Soft roomJoined: never let UI stubs throw after isNetplay is set. */
@@ -2593,7 +2646,7 @@ function confirmDialog(message, opts){
         userid: np.playerID,
         sessionid: sid,
         player_slot: 1,
-        netplay_protocol: 'vaultcast-lockstep-3'
+        netplay_protocol: 'vaultcast-lockstep-4'
       };
       np.players[np.playerID] = np.extra;
       np.users = {};
@@ -2651,7 +2704,7 @@ function confirmDialog(message, opts){
         userid: np.playerID,
         sessionid: sid,
         player_slot: lobbyOpts.player_slot,
-        netplay_protocol: 'vaultcast-lockstep-3'
+        netplay_protocol: 'vaultcast-lockstep-4'
       };
       np.players[np.playerID] = np.extra;
       if (typeof window.io !== 'function') {
@@ -3095,7 +3148,7 @@ function confirmDialog(message, opts){
             return;
           }
           emu._streamLobbyBootStarted = true;
-          lobbyLog('lobby_core_start', { diagnostic_build:'frame-gate-3', role:lobbyOpts.role });
+          lobbyLog('lobby_core_start', { diagnostic_build:'frame-gate-4', role:lobbyOpts.role });
           emu.startButtonClicked(button);
         };
         window.EJS_onGameStart = function(){

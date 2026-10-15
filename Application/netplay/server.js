@@ -1,5 +1,5 @@
 /**
- * Vaultcast — EmulatorJS Socket.IO netplay relay (frame-gated protocol 3).
+ * Vaultcast — EmulatorJS Socket.IO netplay relay (frame-gated protocol 4).
  * Bound to loopback; nginx forwards /netplay/ to this service.
  * Client and relay must be deployed together. No automatic host migration.
  */
@@ -89,7 +89,7 @@ app.get('/health', (_req, res) => {
   res.json({
     ok: true,
     service: 'vaultcast-netplay',
-    version: 'vaultcast-lockstep-3',
+    version: 'vaultcast-lockstep-4',
     rooms: Object.keys(rooms).length,
     roomIds: Object.keys(rooms),
   });
@@ -131,7 +131,7 @@ io.on('connection', (socket) => {
   socket.on('open-room', (data, callback) => {
     let sessionId, playerId, roomName, gameId, maxPlayers, playerName;
     try {
-      if (!data || !data.extra || data.extra.netplay_protocol !== 'vaultcast-lockstep-3') {
+      if (!data || !data.extra || data.extra.netplay_protocol !== 'vaultcast-lockstep-4') {
         return typeof callback === 'function' && callback('Refresh the app: incompatible netplay client');
       }
       if (data && data.extra) {
@@ -195,7 +195,7 @@ io.on('connection', (socket) => {
   socket.on('join-room', (data, callback) => {
     try {
       const extra = (data && data.extra) || {};
-      if (extra.netplay_protocol !== 'vaultcast-lockstep-3') {
+      if (extra.netplay_protocol !== 'vaultcast-lockstep-4') {
         return typeof callback === 'function' && callback('Refresh the app: incompatible netplay client');
       }
       const sessionId = extra.sessionid;
@@ -326,7 +326,7 @@ io.on('connection', (socket) => {
     } else if (Array.isArray(data['sync-control'])) {
       const inputs = data['sync-control'].slice(0, 64).filter(value =>
         value && Array.isArray(value.connected_input) && value.connected_input.length === 3 &&
-        Number.isInteger(value.connected_input[1]) && Number.isFinite(value.connected_input[2])
+        Number.isInteger(value.connected_input[1]) && value.connected_input[1] >= 0 && value.connected_input[1] <= 23 && Number.isFinite(value.connected_input[2])
       ).map(value => ({
         frame: value.frame,
         connected_input: [player.player_slot - 1, value.connected_input[1], value.connected_input[2]],
@@ -363,6 +363,6 @@ io.on('connection', (socket) => {
 });
 
 server.listen(PORT, HOST, () => {
-  npLog('listen', { host: HOST, port: PORT, logFile: LOG_FILE, version: 'vaultcast-lockstep-3' });
+  npLog('listen', { host: HOST, port: PORT, logFile: LOG_FILE, version: 'vaultcast-lockstep-4' });
   console.log(`vaultcast-netplay listening on http://${HOST}:${PORT}`);
 });
