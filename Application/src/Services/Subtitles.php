@@ -92,18 +92,113 @@ final class Subtitles {
         return $tracks;
     }
 
-    public static function toVtt(string $text, string $extension): string {
+    /** Text to UTF-8 with LF line ends: UTF-16 (BOM), UTF-8 (with or without BOM) or Windows-1252. */
+    public static function decode(string $text): string {
         if (substr($text, 0, 2) === "\xff\xfe") $text = mb_convert_encoding(substr($text, 2), 'UTF-8', 'UTF-16LE');
         elseif (substr($text, 0, 2) === "\xfe\xff") $text = mb_convert_encoding(substr($text, 2), 'UTF-8', 'UTF-16BE');
         elseif (!mb_check_encoding($text, 'UTF-8')) $text = mb_convert_encoding($text, 'UTF-8', 'Windows-1252');
         $text = preg_replace('/^\xEF\xBB\xBF/', '', $text);
-        $text = str_replace(["\r\n", "\r", "\0"], ["\n", "\n", ''], $text);
+        return str_replace(["\r\n", "\r", "\0"], ["\n", "\n", ''], $text);
+    }
+
+    public static function toVtt(string $text, string $extension): string {
+        $text = self::decode($text);
         if ($extension === 'vtt') {
             if (!preg_match('/^WEBVTT(?:[ \t\n]|$)/', $text)) throw new RuntimeException('Invalid WebVTT subtitle file.');
             return $text;
         }
-        $text = preg_replace('/^(\d{2,}:\d{2}:\d{2}),(\d{3})(\s+-->\s+\d{2,}:\d{2}:\d{2}),(\d{3})[^\n]*$/m', '$1.$2$3.$4', $text);
+        if ($extension === 'ass' || $extension === 'ssa') return self::assToVtt($text);
+        $text = preg_replace_callback('/^[ \t]*(\d{1,3}):(\d{2}):(\d{2})[,.](\d{1,3})[ \t]*-->[ \t]*(\d{1,3}):(\d{2}):(\d{2})[,.](\d{1,3})[^\n]*$/m', function ($m) {
+            return sprintf('%02d:%s:%s.%s --> %02d:%s:%s.%s', (int)$m[1], $m[2], $m[3], str_pad($m[4], 3, '0'), (int)$m[5], $m[6], $m[7], str_pad($m[8], 3, '0'));
+        }, $text);
         return "WEBVTT\n\n" . trim($text) . "\n";
+    }
+
+    /** Which subtitle format the (decoded) text really is: vtt, srt, ass, or null. Extension is ignored. */
+    public static function detectFormat(string $text): ?string {
+        $head = substr($text, 0, 65536);
+        if (preg_match('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/', $head)) return null; // binary
+        if (preg_match('/^WEBVTT(?:[ \t\n]|$)/', $head) && strpos($head, '-->') !== false) return 'vtt';
+        if (preg_match('/^\s*\[Script Info\]/i', $head) || (preg_match('/^\[Events\]/mi', $text) && preg_match('/^Dialogue:/mi', $text))) {
+            return preg_match('/^Dialogue:/mi', $text) ? 'ass' : null;
+        }
+        if (preg_match('/^\s*\d+\s*\n\s*\d{1,3}:\d{2}:\d{2}[,.]\d{1,3}\s*-->\s*\d{1,3}:\d{2}:\d{2}[,.]\d{1,3}/m', $head)) return 'srt';
+        return null;
+    }
+
+    private static function assTime(string $t): ?int {
+        if (!preg_match('/^\s*(\d+):(\d{1,2}):(\d{1,2})(?:[.,](\d{1,3}))?\s*$/', $t, $m)) return null;
+        $frac = isset($m[4]) ? (int)str_pad($m[4], 3, '0') : 0; // centiseconds "12" -> 120 ms
+        return (((int)$m[1] * 60 + (int)$m[2]) * 60 + (int)$m[3]) * 1000 + $frac;
+    }
+
+    private static function vttTime(int $ms): string {
+        return sprintf('%02d:%02d:%02d.%03d', intdiv($ms, 3600000), intdiv($ms, 60000) % 60, intdiv($ms, 1000) % 60, $ms % 1000);
+    }
+
+    /** ASS/SSA [Events] to WebVTT: styling/override tags dropped, drawings skipped, \N kept as line breaks. */
+    public static function assToVtt(string $text): string {
+        $format = ['layer', 'start', 'end', 'style', 'name', 'marginl', 'marginr', 'marginv', 'effect', 'text'];
+        $inEvents = false;
+        $cues = [];
+        foreach (explode("\n", $text) as $line) {
+            $line = trim($line);
+            if ($line === '' || $line[0] === ';') continue;
+            if (preg_match('/^\[(.+)\]$/', $line, $sec)) { $inEvents = strcasecmp($sec[1], 'Events') === 0; continue; }
+            if (!$inEvents) continue;
+            if (stripos($line, 'Format:') === 0) {
+                $format = array_map(function ($f) { return strtolower(trim($f)); }, explode(',', substr($line, 7)));
+                continue;
+            }
+            if (stripos($line, 'Dialogue:') !== 0) continue;
+            $parts = explode(',', ltrim(substr($line, 9)), count($format));
+            if (count($parts) < count($format)) continue;
+            $row = array_combine($format, $parts);
+            $start = self::assTime((string)($row['start'] ?? ''));
+            $end = self::assTime((string)($row['end'] ?? ''));
+            if ($start === null || $end === null || $end <= $start) continue;
+            $body = (string)($row['text'] ?? '');
+            if (preg_match('/\{[^}]*\\\\p[1-9][^}]*\}/', $body)) continue; // vector drawing, not text
+            $body = preg_replace('/\{[^}]*\}/', '', $body);
+            $body = str_replace(['\\N', '\\n', '\\h'], ["\n", "\n", ' '], $body);
+            $body = trim(htmlspecialchars($body, ENT_NOQUOTES, 'UTF-8'));
+            $body = preg_replace("/\n{2,}/", "\n", str_replace('-->', '--&gt;', $body));
+            if ($body === '') continue;
+            $cues[] = [$start, $end, $body];
+        }
+        if (!$cues) throw new RuntimeException('The ASS/SSA file has no dialogue lines.');
+        usort($cues, function ($a, $b) { return $a[0] <=> $b[0]; });
+        $out = "WEBVTT\n";
+        foreach ($cues as $c) $out .= "\n" . self::vttTime($c[0]) . ' --> ' . self::vttTime($c[1]) . "\n" . $c[2] . "\n";
+        return $out;
+    }
+
+    /** May this user add subtitles (upload)? Admins always; others when the admin allows it (same toggle as OpenSubtitles). */
+    public static function uploadAllowed(array $user): bool {
+        if (($user['role'] ?? '') === 'admin') return true;
+        $os = Store::settings()['opensubtitles'] ?? [];
+        return is_array($os) && !empty($os['allow_users']);
+    }
+
+    /**
+     * Validate an uploaded subtitle by content (SRT, VTT, ASS/SSA), convert it to WebVTT and save it
+     * like the OpenSubtitles files (<stem>.<lang>.uploaded.vtt next to the video, else data/subtitles).
+     * @return array{ok:bool,error?:string,file?:string,format?:string}
+     */
+    public static function upload(string $media, string $raw, string $language): array {
+        if ($raw === '') return ['ok' => false, 'error' => 'The file is empty.'];
+        if (strlen($raw) > self::MAX_BYTES) return ['ok' => false, 'error' => 'Subtitle files can be at most 2 MB.'];
+        $language = strtolower(trim($language));
+        if (!preg_match('/^[a-z]{2,3}(-[a-z]{2})?$/', $language)) return ['ok' => false, 'error' => 'Choose the subtitle language.'];
+        $text = self::decode($raw);
+        if (!mb_check_encoding($text, 'UTF-8')) return ['ok' => false, 'error' => 'Unsupported text encoding.'];
+        $format = self::detectFormat($text);
+        if ($format === null) return ['ok' => false, 'error' => 'This does not look like an SRT, WebVTT or ASS/SSA subtitle file.'];
+        try { $vtt = self::toVtt($text, $format); } catch (RuntimeException $e) { return ['ok' => false, 'error' => $e->getMessage()]; }
+        if (strpos($vtt, '-->') === false) return ['ok' => false, 'error' => 'The file contains no subtitle cues.'];
+        $path = self::saveFor($media, $vtt, $language, 'uploaded');
+        if ($path === null) return ['ok' => false, 'error' => 'Could not save the subtitle on the server.'];
+        return ['ok' => true, 'file' => $path, 'format' => $format];
     }
 
     public static function serve(string $token, string $id): void {
