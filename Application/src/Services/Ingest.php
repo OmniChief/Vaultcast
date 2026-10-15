@@ -393,6 +393,7 @@ class Ingest {
         $show = Catalogue::fixText((string)($b['show'] ?? ''));
         if ($kind !== 'movie' && $show === '') return ['ok' => false, 'error' => 'Show name required'];
         $dests = []; $results = []; $overrideRows = []; $showKeys = [];
+        $stopped = false;
         foreach ((array)($b['files'] ?? []) as $f) {
             $path = (string)($f['path'] ?? '');
             if (!isset($allowed[$path])) { $results[] = ['path' => $path, 'ok' => false, 'error' => 'Not a file of this torrent']; continue; }
@@ -421,6 +422,7 @@ class Ingest {
                 }
                 $results[] = ['path' => $path, 'ok' => false, 'error' => 'A different file already exists at ' . $pv['rel']]; continue;
             }
+            if (!$stopped) { Acquisition::stopTorrent($tor); $stopped = true; }
             $ap = Library::apply($body);
             if (empty($ap['ok'])) { $results[] = ['path' => $path, 'ok' => false, 'error' => $ap['error'] ?? 'move failed']; continue; }
             $dests[] = (string)$ap['dest'];

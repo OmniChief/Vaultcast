@@ -1740,6 +1740,7 @@ class Acquisition {
         }
 
         $placed = [];
+        $stopped = false;
         foreach ($picked as $file) {
             $src = $file['path'];
             $sources[] = $src;
@@ -1768,6 +1769,8 @@ class Acquisition {
                 $placed[] = ['source' => $src, 'dest' => $dest, 'section_id' => $dup['section'] ?? $sectionId, 'moved' => false, 'duplicate' => true];
                 continue;
             }
+            // Seeding torrents hold their files open: stop it right before the first move
+            if (!$stopped) { self::stopTorrent($tor); $stopped = true; }
             $place = self::placeImportedFile($src, $meta, $sectionId);
             if (empty($place['ok'])) {
                 return [
@@ -1857,6 +1860,16 @@ class Acquisition {
             $left[] = $real;
         }
         return $left;
+    }
+
+    /** torrent-stop before files are moved out, so Transmission stops seeding/verifying files that are going away. */
+    public static function stopTorrent(array $tor): bool {
+        $tid = (int)($tor['id'] ?? 0);
+        $tr = Store::settings()['acquisition']['transmission'] ?? [];
+        if ($tid < 1 || empty($tr['enabled'])) return false;
+        if (isset($tor['status']) && (int)$tor['status'] === 0) return true;
+        $r = self::transmissionRpc($tr, ['method' => 'torrent-stop', 'arguments' => ['ids' => [$tid]]]);
+        return !empty($r['ok']);
     }
 
     private static function removeTorrentIfSafe(array $tor, array $tr, array $dests): array {

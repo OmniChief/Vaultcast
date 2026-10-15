@@ -584,15 +584,8 @@ class Library {
             }
         }
 
-        // Prefer rename (same filesystem); fall back to copy+unlink
-        $moved = @rename($src, $dest);
-        if (!$moved) {
-            if (!@copy($src, $dest)) {
-                return ['ok' => false, 'error' => 'Failed to move/copy file'];
-            }
-            @unlink($src);
-            $moved = true;
-        }
+        $mv = self::moveFile($src, $dest);
+        if (empty($mv['ok'])) return ['ok' => false, 'error' => $mv['error'] ?? 'Failed to move file'];
 
         // Best-effort: remove empty leftover dirs under downloads (not section roots)
         self::cleanupEmptyParents($src);
@@ -601,6 +594,8 @@ class Library {
         return [
             'ok' => true,
             'moved' => true,
+            'method' => $mv['method'] ?? 'rename',
+            'source_kept' => !empty($mv['source_kept']),
             'source' => $src,
             'dest' => $dest,
             'rel' => $preview['rel'],
@@ -608,6 +603,33 @@ class Library {
             'item' => $item ? Catalogue::publicItem($item) : null,
             'item_id' => $item['id'] ?? null,
         ];
+    }
+
+    /**
+     * Move a file: rename() on the same filesystem; only when that fails (cross-device) copy to a
+     * temporary name, verify the size, put it in place and delete the source.
+     */
+    public static function moveFile(string $src, string $dest): array {
+        if (@rename($src, $dest)) return ['ok' => true, 'method' => 'rename'];
+        clearstatcache();
+        // Windows can refuse a rename while another process (Transmission) still releases the handle
+        if (is_file($src) && !file_exists($dest)) {
+            usleep(500000);
+            if (@rename($src, $dest)) return ['ok' => true, 'method' => 'rename'];
+        }
+        $size = @filesize($src);
+        if ($size === false) return ['ok' => false, 'error' => 'Source file missing'];
+        $tmp = $dest . '.vcpart';
+        @unlink($tmp);
+        if (!@copy($src, $tmp)) { @unlink($tmp); return ['ok' => false, 'error' => 'Failed to copy file to the library (disk full or permissions?)']; }
+        clearstatcache();
+        if (@filesize($tmp) !== $size) { @unlink($tmp); return ['ok' => false, 'error' => 'Copied file size does not match the source']; }
+        if (!@rename($tmp, $dest)) { @unlink($tmp); return ['ok' => false, 'error' => 'Failed to place copied file']; }
+        if (!@unlink($src)) {
+            // Keep one copy only: the library file is verified, so the source must go; report if it cannot.
+            return ['ok' => true, 'method' => 'copy', 'source_kept' => true];
+        }
+        return ['ok' => true, 'method' => 'copy'];
     }
 
     private static function cleanupEmptyParents(string $oldPath): void {
