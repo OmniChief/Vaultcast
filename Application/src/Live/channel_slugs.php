@@ -2,9 +2,11 @@
 /**
  * Stable, human-readable channel ids for external players: ?channel=ch-<number>.
  *
- * Every TV Studio (relay) channel and IPTV lineup channel gets `ch-<guide number>`. When two
- * channels share a number, the relay channel (then the lower internal id) keeps `ch-N` and the
- * others get `ch-N-2`, `ch-N-3`, ... in a stable order.
+ * Every TV Studio (relay) channel gets `ch-<guide number>`. When two share a number, the lower
+ * internal id keeps `ch-N` and the others get `ch-N-2`, `ch-N-3`, ... in a stable order.
+ * Guide ids (M3U tvg-id / XMLTV channel id) stay `relay.<id>` / `iptv.<id>`: they are permanent, so
+ * EPG mappings in clients survive renumbering. IPTV channels keep their original stream URLs;
+ * live_channel_slugs() still accepts them so callers can rank both if ever needed.
  *
  * Old links keep working: the original random ids (`ch-u8f1qa`, `relay.<id>`, `iptv.<id>`) still
  * resolve, and every slug ever handed out is remembered (doc `live_channel_aliases`), so after a
@@ -87,11 +89,10 @@ function live_channel_resolve($value, $slugs, $aliases = array()) {
     return null;
 }
 
-/** Current slugs for the station + IPTV lineup, remembering them for future aliasing. */
+/** Current relay-channel slugs, remembering them for future aliasing. */
 function live_channel_slugs_current($station = null) {
     if ($station === null) { require_once __DIR__ . '/store.php'; $station = relay_load_station(); }
-    require_once __DIR__ . '/iptv.php';
-    $slugs = live_channel_slugs($station['channels'] ?? array(), iptv_lineup_channels());
+    $slugs = live_channel_slugs($station['channels'] ?? array(), array());
     try {
         $aliases = \Vaultcast\Repository::document('live_channel_aliases', array());
         list($aliases, $changed) = live_channel_remember($aliases, $slugs);

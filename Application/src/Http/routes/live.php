@@ -114,24 +114,6 @@ function live_bridge_m3u(): void {
     $hit = live_channel_resolve((string)($_GET['channel'] ?? ''), $slugs, $aliases);
     $channel = null;
     $id = '';
-    if ($hit && $hit['kind'] === 'iptv') {
-        // IPTV lineup channel: hand the player the upstream stream
-        foreach (iptv_lineup_channels() as $c) {
-            if ((string)$c['id'] !== $hit['id']) continue;
-            header('Cache-Control: no-store');
-            header('X-Content-Type-Options: nosniff');
-            $dl = isset($_GET['dl']) && $_GET['dl'] !== '' && $_GET['dl'] !== '0';
-            if (!$dl && empty($c['userAgent']) && empty($c['referrer'])) { header('Location: ' . $c['url'], true, 302); exit; }
-            $body = "#EXTM3U\n";
-            if (!empty($c['userAgent'])) $body .= '#EXTVLCOPT:http-user-agent=' . str_replace(array("\r", "\n"), '', (string)$c['userAgent']) . "\n";
-            if (!empty($c['referrer'])) $body .= '#EXTVLCOPT:http-referrer=' . str_replace(array("\r", "\n"), '', (string)$c['referrer']) . "\n";
-            $body .= '#EXTINF:-1,' . (int)$c['number'] . ' ' . str_replace(array(',', "\r", "\n"), ' ', (string)$c['name']) . "\n" . $c['url'] . "\n";
-            header('Content-Type: audio/x-mpegurl; charset=utf-8');
-            header('Content-Disposition: ' . ($dl ? 'attachment' : 'inline') . '; filename="channel-' . (int)$c['number'] . '.m3u"');
-            if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'HEAD') echo $body;
-            exit;
-        }
-    }
     if ($hit && $hit['kind'] === 'relay') {
         foreach ((array)($station['channels'] ?? []) as $c) {
             if (isset($c['id']) && (string)$c['id'] === $hit['id']) { $channel = $c; $id = (string)$c['id']; break; }

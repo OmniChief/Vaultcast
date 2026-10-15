@@ -486,14 +486,9 @@ function tvs_xmltv($station, $days = null) {
     $fmt = function ($ms) { return gmdate('YmdHis', intdiv($ms, 1000)) . ' +0000'; };
     $x = array('<?xml version="1.0" encoding="UTF-8"?>', '<!DOCTYPE tv SYSTEM "xmltv.dtd">', '<tv generator-info-name="Vaultcast TV Studio">');
     $progs = array();
-    require_once __DIR__ . '/channel_slugs.php';
-    // Relay slugs never depend on IPTV (relay wins collisions), so IPTV is only loaded when exported.
-    if ($st['epg']['includeIptv']) list($slugs) = live_channel_slugs_current($station);
-    else $slugs = live_channel_slugs($station['channels'] ?? array(), array());
-    $sidx = live_channel_slug_index($slugs);
     foreach ($station['channels'] ?? array() as $ch) {
         if (empty($ch['enabled'])) continue;
-        $id = $sidx['relay'][$ch['id']] ?? ('relay.' . $ch['id']);
+        $id = 'relay.' . $ch['id'];
         $x[] = '  <channel id="' . tvs_xml($id) . '"><display-name>' . tvs_xml($ch['name']) . '</display-name><display-name>' . tvs_xml($ch['number']) . '</display-name>'
             . (!empty($st['channels'][$ch['id']]['logo']) ? '<icon src="' . tvs_xml($st['channels'][$ch['id']]['logo']) . '"/>' : '') . '</channel>';
         $prev = null;
@@ -510,7 +505,7 @@ function tvs_xmltv($station, $days = null) {
         require_once __DIR__ . '/epg.php';
         $idx = epg_load_iptv_index();
         foreach (iptv_lineup_channels() as $c) {
-            $id = $sidx['iptv'][$c['id']] ?? ('iptv.' . $c['id']);
+            $id = 'iptv.' . $c['id'];
             $x[] = '  <channel id="' . tvs_xml($id) . '"><display-name>' . tvs_xml($c['name']) . '</display-name>' . (!empty($c['logo']) ? '<icon src="' . tvs_xml($c['logo']) . '"/>' : '') . '</channel>';
             $list = $idx['programs'][$c['id']] ?? ($idx['programs'][$c['tvgId'] ?? ''] ?? array());
             foreach ($list as $p) if ($p['endUnix'] > $from && $p['startUnix'] < $to) $progs[] = array($id, $p);
@@ -537,20 +532,20 @@ function tvs_playlist_m3u($station, $base) {
     $chs = $station['channels'] ?? array();
     usort($chs, function ($a, $b) { return (int)$a['number'] - (int)$b['number']; });
     require_once __DIR__ . '/channel_slugs.php';
-    require_once __DIR__ . '/iptv.php';
     list($slugs) = live_channel_slugs_current($station);
     $sidx = live_channel_slug_index($slugs);
     foreach ($chs as $ch) {
         if (empty($ch['enabled'])) continue;
         $c = $st['channels'][$ch['id']] ?? tvs_default_channel();
         $slug = $sidx['relay'][$ch['id']] ?? $ch['id'];
-        $lines[] = '#EXTINF:-1 tvg-id="' . $slug . '" tvg-chno="' . (int)$ch['number'] . '"' . ($c['logo'] ? ' tvg-logo="' . str_replace('"', '', $c['logo']) . '"' : '') . ' group-title="' . str_replace('"', '', $c['group'] ?: 'Relay') . '",' . str_replace(',', ' ', $ch['name']);
+        // tvg-id stays the permanent relay.<id> so guide mappings survive renumbering; only the URL is numbered
+        $lines[] = '#EXTINF:-1 tvg-id="relay.' . $ch['id'] . '" tvg-chno="' . (int)$ch['number'] . '"' . ($c['logo'] ? ' tvg-logo="' . str_replace('"', '', $c['logo']) . '"' : '') . ' group-title="' . str_replace('"', '', $c['group'] ?: 'Relay') . '",' . str_replace(',', ' ', $ch['name']);
         $lines[] = $base . 'api/live/m3u?channel=' . rawurlencode($slug);
     }
+    require_once __DIR__ . '/iptv.php';
     foreach (iptv_lineup_channels() as $c) {
-        $slug = $sidx['iptv'][$c['id']] ?? ('iptv.' . $c['id']);
-        $lines[] = '#EXTINF:-1 tvg-id="' . $slug . '" tvg-chno="' . (int)$c['number'] . '"' . (!empty($c['logo']) ? ' tvg-logo="' . str_replace('"', '', $c['logo']) . '"' : '') . ' group-title="' . str_replace('"', '', $c['group'] ?: 'IPTV') . '",' . str_replace(',', ' ', $c['name']);
-        $lines[] = $base . 'api/live/m3u?channel=' . rawurlencode($slug);
+        $lines[] = '#EXTINF:-1 tvg-id="iptv.' . $c['id'] . '" tvg-chno="' . (int)$c['number'] . '"' . (!empty($c['logo']) ? ' tvg-logo="' . str_replace('"', '', $c['logo']) . '"' : '') . ' group-title="' . str_replace('"', '', $c['group'] ?: 'IPTV') . '",' . str_replace(',', ' ', $c['name']);
+        $lines[] = $c['url'];
     }
     return implode("\n", $lines) . "\n";
 }

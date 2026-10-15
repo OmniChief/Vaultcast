@@ -55,14 +55,15 @@ check(live_channel_resolve('ch-5', $gone, $aliases) === null, 'alias of a delete
 $GLOBALS['station'] = array('mediaBaseUrl' => '', 'cycles' => array(), 'media' => array(), 'channels' => array(
     array('id' => 'ch-u8f1qa', 'number' => 1, 'name' => 'One', 'enabled' => true), array('id' => 'ch-zz9k2p', 'number' => 2, 'name' => 'Two', 'enabled' => true)));
 tvs_save(array('epg' => array('includeIptv' => false)));
+\Vaultcast\Repository::$docs['live_iptv'] = array('seededDefaults' => 1, 'numberStart' => 100, 'feeds' => array(), 'epgUrls' => array(),
+    'channels' => array(array('id' => 'news', 'name' => 'News', 'url' => 'https://streams.example.local/news/index.m3u8', 'enabled' => true)));
 $m3u = tvs_playlist_m3u($GLOBALS['station'], 'http://example.local/media/');
-check(strpos($m3u, 'api/live/m3u?channel=ch-1') !== false && strpos($m3u, 'api/live/m3u?channel=ch-2') !== false && strpos($m3u, 'ch-u8f1qa') === false, 'lineup M3U uses ch-<number> URLs');
-check(strpos($m3u, 'tvg-id="ch-1"') !== false, 'tvg-id matches the channel id');
+check(strpos($m3u, 'api/live/m3u?channel=ch-1') !== false && strpos($m3u, 'api/live/m3u?channel=ch-2') !== false && strpos($m3u, 'm3u?channel=ch-u8f1qa') === false, 'lineup M3U uses ch-<number> URLs for relay channels');
+check(strpos($m3u, 'tvg-id="relay.ch-u8f1qa"') !== false, 'relay tvg-id unchanged (stable guide mapping)');
+check(strpos($m3u, "\nhttps://streams.example.local/news/index.m3u8\n") !== false && strpos($m3u, 'tvg-id="iptv.news"') !== false && strpos($m3u, 'm3u?channel=ch-100') === false, 'IPTV keeps its original stream URL and tvg-id');
 $xml = tvs_xmltv($GLOBALS['station'], 1);
-check(strpos($xml, '<channel id="ch-1">') !== false && strpos($xml, 'relay.ch-u8f1qa') === false, 'XMLTV channel ids match the M3U tvg-ids');
-\Vaultcast\Repository::$docs = array(); tvs_playlist_m3u($GLOBALS['station'], 'http://example.local/media/');
-check(isset(\Vaultcast\Repository::$docs['live_channel_aliases']['ch-1']), 'exported slugs are remembered for aliasing');
-
+check(strpos($xml, '<channel id="relay.ch-u8f1qa">') !== false, 'XMLTV ids unchanged and still match the M3U tvg-ids');
+check(isset(\Vaultcast\Repository::$docs['live_channel_aliases']['ch-1']) && !isset(\Vaultcast\Repository::$docs['live_channel_aliases']['ch-100']), 'relay slugs remembered for aliasing; IPTV not numbered');
 $route = file_get_contents(__DIR__ . '/../src/Http/routes/live.php');
 check(strpos($route, 'live_channel_resolve(') !== false && strpos($route, "'channels'];") !== false, 'm3u endpoint resolves slugs/aliases; channels action listed');
 $js = file_get_contents(__DIR__ . '/../assets/js/app.js');
