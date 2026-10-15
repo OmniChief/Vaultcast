@@ -93,6 +93,16 @@ final class Access
             $p = $token();
             if ($p === null) return null; // the handler answers invalid/expired tokens itself
             $uid = (string)($p['user_id'] ?? '');
+            // Live/Relay channel files (api/live/file) issue tokens owned by 'live': Live is readable
+            // signed out (external IPTV players), so treat them like a /live/ request instead of a
+            // deleted account. A signed-in viewer is still checked below.
+            if ($uid === 'live') {
+                if ($session === null) return null;
+                $user = $findUser((string)($session['user_id'] ?? ''));
+                if (!$user) return null;
+                $st = self::state($user, $now);
+                return $st['active'] ? null : [403, ['ok' => false, 'error' => self::message($st['state']), 'code' => 'access_denied', 'access' => $st]];
+            }
             if ($uid === '' || $uid === 'public') return $requireLogin ? [403, ['ok' => false, 'error' => 'Sign in to play this.', 'code' => 'login_required']] : null;
             $owner = $findUser($uid);
             if (!$owner) return [403, ['ok' => false, 'error' => 'This account no longer exists.', 'code' => 'access_denied']];
