@@ -10314,7 +10314,7 @@ function viewCollectionDetail(){
     open: {},
     q: {},
     lib: { kind: 'all' },
-    cat: { open: false, q: '', section: '', page: 1, per: 30, hits: [], total: 0, hasMore: false, sections: [], busy: false, error: '', req: 0, timer: null },
+    cat: { open: false, q: '', section: '', page: 1, per: 30, hits: [], total: 0, hasMore: false, sections: [], formats: null, availFormats: [], busy: false, error: '', req: 0, timer: null },
     editor: null
   };
   var LIVE_KINDS = ['movie', 'episode', 'commercial', 'bumper'];
@@ -11400,6 +11400,15 @@ function viewCollectionDetail(){
     for (var i = 0; i < media.length; i++) if (media[i].catalogueId === cid) return media[i];
     return null;
   }
+  /* per-user saved media-format filter for Add from server library */
+  function liveCatFormatsPref(){
+    var p = (state.user && state.user.prefs) || {};
+    return Array.isArray(p.live_cat_formats) ? p.live_cat_formats.slice() : [];
+  }
+  function liveCatSaveFormats(list){
+    if (state.user) { state.user.prefs = state.user.prefs || {}; state.user.prefs.live_cat_formats = list.slice(); }
+    api('/me/prefs', { method:'POST', body:{ live_cat_formats: list } }).catch(function(){});
+  }
   function liveCatalogueToMedia(item){
     var tv = item.type === 'tv' || item.type === 'anime' || (item.show && item.season != null && item.season !== '');
     var entry = {
@@ -11494,7 +11503,8 @@ function viewCollectionDetail(){
       var req = ++cat.req;
       cat.busy = true; cat.error = '';
       paintCatResults();
-      liveApi('catalogue', 'page=' + cat.page + '&per=' + cat.per + '&q=' + encodeURIComponent(cat.q) + '&section=' + encodeURIComponent(cat.section)).then(function(body){
+      if (cat.formats === null) cat.formats = liveCatFormatsPref();
+      liveApi('catalogue', 'page=' + cat.page + '&per=' + cat.per + '&q=' + encodeURIComponent(cat.q) + '&section=' + encodeURIComponent(cat.section) + '&formats=' + encodeURIComponent(cat.formats.join(','))).then(function(body){
         if (req !== cat.req) return;
         cat.busy = false;
         if (!body || !body.ok) { cat.error = (body && body.error) || 'Catalogue search failed'; cat.hits = []; cat.total = 0; cat.hasMore = false; paintCatResults(); return; }
@@ -11504,7 +11514,10 @@ function viewCollectionDetail(){
         if (body.per) cat.per = body.per;
         var hadSections = cat.sections.length;
         if (body.sections && body.sections.length) cat.sections = body.sections;
-        if (!hadSections && cat.sections.length) paintCat(); else paintCatResults();
+        var prevFormats = cat.availFormats.map(function(f){ return f.ext; }).join(',');
+        cat.availFormats = body.formats || [];
+        var formatsChanged = prevFormats !== cat.availFormats.map(function(f){ return f.ext; }).join(',');
+        if ((!hadSections && cat.sections.length) || formatsChanged) paintCat(); else paintCatResults();
       }).catch(function(e){
         if (req !== cat.req) return;
         cat.busy = false; cat.error = String(e.message || e); paintCatResults();
@@ -11527,11 +11540,32 @@ function viewCollectionDetail(){
           h('select', { 'aria-label': 'Library section', onChange: function(e){ cat.section = e.target.value; cat.page = 1; loadCat(); } },
             [h('option', { value: '', text: 'All video', selected: !cat.section })].concat(cat.sections.map(function(s){
               return h('option', { value: s.id, text: s.label || s.id, selected: cat.section === s.id });
-            })))
+            }))),
+          liveCatFormatChips()
         ]),
         catResults
       ]));
       paintCatResults();
+    }
+    /* media-format filter: chips for the extensions actually present; combines with section + search */
+    function liveCatFormatChips(){
+      var sel = cat.formats || [];
+      var avail = cat.availFormats.slice();
+      sel.forEach(function(x){ if (!avail.some(function(f){ return f.ext === x; })) avail.push({ ext: x, count: 0 }); });
+      if (!avail.length) return null;
+      function set(list){
+        cat.formats = list.slice().sort(); cat.page = 1;
+        liveCatSaveFormats(cat.formats);
+        paintCat(); loadCat();
+      }
+      return h('div', { className: 'live-format-chips', role: 'group', 'aria-label': 'Media format' }, [
+        h('button', { type: 'button', className: 'sys-chip nsm-chip' + (!sel.length ? ' nsm-accent' : ''), 'aria-pressed': String(!sel.length), text: 'All formats', onClick: function(){ set([]); } })
+      ].concat(avail.map(function(f){
+        var on = sel.indexOf(f.ext) >= 0;
+        return h('button', { type: 'button', className: 'sys-chip nsm-chip' + (on ? ' nsm-accent' : ''), 'aria-pressed': String(on), title: f.count + ' file(s)',
+          text: f.ext.toUpperCase() + (f.count ? ' ' + f.count : ''),
+          onClick: function(){ set(on ? sel.filter(function(x){ return x !== f.ext; }) : sel.concat([f.ext])); } });
+      })));
     }
     function paintCatResults(){
       if (!catResults) return;
@@ -11594,7 +11628,7 @@ function viewCollectionDetail(){
     function addShow(showName){
       if (!showName) return;
       liveSetMsg('Importing ' + showName + '\u2026');
-      liveApi('catalogue', 'show=' + encodeURIComponent(showName)).then(function(body){
+      liveApi('catalogue', 'show=' + encodeURIComponent(showName) + '&formats=' + encodeURIComponent((cat.formats || []).join(','))).then(function(body){
         if (!body || !body.ok || !body.items || !body.items.length) { liveSetMsg((body && body.error) || 'Could not read that show', true); paintCatResults(); return; }
         var added = 0, skipped = 0, need = [];
         body.items.forEach(function(x){
