@@ -60,6 +60,41 @@ $cases = [
 foreach ($cases as $in => $want) check(num($in) === $want, 'parse "' . $in . '" -> ' . var_export($want, true) . ' (got ' . var_export(num($in), true) . ')');
 check(AbsoluteNumbering::parse('[Grp] T - 05 [720p]')['fansub'] === true, 'fansub group prefix noticed');
 
+// ---- "Show Title NN Episode title" (bare number after the show name)
+$dbz = [
+    'Dragonball Z Kai 01 Prologue to Battle! The Return of Son Goku.mkv' => 1,
+    "Dragonball Z Kai 02 The Enemy is Goku's Brother!.mkv" => 2,
+    "Dragonball Z Kai 06 The End of Snake Way! King Kai's Bizarre Test!.mkv" => 6,
+];
+foreach ($dbz as $f => $want) {
+    foreach ([['Dragon Ball Z Kai'], ['Dragonball Z Kai'], ['dragon ball z: kai (2009)'], []] as $titles) {
+        $p = AbsoluteNumbering::parse($f, $titles);
+        check($p && $p['number'] === $want, 'parse "' . $f . '" with titles ' . json_encode($titles) . ' -> ' . $want . ' (got ' . json_encode($p) . ')');
+    }
+}
+$p = AbsoluteNumbering::parse('Mob Psycho 100 05 Discord ~Who Am I~.mkv', ['Mob Psycho 100']);
+check($p && $p['number'] === 5 && $p['method'] === 'title', 'Mob Psycho 100 05 -> 5 (the 100 in the title is not taken)');
+$p = AbsoluteNumbering::parse('86 Eighty-Six 03 What He Can Do.mkv', ['86 Eighty-Six']);
+check($p && $p['number'] === 3, '86 Eighty-Six 03 -> 3 (the 86 in the title is not taken)');
+$p = AbsoluteNumbering::parse('86 EIGHTY SIX 03 What He Can Do.mkv', ['86: Eighty-Six']);
+check($p && $p['number'] === 3, 'title prefix ignores case and punctuation');
+$p = AbsoluteNumbering::parse('Space Show 2001 The Odyssey.mkv', ['Space Show']);
+check($p && $p['number'] === 2001, 'after a matched show title, "2001" is kept as an episode number');
+check(AbsoluteNumbering::parse('Space Show 2001 The Odyssey.mkv') === null, 'without the title, 2001 is treated as a year');
+check(AbsoluteNumbering::parse('Mob Psycho 100 S01E05 Discord.mkv', ['Mob Psycho 100']) === null, 'SxxEyy still wins (no absolute)');
+check(AbsoluteNumbering::parse('Mob Psycho 100 01-12 Batch.mkv', ['Mob Psycho 100']) === null, 'ranges/batches still rejected with a title');
+check(AbsoluteNumbering::parse('Dragonball Z Kai 01 Prologue.mkv', ['Dragonball Z Kaiju']) !== null && AbsoluteNumbering::parse('Dragonball Z Kai 01 Prologue.mkv', ['Dragonball Z Kaiju'])['method'] !== 'title', 'a longer/different title is not matched');
+check(num('[Grp] Title - 12v2 [ABCD1234]') === 12 && AbsoluteNumbering::parse('[Grp] Show 2 - 03 [720p]', ['Show'])['number'] === 3, 'existing dash pattern still preferred over title-prefix');
+// unknown title: consistent prefix across the show's files
+$mob = ['Mob Psycho 100 01 Self-Proclaimed Psychic.mkv', 'Mob Psycho 100 02 Doubts About Youth.mkv', 'Mob Psycho 100 05 Discord.mkv'];
+$pre = AbsoluteNumbering::commonPrefix($mob);
+check($pre === 'Mob Psycho 100 ', 'common prefix stops before the episode number (got ' . json_encode($pre) . ')');
+check(AbsoluteNumbering::parse($mob[2], [], $pre)['number'] === 5 && AbsoluteNumbering::parse($mob[2], [], $pre)['method'] === 'prefix', 'prefix heuristic: Mob Psycho 100 05 -> 5 without a known title');
+$six = ['86 Eighty-Six 01 Undertaker.mkv', '86 Eighty-Six 03 What He Can Do.mkv'];
+check(AbsoluteNumbering::parse($six[1], [], AbsoluteNumbering::commonPrefix($six))['number'] === 3, 'prefix heuristic: 86 Eighty-Six 03 -> 3');
+check(AbsoluteNumbering::commonPrefix(['Show 01', 'Show 02']) === 'Show ' && AbsoluteNumbering::commonPrefix(['Only one']) === '', 'common prefix backs out of numbers; needs 2+ files');
+check(AbsoluteNumbering::parse('Some Show 1080p 07 Title x265.mkv', ['Other']) !== null && AbsoluteNumbering::parse('Some Show 1080p 07 Title x265.mkv', ['Other'])['number'] === 7, 'fallback skips resolution/codec');
+
 // ---- detection
 $fan = ['[Grp] Show - 01 [1080p]', '[Grp] Show - 02 [1080p]', '[Grp] Show - 03 [1080p]'];
 check(AbsoluteNumbering::detect($fan, 'tv')['mode'] === 'absolute', 'fansub names -> absolute');
@@ -159,6 +194,16 @@ check((Store::$docs['match_overrides']['items']['0000000000000003']['source'] ??
 $fwd = AbsoluteNumbering::apply($key, ['mode' => 'absolute', '_guide' => $guide, 'rows' => [['id' => '0000000000000002', 'absolute' => 2]]]);
 check($fwd['changed'] === 1 && Catalogue::$cat['items']['0000000000000002']['episode'] === 2 && Catalogue::$cat['items']['0000000000000001']['season'] === null, 'apply only selected rows');
 check(!AbsoluteNumbering::apply($key, ['mode' => 'weird'])['ok'], 'unknown mode rejected');
+
+// preview over a "Show NN Title" library (titles from the library show name)
+$save = Catalogue::$cat;
+$dItems = [];
+foreach (array_keys($dbz) as $i => $f) { $id = sprintf('d%015x', $i + 1); $dItems[$id] = ['id' => $id, 'type' => 'anime', 'section' => 'anime', 'show' => 'Dragon Ball Z Kai', 'rel' => 'Dragon Ball Z Kai/' . $f, 'season' => null, 'episode' => null, 'episode_title' => null]; }
+Catalogue::$cat = ['items' => $dItems];
+$dk = Catalogue::showKey('anime', 'Dragon Ball Z Kai');
+$dp = AbsoluteNumbering::preview($dk, ['_guide' => $guide, 'mode' => 'absolute']);
+check(array_map(function ($r) { return $r['detected']; }, $dp['rows']) === [1, 2, 6] && !in_array('no absolute number found', array_column($dp['rows'], 'note'), true), 'Fix Match preview finds 1, 2, 6 for the Dragonball Z Kai files');
+Catalogue::$cat = $save;
 
 // wiring
 $routes = file_get_contents(__DIR__ . '/../src/Http/routes/admin-library.php');
