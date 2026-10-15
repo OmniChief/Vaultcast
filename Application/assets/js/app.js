@@ -134,27 +134,100 @@
     try { subtitlePreference = localStorage.getItem(subtitleKey); } catch (e) {}
     var probeTracks = [], captionTracks = [], probeDuration = 0;
     /* Audio switching without browser audioTracks: restart a server remux (/stream/remux) at the
-       current position with the chosen track. remux.offset is where that stream starts. */
-    var remux = { active:false, offset:0, track:null, seeking:false };
+       current position with the chosen track. remux.offset is the source time where that stream
+       starts (the keyframe the server reports), so the real position is offset + media.currentTime.
+       While remuxing, native controls are replaced by a bar over the FULL duration (ffprobe /
+       library metadata); seeking anywhere restarts the remux at the target with the same track. */
+    var remux = { active:false, offset:0, track:null, seeking:false, gen:0, dragging:false };
+    function fullDuration(){ return probeDuration || Number(play.duration) || 0; }
     function absTime(){ return (remux.active ? remux.offset : 0) + (media.currentTime || 0); }
     openPlayer._absTime = absTime;
-    openPlayer._absDuration = function(){ return remux.active ? (probeDuration || 0) : (media.duration || 0); };
+    openPlayer._absDuration = function(){ return remux.active ? fullDuration() : (media.duration || 0); };
     function remuxSrc(index, at){
-      return streamPlayUrl(play.remux_url) + '&a=' + encodeURIComponent(index) + '&ss=' + Math.max(0, at).toFixed(2);
+      return streamPlayUrl(play.remux_url) + '&a=' + encodeURIComponent(index) + '&ss=' + Math.max(0, at).toFixed(3);
+    }
+    function fmtT(t){
+      t = Math.max(0, Math.floor(t || 0));
+      var hh = Math.floor(t / 3600), mm = Math.floor(t / 60) % 60, ss = t % 60;
+      return (hh ? hh + ':' + (mm < 10 ? '0' : '') : '') + mm + ':' + (ss < 10 ? '0' : '') + ss;
+    }
+    var rbPlay = h('button', { className:'btn ghost sm', type:'button', 'aria-label':'Play or pause', text:'❚❚' });
+    var rbRange = h('input', { type:'range', min:'0', max:'0', step:'0.1', value:'0', 'aria-label':'Seek', style:'flex:1;min-width:120px' });
+    var rbTime = h('span', { className:'muted', style:'font-variant-numeric:tabular-nums;white-space:nowrap', text:'0:00 / 0:00' });
+    var rbFull = h('button', { className:'btn ghost sm', type:'button', 'aria-label':'Full screen', text:'⛶' });
+    var remuxBar = h('div', { className:'player-remux-bar', style:'display:none;align-items:center;gap:8px;padding:6px 10px;background:rgba(0,0,0,.6)' }, [rbPlay, rbRange, rbTime, rbFull]);
+    overlay.appendChild(remuxBar);
+    rbPlay.onclick = function(){ if (media.paused) { var pr = media.play(); if (pr && pr.catch) pr.catch(function(){}); } else media.pause(); };
+    rbFull.onclick = function(){
+      try { if (document.fullscreenElement) document.exitFullscreen(); else (overlay.requestFullscreen || media.requestFullscreen).call(overlay.requestFullscreen ? overlay : media); } catch (eF) {}
+    };
+    rbRange.addEventListener('input', function(){ remux.dragging = true; rbTime.textContent = fmtT(+rbRange.value) + ' / ' + fmtT(fullDuration()); });
+    rbRange.addEventListener('change', function(){ remux.dragging = false; switchViaRemux(remux.track, +rbRange.value); });
+    function paintRemuxBar(){
+      if (!remux.active) return;
+      var d = fullDuration();
+      rbRange.max = String(d || Math.max(absTime(), 1));
+      if (!remux.dragging) rbRange.value = String(absTime());
+      rbTime.textContent = fmtT(absTime()) + ' / ' + (d ? fmtT(d) : '–:––');
+      rbPlay.textContent = media.paused ? '▶' : '❚❚';
+    }
+    ['timeupdate','play','pause','loadedmetadata'].forEach(function(ev){ media.addEventListener(ev, paintRemuxBar); });
+    function setRemuxUi(on){
+      remuxBar.style.display = on ? 'flex' : 'none';
+      media.controls = !on;
+      paintRemuxBar();
     }
     function switchViaRemux(index, at){
-      if (!play.remux_url) return false;
-      var pos = at != null ? at : absTime();
+      if (!play.remux_url || !play.remux_allowed) return false;
+      var target = Math.max(0, at != null ? at : absTime());
+      var d = fullDuration();
+      if (d && target > d - 0.5) target = Math.max(0, d - 0.5);
       var wasPaused = media.paused && media.currentTime > 0;
-      remux.active = true; remux.offset = pos; remux.track = index; remux.seeking = true;
-      try { media.src = remuxSrc(index, pos); media.load(); if (!wasPaused) { var pr = media.play(); if (pr && pr.catch) pr.catch(function(){}); } } catch (eRm) {}
-      setTimeout(function(){ remux.seeking = false; }, 800);
+      var gen = ++remux.gen;
+      remux.seeking = true; remux.track = index;
+      var info = streamPlayUrl(play.remux_url) + '&info=1&ss=' + target.toFixed(3);
+      fetch(info, { credentials:'same-origin', cache:'no-store' }).then(function(r){ return r.json(); }).catch(function(){ return null; }).then(function(j){
+        if (gen !== remux.gen || !overlay.isConnected) return;
+        if (j && j.ok === false) { remux.seeking = false; toast(j.error || 'Audio switching is not available.', { kind:'bad' }); return; }
+        var start = j && isFinite(j.start) ? Math.min(target, Math.max(0, Number(j.start))) : target;
+        if (j && j.duration && !probeDuration) probeDuration = Number(j.duration);
+        remux.active = true; remux.offset = start;
+        setRemuxUi(true);
+        var seekAt = j && isFinite(j.seek) ? Number(j.seek) : start;
+        try { media.src = remuxSrc(index, seekAt); media.load(); } catch (eRm) {}
+        media.addEventListener('loadedmetadata', function(){
+          if (gen !== remux.gen) return;
+          if (target - start > 0.25) { try { media.currentTime = target - start; } catch (eS) {} }
+          if (!wasPaused) { var pr = media.play(); if (pr && pr.catch) pr.catch(function(){}); }
+          setTimeout(function(){ if (gen === remux.gen) remux.seeking = false; }, 400);
+          paintRemuxBar();
+        }, { once:true });
+      });
       return true;
+    }
+    /* DirectPlay only: admins may turn remuxing on from here; others are told it is disabled. */
+    function requestRemux(index, at){
+      if (!play.remux_url) return Promise.resolve(false);
+      if (play.remux_allowed) return Promise.resolve(switchViaRemux(index, at));
+      if (!(state.user && state.user.role === 'admin')) {
+        toast('Switching audio tracks is disabled by the administrator (DirectPlay only).', { kind:'bad' });
+        return Promise.resolve(false);
+      }
+      return confirmDialog('This browser cannot switch audio tracks in the file directly. The server can remux the video with the chosen track (video copied, audio converted when needed), but “DirectPlay only” is on in Settings → Streaming. Turn DirectPlay only off and allow remuxing?', { okText:'Allow remuxing', host: overlay }).then(function(ok){
+        if (!ok) return false;
+        return api('/admin/settings', { method:'POST', body:{ streaming:{ directplay_only:false } } }).then(function(j){
+          if (!j || !j.ok) { toast((j && j.error) || 'Could not change the setting', { kind:'bad' }); return false; }
+          if (j.settings) state.settings = j.settings;
+          play.remux_allowed = true;
+          return switchViaRemux(index, at);
+        });
+      });
     }
     function inBuffered(t){
       try { for (var b = 0; b < media.buffered.length; b++) if (t >= media.buffered.start(b) - 0.5 && t <= media.buffered.end(b) + 0.5) return true; } catch (eB) {}
       return false;
     }
+    /* Keyboard / programmatic seeks set media.currentTime (relative to the remux start). */
     media.addEventListener('seeking', function(){
       if (!remux.active || remux.seeking) return;
       var t = media.currentTime || 0;
@@ -233,9 +306,12 @@
         var result = applyAudioTrack(media,index);
         if (result.ok) { audioPreference=index; audioApplied=true; setAudioPref(item.id,index); }
         else toast(result.note,{kind:'bad'});
-      } else if (switchViaRemux(index)) {
-        audioPreference=index; audioApplied=true; setAudioPref(item.id,index);
-        toast('Switching audio…', { ms:1400 });
+      } else if (play.remux_url) {
+        requestRemux(index).then(function(ok){
+          if (ok) { audioPreference=index; audioApplied=true; setAudioPref(item.id,index); toast('Switching audio…', { ms:1400 }); }
+          refresh();
+        });
+        return;
       } else toast('Audio switching is not available for this file.',{kind:'bad'});
       refresh();
     };
@@ -299,7 +375,7 @@
       if (!audioApplied && audioPreference != null && !(nat && nat.length > 1) && probeTracks.length > 1 && audioPreference < probeTracks.length) {
         var def = probeTracks.filter(function(t){return t.default;})[0] || probeTracks[0];
         audioApplied = true;
-        if (audioPreference !== (def ? def.relative : 0)) {
+        if (audioPreference !== (def ? def.relative : 0) && play.remux_allowed) {
           var go = function(){ switchViaRemux(audioPreference); };
           if (media.readyState >= 1) go(); else media.addEventListener('loadedmetadata', go, { once:true });
         }
@@ -562,7 +638,7 @@
           ])
         ])
       ]);
-      document.body.appendChild(overlay);
+      ((opts.host && opts.host.isConnected) ? opts.host : document.body).appendChild(overlay);
     });
   }
   function emptyState(title, detail, actions){

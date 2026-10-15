@@ -125,6 +125,8 @@ class Stream {
             'preferred_audio' => $pref,
             'directplay_audio_select' => $directPlayAudioSelect,
             'remux_url' => ($item['media_kind'] ?? '') === 'video' ? ($base . '/api/stream/remux?t=' . $token) : null,
+            'remux_allowed' => Remux::enabled(),
+            'duration' => isset($item['duration']) ? (float)$item['duration'] : null,
             'video_codec' => $videoCodec,
             'needs_convert_hint' => $needsConvertHint,
             'audio_note' => count($audioTracks) > 1
