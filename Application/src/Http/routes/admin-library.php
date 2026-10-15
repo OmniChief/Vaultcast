@@ -77,6 +77,20 @@ if ($path === '/admin/library/apply-batch' && $method === 'POST') {
     json_out(Library::applyBatch(body_json()));
 }
 
+if ($path === '/admin/library/query' && $method === 'POST') {
+    json_out(LibraryQuery::search(body_json()));
+}
+
+if ($path === '/admin/library/query/preview' && $method === 'POST') {
+    json_out(LibraryQuery::preview(body_json()));
+}
+
+if ($path === '/admin/library/query/apply' && $method === 'POST') {
+    if (stripos((string)($_SERVER['CONTENT_TYPE'] ?? ''), 'application/json') === false) json_error('JSON required', 415);
+    @set_time_limit(300);
+    json_out(LibraryQuery::apply(body_json()));
+}
+
 if ($path === '/admin/library/roots' && $method === 'GET') {
     json_out([
         'ok' => true,
