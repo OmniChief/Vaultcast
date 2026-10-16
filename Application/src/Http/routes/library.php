@@ -114,7 +114,7 @@ if (preg_match('#^/sections/([a-zA-Z0-9_-]+)/items$#', $path, $m) && $method ===
             $pack = Catalogue::browseCacheGet('facets_movies', $m[1]);
             $out['facets'] = $pack['facets'] ?? Catalogue::movieFacetsCached($m[1], Catalogue::sectionItems($m[1]));
         }
-        $out['items'] = array_map(function ($item) { return Catalogue::publicItem($item, false); }, $out['items']);
+        $out['items'] = Catalogue::publicItems($out['items']);
         Catalogue::browseCachePut('browse_items', $browseSalt, $out);
         json_out($out);
     }
@@ -188,7 +188,7 @@ if (preg_match('#^/sections/([a-zA-Z0-9_-]+)/items$#', $path, $m) && $method ===
             'decade' => $decade !== '' ? $decade : null,
             'actor' => $actor !== '' ? $actor : null,
         ],
-        'items' => array_map(function ($it) { return Catalogue::publicItem($it, false); }, $slice),
+        'items' => Catalogue::publicItems($slice),
         'cached' => false,
     ];
     Catalogue::browseCachePut('browse_items', $browseSalt, $browseOut);

@@ -10,14 +10,19 @@ final class Migrations
 
     public static function stampFile(): string
     {
-        // Keyed on the app version too, so every update re-runs the (idempotent) steps once.
-        $app = defined('STREAM_VERSION') ? preg_replace('/[^0-9A-Za-z.]/', '', STREAM_VERSION) : '0';
-        return STREAM_SHM . '/migrations-v' . self::VERSION . '-app' . $app . '.done';
+        // Schema version only; clearing disposable caches or updating JS must not repeat ACL walks.
+        return STREAM_DATA . '/runtime/migrations-v' . self::VERSION . '.done';
     }
 
     public static function runIfNeeded(): void
     {
         if (is_file(self::stampFile())) return;
+        if (!is_dir(dirname(self::stampFile()))) @mkdir(dirname(self::stampFile()), 0775, true);
+        // Adopt an already completed migration from any previous app version.
+        if (glob(STREAM_SHM . '/migrations-v' . self::VERSION . '-app*.done')) {
+            @file_put_contents(self::stampFile(), date('c') . "\n", LOCK_EX);
+            return;
+        }
         $pdo = \Vaultcast\Database::connection();
         // Serialise concurrent first requests across PHP workers (MariaDB named lock).
         $got = (int)$pdo->query("SELECT GET_LOCK('vaultcast_migrations', 30)")->fetchColumn();

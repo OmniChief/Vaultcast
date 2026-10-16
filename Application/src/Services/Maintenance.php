@@ -7,7 +7,7 @@ final class Maintenance
     private static $checked = 0.0;
     /** Background-only tasks started by the app itself (not listed in the maintenance UI). */
     const INTERNAL = ['ingest' => 'Import reviewed download'];
-    const TASKS = ['scan' => 'Scan library folders', 'collections' => 'Match collections', 'downloads' => 'Import completed downloads', 'durations' => 'Fill Live media durations', 'facts' => 'Probe new media codecs and store show guides'];
+    const TASKS = ['metadata' => 'Prepare artwork and synopses', 'scan' => 'Scan library folders', 'collections' => 'Match collections', 'downloads' => 'Import completed downloads', 'durations' => 'Fill Live media durations', 'facts' => 'Probe new media codecs and store show guides'];
 
     public static function runCommand(string $task, ?string $target = null): array
     {
@@ -101,8 +101,9 @@ final class Maintenance
                 case 'scan':
                     $job['result'] = Catalogue::rescan();
                     // Probe only new/changed files afterwards (queued; waits for this lock).
-                    if (!isset($job['result']['ok']) || $job['result']['ok']) { try { self::start('facts', 'scan'); } catch (Throwable $ignored) {} }
+                    if (!isset($job['result']['ok']) || $job['result']['ok']) { try { self::start('facts', 'scan'); self::start('metadata', 'scan'); } catch (Throwable $ignored) {} }
                     break;
+                case 'metadata': $job['result'] = MetadataWarmup::run(); break;
                 case 'facts': $job['result'] = MediaFacts::refresh(function () { self::checkpoint(); }); break;
                 case 'collections': $job['result'] = Collections::rematch($job['target'] ?? null); break;
                 case 'downloads':

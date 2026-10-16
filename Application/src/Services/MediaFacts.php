@@ -9,7 +9,7 @@
 final class MediaFacts
 {
     /** @var array<string,array>|null */
-    private static $map;
+    private static $map = [];
 
     const TABLE_SQL = 'CREATE TABLE IF NOT EXISTS vaultcast_media_facts (
     item_id VARCHAR(64) NOT NULL PRIMARY KEY,
@@ -31,19 +31,37 @@ final class MediaFacts
         return (int)($it['mtime'] ?? 0) . '|' . (int)($it['size'] ?? 0);
     }
 
-    /** Fresh facts for an item (matching mtime|size), or null. One query per request. */
+    /** Fetch only the facts needed by this response, in bounded primary-key batches. */
+    public static function preload(array $items): void
+    {
+        $ids = [];
+        foreach ($items as $it) {
+            $id = (string)($it['id'] ?? '');
+            if ($id !== '' && !array_key_exists($id, self::$map)) $ids[$id] = $id;
+        }
+        foreach (array_chunk(array_values($ids), 200) as $batch) {
+            foreach ($batch as $id) self::$map[$id] = null;
+            try {
+                $s = \Vaultcast\Database::connection()->prepare('SELECT item_id,sig,needs_convert,present FROM vaultcast_media_facts WHERE item_id IN (' . implode(',', array_fill(0, count($batch), '?')) . ')');
+                $s->execute($batch);
+                foreach ($s as $row) self::$map[(string)$row['item_id']] = $row;
+            } catch (\Throwable $e) { /* not migrated yet: extension fallback */ }
+        }
+    }
+
+    /** Fresh facts for one item, without reading the entire library's facts table. */
     public static function get(array $it): ?array
     {
-        if (self::$map === null) {
-            self::$map = [];
-            try {
-                foreach (\Vaultcast\Database::connection()->query('SELECT item_id, sig, needs_convert, present FROM vaultcast_media_facts')->fetchAll(PDO::FETCH_ASSOC) as $r) {
-                    self::$map[(string)$r['item_id']] = $r;
-                }
-            } catch (\Throwable $e) { /* table not migrated yet: no facts */ }
-        }
+        self::preload([$it]);
         $row = self::$map[(string)($it['id'] ?? '')] ?? null;
         return ($row && (string)$row['sig'] === self::sig($it)) ? $row : null;
+    }
+
+    /** Audio-track details prepared by the existing facts worker. */
+    public static function audio(array $it): array
+    {
+        $row = \Vaultcast\Repository::document('media-audio:' . (string)$it['id'], []);
+        return ($row['sig'] ?? '') === self::sig($it) ? ($row['probe'] ?? []) : [];
     }
 
     public static function codecsNeedConvert(string $vc, string $ac): bool
@@ -80,13 +98,17 @@ final class MediaFacts
                 $shows[Catalogue::showKey((string)($it['section'] ?? ''), (string)$it['show'])] = (string)$it['show'];
             }
             $sig = self::sig($it);
-            if (($known[$id] ?? null) === $sig) { $out['unchanged']++; continue; }
+            if (($known[$id] ?? null) === $sig && self::audio($it)) { $out['unchanged']++; continue; }
             if ($checkpoint) $checkpoint();
             $path = (string)($it['path'] ?? '');
             if ($path === '' || !is_file($path)) {
                 $ins->execute([$id, $sig, '', '', 0, 0, time()]); $out['missing']++; continue;
             }
             $p = MediaProbe::probeSummary($path, 15, true);
+            \Vaultcast\Repository::putDocument('media-audio:' . $id, ['sig' => $sig, 'probe' => [
+                'audio_tracks' => $p['audio_tracks'] ?? [], 'audio_count' => $p['audio_count'] ?? 0,
+                'multi_audio' => !empty($p['multi_audio']),
+            ]]);
             $vc = (string)($p['video_codec'] ?? '');
             $ac = (string)($p['audio_tracks'][0]['codec'] ?? '');
             if ($vc === '') {
@@ -102,7 +124,8 @@ final class MediaFacts
         $stale = array_diff_key($known, $seen);
         if ($stale) {
             $del = $pdo->prepare('DELETE FROM vaultcast_media_facts WHERE item_id=?');
-            foreach (array_keys($stale) as $id) { $del->execute([$id]); $out['removed']++; }
+            $delAudio = $pdo->prepare('DELETE FROM vaultcast_documents WHERE name=?');
+            foreach (array_keys($stale) as $id) { $del->execute([$id]); $delAudio->execute(['media-audio:' . $id]); $out['removed']++; }
         }
         $out['probe_seconds'] = round(microtime(true) - $t0, 1);
         // Episode guides: online/disk cache lookups happen here, never on a page request.
@@ -118,6 +141,8 @@ final class MediaFacts
                 } catch (\Throwable $e) { error_log('Vaultcast guide ' . $key . ': ' . $e->getMessage()); }
             }
         }
+        self::$map = [];
+        Catalogue::invalidateDerivedCaches();
         // Warm the per-show list cache (show art lookups) so the first list request after a scan is cache-only.
         foreach ((Store::settings()['sections'] ?? []) as $sec) {
             $t = is_array($sec) ? (string)($sec['type'] ?? '') : '';
