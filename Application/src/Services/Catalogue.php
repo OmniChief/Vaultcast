@@ -1875,6 +1875,12 @@ class Catalogue {
         return is_array($hit) ? $hit : null;
     }
 
+    public static function cachedHomeLibrary(): ?array {
+        $revision = Store::revision('catalogue') . '|' . Store::revision('settings') . '|' . Store::revision('browse_epoch');
+        $entry = \Vaultcast\Repository::cacheGet('home-library-v2');
+        return $entry && ($entry['revision'] ?? '') === $revision ? $entry['home'] : null;
+    }
+
     public static function homeLibrary(): array {
         $revision = Store::revision('catalogue') . '|' . Store::revision('settings') . '|' . Store::revision('browse_epoch');
         $entry = \Vaultcast\Repository::cacheGet('home-library-v2');

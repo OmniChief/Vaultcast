@@ -49,7 +49,21 @@ if (isset($_GET['manifest'])) {
     exit;
 }
 require_once __DIR__ . '/src/bootstrap.php';
+$loginError = '';
+if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && ($_POST['first_action'] ?? '') === 'login') {
+    $loginUser = Auth::findUser(trim((string)($_POST['username'] ?? '')));
+    if ($loginUser && password_verify((string)($_POST['password'] ?? ''), $loginUser['password_hash'] ?? '')) {
+        Auth::createSession($loginUser);
+        $destination = (string)($_SERVER['REQUEST_URI'] ?? $base);
+        if (strpos($destination, $base) !== 0 || strpos($destination, '//') === 0 || preg_match('/[\r\n]/', $destination)
+            || in_array(trim(substr((string)$path, strlen($base)), '/'), ['login','welcome'], true)) $destination = $base;
+        header('Location: ' . $destination, true, 303);
+        exit;
+    }
+    $loginError = 'Incorrect username or password.';
+}
 $startup = Startup::snapshot();
+$firstPage = FirstPage::render($startup, $base, $siteName, $loginError);
 release_request_locks();
 require_once __DIR__ . '/src/Services/PlayerAssets.php';
 $shell = (string)file_get_contents(__DIR__ . '/src/Views/app.html');
@@ -61,4 +75,4 @@ $config .= '<script>window.__SITE_NAME__=' . json_encode($siteName, JSON_HEX_TAG
 $config .= '<script>window.__STREAM_STARTUP__=' . json_encode($startup, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_INVALID_UTF8_SUBSTITUTE) . ';</script>';
 $assetVersion = substr(hash('sha256', hash_file('sha256', __DIR__ . '/assets/js/request-cache.js') . hash_file('sha256', __DIR__ . '/assets/js/app.js') . hash_file('sha256', __DIR__ . '/assets/js/routes.js') . hash_file('sha256', __DIR__ . '/assets/js/matching.js') . hash_file('sha256', __DIR__ . '/assets/js/netplay_sync.js') . hash_file('sha256', __DIR__ . '/assets/css/app.css')), 0, 16);
 // <base> keeps relative asset URLs working on deep links such as /tvshows/<show>/season-2.
-echo str_replace(['{{BASE_HREF}}', '<!-- VAULTCAST_CONFIG -->', '{{VERSION}}', '{{SITE_NAME}}', '{{ASSET_VERSION}}'], [htmlspecialchars($base, ENT_QUOTES, 'UTF-8'), $config, trim((string)file_get_contents(__DIR__ . '/VERSION')), htmlspecialchars($siteName, ENT_QUOTES, 'UTF-8'), $assetVersion], $shell);
+echo str_replace(['{{BASE_HREF}}', '<!-- VAULTCAST_CONFIG -->', '<!-- VAULTCAST_PAGE -->', '{{VERSION}}', '{{SITE_NAME}}', '{{ASSET_VERSION}}'], [htmlspecialchars($base, ENT_QUOTES, 'UTF-8'), $config, $firstPage, trim((string)file_get_contents(__DIR__ . '/VERSION')), htmlspecialchars($siteName, ENT_QUOTES, 'UTF-8'), $assetVersion], $shell);

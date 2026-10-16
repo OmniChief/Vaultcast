@@ -1,44 +1,26 @@
-# Page startup
+# First-response pages
 
-The initial HTML contains a server-verified account snapshot and, when available,
-that account's revision-valid cached home response. The browser consumes this once
-and follows the existing route logic. A warm visit needs no `/me` or `/home` request
-before rendering. Account changes discard the supplied home response.
+The HTML response contains a real signed-in home page or a native sign-in form.
+There is no boot logo or empty app container. Home navigation, title cards and
+artwork image URLs are present before JavaScript downloads or executes. The form
+posts to the same page and redirects after successful authentication; it does not
+wait for an AJAX home request before completing sign-in.
 
-Home responses have no time-based expiry. Catalogue, progress, settings and
-browse-epoch revisions invalidate them immediately. Each viewer has one replaceable
-cache entry, so revisions do not accumulate permanent files. Cache keys are
-captured before building the response so a concurrent edit cannot label old data
-with a newer revision. The cache remains disposable and outside the browser.
+Startup checks the current session and access state before including catalogue
+data. It prefers the viewer's revision-valid home cache, then the shared library
+cache. If both are absent, SQL returns up to eight real cards per section. TV
+cards use grouped catalogue records rather than full summaries or media-folder
+walks. This cold fallback does not perform artwork discovery or probes and does
+not include private media paths. Database and network latency still affect HTML
+response time.
 
-The HTML response stays `no-store`. Startup checks the current session and access
-expiry before reading cached home data; it never embeds a password hash or session
-token. Guest access follows the existing guest-browsing setting. Conversion badges
-continue to update separately and do not block rendering.
+JavaScript enhances the existing home DOM without replacing it at startup. An
+incomplete personal response is refreshed in the background; Continue Watching
+is updated separately so the page, search form and current scroll remain in place.
+Navigation and playback use the existing application handlers after enhancement.
+Detail routes still use their existing API-driven views, with the initial page
+remaining visible while their route resolves. This change is server rendering of
+the home/sign-in entry point, not a rewrite of every detail or settings screen.
 
-Cold or invalidated caches still require `/home`; the HTML request never builds
-the catalogue. Deep links can still need their own detail requests. This change
-removes the startup request waterfall for warm visits, not database or network
-latency. Measure document response time and cold `/home` time on the deployed
-server before attributing any remaining delay to the browser.
-
-Regression checks: `node Application/tests/startup_test.js` and
-`php Application/tests/startup_access_test.php`. Check warm/cold visits, expiry,
-deleted accounts, guest-to-member login, and direct movie/show links on deployment.
-
-## Cold-library work
-
-TV summaries derive media paths from catalogue records without checking media
-folders. Show summaries and the show-poster lookup use replaceable, revision-keyed
-entries without timers. Poster lookup reads only TV/anime sections on a cache miss
-and no longer walks every episode path for each artwork request. Serving the
-selected artwork can still access its file.
-
-Library rows are shared across viewers separately from Continue Watching. Progress
-updates rebuild the personal portion without regenerating random rows and show
-summaries. Existing metadata/facts workers warm the shared home and artwork lookup
-after invalidating derived data. No new scheduler or dependency is required.
-
-Sign-in acknowledges the click immediately and prevents duplicate submissions.
-Loading feedback is retained until the request completes. These UI messages do
-not substitute for reducing the server work described above.
+Cache expiry remains action/revision based. Application/VERSION is unchanged.
+No tests or syntax checks were run for this change, as requested.

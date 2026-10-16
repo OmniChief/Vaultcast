@@ -13,9 +13,12 @@ final class Startup {
         }
         // Deleted, expired and unapproved accounts must never receive cached library data.
         $allowed = $user ? !empty($user['access_state']['active']) : (!$session && $guest);
+        $page = $allowed ? FirstPage::home($user ?: guest_user()) : ['home'=>null, 'refresh'=>false];
         return [
             'me' => ['ok'=>true, 'user'=>$user, 'authenticated'=>(bool)$user, 'guest_browsing'=>$guest],
-            'home' => $allowed ? Catalogue::cachedHome($user ?: guest_user()) : null,
+            'home' => $page['home'],
+            'refresh' => $page['refresh'],
+            'serverRendered' => true,
         ];
     }
 }

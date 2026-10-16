@@ -13108,18 +13108,71 @@ function viewCollectionDetail(){
     document.head.appendChild(sm);
   };
 
-  // The HTML response already authenticates this visitor and includes a warm home view.
-  document.body.classList.remove('boot');
-  if (window.__STREAM_TV__) document.body.classList.add('tv');
+  // Enhance actual first-response content without clearing it or waiting for /home.
+  function enhanceFirstPage(){
+    var initial = window.__STREAM_STARTUP__;
+    if (!initial || !initial.serverRendered) return bootApp();
+    if (!initial.home) {
+      state.view = state.user ? 'welcome' : 'login';
+      var form = document.getElementById('first-login');
+      if (form) form.addEventListener('submit', function(){
+        var button = form.querySelector('button[type="submit"]');
+        if (button) { button.disabled = true; button.textContent = 'Signing in…'; }
+      });
+      return;
+    }
+    state.home = initial.home;
+    state._guest = !state.user && !!initial.me.guest_browsing;
+    applyPrefs();
+    var root = $('#app');
+    root.addEventListener('click', function(event){
+      var link = event.target.closest && event.target.closest('a[data-first-nav]');
+      if (!link || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+      event.preventDefault();
+      var playId = link.getAttribute('data-first-play');
+      if (playId) {
+        var items = (state.home.continue_watching || []).slice();
+        (state.home.sections || []).forEach(function(section){ items = items.concat(section.items || []); });
+        var item = items.find(function(candidate){ return String(candidate.id) === playId; });
+        if (item) { playItem(item); return; }
+      }
+      history.pushState({}, '', link.href);
+      applyRoute().then(function(){
+        state._routed = true;
+        if (state.view === 'search' && state.searchQuery) runGlobalSearch(state.searchQuery);
+        else render();
+        replaceNav();
+        if (state._openGameItem) { var game = state._openGameItem; state._openGameItem = null; playItem(game); }
+      }).catch(function(){ location.href = link.href; });
+    });
+    if (R.relative(location.pathname, BASE) !== '' || /^#\//.test(location.hash)) {
+      return bootApp(); // Detail routes keep visible HTML underneath while their own data arrives.
+    }
+    state._routed = true;
+    replaceNav();
+    initial.home = null;
+    setTimeout(loadLiveTeaser, 0);
+    if (initial.refresh) {
+      api('/home').then(function(home){
+        if (!home.ok || String((state.user || {}).id || '') !== String((initial.me.user || {}).id || '') || accessGated()) return;
+        state.home = home;
+        var continueSlot = document.getElementById('first-continue');
+        if (state.view === 'home' && continueSlot) {
+          var continuing = cwOnePerShow(home.continue_watching || []);
+          var row = continuing.length ? rowEl('Continue watching', continuing.map(function(item){ return cardEl(item, item.progress); }), {meta:String(continuing.length)}) : null;
+          continueSlot.innerHTML = '';
+          if (row) continueSlot.appendChild(row);
+        }
+      }).catch(function(){ /* The server-rendered catalogue remains usable offline. */ });
+    }
+  }
   var initialMe = window.__STREAM_STARTUP__ && window.__STREAM_STARTUP__.me;
   var meP = (initialMe ? Promise.resolve(initialMe) : api('/me')).then(function(j){
     if (j.ok && j.user) state.user = j.user;
     if (j.ok && typeof j.pending_convert_count === 'number') updateConvertNotif(j.pending_convert_count);
     return j;
   }).catch(function(){ return null; });
-  bootApp();
-  meP.then(function(){
-    startConvertNotifPoll();
-  });
+  meP.then(enhanceFirstPage);
+  meP.then(function(){ startConvertNotifPoll(); });
   registerSW();
 })();

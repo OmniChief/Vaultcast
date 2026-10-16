@@ -2756,3 +2756,19 @@ html[data-client-mode="mobile"] .az-toggle { display: inline-flex; align-items: 
   border-radius: .35rem;
   background: linear-gradient(90deg, rgba(128,128,128,.16), rgba(128,128,128,.08));
 }
+
+/* First-response content uses the same navigation and card system as the enhanced app. */
+.first-sections { display:flex; gap:1.5rem; overflow:auto; padding:1rem var(--gutter, 28px); border-bottom:1px solid rgba(255,255,255,.08); }
+.first-sections a { color:var(--muted, #aeb9cd); white-space:nowrap; text-decoration:none; }
+.first-sections a:hover { color:var(--text, #fff); }
+.first-hero { padding:clamp(32px,6vw,80px) var(--gutter, 28px); background:radial-gradient(ellipse at 80% 0%,rgba(70,103,165,.22),transparent 70%); }
+.first-hero h1 { font-size:clamp(2rem,4vw,3.8rem); letter-spacing:-.04em; margin:.4em 0; }
+.first-hero p { color:var(--muted, #aeb9cd); }
+.first-card { display:block; color:inherit; text-decoration:none; }
+.first-card .poster { overflow:hidden; border-radius:inherit; }
+.first-card .poster img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+.first-card .ph { padding:14px; }
+.first-noscript { padding:1rem var(--gutter,28px); color:var(--muted,#aeb9cd); }
+#first-home .mode-tab { display:inline-flex; align-items:center; text-decoration:none; }
+#first-home .nav-right form { margin:0; }
+@media(max-width:640px) { #first-home .nav-right form { display:none; } .first-sections { gap:1rem; } }
