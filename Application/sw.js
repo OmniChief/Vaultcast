@@ -16,6 +16,14 @@ self.addEventListener('fetch', function(event){
   if (url.pathname.indexOf('/vendor/') >= 0) return;
   if (!/\.(?:js|css|png|svg|woff2?)$/.test(url.pathname)) return;
   event.respondWith(caches.open(CACHE).then(function(cache){
+    // Content-versioned assets are immutable for this app version.
+    if (url.searchParams.has('v')) return cache.match(event.request).then(function(hit){
+      if (hit) return hit;
+      return fetch(event.request).then(function(response){
+        if (response.ok) cache.put(event.request,response.clone());
+        return response;
+      });
+    });
     return fetch(event.request).then(function(response){
       if (response.ok) cache.put(event.request,response.clone());
       return response;

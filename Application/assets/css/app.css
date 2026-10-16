@@ -2741,3 +2741,11 @@ html[data-client-mode="mobile"] .az-toggle { display: inline-flex; align-items: 
 .folder-picker-error { color:var(--danger); margin:0; }
 .folder-picker-list { list-style:none; margin:0; padding:0; max-height:320px; overflow:auto; display:flex; flex-direction:column; gap:4px; }
 .folder-picker-list .btn { width:100%; text-align:left; }
+/* Cold-response placeholder. :empty releases the styling when status text arrives. */
+.pending-content:empty {
+  min-height: 1em;
+  width: min(28rem, 75%);
+  margin: 1rem 0;
+  border-radius: .35rem;
+  background: linear-gradient(90deg, rgba(128,128,128,.16), rgba(128,128,128,.08));
+}

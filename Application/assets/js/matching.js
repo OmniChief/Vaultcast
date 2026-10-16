@@ -80,7 +80,7 @@
 
   /* ------------------------------------------------------- settings entry */
   M.settingsKids = function(sec){
-    var host = h('div', { className: 'nsm-panel', id: 'nsm-panel-' + sec }, [ h('p', { className: 'muted', text: 'Loading…' }) ]);
+    var host = h('div', { className: 'nsm-panel', id: 'nsm-panel-' + sec }, [ h('p', { className: 'muted pending-content', role: 'status' }) ]);
     var kids;
     if (sec === 'ingest') {
       kids = [ h('h2', { text: 'Ingest inbox' }),
@@ -347,7 +347,7 @@
     var list = h('div', { className: 'nsm-show-list' });
     function load(){
       M.ui.matchQ = qIn.value; M.ui.matchFilter = filt.value;
-      clear(list).appendChild(h('p', { className: 'muted', text: 'Loading…' }));
+      clear(list).appendChild(h('p', { className: 'muted pending-content', role: 'status' }));
       api('/admin/match/shows?filter=' + encodeURIComponent(filt.value) + '&q=' + encodeURIComponent(qIn.value)).then(function(j){
         clear(list);
         if (!j.ok) return list.appendChild(h('p', { className: 'bad', text: j.error || 'Failed' }));
@@ -395,7 +395,7 @@
   }
 
   function renderShowEditor(host, showKey){
-    clear(host).appendChild(h('p', { className: 'muted', text: 'Loading show…' }));
+    clear(host).appendChild(h('p', { className: 'muted pending-content', role: 'status' }));
     api('/admin/match/show/' + showKey).then(function(j){
       clear(host);
       if (!j.ok) { host.appendChild(h('p', { className: 'bad', text: j.error || 'Show not found' })); host.appendChild(h('button', { className: 'btn', text: '← All shows', onClick: function(){ renderMatching(host); } })); return; }
@@ -650,7 +650,7 @@
     host.appendChild(h('div', { className: 'tabs' }, ['open', 'resolved', 'dismissed', 'all'].map(function(s){
       return h('button', { type: 'button', className: s === st ? 'active' : '', text: s.charAt(0).toUpperCase() + s.slice(1), onClick: function(){ M.ui.repStatus = s; renderReports(host); } });
     })));
-    var list = h('div', {}, [ h('p', { className: 'muted', text: 'Loading…' }) ]);
+    var list = h('div', {}, [ h('p', { className: 'muted pending-content', role: 'status' }) ]);
     host.appendChild(list);
     api('/admin/reports?status=' + st).then(function(j){
       clear(list);
@@ -708,7 +708,7 @@
     if (r.kind === 'movie' || cur.type === 'movies' || cur.type === 'movie') {
       return movieFixForm(host, r.item_id, cur, function(label){ setReport(r.id, { status: 'resolved', resolution: 'Now: ' + label }, listHost); });
     }
-    host.appendChild(h('p', { className: 'muted', text: 'Loading show guide…' }));
+    host.appendChild(h('p', { className: 'muted pending-content', role: 'status' }));
     if (!r.show_key) { clear(host).appendChild(h('p', { className: 'bad', text: 'Episode has no show key' })); return; }
     api('/admin/match/show/' + r.show_key).then(function(j){
       clear(host);

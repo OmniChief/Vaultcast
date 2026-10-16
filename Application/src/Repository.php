@@ -47,7 +47,8 @@ final class Repository
         if (@file_put_contents($tmp, $body) === false) return;
         // rename() replaces atomically on Linux and Windows (MoveFileEx) in PHP 7.4+.
         if (!@rename($tmp, $f)) @unlink($tmp);
-        if (random_int(1, 200) === 1) self::cacheSweep($dir);
+        // Directory cleanup belongs to maintenance, never a random browsing request.
+        if (PHP_SAPI === 'cli' && random_int(1, 200) === 1) self::cacheSweep($dir);
     }
 
     /** Remove every cache entry. @return int files deleted */

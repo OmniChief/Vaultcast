@@ -1259,6 +1259,7 @@ class Catalogue {
     private static function buildSectionShows(string $sectionId): array {
         $items = self::sectionItems($sectionId);
         $groups = [];
+        $byId = array_column($items, null, 'id');
         foreach ($items as $it) {
             /* do not enrichItemArt per episode (is_file + poster disk walks × thousands). Art resolved once per show below. */
             $name = $it['show'] ?? '';
@@ -1305,10 +1306,7 @@ class Catalogue {
             /* one art enrich per show (not per episode). */
             if ((!empty($g['episodes'][0])) && class_exists('Posters')) {
                 $sampleId = $g['episodes'][0];
-                $sample = null;
-                foreach ($items as $cand) {
-                    if (($cand['id'] ?? '') === $sampleId) { $sample = $cand; break; }
-                }
+                $sample = $byId[$sampleId] ?? null;
                 if (is_array($sample)) {
                     $sample = self::enrichItemArt($sample);
                     if (!empty($sample['show_poster'])) $g['local_poster'] = $sample['show_poster'];
@@ -1447,7 +1445,9 @@ class Catalogue {
     }
 
     private static function showDetail(string $sectionId, string $showName, array $meta): array {
-        $items = self::sectionItems($sectionId);
+        // The section_show index narrows this to one show; retain orphan-folder fallback.
+        $items = \Vaultcast\Repository::rows("SELECT payload FROM vaultcast_items WHERE section_id=? AND (show_title=? OR show_title='') ORDER BY title,id", [$sectionId, $showName]);
+        MediaFacts::preload($items);
         $available = []; // "S{s}E{e}" => public item
         $unnumbered = [];
         foreach ($items as $it) {
@@ -1771,7 +1771,7 @@ class Catalogue {
             $items = array_map(function ($s) { return self::publicShow($s); }, $raw);
             $kind = 'shows';
         } else {
-            $items = array_map(function ($it) { return self::publicItem($it, false); }, $raw);
+            $items = self::publicItems($raw);
             $kind = 'items';
         }
         $out = ['ok' => true, 'kind' => $kind, 'items' => $items, 'cached' => false];
@@ -1922,7 +1922,7 @@ class Catalogue {
                 /* Prefer stored show_count — never rebuild sectionShows just for a number. */
                 $browseCount = $sec['show_count'] ?? count($rand);
             } else {
-                $items = array_map(function ($it) { return self::publicItem($it, false); }, $rand);
+                $items = self::publicItems($rand);
                 $browseCount = $sec['count'];
             }
             $sections[] = [
@@ -2106,6 +2106,11 @@ class Catalogue {
             $continue[] = $pub;
         }
         return $continue;
+    }
+
+    public static function publicItems(array $items): array {
+        MediaFacts::preload($items);
+        return array_map(function ($it) { return self::publicItem($it, false); }, $items);
     }
 
     public static function publicItem(array $it, bool $checkPosterFiles = true): array {
@@ -2402,6 +2407,10 @@ class Catalogue {
         $facts = MediaFacts::get($it);
         $pub['file_exists'] = $path !== '' && (!$facts || !empty($facts['present']));
         $pub['path'] = $path; // admin/detail may need for diagnose; public UI can hide
+        $audio = MediaFacts::audio($it);
+        $pub['audio_tracks'] = $audio['audio_tracks'] ?? [];
+        $pub['audio_count'] = $audio['audio_count'] ?? 0;
+        $pub['multi_audio'] = !empty($audio['multi_audio']);
         if (!empty($_GET['probe']) || !empty($_GET['audio'])) {
             $probe = MediaProbe::probeSummary($path);
             $pub['audio_tracks'] = $probe['audio_tracks'] ?? [];
@@ -2450,6 +2459,7 @@ class Catalogue {
         $ql = strtolower($q);
         $cat = \Vaultcast\Repository::document('catalogue', ['sections' => []]);
         $cat['items'] = \Vaultcast\Repository::searchItems($q);
+        MediaFacts::preload($cat['items']);
         $hits = [];
         $seenShows = [];
         foreach ($cat['sections'] ?? [] as $sec) {

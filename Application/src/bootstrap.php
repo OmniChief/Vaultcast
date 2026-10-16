@@ -62,5 +62,5 @@ spl_autoload_register(function (string $class): void {
 
 require_once __DIR__ . '/Http/helpers.php';
 
-// Apply pending storage migrations once per version (cheap stamp-file check per request).
+// Apply pending storage migrations once per schema version (durable stamp check).
 Migrations::runIfNeeded();

@@ -4,6 +4,7 @@ declare(strict_types=1);
 class Store {
     private static $cache = [];
     private static $revisions = [];
+    private static $settings;
     public static function get(string $name, $default = null) {
         if (PHP_SAPI !== 'cli' && array_key_exists($name, self::$cache)) return self::$cache[$name];
         $revision = self::revision($name);
@@ -24,12 +25,14 @@ class Store {
         return self::$revisions[$name] = \Vaultcast\Repository::revision($name);
     }
     public static function invalidate(string $name = null): void {
+        if ($name === null || $name === 'settings') self::$settings = null;
         if ($name === null) { self::$cache = []; self::$revisions = []; }
         else { unset(self::$cache[$name], self::$revisions[$name]); }
     }
     public static function settings(): array {
+        if (PHP_SAPI !== 'cli' && self::$settings !== null) return self::$settings;
         $settings = self::get('settings', []);
-        return self::managedMediaAccel(self::managedTransmission(self::normalizeFeatures(is_array($settings) ? $settings : [])));
+        return self::$settings = self::managedMediaAccel(self::managedTransmission(self::normalizeFeatures(is_array($settings) ? $settings : [])));
     }
     /**
      * The Windows installer writes the nginx config. From the version that ships the internal

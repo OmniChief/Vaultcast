@@ -558,6 +558,13 @@
     (kids||[]).forEach(function(c){ if (c == null) return; el.appendChild(typeof c === 'string' ? document.createTextNode(c) : c); });
     return el;
   }
+  // The shape reserves space on a cold request; real content replaces it before paint on cache hits.
+  function pendingContent(attrs){
+    attrs = Object.assign({}, attrs || {});
+    attrs.className = (attrs.className || '') + ' pending-content';
+    attrs.role = 'status';
+    return h('p', attrs);
+  }
   function toast(msg, opts){
     opts = opts || {};
     var t = $('#toast');
@@ -733,7 +740,20 @@ function confirmDialog(message, opts){
       fetch(API + '/progress', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: body, keepalive: true }).catch(function(){});
     } catch (eF) {}
   }
+  var navigationCache = window.createRequestCache();
   function api(path, opts){
+    opts = opts || {};
+    var method = String(opts.method || 'GET').toUpperCase();
+    if (method !== 'GET') {
+      navigationCache.clear();
+      return apiRequest(path, opts).then(function(j){ navigationCache.clear(); return j; }, function(error){ navigationCache.clear(); throw error; });
+    }
+    var cacheable = method === 'GET' && !opts.signal && /^(?:\/home$|\/sections(?:$|\/)|\/shows\/[a-f0-9]+$|\/items\/[a-f0-9]+(?:\?synopsis=[01])?$|\/collections(?:$|\/)|\/resolve\?)/.test(path);
+    if (!cacheable) return apiRequest(path, opts);
+    var userKey = state.user ? state.user.id : 'guest';
+    return navigationCache.read(userKey + ':' + path, function(){ return apiRequest(path, opts); });
+  }
+  function apiRequest(path, opts){
     opts = opts || {};
     var headers = opts.headers || {};
     if (opts.body && typeof opts.body === 'object' && !(opts.body instanceof FormData)) {
@@ -745,6 +765,7 @@ function confirmDialog(message, opts){
     return fetch(API + path, fetchOpts)
       .then(function(r){
         return r.json().catch(function(){ return { ok:false, error:'Bad JSON' }; }).then(function(j){
+          if (r.status === 401 || r.status === 403) navigationCache.clear();
           if (r.status === 401) {
             state.user = null;
             if (state.view === 'admin' || state._wantAdmin) {
@@ -1044,7 +1065,8 @@ function confirmDialog(message, opts){
       function startNet(){
         if (startedNet || finished) return;
         startedNet = true;
-        var allowFetch = el.getAttribute('data-poster-fetch') === '1';
+        // Remote discovery belongs to the metadata maintenance worker.
+        var allowFetch = false;
         var url = posterServerUrl(itemId, kind, !!allowFetch, variant);
         function attempt(retry){
           fetchPosterServer(url, allowFetch ? 5000 : 4000).then(function(res){
@@ -2937,7 +2959,7 @@ function confirmDialog(message, opts){
       if (!append) {
         more.hidden = true;
         grid.innerHTML = '';
-        grid.appendChild(h('p', { className:'muted', text:'Loading…' }));
+        grid.appendChild(pendingContent({ className:'muted', }));
       }
       api('/lobby/multiplayer?per=60&page=' + nextPage + '&q=' + encodeURIComponent(activeQuery)).then(function(j){
         if (ticket !== requestId || !overlay.parentNode) return;
@@ -3030,7 +3052,7 @@ function confirmDialog(message, opts){
       ])
     ]));
     wrap.appendChild(h('div', { id:'lobby-session-list', className:'lobby-session-list' }, [
-      h('p', { className:'muted', text:'Loading sessions…' })
+      pendingContent({ className:'muted', })
     ]));
     wrap.appendChild(h('div', { className:'lobby-footnote muted' }, [
       h('p', { text:'Keep the host game open while others join. Each guest controls their assigned player using their normal Player 1 controls. Everyone needs the same game, emulator core and core settings. If the host leaves, start a new session from Lobby.' })
@@ -3065,7 +3087,7 @@ function confirmDialog(message, opts){
     _emuLoading = true;
     wrapEmuAudioContext();
     root.innerHTML = '';
-    root.appendChild(h('p', { className:'muted', id:'emu-status', text:'Loading Emulator.js...' }));
+    root.appendChild(pendingContent({ className:'muted', id:'emu-status', }));
     try {
       root.style.cssText = 'position:absolute;top:0;left:0;right:0;bottom:0;width:100%;height:100%;margin:0;padding:0;background:#000;z-index:1;';
     } catch (eR) {}
@@ -3118,7 +3140,7 @@ function confirmDialog(message, opts){
         window.EJS_externalFiles = extFiles;
         try {
           var st = document.getElementById('emu-status');
-          if (st) st.textContent = 'Loading Emulator.js + disc image (large download)…';
+          if (st) st.textContent = 'Preparing Emulator.js + disc image (large download)…';
         } catch (eSt2) {}
       }
       window.EJS_pathtodata = dataPath;
@@ -3792,7 +3814,7 @@ try {
     toast('Picking a game\u2026', { ms: 1200 });
     api('/sections/' + encodeURIComponent(rs.id) + '/items?per=1&page=' + page).then(function(j){
       var it = j && (j.items || [])[0];
-      if (it) { toast('Loading ' + (it.title || 'game') + (it.system ? ' \u00b7 ' + it.system : ''), { ms: 2200 }); playItem(it); }
+      if (it) { toast('Starting ' + (it.title || 'game') + (it.system ? ' \u00b7 ' + it.system : ''), { ms: 2200 }); playItem(it); }
       else toast('No game found, try again');
     }).catch(function(e){ toast(String(e), { kind:'bad' }); });
   }
@@ -3803,7 +3825,7 @@ try {
     var rs = romsSection();
     if (!rs) return shell(h('div', { className:'panel' }, [ emptyState('No games library', 'Add a ROMs library under Admin → Libraries, then scan.') ]));
     state.section = rs.id; state.sectionType = 'roms'; state.sectionLabel = rs.label;
-    var wrap = h('div', { id:'section-view', className:'play-view' }, [ sectionHeroEl(rs.id, 'Loading…') ]);
+    var wrap = h('div', { id:'section-view', className:'play-view' }, [ sectionHeroEl(rs.id, '') ]);
     setTimeout(function(){ loadSection(rs.id, state.sectionQ || ''); }, 0);
     return shell(wrap);
   }
@@ -4108,7 +4130,7 @@ try {
   function viewLive(){
     var wrap = h('div', { id:'live-view', className:'live-view' }, [
       h('section', { className:'live-hero skeleton', id:'live-top' }, [
-        h('div', { className:'live-hero-copy' }, [ h('div', { className:'eyebrow', text:'Watch Live' }), h('h1', { text:'Tuning in\u2026' }), h('p', { className:'muted', text:'Loading Relay channels, IPTV favourites and the guide.' }) ])
+        h('div', { className:'live-hero-copy' }, [ h('div', { className:'eyebrow', text:'Watch Live' }), h('h1', { text:'Tuning in\u2026' }), pendingContent({ className:'muted', }) ])
       ])
     ]);
     setTimeout(function(){ loadLive(false); }, 0);
@@ -4954,13 +4976,13 @@ try {
 
   function viewSection(){
     state.sectionLetter = state.sectionLetter || '';
-    var wrap = h('div', { id:'section-view' }, [ h('div', { className:'hero' }, [ h('h1', { text: state.sectionLabel || state.section }), h('p', { className:'muted', text:'Loading…' }) ]) ]);
+    var wrap = h('div', { id:'section-view' }, [ h('div', { className:'hero' }, [ h('h1', { text: state.sectionLabel || state.section }), pendingContent({ className:'muted', }) ]) ]);
     loadSection(state.section, state.sectionQ || '');
     return shell(wrap);
   }
 
   function viewShow(){
-    var wrap = h('div', { id:'show-view' }, [ h('div', { className:'hero' }, [ h('h1', { text:'Loading…' }) ]) ]);
+    var wrap = h('div', { id:'show-view' }, [ h('div', { className:'hero' }, [ h('h1', { text:'TV show' }), pendingContent() ]) ]);
     loadShow(state.showKey);
     return shell(wrap);
   }
@@ -4984,7 +5006,7 @@ try {
   var _movieLoadSeq = 0;
 
   function viewMovie(){
-    var wrap = h('div', { id:'movie-view' }, [ h('div', { className:'hero' }, [ h('h1', { text:'Loading…' }) ]) ]);
+    var wrap = h('div', { id:'movie-view' }, [ h('div', { className:'hero' }, [ h('h1', { text:'Movie' }), pendingContent() ]) ]);
     loadMovie(state.movieId);
     return shell(wrap);
   }
@@ -5036,8 +5058,8 @@ try {
       if (item.file_exists === false) {
         actions.push(h('span', { className:'bad', text:'File missing on disk' }));
       }
-      // Probe is optional enrichment — never blocks the detail paint.
-      api('/items/'+encodeURIComponent(item.id)+'/probe').then(function(pr){
+      // Audio metadata was prepared by the facts worker; opening a page never probes media.
+      Promise.resolve(item).then(function(pr){
         if (!stillHere() || !pr || !pr.multi_audio) return;
         var box = $('#movie-audio-box');
         if (!box) return;
@@ -5057,7 +5079,7 @@ try {
       var meta = [item.year, item.ext, item.size ? fmtSize(item.size) : null, item.synopsis_source].filter(Boolean);
       var synopsisEl = item.synopsis
         ? h('p', { className:'synopsis', id:'movie-synopsis', text: item.synopsis })
-        : h('p', { className:'muted', id:'movie-synopsis', text: item.synopsis_pending ? '' : 'No synopsis cached yet.' });
+        : h('p', { className:'muted', id:'movie-synopsis', text: 'No synopsis cached yet.' });
       root.appendChild(h('div', { className:'hero detail-hero', 'data-backdrop-host':'1', style:'display:flex;gap:20px;align-items:flex-end;flex-wrap:wrap' }, [
         poster,
         h('div', { style:'flex:1;min-width:200px' }, [
@@ -5075,29 +5097,6 @@ try {
       }
       root.appendChild(h('div', { id:'movie-collections' }));
       mountMovieCollections(item.id);
-      // Fill synopsis after paint. Deferred so the hero poster fetch (also remote)
-      // gets the single Windows php-cgi worker first; aborted when the user leaves.
-      if (item.synopsis_pending) {
-        setTimeout(function(){
-          if (!stillHere()) return;
-          api('/items/'+encodeURIComponent(item.id)+'/synopsis').then(function(sy){
-            if (!stillHere() || !sy || !sy.ok) return;
-            var el = $('#movie-synopsis');
-            if (!el) return;
-            if (sy.synopsis) {
-              el.className = 'synopsis';
-              el.textContent = sy.synopsis;
-            } else {
-              el.className = 'muted';
-              el.textContent = 'No synopsis cached yet.';
-            }
-          }).catch(function(){
-            if (!stillHere()) return;
-            var el = $('#movie-synopsis');
-            if (el && !el.textContent) { el.className = 'muted'; el.textContent = 'No synopsis cached yet.'; }
-          });
-        }, 400);
-      }
     }).catch(function(e){
       paintError(String(e && e.message || e || 'Could not load movie'));
     });
@@ -5236,7 +5235,7 @@ try {
         h('div', { className:'billboard-copy' }, [
           h('div', { className:'eyebrow', text: title }),
           h('h1', { text: state.sectionLabel || id }),
-          h('p', { className:'muted', text: 'Loading showcase\u2026' })
+          pendingContent({ className:'muted', })
         ])
       ])
     ]));
@@ -5567,6 +5566,7 @@ try {
     loadSection(id, state.sectionQ || '', { system: state.sectionSystem });
   }
 
+  var _sectionLoadSeq = 0;
   function loadSection(id, q, opts){
     opts = opts || {};
     var append = !!opts.append;
@@ -5588,7 +5588,8 @@ try {
     if (!asShows && state.sectionSystem) path += '&system=' + encodeURIComponent(state.sectionSystem);
     path = appendSectionFilterParams(path);
     if (append) state.sectionLoadingMore = true;
-    var cacheKey = 'ns_browse_v1:' + path;
+    var seq = ++_sectionLoadSeq;
+    function stillHere(){ return seq === _sectionLoadSeq && state.section === id && (state.view === 'section' || state.view === 'play'); }
 
     function paintSectionPayload(j){
       state.sectionLoadingMore = false;
@@ -5670,7 +5671,7 @@ try {
           hasMore ? h('button', {
             className:'btn primary load-more-btn',
             id:'section-load-more',
-            text: state.sectionLoadingMore ? 'Loading…' : 'Load more',
+            text: state.sectionLoadingMore ? 'Please wait…' : 'Load more',
             onClick: function(){
               if (state.sectionLoadingMore) return;
               state.sectionPage = (state.sectionPage||1) + 1;
@@ -5683,19 +5684,8 @@ try {
       setupSectionInfiniteScroll(id);
     }
 
-    /* instant paint from sessionStorage while network refreshes */
-    try {
-      if (!append) {
-        var cachedRaw = sessionStorage.getItem(cacheKey);
-        if (cachedRaw) {
-          var cachedJ = JSON.parse(cachedRaw);
-          if (cachedJ && cachedJ.ok) paintSectionPayload(cachedJ);
-        }
-      }
-    } catch (eCache) {}
-
     api(path).then(function(j){
-      try { if (j && j.ok && !append) sessionStorage.setItem(cacheKey, JSON.stringify(j)); } catch (eSet) {}
+      if (!stillHere()) return;
       if (!j || !j.ok) {
         state.sectionLoadingMore = false;
         if (!append) {
@@ -5714,6 +5704,7 @@ try {
       }
       paintSectionPayload(j);
     }).catch(function(e){
+      if (!stillHere()) return;
       state.sectionLoadingMore = false;
       if (!append) {
         var root = $('#section-view');
@@ -6213,7 +6204,7 @@ try {
       ])
     ];
     if (state.searchBusy && !(res.catalogue||[]).length) {
-      kids.push(h('p', { className:'muted', style:'padding:0 20px', text:'Loading catalogue results…' }));
+      kids.push(pendingContent({ className:'muted', style:'padding:0 20px', }));
     } else if (!(res.catalogue||[]).length) {
       kids.push(emptyState(
         q ? 'No catalogue matches' : 'Type a title to search',
@@ -6521,14 +6512,14 @@ try {
       bodyKids = [
         h('h2', { text: 'server & processes' }),
         h('p', { className: 'muted', text: 'Resource usage, service restarts, process manager, and reboot. Admin only.' }),
-        h('div', { id: 'system-panel', className: 'system-panel' }, [ h('p', { className:'muted', text:'Loading system status…' }) ])
+        h('div', { id: 'system-panel', className: 'system-panel' }, [ pendingContent({ className:'muted', }) ])
       ];
       setTimeout(loadSystemPanel, 0);
     } else if (sec === 'players') {
       bodyKids = [
         h('h2', {text:'Player files'}),
         h('p', {className:'muted',text:'Choose whether browsers load EmulatorJS and HLS.js from their CDNs or from this server. Server storage includes all emulator cores. Games and BIOS files stay in your library.'}),
-        h('div', {id:'player-assets-panel',className:'settings-card'}, [h('p',{text:'Loading…'})])
+        h('div', {id:'player-assets-panel',className:'settings-card'}, [pendingContent({})])
       ];
       setTimeout(renderPlayerAssets, 0);
     } else if (sec === 'diagnostics') {
@@ -6539,7 +6530,7 @@ try {
           h('button', { className: 'btn', text: 'Refresh list', onClick: loadDiagList }),
           h('button', { className: 'btn ghost', text: 'Run all', onClick: runDiag })
         ]),
-        h('div', { id: 'diag-out', className: 'settings-card' }, [ h('p', { className: 'muted', text: 'Loading tests…' }) ])
+        h('div', { id: 'diag-out', className: 'settings-card' }, [ pendingContent({ className: 'muted', }) ])
       ];
       setTimeout(loadDiagList, 0);
     } else if (sec === 'ingest' || sec === 'matching' || sec === 'reports') {
@@ -6547,21 +6538,21 @@ try {
       if (!window.NSMatch && window.__nsEnsureMatching) {
         window.__nsEnsureMatching(function(){ if (state.view === 'settings') render(); });
       }
-      bodyKids = window.NSMatch ? window.NSMatch.settingsKids(sec) : [ h('h2', { text: 'Matching' }), h('p', { className: 'muted', text: 'Loading…' }) ];
+      bodyKids = window.NSMatch ? window.NSMatch.settingsKids(sec) : [ h('h2', { text: 'Matching' }), pendingContent({ className: 'muted', }) ];
     } else if (sec === 'live' || sec.indexOf('live-') === 0) {
       bodyKids = liveNativeSettingsKids(sec);
     } else if (sec === 'poster-optimise') {
       bodyKids = [
         h('h2', { text: 'Poster optimisation' }),
         h('p', { className: 'muted', text: 'Build three versions of each poster: original JPG/PNG, same-resolution WebP, and a smaller WebP thumbnail for library grids. Detail pages use full WebP; browsers without WebP fall back to the original.' }),
-        h('div', { id: 'poster-optimise-panel', className: 'convert-admin po-admin' }, [ h('p', { className:'muted', text:'Loading…' }) ])
+        h('div', { id: 'poster-optimise-panel', className: 'convert-admin po-admin' }, [ pendingContent({ className:'muted', }) ])
       ];
       setTimeout(function(){ renderPosterOptimisePanel(); }, 0);
     } else if (sec === 'optimise-system') {
       bodyKids = [
         h('h2', { text: 'System optimisation' }),
         h('p', { className: 'muted', text: 'Safe, portable cache tools for faster browsing. Manage generated files without changing your media.' }),
-        h('div', { id: 'optimise-system-panel', className: 'convert-admin po-admin' }, [ h('p', { className:'muted', text:'Loading…' }) ])
+        h('div', { id: 'optimise-system-panel', className: 'convert-admin po-admin' }, [ pendingContent({ className:'muted', }) ])
       ];
       setTimeout(function(){ renderOptimiseSystemPanel(); }, 0);
     } else {
@@ -6576,7 +6567,7 @@ try {
           acquisition: 'Acquisition', general: 'General', users: 'Users', advanced: 'Advanced'
         })[sec] || sec }),
         h('div', { id: 'admin-body', className: 'tab-panel active settings-admin-body' }, [
-          h('p', { className: 'muted', text: 'Loading settings…' })
+          pendingContent({ className: 'muted', })
         ])
       ];
       setTimeout(fillAdmin, 0);
@@ -6621,7 +6612,7 @@ try {
     var host = $('#system-panel');
     if (!host) return;
     host.innerHTML = '';
-    host.appendChild(h('p', { className:'muted', text:'Loading…' }));
+    host.appendChild(pendingContent({ className:'muted', }));
     Promise.all([
       api('/admin/system/status'),
       api('/admin/system/processes?limit=60'),
@@ -6872,7 +6863,7 @@ try {
           }))
         ]);
       })),
-      h('div', { id:'admin-body', className:'tab-panel active' }, [ h('p', { className:'muted', text:'Loading settings…' }) ])
+      h('div', { id:'admin-body', className:'tab-panel active' }, [ pendingContent({ className:'muted', }) ])
     ]);
     // async fill
     setTimeout(fillAdmin, 0);
@@ -6994,7 +6985,7 @@ try {
               });
             }})
           ]),
-          h('div', { id:'admin_queue_panel', className:'tx-panel' }, [ h('p', { className:'muted', text:'Loading…' }) ])
+          h('div', { id:'admin_queue_panel', className:'tx-panel' }, [ pendingContent({ className:'muted', }) ])
         ]));
         function removeDownloadItem(body, btn){
           var deleting = !!body.delete_local_data;
@@ -7346,7 +7337,7 @@ try {
   }
   function refreshPosterCoverage(){
     var summary = $('#poster_cov_summary');
-    if (summary) summary.textContent = 'Loading coverage…';
+    if (summary) summary.textContent = 'Checking coverage…';
     return api('/admin/posters/status').then(function(r){
       paintPosterCoverage(r);
       return r;
@@ -7510,7 +7501,7 @@ try {
     ]));
     wrap.appendChild(h('div', { className:'settings-card stack' }, [
       h('h3', { className:'admin-section-title', text:'Coverage' }),
-      h('p', { id:'poster_cov_summary', className:'muted', text:'Loading coverage…' }),
+      pendingContent({ id:'poster_cov_summary', className:'muted', }),
       h('div', { id:'poster_cov_grid', className:'poster-cov-grid' }),
       h('h4', { text:'Missing sample' }),
       h('pre', { id:'poster_miss_sample', className:'muted poster-miss-sample', text:'…' }),
@@ -7545,7 +7536,7 @@ try {
     var panel = h('div', { className:'folder-picker', hidden:true });
     function load(path){
       panel.innerHTML = '';
-      panel.appendChild(h('p', { className:'muted', text:'Loading folders…' }));
+      panel.appendChild(pendingContent({ className:'muted', }));
       api('/admin/folders?path='+encodeURIComponent(path||'')).then(function(r){
         panel.innerHTML = '';
         var here = r.path || '';
@@ -7794,7 +7785,7 @@ try {
     var editor = $('#orphan_editor'); if (!editor) return;
     editor.style.display = '';
     editor.innerHTML = '';
-    editor.appendChild(h('p', { className:'muted', text:'Loading suggestion…' }));
+    editor.appendChild(pendingContent({ className:'muted', }));
     api('/admin/library/suggest', { method:'POST', body:{ path: o.path } }).then(function(r){
       editor.innerHTML = '';
       if (!r.ok) { editor.appendChild(h('p', { text: r.error||'Suggest failed' })); return; }
@@ -8274,7 +8265,7 @@ try {
       h('div', { className:'cv-glass-head' }, [
         h('h3', { className:'admin-section-title', text:'Batch poster WebP' }),
         h('p', { className:'muted', text:'Library grids load thumb WebP; movie/TV detail uses main WebP (quality + max width). Original JPG/PNG always kept as fallback.' }),
-        h('p', { id:'po-summary', className:'muted', text:'Loading summary…' })
+        pendingContent({ id:'po-summary', className:'muted', })
       ]),
             h('div', { className:'po-webp-settings cv-section', style:'margin:8px 0 12px' }, [
         h('h4', { className:'admin-section-title', text:'WebP conversion settings', style:'margin:0 0 6px;font-size:15px' }),
@@ -8389,7 +8380,7 @@ h('div', { className:'cv-find-bar' }, [
     var host = $('#optimise-system-panel');
     if (!host) return;
     host.innerHTML = '';
-    host.appendChild(h('p', { className:'muted', text:'Loading cache status…' }));
+    host.appendChild(pendingContent({ className:'muted', }));
 
     function paint(st){
       host.innerHTML = '';
@@ -9606,7 +9597,7 @@ h('div', { className:'cv-find-bar' }, [
         h('section', { className:'cv-section settings-card cv-batch-section' }, [
           h('h3', { className:'admin-section-title', text:'Batch video converter' }),
           h('p', { className:'muted', text:'Glass queue + Find all for DirectPlay gaps (real H.264/AAC). Restrict to Movies / TV / Anime — games are never scanned. Results stream in live; Stop keeps what was found. TV series stay in accordions.' }),
-          h('div', { id:'cv_batch_list', className:'cv-batch-list cv-glass-wrap' }, [ h('p', { className:'muted', text:'Loading batch\u2026' }) ]),
+          h('div', { id:'cv_batch_list', className:'cv-batch-list cv-glass-wrap' }, [ pendingContent({ className:'muted', }) ]),
           h('div', { className:'row-actions' }, [
             h('button', { className:'btn', text:'Refresh queue', onClick: function(){ refreshConvertAdmin(); } }),
             h('button', { className:'btn ghost', text:'Clear finished', onClick: function(){
@@ -9817,7 +9808,7 @@ h('div', { className:'cv-find-bar' }, [
 
   function mmLoadCatalogue(){
     var status = $('#mm_status'); var list = $('#mm_list');
-    if (status) status.textContent = 'Loading…';
+    if (status) status.textContent = 'Please wait…';
     if (list) list.innerHTML = '';
     var mmMode = (state.mm&&state.mm.mode)||'auto';
     var mmNoPoster = (mmMode==='items_noposter'||mmMode==='shows_noposter') ? '1' : '';
@@ -10024,7 +10015,7 @@ h('div', { className:'cv-find-bar' }, [
   function mmBrowseFiles(path){
     var list = $('#mm_files'); var pathEl = $('#mm_files_path');
     if (pathEl) pathEl.textContent = path || '(roots)';
-    if (list) { list.innerHTML=''; list.appendChild(h('p', { className:'muted', text:'Loading…' })); }
+    if (list) { list.innerHTML=''; list.appendChild(pendingContent({ className:'muted', })); }
     apiAbortable('/admin/media/files?path='+encodeURIComponent(path||''), {}, 'mm_files').then(function(r){
       if (!list) return;
       list.innerHTML = '';
@@ -10255,7 +10246,7 @@ h('div', { className:'cv-find-bar' }, [
         h('p', { className:'muted', text:'Film series & show groups — tap a poster to expand its titles' }),
         (state.user && state.user.role === 'admin') ? findCollectionsPanel(function(){ if (state.view === 'collections') render(); }) : null
       ]),
-      h('div', { id:'pub_col_list', className:'collections-grid' }, [ h('p', { className:'muted', text:'Loading…' }) ])
+      h('div', { id:'pub_col_list', className:'collections-grid' }, [ pendingContent({ className:'muted', }) ])
     ]);
     api('/collections').then(function(r){
       var list = $('#pub_col_list'); if (!list) return;
@@ -10293,7 +10284,7 @@ h('div', { className:'cv-find-bar' }, [
       }
       function fillExpand(panel, col){
         panel.innerHTML = '';
-        panel.appendChild(h('p', { className:'muted', text:'Loading titles…' }));
+        panel.appendChild(pendingContent({ className:'muted', }));
         api('/collections/'+col.id).then(function(st){
           if (!panel.isConnected || openId !== col.id) return;
           panel.innerHTML = '';
@@ -10430,7 +10421,7 @@ h('div', { className:'cv-find-bar' }, [
   }
 
 function viewCollectionDetail(){
-    var wrap = h('div', { className:'panel', id:'col_detail' }, [ h('p', { className:'muted', text:'Loading…' }) ]);
+    var wrap = h('div', { className:'panel', id:'col_detail' }, [ pendingContent({ className:'muted', }) ]);
     api('/collections/'+state.collectionId).then(function(st){
       var root = $('#col_detail'); if (!root) return;
       root.innerHTML = '';
@@ -10925,7 +10916,7 @@ function viewCollectionDetail(){
       })),
       h('p', { id: 'live-native-status', className: 'muted live-native-status' + (liveSet.statusBad ? ' bad' : ''), text: liveSet.status || '' }),
       h('div', { id: 'live-native-panel', className: 'live-native-panel' }, [
-        h('p', { className: 'muted', text: 'Loading\u2026' })
+        pendingContent({ className: 'muted', })
       ])
     ];
   }
@@ -10935,7 +10926,7 @@ function viewCollectionDetail(){
     if (!host) return;
     if (sec === 'live') sec = 'live-channels';
     host.innerHTML = '';
-    host.appendChild(h('p', { className: 'muted', text: 'Loading\u2026' }));
+    host.appendChild(pendingContent({ className: 'muted', }));
     /* unsaved Relay edits survive moving between sections; otherwise always reload from the server */
     var p;
     if (sec === 'live-studio') { paintTvStudio(host); return; }
@@ -10995,7 +10986,7 @@ function viewCollectionDetail(){
   }
   function paintTvStudio(host){
     host.innerHTML = '';
-    host.appendChild(h('p', { className:'muted', text:'Loading TV Studio\u2026' }));
+    host.appendChild(pendingContent({ className:'muted', }));
     (tvs.data && tvs.dirty ? Promise.resolve() : tvsLoad()).then(function(){ tvsPaint(); }).catch(function(e){
       host.innerHTML = ''; host.appendChild(h('p', { className:'bad', text:String(e.message || e) }));
     });
@@ -11226,7 +11217,7 @@ function viewCollectionDetail(){
     return pane;
   }
   function tvsPreview(body){
-    var card = h('div', { className:'settings-card tvs-preview' }, [ h('h3', { text:'Next 12 hours (saved schedule)' }), h('p', { className:'muted', text:'Loading\u2026' }) ]);
+    var card = h('div', { className:'settings-card tvs-preview' }, [ h('h3', { text:'Next 12 hours (saved schedule)' }), pendingContent({ className:'muted', }) ]);
     body.appendChild(card);
     tvsApi('tv_preview', { query:'?channel=' + encodeURIComponent(tvs.channelId) + '&hours=12' }).then(function(j){
       card.lastChild.remove();
@@ -11357,7 +11348,7 @@ function viewCollectionDetail(){
 
   /* ---- status ---- */
   function tvsPaintHealth(body){
-    var card = h('div', { className:'settings-card' }, [ h('h3', { text:'Stream status' }), h('p', { className:'muted', text:'Loading\u2026' }) ]);
+    var card = h('div', { className:'settings-card' }, [ h('h3', { text:'Stream status' }), pendingContent({ className:'muted', }) ]);
     body.appendChild(card);
     tvsApi('tv_health').then(function(j){
       card.lastChild.remove();
@@ -12579,7 +12570,7 @@ function viewCollectionDetail(){
         }})
       ]),
       h('p', { className: 'muted', text: 'Status dots stay grey until you Check (max 25 at a time). Hide inactive only drops channels previously probed red. All feeds merges every enabled feed, de-duplicated by stream URL.' }),
-      h('div', { id: 'iptvResults', className: 'live-table-wrap' }, [h('p', { className: 'muted', text: 'Loading playlist…' })]),
+      h('div', { id: 'iptvResults', className: 'live-table-wrap' }, [pendingContent({ className: 'muted', })]),
       h('div', { className: 'row-actions', style: 'margin-top:8px' }, [
         h('button', { className: 'btn ghost', type: 'button', id: 'iptvMore', text: 'Load more', disabled: true, onClick: function(){ runIptvBrowse(true, false); }}),
         h('span', { className: 'muted', id: 'iptvCount', text: '' })
@@ -12652,7 +12643,7 @@ function viewCollectionDetail(){
       var count = document.getElementById('iptvCount');
       if (!box) return;
       box.innerHTML = '';
-      if (br.loading) { box.appendChild(h('p', { className: 'muted', text: 'Loading playlist…' })); return; }
+      if (br.loading) { box.appendChild(pendingContent({ className: 'muted', })); return; }
       if (!(br.channels || []).length) {
         box.appendChild(h('p', { className: 'muted', text: 'No channels in this feed (or all filtered).' }));
       } else {
