@@ -8,12 +8,20 @@
     function read(key, fetcher){
       var hit = entries.get(key);
       if (hit && hit.until > now()) return Promise.resolve(JSON.parse(hit.json));
+      // Stale-while-revalidate: navigation renders the last copy at once and refreshes in the background.
+      if (hit && hit.staleUntil > now()) {
+        if (!pending.has(key)) fetchInto(key, fetcher).catch(function(){});
+        return Promise.resolve(JSON.parse(hit.json));
+      }
       if (pending.has(key)) return pending.get(key).then(function(j){ return JSON.parse(JSON.stringify(j)); });
+      return fetchInto(key, fetcher).then(function(j){ return JSON.parse(JSON.stringify(j)); });
+    }
+    function fetchInto(key, fetcher){
       var generation = epoch;
       var request = Promise.resolve().then(fetcher).then(function(j){
         if (generation === epoch && j && j.ok && !j.error) {
           entries.delete(key);
-          entries.set(key, {json:JSON.stringify(j), until:now() + 15000});
+          entries.set(key, {json:JSON.stringify(j), until:now() + 15000, staleUntil:now() + 600000});
           while (entries.size > 40) entries.delete(entries.keys().next().value);
         }
         return j;
@@ -21,7 +29,7 @@
       pending.set(key, request);
       function finish(){ if (pending.get(key) === request) pending.delete(key); }
       request.then(finish, finish);
-      return request.then(function(j){ return JSON.parse(JSON.stringify(j)); });
+      return request;
     }
     return {read:read, clear:clear};
   }
