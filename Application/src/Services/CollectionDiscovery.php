@@ -128,6 +128,8 @@ final class CollectionDiscovery {
             }
             if ($s['done'] >= count($s['queue'])) {
                 $s['status'] = 'done';
+                // Store availability, posters and synopses for the new/extended collections (Settings-side job)
+                Collections::queueRefresh(null, false);
                 $s['message'] = sprintf('Done: %d films in %d collections · %d created · %d updated', $s['found'], count($s['series']), $s['created'], $s['updated'])
                     . ($s['skipped_manual'] ? ' · ' . $s['skipped_manual'] . ' left alone (manual collection with that name)' : '');
             } else {
@@ -302,7 +304,7 @@ final class CollectionDiscovery {
 
     // ---- TMDB ----
 
-    private static function tmdbGet(string $path, array $q = []) {
+    public static function tmdbGet(string $path, array $q = []) {
         $key = self::tmdbKey();
         $headers = [];
         if (strlen($key) > 60 && substr_count($key, '.') >= 2) $headers[] = 'Authorization: Bearer ' . $key; // v4 read token

@@ -10331,16 +10331,7 @@ h('div', { className:'cv-find-bar' }, [
             if (p.present && p.item) {
               rail.appendChild(cardEl(p.item));
             } else {
-              var missPoster = h('div', { className:'poster poster-failed' }, [
-                h('div', { className:'ph', text: p.title || 'Missing' })
-              ]);
-              rail.appendChild(h('div', { className:'card card-missing', tabindex:'0', role:'group' }, [
-                missPoster,
-                h('div', { className:'meta' }, [
-                  h('div', { className:'title', text: (p.title || 'Untitled') + (p.year ? (' (' + p.year + ')') : '') }),
-                  h('div', { className:'sub', text:'Missing' })
-                ])
-              ]));
+              rail.appendChild(collectionMissingCard(p, col.id));
             }
           });
           panel.appendChild(rail);
@@ -10435,6 +10426,48 @@ h('div', { className:'cv-find-bar' }, [
     return shell(wrap);
   }
 
+  /** Greyed card for a collection member that is not in the library; opens its info page (no Play). */
+  function collectionMissingCard(p, colId){
+    var poster = p.poster
+      ? h('div', { className:'poster' }, [ h('img', { src: API + '/' + p.poster, alt:'', loading:'lazy' }) ])
+      : h('div', { className:'poster poster-failed' }, [ h('div', { className:'ph', text: p.title || 'Missing' }) ]);
+    function open(e){ if (e) e.stopPropagation(); state.colMember = { id: colId, index: p.index }; state.view = 'colmember'; render(); }
+    return h('div', { className:'card card-missing', tabindex:'0', role:'button', title:'Not in your library', onClick: open,
+      onKeydown: function(e){ if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(e); } } }, [
+      poster,
+      h('div', { className:'meta' }, [
+        h('div', { className:'title', text: (p.title || 'Untitled') + (p.year ? (' (' + p.year + ')') : '') }),
+        h('div', { className:'sub', text:'Not in library' })
+      ])
+    ]);
+  }
+
+  /** Info page for a collection member that is not owned: stored poster + synopsis, no Play button. */
+  function viewCollectionMember(){
+    var ref = state.colMember || {};
+    var wrap = h('div', { className:'panel', id:'col_member' }, [ pendingContent({ className:'muted' }) ]);
+    api('/collections/' + ref.id).then(function(st){
+      var root = $('#col_member'); if (!root) return;
+      root.innerHTML = '';
+      var p = st && st.ok ? (st.parts || []).filter(function(x){ return x.index === ref.index; })[0] : null;
+      if (!p) { root.appendChild(h('p', { className:'bad', text:(st && st.error) || 'Not found' })); return; }
+      if (p.present && p.item) { if (p.item.show_key) openShow(p.item.show_key); else openMovie(p.item.id); return; }
+      var col = st.collection || {};
+      root.appendChild(h('button', { className:'btn ghost', text:'← ' + (col.name || 'Collection'), onClick: function(){ state.collectionId = ref.id; state.view = 'collection'; render(); } }));
+      root.appendChild(h('div', { className:'movie-detail col-member', style:'display:flex;gap:24px;flex-wrap:wrap;margin-top:12px' }, [
+        h('div', { className:'poster', style:'width:220px;flex:0 0 auto;filter:grayscale(.35)' }, [
+          p.poster ? h('img', { src: API + '/' + p.poster, alt:'' }) : h('div', { className:'ph', text: p.title || '' })
+        ]),
+        h('div', { style:'flex:1;min-width:240px' }, [
+          h('h1', { text: (p.title || 'Untitled') + (p.year ? (' (' + p.year + ')') : '') }),
+          h('p', { className:'muted', text:'Not in your library · part of ' + (col.name || 'this collection') }),
+          h('p', { text: p.overview || 'No synopsis stored yet. Refresh the collection in Settings to fetch it.' })
+        ])
+      ]));
+    });
+    return shell(wrap);
+  }
+
 function viewCollectionDetail(){
     var wrap = h('div', { className:'panel', id:'col_detail' }, [ pendingContent({ className:'muted', }) ]);
     api('/collections/'+state.collectionId).then(function(st){
@@ -10470,7 +10503,9 @@ function viewCollectionDetail(){
           p.present && p.item ? h('button', { className:'btn', text:'Open', onClick: function(){
             if (p.item.show_key) openShow(p.item.show_key);
             else openMovie(p.item.id);
-          } }) : null
+          } }) : h('button', { className:'btn ghost', text:'Info', onClick: function(){
+            state.colMember = { id: col.id, index: p.index }; state.view = 'colmember'; render();
+          } })
         ].filter(Boolean)));
       });
     });
@@ -13019,6 +13054,7 @@ function viewCollectionDetail(){
     else if (state.view === 'search') root.appendChild(viewSearch());
     else if (state.view === 'collections') root.appendChild(viewCollections());
     else if (state.view === 'collection') root.appendChild(viewCollectionDetail());
+    else if (state.view === 'colmember') root.appendChild(viewCollectionMember());
     else if (state.view === 'live') { root.appendChild(viewLive()); setTimeout(consumePendingLiveChannel, 0); }
     else if (state.view === 'play') root.appendChild(viewPlay());
     else root.appendChild(viewHome());

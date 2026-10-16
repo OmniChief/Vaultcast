@@ -105,7 +105,7 @@ final class Maintenance
                     break;
                 case 'metadata': $job['result'] = MetadataWarmup::run(); break;
                 case 'facts': $job['result'] = MediaFacts::refresh(function () { self::checkpoint(); }); break;
-                case 'collections': $job['result'] = Collections::rematch($job['target'] ?? null); break;
+                case 'collections': $job['result'] = Collections::refresh($job['target'] ?? null); break;
                 case 'downloads':
                     if (empty(Store::settings()['features']['downloads'])) throw new RuntimeException('Downloads are disabled.');
                     $job['result'] = Acquisition::processCompletedDownloads(['source' => 'admin', 'limit' => 3]); break;

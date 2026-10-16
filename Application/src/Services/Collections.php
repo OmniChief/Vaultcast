@@ -18,18 +18,20 @@ class Collections {
         return null;
     }
 
+    /**
+     * Collections page: reads only what Settings stored (no matching, catalogue load, HTTP or file checks).
+     * Counts and the cover were computed by refresh().
+     */
     public static function publicList(): array {
         $out = [];
         foreach (self::all() as $c) {
-            $st = self::status($c['id']);
-            $parts = $st['parts'] ?? [];
+            $parts = is_array($c['parts'] ?? null) ? $c['parts'] : [];
             $present = 0;
             $cover = null;
             foreach ($parts as $p) {
-                if (!empty($p['present'])) {
-                    $present++;
-                    if ($cover === null && !empty($p['item'])) $cover = $p['item'];
-                }
+                if (!is_array($p) || empty($p['present'])) continue;
+                $present++;
+                if ($cover === null && !empty($p['item'])) $cover = $p['item'];
             }
             $out[] = [
                 'id' => $c['id'],
@@ -43,13 +45,125 @@ class Collections {
                 'available_count' => $present,
                 'missing_count' => count($parts) - $present,
                 'cover_item' => $cover,
+                'refreshed' => !empty($c['refreshed_at']),
             ];
+        }
+        // Collections stored before snapshots existed: start ONE background refresh (never matched in-request)
+        if (array_filter($out, function ($c) { return empty($c['refreshed']); }) && !Store::get('collections_snapshot_queued', false)) {
+            Store::set('collections_snapshot_queued', date('c'));
+            self::queueRefresh(null, false);
         }
         /* VoD Collections tab always A–Z by collection name */
         usort($out, function ($a, $b) {
             return strcasecmp((string)($a['name'] ?? ''), (string)($b['name'] ?? ''));
         });
         return ['ok' => true, 'collections' => $out];
+    }
+
+    /** Public view of one stored part (snapshot written by refresh()). */
+    private static function publicPart(int $i, array $part): array {
+        return [
+            'index' => $i,
+            'title' => $part['title'] ?? '',
+            'year' => $part['year'] ?? null,
+            'present' => !empty($part['present']),
+            'item_id' => !empty($part['present']) ? ($part['item_id'] ?? null) : null,
+            'linked' => !empty($part['item_id']) ? (($part['link'] ?? 'auto') === 'manual' ? 'manual' : 'auto') : null,
+            'match' => $part['match'] ?? null,
+            'item' => !empty($part['present']) ? ($part['item'] ?? null) : null,
+            'overview' => $part['overview'] ?? '',
+            'poster' => !empty($part['poster_file']) ? 'collections/poster/' . $part['poster_file'] : null,
+            'ext_id' => $part['ext_id'] ?? null,
+        ];
+    }
+
+    /**
+     * Settings-side refresh: link parts to library items, store availability + a public item snapshot,
+     * and fetch/cache poster + synopsis for members (owned or not). Network only here.
+     */
+    public static function refresh(?string $onlyId = null, bool $fetchMeta = true): array {
+        $res = self::rematch($onlyId);
+        $list = self::all();
+        $items = self::catalogueItems();
+        foreach ($list as &$c) {
+            if ($onlyId !== null && ($c['id'] ?? '') !== $onlyId) continue;
+            foreach ($c['parts'] as &$part) {
+                if (!is_array($part)) continue;
+                if (class_exists('Maintenance')) Maintenance::checkpoint();
+                $iid = (string)($part['item_id'] ?? '');
+                $part['present'] = $iid !== '' && isset($items[$iid]);
+                $part['item'] = $part['present'] ? Catalogue::publicItem($items[$iid], false) : null;
+                if ($fetchMeta && (empty($part['meta_at']) || (empty($part['poster_file']) && strtotime((string)$part['meta_at']) < time() - 7 * 86400))) {
+                    self::fetchPartMeta($part);
+                }
+            }
+            unset($part);
+            $c['refreshed_at'] = date('c');
+        }
+        unset($c);
+        self::save($list);
+        return $res;
+    }
+
+    /** Refresh in the background (Maintenance CLI job); inline without network if no worker can start. */
+    public static function queueRefresh(?string $id = null, bool $inlineFallback = true): void {
+        try {
+            Maintenance::start('collections', 'Settings', $id);
+        } catch (Throwable $e) {
+            if ($inlineFallback) { try { self::refresh($id, false); } catch (Throwable $ignored) {} }
+        }
+    }
+
+    public static function posterDir(): string {
+        $d = Posters::dir() . '/collections';
+        if (!is_dir($d)) @mkdir($d, 0775, true);
+        return $d;
+    }
+
+    /** Poster + synopsis for one member: TMDB (with a key) else Wikipedia summary. */
+    private static function fetchPartMeta(array &$part): void {
+        $part['meta_at'] = date('c');
+        $title = trim((string)($part['title'] ?? ''));
+        if ($title === '') return;
+        $year = !empty($part['year']) ? (int)$part['year'] : 0;
+        $img = null; $overview = '';
+        try {
+            if (CollectionDiscovery::tmdbKey() !== '') {
+                $tid = preg_match('/^tmdb:(\d+)$/', (string)($part['ext_id'] ?? ''), $m) ? (int)$m[1] : 0;
+                if (!$tid) {
+                    $q = ['query' => $title];
+                    if ($year) $q['year'] = $year;
+                    $f = CollectionDiscovery::tmdbGet('/search/movie', $q);
+                    if (is_array($f) && !empty($f['results'][0]['id'])) $tid = (int)$f['results'][0]['id'];
+                    if ($tid) $part['ext_id'] = 'tmdb:' . $tid;
+                }
+                if ($tid) {
+                    $mv = CollectionDiscovery::tmdbGet('/movie/' . $tid);
+                    if (is_array($mv)) {
+                        $overview = trim((string)($mv['overview'] ?? ''));
+                        if (!empty($mv['poster_path'])) $img = 'https://image.tmdb.org/t/p/w342' . $mv['poster_path'];
+                    }
+                }
+            }
+            if ($overview === '' && $img === null) {
+                foreach (array_filter([$year ? $title . ' (' . $year . ' film)' : null, $title . ' (film)', $title]) as $page) {
+                    $body = self::httpGet('https://en.wikipedia.org/api/rest_v1/page/summary/' . rawurlencode(str_replace(' ', '_', $page)));
+                    $j = $body ? json_decode($body, true) : null;
+                    if (!is_array($j) || ($j['type'] ?? '') === 'disambiguation' || empty($j['extract'])) continue;
+                    $overview = trim((string)$j['extract']);
+                    $img = (string)($j['originalimage']['source'] ?? $j['thumbnail']['source'] ?? '') ?: null;
+                    break;
+                }
+            }
+        } catch (Throwable $e) { return; }
+        if ($overview !== '') $part['overview'] = function_exists('mb_substr') ? mb_substr($overview, 0, 2000) : substr($overview, 0, 2000);
+        if ($img !== null && preg_match('#^https://#i', $img)) {
+            $bin = self::httpGet($img);
+            if ($bin !== null && strlen($bin) > 1000 && strlen($bin) < 8 * 1024 * 1024 && in_array(substr($bin, 0, 3), ["\xFF\xD8\xFF", "\x89PN"], true)) {
+                $name = substr(sha1($img), 0, 16) . (substr($bin, 0, 3) === "\x89PN" ? '.png' : '.jpg');
+                if (@file_put_contents(self::posterDir() . '/' . $name, $bin) !== false) $part['poster_file'] = $name;
+            }
+        }
     }
 
     public static function create(array $data): array {
@@ -68,6 +182,7 @@ class Collections {
         ];
         $list[] = $col;
         self::save($list);
+        self::queueRefresh($col['id']);
         return ['ok' => true, 'collection' => $col];
     }
 
@@ -80,6 +195,7 @@ class Collections {
             }
             $c['updated_at'] = date('c');
             self::save($list);
+            if (array_key_exists('parts', $data) || array_key_exists('type', $data)) self::queueRefresh($id);
             return ['ok' => true, 'collection' => $c];
         }
         json_error('Not found', 404);
@@ -115,61 +231,36 @@ class Collections {
     public static function forItem(string $itemId): array {
         $itemId = (string)$itemId;
         if ($itemId === '') json_error('item_id required', 400);
-        $items = self::catalogueItems();
-        if (!isset($items[$itemId])) json_error('Not found', 404);
         $out = [];
         foreach (self::all() as $c) {
-            $type = (string)($c['type'] ?? 'movies');
-            $matched = false;
             $parts = [];
-            foreach ($c['parts'] ?? [] as $i => $part) {
-                if (!is_array($part)) $part = [];
-                $res = self::matchPart($part, $type);
-                $pid = $res ? (string)($res['item']['id'] ?? '') : '';
-                if ($pid !== '' && $pid === $itemId) $matched = true;
-                $parts[] = [
-                    'index' => $i,
-                    'title' => $part['title'] ?? '',
-                    'year' => $part['year'] ?? null,
-                    'present' => $res !== null,
-                    'item_id' => $pid !== '' ? $pid : null,
-                    'item' => $res ? Catalogue::publicItem($res['item'], false) : null,
-                    'current' => ($pid !== '' && $pid === $itemId),
-                ];
+            $matched = false;
+            foreach ((array)($c['parts'] ?? []) as $i => $part) {
+                if (!is_array($part)) continue;
+                $pp = self::publicPart((int)$i, $part);
+                $pp['current'] = $pp['present'] && (string)$pp['item_id'] === $itemId;
+                if ($pp['current']) $matched = true;
+                $parts[] = $pp;
             }
             if ($matched) {
-                $out[] = [
-                    'id' => $c['id'] ?? '',
-                    'name' => $c['name'] ?? '',
-                    'type' => $type,
-                    'description' => $c['description'] ?? '',
-                    'parts' => $parts,
-                ];
+                $out[] = ['id' => $c['id'] ?? '', 'name' => $c['name'] ?? '', 'type' => (string)($c['type'] ?? 'movies'), 'description' => $c['description'] ?? '', 'parts' => $parts];
             }
         }
         return ['ok' => true, 'item_id' => $itemId, 'collections' => $out];
     }
 
-        public static function status(string $id): array {
+    /** One collection from the stored snapshot (no matching, no network). */
+    public static function status(string $id): array {
         $col = self::get($id);
         if (!$col) json_error('Not found', 404);
-        $type = (string)($col['type'] ?? 'movies');
         $parts = [];
-        foreach ($col['parts'] ?? [] as $i => $part) {
-            $res = self::matchPart(is_array($part) ? $part : [], $type);
-            $parts[] = [
-                'index' => $i,
-                'title' => $part['title'] ?? '',
-                'year' => $part['year'] ?? null,
-                'present' => $res !== null,
-                'match' => $res ? $res['how'] : null,
-                'item_id' => $res ? (string)($res['item']['id'] ?? '') : null,
-                'linked' => !empty($part['item_id']) ? (($part['link'] ?? 'auto') === 'manual' ? 'manual' : 'auto') : null,
-                'item' => $res ? Catalogue::publicItem($res['item'], false) : null,
-            ];
+        foreach ((array)($col['parts'] ?? []) as $i => $part) {
+            if (is_array($part)) $parts[] = self::publicPart((int)$i, $part);
         }
         $missing = array_values(array_filter($parts, function ($p) { return !$p['present']; }));
-        return ['ok' => true, 'collection' => $col, 'parts' => $parts, 'missing' => $missing];
+        $pub = $col;
+        unset($pub['parts']);
+        return ['ok' => true, 'collection' => $pub, 'parts' => $parts, 'missing' => $missing];
     }
 
     /**
@@ -248,6 +339,7 @@ class Collections {
             }
             $c['updated_at'] = date('c');
             self::save($list);
+            self::refresh($id, false);
             return self::status($id);
         }
         json_error('Not found', 404);

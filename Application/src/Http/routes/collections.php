@@ -4,6 +4,16 @@ if (preg_match('#^/collections/for-item/([^/]+)$#', $path, $m) && $method === 'G
     json_out(Collections::forItem(rawurldecode($m[1])));
 }
 
+if (preg_match('#^/collections/poster/([a-f0-9]{16}\.(?:jpg|png))$#', $path, $m) && $method === 'GET') {
+    $file = Collections::posterDir() . '/' . $m[1];
+    if (!is_file($file)) json_error('Not found', 404);
+    header('Content-Type: ' . (substr($m[1], -4) === '.png' ? 'image/png' : 'image/jpeg'));
+    header('Content-Length: ' . filesize($file));
+    header('Cache-Control: public, max-age=2592000, immutable');
+    readfile($file);
+    exit;
+}
+
 if ($path === '/collections' && $method === 'GET') {
     json_out(Collections::publicList());
 }
