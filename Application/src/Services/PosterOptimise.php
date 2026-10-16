@@ -470,7 +470,6 @@ class PosterOptimise {
      * $wantWebp: client accepts image/webp
      */
     public static function pickServePath(string $resolvedPath, string $variant = 'full', bool $wantWebp = true): string {
-        if (!is_file($resolvedPath)) return $resolvedPath;
         $base = basename($resolvedPath);
         $dir = dirname($resolvedPath);
         // If already a webp path, honour it
@@ -494,12 +493,10 @@ class PosterOptimise {
     }
 
     public static function clientWantsWebp(): bool {
-        $accept = strtolower((string)($_SERVER['HTTP_ACCEPT'] ?? ''));
-        if ($accept !== '' && strpos($accept, 'image/webp') !== false) return true;
-        // Explicit query from JS feature-detect
+        // Explicit query from JS feature-detect takes precedence over Accept.
         if (isset($_GET['webp']) && ($_GET['webp'] === '1' || $_GET['webp'] === 'true')) return true;
         if (isset($_GET['webp']) && ($_GET['webp'] === '0' || $_GET['webp'] === 'false')) return false;
-        // Default: assume modern browsers; JS always sends webp=0/1
-        return false;
+        $accept = strtolower((string)($_SERVER['HTTP_ACCEPT'] ?? ''));
+        return strpos($accept, 'image/webp') !== false;
     }
 }

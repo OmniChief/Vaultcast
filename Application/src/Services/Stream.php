@@ -532,6 +532,20 @@ class Stream {
         exit;
     }
 
+    /** Resolve the requested cached variant before requiring an original JPEG. */
+    private static function serveCachedPoster(string $original): void {
+        $path = $original;
+        if (class_exists('PosterOptimise')) {
+            $variant = strtolower((string)($_GET['variant'] ?? 'full'));
+            if (!in_array($variant, ['thumb', 'full', 'original'], true)) $variant = 'full';
+            $path = PosterOptimise::pickServePath($original, $variant, PosterOptimise::clientWantsWebp());
+        }
+        $minimum = strtolower(pathinfo($path, PATHINFO_EXTENSION)) === 'webp' ? 40 : 100;
+        if (is_file($path) && is_readable($path) && filesize($path) > $minimum) {
+            self::servePosterFile($path);
+        }
+    }
+
     private static function wantsRemotePoster(): bool {
         return isset($_GET['fetch']) && $_GET['fetch'] !== '0' && $_GET['fetch'] !== '';
     }
@@ -548,13 +562,9 @@ class Stream {
         $safe = preg_replace('/[^a-f0-9]/', '', $itemId);
         if ($safe === '') self::posterMiss();
         $movieCache = Posters::movieCachePath($safe);
-        if (is_file($movieCache) && filesize($movieCache) > 100) {
-            self::servePosterFile($movieCache);
-        }
+        self::serveCachedPoster($movieCache);
         $gameCache = Posters::gameCachePath($safe);
-        if (is_file($gameCache) && filesize($gameCache) > 100) {
-            self::servePosterFile($gameCache);
-        }
+        self::serveCachedPoster($gameCache);
         $item = Catalogue::item($safe);
         if (!$item) self::posterMiss();
         // Fill season/episode + local art when catalogue scan omitted them
@@ -627,7 +637,7 @@ class Stream {
 
     /**
      * Show poster by showKey.
-     * A cached JPEG is served immediately. Catalogue::show() is not used here:
+     * A cached poster variant is served immediately. Catalogue::show() is not used here:
      * that builds the episode guide and may call TVMaze, which pinned the five
      * php-fpm workers and turned poster grids into 502s.
      */
@@ -635,9 +645,7 @@ class Stream {
         $safe = preg_replace('/[^a-f0-9]/', '', $showKey);
         if ($safe === '') self::posterMiss();
         $cached = Posters::showCachePath($safe);
-        if (is_file($cached) && filesize($cached) > 100) {
-            self::servePosterFile($cached);
-        }
+        self::serveCachedPoster($cached);
         $hint = Catalogue::showPosterHint($safe);
         $local = ($hint && !empty($hint['local'])) ? (string)$hint['local'] : null;
         if ((!$local || !is_file($local)) && $hint && !empty($hint['show_dir'])) {
@@ -662,16 +670,14 @@ class Stream {
 
     /**
      * Season poster by showKey + season number.
-     * Cached JPEG served immediately; ?fetch=1 pulls TVMaze relative season art.
+     * Cached poster variant served immediately; ?fetch=1 pulls TVMaze relative season art.
      * Falls back to show poster when season art is unavailable.
      */
     public static function seasonPoster(string $showKey, int $season): void {
         $safe = preg_replace('/[^a-f0-9]/', '', $showKey);
         if ($safe === '' || $season < 0) self::posterMiss();
         $cached = Posters::seasonCachePath($safe, $season);
-        if (is_file($cached) && filesize($cached) > 100) {
-            self::servePosterFile($cached);
-        }
+        self::serveCachedPoster($cached);
         $hint = Catalogue::showPosterHint($safe);
         $title = $hint ? (string)($hint['title'] ?? '') : '';
         $showDir = ($hint && !empty($hint['show_dir'])) ? (string)$hint['show_dir'] : null;
@@ -694,9 +700,7 @@ class Stream {
         }
         // Fall back to show poster (cache / local / optional remote)
         $showCached = Posters::showCachePath($safe);
-        if (is_file($showCached) && filesize($showCached) > 100) {
-            self::servePosterFile($showCached);
-        }
+        self::serveCachedPoster($showCached);
         $localShow = ($hint && !empty($hint['local'])) ? (string)$hint['local'] : null;
         if ((!$localShow || !is_file($localShow)) && $showDir) {
             $localShow = Posters::findLocalShowArt($showDir);
