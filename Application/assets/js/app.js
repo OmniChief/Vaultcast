@@ -12874,16 +12874,23 @@ function viewCollectionDetail(){
         h('p', { text:'DirectPlay catalogue on your server' }),
         h('label', {}, ['Username', h('input', { id:'lu', autocomplete:'username' })]),
         h('label', {}, ['Password', h('input', { id:'lp', type:'password', autocomplete:'current-password', onKeydown: function(e){ if(e.key==='Enter') doLogin(); } })]),
-        h('button', { className:'btn primary', text:'Sign in', onClick: doLogin }),
+        h('button', { id:'login-submit', className:'btn primary', text:'Sign in', onClick: doLogin }),
         h('button', { className:'btn ghost', text: state.user || state._guest ? 'Back to catalogue' : 'Back', onClick: function(){ state._wantAdmin=false; if (state.user || state._guest) { state.view='home'; render(); } else showWelcome(); } }),
         h('p', { id:'login-err', className:'bad' })
       ])
     ]);
   }
   function doLogin(){
+    if (state._loginBusy) return;
+    state._loginBusy = true;
+    var button = $('#login-submit');
+    var error = $('#login-err');
+    if (error) error.textContent = '';
+    if (button) { button.disabled = true; button.textContent = 'Signing in…'; }
     api('/login', { method:'POST', body:{ username: $('#lu').value, password: $('#lp').value } }).then(function(j){
       if (!j.ok) { $('#login-err').textContent = j.error || 'Login failed'; return; }
       state.user = j.user;
+      if (button) button.textContent = 'Opening your library…';
       if (state._wantAdmin) {
         if (state.user.role !== 'admin') {
           $('#login-err').textContent = 'Admin account required';
@@ -12893,13 +12900,18 @@ function viewCollectionDetail(){
         state.view = 'settings';
         state.settingsSection = state._settingsAfterLogin || state.settingsSection || 'general';
         state._settingsAfterLogin = null;
-        if (!state.home) { bootApp(); return; }
+        if (!state.home) return bootApp();
         pushNav();
         render();
         return;
       }
       restoreReturnHash();
-      bootApp();
+      return bootApp();
+    }).catch(function(){
+      if (error && error.isConnected) error.textContent = 'Could not sign in. Check your connection and try again.';
+    }).then(function(){
+      state._loginBusy = false;
+      if (button && button.isConnected) { button.disabled = false; button.textContent = 'Sign in'; }
     });
   }
 
@@ -12981,11 +12993,11 @@ function viewCollectionDetail(){
   }
 
   function bootApp(){
-    meP.then(function(me){
+    return meP.then(function(me){
       if (me && me.ok && !me.user) state._guestBrowsing = !!me.guest_browsing;
       if (!state.user && !state._guest) { showWelcome(); return; }
       if (accessGated()) { showWelcome(); return; }
-      loadHome();
+      return loadHome();
     });
   }
   function loadHome(){

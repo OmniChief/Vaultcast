@@ -360,9 +360,9 @@ class Catalogue {
     }
 
     /** Show root directory for a TV/anime item. */
-    public static function showDirFromItem(array $item): ?string {
+    public static function showDirFromItem(array $item, bool $checkDisk = true): ?string {
         if (class_exists('Posters')) {
-            return Posters::showDirFromItem($item);
+            return Posters::showDirFromItem($item, $checkDisk);
         }
         return null;
     }
@@ -1248,10 +1248,12 @@ class Catalogue {
 
     /** Group TV/Anime episodes into show-level entries. */
     public static function sectionShows(string $sectionId): array {
-        $cached = self::shmCacheGet('section_shows', $sectionId);
-        if ($cached !== null) return $cached['shows'];
+        $revision = Store::revision('catalogue') . '|' . Store::revision('browse_epoch') . '|' . Store::revision('settings');
+        $slot = 'section-shows-current-v2|' . $sectionId;
+        $cached = \Vaultcast\Repository::cacheGet($slot);
+        if ($cached && ($cached['revision'] ?? '') === $revision) return $cached['shows'];
         $shows = self::buildSectionShows($sectionId);
-        self::shmCachePut('section_shows', $sectionId, ['shows'=>$shows]);
+        \Vaultcast\Repository::cachePut($slot, ['revision'=>$revision, 'shows'=>$shows], 0);
         return $shows;
     }
 
@@ -1259,7 +1261,6 @@ class Catalogue {
     private static function buildSectionShows(string $sectionId): array {
         $items = self::sectionItems($sectionId);
         $groups = [];
-        $byId = array_column($items, null, 'id');
         foreach ($items as $it) {
             /* do not enrichItemArt per episode (is_file + poster disk walks × thousands). Art resolved once per show below. */
             $name = $it['show'] ?? '';
@@ -1278,14 +1279,14 @@ class Catalogue {
                     'seasons' => [],
                     'ep_keys' => [],
                     'local_poster' => $it['show_poster'] ?? null,
-                    'show_dir' => self::showDirFromItem($it),
+                    'show_dir' => self::showDirFromItem($it, false),
                     'mtime' => $it['mtime'] ?? 0,
                 ];
             }
             $g =& $groups[$name];
             $g['episodes'][] = $it['id'];
             if (empty($g['show_dir'])) {
-                $dir = self::showDirFromItem($it);
+                $dir = self::showDirFromItem($it, false);
                 if ($dir) $g['show_dir'] = $dir;
             }
             $season = $it['season'];
@@ -1303,31 +1304,9 @@ class Catalogue {
         $out = [];
         foreach ($groups as $name => $g) {
             $key = self::showKey($sectionId, $name);
-            /* one art enrich per show (not per episode). */
-            if ((!empty($g['episodes'][0])) && class_exists('Posters')) {
-                $sampleId = $g['episodes'][0];
-                $sample = $byId[$sampleId] ?? null;
-                if (is_array($sample)) {
-                    $sample = self::enrichItemArt($sample);
-                    if (!empty($sample['show_poster'])) $g['local_poster'] = $sample['show_poster'];
-                    elseif (!empty($sample['poster']) && empty($g['local_poster'])) $g['local_poster'] = $sample['poster'];
-                    $sd = self::showDirFromItem($sample);
-                    if ($sd) $g['show_dir'] = $sd;
-                }
-            }
+            // Browsing uses scan records; never wake or walk media disks for summary cards.
             $showDir = $g['show_dir'] ?? null;
-            if ((!$showDir || !is_dir((string)$showDir)) && !empty($g['local_poster'])) {
-                $showDir = dirname((string)$g['local_poster']);
-            }
-            if ($showDir && class_exists('Posters') && (empty($g['local_poster']) || !is_file((string)$g['local_poster']))) {
-                $disk = Posters::findLocalShowArt((string)$showDir);
-                if ($disk) $g['local_poster'] = $disk;
-            }
-            $has = class_exists('Posters')
-                ? Posters::hasShowPoster($g['local_poster'] ?? null, $key, is_dir((string)$showDir) ? (string)$showDir : null)
-                : !empty($g['local_poster']);
-            // Optimistic: allow UI to request poster endpoint (TVMaze on-demand) when enabled
-            if (!$has && class_exists('Posters') && Posters::enabled()) $has = true;
+            $has = !empty($g['local_poster']) || (class_exists('Posters') && Posters::enabled());
             $localEps = count($g['episodes']);
             $availableCount = $localEps;
             $localEpKeys = $g['ep_keys'] ?? [];
@@ -1360,7 +1339,7 @@ class Catalogue {
                 'season_count' => $seasonCount,
                 'has_poster' => $has,
                 'local_poster' => $g['local_poster'],
-                'show_dir' => is_dir((string)($showDir ?? '')) ? (string)$showDir : ($g['show_dir'] ?? null),
+                'show_dir' => $showDir,
                 'mtime' => $g['mtime'],
             ];
             // attach TVMaze genres/status/year/network for library filters
@@ -1380,53 +1359,36 @@ class Catalogue {
      * @return array{title:string,local:?string,section:string}|null
      */
     public static function showPosterHint(string $showKey): ?array {
-        $mtime = Store::revision('catalogue');
-        if (self::$showPosterIndex === null || self::$showPosterIndexMtime !== $mtime) {
-            $map = [];
-            $cat = self::get();
-            foreach ($cat['items'] ?? [] as $it) {
-                if (!is_array($it)) continue;
-                $type = $it['type'] ?? '';
-                if ($type !== 'tv' && $type !== 'anime') continue;
-                $name = (string)($it['show'] ?? '');
-                if ($name === '') continue;
-                $key = self::showKey((string)($it['section'] ?? ''), $name);
-                if (!isset($map[$key])) {
-                    $map[$key] = ['title' => $name, 'local' => null, 'section' => (string)($it['section'] ?? ''), 'show_dir' => null];
+        $revision = Store::revision('catalogue') . '|' . Store::revision('browse_epoch');
+        if (self::$showPosterIndex === null || self::$showPosterIndexMtime !== $revision) {
+            $entry = \Vaultcast\Repository::cacheGet('show-poster-index-v2');
+            if ($entry && ($entry['revision'] ?? '') === $revision) {
+                self::$showPosterIndex = $entry['hints'];
+            } else {
+                $map = [];
+                // Read only TV/anime records once per revision, not the whole library per image.
+                $sectionIds = [];
+                foreach (\Vaultcast\Repository::document('catalogue', ['sections'=>[]])['sections'] ?? [] as $section) {
+                    if (in_array($section['type'] ?? '', ['tv','anime'], true)) $sectionIds[] = (string)$section['id'];
                 }
-                if ($map[$key]['show_dir'] === null) {
-                    $dir = self::showDirFromItem($it);
-                    if ($dir) $map[$key]['show_dir'] = $dir;
+                $items = $sectionIds ? \Vaultcast\Repository::rows('SELECT payload FROM vaultcast_items WHERE section_id IN ('
+                    . implode(',', array_fill(0, count($sectionIds), '?')) . ')', $sectionIds) : [];
+                foreach ($items as $it) {
+                    $name = (string)($it['show'] ?? '');
+                    if ($name === '') $name = explode('/', str_replace('\\', '/', (string)($it['rel'] ?? '')))[0] ?: (string)($it['title'] ?? 'Unknown');
+                    $section = (string)($it['section'] ?? '');
+                    $key = self::showKey($section, $name);
+                    if (!isset($map[$key])) $map[$key] = ['title'=>$name, 'local'=>null,
+                        'section'=>$section, 'show_dir'=>self::showDirFromItem($it, false)];
+                    if (!empty($it['show_poster'])) $map[$key]['local'] = $it['show_poster'];
+                    elseif (!$map[$key]['local'] && !empty($it['poster'])) $map[$key]['local'] = $it['poster'];
                 }
-                if ($map[$key]['local'] === null) {
-                    if (!empty($it['show_poster']) && is_file($it['show_poster'])) $map[$key]['local'] = $it['show_poster'];
-                    elseif (!empty($it['poster']) && is_file($it['poster'])) {
-                        // Prefer show-root art over episode thumbs later via findLocalShowArt
-                        $map[$key]['local'] = $it['poster'];
-                    }
-                }
+                self::$showPosterIndex = $map;
+                \Vaultcast\Repository::cachePut('show-poster-index-v2', ['revision'=>$revision, 'hints'=>$map], 0);
             }
-            self::$showPosterIndex = $map;
-            self::$showPosterIndexMtime = $mtime;
+            self::$showPosterIndexMtime = $revision;
         }
-        $hint = self::$showPosterIndex[$showKey] ?? null;
-        if (!$hint) return null;
-        // Resolve-time local fallback when catalogue omitted show_poster
-        if ((empty($hint['local']) || !is_file((string)$hint['local'])) && !empty($hint['show_dir']) && class_exists('Posters')) {
-            $disk = Posters::findLocalShowArt((string)$hint['show_dir']);
-            if ($disk) {
-                $hint['local'] = $disk;
-                self::$showPosterIndex[$showKey]['local'] = $disk;
-            }
-        } elseif (!empty($hint['local']) && !empty($hint['show_dir']) && class_exists('Posters')) {
-            // If "local" is an episode thumb / non-show-root file, prefer real show poster
-            $disk = Posters::findLocalShowArt((string)$hint['show_dir']);
-            if ($disk) {
-                $hint['local'] = $disk;
-                self::$showPosterIndex[$showKey]['local'] = $disk;
-            }
-        }
-        return $hint;
+        return self::$showPosterIndex[$showKey] ?? null;
     }
 
     public static function show(string $showKey): ?array {
@@ -1900,7 +1862,7 @@ class Catalogue {
     }
 
     private static function homeCacheKey(array $user): string {
-        return 'home|' . md5((string)($user['id'] ?? 'guest') . '|' . Store::revision('catalogue')
+        return 'home-v2|' . md5((string)($user['id'] ?? 'guest') . '|' . Store::revision('catalogue')
             . '|' . Store::revision('progress') . '|' . Store::revision('settings'))
             . '|' . Store::revision('browse_epoch');
     }
@@ -1913,16 +1875,12 @@ class Catalogue {
         return is_array($hit) ? $hit : null;
     }
 
-    public static function home(array $user): array {
-        $uid = (string)($user['id'] ?? 'guest');
-        // Capture revisions before building; concurrent edits must invalidate this result.
-        $cacheKey = self::homeCacheKey($user);
-        $hit = self::cachedHome($user);
-        if ($hit !== null) { $hit['cached'] = true; return $hit; }
-
+    public static function homeLibrary(): array {
+        $revision = Store::revision('catalogue') . '|' . Store::revision('settings') . '|' . Store::revision('browse_epoch');
+        $entry = \Vaultcast\Repository::cacheGet('home-library-v2');
+        if ($entry && ($entry['revision'] ?? '') === $revision) return $entry['home'];
         $settings = Store::settings();
-        $n = (int)($settings['home']['random_per_section'] ?? 10);
-        $cwLimit = (int)($settings['home']['continue_watching_limit'] ?? 20);
+        $n = max(1, min(100, (int)($settings['home']['random_per_section'] ?? 10)));
         $cat = \Vaultcast\Repository::document('catalogue', ['sections' => []]);
         $sections = [];
         foreach ($cat['sections'] ?? [] as $sec) {
@@ -1946,23 +1904,23 @@ class Catalogue {
                 'items' => $items,
             ];
         }
-        $progress = [$uid => \Vaultcast\Repository::progress($uid)];
-        $userProg = is_array($progress[$uid] ?? null) ? $progress[$uid] : [];
-        uasort($userProg, function ($a, $b) {
-            return ($b['updated_at'] ?? 0) <=> ($a['updated_at'] ?? 0);
-        });
-        $continue = self::continueWatching($userProg, $cwLimit);
-        $out = [
-            'ok' => true,
-            'app_name' => $settings['app_name'] ?? 'Vaultcast',
-            'features' => $settings['features'] ?? ['live' => true, 'downloads' => false, 'server_tools' => false],
-            'scanned_at' => $cat['scanned_at'] ?? null,
-            'item_count' => $cat['item_count'] ?? 0,
-            'continue_watching' => $continue,
-            'sections' => $sections,
-            'cached' => false,
-        ];
-        // One replaceable entry per viewer: no timer, and no orphan file per revision.
+        $out = ['ok'=>true, 'app_name'=>$settings['app_name'] ?? 'Vaultcast',
+            'features'=>$settings['features'] ?? ['live'=>true, 'downloads'=>false, 'server_tools'=>false],
+            'scanned_at'=>$cat['scanned_at'] ?? null, 'item_count'=>$cat['item_count'] ?? 0,
+            'continue_watching'=>[], 'sections'=>$sections, 'cached'=>false];
+        \Vaultcast\Repository::cachePut('home-library-v2', ['revision'=>$revision, 'home'=>$out], 0);
+        return $out;
+    }
+
+    public static function home(array $user): array {
+        $uid = (string)($user['id'] ?? 'guest');
+        $cacheKey = self::homeCacheKey($user);
+        $hit = self::cachedHome($user);
+        if ($hit !== null) return $hit;
+        $out = self::homeLibrary();
+        $settings = Store::settings();
+        $out['continue_watching'] = self::continueWatching(\Vaultcast\Repository::progress($uid),
+            max(0, min(100, (int)($settings['home']['continue_watching_limit'] ?? 20))));
         \Vaultcast\Repository::cachePut('home-current|' . $uid, ['revision'=>$cacheKey, 'home'=>$out], 0);
         return $out;
     }

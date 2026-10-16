@@ -48,7 +48,7 @@ class Posters {
     /**
      * Show folder on disk from a catalogue item (…/Show Name (1994)/Season 1/ep.mkv).
      */
-    public static function showDirFromItem(array $item): ?string {
+    public static function showDirFromItem(array $item, bool $checkDisk = true): ?string {
         $path = str_replace('\\', '/', (string)($item['path'] ?? ''));
         $rel = str_replace('\\', '/', (string)($item['rel'] ?? ''));
         if ($path === '' || $rel === '') return null;
@@ -60,12 +60,12 @@ class Posters {
         if (substr($path, -strlen($rel)) === $rel) {
             $root = rtrim(substr($path, 0, strlen($path) - strlen($rel)), '/');
             $dir = $root . '/' . $showFolder;
-            return is_dir($dir) ? $dir : null;
+            return !$checkDisk || is_dir($dir) ? $dir : null;
         }
         // fallback: walk up from file to show folder name
-        $dir = is_file($path) ? dirname($path) : $path;
+        $dir = !$checkDisk || is_file($path) ? dirname($path) : $path;
         for ($i = 0; $i < 6; $i++) {
-            if (basename($dir) === $showFolder && is_dir($dir)) return $dir;
+            if (basename($dir) === $showFolder && (!$checkDisk || is_dir($dir))) return $dir;
             $parent = dirname($dir);
             if ($parent === $dir) break;
             $dir = $parent;
