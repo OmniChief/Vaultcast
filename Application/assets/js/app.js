@@ -8063,7 +8063,9 @@ try {
             h('div', { className:'cv-glass-poster', style: 'background-image:url("'+preview.replace(/"/g,'%22')+'")' }),
             h('div', { className:'cv-glass-main' }, [
               h('div', { className:'cv-glass-title', text: it.label || it.file }),
-              h('div', { className:'cv-glass-reason', text: it.reason || 'Needs WebP / thumb' }),
+              (job && job.status === 'failed')
+                ? h('div', { className:'cv-glass-reason bad', role:'alert', title: job.error || '', text: 'Failed: ' + (job.error || 'unknown error (see server log)') })
+                : h('div', { className:'cv-glass-reason', text: it.reason || 'Needs WebP / thumb' }),
               h('div', { className:'cv-glass-sub muted', text: 'orig ' + fmtShortBytes(it.original_bytes)
                 + (it.has_webp ? (' · webp ' + fmtShortBytes(it.webp_bytes)) : ' · no webp')
                 + (it.has_thumb ? (' · thumb ' + fmtShortBytes(it.thumb_bytes)) : ' · no thumb') })

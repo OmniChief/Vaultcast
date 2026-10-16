@@ -87,7 +87,7 @@ class PosterOptimise {
         $hasWebp = is_file($p['webp']) && filesize($p['webp']) > 40;
         $hasThumb = is_file($p['thumb']) && filesize($p['thumb']) > 40;
         $needs = $hasOrig && (!$hasWebp || !$hasThumb || $overwrite);
-        $label = self::labelForStem($stem);
+        $label = self::labelForStem($stem, $hasOrig ? basename($orig) : $file);
         if (!$hasOrig) $reason = 'missing original';
         elseif ($overwrite && ($hasWebp || $hasThumb)) $reason = 're-optimise (overwrite WebP)';
         elseif (!$hasWebp && !$hasThumb) $reason = 'missing WebP + thumb';
@@ -112,25 +112,40 @@ class PosterOptimise {
         ];
     }
 
-    private static function labelForStem(string $stem): array {
+    /** show key (sha1(section|show) prefix) => show title, built once per request from the indexed items table. */
+    private static $showTitles = null;
+    private static function showTitle(string $key): ?string {
+        if (self::$showTitles === null) {
+            self::$showTitles = [];
+            try {
+                foreach (\Vaultcast\Database::connection()->query("SELECT DISTINCT section_id, show_title FROM vaultcast_items WHERE show_title <> ''") as $row) {
+                    self::$showTitles[Catalogue::showKey((string)$row['section_id'], (string)$row['show_title'])] = (string)$row['show_title'];
+                }
+            } catch (\Throwable $e) { /* fall back to unlinked label */ }
+        }
+        return self::$showTitles[$key] ?? null;
+    }
+
+    private static function labelForStem(string $stem, string $fileName = ''): array {
         $kind = 'item';
         $id = $stem;
         $title = $stem;
+        $unlinked = 'Unlinked artwork · ' . ($fileName !== '' ? $fileName : $stem);
         if (preg_match('/^movie_([a-f0-9]+)$/i', $stem, $m)) {
             $kind = 'movie'; $id = $m[1];
             $it = Catalogue::item($id);
-            $title = $it['title'] ?? ('Movie ' . substr($id, 0, 8));
+            $title = $it['title'] ?? $unlinked;
         } elseif (preg_match('/^game_([a-f0-9]+)$/i', $stem, $m)) {
             $kind = 'game'; $id = $m[1];
             $it = Catalogue::item($id);
-            $title = $it['title'] ?? ('Game ' . substr($id, 0, 8));
+            $title = $it['title'] ?? $unlinked;
         } elseif (preg_match('/^show_([a-f0-9]+)$/i', $stem, $m)) {
             $kind = 'show'; $id = $m[1];
-            $title = 'Show ' . substr($id, 0, 8);
-            // best-effort: scan home sections is heavy; keep short id label
+            $title = self::showTitle($id) ?? $unlinked;
         } elseif (preg_match('/^season_([a-f0-9]+)_s(\d+)$/i', $stem, $m)) {
             $kind = 'season'; $id = $m[1] . '-s' . $m[2];
-            $title = 'Season ' . (int)$m[2] . ' · ' . substr($m[1], 0, 8);
+            $show = self::showTitle($m[1]);
+            $title = $show !== null ? $show . ' · Season ' . (int)$m[2] : $unlinked;
         }
         $poster_url = null;
         if ($kind === 'show') $poster_url = '/api/shows/' . $id . '/poster?fetch=0&variant=thumb';
@@ -266,21 +281,21 @@ class PosterOptimise {
     /** Optimise one original file (sync). $opts may override quality / overwrite. */
     public static function optimiseOne(string $fileOrStem, array $opts = []): array {
         if (!self::ffmpegHasWebp()) {
-            return ['ok' => false, 'error' => 'ffmpeg libwebp not available'];
+            if (!function_exists('imagewebp')) return ['ok' => false, 'error' => 'WebP encoding unavailable: ffmpeg has no libwebp and PHP GD has no WebP support.'];
         }
         $cfg = self::settings($opts);
         $file = $fileOrStem;
         if (!preg_match('/\.(jpe?g|png)$/i', $file)) {
             $p0 = self::pathsForStem($file);
-            if (!$p0['original']) return ['ok' => false, 'error' => 'original not found'];
+            if (!$p0['original']) return ['ok' => false, 'error' => 'Source image missing (no original JPG/PNG for this artwork).'];
             $file = basename($p0['original']);
         }
         $file = basename($file);
         if (!preg_match('/^(movie_|game_|show_|season_)[a-zA-Z0-9_.-]+\.(jpe?g|png)$/i', $file)) {
-            return ['ok' => false, 'error' => 'invalid poster name'];
+            return ['ok' => false, 'error' => 'Unrecognised artwork file name.'];
         }
         $st = self::statusForFile($file, (bool)$cfg['overwrite']);
-        if (!$st['original']) return ['ok' => false, 'error' => 'original missing'];
+        if (!$st['original']) return ['ok' => false, 'error' => 'Source image missing (no original JPG/PNG for this artwork).'];
         $stem = $st['stem'];
         $paths = self::pathsForStem($stem);
         $orig = $paths['original'];
@@ -292,14 +307,14 @@ class PosterOptimise {
         if ($needWebp) {
             $r = self::runFfmpegWebp($orig, $paths['webp'], (int)$cfg['full_max_w'], (int)$cfg['full_quality'], (int)$cfg['compression_level']);
             if ($r['ok']) $made[] = $overwrite && !empty($st['has_webp']) ? 'webp-replaced' : 'webp';
-            else $errors[] = 'webp: ' . $r['error'];
+            else $errors[] = $r['error'];
         } else {
             $made[] = 'webp-exists';
         }
         if ($needThumb) {
             $r = self::runFfmpegWebp($orig, $paths['thumb'], (int)$cfg['thumb_max_w'], (int)$cfg['thumb_quality'], (int)$cfg['compression_level']);
             if ($r['ok']) $made[] = $overwrite && !empty($st['has_thumb']) ? 'thumb-replaced' : 'thumb';
-            else $errors[] = 'thumb: ' . $r['error'];
+            else if (!in_array($r['error'], $errors, true)) $errors[] = 'Thumb: ' . $r['error'];
         } else {
             $made[] = 'thumb-exists';
         }
@@ -315,22 +330,108 @@ class PosterOptimise {
         ];
     }
 
-    private static function runFfmpegWebp(string $src, string $dest, ?int $maxW, int $quality, int $compression = 4): array {
-        $tmp = $dest . '.tmp.' . getmypid() . '.webp';
-        $arguments = ['ffmpeg','-y','-threads','1','-filter_threads','1','-filter_complex_threads','1','-hide_banner','-loglevel','error','-i',$src];
-        if ($maxW) array_push($arguments, '-vf', 'scale=' . (int)$maxW . ':-1');
-        array_push($arguments, '-c:v','libwebp','-threads','1','-quality',(string)$quality,'-compression_level',(string)max(0,min(6,$compression)),$tmp);
-        $result = Process::capture($arguments, 25);
-        if ($result === null || !is_file($tmp) || filesize($tmp) < 40) {
-            @unlink($tmp);
-            return ['ok'=>false,'error'=>'Artwork conversion failed or timed out.'];
+    /** Why a source can't be converted, or null when it looks like a readable image. */
+    private static function sourceProblem(string $src): ?string {
+        if (!is_file($src)) return 'Source image missing.';
+        if (!is_readable($src)) return 'Source image unreadable (permission denied).';
+        $size = (int)@filesize($src);
+        if ($size < 64) return 'Source image is empty or truncated (' . $size . ' bytes).';
+        $head = (string)@file_get_contents($src, false, null, 0, 16);
+        if ($head === '') return 'Source image unreadable.';
+        $isJpeg = substr($head, 0, 3) === "\xFF\xD8\xFF";
+        $isPng = substr($head, 0, 8) === "\x89PNG\r\n\x1a\n";
+        $isWebp = substr($head, 0, 4) === 'RIFF' && substr($head, 8, 4) === 'WEBP';
+        $isGif = substr($head, 0, 3) === 'GIF';
+        $isAvif = substr($head, 4, 4) === 'ftyp';
+        if (!$isJpeg && !$isPng && !$isWebp && !$isGif && !$isAvif) {
+            return stripos($head, '<') !== false ? 'Not an image (the saved file is an HTML/text error page from the artwork source).' : 'Not an image (unrecognised file content).';
         }
-        if (!@rename($tmp, $dest)) {
+        return null;
+    }
+
+    private static function runFfmpegWebp(string $src, string $dest, ?int $maxW, int $quality, int $compression = 4): array {
+        $bad = self::sourceProblem($src);
+        if ($bad !== null) return ['ok' => false, 'error' => $bad];
+        $dir = dirname($dest);
+        if (!is_writable($dir)) return ['ok' => false, 'error' => 'Write permission denied on the artwork folder.'];
+        if (is_file($dest) && !is_writable($dest)) return ['ok' => false, 'error' => 'Write permission denied: existing WebP cannot be replaced.'];
+        $tmp = $dest . '.tmp.' . getmypid() . '.webp';
+        $ffErr = null;
+        if (self::ffmpegHasWebp()) {
+            $arguments = ['ffmpeg','-y','-threads','1','-hide_banner','-loglevel','error','-i',$src];
+            // Never upscale; even height keeps every encoder happy.
+            if ($maxW) array_push($arguments, '-vf', "scale='min(" . (int)$maxW . ",iw)':-2");
+            array_push($arguments, '-frames:v', '1', '-c:v','libwebp','-quality',(string)$quality,'-compression_level',(string)max(0,min(6,$compression)),$tmp);
+            $run = self::runWithStderr($arguments, 40);
+            if (is_file($tmp) && filesize($tmp) >= 40) return self::finish($tmp, $dest);
             @unlink($tmp);
-            return ['ok' => false, 'error' => 'rename failed'];
+            $ffErr = $run['timeout'] ? 'Conversion timed out after 40 s.' : self::explainFfmpeg($run['stderr']);
+        }
+        // Fallback: PHP GD (also covers ffmpeg builds without libwebp)
+        if (function_exists('imagewebp') && function_exists('imagecreatefromstring')) {
+            $img = @imagecreatefromstring((string)@file_get_contents($src));
+            if ($img) {
+                $w = imagesx($img); $hgt = imagesy($img);
+                if ($maxW && $w > $maxW) {
+                    $nh = max(1, (int)round($hgt * $maxW / $w));
+                    $dst = imagecreatetruecolor($maxW, $nh);
+                    imagealphablending($dst, false); imagesavealpha($dst, true);
+                    imagecopyresampled($dst, $img, 0, 0, 0, 0, $maxW, $nh, $w, $hgt);
+                    imagedestroy($img); $img = $dst;
+                } elseif (!imageistruecolor($img)) {
+                    imagepalettetotruecolor($img);
+                }
+                $ok = @imagewebp($img, $tmp, max(0, min(100, $quality)));
+                imagedestroy($img);
+                if ($ok && is_file($tmp) && filesize($tmp) >= 40) return self::finish($tmp, $dest);
+                @unlink($tmp);
+                return ['ok' => false, 'error' => $ffErr ?: 'GD could not write WebP (disk full or permission denied?).'];
+            }
+            return ['ok' => false, 'error' => $ffErr ?: 'Source image is corrupt or in a format GD cannot read.'];
+        }
+        return ['ok' => false, 'error' => $ffErr ?: 'WebP encoding unavailable: ffmpeg has no libwebp and PHP GD has no WebP support.'];
+    }
+
+    private static function finish(string $tmp, string $dest): array {
+        if (!@rename($tmp, $dest)) {
+            if (!@copy($tmp, $dest)) { @unlink($tmp); return ['ok' => false, 'error' => 'Write permission denied: could not replace the WebP file.']; }
+            @unlink($tmp);
         }
         @chmod($dest, 0664);
         return ['ok' => true];
+    }
+
+    private static function explainFfmpeg(string $err): string {
+        $e = strtolower($err);
+        if ($e === '') return 'ffmpeg failed without output (not installed or blocked?).';
+        if (strpos($e, 'unknown encoder') !== false || strpos($e, "libwebp") !== false && strpos($e, 'not found') !== false) return 'ffmpeg has no WebP encoder (libwebp).';
+        if (strpos($e, 'permission denied') !== false) return 'Permission denied reading the source or writing the WebP.';
+        if (strpos($e, 'no space left') !== false) return 'Disk full while writing the WebP.';
+        if (strpos($e, 'invalid data') !== false || strpos($e, 'could not find codec') !== false || strpos($e, 'decode') !== false) return 'Source image is corrupt or not a supported image.';
+        if (strpos($e, 'no such file') !== false) return 'Source image missing.';
+        $line = trim((string)strtok(trim($err), "\n"));
+        return 'ffmpeg error: ' . (strlen($line) > 160 ? substr($line, 0, 160) . '…' : $line);
+    }
+
+    /** proc_open with captured stderr and a hard timeout. */
+    private static function runWithStderr(array $arguments, int $timeout): array {
+        if (!function_exists('proc_open')) return ['stderr' => 'proc_open disabled', 'timeout' => false];
+        $errFile = tempnam(sys_get_temp_dir(), 'pow_');
+        $null = PHP_OS_FAMILY === 'Windows' ? 'NUL' : '/dev/null';
+        $p = @proc_open($arguments, [0 => ['file', $null, 'r'], 1 => ['file', $null, 'w'], 2 => ['file', $errFile ?: $null, 'w']], $pipes, null, null, ['bypass_shell' => true]);
+        if (!is_resource($p)) { if ($errFile) @unlink($errFile); return ['stderr' => 'could not start ffmpeg', 'timeout' => false]; }
+        $deadline = microtime(true) + max(1, $timeout);
+        $timedOut = false;
+        while (true) {
+            $st = proc_get_status($p);
+            if (!$st['running']) break;
+            if (microtime(true) >= $deadline) { $timedOut = true; proc_terminate($p, 9); break; }
+            usleep(50000);
+        }
+        proc_close($p);
+        $err = $errFile ? (string)@file_get_contents($errFile, false, null, 0, 8192) : '';
+        if ($errFile) @unlink($errFile);
+        return ['stderr' => $err, 'timeout' => $timedOut];
     }
 
     /** Queue several files and process up to $budget ones synchronously.
