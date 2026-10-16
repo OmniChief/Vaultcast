@@ -40,6 +40,8 @@ final class MetadataWarmup
             if (in_array($type, ['tv', 'anime'], true)) Catalogue::sectionShows($id);
             elseif (in_array($type, ['movies', 'disney'], true)) Catalogue::movieFacetsCached($id, Catalogue::sectionItems($id));
         }
+        Catalogue::homeLibrary();
+        Catalogue::showPosterHint('');
         return $out;
     }
 }

@@ -25,3 +25,20 @@ server before attributing any remaining delay to the browser.
 Regression checks: `node Application/tests/startup_test.js` and
 `php Application/tests/startup_access_test.php`. Check warm/cold visits, expiry,
 deleted accounts, guest-to-member login, and direct movie/show links on deployment.
+
+## Cold-library work
+
+TV summaries derive media paths from catalogue records without checking media
+folders. Show summaries and the show-poster lookup use replaceable, revision-keyed
+entries without timers. Poster lookup reads only TV/anime sections on a cache miss
+and no longer walks every episode path for each artwork request. Serving the
+selected artwork can still access its file.
+
+Library rows are shared across viewers separately from Continue Watching. Progress
+updates rebuild the personal portion without regenerating random rows and show
+summaries. Existing metadata/facts workers warm the shared home and artwork lookup
+after invalidating derived data. No new scheduler or dependency is required.
+
+Sign-in acknowledges the click immediately and prevents duplicate submissions.
+Loading feedback is retained until the request completes. These UI messages do
+not substitute for reducing the server work described above.
