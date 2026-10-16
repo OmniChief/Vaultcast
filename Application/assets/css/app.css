@@ -78,7 +78,7 @@ img { max-width:100%; display:block; }
 .tab-panel { display: none; padding: 16px; }
 .tab-panel.active { display:block; }
 .stack label { display:flex; flex-direction:column; gap:6px; font-size:.85rem; color:var(--muted); }
-.stack input,
+.stack input:not([type=checkbox]):not([type=radio]):not([type=range]),
 .stack select,
 .stack textarea { background:var(--bg); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text); padding:10px 12px; }
 .stack { display:flex; flex-direction:column; gap:12px; }
@@ -719,7 +719,7 @@ main.view { display: block; }
 .btn-lg { padding: 13px 22px; font-size: 1rem; border-radius: var(--radius); }
 .row-actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 input, select, textarea { color-scheme: dark; }
-.stack input,
+.stack input:not([type=checkbox]):not([type=radio]):not([type=range]),
 .stack select,
 .stack textarea,
 .panel input:not([type=checkbox]):not([type=radio]):not([type=range]),
@@ -2460,7 +2460,14 @@ body[data-navigation="remote"] { --gutter: clamp(24px, 4vw, 80px); }
 .episode-row:hover {background:var(--bg3)}
 .episode-list {gap:10px}
 .settings-card {border:1px solid var(--border);border-radius:16px;padding:24px;background:var(--card)}
-.settings-panel input,.settings-panel select {min-height:44px}
+.settings-panel input:not([type=checkbox]):not([type=radio]):not([type=range]),
+.settings-panel select { min-height: 44px; }
+/* Keep native selection controls compact and their labels on one row. */
+.settings-panel .check-label {
+  display: inline-flex; flex-direction: row; align-items: center; gap: 8px; cursor: pointer;
+}
+.settings-panel .check-label input[type=checkbox],
+.settings-panel .check-label input[type=radio] { flex: 0 0 auto; width: auto; margin: 0; }
 .settings-panel label {line-height:1.5}
 .empty-state {max-width:650px;margin:40px auto;text-align:center;padding:32px 24px}
 .badge {letter-spacing:.02em;font-weight:550}
