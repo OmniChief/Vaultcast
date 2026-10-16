@@ -946,7 +946,8 @@ function confirmDialog(message, opts){
       toast(String(e));
     });
   }
-  var POSTER_PARALLEL = 2;
+  var POSTER_PARALLEL = 4;
+  var _posterRequests = Object.create(null);
   var _posterQueue = [];
   var _posterActive = 0;
 
@@ -1068,29 +1069,30 @@ function confirmDialog(message, opts){
         // Remote discovery belongs to the metadata maintenance worker.
         var allowFetch = false;
         var url = posterServerUrl(itemId, kind, !!allowFetch, variant);
-        function attempt(retry){
-          fetchPosterServer(url, allowFetch ? 5000 : 4000).then(function(res){
-            if (finished) return;
-            if (res && res.status === 404) { markPosterFail(el); done(); return; }
-            if (!res || !res.ok) throw new Error('poster');
-            var copy = res.clone();
-            return res.blob().then(function(b){
-              if (!paint(b)) { if (!finished) { markPosterFail(el); done(); } return; }
-              if (typeof caches !== 'undefined') {
-                caches.open(POSTER_CACHE).then(function(c){ return c.put(key, copy); }).catch(function(){});
-              }
+        // Share bytes across duplicate tiles; keep the deadline through body download.
+        if (!_posterRequests[url]) {
+          var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+          var deadline = setTimeout(function(){ if (ctrl) ctrl.abort(); }, 4000);
+          var request = fetch(url, { credentials:'same-origin', cache:'default', signal:ctrl ? ctrl.signal : undefined })
+            .then(function(res){
+              if (!res.ok) throw new Error('Poster HTTP ' + res.status);
+              return res.blob();
             });
-          }).catch(function(){
-            if (finished) return;
-            if (retry && posterInDom(el)) {
-              setTimeout(function(){ attempt(false); }, 650);
-              return;
-            }
-            markPosterFail(el);
-            done();
+          _posterRequests[url] = request.then(function(blob){
+            clearTimeout(deadline); delete _posterRequests[url]; return blob;
+          }, function(error){
+            clearTimeout(deadline); delete _posterRequests[url]; throw error;
           });
         }
-        attempt(true);
+        _posterRequests[url].then(function(b){
+          if (!paint(b)) { if (!finished) { markPosterFail(el); done(); } return; }
+          if (typeof caches !== 'undefined') {
+            caches.open(POSTER_CACHE).then(function(c){ return c.put(key, new Response(b)); }).catch(function(){});
+          }
+        }).catch(function(){
+          if (stillWanted()) markPosterFail(el);
+          done();
+        });
       }
       var cacheTimer = setTimeout(function(){ startNet(); }, 900);
       var cacheP = (typeof caches !== 'undefined')
@@ -4974,16 +4976,16 @@ try {
     document.body.appendChild(toggle);
   }
 
-  function viewSection(){
+  function viewSection(onReady){
     state.sectionLetter = state.sectionLetter || '';
     var wrap = h('div', { id:'section-view' }, [ h('div', { className:'hero' }, [ h('h1', { text: state.sectionLabel || state.section }), pendingContent({ className:'muted', }) ]) ]);
-    loadSection(state.section, state.sectionQ || '');
+    loadSection(state.section, state.sectionQ || '', { root:wrap, onReady:onReady });
     return shell(wrap);
   }
 
-  function viewShow(){
+  function viewShow(onReady){
     var wrap = h('div', { id:'show-view' }, [ h('div', { className:'hero' }, [ h('h1', { text:'TV show' }), pendingContent() ]) ]);
-    loadShow(state.showKey);
+    loadShow(state.showKey, wrap, onReady);
     return shell(wrap);
   }
 
@@ -5241,7 +5243,7 @@ try {
     ]));
 
     var footText = opts.footText || '';
-    api(path).then(function(j){
+    (opts.request || api(path)).then(function(j){
       if (!host.isConnected || host.getAttribute('data-req') !== reqToken) return;
       host.innerHTML = '';
       var list = (j && j.ok && j.items) ? j.items : [];
@@ -5588,6 +5590,9 @@ try {
     if (!asShows && state.sectionSystem) path += '&system=' + encodeURIComponent(state.sectionSystem);
     path = appendSectionFilterParams(path);
     if (append) state.sectionLoadingMore = true;
+    var showcaseRequest = !append && sectionShowcaseKind(id)
+      ? api('/sections/' + encodeURIComponent(id) + '/' + (sectionShowcaseKind(id) === 'recent' ? 'recent' : 'random') + '?n=16').catch(function(){ return null; })
+      : null;
     var seq = ++_sectionLoadSeq;
     function stillHere(){ return seq === _sectionLoadSeq && state.section === id && (state.view === 'section' || state.view === 'play'); }
 
@@ -5598,7 +5603,7 @@ try {
         if (state.sectionSystem && !state.sectionSystemSlug && j.system_slugs[state.sectionSystem]) { state.sectionSystemSlug = j.system_slugs[state.sectionSystem]; replaceNav(); }
         else if (state.view === 'play' && state.sectionSystem) syncUrl();
       }
-      var root = $('#section-view');
+      var root = (opts.root || $('#section-view'));
       if (!root) return;
       var total = j.total||0;
       var list = asShows ? (j.shows||[]) : (j.items||[]);
@@ -5623,7 +5628,7 @@ try {
         if (!showcaseKind) root.appendChild(sectionHeroEl(id, heroLabel));
         if (j.letters) state._sectionLetters = j.letters;
         mountAzRail(root, id, j.letters || state._sectionLetters || null);
-        if (showcaseKind) mountSectionShowcase(root, id, { footText: heroLabel, asShows: asShows, total: total });
+        if (showcaseKind) mountSectionShowcase(root, id, { footText: heroLabel, asShows: asShows, total: total, request: showcaseRequest });
         if (j.systems) state._sectionSystems = j.systems;
         mountConsoleFilter(root, id, j.systems || state._sectionSystems || null);
         if (j.facets) state._sectionFacets = j.facets;
@@ -5688,8 +5693,9 @@ try {
       if (!stillHere()) return;
       if (!j || !j.ok) {
         state.sectionLoadingMore = false;
+        if (opts.onReady) opts.onReady();
         if (!append) {
-          var rootFail = $('#section-view');
+          var rootFail = (opts.root || $('#section-view'));
           if (rootFail && !rootFail.querySelector('.section-grid, .empty-state, .billboard-section')) {
             rootFail.innerHTML = '';
             rootFail.appendChild(h('div', { className:'hero' }, [
@@ -5702,12 +5708,14 @@ try {
         toast((j && j.error) || 'Library load failed', { kind:'bad' });
         return;
       }
+      if (opts.onReady) opts.onReady();
       paintSectionPayload(j);
     }).catch(function(e){
       if (!stillHere()) return;
       state.sectionLoadingMore = false;
+      if (opts.onReady) opts.onReady();
       if (!append) {
-        var root = $('#section-view');
+        var root = (opts.root || $('#section-view'));
         if (root && !root.querySelector('.section-grid, .empty-state, .billboard-section')) {
           root.innerHTML = '';
           root.appendChild(h('div', { className:'hero' }, [
@@ -5857,19 +5865,18 @@ try {
   }
 
   var _showLoadSeq = 0;
-  function loadShow(showKey){
+  function loadShow(showKey, destination, onReady){
     var seq = ++_showLoadSeq;
     function stillHere(){
       return seq === _showLoadSeq && state.view === 'show' && String(state.showKey) === String(showKey);
     }
-    Promise.all([
-      api('/shows/'+encodeURIComponent(showKey)),
-      loadDownloadStatus(false)
-    ]).then(function(pair){
+    api('/shows/'+encodeURIComponent(showKey)).then(function(j){
       if (!stillHere()) return;
-      var j = pair[0];
-      var dl = pair[1] || {};
-      var root = $('#show-view');
+      if (onReady) onReady();
+      var dl = _dlStatus || {};
+      var activeSeason;
+      var firstPaint = true;
+      var root = (destination || $('#show-view'));
       if (!root) return;
       if (!j || !j.ok || !j.show) {
         root.innerHTML = '';
@@ -5893,6 +5900,7 @@ try {
       if (state.showSeason != null && seasons.some(function(s){ return s.season === state.showSeason; })) selected = state.showSeason;
       else if (wantEpItem) seasons.forEach(function(s){ (s.episodes || []).forEach(function(ep){ if (ep.id === wantEpItem) selected = s.season; }); });
       function paint(sel, fromTab){
+        activeSeason = sel;
         if (fromTab) { state.showSeason = sel; state.showEpisode = null; syncUrl(); }
         root.innerHTML = '';
         var heroPoster = h('div', { className:'poster poster-pending show-hero-poster', 'data-poster-fetch':'1', 'data-backdrop-src':'1', 'data-poster-variant':'full' }, [
@@ -5961,7 +5969,7 @@ try {
               h('span', { className:'muted', text: badgeCount ? (badgeCount + ' download' + (badgeCount===1?'':'s') + ' in progress') : 'No active downloads for this library' }),
               h('button', { className:'btn ghost', text:'Open download queue', onClick: function(){ state.adminTab='queue'; openAdmin(); } }),
               h('button', { className:'btn ghost', text:'Refresh', onClick: function(){
-                loadDownloadStatus(true).then(function(r){ dl = r || dl; paint(sel); });
+                loadDownloadStatus(true).then(function(r){ if (!stillHere()) return; dl = r || dl; paint(activeSeason); });
               }})
             ])
           ]));
@@ -6108,12 +6116,19 @@ try {
         }));
         root.appendChild(list);
         var target = list.querySelector('[data-episode-target]');
-        if (target) setTimeout(function(){ try { target.scrollIntoView({ block:'center', behavior:'smooth' }); target.focus({ preventScroll:true }); } catch (eT) {} }, 60);
+        if (target && firstPaint) setTimeout(function(){ if (!stillHere()) return; try { target.scrollIntoView({ block:'center', behavior:'smooth' }); target.focus({ preventScroll:true }); } catch (eT) {} }, 60);
+        firstPaint = false;
       }
       paint(selected);
+      loadDownloadStatus(false).then(function(fresh){
+        if (!stillHere() || !fresh || JSON.stringify(fresh.downloading || []) === JSON.stringify(dl.downloading || [])) return;
+        dl = fresh;
+        paint(activeSeason);
+      });
     }).catch(function(e){
       if (!stillHere()) return;
-      var root = $('#show-view');
+      if (onReady) onReady();
+      var root = (destination || $('#show-view'));
       if (!root) return;
       root.innerHTML = '';
       root.appendChild(h('div', { className:'hero' }, [
@@ -12955,6 +12970,23 @@ function viewCollectionDetail(){
   function render(){ renderView(); syncUrl(); }
   function renderView(){
     var root = $('#app');
+    if ((state.view === 'section' || state.view === 'show') && root.firstChild) {
+      var nextView;
+      var published = false;
+      var publish = function(){
+        if (published) return;
+        published = true;
+        stopBillboardCycle();
+        unmountAzRail();
+        applyPrefs();
+        document.body.classList.remove('view-live');
+        stopLiveTimers();
+        closeMenus();
+        root.replaceChildren(nextView);
+      };
+      nextView = state.view === 'section' ? viewSection(publish) : viewShow(publish);
+      return;
+    }
     stopBillboardCycle();
     unmountAzRail();
     root.innerHTML = '';
