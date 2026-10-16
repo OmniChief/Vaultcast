@@ -63,7 +63,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && ($_POST['first_action'] 
     $loginError = 'Incorrect username or password.';
 }
 $startup = Startup::snapshot();
-$firstPage = FirstPage::render($startup, $base, $siteName, $loginError);
+$firstPage = FirstPage::render($startup, $base, $siteName, $loginError, substr((string)$path, strlen($base)));
 release_request_locks();
 require_once __DIR__ . '/src/Services/PlayerAssets.php';
 $shell = (string)file_get_contents(__DIR__ . '/src/Views/app.html');

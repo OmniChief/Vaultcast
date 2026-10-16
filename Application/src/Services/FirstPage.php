@@ -78,7 +78,7 @@ final class FirstPage {
         return $html . '</div></section>';
     }
 
-    public static function render(array $startup, string $base, string $site, string $error = ''): string {
+    public static function render(array $startup, string $base, string $site, string $error = '', string $route = ''): string {
         $user = $startup['me']['user'] ?? null;
         if ($user && empty($user['access_state']['active'])) {
             return '<main class="login-wrap"><div class="login-card stack"><h1>' . self::esc($site) . '</h1><p>'
@@ -91,6 +91,10 @@ final class FirstPage {
                 . '<label>Username<input name="username" autocomplete="username" required></label>'
                 . '<label>Password<input name="password" type="password" autocomplete="current-password" required></label>'
                 . '<button class="btn primary" type="submit">Sign in</button><p class="bad" role="alert">' . self::esc($error) . '</p></form></main>';
+        }
+        // Settings/admin deep links: no server-rendered library rows, so no poster requests; the app renders the route.
+        if (preg_match('#^(settings|admin)(/|$)#', ltrim($route, '/'))) {
+            return '<div class="app-shell xshell" id="first-home"><main class="view" id="main" aria-busy="true"></main></div>';
         }
         $home = $startup['home'];
         $html = '<div class="app-shell xshell" id="first-home"><header class="topnav xnav">'
