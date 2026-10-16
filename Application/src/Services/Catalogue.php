@@ -1899,14 +1899,25 @@ class Catalogue {
         return \Vaultcast\Repository::item($id);
     }
 
+    private static function homeCacheKey(array $user): string {
+        return 'home|' . md5((string)($user['id'] ?? 'guest') . '|' . Store::revision('catalogue')
+            . '|' . Store::revision('progress') . '|' . Store::revision('settings'))
+            . '|' . Store::revision('browse_epoch');
+    }
+
+    public static function cachedHome(array $user): ?array {
+        $entry = \Vaultcast\Repository::cacheGet('home-current|' . (string)($user['id'] ?? 'guest'));
+        if (!$entry || ($entry['revision'] ?? '') !== self::homeCacheKey($user)) return null;
+        $hit = $entry['home'] ?? null;
+        if (is_array($hit)) $hit['cached'] = true;
+        return is_array($hit) ? $hit : null;
+    }
+
     public static function home(array $user): array {
-        // Cache the home view by catalogue, preferences and viewing-progress revisions.
         $uid = (string)($user['id'] ?? 'guest');
-        $catM = Store::revision('catalogue');
-        $progM = Store::revision('progress');
-        $setM = Store::revision('settings');
-        $cacheKey = md5($uid . '|' . $catM . '|' . $progM . '|' . $setM);
-        $hit = \Vaultcast\Repository::cacheGet('home|' . $cacheKey . '|' . Store::revision('browse_epoch'));
+        // Capture revisions before building; concurrent edits must invalidate this result.
+        $cacheKey = self::homeCacheKey($user);
+        $hit = self::cachedHome($user);
         if ($hit !== null) { $hit['cached'] = true; return $hit; }
 
         $settings = Store::settings();
@@ -1951,7 +1962,8 @@ class Catalogue {
             'sections' => $sections,
             'cached' => false,
         ];
-        \Vaultcast\Repository::cachePut('home|' . $cacheKey . '|' . Store::revision('browse_epoch'), $out, 45);
+        // One replaceable entry per viewer: no timer, and no orphan file per revision.
+        \Vaultcast\Repository::cachePut('home-current|' . $uid, ['revision'=>$cacheKey, 'home'=>$out], 0);
         return $out;
     }
 

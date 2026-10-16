@@ -34,16 +34,17 @@ final class Repository
         $raw = is_file($f) ? @file_get_contents($f) : false;
         if ($raw === false || $raw === '') return null;
         $j = json_decode($raw, true);
-        if (!is_array($j) || !isset($j['e']) || (int)$j['e'] <= time()) return null;
+        if (!is_array($j) || !isset($j['e']) || ((int)$j['e'] !== 0 && (int)$j['e'] <= time())) return null;
         return is_array($j['v'] ?? null) ? $j['v'] : null;
     }
 
+    /** A zero TTL is revision-managed: callers must validate dependencies on every read. */
     public static function cachePut(string $key, array $value, int $ttl = 3600): void {
         $f = self::cacheFile($key);
         $dir = dirname($f);
         if (!is_dir($dir)) @mkdir($dir, 0775, true);
         $tmp = $f . '.' . bin2hex(random_bytes(4)) . '.tmp';
-        $body = self::encode(['e' => time() + max(1, $ttl), 'v' => $value]);
+        $body = self::encode(['e' => $ttl === 0 ? 0 : time() + max(1, $ttl), 'v' => $value]);
         if (@file_put_contents($tmp, $body) === false) return;
         // rename() replaces atomically on Linux and Windows (MoveFileEx) in PHP 7.4+.
         if (!@rename($tmp, $f)) @unlink($tmp);
@@ -70,7 +71,7 @@ final class Repository
         $n = 0;
         foreach (glob($dir . '/*.json') ?: [] as $f) {
             $j = json_decode((string)@file_get_contents($f), true);
-            if (!is_array($j) || (int)($j['e'] ?? 0) <= time()) { if (@unlink($f)) $n++; }
+            if (!is_array($j) || !isset($j['e']) || ((int)$j['e'] !== 0 && (int)$j['e'] <= time())) { if (@unlink($f)) $n++; }
         }
         return $n;
     }

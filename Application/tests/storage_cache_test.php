@@ -22,6 +22,13 @@ file_put_contents($tmp . '/kv/' . substr($h, 0, 2) . '/' . $h . '.json', '{broke
 check(R::cacheGet('old') === null, 'corrupt entry is a miss, not an error');
 check(glob($tmp . '/kv/*/*.tmp') === [], 'no temp files left behind');
 
+R::cachePut('revision-managed', ['revision'=>1], 0);
+check(R::cacheGet('revision-managed') === ['revision'=>1], 'zero TTL keeps revision-managed data');
+foreach (glob($tmp . '/kv/*', GLOB_ONLYDIR) ?: [] as $dir) R::cacheSweep($dir);
+check(R::cacheGet('revision-managed') === ['revision'=>1], 'sweep preserves revision-managed data');
+R::cachePut('revision-managed', ['revision'=>2], 0);
+check(R::cacheGet('revision-managed') === ['revision'=>2], 'revision-managed entry is replaceable');
+
 R::cachePut('a', ['1'], 60); R::cachePut('b', ['2'], 60);
 check(R::cacheStats()['files'] >= 2, 'stats count entries');
 R::cacheClear();
