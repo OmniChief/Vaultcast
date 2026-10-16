@@ -1708,7 +1708,8 @@ class Catalogue {
             shuffle($shows);
             return array_slice($shows, 0, max(1, $n));
         }
-        return \Vaultcast\Repository::rows('SELECT payload FROM vaultcast_items WHERE section_id=? ORDER BY RAND() LIMIT ' . max(1, min(100, $n)), [$sectionId]);
+        // Sample narrow IDs first; do not sort every LONGTEXT payload in the section.
+        return \Vaultcast\Repository::rows('SELECT i.payload FROM vaultcast_items i JOIN (SELECT id FROM vaultcast_items WHERE section_id=? ORDER BY RAND() LIMIT ' . max(1, min(100, $n)) . ') picks ON picks.id=i.id', [$sectionId]);
     }
 
     /**
@@ -1718,8 +1719,11 @@ class Catalogue {
     public static function randomPublic(string $sectionId, int $n = 16): array {
         $n = max(1, min(40, $n));
         $salt = $sectionId . '|n=' . $n;
-        $hit = self::shmCacheGet('showcase_random', $salt);
-        if (is_array($hit) && isset($hit['items']) && is_array($hit['items']) && (time() - (int)($hit['_cached_at'] ?? 0)) < 120) {
+        $revision = Store::revision('catalogue') . '|' . Store::revision('browse_epoch') . '|' . Store::revision('settings');
+        $slot = 'showcase-random-current|' . $salt;
+        $entry = \Vaultcast\Repository::cacheGet($slot);
+        $hit = $entry && ($entry['revision'] ?? '') === $revision ? ($entry['payload'] ?? null) : null;
+        if (is_array($hit) && isset($hit['items']) && is_array($hit['items'])) {
             $hit['cached'] = true;
             return $hit;
         }
@@ -1737,8 +1741,18 @@ class Catalogue {
             $kind = 'items';
         }
         $out = ['ok' => true, 'kind' => $kind, 'items' => $items, 'cached' => false];
-        self::shmCachePut('showcase_random', $salt, $out);
+        // Capture dependencies before building; no age check or file per revision.
+        \Vaultcast\Repository::cachePut($slot, ['revision'=>$revision, 'payload'=>$out], 0);
         return $out;
+    }
+
+    /** Prepare the standard Films/Discover row during existing background work. */
+    public static function warmRandomShowcases(): void {
+        foreach (\Vaultcast\Repository::document('catalogue', ['sections'=>[]])['sections'] ?? [] as $section) {
+            if (!in_array($section['type'] ?? '', ['movies','disney'], true)) continue;
+            Maintenance::checkpoint();
+            self::randomPublic((string)$section['id'], 16);
+        }
     }
 
     /** Recently Updated showcase with short SHM cache (no ffprobe on cards). */
@@ -2096,7 +2110,7 @@ class Catalogue {
         $kind = $it['media_kind'] ?? '';
         $postersOn = class_exists('Posters') && Posters::enabled();
         // Posters on: the UI lazy-fetches art, so has_poster is optimistic -- skip every per-item file check.
-        if ($postersOn) $hasPoster = true;
+        if ($postersOn || !$checkPosterFiles) $hasPoster = true; // Card rows defer artwork existence to the image request.
         // Always resolve cache hits when possible (home used checkPosterFiles=false and hid CW/TV art).
         if (!$hasPoster && $type && in_array($type, ['tv','anime'], true) && !empty($it['show'])) {
             $key = self::showKey($it['section'] ?? '', $it['show']);
