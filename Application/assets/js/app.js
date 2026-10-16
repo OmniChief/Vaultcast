@@ -12989,11 +12989,18 @@ function viewCollectionDetail(){
     });
   }
   function loadHome(){
-    Promise.all([api('/home'), meP]).then(function(results){
-      var j = results[0];
-      if (!j.ok) { toast(j.error||'Home failed'); render(); return; }
+    var startup = window.__STREAM_STARTUP__;
+    var sameUser = startup && startup.me && String((startup.me.user || {}).id || '') === String((state.user || {}).id || '');
+    var initialHome = sameUser && startup.home;
+    if (window.__STREAM_STARTUP__) window.__STREAM_STARTUP__.home = null;
+    var homeRequest = initialHome ? Promise.resolve(initialHome) : api('/home');
+    return homeRequest.then(function(j){
+      if (!j.ok) {
+        if (j._status === 401 || j._status === 403) return;
+        throw new Error(j.error || 'Home failed');
+      }
       state.home = j;
-      applyRoute().then(function(){
+      return applyRoute().then(function(){
         state._routed = true;
         applyClientMode();
         if (state.view === 'search' && state.searchQuery) { runGlobalSearch(state.searchQuery); replaceNav(); return; }
@@ -13002,7 +13009,15 @@ function viewCollectionDetail(){
         /* Deep link to a game: list page underneath (so Back/close returns to it), then start the game. */
         if (state._openGameItem) { var g = state._openGameItem; state._openGameItem = null; playItem(g); }
       });
-});
+    }).catch(function(){
+      var root = $('#app');
+      root.innerHTML = '';
+      root.appendChild(shell(h('div', { className:'empty-state', role:'alert' }, [
+        h('h2', { text:'Could not open your library' }),
+        h('p', { text:'Check your connection and try again.' }),
+        h('button', { className:'btn primary', text:'Try again', onClick:loadHome })
+      ])));
+    });
   }
 
   function renderPlayerAssets(){
@@ -13081,10 +13096,11 @@ function viewCollectionDetail(){
     document.head.appendChild(sm);
   };
 
-  // Fetch the account and home view together before rendering.
+  // The HTML response already authenticates this visitor and includes a warm home view.
   document.body.classList.remove('boot');
   if (window.__STREAM_TV__) document.body.classList.add('tv');
-  var meP = api('/me').then(function(j){
+  var initialMe = window.__STREAM_STARTUP__ && window.__STREAM_STARTUP__.me;
+  var meP = (initialMe ? Promise.resolve(initialMe) : api('/me')).then(function(j){
     if (j.ok && j.user) state.user = j.user;
     if (j.ok && typeof j.pending_convert_count === 'number') updateConvertNotif(j.pending_convert_count);
     return j;

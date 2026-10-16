@@ -48,6 +48,9 @@ if (isset($_GET['manifest'])) {
     echo json_encode($manifest, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
     exit;
 }
+require_once __DIR__ . '/src/bootstrap.php';
+$startup = Startup::snapshot();
+release_request_locks();
 require_once __DIR__ . '/src/Services/PlayerAssets.php';
 $shell = (string)file_get_contents(__DIR__ . '/src/Views/app.html');
 $config = '<script>window.__STREAM_BASE__=' . json_encode($base, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) . ';</script>';
@@ -55,6 +58,7 @@ $config .= '<script>window.VaultcastDependencies=' . json_encode(PlayerAssets::m
 $publicBase = trim((string)(\Vaultcast\Repository::document('settings', [])['public_base_url'] ?? ''));
 $config .= '<script>window.__PUBLIC_BASE_URL__=' . json_encode(preg_match('#^https?://#i', $publicBase) ? rtrim($publicBase, '/') . '/' : '', JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) . ';</script>';
 $config .= '<script>window.__SITE_NAME__=' . json_encode($siteName, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) . ';</script>';
+$config .= '<script>window.__STREAM_STARTUP__=' . json_encode($startup, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_INVALID_UTF8_SUBSTITUTE) . ';</script>';
 $assetVersion = substr(hash('sha256', hash_file('sha256', __DIR__ . '/assets/js/request-cache.js') . hash_file('sha256', __DIR__ . '/assets/js/app.js') . hash_file('sha256', __DIR__ . '/assets/js/routes.js') . hash_file('sha256', __DIR__ . '/assets/js/matching.js') . hash_file('sha256', __DIR__ . '/assets/js/netplay_sync.js') . hash_file('sha256', __DIR__ . '/assets/css/app.css')), 0, 16);
 // <base> keeps relative asset URLs working on deep links such as /tvshows/<show>/season-2.
 echo str_replace(['{{BASE_HREF}}', '<!-- VAULTCAST_CONFIG -->', '{{VERSION}}', '{{SITE_NAME}}', '{{ASSET_VERSION}}'], [htmlspecialchars($base, ENT_QUOTES, 'UTF-8'), $config, trim((string)file_get_contents(__DIR__ . '/VERSION')), htmlspecialchars($siteName, ENT_QUOTES, 'UTF-8'), $assetVersion], $shell);
