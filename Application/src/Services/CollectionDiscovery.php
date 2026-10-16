@@ -215,7 +215,7 @@ final class CollectionDiscovery {
             'source' => (string)($col['source'] ?? ''),
             'source_url' => $col['source_url'] ?? null,
             'source_query' => null,
-        ]);
+        ], false); // one refresh for the whole run when it finishes
         $list = Collections::all();
         foreach ($list as $i => $c) {
             if (($c['id'] ?? '') !== $created['collection']['id']) continue;

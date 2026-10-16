@@ -24,12 +24,16 @@ class Collections {
      */
     public static function publicList(): array {
         $out = [];
-        foreach (self::all() as $c) {
+        $all = self::all();
+        $owned = self::ownedItems($all);
+        foreach ($all as $c) {
             $parts = is_array($c['parts'] ?? null) ? $c['parts'] : [];
             $present = 0;
             $cover = null;
             foreach ($parts as $p) {
-                if (!is_array($p) || empty($p['present'])) continue;
+                if (!is_array($p)) continue;
+                $p = self::withOwned($p, $owned);
+                if (empty($p['present'])) continue;
                 $present++;
                 if ($cover === null && !empty($p['item'])) $cover = $p['item'];
             }
@@ -49,15 +53,39 @@ class Collections {
             ];
         }
         // Collections stored before snapshots existed: start ONE background refresh (never matched in-request)
-        if (array_filter($out, function ($c) { return empty($c['refreshed']); }) && !Store::get('collections_snapshot_queued', false)) {
-            Store::set('collections_snapshot_queued', date('c'));
-            self::queueRefresh(null, false);
-        }
+        self::ensureRefreshedOnce($out);
         /* VoD Collections tab always A–Z by collection name */
         usort($out, function ($a, $b) {
             return strcasecmp((string)($a['name'] ?? ''), (string)($b['name'] ?? ''));
         });
         return ['ok' => true, 'collections' => $out];
+    }
+
+    /**
+     * Library items for the item_ids stored on parts: one indexed primary-key query (no catalogue load).
+     * Lets owned/missing show correctly even before (or without) a Settings refresh.
+     */
+    private static function ownedItems(array $collections): array {
+        $ids = [];
+        foreach ($collections as $c) {
+            foreach ((array)($c['parts'] ?? []) as $p) {
+                if (is_array($p) && !empty($p['item_id'])) $ids[(string)$p['item_id']] = true;
+            }
+        }
+        $out = [];
+        foreach (array_chunk(array_keys($ids), 500) as $chunk) {
+            $rows = \Vaultcast\Repository::rows('SELECT payload FROM vaultcast_items WHERE id IN (' . implode(',', array_fill(0, count($chunk), '?')) . ')', $chunk);
+            foreach ($rows as $it) if (is_array($it) && isset($it['id'])) $out[(string)$it['id']] = $it;
+        }
+        return $out;
+    }
+
+    /** Owned = the stored item_id still exists in the library; snapshot item falls back to the live row. */
+    private static function withOwned(array $part, array $owned): array {
+        $iid = (string)($part['item_id'] ?? '');
+        $part['present'] = $iid !== '' && isset($owned[$iid]);
+        if ($part['present'] && empty($part['item'])) $part['item'] = Catalogue::publicItem($owned[$iid], false);
+        return $part;
     }
 
     /** Public view of one stored part (snapshot written by refresh()). */
@@ -83,26 +111,61 @@ class Collections {
      */
     public static function refresh(?string $onlyId = null, bool $fetchMeta = true): array {
         $res = self::rematch($onlyId);
-        $list = self::all();
         $items = self::catalogueItems();
+        // 1) Owned/missing + item snapshot for every part, saved at once (fast, no network)
+        $list = self::all();
         foreach ($list as &$c) {
             if ($onlyId !== null && ($c['id'] ?? '') !== $onlyId) continue;
             foreach ($c['parts'] as &$part) {
                 if (!is_array($part)) continue;
-                if (class_exists('Maintenance')) Maintenance::checkpoint();
                 $iid = (string)($part['item_id'] ?? '');
                 $part['present'] = $iid !== '' && isset($items[$iid]);
                 $part['item'] = $part['present'] ? Catalogue::publicItem($items[$iid], false) : null;
-                if ($fetchMeta && (empty($part['meta_at']) || (empty($part['poster_file']) && strtotime((string)$part['meta_at']) < time() - 7 * 86400))) {
-                    self::fetchPartMeta($part);
-                }
             }
             unset($part);
             $c['refreshed_at'] = date('c');
         }
         unset($c);
         self::save($list);
+        if (!$fetchMeta) return $res;
+        // 2) Posters + synopses (network), saved per collection and merged into the latest list
+        foreach ($list as $c) {
+            if ($onlyId !== null && ($c['id'] ?? '') !== $onlyId) continue;
+            $meta = [];
+            foreach ((array)($c['parts'] ?? []) as $k => $part) {
+                if (!is_array($part)) continue;
+                if (class_exists('Maintenance')) Maintenance::checkpoint();
+                if (!empty($part['meta_at']) && (!empty($part['poster_file']) || strtotime((string)$part['meta_at']) > time() - 7 * 86400)) continue;
+                self::fetchPartMeta($part);
+                $meta[self::partSig($part)] = array_intersect_key($part, array_flip(['meta_at', 'overview', 'poster_file', 'ext_id']));
+            }
+            if (!$meta) continue;
+            $latest = self::all();
+            foreach ($latest as &$lc) {
+                if (($lc['id'] ?? '') !== ($c['id'] ?? '')) continue;
+                foreach ($lc['parts'] as &$lp) {
+                    if (is_array($lp) && isset($meta[self::partSig($lp)])) $lp = array_merge($lp, $meta[self::partSig($lp)]);
+                }
+                unset($lp);
+            }
+            unset($lc);
+            self::save($latest);
+        }
         return $res;
+    }
+
+    private static function partSig(array $p): string {
+        return strtolower(trim((string)($p['title'] ?? ''))) . '|' . (string)($p['year'] ?? '');
+    }
+
+    /** Start ONE background refresh for collections never refreshed; the flag is set only when the job started. */
+    public static function ensureRefreshedOnce(array $public): void {
+        if (!array_filter($public, function ($c) { return empty($c['refreshed']); })) return;
+        if (Store::get('collections_snapshot_v2', false)) return;
+        try {
+            Maintenance::start('collections', 'Settings');
+            Store::set('collections_snapshot_v2', date('c'));
+        } catch (Throwable $e) { /* retried on a later load */ }
     }
 
     /** Refresh in the background (Maintenance CLI job); inline without network if no worker can start. */
@@ -166,7 +229,7 @@ class Collections {
         }
     }
 
-    public static function create(array $data): array {
+    public static function create(array $data, bool $refresh = true): array {
         $list = self::all();
         $col = [
             'id' => bin2hex(random_bytes(8)),
@@ -182,7 +245,7 @@ class Collections {
         ];
         $list[] = $col;
         self::save($list);
-        self::queueRefresh($col['id']);
+        if ($refresh) self::queueRefresh($col['id']);
         return ['ok' => true, 'collection' => $col];
     }
 
@@ -232,12 +295,17 @@ class Collections {
         $itemId = (string)$itemId;
         if ($itemId === '') json_error('item_id required', 400);
         $out = [];
-        foreach (self::all() as $c) {
+        $all = array_values(array_filter(self::all(), function ($c) use ($itemId) {
+            foreach ((array)($c['parts'] ?? []) as $p) if (is_array($p) && (string)($p['item_id'] ?? '') === $itemId) return true;
+            return false;
+        }));
+        $owned = self::ownedItems($all);
+        foreach ($all as $c) {
             $parts = [];
             $matched = false;
             foreach ((array)($c['parts'] ?? []) as $i => $part) {
                 if (!is_array($part)) continue;
-                $pp = self::publicPart((int)$i, $part);
+                $pp = self::publicPart((int)$i, self::withOwned($part, $owned));
                 $pp['current'] = $pp['present'] && (string)$pp['item_id'] === $itemId;
                 if ($pp['current']) $matched = true;
                 $parts[] = $pp;
@@ -254,8 +322,9 @@ class Collections {
         $col = self::get($id);
         if (!$col) json_error('Not found', 404);
         $parts = [];
+        $owned = self::ownedItems([$col]);
         foreach ((array)($col['parts'] ?? []) as $i => $part) {
-            if (is_array($part)) $parts[] = self::publicPart((int)$i, $part);
+            if (is_array($part)) $parts[] = self::publicPart((int)$i, self::withOwned($part, $owned));
         }
         $missing = array_values(array_filter($parts, function ($p) { return !$p['present']; }));
         $pub = $col;

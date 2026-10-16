@@ -25,6 +25,7 @@ if (preg_match('#^/collections/([a-f0-9]+)$#', $path, $m) && $method === 'GET') 
 
 
 if ($path === '/admin/collections' && $method === 'GET') {
+    Collections::ensureRefreshedOnce(Collections::publicList()['collections']);
     json_out(['ok' => true, 'collections' => Collections::all()]);
 }
 
