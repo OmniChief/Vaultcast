@@ -10258,8 +10258,7 @@ h('div', { className:'cv-find-bar' }, [
     var wrap = h('div', { id:'collections-view', className:'panel panel-collections' }, [
       h('div', { className:'hero' }, [
         h('h1', { text:'Collections' }),
-        h('p', { className:'muted', text:'Film series & show groups — tap a poster to expand its titles' }),
-        (state.user && state.user.role === 'admin') ? findCollectionsPanel(function(){ if (state.view === 'collections') render(); }) : null
+        h('p', { className:'muted', text:'Film series & show groups — tap a poster to expand its titles' })
       ]),
       h('div', { id:'pub_col_list', className:'collections-grid' }, [ pendingContent({ className:'muted', }) ])
     ]);
@@ -10269,7 +10268,7 @@ h('div', { className:'cv-find-bar' }, [
       if (!r.ok || !(r.collections||[]).length) {
         list.innerHTML = '';
         list.className = 'collections-grid';
-        list.appendChild(emptyState('No collections', 'Admins can import franchises from Wikipedia / TVMaze under Admin → Collections.'));
+        list.appendChild(emptyState('No collections', ''));
         return;
       }
 
