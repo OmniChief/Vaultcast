@@ -150,6 +150,7 @@ final class MediaFacts
                 try { Catalogue::sectionShows((string)$sec['id']); } catch (\Throwable $e) {}
             }
         }
+        Catalogue::warmRandomShowcases();
         Catalogue::homeLibrary();
         Catalogue::showPosterHint('');
         $out['seconds'] = round(microtime(true) - $t0, 1);
