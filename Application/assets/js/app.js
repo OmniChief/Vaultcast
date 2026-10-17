@@ -1276,6 +1276,19 @@ function confirmDialog(message, opts){
 
   function playItem(item, opts){
     opts = opts || {};
+    if (!opts.inline && !opts.lobby) {
+      if (item.media_kind === 'rom' || item.type === 'roms') { openGame(item); return; }
+      if (item.show_key && (state.view !== 'show' || String(state.showKey) !== String(item.show_key))) { state._pendingEpisode = item; openShow(item.show_key, item.season, item.episode); return; }
+      if (!item.show && (item.media_kind === 'video' || item.type === 'movies' || item.type === 'disney') && state.view !== 'movie') { openMovie(item.id); return; }
+    }
+    var pageHost = document.getElementById('detail-player');
+    var requestId = ++_playRequestId;
+    function showRetry(){
+      if (!pageHost || !pageHost.isConnected || requestId !== _playRequestId) return;
+      pageHost.appendChild(h('button', {className:'btn', type:'button', text:'Retry player', onClick:function(){
+        pageHost.innerHTML = ''; playItem(item, Object.assign({}, opts, {inline:true}));
+      }}));
+    }
     openPlayer._lobbyOpts = opts.lobby || null;
     // Lazy-fill poster/metadata cache when user opens an item that has no poster yet
     try {
@@ -1291,7 +1304,9 @@ function confirmDialog(message, opts){
     var pref = opts.audio != null ? opts.audio : getAudioPref(item.id);
     if (pref != null && !isNaN(pref)) body.audio = pref;
     api('/items/'+item.id+'/play', { method:'POST', body: body }).then(function(j){
+      if (requestId !== _playRequestId || (pageHost && !pageHost.isConnected)) return;
       if (!j.ok) {
+        showRetry();
         if (needsConvertExt(item) && state.user && state.user.role === 'admin') {
           if (confirm((j.error || 'Play failed') + '\n\nQueue ffmpeg convert to DirectPlay MP4?')) enqueueConvert(item);
         } else {
@@ -1299,8 +1314,19 @@ function confirmDialog(message, opts){
         }
         return;
       }
+      j.autoplay = opts.autoplay !== false;
       openPlayer(item, j);
-    }).catch(function(e){ toast(String(e)); });
+    }).catch(function(e){ if (requestId !== _playRequestId) return; showRetry(); toast(String(e)); });
+  }
+  var _playRequestId = 0;
+
+  function mountDetailPlayer(player, host, focus){
+    (host || document.body).appendChild(player);
+    if (host && focus) {
+      player.setAttribute('tabindex', '-1');
+      player.scrollIntoView({block:'start', behavior:'smooth'});
+      player.focus({preventScroll:true});
+    }
   }
 
   /* saved resume position (seconds) for an item; 0 = start from beginning */
@@ -1324,23 +1350,24 @@ function confirmDialog(message, opts){
     openPlayer._deskPlayStarted = false;
     openPlayer._deskRecoverTries = 0;
     openPlayer._deskRecovering = false;
+    var inlineHost = play.media_kind === 'audio' ? null : document.getElementById('detail-player');
     if (play && play.media_kind === 'rom' && item && item.game_path) state.gamePath = item.game_path;
-    pushNav({ player:true, itemId: item.id });
-    var overlay = h('div', { className:'player-overlay player-simple', id:'player-overlay' });
+    if (!inlineHost) pushNav({ player:true, itemId: item.id });
+    var overlay = h('div', { className:'player-overlay player-simple' + (inlineHost ? ' player-inline' : ''), id:'player-overlay' });
     if (state.gamePath) overlay.appendChild(shareButton(function(){ return routePath(); }, 'Copy link to this game'));
-    overlay.appendChild(h('button', {
+    if (!inlineHost) overlay.appendChild(h('button', {
       className:'player-close', id:'player-back', text:'\u00d7', title:'Back',
       onClick: function(){ try { history.back(); } catch (e) { closePlayer(); } }
     }));
 
     if (play.media_kind === 'rom') {
       try {
-        overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;width:100%;height:100%;z-index:1000;background:#000;margin:0;padding:0;overflow:hidden;display:block;';
+        if (!inlineHost) overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;width:100%;height:100%;z-index:1000;background:#000;margin:0;padding:0;overflow:hidden;display:block;';
       } catch (eRo) {}
       var root = h('div', { id:'emu-root' });
       root.style.cssText = 'position:absolute;top:0;left:0;right:0;bottom:0;width:100%;height:100%;background:#000;z-index:1;';
       overlay.appendChild(root);
-      document.body.appendChild(overlay);
+      mountDetailPlayer(overlay, inlineHost, true);
       loadEmulator(root, play, item, openPlayer._lobbyOpts || null);
       openPlayer._lobbyOpts = null;
       return;
@@ -1351,7 +1378,7 @@ function confirmDialog(message, opts){
     if (play.media_kind === 'audio') {
       media = h('audio', { id:'player-media', controls:true, autoplay:true, preload:'auto', src: src });
     } else {
-      media = h('video', { id:'player-media', controls:true, autoplay:true, playsinline:true, preload:'auto' });
+      media = h('video', { id:'player-media', controls:true, autoplay:play.autoplay !== false, playsinline:true, preload:'metadata' });
       media.setAttribute('webkit-playsinline', 'true');
       media.setAttribute('playsinline', 'true');
       if (play.mime) {
@@ -1402,7 +1429,7 @@ function confirmDialog(message, opts){
       var cur = media.currentSrc || media.src || '';
       if (!openPlayer._deskPlayStarted && !directTried && cur.indexOf('/stream/play') >= 0 && cur.indexOf('direct=1') < 0) {
         directTried = true;
-        try { media.src = cur + (cur.indexOf('?') >= 0 ? '&' : '?') + 'direct=1'; media.play(); } catch (eD) {}
+        try { media.src = cur + (cur.indexOf('?') >= 0 ? '&' : '?') + 'direct=1'; if (play.autoplay !== false || openPlayer._deskPlayStarted) media.play(); } catch (eD) {}
         return;
       }
       /* soft mid-play recover (token refresh + seek) before convert toast */
@@ -1447,15 +1474,15 @@ function confirmDialog(message, opts){
       });
       overlay.appendChild(convertBtn);
     }
-    document.body.appendChild(overlay);
-    if (document.body.classList.contains('tv') || document.body.classList.contains('mode-tv') || document.documentElement.getAttribute('data-client-mode')==='tv') {
+    mountDetailPlayer(overlay, inlineHost, play.autoplay !== false);
+    if (!inlineHost && (document.body.classList.contains('tv') || document.body.classList.contains('mode-tv') || document.documentElement.getAttribute('data-client-mode')==='tv')) {
       try {
         overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;width:100%;height:100%;z-index:1000;background:#000;margin:0;padding:0;overflow:hidden;display:block;';
         media.style.cssText = 'position:absolute;top:0;left:0;right:0;bottom:0;width:100%;height:100%;max-width:none;max-height:none;margin:0;padding:0;border:0;background:#000;z-index:1;opacity:1;visibility:visible;object-fit:contain;';
       } catch (eLay) {}
     }
     try {
-      var pr = media.play();
+      var pr = play.autoplay !== false ? media.play() : null;
       if (pr && pr.catch) pr.catch(function(){});
     } catch(e){}
     /* MKV/etc: if video stays at videoWidth=0 (black picture / audio-only), emphasise Convert */
@@ -1465,9 +1492,9 @@ function confirmDialog(message, opts){
         blackChecks++;
         var vw = 0;
         try { vw = media.videoWidth || 0; } catch (eV) {}
-        if (vw > 0 || blackChecks > 8 || !document.getElementById('player-overlay')) {
+        if (vw > 0 || blackChecks > 8 || !overlay.isConnected) {
           clearInterval(blackTimer);
-          if (vw > 0) return;
+          if (vw > 0 || !overlay.isConnected || !openPlayer._deskPlayStarted) return;
           if (state.user && state.user.role === 'admin') {
             if (convertBtn) {
               convertBtn.textContent = 'Convert — black video / no picture';
@@ -1658,7 +1685,7 @@ function confirmDialog(message, opts){
 
   function closePlayer(opts){
     opts = opts || {};
-    state.gamePath = null;
+    if (state.view !== 'game') state.gamePath = null;
     openPlayer._absTime = null; openPlayer._absDuration = null;
     if (!opts.preserveLobby) {
       try { lobbyEndHostSession(); } catch (eLobbyEnd) {}
@@ -1694,7 +1721,7 @@ function confirmDialog(message, opts){
   }
   function onAppPopState(ev){
     var st = ev.state;
-    if (document.getElementById('player-overlay')) {
+    if (document.getElementById('player-overlay') && !document.querySelector('.player-inline')) {
       closePlayer();
       return;
     }
@@ -1708,6 +1735,7 @@ function confirmDialog(message, opts){
     if (st.movieId != null) state.movieId = st.movieId;
     if (st.collectionId != null) state.collectionId = st.collectionId;
     state.movieSlug = st.movieSlug || null; state.showSlug = st.showSlug || null;
+    state.gamePath = st.gamePath || null;
     state.showSeason = st.showSeason != null ? st.showSeason : null; state.showEpisode = st.showEpisode != null ? st.showEpisode : null;
     if (st.settingsSection != null) state.settingsSection = st.settingsSection;
     if (st.playTab != null) state.playTab = st.playTab;
@@ -3347,7 +3375,7 @@ try {
   function currentMode(){
     var v = state.view;
     if (v === 'live') return 'live';
-    if (v === 'play') return 'play';
+    if (v === 'play' || v === 'game') return 'play';
     if (v === 'section' && state.sectionType === 'roms') return 'play';
     if (v === 'admin' || v === 'settings' || v === 'login' || v === 'welcome') return '';
     return 'vod';
@@ -3365,7 +3393,7 @@ try {
   var R = window.VaultcastRoutes;
   function routePath(extra){
     extra = extra || {};
-    if (state.gamePath && !extra.live) return R.build({ view:'play', gamePath: state.gamePath });
+    if (state.view === 'game' && state.gamePath && !extra.live) return R.build({ view:'play', gamePath: state.gamePath });
     return R.build({ systemSlug: state.view === 'play' && state.sectionSystem ? (state.sectionSystemSlug || null) : null, view: state.view, movieSlug: state.movieSlug, movieId: state.movieId, showSlug: state.showSlug, showKey: state.showKey,
       season: state.showSeason, episode: state.showEpisode, liveCh: extra.live || null, playTab: state.playTab, section: state.section,
       collectionId: state.collectionId, searchQuery: state.searchQuery, settingsSection: state.settingsSection, adminTab: state.adminTab });
@@ -3409,7 +3437,7 @@ try {
             var it = d && (d.item || d);
             if (!it || !it.id) { toast('Game not found', { kind:'bad' }); return; }
             if (it.system) { state.sectionSystem = it.system; state.sectionSystemSlug = String(it.game_path || '').split('/')[0] || null; }
-            state._openGameItem = it;
+            state.gameItem = it; state.movieId = it.id; state.gamePath = it.game_path || null; state.view = 'game';
           });
         }
       });
@@ -5022,24 +5050,35 @@ try {
   }
 
   function openMovie(itemId){
+    state._pendingEpisode = null;
     if (state.movieId !== itemId) state.movieSlug = null;
     state.movieId = itemId;
     state.view = 'movie';
     render();
   }
 
+  function openGame(item){
+    state._pendingEpisode = null;
+    state.gameItem = item;
+    state.movieId = item.id;
+    state.gamePath = item.game_path || null;
+    state.view = 'game';
+    render();
+  }
+
   var _movieLoadSeq = 0;
 
   function viewMovie(){
-    var wrap = h('div', { id:'movie-view' }, [ h('div', { className:'hero' }, [ h('h1', { text:'Movie' }), pendingContent() ]) ]);
+    var wrap = h('div', { id:'movie-view' }, [ h('div', { className:'hero' }, [ h('h1', { text:state.view === 'game' ? 'Game' : 'Movie' }), pendingContent() ]) ]);
     loadMovie(state.movieId);
     return shell(wrap);
   }
 
   function loadMovie(itemId){
     var seq = ++_movieLoadSeq;
+    var isGame = state.view === 'game';
     function stillHere(){
-      return seq === _movieLoadSeq && state.view === 'movie' && String(state.movieId) === String(itemId);
+      return seq === _movieLoadSeq && state.view === (isGame ? 'game' : 'movie') && String(state.movieId) === String(itemId);
     }
     function paintError(msg){
       if (!stillHere()) return;
@@ -5056,9 +5095,10 @@ try {
       if (!stillHere()) return;
       var root = $('#movie-view');
       if (!root) return;
-      if (!j || !j.ok || !j.item) { paintError('Movie not found'); return; }
+      if (!j || !j.ok || !j.item) { paintError(isGame ? 'Game not found' : 'Movie not found'); return; }
       var item = j.item;
-      if (item.slug && stillHere() && state.movieSlug !== item.slug) { state.movieSlug = item.slug; replaceNav(); }
+      if (isGame) { state.gameItem = item; state.gamePath = item.game_path || state.gamePath; replaceNav(); }
+      else if (item.slug && stillHere() && state.movieSlug !== item.slug) { state.movieSlug = item.slug; replaceNav(); }
       root.innerHTML = '';
       var poster = h('div', { className:'poster poster-pending movie-hero-poster', 'data-poster-fetch':'1', 'data-backdrop-src':'1', 'data-poster-variant':'full' }, [
         h('div', { className:'ph', text: item.title || 'Movie' })
@@ -5068,8 +5108,7 @@ try {
           if (item.section) navigate('section', item.section);
           else { state.view='home'; render(); }
         }}),
-        h('button', { className:'btn primary', text:'Play', onClick: function(){ playItem(item); } }),
-        shareButton(function(){ return 'movies/' + encodeURIComponent(item.slug || item.id); }, 'Copy link to this movie'),
+        shareButton(function(){ return isGame ? routePath() : 'movies/' + encodeURIComponent(item.slug || item.id); }, isGame ? 'Copy link to this game' : 'Copy link to this movie'),
         h('button', { className:'btn', text:'Find alternate', onClick: function(){
           openAlternateFinder({
             title: item.title || '',
@@ -5079,7 +5118,8 @@ try {
         }})
       ];
       if (!canManageDownloads()) actions = actions.filter(function(button){ return button.textContent !== 'Find alternate'; });
-      actions = actions.concat(detailMatchButtons(item, null));
+      if (!isGame) actions = actions.concat(detailMatchButtons(item, null));
+      else actions = actions.filter(function(button){ return button.textContent !== 'Find alternate'; });
       if (item.file_exists === false) {
         actions.push(h('span', { className:'bad', text:'File missing on disk' }));
       }
@@ -5101,10 +5141,12 @@ try {
         box.appendChild(sel);
         box.appendChild(h('span', { className:'muted', text:' Stored locally; applied on DirectPlay when browser allows.' }));
       }).catch(function(){ /* probe is optional */ });
-      var meta = [item.year, item.ext, item.size ? fmtSize(item.size) : null, item.synopsis_source].filter(Boolean);
+      var meta = [item.system, item.year, item.ext, item.size ? fmtSize(item.size) : null, item.synopsis_source].filter(Boolean);
       var synopsisEl = item.synopsis
         ? h('p', { className:'synopsis', id:'movie-synopsis', text: item.synopsis })
         : h('p', { className:'muted', id:'movie-synopsis', text: 'No synopsis cached yet.' });
+      var playerHost = h('div', {id:'detail-player', className:'detail-player'});
+      root.appendChild(playerHost);
       root.appendChild(h('div', { className:'hero detail-hero', 'data-backdrop-host':'1', style:'display:flex;gap:20px;align-items:flex-end;flex-wrap:wrap' }, [
         poster,
         h('div', { style:'flex:1;min-width:200px' }, [
@@ -5120,8 +5162,11 @@ try {
         observePoster(poster, item.id, 'item');
         loadPosterNow(poster, item.id, 'item');
       }
-      root.appendChild(h('div', { id:'movie-collections' }));
-      mountMovieCollections(item.id);
+      if (!isGame) {
+        root.appendChild(h('div', { id:'movie-collections' }));
+        mountMovieCollections(item.id);
+      }
+      if (item.file_exists !== false) playItem(item, {inline:true, autoplay:false});
     }).catch(function(e){
       paintError(String(e && e.message || e || 'Could not load movie'));
     });
@@ -5925,7 +5970,9 @@ try {
       function paint(sel, fromTab){
         activeSeason = sel;
         if (fromTab) { state.showSeason = sel; state.showEpisode = null; syncUrl(); }
-        root.innerHTML = '';
+        var playerHost = root.querySelector('#detail-player');
+        Array.prototype.slice.call(root.children).forEach(function(child){ if (child !== playerHost) child.remove(); });
+        if (!playerHost) { playerHost = h('div', {id:'detail-player', className:'detail-player'}); root.appendChild(playerHost); }
         var heroPoster = h('div', { className:'poster poster-pending show-hero-poster', 'data-poster-fetch':'1', 'data-backdrop-src':'1', 'data-poster-variant':'full' }, [
           h('div', { className:'ph', text: show.title })
         ]);
@@ -6143,6 +6190,7 @@ try {
         firstPaint = false;
       }
       paint(selected);
+      if (state._pendingEpisode && String(state._pendingEpisode.show_key) === String(showKey)) { var pendingEpisode = state._pendingEpisode; state._pendingEpisode = null; playItem(pendingEpisode, {inline:true}); }
       loadDownloadStatus(false).then(function(fresh){
         if (!stillHere() || !fresh || JSON.stringify(fresh.downloading || []) === JSON.stringify(dl.downloading || [])) return;
         dl = fresh;
@@ -13044,6 +13092,9 @@ function viewCollectionDetail(){
   function render(){ renderView(); syncUrl(); }
   function renderView(){
     var root = $('#app');
+    _playRequestId++;
+    if (document.querySelector('.player-inline')) closePlayer();
+    if (state.view !== 'game') state.gamePath = null;
     if ((state.view === 'section' || state.view === 'show') && root.firstChild) {
       var nextView;
       var published = false;
@@ -13089,7 +13140,7 @@ function viewCollectionDetail(){
     if (state.view === 'home') root.appendChild(viewHome());
     else if (state.view === 'section') root.appendChild(viewSection());
     else if (state.view === 'show') root.appendChild(viewShow());
-    else if (state.view === 'movie') root.appendChild(viewMovie());
+    else if (state.view === 'movie' || state.view === 'game') root.appendChild(viewMovie());
     else if (state.view === 'search') root.appendChild(viewSearch());
     else if (state.view === 'collections') root.appendChild(viewCollections());
     else if (state.view === 'collection') root.appendChild(viewCollectionDetail());
