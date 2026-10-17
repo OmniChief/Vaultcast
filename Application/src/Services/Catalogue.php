@@ -23,6 +23,7 @@ class Catalogue {
     }
 
     public static function save(array $cat): bool {
+        $cat = LibraryEditor::filterCatalogue($cat);
         $ok = Store::set('catalogue', $cat);
         if ($ok) self::invalidateDerivedCaches();
         return $ok;
@@ -66,7 +67,8 @@ class Catalogue {
         $revision = self::$derivedRevisions[$key] ?? self::derivedRevision($filePrefix);
         if ($revision !== self::derivedRevision($filePrefix)) return;
         // Arbitrary search/filter pages expire; shared summaries remain revision-managed.
-        $defaultPage = $filePrefix === 'browse_shows' && preg_match('/\|p=1\|per=48\|q=\|L=\|g=\|y=\|d=\|st=\|net=$/D', $salt);
+        $defaultPage = ($filePrefix === 'browse_shows' && preg_match('/\|p=1\|per=48\|q=\|L=\|g=\|y=\|d=\|st=\|net=$/D', $salt))
+            || ($filePrefix === 'browse_items' && preg_match('/\|p=1\|per=48\|q=\|L=\|sys=\|g=\|y=\|d=\|a=$/D', $salt));
         $ttl = in_array($filePrefix, ['browse_items','browse_shows'], true) && !$defaultPage ? 600 : 0;
         \Vaultcast\Repository::cachePut($key, ['revision'=>$revision, 'payload'=>$payload], $ttl);
     }
@@ -83,6 +85,29 @@ class Catalogue {
     public static function movieFacetsCached(string $sectionId, array $items): array {
         $pack = self::movieFacetPack($sectionId, $items);
         return $pack['facets'];
+    }
+
+    public static function movieFacetsForBrowse(string $sectionId): array {
+        $pack = self::browseCacheGet('facets_movies', $sectionId);
+        if (isset($pack['facets'])) return ['facets'=>$pack['facets'], 'pending'=>false];
+        self::queueBrowseWarmup();
+        $previous = \Vaultcast\Repository::cacheGet('movie-facets-last|' . $sectionId);
+        return ['facets'=>$previous['facets'] ?? ['years'=>[], 'decades'=>[], 'genres'=>[]], 'pending'=>true];
+    }
+
+    public static function queueBrowseWarmup(): void {
+        $dir = STREAM_DATA . '/runtime';
+        if (!is_dir($dir)) @mkdir($dir, 0775, true);
+        $lock = @fopen($dir . '/browse-warmup.lock', 'c');
+        if (!$lock) return;
+        try {
+            if (!flock($lock, LOCK_EX | LOCK_NB)) return;
+            $state = \Vaultcast\Repository::cacheGet('browse-warmup-job');
+            if ($state) return;
+            $job = Maintenance::start('views', 'Prepare missing browse caches');
+            if (!empty($job['ok'])) \Vaultcast\Repository::cachePut('browse-warmup-job', ['id'=>$job['job']['id'] ?? null], 300);
+        } catch (Throwable $e) { error_log('Browse warmup: ' . $e->getMessage()); }
+        finally { flock($lock, LOCK_UN); fclose($lock); }
     }
 
     /**
@@ -120,6 +145,7 @@ class Catalogue {
         arsort($genres);
         $facets = ['years' => $years, 'decades' => $decades, 'genres' => $genres];
         self::shmCachePut('facets_movies', $sectionId, ['facets' => $facets, 'genres_by_id' => $byId]);
+        \Vaultcast\Repository::cachePut('movie-facets-last|' . $sectionId, ['facets'=>$facets], 0);
         return ['facets' => $facets, 'genres_by_id' => $byId];
     }
 
@@ -1672,7 +1698,7 @@ class Catalogue {
                     !empty($meta['show_dir']) ? (string)$meta['show_dir'] : (!empty($meta['local_poster']) ? dirname((string)$meta['local_poster']) : null)
                 )),
                 'tvmaze_id' => is_array($tvmaze) ? ($tvmaze['id'] ?? null) : null,
-                'synopsis' => is_array($tvmaze) ? ($tvmaze['summary'] ?? null) : null,
+                'synopsis' => Posters::showSynopsisCached((string)$meta['show_key']) ?? (is_array($tvmaze) ? ($tvmaze['summary'] ?? null) : null),
                 'genres' => is_array($tvmaze) ? ($tvmaze['genres'] ?? []) : [],
                 'episode_source' => $source,
             ],
@@ -1807,7 +1833,13 @@ class Catalogue {
                     'shows'=>array_map(['Catalogue','publicShow'], array_slice($shows,0,48)), 'cached'=>true
                 ]);
             } elseif (in_array($type, ['movies','disney'], true)) {
-                self::movieFacetsCached($id, self::sectionItems($id));
+                $facets = self::movieFacetsCached($id, self::sectionItems($id));
+                $salt = $id . '|p=1|per=48|q=|L=|sys=|g=|y=|d=|a=';
+                self::browseCacheGet('browse_items', $salt);
+                $out = \Vaultcast\Repository::browse($id, '', '', '', 1, 48);
+                $out['facets'] = $facets;
+                $out['items'] = self::publicItems($out['items']);
+                self::browseCachePut('browse_items', $salt, $out);
                 self::randomPublic($id, 16);
             }
         }
@@ -2454,7 +2486,7 @@ class Catalogue {
                 $synopsis = Posters::showSynopsisCached($key);
                 $synopsisSource = $synopsis ? 'tvmaze' : null;
                 $synopsisPending = $synopsis === null;
-            } elseif ($type === 'movies' || $type === 'disney' || ($it['media_kind'] ?? '') === 'video') {
+            } elseif ($type === 'movies' || $type === 'disney' || in_array($it['media_kind'] ?? '', ['video', 'rom'], true)) {
                 if ($type === 'movies' || $type === 'disney' || empty($it['show'])) {
                     $c = Posters::movieSynopsisCached($it['id']);
                     $synopsis = $c['summary'];

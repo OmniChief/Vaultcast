@@ -745,6 +745,7 @@ function confirmDialog(message, opts){
     opts = opts || {};
     var method = String(opts.method || 'GET').toUpperCase();
     if (method !== 'GET') {
+      if (/^\/items\/[a-f0-9]+\/play$/.test(path) || path === '/admin/posters/audit') return apiRequest(path, opts);
       navigationCache.clear();
       return apiRequest(path, opts).then(function(j){ navigationCache.clear(); return j; }, function(error){ navigationCache.clear(); throw error; });
     }
@@ -810,9 +811,18 @@ function confirmDialog(message, opts){
   var POSTER_CACHE = 'vaultcast-posters-v2';
   var POSTER_CACHE_MAX_AGE = 60 * 60 * 1000;
   var _posterMem = Object.create(null);
+  var posterRevision = '2';
+  try {posterRevision = localStorage.getItem('vaultcast-artwork-revision') || '2';} catch (eArtRevision) {}
+  function refreshArtwork(){
+    posterRevision = String(Date.now());
+    try {localStorage.setItem('vaultcast-artwork-revision', posterRevision);} catch (eArtRevision) {}
+    _posterMem = Object.create(null); _posterRequests = Object.create(null);
+    navigationCache.clear();
+    return window.caches ? caches.delete(POSTER_CACHE).catch(function(){}) : Promise.resolve();
+  }
 
   function posterCacheRequest(cacheId, variant){
-    var key = String(cacheId || '') + '|' + String(variant || 'full') + '|' + (supportsWebP() ? 'w1' : 'w0');
+    var key = String(cacheId || '') + '|' + String(variant || 'full') + '|' + (supportsWebP() ? 'w1' : 'w0') + '|' + posterRevision;
     return new Request(BASE + 'poster-cache/' + encodeURIComponent(key), { credentials:'same-origin' });
   }
   /* WebP feature-detect once — non-supporting browsers get original JPG/PNG */
@@ -829,7 +839,7 @@ function confirmDialog(message, opts){
     variant = variant || 'full';
     q += '&variant=' + encodeURIComponent(variant);
     q += supportsWebP() ? '&webp=1' : '&webp=0';
-    q += '&art=2'; // bypass original-image responses cached immutable by older builds
+    q += '&art=' + posterRevision;
     if (kind === 'show') return API + '/shows/' + cacheId + '/poster' + q;
     if (kind === 'season') {
       // cacheId = showKey + '-s' + season
@@ -1039,7 +1049,7 @@ function confirmDialog(message, opts){
     var itemId = job.itemId;
     var kind = job.kind;
     var variant = job.variant || el.getAttribute('data-poster-variant') || 'full';
-    var memKey = String(itemId) + '|' + variant + '|' + (supportsWebP() ? 'w1' : 'w0');
+    var memKey = String(itemId) + '|' + variant + '|' + (supportsWebP() ? 'w1' : 'w0') + '|' + posterRevision;
     var key = posterCacheRequest(itemId, variant);
     return new Promise(function(resolve){
       var finished = false;
@@ -5037,6 +5047,9 @@ try {
         else tools.openMovieFix(item);
       });
     }}));
+    if (state.user && state.user.role === 'admin') buttons.push(h('button', {className:'btn ghost', type:'button', text:'Manual edit', onClick:function(){
+      withTools(function(tools){ if (state.user && state.user.role === 'admin') tools.editDialog(item, showKey); });
+    }}));
     return buttons;
   }
 
@@ -5118,8 +5131,8 @@ try {
         }})
       ];
       if (!canManageDownloads()) actions = actions.filter(function(button){ return button.textContent !== 'Find alternate'; });
-      if (!isGame) actions = actions.concat(detailMatchButtons(item, null));
-      else actions = actions.filter(function(button){ return button.textContent !== 'Find alternate'; });
+      actions = actions.concat(detailMatchButtons(item, null));
+      if (isGame) actions = actions.filter(function(button){ return button.textContent !== 'Find alternate'; });
       if (item.file_exists === false) {
         actions.push(h('span', { className:'bad', text:'File missing on disk' }));
       }
@@ -8042,6 +8055,92 @@ try {
     return (n/1048576).toFixed(n>=10485760?0:1) + ' MB';
   }
 
+  function renderArtworkAudit(host){
+    var rows = [], selected = {}, running = false, stopped = false, page = 0;
+    var status = h('p', {className:'muted', role:'status', text:'Check library artwork references against files on disk.'});
+    var list = h('div', {className:'artwork-audit-list', style:'max-height:520px;overflow:auto'});
+    var all = h('input', {type:'checkbox', 'aria-label':'Select all artwork problems'});
+    var scan = h('button', {className:'btn', type:'button', text:'Check for missing / broken artwork'});
+    var stop = h('button', {className:'btn ghost', type:'button', text:'Stop', disabled:true, onClick:function(){stopped = true;}});
+    var repair = h('button', {className:'btn primary', type:'button', text:'Repair selected', disabled:true});
+    var panel = h('div', {className:'settings-card'}, [h('h3', {text:'Artwork integrity checker'}), status,
+      h('div', {className:'row-actions'}, [scan, stop, h('label', {}, [all, ' Select all results']), repair]), list]);
+    host.appendChild(panel);
+    function current(){ return panel.isConnected; }
+    function controls(){
+      var count = rows.filter(function(row){return !!selected[row.key];}).length;
+      repair.disabled = running || !count; scan.disabled = running; stop.disabled = !running; all.disabled = running;
+      all.checked = rows.length > 0 && count === rows.length; all.indeterminate = count > 0 && count < rows.length;
+      repair.textContent = 'Repair selected' + (count ? ' (' + count + ')' : '');
+    }
+    function openTools(row, edit){
+      var showKey = row.show_key;
+      api(showKey ? '/shows/' + encodeURIComponent(showKey) : '/items/' + encodeURIComponent(row.id) + '?synopsis=1').then(function(result){
+        if (!result.ok) throw new Error(result.error || 'Library entry not found');
+        var item = showKey ? result.show : result.item;
+        window.__nsEnsureMatching(function(){
+          if (!(state.user && state.user.role === 'admin') || !window.NSMatch) return;
+          if (edit) window.NSMatch.editDialog(item, showKey);
+          else if (showKey) {window.NSMatch.ui.openShow = showKey; openSettings('matching');}
+          else window.NSMatch.openMovieFix(item);
+        });
+      }).catch(function(error){toast(error.message, {kind:'bad'});});
+    }
+    function draw(){
+      list.innerHTML = '';
+      page = Math.max(0, Math.min(page, Math.ceil(rows.length / 100) - 1));
+      rows.slice(page * 100, page * 100 + 100).forEach(function(row){
+        var checkbox = h('input', {type:'checkbox', checked:!!selected[row.key], disabled:running, 'aria-label':'Select ' + row.title, onChange:function(event){selected[row.key] = event.target.checked; controls();}});
+        var actions = [h('button', {className:'btn ghost', type:'button', disabled:running, text:'Repair', onClick:function(){runRepairs([row]);}}),
+          h('button', {className:'btn ghost', type:'button', disabled:running, text:'Fix match', onClick:function(){openTools(row, false);}}),
+          h('button', {className:'btn ghost', type:'button', disabled:running, text:'Manual edit', onClick:function(){openTools(row, true);}})];
+        list.appendChild(h('div', {className:'panel', style:'padding:12px;margin:8px 0'}, [
+          h('label', {}, [checkbox, ' ' + (row.title || row.id) + ' · ' + row.kind + (row.season != null ? ' ' + row.season : '')]),
+          h('p', {className:row.missing ? 'bad' : 'muted', text:row.problems.join(' · ')}),
+          row.message ? h('p', {text:row.message}) : null, h('div', {className:'row-actions'}, actions)
+        ]));
+      });
+      if (rows.length > 100) list.appendChild(h('div', {className:'row-actions'}, [
+        h('button', {className:'btn', text:'Previous', disabled:!page, onClick:function(){page--;draw();}}),
+        h('span', {text:'Page ' + (page + 1) + ' of ' + Math.ceil(rows.length / 100)}),
+        h('button', {className:'btn', text:'Next', disabled:(page + 1) * 100 >= rows.length, onClick:function(){page++;draw();}})
+      ]));
+      controls();
+    }
+    all.onchange = function(){rows.forEach(function(row){selected[row.key] = all.checked;});draw();};
+    scan.onclick = function(){
+      running = true; stopped = false; rows = []; selected = {}; page = 0; draw();
+      function next(offset, revision){
+        if (!current()) return;
+        if (stopped) {running = false; status.textContent += ' · stopped';draw();return;}
+        api('/admin/posters/audit', {method:'POST', body:{offset:offset, revision:revision}}).then(function(result){
+          if (!current()) return;
+          if (!result.ok) throw new Error(result.error || 'Artwork check failed');
+          rows = rows.concat(result.items || []);
+          status.textContent = 'Checked ' + result.offset + '/' + result.total + ' artwork entries · ' + rows.length + ' problems';
+          if (result.more) {controls();setTimeout(function(){next(result.offset, result.revision);}, 50);}
+          else {running = false; status.textContent += rows.length ? ' · select entries to repair, match or edit' : ' · no problems found';draw();}
+        }).catch(function(error){running = false;status.textContent = error.message;draw();});
+      }
+      next(0);
+    };
+    function runRepairs(queue){
+      running = true; stopped = false; var completed = 0, resolved = 0; draw();
+      function next(){
+        if (!current()) return;
+        if (stopped || !queue.length) {running = false;status.textContent = 'Repaired ' + resolved + ' of ' + completed + ' checked entries' + (stopped ? ' · stopped' : '');draw();return;}
+        var row = queue.shift(); status.textContent = 'Repairing ' + (row.title || row.id) + ' · ' + queue.length + ' remaining';
+        api('/admin/posters/audit/repair', {method:'POST', body:{key:row.key}}).then(function(result){
+          if (!result.ok) throw new Error(result.error || 'Repair failed');
+          if (result.resolved) {resolved++; refreshArtwork(); rows = rows.filter(function(item){return item.key !== row.key;});delete selected[row.key];}
+          else {row.problems = result.item ? result.item.problems : row.problems;row.message = result.message;}
+        }).catch(function(error){row.message = error.message;}).then(function(){completed++;setTimeout(next, 50);});
+      }
+      next();
+    }
+    repair.onclick = function(){runRepairs(rows.filter(function(row){return selected[row.key];}));};
+  }
+
   function renderPosterOptimisePanel(){
     var host = $('#poster-optimise-panel');
     if (!host) return;
@@ -8434,6 +8533,7 @@ h('div', { className:'cv-find-bar' }, [
       h('div', { id:'po-glass-list', className:'cv-glass-list' })
     ]));
 
+    renderArtworkAudit(host);
     statusLine();
     applyPoCfg(poCfg);
     api('/admin/posters/optimise/summary').then(function(r){
@@ -13252,7 +13352,7 @@ function viewCollectionDetail(){
 
   /* helpers for assets/js/matching.js (Ingest inbox / Fix matching / Label reports) */
   window.NSApp = { h: h, api: api, toast: toast, confirmDialog: confirmDialog, render: render, state: state,
-    openSettings: openSettings, openShow: openShow, openMovie: openMovie, fmtSize: fmtSize, version: APP_VERSION };
+    openSettings: openSettings, openShow: openShow, openMovie: openMovie, openGame:openGame, navigate:navigate, refreshArtwork:refreshArtwork, fmtSize: fmtSize, version: APP_VERSION };
   // Load matching tools when Settings or a detail-page action needs them.
   var matchingCallbacks = [];
   window.__nsEnsureMatching = function(cb){

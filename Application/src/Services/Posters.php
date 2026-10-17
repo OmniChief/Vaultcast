@@ -912,6 +912,7 @@ class Posters {
     /** Cached show synopsis only (pin or TVMaze disk cache). Never hits the network. */
     public static function showSynopsisCached(string $showKey): ?string {
         $pin = self::showMetaPin($showKey);
+        if ($pin && !empty($pin['manual'])) return (string)($pin['summary'] ?? '');
         if ($pin && is_string($pin['summary'] ?? null) && $pin['summary'] !== '') return (string)$pin['summary'];
         $safe = preg_replace('/[^a-f0-9]/', '', $showKey);
         $cachePath = STREAM_DATA . '/tvmaze/show_' . $safe . '_episodes.json';
@@ -939,7 +940,7 @@ class Posters {
     /** Cached movie synopsis only (pin or disk). Never hits OMDb/Wikipedia. */
     public static function movieSynopsisCached(string $itemId): ?array {
         $pin = MetadataPins::get('movie_synopsis', $itemId);
-        if ($pin !== null && is_string($pin['summary'] ?? null) && $pin['summary'] !== '') {
+        if ($pin !== null && is_string($pin['summary'] ?? null) && ($pin['summary'] !== '' || !empty($pin['manual']))) {
             return ['summary' => (string)$pin['summary'], 'source' => (string)($pin['provider'] ?? 'pin'), 'pending' => false];
         }
         $cache = self::movieSynopsisCachePath($itemId);
@@ -1222,6 +1223,14 @@ class Posters {
      * ROM / game poster: libretro Named_Boxarts (GitHub raw — thumbnails.libretro.com is 404), then Wikipedia.
      */
     public static function fetchGamePoster(array $item): ?string {
+        $pin = self::moviePosterPin((string)$item['id']);
+        if ($pin) {
+            foreach (self::pinnedPosterUrls($pin) as $url) {
+                $saved = self::downloadToCache(self::gameCachePath((string)$item['id']), $url);
+                if ($saved) return $saved;
+            }
+            return null;
+        }
         $id = (string)($item['id'] ?? '');
         if ($id === '') return null;
         $dest = self::gameCachePath($id);

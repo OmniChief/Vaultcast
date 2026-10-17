@@ -52,7 +52,16 @@ final class Slugs
     {
         if (self::$reg !== null) return;
         $started = microtime(true);
-        $doc = self::$load ? call_user_func(self::$load) : \Vaultcast\Repository::document(self::DOC, []);
+        if (self::$load) $doc = call_user_func(self::$load);
+        else {
+            $revision = Store::revision(self::DOC);
+            $cached = \Vaultcast\Repository::cacheGet('slug-registry-v1');
+            if (($cached['revision'] ?? null) === $revision) $doc = $cached['registry'];
+            else {
+                $doc = \Vaultcast\Repository::document(self::DOC, []);
+                if ($revision === \Vaultcast\Repository::revision(self::DOC)) \Vaultcast\Repository::cachePut('slug-registry-v1', ['revision'=>$revision, 'registry'=>$doc], 0);
+            }
+        }
         self::$reg = [];
         foreach (self::KINDS as $k) self::$reg[$k] = is_array($doc[$k] ?? null) ? $doc[$k] : [];
         self::reindex();

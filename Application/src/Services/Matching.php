@@ -12,7 +12,7 @@ declare(strict_types=1);
 class Matching {
     const STORE = 'match_overrides';
     const REPORTS = 'label_reports';
-    const FIELDS = ['show', 'season', 'episode', 'episode_title', 'title', 'year'];
+    const FIELDS = ['show', 'season', 'episode', 'episode_title', 'title', 'year', 'poster', 'show_poster'];
 
     /* ------------------------------------------------------------------ store */
 
@@ -100,7 +100,7 @@ class Matching {
     }
 
     /** Write overrides for many items and patch the catalogue in place (one save each). */
-    public static function saveItemFields(array $rows, string $source, string $by = 'admin', bool $keepManual = false): array {
+    public static function saveItemFields(array $rows, string $source, string $by = 'admin', bool $keepManual = false, bool $scheduleBackup = true): array {
         $o = self::overrides();
         $cat = Catalogue::get();
         $changed = 0;
@@ -156,7 +156,7 @@ class Matching {
             $cat['updated_at'] = date('c');
             Catalogue::save($cat);
             Store::invalidate('catalogue');
-            $backup = MetadataSidecars::schedule();
+            $backup = $scheduleBackup ? MetadataSidecars::schedule() : ['ok'=>true];
         }
         return ['ok' => true, 'changed' => $changed, 'skipped' => $skipped, 'ids' => $updated] + (!empty($backup) && empty($backup['ok']) ? ['warning'=>$backup['warning']] : []);
     }
@@ -864,9 +864,10 @@ class Matching {
         if ($title === '') return ['ok' => false, 'error' => 'title required'];
         $row = ['id' => $id, 'title' => $title, 'year' => $b['year'] ?? null];
         if (!empty($b['imdb_id'])) $row['imdb_id'] = (string)$b['imdb_id'];
-        $res = self::saveItemFields([$row], 'manual', self::actor());
+        $res = self::saveItemFields([$row], 'manual', self::actor(), false, false);
         if (class_exists('Posters')) {
-            $dest = Posters::movieCachePath($id);
+            $isGame = ($it['media_kind'] ?? '') === 'rom';
+            $dest = $isGame ? Posters::gameCachePath($id) : Posters::movieCachePath($id);
             MetadataSidecars::invalidateMovie($it);
             Posters::clearCachedArtwork($dest);
             $synCache = Posters::movieSynopsisCachePath($id);
@@ -891,7 +892,10 @@ class Matching {
                 $bin = self::http($img, 15);
                 if ($bin !== null && strlen($bin) > 500) @file_put_contents($dest, $bin, LOCK_EX);
             }
-            if ($posterPin !== null && !is_file($dest)) Posters::fetchMoviePoster($id, $title, null);
+            if ($posterPin !== null && !is_file($dest)) {
+                if ($isGame) { $it['title'] = $title; Posters::fetchGamePoster($it); }
+                else Posters::fetchMoviePoster($id, $title, null);
+            }
         }
         self::log('MOVIE ' . $id . ' => ' . $title . ' (' . ($b['year'] ?? '') . ')');
         $backup = MetadataSidecars::schedule();

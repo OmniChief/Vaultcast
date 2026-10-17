@@ -1,5 +1,7 @@
 <?php
 declare(strict_types=1);
+if ($path === '/admin/posters/audit' && $method === 'POST') json_out(ArtworkAudit::scan(body_json()));
+if ($path === '/admin/posters/audit/repair' && $method === 'POST') json_out(ArtworkAudit::repair(body_json()));
 if ($path === '/admin/posters/status' && $method === 'GET') {
     try {
         json_out(Posters::coverage());
@@ -140,7 +142,7 @@ if (strpos($path, '/admin/match') === 0 || strpos($path, '/admin/ingest') === 0 
     if ($path === '/admin/match/search' && $method === 'POST') {
         $b = body_json();
         $kind = (string)($b['kind'] ?? 'tv');
-        $res = Ingest::search($kind, (string)($b['q'] ?? ''), isset($b['source']) ? (string)$b['source'] : null);
+        $res = $kind === 'game' ? PublicMetadata::search('game', (string)($b['q'] ?? ''), $b['source'] ?? null) : Ingest::search($kind, (string)($b['q'] ?? ''), isset($b['source']) ? (string)$b['source'] : null);
         if (empty($res['sources'])) $res['sources'] = PublicMetadata::sources($kind);
         json_out($res);
     }

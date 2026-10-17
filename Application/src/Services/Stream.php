@@ -517,10 +517,9 @@ class Stream {
             $path = PosterOptimise::pickServePath($path, $variant, $wantWebp);
         }
         if (!is_file($path)) self::posterMiss();
-        $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
-        if ($ext === 'webp') $mime = 'image/webp';
-        elseif ($ext === 'png') $mime = 'image/png';
-        else $mime = 'image/jpeg';
+        $info = @getimagesize($path);
+        $mime = $info['mime'] ?? '';
+        if (!in_array($mime, ['image/webp','image/png','image/jpeg','image/gif'], true)) self::posterMiss();
         header('Content-Type: ' . $mime);
         // Variant files can appear after background preparation; revalidate mutable URLs.
         header('Cache-Control: public, max-age=3600');
