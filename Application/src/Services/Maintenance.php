@@ -7,7 +7,7 @@ final class Maintenance
     private static $checked = 0.0;
     /** Background-only tasks started by the app itself (not listed in the maintenance UI). */
     const INTERNAL = ['ingest' => 'Import reviewed download'];
-    const TASKS = ['views' => 'Prepare browsing pages', 'epg' => 'Refresh programme guide', 'metadata' => 'Prepare artwork and synopses', 'scan' => 'Scan library folders', 'collections' => 'Match collections', 'downloads' => 'Import completed downloads', 'durations' => 'Fill Live media durations', 'facts' => 'Probe new media codecs and store show guides'];
+    const TASKS = ['search' => 'Prepare live search index', 'views' => 'Prepare browsing pages', 'epg' => 'Refresh programme guide', 'metadata' => 'Prepare artwork and synopses', 'scan' => 'Scan library folders', 'collections' => 'Match collections', 'downloads' => 'Import completed downloads', 'durations' => 'Fill Live media durations', 'facts' => 'Probe new media codecs and store show guides'];
 
     public static function runCommand(string $task, ?string $target = null): array
     {
@@ -77,6 +77,14 @@ final class Maintenance
     public static function run(string $id): array
     {
         if (PHP_SAPI !== 'cli' || !preg_match('/^\d{14}-[a-f0-9]{12}$/D', $id)) throw new RuntimeException('Invalid maintenance worker.');
+        // Children (including probes and artwork encoders) inherit the lower CPU priority.
+        if (PHP_OS_FAMILY !== 'Windows') {
+            if (function_exists('proc_nice')) @proc_nice(10);
+            // Optional system utility; no installation or administrator access required.
+            foreach (['/usr/bin/ionice','/bin/ionice'] as $ionice) if (is_executable($ionice)) {
+                Process::capture([$ionice,'-c','3','-p',(string)getmypid()],2);break;
+            }
+        }
         $job = \Vaultcast\Repository::document('maintenance-job:' . $id);
         if (!$job || $job['status'] !== 'queued') throw new RuntimeException('Task is no longer queued.');
         $lock = fopen(STREAM_DATA . '/maintenance.lock', 'c');
@@ -98,6 +106,7 @@ final class Maintenance
             $job['status'] = 'running'; $job['started_at'] = date('c');
             \Vaultcast\Repository::putDocument('maintenance-job:' . $id, $job);
             switch ($job['task']) {
+                case 'search': SearchIndex::warm(); $job['result']=['ok'=>true]; break;
                 case 'scan':
                     $job['result'] = Catalogue::rescan();
                     if (!isset($job['result']['ok']) || $job['result']['ok']) Catalogue::warmBrowseViews();

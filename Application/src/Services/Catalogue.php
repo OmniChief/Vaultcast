@@ -1815,6 +1815,7 @@ class Catalogue {
 
     /** Run during maintenance, before the next viewer needs these derived views. */
     public static function warmBrowseViews(): void {
+        SearchIndex::warm();
         foreach (\Vaultcast\Repository::document('catalogue', ['sections'=>[]])['sections'] ?? [] as $section) {
             Maintenance::checkpoint();
             $id = (string)$section['id'];

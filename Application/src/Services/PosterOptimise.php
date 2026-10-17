@@ -385,10 +385,10 @@ class PosterOptimise {
         $tmp = $dest . '.tmp.' . getmypid() . '.webp';
         $ffErr = null;
         if (self::ffmpegHasWebp()) {
-            $arguments = ['ffmpeg','-y','-threads','1','-hide_banner','-loglevel','error','-i',$src];
+            $arguments = ['ffmpeg','-y','-threads','1','-filter_threads','1','-filter_complex_threads','1','-hide_banner','-loglevel','error','-i',$src];
             // Never upscale; even height keeps every encoder happy.
             if ($maxW) array_push($arguments, '-vf', "scale='min(" . (int)$maxW . ",iw)':-2");
-            array_push($arguments, '-frames:v', '1', '-c:v','libwebp','-quality',(string)$quality,'-compression_level',(string)max(0,min(6,$compression)),$tmp);
+            array_push($arguments, '-frames:v', '1', '-threads','1','-c:v','libwebp','-quality',(string)$quality,'-compression_level',(string)max(0,min(6,$compression)),$tmp);
             $run = self::runWithStderr($arguments, 40);
             if (is_file($tmp) && filesize($tmp) >= 40) return self::finish($tmp, $dest);
             @unlink($tmp);

@@ -32,11 +32,12 @@ if ($path === '/search' && $method === 'GET') {
     $limit = min(100, max(1, (int)($_GET['limit'] ?? 40)));
     if (!empty($_GET['suggest'])) {
         $started=microtime(true);
-        $hits = [];
         $viewer=current_or_guest();
+        $indexed=SearchIndex::suggest($q,$viewer,($_GET['area'] ?? '')==='games');
+        $hits = $indexed ?? [];
         $library=AreaAccess::allowed($viewer,'library') && ($_GET['area'] ?? '')!=='games';
         $games=AreaAccess::allowed($viewer,'games');
-        if ($q !== '' && ($library || $games)) {
+        if ($indexed===null && $q !== '' && ($library || $games)) {
             $needle = '%' . strtr($q, ['!'=>'!!','%'=>'!%','_'=>'!_']) . '%';
             $scope=$library && $games ? '1=1' : ($games ? "media_kind='rom'" : "media_kind<>'rom'");
             // Apply access restrictions before LIMIT; fetch at most five payloads from MariaDB.
