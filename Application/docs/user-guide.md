@@ -127,7 +127,17 @@ year and source before applying a match. Lookups are cached for an hour.
 
 Administrators can open **Settings → Maintenance → Check for updates** to see
 the installed version, the version on GitHub and the list of files that differ.
-Select **Update now** to install them. Vaultcast then:
+Select **Update now** to install them.
+
+The **Update branch** selector also lists available test branches. Selecting one
+checks its files; **Switch to branch-name** installs it and pins future checks
+to that branch. Select `main` and apply the switch to return to the standard
+build, even if its version is lower or its files are identical. If a test branch
+is deleted, Vaultcast keeps its installed files and pin; it offers `main` without
+switching automatically. Branch switching does not reverse database migrations
+made by test builds.
+
+When applying an update, Vaultcast:
 
 1. downloads only the changed files from GitHub and checks each one against its
    git blob SHA, refusing the update if any file does not match;

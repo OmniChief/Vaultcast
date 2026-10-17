@@ -3,11 +3,26 @@
 The in-app updater (**Settings → Maintenance → Check for updates**) compares the
 installed application files with the `main` branch of `OmniChief/Vaultcast` on
 GitHub. There is **no build step, no release package and no checksum file**.
-Publishing an update is just pushing to `main`.
+Publishing a standard update is just pushing to `main`. Settings also lists the
+repository's available branches for testing. Select a branch, review its file
+diff, and apply **Switch to branch-name**. Future checks stay pinned to that
+branch until an administrator explicitly installs another branch.
+
+If a test branch is deleted, its installed files and pin remain in place. The
+selector lists only branches still available (plus `main`); choose `main` and
+apply the switch to return. It is possible to switch when versions are equal,
+when returning to a lower version, or when both branches contain identical
+files. Switching files does not reverse database migrations performed by test
+code; test branches should keep schema changes backward compatible.
+
+The pin is stored in `data/updates/channel.json`, committed together with the
+file swap and restored by rollback. Branch discovery and previewing a diff do
+not change it. Every check refreshes the paginated branch list; tree caches and
+ETags are isolated by branch. A failed discovery leaves the installed pin intact.
 
 ## How the updater decides what to change
 
-1. One call to the GitHub Git Trees API (`GET /repos/OmniChief/Vaultcast/git/trees/main?recursive=1`)
+1. After discovering branches, a call to the GitHub Git Trees API for the selected branch
    lists every file's path and its git blob SHA.
 2. Local files under the allowlist are hashed the same way Git does
    (`sha1("blob <len>\0" + content)`). A file whose local content matches the
@@ -38,9 +53,10 @@ install the contents of `Application/` there):
   and `tests/`. Local copies under `deploy/` (for example an adapted nginx
   config) and anything under `netplay/node_modules` are left alone.
 
-Never touched: `config.php`, `data/` (settings, caches, uploads, Windows
+Never downloaded from the repository: `config.php`, `data/` (settings, caches, uploads, Windows
 runtimes under `data/runtime/`, Transmission), the database, media folders,
-`node_modules`, `.user.ini`.
+`node_modules`, `.user.ini`. The updater maintains its own branch state, caches,
+staging files and rollback journals under `data/updates/`.
 
 ## Steps to publish
 
