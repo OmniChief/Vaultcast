@@ -116,7 +116,7 @@ if ($path === '/me/prefs' && $method === 'POST') {
     $saved = \Vaultcast\Repository::updateUser($user['id'], function (array $u) use ($b, $avatar): array {
             $u['avatar_version'] = $avatar;
             $prefs = $u['prefs'] ?? [];
-            foreach (['theme','autoplay','default_quality','reduce_motion','tv_mode','language'] as $k) {
+            foreach (['theme','autoplay','default_quality','reduce_motion','language'] as $k) {
                 if (array_key_exists($k, $b)) $prefs[$k] = $b[$k];
             }
             if (array_key_exists('live_cat_formats', $b)) $prefs['live_cat_formats'] = relay_clean_formats($b['live_cat_formats']);
