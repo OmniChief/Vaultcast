@@ -97,9 +97,9 @@ final class Access
             // signed out (external IPTV players), so treat them like a /live/ request instead of a
             // deleted account. A signed-in viewer is still checked below.
             if ($uid === 'live') {
-                if ($session === null) return null;
+                if ($session === null) return $requireLogin ? [401, ['ok'=>false, 'error'=>'Sign in to watch live.', 'code'=>'login_required']] : null;
                 $user = $findUser((string)($session['user_id'] ?? ''));
-                if (!$user) return null;
+                if (!$user) return [401, ['ok'=>false, 'error'=>'Sign in to continue.', 'code'=>'login_required']];
                 $st = self::state($user, $now);
                 return $st['active'] ? AreaAccess::denied($user, 'live') : [403, ['ok' => false, 'error' => self::message($st['state']), 'code' => 'access_denied', 'access' => $st]];
             }
@@ -121,8 +121,6 @@ final class Access
             return $st['active'] ? null : [403, ['ok' => false, 'error' => self::message($st['state']), 'code' => 'access_denied', 'access' => $st]];
         }
         if (!$requireLogin) return null;
-        // Signed out: external IPTV players read /live/* without cookies; lobby guests join by invite.
-        if (strpos($path, '/live/') === 0 || strpos($path, '/lobby/') === 0 || strpos($path, '/netplay/') === 0) return null;
         return [401, ['ok' => false, 'error' => 'Sign in to continue.', 'code' => 'login_required']];
     }
 

@@ -9,7 +9,7 @@ $features = Store::settings()['features'] ?? [];
 // Access gate: expired / not-yet-approved users and deleted accounts are refused on every API
 // and stream request, whatever the UI shows. Admins always pass.
 $__denied = Access::gate($path, Auth::currentSession(), function (string $id) { $user = $id === '' ? null : Auth::findById($id); AreaAccess::remember($user); return $user; },
-    (Store::settings()['auth']['require_login'] ?? true) !== false,
+    !NetworkAccess::guestAllowed(),
     function () use ($path) {
         $t = '';
         if ($path === '/stream/play' || $path === '/stream/remux') $t = (string)($_GET['t'] ?? '');

@@ -82,7 +82,7 @@ if (preg_match('#^/stream/bios/psx/(.+)$#', $path, $m) && ($method === 'GET' || 
 
 if ($path === '/me' && $method === 'GET') {
     $sess = Auth::currentSession();
-    $guestBrowsing = (Store::settings()['auth']['require_login'] ?? true) === false;
+    $guestBrowsing = NetworkAccess::guestAllowed();
     if (!$sess) {
         json_out(['ok' => true, 'user' => null, 'authenticated' => false, 'guest_browsing' => $guestBrowsing, 'pending_convert_count' => 0]);
     }

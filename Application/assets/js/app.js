@@ -6533,7 +6533,15 @@ try {
           h('label', { className: 'check-label' }, [ h('input', { id: 'autoplay', type: 'checkbox', checked: !!prefs.autoplay }), ' Autoplay' ]),
           h('div', { className: 'row-actions' }, [
             h('button', { className: 'btn primary', text: 'Save preferences', onClick: savePrefs }),
-            h('button', {className: 'btn', text: 'Sign out', onClick: function(){ api('/logout', {method:'POST'}).then(function(){ state.user = null; state._guest = false; state.home = null; showWelcome(); }); }})
+            h('button', {className: 'btn', text: 'Sign out', onClick: function(){ api('/logout', {method:'POST'}).then(function(result){
+              if (!result.ok) return toast(result.error || 'Could not sign out', {kind:'bad'});
+              closePlayer(); state.user = null; state._guest = false; state.home = null;
+              return api('/me').then(function(me){
+                state._guestBrowsing = !!me.guest_browsing; state._guest = state._guestBrowsing;
+                if (state._guest) return loadHome();
+                showWelcome();
+              });
+            }).catch(function(){showWelcome();}); }})
           ])
         ]) : h('div', { className: 'settings-card row-actions' }, [
           h('button', { className: 'btn primary', text: 'Sign in', onClick: function(){ state._wantAdmin = false; state.view = 'login'; render(); } })
@@ -7014,7 +7022,10 @@ try {
           fieldEl('home_random','Random titles per library row', home.random_per_section||10, 'number'),
           fieldEl('home_cw','Continue Watching row size', home.continue_watching_limit||20, 'number'),
           h('h3', { className:'admin-section-title', text:'Sign-in' }),
-          h('label', { className:'check-label' }, [ h('input', { id:'auth_req', type:'checkbox', checked: auth.require_login!==false }), ' Require login to browse' ]),
+          h('label', { className:'check-label' }, [ h('input', { id:'auth_req', type:'checkbox', checked:true, disabled:true }), ' External visitors must sign in' ]),
+          h('label', { className:'check-label' }, [ h('input', { id:'auth_lan', type:'checkbox', checked:auth.lan_guest_access!==false }), ' Allow local network users to watch without signing in' ]),
+          h('p', {className:'muted', text:'LAN guests can browse and play content. Administration still requires an admin login.'}),
+          fieldEl('auth_proxies','Trusted reverse proxy IPs / CIDRs (optional, comma separated)', (auth.trusted_proxies || []).join(', ')),
           fieldEl('auth_ttl','Stay signed in for (seconds)', auth.session_ttl_seconds||604800, 'number'),
           h('h3', { className:'admin-section-title', text:'Installable app (PWA)' }),
           h('label', { className:'check-label' }, [ h('input', { id:'pwa_en', type:'checkbox', checked: pwa.enabled!==false }), ' Allow Add to Home Screen' ]),
@@ -7030,7 +7041,7 @@ try {
                 public_base_url: $('#public_base_url').value.trim(),
                 theme: $('#theme').value,
                 home: { random_per_section:+$('#home_random').value, continue_watching_limit:+$('#home_cw').value },
-                auth: { require_login: $('#auth_req').checked, session_ttl_seconds:+$('#auth_ttl').value },
+                auth: { require_login:true, lan_guest_access:$('#auth_lan').checked, trusted_proxies:$('#auth_proxies').value.split(',').map(function(value){return value.trim();}).filter(Boolean), session_ttl_seconds:+$('#auth_ttl').value },
                 pwa: { enabled: $('#pwa_en').checked, theme_color:$('#pwa_theme').value, background_color:$('#pwa_bg').value }
               });
             }})
@@ -13344,6 +13355,7 @@ function viewCollectionDetail(){
   function bootApp(){
     return meP.then(function(me){
       if (me && me.ok && !me.user) state._guestBrowsing = !!me.guest_browsing;
+      if (me && me.guest_browsing && !state.user) state._guest = true;
       if (!state.user && !state._guest) { showWelcome(); return; }
       if (accessGated()) { showWelcome(); return; }
       return loadHome();

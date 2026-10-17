@@ -6,7 +6,7 @@ final class Startup {
     public static function snapshot(): array {
         $session = Auth::currentSession();
         $user = $session ? Auth::findById((string)$session['user_id']) : null;
-        $guest = (Store::settings()['auth']['require_login'] ?? true) === false;
+        $guest = NetworkAccess::guestAllowed();
         if ($user) {
             unset($user['password_hash'], $user['_session']);
             $user['access_state'] = Access::state($user);
