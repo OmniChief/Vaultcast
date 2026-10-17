@@ -284,7 +284,7 @@ function epg_load_iptv_index() {
     return $data;
 }
 
-function epg_unified_guide($station, $hours = 12, $slim = false) {
+function epg_unified_guide($station, $hours = 12, $slim = false, $viewerOverride = null) {
     $hours = max(1, min(48, (int)$hours));
     $now = (int) round(microtime(true) * 1000);
     $from = $now - 15 * 60000;
@@ -295,13 +295,13 @@ function epg_unified_guide($station, $hours = 12, $slim = false) {
     if (!empty($iptv['epgUrls'])) {
         $stale = empty($index['updatedAt']) || (time() - strtotime($index['updatedAt'])) > 21600;
         if ($stale) {
-            try { epg_refresh(false); $index = epg_load_iptv_index(); } catch (Exception $e) { /* keep going */ }
+            LiveGuideCache::queueEpg(); // The viewer reads the previous index; network work runs in CLI.
         }
     }
 
     $channels = array();
     require_once __DIR__ . '/tvstudio.php';
-    $viewer = class_exists('Auth') ? Auth::currentSession() : null;
+    $viewer = func_num_args() >= 4 ? $viewerOverride : (class_exists('Auth') ? Auth::currentSession() : null);
     $studio = tvs_load();
     foreach ($station['channels'] as $ch) {
         if (empty($ch['enabled'])) continue;

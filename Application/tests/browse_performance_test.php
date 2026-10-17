@@ -62,6 +62,17 @@ namespace {
     Store::$rev['catalogue']++;
     Catalogue::browseCachePut('facets_movies', 'movies', ['stale'=>true]);
     check(Catalogue::browseCacheGet('facets_movies', 'movies') === null, 'a build from an old revision is not stamped as new');
+    @mkdir(STREAM_DATA . '/tvmaze',0775,true);
+    file_put_contents(STREAM_DATA . '/tvmaze/show_abc_episodes.json', json_encode(['genres'=>['Wrong cache reread'],'premiered'=>'1990-01-01']));
+    $prepared=['show_key'=>'abc','id'=>'abc','title'=>'Prepared','section'=>'tv','type'=>'tv','_meta_prepared'=>true,'genres'=>['Comedy'],'slug'=>'prepared'];
+    $calls=Slugs::$calls;$projected=Catalogue::publicShow($prepared);
+    check($projected['genres']===['Comedy'] && Slugs::$calls===$calls,'prepared show projection neither rereads metadata files nor resolves slugs');
+    unlink(STREAM_DATA . '/tvmaze/show_abc_episodes.json');rmdir(STREAM_DATA . '/tvmaze');
+    $defaultSalt='tv|p=1|per=48|q=|L=|g=|y=|d=|st=|net=';
+    Catalogue::browseCacheGet('browse_shows',$defaultSalt);Catalogue::browseCachePut('browse_shows',$defaultSalt,['ok'=>true]);
+    $hash=hash('sha256','browse-current|browse_shows|' . $defaultSalt);
+    $entry=json_decode(file_get_contents(STREAM_SHM . '/kv/' . substr($hash,0,2) . '/' . $hash . '.json'),true);
+    check($entry['e']===0,'default show page remains warm until its revisions change');
     echo sprintf("fixture: 6000 episodes / 120 shows; cold %.2f ms, warm %.2f ms\n", $cold*1000, $warm*1000);
     \Vaultcast\Repository::cacheClear();
     foreach (glob(STREAM_SHM . '/kv/*', GLOB_ONLYDIR) ?: [] as $dir) @rmdir($dir);

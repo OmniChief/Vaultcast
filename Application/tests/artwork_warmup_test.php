@@ -28,12 +28,13 @@ namespace {
         public static function showPosterHint($key) {}
     }
     class Posters {
+        public static $resolutions=0;
         public static function enabled() { return false; }
         public static function beginRemoteBudget($seconds) {}
         public static function endRemoteBudget() {}
         public static function dir() { return STREAM_DATA . '/posters'; }
         public static function gameCachePath($id) { return self::dir() . '/game_' . $id . '.jpg'; }
-        public static function resolveItem($item, $remote) { if ($remote) throw new \RuntimeException('Remote request made while disabled'); return STREAM_DATA . '/local.png'; }
+        public static function resolveItem($item, $remote) { self::$resolutions++; if ($remote) throw new \RuntimeException('Remote request made while disabled'); return STREAM_DATA . '/local.png'; }
         public static function adoptFile($dest, $src) { if (!is_file($dest)) copy($src, $dest); return $dest; }
     }
     require __DIR__ . '/../src/Services/PosterOptimise.php';
@@ -49,6 +50,7 @@ namespace {
     if ($size[0] > 320 || filesize($thumb) >= filesize(STREAM_DATA . '/local.png')) throw new \RuntimeException('Artwork was not resized');
     if (PosterOptimise::pickServePath(Posters::gameCachePath('abcdef'), 'thumb', true) !== $thumb) throw new \RuntimeException('Thumbnail is not served');
     if (MetadataWarmup::run()['artwork_prepared'] !== 0 || Catalogue::$warmed !== 2) throw new \RuntimeException('Warmup is not idempotent');
+    if (Posters::$resolutions!==1) throw new \RuntimeException('Canonical artwork reread local sidecars');
     echo '1200px local sidecar -> ' . $size[0] . 'px WebP, ' . filesize($thumb) . " bytes\n";
     foreach (glob(STREAM_DATA . '/posters/*') as $file) unlink($file);
     unlink(STREAM_DATA . '/local.png'); rmdir(STREAM_DATA . '/posters'); rmdir(STREAM_DATA);

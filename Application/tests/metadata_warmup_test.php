@@ -13,18 +13,18 @@ namespace {
     define('STREAM_DATA', sys_get_temp_dir() . '/vc-metadata-' . getmypid());
     mkdir(STREAM_DATA);
     class Catalogue {
-        public static $items = [];
+        public static $items = []; public static $warmed=0;
         public static function get() { return ['items'=>self::$items]; }
         public static function showKey($section, $show) { return substr(sha1($section . $show), 0, 16); }
         public static function showDirFromItem($it) { return null; }
         public static function seasonEpisodeFromRel($rel) { return ['season'=>3]; }
         public static function invalidateDerivedCaches() {}
-        public static function warmBrowseViews() {}
+        public static function warmBrowseViews() {self::$warmed++;}
         public static function homeLibrary() {}
         public static function showPosterHint($key) {}
     }
     class Matching { public static $pins=[]; public static function overrides() { return ['shows'=>self::$pins]; } }
-    class MetadataSidecars { public static function run($progress=null) { return ['deferred'=>0, 'written'=>0, 'failed'=>0]; } }
+    class MetadataSidecars { public static $calls=0; public static function run($progress=null) { self::$calls++; return ['deferred'=>0, 'written'=>0, 'failed'=>0]; } }
     class Maintenance {
         public static $cancel = false;
         public static function checkpoint() { if (self::$cancel) throw new \RuntimeException('Cancelled'); }
@@ -78,7 +78,12 @@ namespace {
     check(count(Posters::$calls)===3,'changed show pin bypasses the miss cooldown for show and seasons');
     PosterOptimise::$files=['movie_aa.jpg']; file_put_contents(STREAM_DATA . '/movie_aa.jpg',str_repeat('x',101));
     check(MetadataWarmup::run(null,120,0)['artwork_deferred']===1,'encoding budget defers remaining images');
-    check(MetadataWarmup::run()['artwork_prepared']===1,'next pass optimises deferred image');
+    $sidecars=MetadataSidecars::$calls; $warmed=Catalogue::$warmed;
+    $resumed=MetadataWarmup::run(null,120,120,true);
+    check($resumed['processed']===0 && $resumed['artwork_prepared']===1,'encoding continuation skips completed metadata stage');
+    check(MetadataSidecars::$calls===$sidecars+1 && Catalogue::$warmed===$warmed+1,'sidecars and page preparation run only after encoding completes');
+    MetadataWarmup::run(null,120,120,true);
+    check(MetadataSidecars::$calls===$sidecars+1 && Catalogue::$warmed===$warmed+1,'completed continuation never repeats sidecars or invalidates views');
     check(MetadataWarmup::run()['artwork_prepared']===0,'prepared image is skipped');
     Maintenance::$cancel=true;
     try { MetadataWarmup::run(); throw new \LogicException('Cancellation swallowed'); } catch (\RuntimeException $e) { check($e->getMessage()==='Cancelled','cancellation escapes per-item error handlers'); }

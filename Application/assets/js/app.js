@@ -948,7 +948,7 @@ function confirmDialog(message, opts){
       toast(String(e));
     });
   }
-  var POSTER_PARALLEL = 4;
+  var POSTER_PARALLEL = 2;
   var _posterRequests = Object.create(null);
   var _posterQueue = [];
   var _posterActive = 0;
@@ -6454,6 +6454,7 @@ try {
     } else if (sec === 'maintenance' && isAdmin) {
       var jobsHost = h('div', {className:'stack'});
       function refreshJobs(){
+        clearTimeout(jobsHost._poll);
         api('/admin/maintenance').then(function(result){
           jobsHost.textContent = '';
           if (!result.ok) { jobsHost.textContent = result.error || 'Could not load tasks'; return; }
@@ -6464,17 +6465,18 @@ try {
             ]));
           });
           result.jobs.forEach(function(job){
-            var row=h('div',{className:'settings-card'},[h('strong',{text:result.tasks[job.task] || job.task}),h('p',{text:job.status+' · '+job.created_at+' · '+job.requested_by}),h('p',{className:'muted',text:job.error || ''})]);
+            var row=h('div',{className:'settings-card'},[h('strong',{text:result.tasks[job.task] || job.task}),h('p',{text:(job.result && job.result.continuation ? 'Pass complete · continuing' : job.status)+' · '+job.created_at+' · '+job.requested_by}),h('p',{className:'muted',text:job.error || ''})]);
             if (job.progress) row.appendChild(h('p',{className:'muted',text:(job.progress.phase || 'Progress') + ': ' + job.progress.done + '/' + job.progress.total + ' · ' + (job.progress.file || '')}));
-            if (job.result && job.task === 'metadata') row.appendChild(h('p',{className:'muted',text:'Checked ' + job.result.processed + ' artwork entries · ' + job.result.artwork_prepared + ' optimised · ' + (job.result.failed + job.result.artwork_failed) + ' failed' + (job.result.continuation ? ' · remaining work continues automatically in the next task' : '')}));
+            if (job.result && job.task === 'metadata') row.appendChild(h('p',{className:'muted',text:(job.result.stage ? 'Stage: ' + job.result.stage + ' · this pass checked ' : 'Checked ') + job.result.processed + ' artwork entries · ' + job.result.artwork_prepared + ' optimised · ' + (job.result.failed + job.result.artwork_failed) + ' failed' + (job.result.continuation ? ' · remaining work continues automatically in the next task' : '')}));
             if (job.result && job.result.warning) row.appendChild(h('p',{className:'bad',text:job.result.warning}));
             if (job.result && job.result.sidecars) row.appendChild(h('p',{className:'muted',text:'Beside media: ' + job.result.sidecars.written + ' files backed up · ' + job.result.sidecars.unchanged + ' unchanged · ' + job.result.sidecars.preserved + ' existing files preserved · ' + job.result.sidecars.failed + ' failed · ' + job.result.sidecars.skipped + ' unavailable/outside library'}));
             if (job.status==='queued'||job.status==='running') row.appendChild(h('button',{className:'btn',text:'Cancel',onClick:function(){api('/admin/maintenance/cancel',{method:'POST',body:{id:job.id}}).then(function(r){toast(r.message || r.error); refreshJobs();});}}));
             jobsHost.appendChild(row);
           });
+          if (result.jobs.some(function(job){return job.status==='queued'||job.status==='running';})) jobsHost._poll=setTimeout(function(){if(jobsHost.isConnected && state.view==='settings' && state.settingsSection==='maintenance')refreshJobs();},2000);
         });
       }
-      bodyKids=[h('h2',{text:'Background tasks'}),h('p',{className:'muted',text:'Scans and updates may queue preparation automatically. One task runs at a time. Artwork preparation continues automatically in bounded passes. Cancellation stops at the next file or transaction boundary. Refresh to see current progress.'}),
+      bodyKids=[h('h2',{text:'Background tasks'}),h('p',{className:'muted',text:'Scans and updates may queue preparation automatically. One task runs at a time. Artwork preparation continues automatically in bounded passes. Cancellation stops at the next file or transaction boundary. Progress refreshes automatically while this page is open.'}),
         h('button',{className:'btn',text:'Refresh status',onClick:refreshJobs}), jobsHost,
         h('p',{className:'muted',text:'Video conversion and artwork batches are started by administrators in their settings pages. Download transfers are controlled in Download queue. External OS schedules must be managed in Task Scheduler or cron.'}),
         h('button',{className:'btn',text:'Video conversion jobs',onClick:function(){openSettings('convert');}}),h('button',{className:'btn',text:'Artwork jobs',onClick:function(){openSettings('poster-optimise');}})];
@@ -13193,6 +13195,42 @@ function viewCollectionDetail(){
     document.head.appendChild(sm);
   };
 
+  // Initial HTML images also need bounded scheduling; native lazy loading can
+  // enqueue whole horizontal rails and consume all HTTP/1.1 connections.
+  function enhanceFirstPosters(){
+    var first = document.getElementById('first-home');
+    if (!first) return;
+    var queue = [], active = 0, observer;
+    function pump(){
+      while (active < 2 && queue.length) {
+        var img = queue.shift();
+        if (img.isConnected === false) continue;
+        var url = img.getAttribute('data-first-src');
+        if (!url) continue;
+        img.removeAttribute('data-first-src'); active++;
+        (function(image){
+          var finished = false;
+          function done(){ if (finished) return; finished = true; active--; pump(); }
+          image.addEventListener('load', done, {once:true});
+          image.addEventListener('error', done, {once:true});
+          image.src = url;
+        })(img);
+      }
+    }
+    var images = first.querySelectorAll('img[data-first-src]');
+    if (typeof IntersectionObserver === 'undefined') {
+      Array.prototype.forEach.call(images, function(img){ queue.push(img); }); pump(); return;
+    }
+    observer = new IntersectionObserver(function(entries){
+      entries.forEach(function(entry){
+        if (!entry.isIntersecting) return;
+        observer.unobserve(entry.target); queue.push(entry.target);
+      });
+      pump();
+    }, {root:null, rootMargin:'80px 0px', threshold:0.01});
+    Array.prototype.forEach.call(images, function(img){ observer.observe(img); });
+  }
+
   // Reuse the same interactive navigation as in-app transitions, retaining the
   // first-response cards and avoiding another Home request or full repaint.
   function enhanceHomeNavigation(){
@@ -13246,6 +13284,7 @@ function viewCollectionDetail(){
       return bootApp(); // Detail routes keep visible HTML underneath while their own data arrives.
     }
     enhanceHomeNavigation();
+    enhanceFirstPosters();
     state._routed = true;
     replaceNav();
     initial.home = null;

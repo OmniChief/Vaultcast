@@ -40,6 +40,7 @@ final class AssetDelivery {
             @ini_set('zlib.output_compression', '0');
             header('Content-Encoding: gzip');
         }
+        header('Content-Length: ' . strlen($result['body']));
         return $result['body'];
     }
 

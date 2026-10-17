@@ -71,7 +71,7 @@ final class FirstPage {
             $poster = $base . 'api/' . ($show ? 'shows/' : 'items/') . rawurlencode((string)$item['id']) . '/poster?fetch=0&variant=thumb&art=2';
             $html .= '<a class="card first-card" data-first-nav href="' . self::esc(self::cardUrl($item, $base)) . '">'
                 . '<div class="poster"><span class="ph">' . self::esc($name) . '</span>'
-                . '<img loading="lazy" decoding="async" width="160" height="240" src="' . self::esc($poster) . '" alt="" onerror="this.remove()"></div>'
+                . '<img loading="lazy" decoding="async" width="160" height="240" data-first-src="' . self::esc($poster) . '" alt="" onerror="this.remove()"><noscript><img loading="lazy" width="160" height="240" src="' . self::esc($poster) . '" alt=""></noscript></div>'
                 . '<div class="meta"><div class="title">' . self::esc($name) . '</div><div class="sub">'
                 . self::esc($item['year'] ?? $item['system'] ?? '') . '</div></div></a>';
         }

@@ -36,6 +36,9 @@ final class ArtworkLibrary
     /** Local mode never downloads. TV work is once per show/season, not episode. */
     public static function prepare(array $target, bool $remote = false): ?string
     {
+        // adoptFile already keeps an existing canonical original. Resolve it
+        // first so continuations do not revisit thousands of NAS sidecar paths.
+        if (is_file($target['path']) && filesize($target['path']) > 100) return $target['path'];
         $it = $target['item'];
         if ($target['kind'] === 'shows' || $target['kind'] === 'seasons') {
             $dir = Catalogue::showDirFromItem($it);

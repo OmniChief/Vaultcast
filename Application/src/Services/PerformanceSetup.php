@@ -6,7 +6,7 @@ final class PerformanceSetup {
     public static function schedule(?string $runtime = null): void {
         $runtime = $runtime ?? STREAM_DATA . '/runtime';
         if (!is_dir($runtime) && !@mkdir($runtime, 0775, true)) return;
-        $stamp = $runtime . '/performance-v3.json';
+        $stamp = $runtime . '/performance-v4.json';
         $read = function () use ($stamp) {
             $state = json_decode((string)@file_get_contents($stamp), true);
             return is_array($state) && (!empty($state['job']) || time() - (int)($state['attempted_at'] ?? 0) < 300);
@@ -18,6 +18,8 @@ final class PerformanceSetup {
             if (!flock($lock, LOCK_EX | LOCK_NB) || $read()) return;
             $state = ['attempted_at'=>time()];
             try {
+                $views = Maintenance::start('views', 'Performance update');
+                $state['views'] = $views['job']['id'] ?? null;
                 $result = Maintenance::start('metadata', 'Performance update');
                 if (empty($result['ok']) || empty($result['job']['id'])) throw new RuntimeException('Could not queue artwork preparation.');
                 $state['job'] = $result['job']['id'];

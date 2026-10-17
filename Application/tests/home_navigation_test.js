@@ -21,7 +21,7 @@ function fixture(path='/',base='/',hash='') {
     location:{pathname:path,hash},document:{getElementById:id=>id==='first-home'?first:null},
     $:selector=>selector==='#app'?root:null,applyPrefs(){},boots:0,bootApp(){c.boots++;},
     icon:name=>h('svg',{name}),openSettings:section=>{c.settingsOpened=section;},runGlobalSearch:q=>{c.searched=q;},
-    replaceNav(){c.replaced=true;},setTimeout(){},loadLiveTeaser(){},
+    enhanceFirstPosters(){c.postersEnhanced=true;},replaceNav(){c.replaced=true;},setTimeout(){},loadLiveTeaser(){},
     api(){throw Error('Warm Home must not fetch another API response');},render(){throw Error('SSR cards must not be repainted');},
     shell(content){assert.strictEqual(content,null);return h('div',{},[h('header',{},[c.searchBoxEl('vod'),c.accountMenu()]),h('nav',{className:'subnav'},[h('button',{className:'subnav-btn active',text:'Home'})]),h('main')]);}
   };

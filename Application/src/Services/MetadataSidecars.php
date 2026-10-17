@@ -5,6 +5,17 @@ declare(strict_types=1);
 final class MetadataSidecars
 {
     private static $guides = [];
+    private static $roots = null;
+    private static $manifests = [];
+    private static function roots(): array {
+        if (self::$roots !== null) return self::$roots;
+        self::$roots = [];
+        foreach (Store::settings()['sections'] ?? [] as $section) {
+            $root = realpath((string)($section['path'] ?? ''));
+            if ($root) self::$roots[(string)($section['id'] ?? '')] = $root;
+        }
+        return self::$roots;
+    }
     private static function lock(string $dir)
     {
         $runtime = STREAM_DATA . '/runtime';
@@ -23,10 +34,8 @@ final class MetadataSidecars
         $show = Catalogue::showDirFromItem($it);
         $show = $show ? realpath($show) : false;
         if (!$dir || !$show || !is_dir($show) || !self::inside($dir, $show)) return null;
-        foreach (Store::settings()['sections'] ?? [] as $section) {
-            $root = realpath((string)($section['path'] ?? ''));
-            if (($section['id'] ?? '') === ($it['section'] ?? '') && $root && self::inside($show, $root)) return $show;
-        }
+        $root = self::roots()[(string)($it['section'] ?? '')] ?? null;
+        if ($root && self::inside($show, $root)) return $show;
         return null;
     }
 
@@ -97,11 +106,8 @@ final class MetadataSidecars
     {
         $file = realpath((string)($it['path'] ?? ''));
         if (!$file || !is_file($file)) return null;
-        foreach (Store::settings()['sections'] ?? [] as $section) {
-            if ((string)($section['id'] ?? '') !== (string)($it['section'] ?? '')) continue;
-            $root = realpath((string)($section['path'] ?? ''));
-            if ($root && self::inside($file, $root)) return dirname($file);
-        }
+        $root = self::roots()[(string)($it['section'] ?? '')] ?? null;
+        if ($root && self::inside($file, $root)) return dirname($file);
         return null;
     }
 
@@ -215,7 +221,7 @@ final class MetadataSidecars
         $lock = self::lock($dir);
         try {
             $manifestKey = 'sidecar-export:' . sha1(str_replace('\\', '/', $dir));
-            $owned = \Vaultcast\Repository::document($manifestKey, []);
+            $owned = self::$manifests[$manifestKey] ?? \Vaultcast\Repository::document($manifestKey, []);
             $owned = is_array($owned) ? $owned : [];
             $before = $owned;
             $nfo = self::xml($kind === 'shows' ? 'tvshow' : ($kind === 'seasons' ? 'season' : ($kind === 'episode' ? 'episodedetails' : 'movie')), $fields);
@@ -235,35 +241,48 @@ final class MetadataSidecars
                     if (is_string($source) && is_file($source)) self::picture($source, $dir . '/' . ($kind === 'shows' ? $art : $stem . '-' . $art), $owned, $out);
                 }
             }
-            if ($owned !== $before) \Vaultcast\Repository::putDocument($manifestKey, $owned);
+            if ($owned !== $before) {
+                // Merge just this export's changes under the folder lock. A
+                // rematch may have invalidated other files since our cached read.
+                $fresh = \Vaultcast\Repository::document($manifestKey, []);
+                $fresh = is_array($fresh) ? $fresh : [];
+                foreach ($owned as $name => $value) if (($before[$name] ?? null) !== $value) $fresh[$name] = $value;
+                \Vaultcast\Repository::putDocument($manifestKey, $fresh);
+                $owned = $fresh;
+            }
+            self::$manifests[$manifestKey] = $owned;
         } finally { flock($lock, LOCK_UN); fclose($lock); }
     }
 
-    public static function run(?callable $progress = null, float $budget = 120): array
+    public static function run(?callable $progress = null, float $budget = 120, bool $resume = false): array
     {
         if (PHP_SAPI !== 'cli') throw new RuntimeException('Sidecar export requires the maintenance worker.');
         $revision = \Vaultcast\Repository::revision('catalogue');
         $tasks = [];
-        self::$guides = [];
+        self::$guides = []; self::$roots = null; self::$manifests = [];
         foreach (ArtworkLibrary::targets() as $target) if ($target['kind'] !== 'games') $tasks[] = [$target['item'], $target];
         $items = Catalogue::get()['items'] ?? [];
         MediaFacts::preload(array_filter($items, static function ($it) { return ($it['media_kind'] ?? '') === 'video'; }));
         foreach ($items as $it) if (in_array($it['type'] ?? '', ['tv','anime'], true) && !empty($it['show'])) $tasks[] = [$it, null];
         $state = \Vaultcast\Repository::document('sidecar-export-cursor', []);
-        $offset = ($state['revision'] ?? null) === $revision ? (int)($state['offset'] ?? 0) : 0;
+        $offset = ($state['revision'] ?? null) === $revision && ($resume || empty($state['done'])) ? (int)($state['offset'] ?? 0) : 0;
         $offset = max(0, min(count($tasks), $offset));
         $out = ['written'=>0, 'unchanged'=>0, 'preserved'=>0, 'failed'=>0, 'skipped'=>0, 'deferred'=>0];
-        $start = microtime(true);
+        $start = microtime(true); $lastSave = $start;
+        try {
         for ($i = $offset; $i < count($tasks); $i++) {
             Maintenance::checkpoint();
             if (microtime(true) - $start >= max(0, min(120, $budget))) break;
             if ($progress) $progress('Backing up metadata beside media', $i, count($tasks), (string)($tasks[$i][0]['title'] ?? ''));
             try { self::export($tasks[$i][0], $tasks[$i][1], $out); }
             catch (Throwable $e) { $out['failed']++; error_log('Vaultcast sidecar: ' . $e->getMessage()); }
-            \Vaultcast\Repository::putDocument('sidecar-export-cursor', ['revision'=>$revision, 'offset'=>$i+1]);
+            if (microtime(true) - $lastSave >= 5) {
+                \Vaultcast\Repository::putDocument('sidecar-export-cursor', ['revision'=>$revision, 'offset'=>$i+1]);
+                $lastSave = microtime(true);
+            }
         }
+        } finally { \Vaultcast\Repository::putDocument('sidecar-export-cursor', ['revision'=>$revision, 'offset'=>$i, 'done'=>$i >= count($tasks)]); }
         $out['deferred'] = count($tasks) - $i;
-        if (!$out['deferred']) \Vaultcast\Repository::putDocument('sidecar-export-cursor', ['revision'=>$revision, 'offset'=>0]);
         return $out;
     }
 }

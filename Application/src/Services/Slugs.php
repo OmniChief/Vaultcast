@@ -51,10 +51,12 @@ final class Slugs
     private static function load(): void
     {
         if (self::$reg !== null) return;
+        $started = microtime(true);
         $doc = self::$load ? call_user_func(self::$load) : \Vaultcast\Repository::document(self::DOC, []);
         self::$reg = [];
         foreach (self::KINDS as $k) self::$reg[$k] = is_array($doc[$k] ?? null) ? $doc[$k] : [];
         self::reindex();
+        if (class_exists('RequestTiming', false)) RequestTiming::add('slug_index', $started);
     }
 
     private static function reindex(): void

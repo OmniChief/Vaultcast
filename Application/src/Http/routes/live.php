@@ -447,10 +447,11 @@ try {
     }
     if ($action === 'guide' && $_SERVER['REQUEST_METHOD'] === 'GET') {
         require_once STREAM_ROOT . '/src/Live/epg.php';
-        $station = relay_load_station();
         $hours = isset($_GET['hours']) ? (int)$_GET['hours'] : 12;
         $slim = isset($_GET['slim']) && $_GET['slim'] === '1';
-        echo json_encode(epg_unified_guide($station, $hours, $slim), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        json_out(LiveGuideCache::read($hours, $slim, Auth::currentSession(), function ($hours, $slim) {
+            return epg_unified_guide(relay_load_station(), $hours, $slim);
+        }));
         exit;
     }
     if ($action === 'epg_refresh' && ($_SERVER['REQUEST_METHOD'] === 'POST' || $_SERVER['REQUEST_METHOD'] === 'GET')) {

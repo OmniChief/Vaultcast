@@ -1,8 +1,8 @@
 <?php
 namespace Vaultcast {
     class Repository {
-        public static $docs=[];
-        public static function document($key,$default=null) { return self::$docs[$key] ?? $default; }
+        public static $docs=[], $reads=[];
+        public static function document($key,$default=null) { self::$reads[$key]=(self::$reads[$key]??0)+1; return self::$docs[$key] ?? $default; }
         public static function putDocument($key,$data) { self::$docs[$key]=$data; }
         public static function revision($name) { return 1; }
     }
@@ -63,7 +63,10 @@ namespace {
     foreach(['A & B-poster.jpg','A & B-poster.webp','A & B-thumb.webp','Second-poster.jpg','Series/tvshow.nfo','Series/poster.jpg','Series/poster.webp','Series/season01.nfo','Series/season01-poster.jpg','Series/Season 1/Episode.nfo'] as $name)check(is_file(STREAM_DATA . '/library/' . $name),'writes ' . $name);
     check(!is_file(STREAM_DATA . '/library/poster.jpg'),'flat movie library uses per-film artwork names');
     check(strpos(file_get_contents(STREAM_DATA . '/library/Series/Season 1/Episode.nfo'),'<title>A good episode</title>')!==false,'episode NFO uses cached guide metadata');
+    \Vaultcast\Repository::$reads=[];
     check(MetadataSidecars::run()['written']===0,'repeat export is idempotent');
+    $manifestReads=0;foreach(\Vaultcast\Repository::$reads as $key=>$reads)if(strpos($key,'sidecar-export:')===0)$manifestReads+=$reads;
+    check($manifestReads===3,'unchanged pass reads each folder manifest once, not once per media file');
     ArtworkLibrary::$targets[1]['item']['title']='Changed title';MetadataSidecars::run();
     check(strpos(file_get_contents(STREAM_DATA . '/library/Second.nfo'),'Changed title')!==false,'owned NFO updates after metadata changes');
     file_put_contents(STREAM_DATA . '/library/Second.nfo','User edit');MetadataSidecars::run();
@@ -72,7 +75,8 @@ namespace {
     Maintenance::$count=0;Maintenance::$cancelAfter=1;
     try { MetadataSidecars::run();throw new \LogicException('Cancellation ignored'); }catch(\RuntimeException $e){check($e->getMessage()==='Cancelled','cancellation escapes exporter');}
     Maintenance::$cancelAfter=PHP_INT_MAX;MetadataSidecars::run();
-    check(\Vaultcast\Repository::$docs['sidecar-export-cursor']['offset']===0,'resume completes and resets cursor');
+    check(!empty(\Vaultcast\Repository::$docs['sidecar-export-cursor']['done']),'resume records a completed sidecar stage');
+    check(MetadataSidecars::run(null,120,true)['written']===0,'completed continuation does not restart the sidecar sweep');
     MetadataSidecars::schedule();MetadataSidecars::schedule();check(Maintenance::$starts===1,'queued preparation coalesces repeated matches');
     \Vaultcast\Repository::$docs['maintenance-job:job-1']['status']='running';
     MetadataSidecars::schedule();MetadataSidecars::schedule();check(Maintenance::$starts===2,'changes during a running snapshot queue only one successor');
