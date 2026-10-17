@@ -77,6 +77,8 @@ final class MetadataWarmup
             }
         }
         if ($progress) $progress('Preparing library pages', count($targets), count($targets), '');
+        $out['sidecars'] = MetadataSidecars::run($progress);
+        if ($out['sidecars']['failed']) $out['warning'] = 'Some metadata backups could not be written. Check write permissions and free space on the library folders.';
         Catalogue::invalidateDerivedCaches();
         Catalogue::warmBrowseViews();
         Catalogue::homeLibrary();

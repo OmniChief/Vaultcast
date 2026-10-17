@@ -434,6 +434,7 @@
         api('/admin/match/show/' + showKey + '/pin', { method: 'POST', body: body }).then(function(r){
           if (!r.ok) return toast(r.error || 'Failed', { kind: 'bad' });
           toast(r.meta_only ? 'Synopsis and poster pinned (episode guide unchanged)' : 'Saved - now run Auto-match', { kind: 'ok' });
+          if (r.warning) toast(r.warning, {kind:'warn'});
           renderShowEditor(host, r.show_key || showKey);
         });
       }
@@ -526,6 +527,7 @@
             busy(bSave, false);
             if (!res.ok) return toast(res.error || 'Failed', { kind: 'bad' });
             toast('Saved ' + res.changed + ' item' + (res.changed === 1 ? '' : 's'), { kind: 'ok' });
+            if (res.warning) toast(res.warning, {kind:'warn'});
             renderShowEditor(host, showKey);
           });
         });
@@ -800,6 +802,7 @@
       api('/admin/match/movie/' + itemId, { method: 'POST', body: { title: t.value.trim(), year: num(y.value), imdb_id: chosen && chosen.source === 'omdb' ? chosen.id : null, image: chosen && chosen.image ? chosen.image : null, match: chosen ? { source: chosen.source, id: chosen.id, title: chosen.title, year: chosen.year || null, summary: chosen.summary || '', url: chosen.url || null, image: chosen.image || null, page_title: chosen.page_title || null } : null } }).then(function(r){
         busy(save, false);
         if (!r.ok) return toast(r.error || 'Failed', { kind: 'bad' });
+        if (r.warning) toast(r.warning, {kind:'warn'});
         toast('Movie label updated', { kind: 'ok' });
         done(t.value.trim() + (y.value ? ' (' + y.value + ')' : ''));
       });

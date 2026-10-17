@@ -118,12 +118,16 @@ final class Maintenance
                     if (\Vaultcast\Repository::document('maintenance-cancel:' . $id, false)) throw new RuntimeException('Cancelled by administrator.');
                     // Yield the global maintenance lock between bounded passes.
                     // Persisted attempts and existing WebP files make the next pass resume.
-                    if ($job['result']['deferred'] || $job['result']['artwork_deferred']) {
+                    if ($job['result']['deferred'] || $job['result']['artwork_deferred'] || !empty($job['result']['sidecars']['deferred'])) {
                         $next = self::start('metadata', 'Continuation of ' . $id);
                         $job['result']['continuation'] = $next['job']['id'];
                     }
                     break;
-                case 'facts': $job['result'] = MediaFacts::refresh(function () { self::checkpoint(); }); break;
+                case 'facts':
+                    $job['result'] = MediaFacts::refresh(function () { self::checkpoint(); });
+                    $backup = MetadataSidecars::schedule();
+                    if (empty($backup['ok'])) $job['result']['warning'] = $backup['warning'];
+                    break;
                 case 'collections': $job['result'] = Collections::refresh($job['target'] ?? null); break;
                 case 'downloads':
                     if (empty(Store::settings()['features']['downloads'])) throw new RuntimeException('Downloads are disabled.');

@@ -24,6 +24,7 @@ namespace {
         public static function showPosterHint($key) {}
     }
     class Matching { public static $pins=[]; public static function overrides() { return ['shows'=>self::$pins]; } }
+    class MetadataSidecars { public static function run($progress=null) { return ['deferred'=>0, 'written'=>0, 'failed'=>0]; } }
     class Maintenance {
         public static $cancel = false;
         public static function checkpoint() { if (self::$cancel) throw new \RuntimeException('Cancelled'); }

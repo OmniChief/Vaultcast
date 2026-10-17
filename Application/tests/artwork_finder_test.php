@@ -51,6 +51,11 @@ namespace {
     check(PosterOptimise::find(0,100,'movies')['total']===3,'stable inventory reused during scan');
     \Vaultcast\Repository::$revision++;
     check(PosterOptimise::find(0,100,'movies')['total']===4,'catalogue revision invalidates artwork inventory');
+    file_put_contents(STREAM_DATA . '/Portable.mkv','media');
+    file_put_contents(STREAM_DATA . '/Portable-poster.jpg',str_repeat('x',200));
+    $portable=Posters::resolveItem(['id'=>'aabb','type'=>'movies','media_kind'=>'video','title'=>'Portable','path'=>STREAM_DATA . '/Portable.mkv'],false);
+    check($portable===Posters::movieCachePath('aabb'),'per-file exported movie art can refill the cache without network access');
+    unlink(STREAM_DATA . '/Portable.mkv');unlink(STREAM_DATA . '/Portable-poster.jpg');
     foreach(glob(STREAM_DATA . '/posters/*') as $file)unlink($file);
     unlink(STREAM_DATA . '/local.png');rmdir(STREAM_DATA . '/posters');rmdir(STREAM_DATA);
     echo "all passed\n";

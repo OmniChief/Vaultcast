@@ -11,14 +11,14 @@ file_put_contents($dir . '/performance-v1.json',json_encode(['job'=>'old-job']))
 PerformanceSetup::schedule($dir); PerformanceSetup::schedule($dir);
 unlink($dir . '/performance-v1.json');
 if (Maintenance::$calls !== 1) throw new RuntimeException('Update queued duplicate metadata jobs');
-$state = json_decode(file_get_contents($dir . '/performance-v2.json'), true);
+$state = json_decode(file_get_contents($dir . '/performance-v3.json'), true);
 if ($state['job'] !== 'test-job') throw new RuntimeException('Queue result missing');
-unlink($dir . '/performance-v2.json'); Maintenance::$fail = true;
+unlink($dir . '/performance-v3.json'); Maintenance::$fail = true;
 PerformanceSetup::schedule($dir); PerformanceSetup::schedule($dir);
 if (Maintenance::$calls !== 2) throw new RuntimeException('Failed worker launch retried on every request');
-$stamp = $dir . '/performance-v2.json';
+$stamp = $dir . '/performance-v3.json';
 file_put_contents($stamp, json_encode(['attempted_at'=>time()-301])); Maintenance::$fail = false;
 PerformanceSetup::schedule($dir);
 if (Maintenance::$calls !== 3) throw new RuntimeException('Failed launch was never retried');
-unlink($dir . '/performance-v2.json'); unlink($dir . '/performance-setup.lock'); rmdir($dir);
+unlink($dir . '/performance-v3.json'); unlink($dir . '/performance-setup.lock'); rmdir($dir);
 echo "all passed\n";

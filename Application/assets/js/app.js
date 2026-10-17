@@ -6467,6 +6467,8 @@ try {
             var row=h('div',{className:'settings-card'},[h('strong',{text:result.tasks[job.task] || job.task}),h('p',{text:job.status+' · '+job.created_at+' · '+job.requested_by}),h('p',{className:'muted',text:job.error || ''})]);
             if (job.progress) row.appendChild(h('p',{className:'muted',text:(job.progress.phase || 'Progress') + ': ' + job.progress.done + '/' + job.progress.total + ' · ' + (job.progress.file || '')}));
             if (job.result && job.task === 'metadata') row.appendChild(h('p',{className:'muted',text:'Checked ' + job.result.processed + ' artwork entries · ' + job.result.artwork_prepared + ' optimised · ' + (job.result.failed + job.result.artwork_failed) + ' failed' + (job.result.continuation ? ' · remaining work continues automatically in the next task' : '')}));
+            if (job.result && job.result.warning) row.appendChild(h('p',{className:'bad',text:job.result.warning}));
+            if (job.result && job.result.sidecars) row.appendChild(h('p',{className:'muted',text:'Beside media: ' + job.result.sidecars.written + ' files backed up · ' + job.result.sidecars.unchanged + ' unchanged · ' + job.result.sidecars.preserved + ' existing files preserved · ' + job.result.sidecars.failed + ' failed · ' + job.result.sidecars.skipped + ' unavailable/outside library'}));
             if (job.status==='queued'||job.status==='running') row.appendChild(h('button',{className:'btn',text:'Cancel',onClick:function(){api('/admin/maintenance/cancel',{method:'POST',body:{id:job.id}}).then(function(r){toast(r.message || r.error); refreshJobs();});}}));
             jobsHost.appendChild(row);
           });

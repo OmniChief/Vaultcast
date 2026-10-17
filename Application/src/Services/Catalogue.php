@@ -597,7 +597,7 @@ class Catalogue {
             $item['emu_core'] = self::guessEmuCore($ext, $rel, $full);
             $item['system'] = self::guessSystemFolder($rel);
         }
-        $poster = self::findPoster(dirname($full));
+        $poster = self::findPoster(dirname($full), $full);
         if (!$poster && ($type === 'tv' || $type === 'anime') && !empty($title['show'])) {
             $parts = explode('/', $rel);
             $showRoot = $rootReal . '/' . $parts[0];
@@ -924,10 +924,17 @@ class Catalogue {
         return $raw;
     }
 
-    private static function findPoster(string $dir): ?string {
+    private static function findPoster(string $dir, ?string $mediaPath = null): ?string {
         foreach (['poster.jpg','poster.png','folder.jpg','cover.jpg','cover.png','Poster.jpg'] as $name) {
             $p = $dir . '/' . $name;
             if (is_file($p)) return $p;
+        }
+        if ($mediaPath !== null) {
+            $stem = pathinfo($mediaPath, PATHINFO_FILENAME);
+            foreach (['jpg','jpeg','png','webp'] as $ext) {
+                $p = $dir . '/' . $stem . '-poster.' . $ext;
+                if (is_file($p)) return $p;
+            }
         }
         return null;
     }

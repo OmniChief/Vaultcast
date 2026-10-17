@@ -4,6 +4,7 @@ declare(strict_types=1);
 $tmp = sys_get_temp_dir() . '/vc-query-' . getmypid();
 define('STREAM_DATA', $tmp . '/data');
 @mkdir(STREAM_DATA, 0777, true);
+class MetadataSidecars { public static $calls=0; public static function schedule() { self::$calls++; return ['ok'=>true]; } }
 class Store {
     public static $docs = [];
     public static function get(string $n, $d = null) { return self::$docs[$n] ?? $d; }
@@ -125,6 +126,7 @@ $p = LibraryQuery::preview(['ids' => [$aid, $newId], 'fix' => ['kind' => 'filena
 check($p['rows'][0]['ok'] && $p['rows'][1]['ok'], 'same name in different folders is fine');
 check(!LibraryQuery::preview(['ids' => [$aid], 'fix' => ['kind' => 'nope', 'value' => 'x']])['ok'], 'unknown fix kind rejected');
 
+check(MetadataSidecars::$calls > 0, 'metadata changes queue background sidecar preparation');
 // wiring
 $routes = file_get_contents(__DIR__ . '/../src/Http/routes/admin-library.php');
 check(strpos($routes, "'/admin/library/query/apply'") !== false && strpos($routes, 'application/json') !== false, 'routes: search, preview, apply (JSON only)');

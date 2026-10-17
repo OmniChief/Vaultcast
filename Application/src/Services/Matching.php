@@ -156,8 +156,9 @@ class Matching {
             $cat['updated_at'] = date('c');
             Catalogue::save($cat);
             Store::invalidate('catalogue');
+            $backup = MetadataSidecars::schedule();
         }
-        return ['ok' => true, 'changed' => $changed, 'skipped' => $skipped, 'ids' => $updated];
+        return ['ok' => true, 'changed' => $changed, 'skipped' => $skipped, 'ids' => $updated] + (!empty($backup) && empty($backup['ok']) ? ['warning'=>$backup['warning']] : []);
     }
 
     /** Remove overrides and rebuild the items from disk names. */
@@ -720,6 +721,8 @@ class Matching {
         }
         if ($targetKey !== $showKey) unset($o['shows'][$showKey]);
         self::saveOverrides($o);
+        MetadataSidecars::invalidateShow($targetKey);
+        if ($targetKey !== $showKey) MetadataSidecars::invalidateShow($showKey);
         self::purgeShowCaches($targetKey);
         if ($targetKey !== $showKey) self::purgeShowCaches($showKey);
         if (class_exists('Posters')) {
@@ -730,7 +733,8 @@ class Matching {
         }
         if ($id > 0) self::tvmazeGuideById($id, true);
         self::log('PIN ' . $targetKey . ' provider=' . $provider . ' id=' . $id . ($renameTo !== '' ? ' rename=' . $renameTo : ''));
-        return ['ok' => true, 'show_key' => $targetKey, 'pin' => $o['shows'][$targetKey] ?? null, 'meta_only' => $metaOnly, 'tvmaze_id' => $id ?: null];
+        $backup = MetadataSidecars::schedule();
+        return ['ok' => true, 'show_key' => $targetKey, 'pin' => $o['shows'][$targetKey] ?? null, 'meta_only' => $metaOnly, 'tvmaze_id' => $id ?: null] + (empty($backup['ok']) ? ['warning'=>$backup['warning']] : []);
     }
 
     public static function purgeShowCaches(string $showKey): void {
@@ -863,6 +867,7 @@ class Matching {
         $res = self::saveItemFields([$row], 'manual', self::actor());
         if (class_exists('Posters')) {
             $dest = Posters::movieCachePath($id);
+            MetadataSidecars::invalidateMovie($it);
             Posters::clearCachedArtwork($dest);
             $synCache = Posters::movieSynopsisCachePath($id);
             @unlink($synCache);
@@ -889,6 +894,8 @@ class Matching {
             if ($posterPin !== null && !is_file($dest)) Posters::fetchMoviePoster($id, $title, null);
         }
         self::log('MOVIE ' . $id . ' => ' . $title . ' (' . ($b['year'] ?? '') . ')');
+        $backup = MetadataSidecars::schedule();
+        if (empty($backup['ok'])) $res['warning'] = $backup['warning'];
         return $res;
     }
 

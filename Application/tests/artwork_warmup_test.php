@@ -16,6 +16,7 @@ namespace {
     if (!function_exists('imagewebp')) { echo "skip: PHP GD WebP is unavailable\n"; exit; }
     class Store { public static function settings() { return []; } }
     class Process { public static function capture($args, $timeout) { return ''; } }
+    class MetadataSidecars { public static function run($progress=null) { return ['deferred'=>0, 'written'=>0, 'failed'=>0]; } }
     class Maintenance { public static function checkpoint() {} }
     class Catalogue {
         public static $warmed = 0;

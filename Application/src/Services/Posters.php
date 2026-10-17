@@ -239,7 +239,7 @@ class Posters {
             $path = (string)($item['path'] ?? '');
             if ($path !== '') {
                 $dir = is_file($path) ? dirname($path) : $path;
-                foreach (['poster.jpg','poster.png','folder.jpg','cover.jpg','cover.png','Poster.jpg'] as $name) {
+                foreach (array_merge(['poster.jpg','poster.png','folder.jpg','cover.jpg','cover.png','Poster.jpg'], array_map(static function ($ext) use ($path) { return pathinfo($path, PATHINFO_FILENAME) . '-poster.' . $ext; }, ['jpg','jpeg','png','webp'])) as $name) {
                     $p = $dir . '/' . $name;
                     if (is_file($p) && filesize($p) > 100) {
                         return self::adoptFile($cached, $p) ?? $p;

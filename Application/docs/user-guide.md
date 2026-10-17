@@ -155,3 +155,29 @@ publisher for an update token and add it to `data/config.php` as
 `'update_token' => '...'`. A fresh Windows or Linux install can update straight
 to the latest version: the updater compares the installed application folder
 with GitHub and only downloads what has changed.
+
+## Metadata and artwork beside media (issue #30)
+
+Artwork preparation also backs up fetched metadata to library folders. Updates,
+matching changes, ingests and codec preparation queue this work automatically;
+existing libraries are backfilled after the update. Settings → Background tasks
+shows written, unchanged, preserved, failed and unavailable counts. Library folders
+must be writable by the PHP maintenance worker; a write failure is reported there.
+
+Movie/episode NFOs use the media filename. Shows have tvshow.nfo, poster artwork
+and thumb.webp in the show folder; seasons have season01.nfo, season01-poster art
+and season01-thumb.webp. Movies use <filename>-poster art and <filename>-thumb.webp
+so films sharing a folder cannot overwrite each other's artwork. Original JPEG/PNG
+and prepared WebP files are copied; available local banner/fanart files are copied
+as well. The task does not invent banners or images unavailable from current sources.
+
+Existing NFOs and artwork are preserved. A fetched NFO backup uses
+<filename>.vaultcast.nfo if another NFO already exists. Vaultcast refreshes files
+it wrote only while their content still matches its export record; manual edits
+are preserved. NFOs contain familiar XML fields plus a vaultcastmetadata element
+with cached provider/codec details. They contain no playback history or credentials.
+This adds portable backups; it does not add a full database-restore/import feature.
+
+Movie/show/episode naming follows the [Kodi NFO conventions](https://kodi.wiki/view/NFO_files).
+The season NFO and embedded Vaultcast metadata are additional backup data; import
+support for those fields depends on the receiving media manager.

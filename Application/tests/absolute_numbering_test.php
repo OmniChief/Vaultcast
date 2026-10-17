@@ -4,6 +4,7 @@ declare(strict_types=1);
 $tmp = sys_get_temp_dir() . '/vc-absnum-' . getmypid();
 define('STREAM_DATA', $tmp);
 @mkdir($tmp, 0775, true);
+class MetadataSidecars { public static $calls=0; public static function schedule() { self::$calls++; return ['ok'=>true]; } }
 class Store {
     public static $docs = []; public static $settings = [];
     public static function get(string $n, $d = null) { return self::$docs[$n] ?? $d; }
@@ -205,6 +206,7 @@ $dp = AbsoluteNumbering::preview($dk, ['_guide' => $guide, 'mode' => 'absolute']
 check(array_map(function ($r) { return $r['detected']; }, $dp['rows']) === [1, 2, 6] && !in_array('no absolute number found', array_column($dp['rows'], 'note'), true), 'Fix Match preview finds 1, 2, 6 for the Dragonball Z Kai files');
 Catalogue::$cat = $save;
 
+check(MetadataSidecars::$calls > 0, 'metadata changes queue background sidecar preparation');
 // wiring
 $routes = file_get_contents(__DIR__ . '/../src/Http/routes/admin-library.php');
 check(strpos($routes, '/numbering/preview') !== false && strpos($routes, "unset(\$nb['_guide'])") !== false, 'admin routes added (test-only guide input stripped)');

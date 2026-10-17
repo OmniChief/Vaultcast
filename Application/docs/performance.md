@@ -54,7 +54,7 @@ retains its codec/audio checks.
 2. Compression and static caching take effect through the ordinary update alone.
    There is no nginx configuration step. A failed maintenance-worker launch is
    logged and retried after five minutes; successful queues are recorded under
-   `data/runtime/performance-v2.json` to avoid duplicate jobs. Existing TLS,
+   `data/runtime/performance-v3.json` to avoid duplicate jobs. Existing TLS,
    HTTP protocol, OPcache and worker-pool settings remain under host management;
    this branch does not depend on changing them.
 
@@ -124,3 +124,35 @@ Fix Match also removes obsolete full/thumb WebP files together with replaced mov
 show and season originals. Previously those variants could keep serving the old
 image after a successful rematch. Show pin changes bypass the preparation cooldown.
 The v2 setup stamp queues the corrected preparation once for earlier branch installs.
+
+## Portable metadata backups (issue #30)
+
+Version 1.0.6 adds a background sidecar export stage after artwork conversion.
+Matching and ingest changes coalesce into one queued preparation pass; changes
+during an active snapshot queue a successor. Codec preparation queues export too.
+The v3 setup stamp backfills existing libraries automatically through the updater.
+No nginx, installer, dependency or manual export step is required.
+
+The exporter only writes beside real media inside its configured section root.
+It rejects sidecar symlinks, uses adjacent temporary files and atomic replacement,
+and tracks hashes in MariaDB so existing/manual sidecars are preserved. Existing
+NFOs receive a separate .vaultcast.nfo backup. Actual image MIME determines the
+extension. Original/poster WebP/thumb WebP and available local banner/fanart are
+copied without network fetches or conversions inside HTTP requests. Unchanged
+image signatures avoid repeatedly reading large images from NAS storage.
+
+The export has a two-minute work budget with a durable catalogue-revision cursor;
+remaining work uses the same automatic continuation as metadata preparation.
+Cancellation leaves completed files intact and resumes from the saved cursor.
+Write failures and unavailable/outside-root media are reported separately. The
+existing library file rename/delete rules cover exported per-file NFO/artwork;
+season folder artwork is now recognised by empty-folder cleanup too.
+
+Regression fixtures cover escaped XML and portable metadata, two movies sharing a
+folder, show/season/episode naming, real JPEG/WebP copies, idempotency, managed
+updates, user-edited NFO preservation, outside-root rejection, cancellation/resume,
+corrupt-image reporting and coalesced matching/ingest preparation scheduling.
+
+Rematches invalidate unchanged managed sidecar artwork before resolving new images,
+preventing exported old artwork from being imported back into the cache. Per-folder
+locks coordinate exports and rematch invalidation; user-edited artwork is preserved.
