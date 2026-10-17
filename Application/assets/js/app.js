@@ -13472,9 +13472,9 @@ function viewCollectionDetail(){
     if (R.relative(location.pathname, BASE) !== '' || /^#\//.test(location.hash)) {
       return bootApp(); // Detail routes keep visible HTML underneath while their own data arrives.
     }
-    enhanceHomeNavigation();
-    enhanceFirstPosters();
+    state.view = 'home';
     state._routed = true;
+    render();
     replaceNav();
     initial.home = null;
     setTimeout(loadLiveTeaser, 0);
@@ -13482,13 +13482,7 @@ function viewCollectionDetail(){
       api('/home').then(function(home){
         if (!home.ok || String((state.user || {}).id || '') !== String((initial.me.user || {}).id || '') || accessGated()) return;
         state.home = home;
-        var continueSlot = document.getElementById('first-continue');
-        if (state.view === 'home' && continueSlot) {
-          var continuing = cwOnePerShow(home.continue_watching || []);
-          var row = continuing.length ? rowEl('Continue watching', continuing.map(function(item){ return cardEl(item, item.progress); }), {meta:String(continuing.length)}) : null;
-          continueSlot.innerHTML = '';
-          if (row) continueSlot.appendChild(row);
-        }
+        if (state.view === 'home' && !document.getElementById('player-overlay')) render();
       }).catch(function(){ /* The server-rendered catalogue remains usable offline. */ });
     }
   }
