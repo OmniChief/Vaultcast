@@ -6,20 +6,30 @@ final class ArtworkAudit
     private static function targets(): array
     {
         $revision = Store::revision('catalogue');
-        $cached = \Vaultcast\Repository::cacheGet('artwork-audit-targets-v1');
+        $cached = \Vaultcast\Repository::cacheGet('artwork-audit-targets-v2');
         if (($cached['revision'] ?? null) === $revision && is_array($cached['targets'] ?? null)) return $cached['targets'];
         $targets = ArtworkLibrary::targets();
+        foreach ($targets as $key => $target) {
+            if ($target['kind'] !== 'seasons') continue;
+            $show = 'show_' . $target['key'];
+            if (isset($targets[$show])) $targets[$show]['seasons'][] = $target;
+            unset($targets[$key]);
+        }
         foreach (Catalogue::get()['items'] ?? [] as $id => $item) {
+            if (!empty($item['show']) && in_array($item['type'] ?? '', ['tv','anime'], true)) {
+                $show = 'show_' . Catalogue::showKey((string)$item['section'], (string)$item['show']);
+                if (isset($targets[$show])) {
+                    foreach (['show_poster','season_poster'] as $field) if (!empty($item[$field])) $targets[$show]['references'][$field][(string)$item[$field]] = true;
+                }
+                continue;
+            }
             if (empty($item['id']) || (string)$item['id'] !== (string)$id || empty($item['path'])) {
                 $targets['record_' . $id] = ['kind'=>'records', 'record_id'=>(string)$id, 'item'=>$item, 'path'=>Posters::movieCachePath((string)$id)];
                 continue;
             }
-            if (!empty($item['show']) && in_array($item['type'] ?? '', ['tv','anime'], true)) {
-                $targets['episode_' . $id] = ['kind'=>'episodes', 'item'=>$item, 'path'=>Posters::movieCachePath((string)$id)];
-            }
         }
         ksort($targets);
-        if ($revision === \Vaultcast\Repository::revision('catalogue')) \Vaultcast\Repository::cachePut('artwork-audit-targets-v1', ['revision'=>$revision, 'targets'=>$targets], 0);
+        if ($revision === \Vaultcast\Repository::revision('catalogue')) \Vaultcast\Repository::cachePut('artwork-audit-targets-v2', ['revision'=>$revision, 'targets'=>$targets], 0);
         return $targets;
     }
 
@@ -43,9 +53,33 @@ final class ArtworkAudit
 
     private static function inspect(string $key, array $target): ?array
     {
+        if ($target['kind'] !== 'shows') return self::inspectSingle($key, $target);
+        $result = self::inspectSingle($key, $target);
+        foreach ($target['seasons'] ?? [] as $season) {
+            $row = self::inspectSingle($key, $season);
+            if (!$row) continue;
+            if (!$result) { $result = $row; $result['problems'] = []; $result['missing'] = false; }
+            foreach ($row['problems'] as $problem) $result['problems'][] = 'Season ' . $season['season'] . ': ' . $problem;
+            $result['missing'] = $result['missing'] || $row['missing'];
+        }
+        foreach ($target['references'] ?? [] as $field => $paths) foreach (array_keys($paths) as $path) {
+            if (self::image($path)) continue;
+            if (!$result) $result = ['problems'=>[], 'missing'=>false];
+            $result['problems'][] = 'Missing, unreadable or invalid database reference: ' . $field;
+        }
+        if (!$result) return null;
+        $result['key'] = $key; $result['id'] = $target['item']['id']; $result['show_key'] = $target['key'];
+        $result['kind'] = 'shows'; $result['title'] = $target['item']['show']; $result['season'] = null;
+        $result['problems'] = array_values(array_unique($result['problems']));
+        return $result;
+    }
+
+    private static function inspectSingle(string $key, array $target): ?array
+    {
         $item = $target['item']; $problems = [];
         if (empty($item['id']) || empty($item['path']) || !preg_match('/^[a-f0-9]{16}$/D', (string)($item['id'] ?? '')) || (isset($target['record_id']) && (string)$item['id'] !== $target['record_id'])) $problems[] = 'Bad library record: missing or invalid id/path';
-        foreach (['poster', 'show_poster', 'season_poster'] as $field) {
+        $fields = $target['kind'] === 'shows' ? ['show_poster'] : ($target['kind'] === 'seasons' ? ['season_poster'] : ['poster']);
+        foreach ($fields as $field) {
             if (!empty($item[$field]) && !self::image((string)$item[$field])) $problems[] = 'Missing, unreadable or invalid database reference: ' . $field;
         }
         $paths = PosterOptimise::pathsForStem(pathinfo($target['path'], PATHINFO_FILENAME));
@@ -102,16 +136,22 @@ final class ArtworkAudit
             }
         }
         if ($changed) { Matching::saveOverrides($overrides); Catalogue::save($cat); $targets = self::targets(); $target = $targets[$key]; }
-        $paths = PosterOptimise::pathsForStem(pathinfo($target['path'], PATHINFO_FILENAME));
-        foreach (['original','webp','thumb'] as $variant) if ($paths[$variant] && is_file($paths[$variant]) && !self::image($paths[$variant])) @unlink($paths[$variant]);
-        $path = self::resolved($target);
-        if (!self::image($path)) {
-            Posters::clearFailed(in_array($target['kind'], ['shows','seasons'], true) ? 'show' : ($target['kind'] === 'games' ? 'game' : 'movie'), (string)($target['key'] ?? $id));
-            Posters::beginRemoteBudget(3);
-            try { $path = ArtworkLibrary::prepare($target, true); }
-            finally { Posters::endRemoteBudget(); }
-        } elseif ($target['kind'] !== 'episodes') Posters::adoptFile($target['path'], $path);
-        if (self::image($path)) {
+        $members = array_merge([$target], $target['seasons'] ?? []);
+        $haveArtwork = false;
+        Posters::beginRemoteBudget(3);
+        try {
+            foreach ($members as $member) {
+                $paths = PosterOptimise::pathsForStem(pathinfo($member['path'], PATHINFO_FILENAME));
+                foreach (['original','webp','thumb'] as $variant) if ($paths[$variant] && is_file($paths[$variant]) && !self::image($paths[$variant])) @unlink($paths[$variant]);
+                $path = self::resolved($member);
+                if (!self::image($path)) {
+                    Posters::clearFailed(in_array($member['kind'], ['shows','seasons'], true) ? 'show' : ($member['kind'] === 'games' ? 'game' : 'movie'), (string)($member['key'] ?? $id));
+                    $path = ArtworkLibrary::prepare($member, true);
+                } elseif ($member['kind'] !== 'seasons') Posters::adoptFile($member['path'], $path);
+                if (self::image($path)) $haveArtwork = true;
+            }
+        } finally { Posters::endRemoteBudget(); }
+        if ($haveArtwork) {
             Catalogue::invalidateDerivedCaches();
             MetadataSidecars::schedule();
         }
