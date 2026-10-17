@@ -2406,6 +2406,21 @@ function confirmDialog(message, opts){
   function lobbyInstallFrameBridge(emu){
     if (!emu || emu._streamFrameBridgeWrapped || typeof emu.initModule !== 'function') return;
     emu._streamFrameBridgeWrapped = true;
+    // The pinned 4.2.1 cores keep _free inside their runtime closure, even
+    // though save_state_info returns memory owned by the caller. Expose that
+    // existing allocator alongside cwrap before the runtime is instantiated.
+    // This changes only the in-memory netplay core script, including cached cores.
+    if (typeof emu.initGameCore === 'function') {
+      var initGameCore = emu.initGameCore;
+      emu.initGameCore = function(js, wasm, thread){
+        var source = new TextDecoder().decode(js);
+        var exportsCwrap = /Module\[(["'])cwrap\1\]\s*=\s*cwrap\s*;/;
+        source = source.replace(exportsCwrap, function(exportStatement){
+          return exportStatement + 'if(typeof _free==="function"){Module["_free"]=_free;}';
+        });
+        return initGameCore.call(this, new TextEncoder().encode(source), wasm, thread);
+      };
+    }
     var initModule = emu.initModule;
     emu.initModule = function(){
       var runtime = window.EJS_Runtime;
@@ -2476,6 +2491,11 @@ function confirmDialog(message, opts){
   function lobbyCaptureState(emu){
     // EmulatorJS 4.2.1 getState() copies the allocated native buffer but never
     // frees it. Checkpoints must not leak a whole savestate on every sample.
+    // Check before allocating so unsupported runtimes cannot leak a buffer or
+    // obscure a snapshot error with a TypeError from the finally block.
+    if (typeof emu.Module._free !== 'function') {
+      throw new Error('This emulator core could not expose snapshot memory cleanup; refresh and reopen the game after updating');
+    }
     var info = emu.gameManager.functions.saveStateInfo().split('|');
     if (info[2] !== '1') throw new Error('Could not save emulator state: ' + info[0]);
     var length = Number(info[0]), address = Number(info[1]);
