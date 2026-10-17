@@ -4,6 +4,8 @@
   'use strict';
   function enc(s){ return encodeURIComponent(String(s)); }
   function dec(s){ try { return decodeURIComponent(s); } catch (e) { return s; } }
+  function letter(value){ value = String(value || '').toUpperCase(); return /^[A-Z#]$/.test(value) ? value : ''; }
+  function withLetter(path, value){ value = letter(value); return path + (value ? '?letter=' + enc(value) : ''); }
 
   /** App state -> path (no leading slash). */
   function build(st){
@@ -23,12 +25,12 @@
     if (v === 'play') {
       if (st.playTab === 'lobby') return 'games/lobby';
       if (st.gamePath) return 'games/' + String(st.gamePath).split('/').map(enc).join('/');
-      if (st.systemSlug) return 'games/' + enc(st.systemSlug);
-      return 'games';
+      if (st.systemSlug) return withLetter('games/' + enc(st.systemSlug), st.sectionLetter);
+      return withLetter('games', st.sectionLetter);
     }
-    if (v === 'section' && st.section) return 'library/' + enc(st.section);
+    if (v === 'section' && st.section) return withLetter('library/' + enc(st.section), st.sectionLetter);
     if (v === 'collection' && st.collectionId) return 'collections/' + enc(st.collectionId);
-    if (v === 'collections') return 'collections';
+    if (v === 'collections') return withLetter('collections', st.collectionsLetter);
     if (v === 'search') return st.searchQuery ? 'search?q=' + enc(st.searchQuery) : 'search';
     if (v === 'settings' || v === 'admin') {
       var sec = v === 'admin' ? (st.adminTab || 'general') : st.settingsSection;
@@ -56,12 +58,12 @@
     if (head === 'tvshows') return { view:'home' };
     if (head === 'live') return { view:'live', liveCh: parts[1] || null };
     if (head === 'games') {
-      if (parts[1] === 'lobby' || !parts[1]) return { view:'play', playTab: parts[1] === 'lobby' ? 'lobby' : 'games' };
+      if (parts[1] === 'lobby' || !parts[1]) return { view:'play', playTab: parts[1] === 'lobby' ? 'lobby' : 'games', sectionLetter:parts[1] === 'lobby' ? '' : letter(params.letter) };
       if (parts[2]) return { view:'game', system: parts[1], slug: parts[2], resolve:true };
-      return { view:'play', playTab:'games', systemSlug: parts[1], resolve:true };
+      return { view:'play', playTab:'games', systemSlug: parts[1], resolve:true, sectionLetter:letter(params.letter) };
     }
-    if (head === 'library' && parts[1]) return { view:'section', section:parts[1] };
-    if (head === 'collections') return parts[1] ? { view:'collection', collectionId:parts[1] } : { view:'collections' };
+    if (head === 'library' && parts[1]) return { view:'section', section:parts[1], sectionLetter:letter(params.letter) };
+    if (head === 'collections') return parts[1] ? { view:'collection', collectionId:parts[1] } : { view:'collections', collectionsLetter:letter(params.letter) };
     if (head === 'search') return { view:'search', searchQuery: params.q || '' };
     if (head === 'settings') return { view:'settings', settingsSection: parts[1] || 'account' };
     if (head === 'welcome') return { view:'welcome' };

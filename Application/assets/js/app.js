@@ -19,6 +19,8 @@
   }
   function navState(extra){
     var st = { v: state.view, section: state.section, sectionType: state.sectionType, sectionLabel: state.sectionLabel, showKey: state.showKey, showSlug: state.showSlug, showSeason: state.showSeason, showEpisode: state.showEpisode, movieId: state.movieId, movieSlug: state.movieSlug, collectionId: state.collectionId, settingsSection: state.settingsSection, playTab: state.playTab, sectionSystem: state.sectionSystem || '', sectionSystemSlug: state.sectionSystemSlug || null, gamePath: state.gamePath || null, searchQuery: state.searchQuery, player: !!document.getElementById('player-overlay') };
+    st.sectionLetter = state.sectionLetter || '';
+    st.collectionsLetter = state.collectionsLetter || '';
     if (extra) Object.keys(extra).forEach(function(k){ st[k]=extra[k]; });
     return st;
   }
@@ -1746,6 +1748,8 @@ function confirmDialog(message, opts){
     if (st.collectionId != null) state.collectionId = st.collectionId;
     state.movieSlug = st.movieSlug || null; state.showSlug = st.showSlug || null;
     state.gamePath = st.gamePath || null;
+    state.sectionLetter = st.sectionLetter || '';
+    state.collectionsLetter = st.collectionsLetter || '';
     state.showSeason = st.showSeason != null ? st.showSeason : null; state.showEpisode = st.showEpisode != null ? st.showEpisode : null;
     if (st.settingsSection != null) state.settingsSection = st.settingsSection;
     if (st.playTab != null) state.playTab = st.playTab;
@@ -3406,7 +3410,8 @@ try {
     if (state.view === 'game' && state.gamePath && !extra.live) return R.build({ view:'play', gamePath: state.gamePath });
     return R.build({ systemSlug: state.view === 'play' && state.sectionSystem ? (state.sectionSystemSlug || null) : null, view: state.view, movieSlug: state.movieSlug, movieId: state.movieId, showSlug: state.showSlug, showKey: state.showKey,
       season: state.showSeason, episode: state.showEpisode, liveCh: extra.live || null, playTab: state.playTab, section: state.section,
-      collectionId: state.collectionId, searchQuery: state.searchQuery, settingsSection: state.settingsSection, adminTab: state.adminTab });
+      collectionId: state.collectionId, searchQuery: state.searchQuery, settingsSection: state.settingsSection, adminTab: state.adminTab,
+      sectionLetter:state.sectionLetter, collectionsLetter:state.collectionsLetter });
   }
   function navUrl(extra){ return BASE + routePath(extra); }
   function shareUrl(path){
@@ -3424,6 +3429,8 @@ try {
     upgradeLegacyHash();
     var rel = R.relative(location.pathname, BASE) + (location.search || '');
     var r = R.parse(rel);
+    state.sectionLetter = r.sectionLetter || '';
+    state.collectionsLetter = r.collectionsLetter || '';
     state.showSeason = null; state.showEpisode = null;
     if (r.view === 'movie' || r.view === 'show') {
       return api('/resolve?path=' + encodeURIComponent('/' + rel.split('?')[0])).then(function(j){
@@ -5658,6 +5665,7 @@ try {
       state.sectionPage = 1;
       state.sectionQ = q || '';
       if (opts.letter != null) state.sectionLetter = opts.letter || '';
+      syncUrl();
     }
     var page = append ? (state.sectionPage || 1) : 1;
     var asShows = sectionIsShowType(id);
@@ -5671,7 +5679,7 @@ try {
     if (!asShows && state.sectionSystem) path += '&system=' + encodeURIComponent(state.sectionSystem);
     path = appendSectionFilterParams(path);
     if (append) state.sectionLoadingMore = true;
-    var showcaseRequest = !append && sectionShowcaseKind(id)
+    var showcaseRequest = !append && !letter && sectionShowcaseKind(id)
       ? api('/sections/' + encodeURIComponent(id) + '/' + (sectionShowcaseKind(id) === 'recent' ? 'recent' : 'random') + '?n=16').catch(function(){ return null; })
       : null;
     var seq = ++_sectionLoadSeq;
@@ -5704,7 +5712,7 @@ try {
         var label = asShows ? (total+' shows') : (total+' titles');
         if (letter2) label = label + ' ' + String.fromCharCode(0x00B7) + ' ' + letter2;
         var heroLabel = label + (list.length && total > list.length ? (' ' + String.fromCharCode(0x00B7) + ' showing '+list.length) : '');
-        var showcaseKind = sectionShowcaseKind(id);
+        var showcaseKind = letter ? null : sectionShowcaseKind(id);
         /* billboard replaces the thin section-hero on Movies/Disney/TV/Anime */
         if (!showcaseKind) root.appendChild(sectionHeroEl(id, heroLabel));
         if (j.letters) state._sectionLetters = j.letters;
@@ -10602,6 +10610,7 @@ h('div', { className:'cv-find-bar' }, [
             ariaLabel: 'Collections alphabet index',
             onPick: function(L){
               state.collectionsLetter = L || '';
+              syncUrl();
               paintGrid();
               try { window.scrollTo(0, 0); } catch (eZ) {}
             }
