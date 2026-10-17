@@ -21,6 +21,7 @@
     var st = { v: state.view, section: state.section, sectionType: state.sectionType, sectionLabel: state.sectionLabel, showKey: state.showKey, showSlug: state.showSlug, showSeason: state.showSeason, showEpisode: state.showEpisode, movieId: state.movieId, movieSlug: state.movieSlug, collectionId: state.collectionId, settingsSection: state.settingsSection, playTab: state.playTab, sectionSystem: state.sectionSystem || '', sectionSystemSlug: state.sectionSystemSlug || null, gamePath: state.gamePath || null, searchQuery: state.searchQuery, player: !!document.getElementById('player-overlay') };
     st.sectionLetter = state.sectionLetter || '';
     st.collectionsLetter = state.collectionsLetter || '';
+    st.roomId = state.gameLobby ? state.gameLobby.session.id : null;
     if (extra) Object.keys(extra).forEach(function(k){ st[k]=extra[k]; });
     return st;
   }
@@ -1385,6 +1386,16 @@ function confirmDialog(message, opts){
       var root = h('div', { id:'emu-root' });
       root.style.cssText = 'position:absolute;top:0;left:0;right:0;bottom:0;width:100%;height:100%;background:#000;z-index:1;';
       overlay.appendChild(root);
+      if (openPlayer._lobbyOpts && state.gameLobby) {
+        var multiplayer = state.gameLobby;
+        var roomButton = h('button', {className:'lobby-emulator-room', type:'button', onClick:function(event){event.stopPropagation();openLobbyNetplayMenu();}});
+        overlay.appendChild(roomButton);
+        setTimeout(function paintRoom(){
+          if (!overlay.isConnected || state.gameLobby !== multiplayer) return;
+          roomButton.textContent = 'Room ' + (multiplayer.session.room_code || '') + ' · P' + multiplayer.options.player_slot + ' · ' + lobbyConnection(multiplayer);
+          setTimeout(paintRoom, 1000);
+        }, 0);
+      }
       mountDetailPlayer(overlay, inlineHost, true);
       loadEmulator(root, play, item, openPlayer._lobbyOpts || null);
       openPlayer._lobbyOpts = null;
@@ -1739,6 +1750,11 @@ function confirmDialog(message, opts){
   }
   function onAppPopState(ev){
     var st = ev.state;
+    if (st && st.v === 'game' && st.roomId) {
+      closePlayer(); state.gameLobby = null; _navSilent = true;
+      applyRoute().then(function(){render();replaceNav();}).catch(function(){state.view='play';state.playTab='lobby';render();}).then(function(){_navSilent=false;});
+      return;
+    }
     if (document.getElementById('player-overlay') && !document.querySelector('.player-inline')) {
       closePlayer();
       return;
@@ -1881,6 +1897,122 @@ function confirmDialog(message, opts){
       return k;
     } catch (e) { return 'anon' + String(Date.now()); }
   }
+  function profileAvatar(profile){
+    profile = profile || {};
+    var name = String(profile.name || profile.display_name || profile.username || 'Guest');
+    var hash = 0; for (var i = 0; i < name.length; i++) hash = ((hash << 5) - hash + name.charCodeAt(i)) | 0;
+    var avatar = h('span', {className:'profile-avatar', 'aria-hidden':'true', style:'--avatar-hue:' + Math.abs(hash % 360)}, [h('span', {text:name.trim().split(/\s+/).slice(0,2).map(function(word){return word.charAt(0);}).join('').toUpperCase() || '?'})]);
+    var url = profile.avatar_url || (profile.avatar_version && profile.id ? API + '/profiles/' + encodeURIComponent(profile.id) + '/avatar?v=' + encodeURIComponent(profile.avatar_version) : null);
+    if (url && ((url.charAt(0) === '/' && url.charAt(1) !== '/') || url.indexOf(location.origin + '/') === 0)) avatar.appendChild(h('img', {src:url, alt:'', loading:'lazy', onError:function(event){event.target.remove();}}));
+    return avatar;
+  }
+
+  function openMultiplayerGame(item, options, session){
+    var multiplayer = {options:options, session:session};
+    try {sessionStorage.setItem('vaultcast-room-' + session.id, JSON.stringify({options:options, item_id:item.id}));} catch (eStore) {}
+    state._openingLobby = true;
+    try {openGame(item, multiplayer);} finally {state._openingLobby = false;}
+  }
+
+  function restoreMultiplayerRoom(item, roomId){
+    return api('/lobby/sessions/' + encodeURIComponent(roomId)).then(function(result){
+      if (!result.ok) {state.gameLobby = {session:{id:roomId, title:item.title}, preview:true, ended:true};return;}
+      var session = result.session, saved = null;
+      if (String(session.item_id) !== String(item.id)) {state.gameLobby = {session:{id:roomId, title:item.title}, preview:true, ended:true, error:'This room belongs to another game.'};return;}
+      try {saved = JSON.parse(sessionStorage.getItem('vaultcast-room-' + roomId) || 'null');} catch (eRestore) {}
+      state.gameLobby = {session:session, preview:true};
+      if (!saved || String(saved.item_id) !== String(item.id) || !saved.options) return;
+      var options = saved.options;
+      if (options.role === 'host' && options.host_key) return api('/lobby/sessions/' + roomId + '/heartbeat', {method:'POST', body:{host_key:options.host_key}}).then(function(heartbeat){
+        if (!heartbeat.ok) return;
+        lobbyStartHeartbeat(heartbeat.session, options.host_key); state.gameLobby = {session:heartbeat.session, options:options};
+      });
+      if (options.role === 'guest' && (session.players || []).some(function(player){return player.slot === options.player_slot;})) {
+        state.lobby.guest = {id:roomId, player_slot:options.player_slot}; state.gameLobby = {session:session, options:options};
+      }
+    });
+  }
+
+  function leaveMultiplayerPage(){
+    var room = state.gameLobby;
+    if (room) try {sessionStorage.removeItem('vaultcast-room-' + room.session.id);} catch (eStore) {}
+    closePlayer(); state.gameLobby = null; state.playTab = 'lobby'; navigate('play');
+  }
+
+  function lobbyConnection(multiplayer){
+    if (multiplayer.ended) return 'Room ended';
+    if (multiplayer.error) return 'Connection failed';
+    if (multiplayer.preview) return 'Ready to join';
+    var emu = window.EJS_emulator, np = emu && emu.netplay;
+    if (!np || !np.socket) return 'Starting emulator';
+    if (np.extra && np.extra.sessionid !== multiplayer.session.id) return 'Connecting';
+    if (np.socket.connected && emu.isNetplay) return 'Connected to room';
+    if (np.socket.connected) return 'Joining room';
+    return 'Disconnected';
+  }
+
+  function openLobbyNetplayMenu(){
+    var emu = window.EJS_emulator;
+    if (!emu || !lobbyBindNetplayUi(emu) || typeof emu.openNetplayMenu !== 'function') {toast('The emulator Netplay menu is not ready yet.');return;}
+    emu.openNetplayMenu();
+  }
+
+  function mountLobbyBoard(root, multiplayer){
+    var session = multiplayer.session, options = multiplayer.options || {};
+    var badge = h('span', {className:'lobby-status-pill', role:'status'});
+    var seats = h('div', {className:'lobby-players-board'});
+    var note = h('p', {className:'muted lobby-room-note', text:'Players use their normal Player 1 controls for their assigned seat. Connection status does not confirm game synchronisation.'});
+    var board = h('section', {className:'lobby-room-panel', 'aria-label':'Multiplayer room'}, [
+      h('div', {className:'lobby-room-heading'}, [h('div', {}, [h('div', {className:'eyebrow', text:'MULTIPLAYER LOBBY'}), h('h2', {text:session.room_code ? 'Room ' + session.room_code : 'Multiplayer room'}), h('p', {className:'muted', text:session.title || ''})]), badge]),
+      seats, note, h('div', {className:'row-actions'}, [
+        multiplayer.preview && !multiplayer.ended ? h('button', {className:'btn primary', text:'Join this room', onClick:function(){joinLobbySession(multiplayer.session);}}) : null,
+        !multiplayer.preview ? h('button', {className:'btn glass', text:'Open emulator Netplay menu', onClick:openLobbyNetplayMenu}) : null,
+        h('button', {className:'btn ghost', text:'Copy room link', onClick:function(){var url=shareUrl(routePath());copyText(url).then(function(){toast('Room link copied');},function(){window.prompt('Copy room link',url);});}}),
+        h('button', {className:'btn ghost danger', text:options.role === 'host' ? 'End room and leave' : 'Back to lobby', onClick:leaveMultiplayerPage})
+      ])
+    ]);
+    root.appendChild(board);
+    var lastPaint = '', stopped = false, refreshing = false, lastFetch = 0;
+    function current(){return board.isConnected && state.gameLobby === multiplayer;}
+    function paint(){
+      if (!current()) return;
+      var status = lobbyConnection(multiplayer); badge.textContent = status; badge.classList.toggle('connected', status === 'Connected to room');
+      if (multiplayer.error) note.textContent = multiplayer.error;
+      var emu = window.EJS_emulator, np = emu && emu.netplay, peers = {};
+      if (np && emu.isNetplay && np.socket && np.socket.connected) Object.keys(np.players || {}).forEach(function(id){var peer = np.players[id]; if (peer && peer.player_slot) peers[peer.player_slot] = peer;});
+      var players = multiplayer.session.players || [];
+      var signature = JSON.stringify([players, Object.keys(peers), options.player_slot, multiplayer.ended]);
+      if (signature === lastPaint) return; lastPaint = signature; seats.innerHTML = '';
+      for (var slot = 1; slot <= (multiplayer.session.max_players || 4); slot++) {
+        var player = players.find(function(person){return person.slot === slot;});
+        var self = !!player && options.player_slot === slot;
+        seats.appendChild(h('article', {className:'lobby-player-seat' + (self ? ' is-you' : '') + (!player ? ' is-open' : '')}, [
+          profileAvatar(player || {name:'?'}), h('div', {className:'lobby-player-copy'}, [
+            h('span', {className:'lobby-player-slot', text:'Player ' + slot + (slot === 1 ? ' · Host' : '')}),
+            h('strong', {text:player ? player.name + (self ? ' · You' : '') : 'Open seat'}),
+            h('span', {className:'muted', text:!player ? 'Waiting for a player' : (multiplayer.ended ? 'Room ended' : (peers[slot] ? 'Connected' : 'In lobby · not connected yet'))})
+          ])
+        ]));
+      }
+    }
+    function tick(){
+      if (!current()) {stopped = true;return;}
+      paint();
+      if (!multiplayer.ended && !refreshing && Date.now() - lastFetch > 3000) {
+        refreshing = true;lastFetch = Date.now();
+        api('/lobby/sessions/' + encodeURIComponent(session.id)).then(function(result){
+          if (!current()) return;
+          if (result.ok) {multiplayer.session = result.session;note.textContent = 'Players use their normal Player 1 controls for their assigned seat. Connection status does not confirm game synchronisation.';}
+          else if (result._status === 404) {multiplayer.ended = true;note.textContent = 'The host has ended this room. Return to Lobby to start or join another game.';}
+          else note.textContent = result.error || 'Could not refresh the players board.';
+          paint();
+        }).catch(function(){if(current()) note.textContent = 'Connection interrupted. Retrying the players board…';}).then(function(){refreshing = false;});
+      }
+      if (!stopped) setTimeout(tick, 1000);
+    }
+    setTimeout(tick, 0);
+  }
+
   function lobbyPlayerName(){
     var u = state.user;
     if (u) return String(u.display_name || u.username || 'Player').slice(0, 32);
@@ -2163,10 +2295,41 @@ function confirmDialog(message, opts){
       removeEventListener: function(){}
     };
   }
-  /** roomJoined / updatePlayersTable / users-updated expect Netplay menu DOM created by openNetplayMenu. */
+  function lobbyBindNetplayUi(emu){
+    if (!emu || !emu.netplayMenu || !emu.netplayMenu.querySelectorAll) return false;
+    var tables = emu.netplayMenu.querySelectorAll('table.ejs_netplay_table');
+    if (tables.length < 2) return false;
+    var np = emu.netplay || (emu.netplay = {});
+    np.table = tables[0].querySelector('tbody'); np.playerTable = tables[1].querySelector('tbody');
+    np.tabs = [tables[0].parentNode, tables[1].parentNode];
+    np.roomNameElem = np.tabs[1].querySelector('strong'); np.passwordElem = np.tabs[1].children[1];
+    np.createButton = emu.netplayMenu.getElementsByTagName('a')[0];
+    if (!np.table || !np.playerTable || !np.roomNameElem || !np.passwordElem || !np.createButton) return false;
+    np.name = np.name || lobbyPlayerName();
+    // Keep room membership controlled by the Vaultcast lobby, including leaving.
+    np.createButton.style.display = 'none';
+    if (!emu.netplayMenu.querySelector('[data-vaultcast-leave]')) np.createButton.parentNode.appendChild(h('button', {className:'ejs_button_button', 'data-vaultcast-leave':'1', type:'button', text:'Leave multiplayer', onClick:leaveMultiplayerPage}));
+    np.updatePlayersTable = function(){
+      if (!np.playerTable || !np.playerTable.isConnected) return;
+      np.playerTable.innerHTML = '';
+      Object.keys(np.players || {}).map(function(id){return np.players[id];}).sort(function(a,b){return (a.player_slot || 1) - (b.player_slot || 1);}).forEach(function(player, index){
+        np.playerTable.appendChild(h('tr', {}, [h('td', {text:'P' + (player.player_slot || index + 1)}), h('td', {text:player.player_name || 'Player'}), h('td', {text:player.userid === np.playerID ? 'You' : ''})]));
+      });
+    };
+    var lobby = state.gameLobby;
+    if (lobby) {
+      np.roomNameElem.innerText = 'Room ' + (lobby.session.room_code || lobby.session.id);
+      np.tabs[0].style.display = 'none';np.tabs[1].style.display = '';np.passwordElem.style.display = 'none';
+    }
+    np._streamHasRealUi = true;
+    return true;
+  }
+
+  /** Prefer EmulatorJS's actual menu; stubs only cover unavailable controls. */
   function lobbyStubNetplayUi(emu){
     if (!emu) return;
     if (!emu.netplay) emu.netplay = {};
+    lobbyBindNetplayUi(emu);
     var np = emu.netplay;
     if (!np.table) np.table = lobbyFakeEl();
     if (!np.playerTable) np.playerTable = lobbyFakeEl();
@@ -2705,6 +2868,7 @@ function confirmDialog(message, opts){
       if (startedEmu.netplay && startedEmu.netplay.socket) startedEmu.netplay.socket.disconnect();
       lobbyEndHostSession();
       lobbyLog('after_start_fail', { role: role, session_id: sid, error: String(msg) });
+      if (state.gameLobby) state.gameLobby.error = String(msg);
       console.warn('lobbyAfterGameStart fail', msg);
       try { toast(msg, { kind:'bad', ms: 5600 }); } catch (eT) {}
     }
@@ -2950,6 +3114,7 @@ function confirmDialog(message, opts){
   }
   function joinLobbySession(s){
     if (!s || !s.id || !s.item_id) return;
+    if (state.lobby.host || state.lobby.guest) {closePlayer();state.gameLobby=null;}
     toast('Joining…', { ms: 1200 });
     api('/lobby/sessions/' + encodeURIComponent(s.id) + '/join', {
       method:'POST', body: { player_name: lobbyPlayerName() }
@@ -2963,12 +3128,12 @@ function confirmDialog(message, opts){
         title: sess.title,
         system: sess.system,
         emu_core: sess.emu_core,
+        game_path: sess.game_path,
         media_kind: 'rom',
         has_poster: !!sess.has_poster
       };
       state.lobby.guest = { id: sess.id, player_slot: slot };
-      playItem(it, {
-        lobby: {
+      openMultiplayerGame(it, {
           role: 'guest',
           session_id: sess.id,
           room_code: sess.room_code,
@@ -2977,8 +3142,7 @@ function confirmDialog(message, opts){
           title: sess.title,
           player_slot: slot,
           join_label: j.join_label
-        }
-      });
+      }, sess);
     }).catch(function(e){ toast(String(e), { kind:'bad' }); });
   }
   function openLobbyStartPicker(){
@@ -3061,6 +3225,7 @@ function confirmDialog(message, opts){
   }
 
   function startLobbyHost(item){
+    if (state.lobby.host || state.lobby.guest) {closePlayer();state.gameLobby=null;}
     if (!item || !item.id) return;
     var key = lobbyHostKey();
     toast('Opening lobby session…', { ms: 1400 });
@@ -3077,8 +3242,7 @@ function confirmDialog(message, opts){
       var sess = j.session;
       lobbyStartHeartbeat(sess, j.host_key || key);
       toast('Lobby session live — others can join (Room ' + (sess.room_code || '') + ')', { ms: 4200 });
-      playItem(item, {
-        lobby: {
+      openMultiplayerGame(item, {
           role: 'host',
           session_id: sess.id,
           room_code: sess.room_code,
@@ -3087,8 +3251,7 @@ function confirmDialog(message, opts){
           title: sess.title,
           player_slot: 1,
           host_key: j.host_key || key
-        }
-      });
+      }, sess);
     }).catch(function(e){ toast('Lobby create failed: ' + String(e && e.message ? e.message : e), { kind:'bad' }); });
   }
   function viewLobby(){
@@ -3235,18 +3398,6 @@ try {
             var lbl = lobbyOpts.join_label || (lobbyOpts.role === 'host' ? ('Hosting · P' + slot) : ('Player ' + slot));
             toast(lbl + (lobbyOpts.room_code ? (' · Room ' + lobbyOpts.room_code) : ''), { ms: 3200 });
           } catch (eT) {}
-          try {
-            if (lobbyOpts.role === 'host') {
-              var existingBadge = document.getElementById('lobby-live-badge');
-              if (existingBadge && existingBadge.parentNode) existingBadge.parentNode.removeChild(existingBadge);
-              var badge = document.createElement('div');
-              badge.id = 'lobby-live-badge';
-              badge.className = 'lobby-live-badge';
-              badge.textContent = 'Lobby session live — others can join' + (lobbyOpts.room_code ? (' · Room ' + lobbyOpts.room_code) : '');
-              var overlay = document.getElementById('player-overlay');
-              if (overlay) overlay.appendChild(badge);
-            }
-          } catch (eBadge) {}
         };
       } else {
         window.EJS_gameID = String((item && item.id) || '') + '-' + session;
@@ -3413,7 +3564,7 @@ try {
   var R = window.VaultcastRoutes;
   function routePath(extra){
     extra = extra || {};
-    if (state.view === 'game' && state.gamePath && !extra.live) return R.build({ view:'play', gamePath: state.gamePath });
+    if (state.view === 'game' && state.gamePath && !extra.live) return R.build({ view:'play', gamePath: state.gamePath, roomId:state.gameLobby ? state.gameLobby.session.id : null });
     return R.build({ systemSlug: state.view === 'play' && state.sectionSystem ? (state.sectionSystemSlug || null) : null, view: state.view, movieSlug: state.movieSlug, movieId: state.movieId, showSlug: state.showSlug, showKey: state.showKey,
       season: state.showSeason, episode: state.showEpisode, liveCh: extra.live || null, playTab: state.playTab, section: state.section,
       collectionId: state.collectionId, searchQuery: state.searchQuery, settingsSection: state.settingsSection, adminTab: state.adminTab,
@@ -3461,6 +3612,8 @@ try {
             if (!it || !it.id) { toast('Game not found', { kind:'bad' }); return; }
             if (it.system) { state.sectionSystem = it.system; state.sectionSystemSlug = String(it.game_path || '').split('/')[0] || null; }
             state.gameItem = it; state.movieId = it.id; state.gamePath = it.game_path || null; state.view = 'game';
+            state.gameLobby = null;
+            if (r.roomId) return restoreMultiplayerRoom(it, r.roomId);
           });
         }
       });
@@ -3544,7 +3697,7 @@ try {
       className: 'icon-btn avatar' + (user ? ' signed-in' : ''), type: 'button',
       title: 'Account & settings', 'aria-label': 'Open account and settings',
       onClick: function(){ openSettings('account'); }
-    }, [user ? h('span', {className: 'avatar-initial', text: String(user.display_name || user.username || '?').trim().slice(0, 1).toUpperCase()}) : icon('user')]);
+    }, [user ? profileAvatar(user) : icon('user')]);
   }
 
   function searchBoxEl(mode){
@@ -5084,11 +5237,12 @@ try {
     render();
   }
 
-  function openGame(item){
+  function openGame(item, multiplayer){
     state._pendingEpisode = null;
     state.gameItem = item;
     state.movieId = item.id;
     state.gamePath = item.game_path || null;
+    state.gameLobby = multiplayer || null;
     state.view = 'game';
     render();
   }
@@ -5174,6 +5328,8 @@ try {
         : h('p', { className:'muted', id:'movie-synopsis', text: 'No synopsis cached yet.' });
       var playerHost = h('div', {id:'detail-player', className:'detail-player'});
       root.appendChild(playerHost);
+      var multiplayer = isGame ? state.gameLobby : null;
+      if (multiplayer) mountLobbyBoard(root, multiplayer);
       root.appendChild(h('div', { className:'hero detail-hero', 'data-backdrop-host':'1', style:'display:flex;gap:20px;align-items:flex-end;flex-wrap:wrap' }, [
         poster,
         h('div', { style:'flex:1;min-width:200px' }, [
@@ -5193,7 +5349,7 @@ try {
         root.appendChild(h('div', { id:'movie-collections' }));
         mountMovieCollections(item.id);
       }
-      if (item.file_exists !== false) playItem(item, {inline:true, autoplay:false});
+      if (item.file_exists !== false && !(multiplayer && multiplayer.preview)) playItem(item, {inline:true, autoplay:false, lobby:multiplayer ? multiplayer.options : null});
     }).catch(function(e){
       paintError(String(e && e.message || e || 'Could not load movie'));
     });
@@ -6519,6 +6675,8 @@ try {
         h('p', { className: 'muted', text: u.username ? ('Signed in as ' + (u.display_name || u.username)) : 'Browsing as guest — sign in to sync preferences.' }),
         u.username ? h('div', { className: 'stack settings-card' }, [
           h('label', {}, ['Display name', h('input', { id: 'dn', value: u.display_name || '' })]),
+          h('div', {className:'profile-avatar-editor'}, [profileAvatar(u), h('label', {}, ['Avatar (JPEG, PNG or WebP, up to 1 MB)', h('input', {id:'profile_avatar', type:'file', accept:'image/jpeg,image/png,image/webp'})])]),
+          h('label', {className:'check-label'}, [h('input', {id:'remove_avatar', type:'checkbox'}), 'Remove avatar (use initials)']),
           h('label', {}, ['Theme', h('select', { id: 'theme' }, [
             h('option', { value: 'dark', text: 'Dark', selected: prefs.theme !== 'light' }),
             h('option', { value: 'light', text: 'Light', selected: prefs.theme === 'light' })
@@ -6715,17 +6873,38 @@ try {
   }
 
   function savePrefs(){
-    api('/me/prefs', { method:'POST', body:{
+    var body = {
       display_name: $('#dn').value,
       theme: $('#theme').value,
       tv_mode: $('#tvmode').value,
       password: $('#pw').value || undefined,
       reduce_motion: $('#reduce').checked,
-      autoplay: $('#autoplay').checked
-    }}).then(function(j){
-      if (!j.ok) return toast(j.error||'Save failed');
-      state.user = j.user; toast('Saved'); applyPrefs();
+      autoplay: $('#autoplay').checked,
+      remove_avatar:!!($('#remove_avatar') && $('#remove_avatar').checked)
+    };
+    var file = $('#profile_avatar') && $('#profile_avatar').files[0];
+    var avatar = Promise.resolve(null);
+    if (file && !body.remove_avatar) avatar = new Promise(function(resolve, reject){
+      if (file.size > 1048576) {reject(new Error('Choose an avatar no larger than 1 MB'));return;}
+      var reader = new FileReader();reader.onerror = function(){reject(new Error('Could not read avatar'));};
+      reader.onload = function(){
+        var image = new Image();image.onerror = function(){reject(new Error('Choose a valid image'));};
+        image.onload = function(){
+          if (image.naturalWidth * image.naturalHeight > 4000000) {reject(new Error('Avatar must be no larger than 4 megapixels'));return;}
+          try {
+            var canvas = document.createElement('canvas');canvas.width = canvas.height = 256;
+            var context = canvas.getContext('2d'), size = Math.min(image.naturalWidth,image.naturalHeight);
+            context.fillStyle = '#172235';context.fillRect(0,0,256,256);
+            context.drawImage(image,(image.naturalWidth-size)/2,(image.naturalHeight-size)/2,size,size,0,0,256,256);
+            resolve(canvas.toDataURL('image/jpeg',0.9));
+          } catch(error) {reject(new Error('Could not prepare avatar'));}
+        };image.src = reader.result;
+      };reader.readAsDataURL(file);
     });
+    avatar.then(function(data){body.avatar_data = data;return api('/me/prefs', {method:'POST', body:body});}).then(function(j){
+      if (!j.ok) return toast(j.error||'Save failed');
+      state.user = j.user; toast('Saved'); applyPrefs(); render();
+    }).catch(function(error){toast(error.message || 'Could not save preferences', {kind:'bad'});});
   }
 
   function fmtBytes(n){
@@ -13295,7 +13474,8 @@ function viewCollectionDetail(){
       }
     }
     _playRequestId++;
-    if (document.querySelector('.player-inline')) closePlayer();
+    if (document.querySelector('.player-inline')) closePlayer({preserveLobby:!!state._openingLobby});
+    if (state.view !== 'game') state.gameLobby = null;
     if (state.view !== 'game') state.gamePath = null;
     if ((state.view === 'section' || state.view === 'show') && root.firstChild) {
       var nextView;

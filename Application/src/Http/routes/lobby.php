@@ -30,6 +30,12 @@ if ($path === '/lobby/client-log' && $method === 'POST') {
 
 
 /* Multiplayer Lobby session registry */
+if (preg_match('#^/lobby/sessions/([a-f0-9]{16})$#', $path, $m) && $method === 'GET') {
+    $session = Lobby::get($m[1]);
+    if (!$session) json_error('This multiplayer room has ended.', 404);
+    header('Cache-Control: no-store');
+    json_out(['ok'=>true, 'session'=>Lobby::publicSession($session)]);
+}
 if ($path === '/lobby/sessions' && $method === 'GET') {
     json_out(['ok' => true, 'sessions' => Lobby::listOpen(), 'heartbeat_seconds' => Lobby::HEARTBEAT_SECONDS]);
 }
@@ -50,7 +56,7 @@ if ($path === '/lobby/sessions' && $method === 'POST') {
         $hostKey = bin2hex(random_bytes(16));
     }
     $max = isset($body['max_players']) ? (int)$body['max_players'] : null;
-    $res = Lobby::create($item, $hostName, $hostKey, $max);
+    $res = Lobby::create($item, $hostName, $hostKey, $max, Profiles::lobbyIdentity());
     if (empty($res['ok'])) json_error($res['error'] ?? 'Could not create session', 400);
     json_out($res);
 }
@@ -78,7 +84,7 @@ if (preg_match('#^/lobby/sessions/([a-f0-9]{16})/join$#', $path, $m) && $method 
         $name = lobby_display_name();
         if ($name === '') $name = 'Player';
     }
-    $res = Lobby::join($m[1], $name);
+    $res = Lobby::join($m[1], $name, Profiles::lobbyIdentity());
     if (empty($res['ok'])) json_error($res['error'] ?? 'join failed', 400);
     json_out($res);
 }

@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 // Public routes
+if (preg_match('#^/profiles/([a-f0-9]{16})/avatar$#', $path, $m) && in_array($method, ['GET','HEAD'], true)) Profiles::serve($m[1]);
 if ($path === '/status' && $method === 'GET') {
     $settings = Store::settings();
     $sess = Auth::currentSession();
@@ -111,7 +112,9 @@ if ($path === '/me/prefs' && $method === 'POST') {
     $user = Auth::requireUser();
     $b = body_json();
     if (!empty($b['password']) && (strlen($b['password']) < 12 || strlen($b['password']) > 72)) json_error('Use a password between 12 and 72 bytes.');
-    $saved = \Vaultcast\Repository::updateUser($user['id'], function (array $u) use ($b): array {
+    try { $avatar = Profiles::saveAvatar($user, $b); } catch (InvalidArgumentException $error) { json_error($error->getMessage(), 422); }
+    $saved = \Vaultcast\Repository::updateUser($user['id'], function (array $u) use ($b, $avatar): array {
+            $u['avatar_version'] = $avatar;
             $prefs = $u['prefs'] ?? [];
             foreach (['theme','autoplay','default_quality','reduce_motion','tv_mode','language'] as $k) {
                 if (array_key_exists($k, $b)) $prefs[$k] = $b[$k];

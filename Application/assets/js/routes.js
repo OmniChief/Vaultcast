@@ -24,7 +24,7 @@
     if (v === 'live') return st.liveCh ? 'live/' + enc(st.liveCh) : 'live';
     if (v === 'play') {
       if (st.playTab === 'lobby') return 'games/lobby';
-      if (st.gamePath) return 'games/' + String(st.gamePath).split('/').map(enc).join('/');
+      if (st.gamePath) return 'games/' + String(st.gamePath).split('/').map(enc).join('/') + (/^[a-f0-9]{16}$/.test(st.roomId || '') ? '?room=' + enc(st.roomId) : '');
       if (st.systemSlug) return withLetter('games/' + enc(st.systemSlug), st.sectionLetter);
       return withLetter('games', st.sectionLetter);
     }
@@ -59,7 +59,7 @@
     if (head === 'live') return { view:'live', liveCh: parts[1] || null };
     if (head === 'games') {
       if (parts[1] === 'lobby' || !parts[1]) return { view:'play', playTab: parts[1] === 'lobby' ? 'lobby' : 'games', sectionLetter:parts[1] === 'lobby' ? '' : letter(params.letter) };
-      if (parts[2]) return { view:'game', system: parts[1], slug: parts[2], resolve:true };
+      if (parts[2]) return { view:'game', system: parts[1], slug: parts[2], resolve:true, roomId:/^[a-f0-9]{16}$/.test(params.room || '') ? params.room : null };
       return { view:'play', playTab:'games', systemSlug: parts[1], resolve:true, sectionLetter:letter(params.letter) };
     }
     if (head === 'library' && parts[1]) return { view:'section', section:parts[1], sectionLetter:letter(params.letter) };

@@ -108,10 +108,14 @@ class Lobby {
             'join_label' => self::joinLabelFor($next),
             'room_code' => (string)($s['room_code'] ?? ''),
             'game_id' => (int)($s['game_id'] ?? 0),
+            'game_path' => $s['game_path'] ?? null,
             'mp_label' => $max . ' lobby seats',
             'created_at' => (int)($s['created_at'] ?? 0),
             'updated_at' => (int)($s['updated_at'] ?? 0),
             'has_poster' => !empty($s['has_poster']),
+            'players' => array_values(array_map(static function(array $player): array {
+                return ['slot'=>(int)($player['slot'] ?? 0), 'name'=>(string)($player['name'] ?? 'Player'), 'role'=>($player['role'] ?? '') === 'host' ? 'host' : 'guest', 'avatar_url'=>$player['avatar_url'] ?? null];
+            }, $players)),
         ];
     }
 
@@ -133,7 +137,7 @@ class Lobby {
         });
     }
 
-    public static function create(array $item, string $hostName, string $hostKey, ?int $maxOverride = null): array {
+    public static function create(array $item, string $hostName, string $hostKey, ?int $maxOverride = null, array $profile = []): array {
         $cap = self::capability($item);
         if (!$cap) {
             return ['ok' => false, 'error' => 'Choose a game from the library'];
@@ -145,6 +149,7 @@ class Lobby {
         $now = time();
         $hostName = trim($hostName) !== '' ? trim($hostName) : 'Host';
         $hostName = mb_substr($hostName, 0, 32);
+        if (!empty($profile['name'])) $hostName = mb_substr((string)$profile['name'], 0, 32);
         $sess = [
             'id' => $id,
             'item_id' => (string)($item['id'] ?? ''),
@@ -158,12 +163,14 @@ class Lobby {
             'mp_label' => (string)$cap['mp_label'],
             'room_code' => $room,
             'game_id' => self::numericGameId((string)($item['id'] ?? $id)),
+            'game_path' => Slugs::game($item),
             'has_poster' => !empty($item['has_poster']) || !empty($item['poster']),
             'players' => [
                 [
                     'slot' => 1,
                     'name' => $hostName,
                     'role' => 'host',
+                    'avatar_url' => $profile['avatar_url'] ?? null,
                     'joined_at' => $now,
                 ],
             ],
@@ -251,10 +258,11 @@ class Lobby {
         });
     }
 
-    public static function join(string $id, string $playerName): array {
+    public static function join(string $id, string $playerName, array $profile = []): array {
+        if (!empty($profile['name'])) $playerName = (string)$profile['name'];
         $playerName = trim($playerName) !== '' ? trim($playerName) : 'Player';
         $playerName = mb_substr($playerName, 0, 32);
-        return self::withLock(function (array $all) use ($id, $playerName) {
+        return self::withLock(function (array $all) use ($id, $playerName, $profile) {
             self::purgeExpired($all);
             if (!isset($all[$id]) || !is_array($all[$id])) {
                 self::writeAll($all);
@@ -273,6 +281,7 @@ class Lobby {
                 'slot' => $slot,
                 'name' => $playerName,
                 'role' => 'guest',
+                'avatar_url' => $profile['avatar_url'] ?? null,
                 'joined_at' => time(),
             ];
             $s['players'] = $players;
