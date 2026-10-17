@@ -75,6 +75,58 @@ final class Updater
         return self::parseVersion($v) ? $v : '0.0.0';
     }
 
+    /** Git branch names, never arbitrary refs, URLs or expressions. */
+    public static function validBranch(string $branch): bool
+    {
+        if ($branch === '' || strlen($branch) > 255 || $branch === '@' || $branch[0] === '-'
+            || preg_match('/[\x00-\x20\x7f~^:?*\[\\\\]/', $branch)
+            || strpos($branch, '..') !== false || strpos($branch, '@{') !== false) return false;
+        foreach (explode('/', $branch) as $part) {
+            if ($part === '' || $part[0] === '.' || substr($part, -1) === '.' || substr($part, -5) === '.lock') return false;
+        }
+        return true;
+    }
+
+    /** Updated transactionally with the files; never fall back when a pinned branch disappears. */
+    public static function currentBranch(): string
+    {
+        $file = self::workDir() . '/channel.json';
+        if (!is_file($file)) return self::BRANCH;
+        $state = json_decode((string)@file_get_contents($file), true);
+        $branch = (string)($state['branch'] ?? '');
+        if (!self::validBranch($branch)) throw new RuntimeException('The saved update branch is invalid. Restore data/updates/channel.json before checking for updates.');
+        return $branch;
+    }
+
+    /** Discover every branch, with per-page ETags. A failed listing never changes the pin. */
+    public static function branches(): array
+    {
+        $names = [self::BRANCH];
+        for ($page = 1; ; $page++) {
+            if ($page > 100) return ['branches' => array_values(array_unique($names)), 'branches_error' => 'Too many branches to list completely. Check again later.'];
+            $cacheFile = self::workDir() . '/branches-' . $page . '.json';
+            $cache = json_decode((string)@file_get_contents($cacheFile), true);
+            $headers = ['Accept: application/vnd.github+json'];
+            if (is_array($cache) && !empty($cache['etag']) && ($cache['token'] ?? false) === (self::token() !== null)) $headers[] = 'If-None-Match: ' . $cache['etag'];
+            $r = self::request(self::API . '/branches?per_page=100&page=' . $page, $headers);
+            $body = $r['status'] === 304 ? ($cache['body'] ?? null) : $r['body'];
+            $rows = is_string($body) ? json_decode($body, true) : null;
+            if (!in_array($r['status'], [200, 304], true) || !is_array($rows) || array_values($rows) !== $rows) {
+                return ['branches' => array_values(array_unique($names)), 'branches_error' => 'Could not refresh the branch list from GitHub. The installed branch remains pinned.'];
+            }
+            if ($r['status'] === 200 && (is_dir(self::workDir()) || @mkdir(self::workDir(), 0770, true))) {
+                @file_put_contents($cacheFile, json_encode(['etag' => $r['headers']['etag'] ?? '', 'body' => $body, 'token' => self::token() !== null]), LOCK_EX);
+            }
+            foreach ($rows as $row) if (is_array($row) && self::validBranch((string)($row['name'] ?? ''))) $names[] = $row['name'];
+            if (count($rows) < 100) break;
+        }
+        $names = array_values(array_unique($names));
+        sort($names, SORT_STRING);
+        $names = array_values(array_diff($names, [self::BRANCH]));
+        array_unshift($names, self::BRANCH);
+        return ['branches' => $names, 'branches_error' => null];
+    }
+
     /** "v1.2.3" / "1.2.3" -> [1,2,3]; anything else -> null. */
     public static function parseVersion(string $tag): ?array
     {
@@ -142,14 +194,17 @@ final class Updater
      * Uses ETag/If-None-Match (a 304 does not count against GitHub's rate limit) and falls back to
      * the last stored tree when the hourly limit is exhausted.
      */
-    public static function remoteTree(): array
+    public static function remoteTree(?string $branch = null): array
     {
-        $cacheFile = self::workDir() . '/tree-cache.json';
+        $branch = $branch ?? self::currentBranch();
+        if (!self::validBranch($branch)) return ['ok' => false, 'error' => 'Invalid update branch.'];
+        $cacheFile = self::workDir() . '/tree-' . hash('sha256', $branch) . '.json';
         $cache = json_decode((string)@file_get_contents($cacheFile), true);
         $cache = is_array($cache) && isset($cache['body'], $cache['fetched']) ? $cache : null;
         $headers = ['Accept: application/vnd.github+json'];
         if ($cache && !empty($cache['etag']) && ($cache['token'] ?? false) === (self::token() !== null)) $headers[] = 'If-None-Match: ' . $cache['etag'];
-        $r = self::request(self::API . '/git/trees/' . self::BRANCH . '?recursive=1', $headers);
+        // refs/heads prevents a branch called, for example, HEAD from resolving as a special ref.
+        $r = self::request(self::API . '/git/trees/' . rawurlencode('refs/heads/' . $branch) . '?recursive=1', $headers);
         $note = null;
         if ($r['status'] === 304 && $cache) {
             $body = (string)$cache['body'];
@@ -174,7 +229,7 @@ final class Updater
                     return ['ok' => false, 'error' => $msg, 'rate_limited' => true];
                 }
             } elseif ($r['status'] === 404) {
-                return ['ok' => false, 'error' => 'GitHub answered 404 for ' . self::REPO . '. The repository is private (or renamed): make it public, or put a read-only token in data/config.php as \'update_token\'.'];
+                return ['ok' => false, 'code' => 'branch_unavailable', 'error' => 'GitHub answered 404 for branch "' . $branch . '". It may have been deleted, or the repository is private. The installed branch stays pinned; choose main explicitly to return to it, or check update_token access.'];
             } elseif ($r['status'] === 401 || $r['status'] === 403) {
                 return ['ok' => false, 'error' => 'GitHub refused the request (HTTP ' . $r['status'] . '). Check the update_token, or try again later.'];
             } else {
@@ -201,11 +256,16 @@ final class Updater
      * Compare local files with main.
      * @return array{ok:bool, current:string, latest?:array, update_available?:bool, error?:string}
      */
-    public static function check(): array
+    public static function check(?string $branch = null): array
     {
         $current = self::currentVersion();
-        $t = self::remoteTree();
-        if (!$t['ok']) return ['ok' => false, 'current' => $current, 'error' => $t['error'], 'rate_limited' => !empty($t['rate_limited'])];
+        try { $installedBranch = self::currentBranch(); }
+        catch (Throwable $e) { return ['ok' => false, 'current' => $current, 'error' => $e->getMessage()]; }
+        $branch = $branch ?? $installedBranch;
+        if (!self::validBranch($branch)) return ['ok' => false, 'current' => $current, 'error' => 'Invalid update branch.'];
+        $context = ['current_branch' => $installedBranch, 'selected_branch' => $branch] + self::branches();
+        $t = self::remoteTree($branch);
+        if (!$t['ok']) return $context + ['ok' => false, 'current' => $current, 'error' => $t['error'], 'code' => $t['code'] ?? null, 'rate_limited' => !empty($t['rate_limited'])];
         $root = self::root();
         $changed = []; $added = []; $bytes = 0;
         foreach ($t['files'] as $rel => $f) {
@@ -222,14 +282,14 @@ final class Updater
         // Remote VERSION: free when unchanged; otherwise one raw download (not rate-limited), verified.
         $remoteVersion = $current;
         if (in_array('VERSION', $changed, true) || in_array('VERSION', $added, true)) {
-            $v = self::fetchBlob($t['files']['VERSION']);
+            $v = self::fetchBlob($t['files']['VERSION'], $why, $branch);
             $remoteVersion = $v !== null && self::parseVersion(trim($v)) ? trim($v) : '?';
         }
         $count = count($changed) + count($added) + count($removed);
-        return ['ok' => true, 'current' => $current, 'update_available' => $count > 0, 'latest' => [
-            'version' => $remoteVersion, 'branch' => self::BRANCH, 'tree' => $t['tree'],
+        return $context + ['ok' => true, 'current' => $current, 'update_available' => $count > 0 || $branch !== $installedBranch, 'branch_change' => $branch !== $installedBranch, 'latest' => [
+            'version' => $remoteVersion, 'branch' => $branch, 'tree' => $t['tree'],
             'changed' => $changed, 'added' => $added, 'removed' => $removed, 'count' => $count, 'bytes' => $bytes,
-            'url' => 'https://github.com/' . self::REPO . '/commits/' . self::BRANCH,
+            'url' => 'https://github.com/' . self::REPO . '/commits/' . rawurlencode($branch),
         ], 'note' => $t['note'], '_files' => $t['files']];
     }
 
@@ -244,10 +304,12 @@ final class Updater
     }
 
     /** Download one blob and return its bytes only if they hash to the tree's blob SHA. */
-    public static function fetchBlob(array $f, ?string &$why = null): ?string
+    public static function fetchBlob(array $f, ?string &$why = null, ?string $branch = null): ?string
     {
         $why = 'download';
-        $raw = self::RAW . '/' . self::BRANCH . '/' . implode('/', array_map('rawurlencode', explode('/', $f['path'])));
+        $branch = $branch ?? self::currentBranch();
+        if (!self::validBranch($branch)) return null;
+        $raw = self::RAW . '/refs/heads/' . rawurlencode($branch) . '/' . implode('/', array_map('rawurlencode', explode('/', $f['path'])));
         $r = self::request($raw, []);
         if ($r['status'] === 200 && $r['body'] !== null) {
             if (hash_equals($f['sha'], self::blobSha($r['body']))) return $r['body'];
@@ -270,7 +332,7 @@ final class Updater
      * @param string|null $expectTree  refuse if main moved since the admin looked
      * @return array{ok:bool, from?:string, to?:string, replaced?:int, created?:int, removed?:int, error?:string, rolled_back?:bool}
      */
-    public static function apply(?array $check = null, ?string $expectTree = null): array
+    public static function apply(?array $check = null, ?string $expectTree = null, ?string $branch = null): array
     {
         @set_time_limit(0);
         @ignore_user_abort(true);
@@ -281,9 +343,13 @@ final class Updater
         $staging = null;
         try {
             if (self::recoverInterrupted() !== null) $check = null; // files changed under us: re-plan
-            $c = $check ?? self::check();
+            $branch = $branch ?? ($check['latest']['branch'] ?? self::currentBranch());
+            if (!self::validBranch($branch)) return ['ok' => false, 'error' => 'Invalid update branch.'];
+            $c = $check ?? self::check($branch);
             if (!$c['ok']) return ['ok' => false, 'error' => $c['error'] ?? 'Update check failed.'];
+            if (($c['current_branch'] ?? self::BRANCH) !== self::currentBranch()) return ['ok' => false, 'error' => 'The installed branch changed. Check again.', 'code' => 'changed'];
             $l = $c['latest'];
+            if (($l['branch'] ?? '') !== $branch) return ['ok' => false, 'error' => 'The checked branch does not match the requested branch. Check again.', 'code' => 'changed'];
             if ($expectTree !== null && $expectTree !== '' && $expectTree !== $l['tree']) return ['ok' => false, 'error' => 'Vaultcast changed on GitHub since you checked. Check again before updating.', 'code' => 'changed'];
             if (empty($c['update_available'])) return ['ok' => false, 'error' => 'Vaultcast ' . $from . ' is already up to date.'];
             $files = $c['_files'];
@@ -294,7 +360,7 @@ final class Updater
             $write = [];
             foreach (array_merge($l['changed'], $l['added']) as $rel) {
                 if (!isset($files[$rel]) || !self::allowed($rel)) throw new RuntimeException('Refusing to write ' . $rel . ' (not on the allowlist).');
-                $body = self::fetchBlob($files[$rel], $why);
+                $body = self::fetchBlob($files[$rel], $why, $branch);
                 if ($body === null) {
                     throw new RuntimeException($why === 'mismatch'
                         ? 'Integrity check failed for ' . $rel . ': the download does not match the blob SHA in the GitHub tree. Nothing was changed.'
@@ -317,9 +383,15 @@ final class Updater
             // 3. Swap with backup + journal + maintenance mode. VERSION last: a half-applied update
             //    never claims the new version.
             if (isset($write['VERSION'])) { $v = $write['VERSION']; unset($write['VERSION']); $write['VERSION'] = $v; }
+            // Only this internally generated state may enter data/: remote files remain denylisted.
+            $channel = $staging . '/channel.json';
+            if (!is_dir($staging) && !@mkdir($staging, 0770, true)) throw new RuntimeException('Cannot create staging folder.');
+            $channelBody = json_encode(['branch' => $branch, 'tree' => $l['tree']], JSON_UNESCAPED_SLASHES);
+            if (@file_put_contents($channel, $channelBody) !== strlen($channelBody)) throw new RuntimeException('Cannot stage the update branch.');
+            $write['data/updates/channel.json'] = $channel;
             $to = $l['version'] !== '?' ? $l['version'] : $from;
             $result = self::swap(['write' => $write, 'remove' => $remove], $from, $to);
-            return ['ok' => true, 'from' => $from, 'to' => self::currentVersion(), 'tree' => $l['tree']] + $result;
+            return ['ok' => true, 'from' => $from, 'to' => self::currentVersion(), 'branch' => $branch, 'tree' => $l['tree']] + $result;
         } catch (Throwable $e) {
             return ['ok' => false, 'error' => $e->getMessage(), 'rolled_back' => $e instanceof UpdaterRolledBack];
         } finally {
@@ -395,7 +467,7 @@ final class Updater
         if (function_exists('opcache_reset')) @opcache_reset();
         self::maintenance(false);
         self::pruneBackups(3);
-        return ['replaced' => count($journal['replaced']), 'created' => count($journal['created']), 'removed' => count($journal['removed']),
+        return ['replaced' => count(array_diff($journal['replaced'], ['data/updates/channel.json'])), 'created' => count(array_diff($journal['created'], ['data/updates/channel.json'])), 'removed' => count($journal['removed']),
             'backup' => substr($backup, strlen(self::root()) + 1)];
     }
 

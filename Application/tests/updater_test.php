@@ -56,7 +56,8 @@ function serve(array $repo, array $rawOverride = [], array $blobOverride = []): 
 }
 Updater::$http = function (string $url, array $headers) {
     global $GH; $GH['calls'][] = $url;
-    $treeUrl = Updater::API . '/git/trees/main?recursive=1';
+    if ($url === Updater::API . '/branches?per_page=100&page=1') return json_encode([['name' => 'main']]);
+    $treeUrl = Updater::API . '/git/trees/' . rawurlencode('refs/heads/main') . '?recursive=1';
     if ($url === $treeUrl) {
         if ($GH['treeStatus'] !== 200) return ['status' => $GH['treeStatus'], 'body' => null, 'headers' => ['x-ratelimit-remaining' => '0', 'x-ratelimit-reset' => (string)(time() + 1800)]];
         $t = [];
@@ -67,7 +68,7 @@ Updater::$http = function (string $url, array $headers) {
         if (in_array('If-None-Match: ' . $etag, $headers, true)) return ['status' => 304, 'body' => null, 'headers' => ['etag' => $etag]];
         return ['status' => 200, 'body' => $body, 'headers' => ['etag' => $etag]];
     }
-    $rawPrefix = Updater::RAW . '/main/';
+    $rawPrefix = Updater::RAW . '/refs/heads/main/';
     if (strpos($url, $rawPrefix) === 0) {
         $p = rawurldecode(substr($url, strlen($rawPrefix)));
         if (array_key_exists($p, $GH['raw'])) return $GH['raw'][$p];
@@ -104,9 +105,9 @@ check($l['removed'] === ['src/Services/Old.php'], 'removed-upstream files listed
 check(!in_array('src/Services/Crlf.php', $l['changed'], true), 'CRLF checkout of an unchanged file is not flagged');
 check($c['update_available'] && $l['count'] === 8, 'update available with 8 files');
 $apiCalls = count(array_filter($GH['calls'], function ($u) { return strpos($u, Updater::API) === 0; }));
-check($apiCalls === 1, "check uses one GitHub API call ($apiCalls)");
+check($apiCalls === 2, "check discovers branches and reads the tree ($apiCalls API calls)");
 $GH['calls'] = []; Updater::check();
-check(is_file("$root/data/updates/tree-cache.json"), 'tree cached with its ETag (repeat checks get a free 304)');
+check(is_file("$root/data/updates/tree-" . hash('sha256', 'main') . '.json'), 'tree cached per branch with its ETag');
 
 // ---------------------------------------------------------------- blob SHA mismatch: rejected, nothing changed
 installed($root); $before = tree($root);
@@ -227,6 +228,62 @@ mkdir("$root/tests");
 $c = Updater::check();
 check(in_array('tests/x_test.php', $c['latest']['added'], true), 'tests/ updated where the install has it (Windows layout)');
 
+// Branch discovery and switching: distinct trees, pruning on return, transactional pin.
+foreach (['../main', 'refs//heads', 'x.lock', 'a..b', 'a@{b', 'a b', 'a?b', 'a\\b', '-bad', 'a/.hidden'] as $name) check(!Updater::validBranch($name), 'invalid branch rejected: ' . $name);
+check(Updater::validBranch('perf/catalogue-fast') && Updater::validBranch('fix-v1.2'), 'slash and dotted branch names accepted');
+$baseHttp = Updater::$http;
+$branchRepos = ['main' => repo(), 'perf/catalogue-fast' => repo(['Application/src/Services/BranchOnly.php' => "<?php // branch only\n", 'Application/index.php' => "<?php // performance build\n"])];
+$branchPages = null; $branchListFail = false;
+Updater::$http = function (string $url, array $headers) use ($baseHttp, &$branchRepos, &$branchPages, &$branchListFail) {
+    if (preg_match('#/branches\?per_page=100&page=(\d+)$#', $url, $m)) {
+        if ($branchListFail) return ['status' => 503, 'body' => null];
+        return json_encode($branchPages !== null ? ($branchPages[(int)$m[1]] ?? []) : array_map(function ($name) { return ['name' => $name]; }, array_keys($branchRepos)));
+    }
+    if (preg_match('#/git/trees/([^?]+)\?recursive=1$#', $url, $m)) {
+        $name = substr(rawurldecode($m[1]), strlen('refs/heads/'));
+        if (!isset($branchRepos[$name])) return ['status' => 404, 'body' => null];
+        serve($branchRepos[$name]);
+        return $baseHttp(Updater::API . '/git/trees/' . rawurlencode('refs/heads/main') . '?recursive=1', $headers);
+    }
+    if (strpos($url, Updater::RAW . '/refs/heads/') === 0) {
+        $tail = substr($url, strlen(Updater::RAW . '/refs/heads/'));
+        $parts = explode('/', $tail, 2); $name = rawurldecode($parts[0]);
+        return $branchRepos[$name][rawurldecode($parts[1] ?? '')] ?? null;
+    }
+    return $baseHttp($url, $headers);
+};
+installed($root);
+$c = Updater::check();
+check($c['branches'] === ['main', 'perf/catalogue-fast'] && $c['current_branch'] === 'main', 'branch discovery includes main and test branch');
+$preview = Updater::check('perf/catalogue-fast');
+check($preview['ok'] && $preview['branch_change'] && Updater::currentBranch() === 'main', 'previewing a branch does not change the installed pin');
+$r = Updater::apply($preview, $preview['latest']['tree'], 'main');
+check(!$r['ok'] && ($r['code'] ?? '') === 'changed', 'checked branch cannot be applied as another branch');
+$r = Updater::apply($preview, $preview['latest']['tree'], 'perf/catalogue-fast');
+check($r['ok'] && Updater::currentBranch() === 'perf/catalogue-fast' && is_file("$root/src/Services/BranchOnly.php"), 'test branch installed and pinned');
+$c = Updater::check();
+check($c['ok'] && !$c['update_available'] && $c['latest']['branch'] === 'perf/catalogue-fast', 'subsequent checks remain on installed branch');
+check(count(glob("$root/data/updates/tree-*.json")) === 2, 'branch tree caches do not leak across channels');
+$back = Updater::check('main');
+Updater::$beforeReplace = function ($rel) { if ($rel === 'data/updates/channel.json') throw new RuntimeException('pin write failed'); };
+$r = Updater::apply($back, $back['latest']['tree'], 'main'); Updater::$beforeReplace = null;
+check(!$r['ok'] && $r['rolled_back'] && Updater::currentBranch() === 'perf/catalogue-fast' && is_file("$root/src/Services/BranchOnly.php"), 'failed return rolls back files and branch pin');
+unset($branchRepos['perf/catalogue-fast']);
+$c = Updater::check();
+check(!$c['ok'] && $c['branches'] === ['main'] && $c['current_branch'] === 'perf/catalogue-fast' && Updater::currentBranch() === 'perf/catalogue-fast', 'deleted branch shows only main without silently changing pin');
+$r = Updater::apply(null, null, 'main');
+check($r['ok'] && Updater::currentBranch() === 'main' && !is_file("$root/src/Services/BranchOnly.php") && file_get_contents("$root/index.php") === "<?php // new index\n", 'explicit return to main restores files and prunes branch-only files');
+$branchRepos['identical'] = $branchRepos['main'];
+$c = Updater::check('identical');
+check($c['update_available'] && $c['latest']['count'] === 0, 'identical files still permit an explicit branch switch');
+$r = Updater::apply($c, $c['latest']['tree'], 'identical');
+check($r['ok'] && Updater::currentBranch() === 'identical' && $r['created'] === 0 && $r['replaced'] === 0, 'zero-file switch persists branch without inflated file counts');
+$branchListFail = true;
+$c = Updater::check();
+check($c['ok'] && $c['branches_error'] && Updater::currentBranch() === 'identical', 'discovery failure leaves installed branch pinned and check usable');
+$branchListFail = false;
+$branchPages = [1 => array_map(function ($i) { return ['name' => 'branch-' . $i]; }, range(1, 100)), 2 => [['name' => 'last-page']]];
+check(in_array('last-page', Updater::branches()['branches'], true), 'branch discovery follows pagination');
 Updater::rmTree($base);
 echo $fails ? "$fails FAILED\n" : "all passed\n";
 exit($fails ? 1 : 0);

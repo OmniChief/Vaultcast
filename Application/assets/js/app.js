@@ -8510,7 +8510,9 @@ h('div', { className:'cv-find-bar' }, [
   }
 
   /* ---------------- Settings → Check for updates (admin) ---------------- */
-  function renderUpdatesPanel(host){
+  function renderUpdatesPanel(host, branch){
+    var requestToken = {};
+    host._updateRequest = requestToken;
     function fileList(title, list, cls){
       if (!list || !list.length) return null;
       return h('details', { className:'updates-files' }, [
@@ -8519,16 +8521,33 @@ h('div', { className:'cv-find-bar' }, [
       ]);
     }
     function paint(r){
+      if (host._updateRequest !== requestToken) return;
       host.textContent = '';
+      r = r || {};
+      var branches = r.branches || ['main'];
+      var selected = r.selected_branch || branch || r.current_branch || 'main';
+      var selector = h('select', { 'aria-label':'Update branch' }, branches.map(function(name){
+        return h('option', { value:name, text:name });
+      }));
+      selector.value = branches.indexOf(selected) >= 0 ? selected : 'main';
+      selector.onchange = function(){ renderUpdatesPanel(host, selector.value); };
+      var checkSelected = h('button', { className:'btn', type:'button', text:'Check selected branch', onClick:function(){ renderUpdatesPanel(host, selector.value); } });
+      host.appendChild(h('div', { className:'settings-card stack' }, [
+        h('p', { text:'Installed branch: ' + (r.current_branch || 'main') }),
+        h('label', {}, [ h('span', { text:'Update branch' }), selector ]),
+        h('p', { className:'muted', text:'Choose a branch to test, or main to return. The installed branch stays pinned until you apply a switch, even if it is deleted on GitHub. Switching files does not undo database migrations made by a test branch.' }),
+        checkSelected
+      ]));
+      if (r.branches_error) host.appendChild(h('p', { className:'bad', text:r.branches_error }));
       if (!r || !r.ok) {
         host.appendChild(h('div', { className:'settings-card' }, [ h('p', { className:'bad', text:(r && r.error) || 'Could not check for updates.' }),
-          h('button', { className:'btn', type:'button', text:'Try again', onClick:function(){ renderUpdatesPanel(host); } }) ]));
+          h('button', { className:'btn', type:'button', text:'Try again', onClick:function(){ renderUpdatesPanel(host, selected); } }) ]));
         return;
       }
       var latest = r.latest || {};
       var rows = [
         h('div', { className:'updates-versions' }, [
-          h('div', {}, [ h('span', { className:'muted', text:'Installed' }), h('strong', { text:r.current }) ]),
+          h('div', {}, [ h('span', { className:'muted', text:'Installed (' + r.current_branch + ')' }), h('strong', { text:r.current }) ]),
           h('div', {}, [ h('span', { className:'muted', text:'Latest on GitHub (' + (latest.branch || 'main') + ')' }), h('strong', { text: latest.version || '?' }) ])
         ])
       ];
@@ -8541,21 +8560,22 @@ h('div', { className:'cv-find-bar' }, [
       }
       if (latest.url) rows.push(h('a', { href:latest.url, target:'_blank', rel:'noopener', className:'linkish', text:'Recent changes on GitHub' }));
       var status = h('p', { className:'muted', 'aria-live':'polite' });
-      var actions = [ h('button', { className:'btn', type:'button', text:'Check again', onClick:function(){ renderUpdatesPanel(host); } }) ];
+      var actions = [ h('button', { className:'btn', type:'button', text:'Check again', onClick:function(){ renderUpdatesPanel(host, selected); } }) ];
       if (r.update_available) {
-        var btn = h('button', { className:'btn primary', type:'button', text:'Update now', onClick:function(){
-          confirmDialog('Update ' + latest.count + ' Vaultcast file' + (latest.count === 1 ? '' : 's') + ' (' + r.current + ' \u2192 ' + latest.version + ')? The site shows a short maintenance page while files are replaced. Your settings, database and media are not touched.', { okText:'Update now' }).then(function(ok){
+        var actionLabel = r.branch_change ? 'Switch to ' + latest.branch : 'Update now';
+        var btn = h('button', { className:'btn primary', type:'button', text:actionLabel, onClick:function(){
+          confirmDialog('Install branch ' + latest.branch + ': ' + latest.count + ' Vaultcast file' + (latest.count === 1 ? '' : 's') + ' (' + r.current + ' \u2192 ' + latest.version + ')? The site shows a short maintenance page while files are replaced. The updater leaves settings and media in place. Branch changes do not reverse database migrations.', { okText:actionLabel }).then(function(ok){
             if (!ok) return;
-            btn.disabled = true; status.className = 'muted'; status.textContent = 'Downloading, verifying and installing\u2026 keep this page open.';
-            api('/admin/updates/apply', { method:'POST', body:{ tree: latest.tree } }).then(function(res){
+            btn.disabled = true; selector.disabled = true; checkSelected.disabled = true; status.className = 'muted'; status.textContent = 'Downloading, verifying and installing\u2026 keep this page open.';
+            api('/admin/updates/apply', { method:'POST', body:{ tree: latest.tree, branch: latest.branch } }).then(function(res){
               if (res && res.ok) {
                 status.className = 'ok';
-                status.textContent = 'Updated to ' + res.to + ' (' + res.replaced + ' replaced, ' + res.created + ' added, ' + res.removed + ' removed). Reloading\u2026';
+                status.textContent = 'Installed ' + res.branch + ' · ' + res.to + ' (' + res.replaced + ' replaced, ' + res.created + ' added, ' + res.removed + ' removed). Reloading\u2026';
                 setTimeout(function(){ location.reload(); }, 2500);
               } else {
-                status.className = 'bad'; status.textContent = (res && res.error) || 'Update failed. Nothing was changed.'; btn.disabled = false;
+                status.className = 'bad'; status.textContent = (res && res.error) || 'Update failed. Nothing was changed.'; btn.disabled = false; selector.disabled = false; checkSelected.disabled = false;
               }
-            }).catch(function(e){ status.className = 'bad'; status.textContent = 'Update request failed: ' + (e && e.message || e) + '. Check again to see the current state.'; btn.disabled = false; });
+            }).catch(function(e){ status.className = 'bad'; status.textContent = 'Update request failed: ' + (e && e.message || e) + '. Check again to see the current state.'; btn.disabled = false; selector.disabled = false; checkSelected.disabled = false; });
           });
         } });
         actions.unshift(btn);
@@ -8564,7 +8584,7 @@ h('div', { className:'cv-find-bar' }, [
       rows.push(status);
       host.appendChild(h('div', { className:'settings-card stack' }, rows));
     }
-    api('/admin/updates').then(paint).catch(function(e){ paint({ ok:false, error:String(e && e.message || e) }); });
+    api('/admin/updates' + (branch ? '?branch=' + encodeURIComponent(branch) : '')).then(paint).catch(function(e){ paint({ ok:false, error:String(e && e.message || e) }); });
   }
   function renderConvertAdminPanel(s){
       var c = Object.assign({
