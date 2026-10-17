@@ -37,7 +37,34 @@
     return currentFrame - 2;
   }
 
-  var api = { ACK_WINDOW: ACK_WINDOW, hostMayRun: hostMayRun, hostBucketsToSend: hostBucketsToSend, pruneBefore: pruneBefore };
+  // Ignore RetroArch container metadata and alignment padding; compare the core's
+  // serialized memory, not achievements, replay bookkeeping or unused bytes.
+  function coreState(bytes){
+    if (!(bytes instanceof Uint8Array) || !bytes.length) throw new Error('Empty emulator state');
+    if (bytes.length < 8 || String.fromCharCode.apply(null, bytes.subarray(0, 7)) !== 'RASTATE') return bytes;
+    if (bytes[7] !== 1) throw new Error('Unsupported emulator state format');
+    for (var offset = 8; offset + 8 <= bytes.length;) {
+      var size = new DataView(bytes.buffer, bytes.byteOffset + offset + 4, 4).getUint32(0, true);
+      var start = offset + 8;
+      if (size > bytes.length - start) throw new Error('Truncated emulator state');
+      if (String.fromCharCode.apply(null, bytes.subarray(offset, offset + 4)) === 'MEM ') {
+        if (!size) throw new Error('Empty emulator core state');
+        return bytes.subarray(start, start + size);
+      }
+      offset = start + Math.ceil(size / 8) * 8;
+    }
+    throw new Error('Emulator state has no core memory');
+  }
+  function stateHash(bytes){
+    var core = coreState(bytes), a = 2166136261, b = 5381;
+    for (var i = 0; i < core.length; i++) {
+      a = Math.imul(a ^ core[i], 16777619);
+      b = Math.imul(b, 33) ^ core[i];
+    }
+    return core.length + ':' + (a >>> 0).toString(16) + ':' + (b >>> 0).toString(16);
+  }
+
+  var api = { ACK_WINDOW: ACK_WINDOW, hostMayRun: hostMayRun, hostBucketsToSend: hostBucketsToSend, pruneBefore: pruneBefore, stateHash: stateHash };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.VaultcastNetplaySync = api;
 })(this);
