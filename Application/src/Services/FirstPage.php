@@ -100,7 +100,8 @@ final class FirstPage {
         $html = '<div class="app-shell xshell" id="first-home"><header class="topnav xnav">'
             . '<a class="brand" data-first-nav href="' . self::esc($base) . '"><span class="mark">▶</span><span class="brand-name">' . self::esc($site) . '</span></a>'
             . '<nav class="mode-switch" aria-label="Mode">';
-        if (AreaAccess::allowed($user, 'library')) $html .= '<a class="mode-tab active" data-first-nav href="' . self::esc($base) . '">Library</a>';
+        $html .= '<a class="mode-tab active" data-first-nav href="' . self::esc($base) . '">Home</a>';
+        if (AreaAccess::allowed($user, 'library')) $html .= '<a class="mode-tab" data-first-nav href="' . self::esc($base . 'library') . '">Library</a>';
         if (!empty($home['features']['live'])) $html .= '<a class="mode-tab" data-first-nav href="' . self::esc($base . 'live') . '">Watch Live</a>';
         foreach ($home['sections'] ?? [] as $section) if ($section['type'] === 'roms') {
             $html .= '<a class="mode-tab" data-first-nav href="' . self::esc($base . 'games') . '">Play</a>'; break;
@@ -109,13 +110,13 @@ final class FirstPage {
             . '<input class="search-box" id="q" type="search" name="q" aria-label="Search library" placeholder="Search movies &amp; shows…"></form>'
             . '<a class="icon-btn avatar" title="Account &amp; settings" aria-label="Open account and settings" data-first-nav href="' . self::esc($base . 'settings') . '"><span class="avatar-initial">'
             . self::esc(mb_strtoupper(mb_substr(trim((string)($user['display_name'] ?? $user['username'] ?? '?')), 0, 1))) . '</span></a></div></header>'
-            . '<nav class="first-sections" aria-label="Libraries"><a class="subnav-btn active" aria-current="page" data-first-nav href="' . self::esc($base) . '">Home</a>';
-        foreach ($home['sections'] ?? [] as $section) $html .= '<a data-first-nav href="' . self::esc($base . 'library/' . rawurlencode($section['id'])) . '">' . self::esc($section['label']) . '</a>';
-        $featured = $home['continue_watching'][0] ?? $home['sections'][0]['items'][0] ?? null;
-        $html .= '<a data-first-nav href="' . self::esc($base . 'collections') . '">Collections</a></nav><main class="view" id="main"><div class="vod-home">'
-            . '<section class="first-hero"><span class="eyebrow">' . (!empty($home['continue_watching']) ? 'CONTINUE WATCHING' : 'YOUR LIBRARY') . '</span><h1>'
-            . self::esc($featured ? (($featured['show'] ?? '') ?: ($featured['title'] ?? 'Your library')) : 'Your library') . '</h1><p>'
-            . number_format((int)($home['item_count'] ?? 0)) . ' titles. Pick up a favourite or discover something new.</p>';
+            . '<nav class="first-sections" aria-label="Home"><a class="subnav-btn active" aria-current="page" data-first-nav href="' . self::esc($base) . '">For you</a>';
+        foreach (['watchlist'=>'Watchlist','favourites'=>'Favourites','calendar'=>'Coming soon','friends'=>'Friends','cinema'=>'Watch together','history'=>'History','stats'=>'Game stats','inbox'=>'Inbox'] as $tab=>$label) $html .= '<a data-first-nav href="' . self::esc($base . 'home/' . $tab) . '">' . self::esc($label) . '</a>';
+        $featured = $home['continue_watching'][0] ?? null;
+        $html .= '</nav><main class="view" id="main"><div class="home-hub">'
+            . '<section class="first-hero hub-hero"><span class="eyebrow">YOUR SPACE. YOUR STORIES.</span><h1>Welcome back, '
+            . self::esc(($user['display_name'] ?? '') ?: ($user['username'] ?? 'friend')) . '.</h1><p>'
+            . 'One more episode. A new high score. A night with your people. It all starts here.</p>';
         if ($featured) {
             $canPlay = ($featured['kind'] ?? '') !== 'show';
             $html .= '<a class="btn primary" data-first-nav' . ($canPlay ? ' data-first-play="' . self::esc($featured['id']) . '"' : '')
@@ -123,9 +124,9 @@ final class FirstPage {
         }
         $html .= '</section>';
         $html .= '<div id="first-continue">' . self::cards('Continue watching', $home['continue_watching'] ?? [], $base) . '</div>';
-        $html .= '<div id="live-teaser"></div>';
-        foreach ($home['sections'] ?? [] as $section) $html .= self::cards((string)$section['label'], $section['items'] ?? [], $base, $base . 'library/' . rawurlencode($section['id']));
-        if (empty($home['sections'])) $html .= '<section class="first-hero"><h2>Your library starts here</h2><a class="btn primary" data-first-nav href="' . self::esc($base . 'settings/sections') . '">Manage libraries</a></section>';
+        $html .= '<div class="hub-content"><div class="hub-two">';
+        foreach (['Recently watched','Back in the game','Your next watch','Your circle'] as $title) $html .= '<section class="hub-panel"><div class="hub-panel-head"><h2>' . self::esc($title) . '</h2></div><div class="hub-panel-body"><p class="hub-empty">Opening your space…</p></div></section>';
+        $html .= '</div></div>';
         return $html . '</div></main></div>';
     }
 }

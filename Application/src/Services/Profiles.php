@@ -42,6 +42,6 @@ final class Profiles
     public static function lobbyIdentity(): array
     {
         $user = AreaAccess::viewer();
-        return $user ? ['name'=>(string)($user['display_name'] ?? $user['username']), 'avatar_url'=>self::avatarUrl($user)] : [];
+        return $user ? ['user_id'=>$user['id'], 'name'=>(string)($user['display_name'] ?? $user['username']), 'avatar_url'=>self::avatarUrl($user)] : [];
     }
 }

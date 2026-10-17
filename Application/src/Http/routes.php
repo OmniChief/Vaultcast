@@ -42,7 +42,7 @@ if (strpos($path, '/live/') === 0) {
         require __DIR__ . '/routes/' . $handler . '.php';
     }
 } else {
-    foreach (['account','library','diagnostics','downloads','collections','lobby'] as $handler) {
+    foreach (['account','hub','library','diagnostics','downloads','collections','lobby'] as $handler) {
         require __DIR__ . '/routes/' . $handler . '.php';
     }
 }

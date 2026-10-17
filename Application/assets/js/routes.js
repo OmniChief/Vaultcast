@@ -11,6 +11,8 @@
   function build(st){
     st = st || {};
     var v = st.view;
+    if (v === 'library') return 'library';
+    if (v === 'home') return st.cinemaId ? 'home/cinema/' + enc(st.cinemaId) : (st.hubTab && st.hubTab !== 'overview' ? 'home/' + enc(st.hubTab) : '');
     if (v === 'movie' && (st.movieSlug || st.movieId)) return 'movies/' + enc(st.movieSlug || st.movieId);
     if (v === 'show' && (st.showSlug || st.showKey)) {
       var p = 'tvshows/' + enc(st.showSlug || st.showKey);
@@ -52,6 +54,12 @@
     var params = {};
     q.split('&').forEach(function(kv){ if (!kv) return; var i = kv.indexOf('='); params[dec(i < 0 ? kv : kv.slice(0, i))] = dec(i < 0 ? '' : kv.slice(i + 1).replace(/\+/g, ' ')); });
     if (head === '') return { view:'home' };
+    if (head === 'home') {
+      var tab = parts[1] || 'overview';
+      if (['overview','favourites','watchlist','calendar','friends','history','stats','inbox','cinema'].indexOf(tab) < 0) return {view:'notfound'};
+      return {view:'home',hubTab:tab,cinemaId:tab === 'cinema' && /^[a-f0-9]{16}$/.test(parts[2] || '') ? parts[2] : null};
+    }
+    if (head === 'library' && !parts[1]) return {view:'library'};
     if (head === 'movies' && parts[1]) return { view:'movie', slug:parts[1], resolve:true };
     if (head === 'movies') return { view:'home' };
     if (head === 'tvshows' && parts[1]) return { view:'show', slug:parts[1], resolve:true };

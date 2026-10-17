@@ -2078,6 +2078,7 @@ class Catalogue {
      * Legacy rule (> 92% watched) is still honoured.
      */
     public static function progressFinished(array $p, bool $isEpisode): bool {
+        if (!empty($p['watched'])) return true;
         $pos = (float)($p['position'] ?? 0);
         $dur = (float)($p['duration'] ?? 0);
         if ($dur <= 0) return false;

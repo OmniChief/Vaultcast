@@ -157,6 +157,7 @@ class Lobby {
             'system' => (string)($item['system'] ?? ''),
             'emu_core' => (string)($item['emu_core'] ?? ''),
             'host_name' => $hostName,
+            'host_user_id' => $profile['user_id'] ?? null,
             'host_key' => hash('sha256', $hostKey),
             'max_players' => $max,
             'join_label_template' => (string)$cap['join_label'],
