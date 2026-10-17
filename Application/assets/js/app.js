@@ -4992,6 +4992,26 @@ try {
     return shell(wrap);
   }
 
+  function detailMatchButtons(item, showKey){
+    function withTools(callback){
+      window.__nsEnsureMatching(function(){ if (window.NSMatch) callback(window.NSMatch); });
+    }
+    var buttons = [h('button', { className:'btn ghost nsm-report-btn', type:'button', text:'⚑ Report', onClick:function(){
+      withTools(function(tools){ tools.reportDialog(showKey
+        ? {kind:'show', show_key:showKey, label:item.title || ''}
+        : {kind:'movie', item_id:item.id, label:(item.title || '') + (item.year ? ' (' + item.year + ')' : '')}); });
+    }})];
+    if (state.user && state.user.role === 'admin') buttons.push(h('button', { className:'btn ghost', type:'button', text:'Fix match', onClick:function(){
+      if (!state.user || state.user.role !== 'admin') return;
+      withTools(function(tools){
+        if (!state.user || state.user.role !== 'admin') return;
+        if (showKey) { tools.ui.openShow = showKey; openSettings('matching'); }
+        else tools.openMovieFix(item);
+      });
+    }}));
+    return buttons;
+  }
+
   function openShow(showKey, season, episode){
     if (state.showKey !== showKey) state.showSlug = null;
     state.showKey = showKey;
@@ -5059,7 +5079,7 @@ try {
         }})
       ];
       if (!canManageDownloads()) actions = actions.filter(function(button){ return button.textContent !== 'Find alternate'; });
-      if (window.NSMatch) actions = actions.concat(window.NSMatch.movieButtons(item));
+      actions = actions.concat(detailMatchButtons(item, null));
       if (item.file_exists === false) {
         actions.push(h('span', { className:'bad', text:'File missing on disk' }));
       }
@@ -5935,7 +5955,7 @@ try {
           }})
         ];
         if (!canManageDownloads()) heroActions = heroActions.filter(function(button){ return button.textContent !== 'Find alternate'; });
-        if (window.NSMatch) heroActions = heroActions.concat(window.NSMatch.showButtons(show, show.show_key || showKey));
+        heroActions = heroActions.concat(detailMatchButtons(show, show.show_key || showKey));
         if (missTotal > 0 && canManageDownloads()) {
           heroActions.push(h('button', {
             className:'btn',
@@ -13182,16 +13202,25 @@ function viewCollectionDetail(){
   /* helpers for assets/js/matching.js (Ingest inbox / Fix matching / Label reports) */
   window.NSApp = { h: h, api: api, toast: toast, confirmDialog: confirmDialog, render: render, state: state,
     openSettings: openSettings, openShow: openShow, openMovie: openMovie, fmtSize: fmtSize, version: APP_VERSION };
-  // Load matching tools when Settings needs them.
+  // Load matching tools when Settings or a detail-page action needs them.
+  var matchingCallbacks = [];
   window.__nsEnsureMatching = function(cb){
     if (window.NSMatch) { if (cb) cb(); return; }
-    if (window.__nsMatchingLoading) { if (cb) { var t=setInterval(function(){ if (window.NSMatch){ clearInterval(t); cb(); } }, 50);} return; }
+    if (cb) matchingCallbacks.push(cb);
+    if (window.__nsMatchingLoading) return;
     window.__nsMatchingLoading = true;
     var sm = document.createElement('script');
     sm.src = BASE + 'index.php?asset=assets/js/matching.js&v=' + (window.__ASSET_VERSION__ || APP_VERSION);
     sm.defer = true;
-    sm.onload = function(){ window.__nsMatchingLoading = false; if (cb) cb(); };
-    sm.onerror = function(){ window.__nsMatchingLoading = false; };
+    sm.onload = function(){
+      window.__nsMatchingLoading = false;
+      var callbacks = matchingCallbacks; matchingCallbacks = [];
+      callbacks.forEach(function(callback){ callback(); });
+    };
+    sm.onerror = function(){
+      window.__nsMatchingLoading = false; matchingCallbacks = [];
+      sm.remove(); toast('Could not load matching tools. Please try again.', {kind:'bad'});
+    };
     document.head.appendChild(sm);
   };
 

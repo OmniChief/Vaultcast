@@ -853,12 +853,14 @@
     var out = [ h('button', { className: 'btn ghost nsm-report-btn', type: 'button', text: '⚑ Report', title: 'Report a wrong title / year / poster', onClick: function(){
       reportDialog({ kind: 'movie', item_id: item.id, label: (item.title || '') + (item.year ? ' (' + item.year + ')' : '') });
     }}) ];
-    if (isAdmin()) out.push(h('button', { className: 'btn ghost', type: 'button', text: 'Fix match', onClick: function(){
-      var body = h('div', {});
-      var m = modal('Fix movie match', [body], { wide: true });
-      movieFixForm(body, item.id, { title: item.title, year: item.year, type: 'movies' }, function(){ m.close(); A.openMovie(item.id); });
-    }}));
+    if (isAdmin()) out.push(h('button', { className: 'btn ghost', type: 'button', text: 'Fix match', onClick: function(){ M.openMovieFix(item); }}));
     return out;
+  };
+  M.openMovieFix = function(item){
+    if (!isAdmin()) return;
+    var body = h('div', {});
+    var m = modal('Fix movie match', [body], { wide: true });
+    movieFixForm(body, item.id, { title: item.title, year: item.year, type: 'movies' }, function(){ m.close(); A.openMovie(item.id); });
   };
   M.showButtons = function(show, showKey){
     var out = [ h('button', { className: 'btn ghost nsm-report-btn', type: 'button', text: '⚑ Report', title: 'Report a wrong show match or wrong episode labels', onClick: function(){
