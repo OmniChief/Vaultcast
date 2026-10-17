@@ -434,6 +434,7 @@
         api('/admin/match/show/' + showKey + '/pin', { method: 'POST', body: body }).then(function(r){
           if (!r.ok) return toast(r.error || 'Failed', { kind: 'bad' });
           toast(r.meta_only ? 'Synopsis and poster pinned (episode guide unchanged)' : 'Saved - now run Auto-match', { kind: 'ok' });
+          if (r.warning) toast(r.warning, {kind:'warn'});
           renderShowEditor(host, r.show_key || showKey);
         });
       }
@@ -526,6 +527,7 @@
             busy(bSave, false);
             if (!res.ok) return toast(res.error || 'Failed', { kind: 'bad' });
             toast('Saved ' + res.changed + ' item' + (res.changed === 1 ? '' : 's'), { kind: 'ok' });
+            if (res.warning) toast(res.warning, {kind:'warn'});
             renderShowEditor(host, showKey);
           });
         });
@@ -778,7 +780,7 @@
     var tabs = h('div', { className: 'nsm-src-tabs', role: 'tablist' }), source = 'all';
     function run(){
       clear(res).appendChild(h('p', { className: 'muted', text: 'Searching…' }));
-      api('/admin/match/search', { method: 'POST', body: { kind: 'movie', q: q.value, source: source } }).then(function(r){
+      api('/admin/match/search', { method: 'POST', body: { kind: cur.type === 'roms' ? 'game' : 'movie', q: q.value, source: source } }).then(function(r){
         clear(res);
         sourceTabs(tabs, r.sources, source, function(id){ source = id; run(); });
         if (r.unavailable) { res.appendChild(h('p', { className: 'muted', text: r.unavailable })); return; }
@@ -800,8 +802,9 @@
       api('/admin/match/movie/' + itemId, { method: 'POST', body: { title: t.value.trim(), year: num(y.value), imdb_id: chosen && chosen.source === 'omdb' ? chosen.id : null, image: chosen && chosen.image ? chosen.image : null, match: chosen ? { source: chosen.source, id: chosen.id, title: chosen.title, year: chosen.year || null, summary: chosen.summary || '', url: chosen.url || null, image: chosen.image || null, page_title: chosen.page_title || null } : null } }).then(function(r){
         busy(save, false);
         if (!r.ok) return toast(r.error || 'Failed', { kind: 'bad' });
-        toast('Movie label updated', { kind: 'ok' });
-        done(t.value.trim() + (y.value ? ' (' + y.value + ')' : ''));
+        if (r.warning) toast(r.warning, {kind:'warn'});
+        toast(cur.type === 'roms' ? 'Game match updated' : 'Movie label updated', { kind: 'ok' });
+        A.refreshArtwork().then(function(){done(t.value.trim() + (y.value ? ' (' + y.value + ')' : ''));});
       });
     });
     host.appendChild(h('div', { className: 'cv-search-row' }, [ q, h('button', { className: 'btn', type: 'button', text: 'Search', onClick: run }) ]));
@@ -850,12 +853,56 @@
     var out = [ h('button', { className: 'btn ghost nsm-report-btn', type: 'button', text: '⚑ Report', title: 'Report a wrong title / year / poster', onClick: function(){
       reportDialog({ kind: 'movie', item_id: item.id, label: (item.title || '') + (item.year ? ' (' + item.year + ')' : '') });
     }}) ];
-    if (isAdmin()) out.push(h('button', { className: 'btn ghost', type: 'button', text: 'Fix match', onClick: function(){
-      var body = h('div', {});
-      var m = modal('Fix movie match', [body], { wide: true });
-      movieFixForm(body, item.id, { title: item.title, year: item.year, type: 'movies' }, function(){ m.close(); A.openMovie(item.id); });
-    }}));
+    if (isAdmin()) out.push(h('button', { className: 'btn ghost', type: 'button', text: 'Fix match', onClick: function(){ M.openMovieFix(item); }}));
     return out;
+  };
+  M.openMovieFix = function(item){
+    if (!isAdmin()) return;
+    var body = h('div', {});
+    var isGame = item.media_kind === 'rom' || item.type === 'roms';
+    var m = modal(isGame ? 'Fix game match' : 'Fix movie match', [body], { wide: true });
+    movieFixForm(body, item.id, { title: item.title, year: item.year, type: isGame ? 'roms' : 'movies' }, function(){ m.close(); if (isGame) A.openGame(item); else A.openMovie(item.id); });
+  };
+  M.editDialog = function(item, showKey){
+    if (!isAdmin()) return;
+    var title = input({value:item.title || ''}), year = input({type:'number', value:item.year || ''});
+    var synopsis = h('textarea', {rows:'8', maxlength:'20000'}); synopsis.value = item.synopsis || '';
+    var upload = input({type:'file', accept:'image/jpeg,image/png,image/webp'});
+    var status = h('p', {className:'muted', role:'status'});
+    var save = h('button', {className:'btn primary', type:'button', text:'Save changes'});
+    var remove = h('button', {className:'btn danger', type:'button', text:'Remove from library'});
+    var m = modal('Manual edit', [
+      h('label', {className:'nsm-field'}, [h('span', {text:'Title'}), title]),
+      h('label', {className:'nsm-field'}, [h('span', {text:'Year'}), year]),
+      h('label', {className:'nsm-field'}, [h('span', {text:'Synopsis'}), synopsis]),
+      h('label', {className:'nsm-field'}, [h('span', {text:'Upload poster (JPEG, PNG or WebP, up to 8 MB)'}), upload]),
+      status, h('div', {className:'row-actions'}, [save, remove])
+    ], {wide:true});
+    function refresh(r){ A.refreshArtwork().then(function(){m.close(); if (showKey) A.openShow(r.show_key || showKey); else if (item.media_kind === 'rom' || item.type === 'roms') A.openGame(item); else A.openMovie(item.id);}); }
+    function posterData(){
+      var file = upload.files && upload.files[0];
+      if (!file) return Promise.resolve(null);
+      if (file.size > 8 * 1024 * 1024) return Promise.reject(new Error('Poster must be no larger than 8 MB'));
+      return new Promise(function(resolve, reject){ var reader = new FileReader(); reader.onload = function(){resolve(reader.result);}; reader.onerror = function(){reject(new Error('Could not read poster'));}; reader.readAsDataURL(file); });
+    }
+    save.onclick = function(){
+      if (!title.value.trim()) { status.textContent = 'Title required'; return; }
+      save.disabled = remove.disabled = true; status.textContent = 'Saving…';
+      posterData().then(function(data){ return api('/admin/media/edit', {method:'POST', body:{id:showKey ? null : item.id, show_key:showKey || null, title:title.value.trim(), year:year.value || null, synopsis:synopsis.value, poster_data:data}}); }).then(function(r){
+        if (!r.ok) throw new Error(r.error || 'Could not save');
+        toast(r.warning || 'Saved', {kind:r.warning ? 'warn' : 'ok'}); refresh(r);
+      }).catch(function(error){ status.textContent = error.message; save.disabled = remove.disabled = false; });
+    };
+    remove.onclick = function(){
+      A.confirmDialog('Remove “' + (item.title || '') + '”' + (showKey ? ' and every episode' : '') + ' from the library? Files remain on disk and rescans will keep these entries excluded.', {okText:'Remove from library', danger:true}).then(function(ok){
+        if (!ok) return;
+        save.disabled = remove.disabled = true;
+        return api('/admin/media/edit', {method:'POST', body:{id:showKey ? null : item.id, show_key:showKey || null, remove:true, confirm:'REMOVE'}}).then(function(r){
+          if (!r.ok) throw new Error(r.error || 'Could not remove');
+          m.close(); A.navigate(item.media_kind === 'rom' ? 'play' : 'home');
+        }).catch(function(error){status.textContent = error.message; save.disabled = remove.disabled = false;});
+      });
+    };
   };
   M.showButtons = function(show, showKey){
     var out = [ h('button', { className: 'btn ghost nsm-report-btn', type: 'button', text: '⚑ Report', title: 'Report a wrong show match or wrong episode labels', onClick: function(){

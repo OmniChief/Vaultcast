@@ -477,8 +477,8 @@ class Ingest {
         if ($tvmazeId > 0) {
             foreach (array_keys($showKeys) as $sk) Matching::pinShow($sk, ['provider' => 'tvmaze', 'tvmaze_id' => $tvmazeId, 'name' => $show]);
         }
-        if ($kind === 'movie' && count($overrideRows) === 1 && !empty($b['match']['image']) && class_exists('Posters')) {
-            Matching::rematchMovie($overrideRows[0]['id'], ['title' => $overrideRows[0]['title'], 'year' => $overrideRows[0]['year'], 'image' => (string)$b['match']['image']]);
+        if ($kind === 'movie' && count($overrideRows) === 1 && !empty($b['match']) && class_exists('Posters')) {
+            Matching::rematchMovie($overrideRows[0]['id'], ['title' => $overrideRows[0]['title'], 'year' => $overrideRows[0]['year'], 'image' => (string)($b['match']['image'] ?? ''), 'match'=>$b['match']]);
         }
         $fin = null;
         if ($dests) {
@@ -492,9 +492,10 @@ class Ingest {
         $next = null;
         if ($dests) { try { $next = Acquisition::processPendingSearches(['limit' => 1]); } catch (Throwable $e) { $next = null; } }
         if ($progress) $progress($total, $total, '');
+        $backup = $dests ? MetadataSidecars::schedule() : ['ok'=>true];
         $errors = array_values(array_filter($results, function ($r) { return empty($r['ok']); }));
         Matching::log('INGEST ' . ($tor['name'] ?? '') . ' kind=' . $kind . ' section=' . $sectionId . ' ok=' . count($dests) . ' errors=' . count($errors));
-        return ['ok' => count($errors) === 0, 'imported' => count($dests), 'errors' => $errors, 'results' => $results, 'finish' => $fin, 'next' => $next, 'error' => $errors ? ($errors[0]['error'] ?? 'Some files failed') : null];
+        return ['ok' => count($errors) === 0, 'imported' => count($dests), 'errors' => $errors, 'results' => $results, 'finish' => $fin, 'next' => $next, 'warning'=>empty($backup['ok']) ? $backup['warning'] : null, 'error' => $errors ? ($errors[0]['error'] ?? 'Some files failed') : null];
     }
 
     public static function setStatus(string $hash, string $status): array {

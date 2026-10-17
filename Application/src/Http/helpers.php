@@ -16,7 +16,10 @@ function json_out($data, int $code = 200): void {
     release_request_locks();
     http_response_code($code);
     header('Content-Type: application/json; charset=utf-8');
-    echo json_encode($data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    $started = microtime(true);
+    $encoded = json_encode($data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    if (class_exists('RequestTiming', false)) RequestTiming::add('json', $started);
+    echo class_exists('AssetDelivery', false) ? AssetDelivery::text((string)$encoded) : $encoded;
     exit;
 }
 

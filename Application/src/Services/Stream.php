@@ -517,12 +517,12 @@ class Stream {
             $path = PosterOptimise::pickServePath($path, $variant, $wantWebp);
         }
         if (!is_file($path)) self::posterMiss();
-        $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
-        if ($ext === 'webp') $mime = 'image/webp';
-        elseif ($ext === 'png') $mime = 'image/png';
-        else $mime = 'image/jpeg';
+        $info = @getimagesize($path);
+        $mime = $info['mime'] ?? '';
+        if (!in_array($mime, ['image/webp','image/png','image/jpeg','image/gif'], true)) self::posterMiss();
         header('Content-Type: ' . $mime);
-        header('Cache-Control: public, max-age=604800, immutable');
+        // Variant files can appear after background preparation; revalidate mutable URLs.
+        header('Cache-Control: public, max-age=3600');
         header('Vary: Accept');
         header('Content-Length: ' . filesize($path));
         if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'HEAD') {
@@ -552,7 +552,7 @@ class Stream {
 
     private static function posterMiss(): void {
         http_response_code(404);
-        header('Cache-Control: no-store');
+        header('Cache-Control: ' . (self::wantsRemotePoster() ? 'no-store' : 'private, max-age=15'));
         header('Content-Length: 0');
         exit;
     }

@@ -68,10 +68,10 @@ final class FirstPage {
             $show = ($item['kind'] ?? '') === 'show';
             $name = (string)($item['show'] ?? $item['title'] ?? 'Untitled');
             if ($name === '') $name = (string)($item['title'] ?? 'Untitled');
-            $poster = $base . 'api/' . ($show ? 'shows/' : 'items/') . rawurlencode((string)$item['id']) . '/poster?fetch=0&variant=thumb';
+            $poster = $base . 'api/' . ($show ? 'shows/' : 'items/') . rawurlencode((string)$item['id']) . '/poster?fetch=0&variant=thumb&art=2';
             $html .= '<a class="card first-card" data-first-nav href="' . self::esc(self::cardUrl($item, $base)) . '">'
                 . '<div class="poster"><span class="ph">' . self::esc($name) . '</span>'
-                . '<img loading="lazy" decoding="async" width="160" height="240" src="' . self::esc($poster) . '" alt="" onerror="this.remove()"></div>'
+                . '<img loading="lazy" decoding="async" width="160" height="240" data-first-src="' . self::esc($poster) . '" alt="" onerror="this.remove()"><noscript><img loading="lazy" width="160" height="240" src="' . self::esc($poster) . '" alt=""></noscript></div>'
                 . '<div class="meta"><div class="title">' . self::esc($name) . '</div><div class="sub">'
                 . self::esc($item['year'] ?? $item['system'] ?? '') . '</div></div></a>';
         }
@@ -92,9 +92,9 @@ final class FirstPage {
                 . '<label>Password<input name="password" type="password" autocomplete="current-password" required></label>'
                 . '<button class="btn primary" type="submit">Sign in</button><p class="bad" role="alert">' . self::esc($error) . '</p></form></main>';
         }
-        // Settings/admin deep links: no server-rendered library rows, so no poster requests; the app renders the route.
-        if (preg_match('#^(settings|admin)(/|$)#', ltrim($route, '/'))) {
-            return '<div class="app-shell xshell" id="first-home"><main class="view" id="main" aria-busy="true"></main></div>';
+        // Home artwork must not compete with a deep link's requested content.
+        if (trim($route, '/') !== '' && trim($route, '/') !== 'index.php') {
+            return '<div class="app-shell xshell" id="first-home"><main class="view" id="main" aria-busy="true"><p role="status">Opening your page…</p></main></div>';
         }
         $home = $startup['home'];
         $html = '<div class="app-shell xshell" id="first-home"><header class="topnav xnav">'
@@ -104,10 +104,11 @@ final class FirstPage {
         foreach ($home['sections'] ?? [] as $section) if ($section['type'] === 'roms') {
             $html .= '<a class="mode-tab" data-first-nav href="' . self::esc($base . 'games') . '">Play</a>'; break;
         }
-        $html .= '</nav><div class="nav-right"><form action="' . self::esc($base . 'search') . '" method="get">'
-            . '<input type="search" name="q" aria-label="Search library" placeholder="Search your library…"></form>'
-            . '<a class="btn ghost" data-first-nav href="' . self::esc($base . 'settings') . '">Account</a></div></header>'
-            . '<nav class="first-sections" aria-label="Libraries"><a data-first-nav href="' . self::esc($base) . '">Home</a>';
+        $html .= '</nav><div class="nav-right"><form class="search-wrap" action="' . self::esc($base . 'search') . '" method="get">'
+            . '<input class="search-box" id="q" type="search" name="q" aria-label="Search library" placeholder="Search movies &amp; shows…"></form>'
+            . '<a class="icon-btn avatar" title="Account &amp; settings" aria-label="Open account and settings" data-first-nav href="' . self::esc($base . 'settings') . '"><span class="avatar-initial">'
+            . self::esc(mb_strtoupper(mb_substr(trim((string)($user['display_name'] ?? $user['username'] ?? '?')), 0, 1))) . '</span></a></div></header>'
+            . '<nav class="first-sections" aria-label="Libraries"><a class="subnav-btn active" aria-current="page" data-first-nav href="' . self::esc($base) . '">Home</a>';
         foreach ($home['sections'] ?? [] as $section) $html .= '<a data-first-nav href="' . self::esc($base . 'library/' . rawurlencode($section['id'])) . '">' . self::esc($section['label']) . '</a>';
         $featured = $home['continue_watching'][0] ?? $home['sections'][0]['items'][0] ?? null;
         $html .= '<a data-first-nav href="' . self::esc($base . 'collections') . '">Collections</a></nav><main class="view" id="main"><div class="vod-home">'

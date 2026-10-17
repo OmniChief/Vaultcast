@@ -79,7 +79,7 @@ class PosterOptimise {
         ];
     }
 
-    public static function statusForFile(string $file, bool $overwrite = false): array {
+    public static function statusForFile(string $file, bool $overwrite = false, bool $withLabel = true): array {
         $stem = self::stemFromFile($file);
         $p = self::pathsForStem($stem);
         $orig = $p['original'];
@@ -87,7 +87,7 @@ class PosterOptimise {
         $hasWebp = is_file($p['webp']) && filesize($p['webp']) > 40;
         $hasThumb = is_file($p['thumb']) && filesize($p['thumb']) > 40;
         $needs = $hasOrig && (!$hasWebp || !$hasThumb || $overwrite);
-        $label = self::labelForStem($stem, $hasOrig ? basename($orig) : $file);
+        $label = $withLabel ? self::labelForStem($stem, $hasOrig ? basename($orig) : $file) : ['title'=>$file, 'kind'=>'item', 'id'=>$stem, 'poster_url'=>null];
         if (!$hasOrig) $reason = 'missing original';
         elseif ($overwrite && ($hasWebp || $hasThumb)) $reason = 're-optimise (overwrite WebP)';
         elseif (!$hasWebp && !$hasThumb) $reason = 'missing WebP + thumb';
@@ -162,23 +162,25 @@ class PosterOptimise {
     /** Paginated find of posters needing WebP variants. */
     public static function find(int $offset = 0, int $limit = 40, string $scope = 'all', bool $overwrite = false): array {
         $cfgOverwrite = $overwrite || !empty(self::settings()['overwrite']);
-        $all = self::listOriginals();
-        if ($scope !== 'all' && $scope !== '') {
-            $prefix = $scope === 'movies' ? 'movie_' : ($scope === 'games' ? 'game_' : ($scope === 'shows' ? 'show_' : ($scope === 'seasons' ? 'season_' : '')));
-            if ($prefix !== '') {
-                $all = array_values(array_filter($all, function ($f) use ($prefix) {
-                    return strpos($f, $prefix) === 0;
-                }));
-            }
-        }
+        $all = ArtworkLibrary::targets();
+        $scopes = array_filter(explode(',', $scope));
+        if ($scopes && !in_array('all', $scopes, true)) $all = array_filter($all, static function ($target) use ($scopes) { return in_array($target['kind'], $scopes, true); });
+        $all = array_values($all);
         $total = count($all);
         $limit = max(1, min(100, $limit));
         $offset = max(0, $offset);
         $sliceFiles = array_slice($all, $offset, $limit);
         $items = [];
-        foreach ($sliceFiles as $f) {
-            $st = self::statusForFile($f, $cfgOverwrite);
-            if ($st['needs']) $items[] = $st;
+        $missing = 0; $ready = 0;
+        foreach ($sliceFiles as $target) {
+            // Paginated local discovery adopts sidecars not previously visited
+            // by a browser; no remote work in a Settings HTTP request.
+            ArtworkLibrary::prepare($target, false);
+            $f = basename($target['path']);
+            $st = self::statusForFile($f, $cfgOverwrite, false);
+            if (!$st['original']) $missing++;
+            elseif (!$st['needs']) $ready++;
+            if ($st['needs']) $items[] = self::statusForFile($f, $cfgOverwrite);
         }
         $scanned = min($total, $offset + count($sliceFiles));
         $done = $scanned >= $total;
@@ -188,6 +190,8 @@ class PosterOptimise {
             'scanned' => $scanned,
             'total' => $total,
             'needs_total' => count($items),
+            'missing_artwork' => $missing,
+            'ready' => $ready,
             'offset' => $offset,
             'next_offset' => $done ? null : $scanned,
             'done' => $done,
@@ -205,7 +209,7 @@ class PosterOptimise {
         $thumbBytes = 0;
         $origBytes = 0;
         foreach ($all as $f) {
-            $st = self::statusForFile($f);
+            $st = self::statusForFile($f, false, false);
             $origBytes += $st['original_bytes'];
             $webpBytes += $st['webp_bytes'];
             $thumbBytes += $st['thumb_bytes'];

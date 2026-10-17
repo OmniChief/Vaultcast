@@ -13,13 +13,8 @@ if (function_exists('mb_internal_encoding')) { @mb_internal_encoding('UTF-8'); }
 define('STREAM_ROOT', dirname(__DIR__));
 require_once __DIR__ . '/Database.php';
 require_once __DIR__ . '/Repository.php';
-set_exception_handler(function (Throwable $error): void {
-    error_log('Vaultcast: ' . $error->getMessage());
-    if (PHP_SAPI === 'cli') { fwrite(STDERR, "Vaultcast could not complete this operation. Check the server log.\n"); exit(1); }
-    http_response_code(500);
-    header('Content-Type: application/json');
-    echo '{"ok":false,"error":"The server could not complete this operation. Check the server log."}';
-});
+require_once __DIR__ . '/Services/StartupFailure.php';
+StartupFailure::register();
 if (!\Vaultcast\Database::installed()) {
     if (PHP_SAPI !== 'cli') {
         http_response_code(503);
@@ -64,3 +59,4 @@ require_once __DIR__ . '/Http/helpers.php';
 
 // Apply pending storage migrations once per schema version (durable stamp check).
 Migrations::runIfNeeded();
+if (PHP_SAPI !== 'cli') PerformanceSetup::schedule();

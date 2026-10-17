@@ -27,7 +27,7 @@ final class PublicMetadata
     /** Metadata sources Fix Match can search, per kind. */
     const SOURCES = [
         'tvmaze'    => ['label' => 'TVmaze',    'kinds' => ['tv', 'anime']],
-        'wikipedia' => ['label' => 'Wikipedia', 'kinds' => ['movie', 'tv', 'anime']],
+        'wikipedia' => ['label' => 'Wikipedia', 'kinds' => ['movie', 'tv', 'anime', 'game']],
         'itunes'    => ['label' => 'iTunes',    'kinds' => ['movie', 'tv']],
         'omdb'      => ['label' => 'OMDb',      'kinds' => ['movie', 'tv'], 'needs_key' => true],
     ];
@@ -46,7 +46,7 @@ final class PublicMetadata
 
     /** Sources for a kind with availability, e.g. OMDb without a key is unavailable with a hint. */
     public static function sources(string $kind): array {
-        $kind = $kind === 'anime' ? 'anime' : ($kind === 'tv' ? 'tv' : 'movie');
+        $kind = in_array($kind, ['anime', 'tv', 'game'], true) ? $kind : 'movie';
         $out = [];
         foreach (self::SOURCES as $id => $def) {
             if (!in_array($kind, $def['kinds'], true)) continue;
@@ -84,7 +84,7 @@ final class PublicMetadata
         }
         // Default "All" keeps the previous behaviour: TVmaze for shows, iTunes + Wikipedia for movies.
         if (!$source || $source === 'all') {
-            $want = array_values(array_intersect($want, ($kind === 'movie' ? ['itunes', 'wikipedia', 'omdb'] : ['tvmaze', 'omdb'])));
+            $want = array_values(array_intersect($want, ($kind === 'game' ? ['wikipedia'] : ($kind === 'movie' ? ['itunes', 'wikipedia', 'omdb'] : ['tvmaze', 'omdb']))));
         }
         $rows = [];
         foreach ($want as $sid) {
@@ -132,7 +132,7 @@ final class PublicMetadata
                     'image' => $img, 'url' => $r['trackViewUrl'] ?? $r['collectionViewUrl'] ?? null];
             }
         } elseif ($sid === 'wikipedia') {
-            $word = $isTv ? 'TV series' : 'film';
+            $word = $kind === 'game' ? 'video game' : ($isTv ? 'TV series' : 'film');
             // One request returns titles, descriptions and thumbnails for all results.
             $wiki = self::fetchJson('https://en.wikipedia.org/w/api.php?' . http_build_query([
                 'action' => 'query', 'format' => 'json', 'formatversion' => 2, 'generator' => 'search',
@@ -140,13 +140,13 @@ final class PublicMetadata
                 'prop' => 'pageimages|extracts', 'piprop' => 'thumbnail', 'pithumbsize' => 240,
                 'exintro' => 1, 'explaintext' => 1, 'exchars' => 600,
             ]));
-            $re = $isTv ? '/\b(series|television|TV|sitcom|show)\b/i' : '/\bfilm\b/i';
+            $re = $kind === 'game' ? '/\b(video game|videogame|game)\b/i' : ($isTv ? '/\b(series|television|TV|sitcom|show)\b/i' : '/\bfilm\b/i');
             foreach ($wiki['query']['pages'] ?? [] as $page) {
                 $name = $page['title'] ?? '';
                 $summary = $page['extract'] ?? '';
                 if (!preg_match($re, $name . ' ' . $summary)) continue;
                 preg_match('/\b(?:19|20)\d{2}\b/', $name . ' ' . $summary, $date);
-                $rows[] = ['kind' => $isTv ? 'tv' : 'movie', 'source' => 'wikipedia', 'id' => $page['pageid'],
+                $rows[] = ['kind' => $kind === 'game' ? 'game' : ($isTv ? 'tv' : 'movie'), 'source' => 'wikipedia', 'id' => $page['pageid'],
                     'title' => preg_replace('/\s*\([^)]*\)$/', '', $name), 'page_title' => $name,
                     'year' => isset($date[0]) ? (int)$date[0] : null, 'summary' => $summary,
                     'image' => $page['thumbnail']['source'] ?? null,

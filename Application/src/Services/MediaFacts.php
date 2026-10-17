@@ -42,7 +42,7 @@ final class MediaFacts
         foreach (array_chunk(array_values($ids), 200) as $batch) {
             foreach ($batch as $id) self::$map[$id] = null;
             try {
-                $s = \Vaultcast\Database::connection()->prepare('SELECT item_id,sig,needs_convert,present FROM vaultcast_media_facts WHERE item_id IN (' . implode(',', array_fill(0, count($batch), '?')) . ')');
+                $s = \Vaultcast\Database::connection()->prepare('SELECT item_id,sig,needs_convert,present,video_codec,audio_codec FROM vaultcast_media_facts WHERE item_id IN (' . implode(',', array_fill(0, count($batch), '?')) . ')');
                 $s->execute($batch);
                 foreach ($s as $row) self::$map[(string)$row['item_id']] = $row;
             } catch (\Throwable $e) { /* not migrated yet: extension fallback */ }
@@ -143,14 +143,7 @@ final class MediaFacts
         }
         self::$map = [];
         Catalogue::invalidateDerivedCaches();
-        // Warm the per-show list cache (show art lookups) so the first list request after a scan is cache-only.
-        foreach ((Store::settings()['sections'] ?? []) as $sec) {
-            $t = is_array($sec) ? (string)($sec['type'] ?? '') : '';
-            if (($t === 'tv' || $t === 'anime') && !empty($sec['id'])) {
-                try { Catalogue::sectionShows((string)$sec['id']); } catch (\Throwable $e) {}
-            }
-        }
-        Catalogue::warmRandomShowcases();
+        Catalogue::warmBrowseViews();
         Catalogue::homeLibrary();
         Catalogue::showPosterHint('');
         $out['seconds'] = round(microtime(true) - $t0, 1);

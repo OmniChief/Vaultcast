@@ -30,6 +30,12 @@ class Posters {
     public static function gameCachePath(string $itemId): string {
         return self::dir() . '/game_' . preg_replace('/[^a-f0-9]/', '', $itemId) . '.jpg';
     }
+    /** Rematching invalidates converted artwork together with its original. */
+    public static function clearCachedArtwork(string $original): void {
+        $stem = pathinfo(basename($original), PATHINFO_FILENAME);
+        if (!preg_match('/^(?:movie_|game_|show_|season_)[a-zA-Z0-9_-]+$/D', $stem)) return;
+        foreach (['.jpg', '.jpeg', '.png', '.webp', '_thumb.webp'] as $suffix) @unlink(self::dir() . '/' . $stem . $suffix);
+    }
     public static function enabled(): bool {
         // Once per request: Store::settings() re-reads runtime ini files, and list/show pages call this per item.
         static $on = null;
@@ -233,7 +239,7 @@ class Posters {
             $path = (string)($item['path'] ?? '');
             if ($path !== '') {
                 $dir = is_file($path) ? dirname($path) : $path;
-                foreach (['poster.jpg','poster.png','folder.jpg','cover.jpg','cover.png','Poster.jpg'] as $name) {
+                foreach (array_merge(['poster.jpg','poster.png','folder.jpg','cover.jpg','cover.png','Poster.jpg'], array_map(static function ($ext) use ($path) { return pathinfo($path, PATHINFO_FILENAME) . '-poster.' . $ext; }, ['jpg','jpeg','png','webp'])) as $name) {
                     $p = $dir . '/' . $name;
                     if (is_file($p) && filesize($p) > 100) {
                         return self::adoptFile($cached, $p) ?? $p;
@@ -285,6 +291,9 @@ class Posters {
     public static function endRemoteBudget(): void { self::$remoteDeadline = null; }
     public static function remoteBudgetExpired(): bool {
         return self::$remoteDeadline !== null && microtime(true) >= self::$remoteDeadline;
+    }
+    public static function remoteSecondsLeft(): ?float {
+        return self::$remoteDeadline === null ? null : max(0.0, self::$remoteDeadline - microtime(true));
     }
 
     private static function throttle(): void {
@@ -903,6 +912,7 @@ class Posters {
     /** Cached show synopsis only (pin or TVMaze disk cache). Never hits the network. */
     public static function showSynopsisCached(string $showKey): ?string {
         $pin = self::showMetaPin($showKey);
+        if ($pin && !empty($pin['manual'])) return (string)($pin['summary'] ?? '');
         if ($pin && is_string($pin['summary'] ?? null) && $pin['summary'] !== '') return (string)$pin['summary'];
         $safe = preg_replace('/[^a-f0-9]/', '', $showKey);
         $cachePath = STREAM_DATA . '/tvmaze/show_' . $safe . '_episodes.json';
@@ -930,7 +940,7 @@ class Posters {
     /** Cached movie synopsis only (pin or disk). Never hits OMDb/Wikipedia. */
     public static function movieSynopsisCached(string $itemId): ?array {
         $pin = MetadataPins::get('movie_synopsis', $itemId);
-        if ($pin !== null && is_string($pin['summary'] ?? null) && $pin['summary'] !== '') {
+        if ($pin !== null && is_string($pin['summary'] ?? null) && ($pin['summary'] !== '' || !empty($pin['manual']))) {
             return ['summary' => (string)$pin['summary'], 'source' => (string)($pin['provider'] ?? 'pin'), 'pending' => false];
         }
         $cache = self::movieSynopsisCachePath($itemId);
@@ -995,6 +1005,8 @@ class Posters {
             }
         }
 
+        // A budget exhaustion is not a definitive provider miss.
+        if (($summary === null || $summary === '') && self::remoteBudgetExpired()) return null;
         @file_put_contents($cache, json_encode([
             'title' => $title,
             'year' => $year,
@@ -1211,6 +1223,14 @@ class Posters {
      * ROM / game poster: libretro Named_Boxarts (GitHub raw — thumbnails.libretro.com is 404), then Wikipedia.
      */
     public static function fetchGamePoster(array $item): ?string {
+        $pin = self::moviePosterPin((string)$item['id']);
+        if ($pin) {
+            foreach (self::pinnedPosterUrls($pin) as $url) {
+                $saved = self::downloadToCache(self::gameCachePath((string)$item['id']), $url);
+                if ($saved) return $saved;
+            }
+            return null;
+        }
         $id = (string)($item['id'] ?? '');
         if ($id === '') return null;
         $dest = self::gameCachePath($id);

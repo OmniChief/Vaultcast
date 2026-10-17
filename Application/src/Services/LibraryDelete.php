@@ -113,6 +113,7 @@ final class LibraryDelete {
             $base = strtolower(pathinfo($name, PATHINFO_FILENAME));
             $ok = in_array(strtolower($name), self::JUNK, true)
                 || (in_array($ext, self::ART_EXT, true) && in_array(preg_replace('/\d+$/', '', $base), self::FOLDER_LEFTOVERS, true))
+                || (in_array($ext, self::ART_EXT, true) && preg_match('/^season(?:\d+|-specials)-(?:poster|thumb|banner|fanart)$/i', $base))
                 || ($ext === 'nfo' && in_array($base, ['movie', 'tvshow', 'season'], true))
                 || in_array($ext, self::SIDECAR_EXT, true);
             if (!$ok) return [];

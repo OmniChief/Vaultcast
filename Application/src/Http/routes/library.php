@@ -111,11 +111,12 @@ if (preg_match('#^/sections/([a-zA-Z0-9_-]+)/items$#', $path, $m) && $method ===
     if (in_array($sectionType, ['roms','music'], true) || $plainMovieBrowse) {
         $out = \Vaultcast\Repository::browse($m[1], $q, $system, $letter, $page, $per);
         if ($plainMovieBrowse) {
-            $pack = Catalogue::browseCacheGet('facets_movies', $m[1]);
-            $out['facets'] = $pack['facets'] ?? Catalogue::movieFacetsCached($m[1], Catalogue::sectionItems($m[1]));
+            $pack = Catalogue::movieFacetsForBrowse($m[1]);
+            $out['facets'] = $pack['facets'];
+            $out['facets_pending'] = $pack['pending'];
         }
         $out['items'] = Catalogue::publicItems($out['items']);
-        Catalogue::browseCachePut('browse_items', $browseSalt, $out);
+        if (empty($out['facets_pending'])) Catalogue::browseCachePut('browse_items', $browseSalt, $out);
         json_out($out);
     }
     $items = Catalogue::sectionItems($m[1]);

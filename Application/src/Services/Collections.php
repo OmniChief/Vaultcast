@@ -23,6 +23,15 @@ class Collections {
      * Counts and the cover were computed by refresh().
      */
     public static function publicList(): array {
+        $revision = \Vaultcast\Repository::revision('collections') . '|' . \Vaultcast\Repository::revision('catalogue');
+        $hit = \Vaultcast\Repository::cacheGet('public-collections-v1');
+        if (($hit['revision'] ?? '') === $revision) return $hit['data'];
+        $data = self::buildPublicList();
+        $after = \Vaultcast\Repository::revision('collections') . '|' . \Vaultcast\Repository::revision('catalogue');
+        if ($revision === $after) \Vaultcast\Repository::cachePut('public-collections-v1', ['revision'=>$revision,'data'=>$data], 0);
+        return $data;
+    }
+    private static function buildPublicList(): array {
         $out = [];
         $all = self::all();
         $owned = self::ownedItems($all);

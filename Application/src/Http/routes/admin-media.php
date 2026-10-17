@@ -1,6 +1,9 @@
 <?php
 declare(strict_types=1);
 // ---- Media Manager (interactive catalogue + file browser) ----
+if ($path === '/admin/media/edit' && $method === 'POST') {
+    json_out(LibraryEditor::save(body_json()));
+}
 if ($path === '/admin/media/diagnose' && $method === 'GET') {
     json_out(PathDiagnose::run([
         'include_orphans' => isset($_GET['orphans']) && $_GET['orphans'] !== '0',

@@ -19,6 +19,8 @@
   }
   function navState(extra){
     var st = { v: state.view, section: state.section, sectionType: state.sectionType, sectionLabel: state.sectionLabel, showKey: state.showKey, showSlug: state.showSlug, showSeason: state.showSeason, showEpisode: state.showEpisode, movieId: state.movieId, movieSlug: state.movieSlug, collectionId: state.collectionId, settingsSection: state.settingsSection, playTab: state.playTab, sectionSystem: state.sectionSystem || '', sectionSystemSlug: state.sectionSystemSlug || null, gamePath: state.gamePath || null, searchQuery: state.searchQuery, player: !!document.getElementById('player-overlay') };
+    st.sectionLetter = state.sectionLetter || '';
+    st.collectionsLetter = state.collectionsLetter || '';
     if (extra) Object.keys(extra).forEach(function(k){ st[k]=extra[k]; });
     return st;
   }
@@ -745,6 +747,7 @@ function confirmDialog(message, opts){
     opts = opts || {};
     var method = String(opts.method || 'GET').toUpperCase();
     if (method !== 'GET') {
+      if (/^\/items\/[a-f0-9]+\/play$/.test(path) || path === '/admin/posters/audit') return apiRequest(path, opts);
       navigationCache.clear();
       return apiRequest(path, opts).then(function(j){ navigationCache.clear(); return j; }, function(error){ navigationCache.clear(); throw error; });
     }
@@ -807,11 +810,21 @@ function confirmDialog(message, opts){
   }
 
   /* Browser-first posters: Cache API keyed by item id, server only on miss */
-  var POSTER_CACHE = 'vaultcast-posters-v1';
+  var POSTER_CACHE = 'vaultcast-posters-v2';
+  var POSTER_CACHE_MAX_AGE = 60 * 60 * 1000;
   var _posterMem = Object.create(null);
+  var posterRevision = '2';
+  try {posterRevision = localStorage.getItem('vaultcast-artwork-revision') || '2';} catch (eArtRevision) {}
+  function refreshArtwork(){
+    posterRevision = String(Date.now());
+    try {localStorage.setItem('vaultcast-artwork-revision', posterRevision);} catch (eArtRevision) {}
+    _posterMem = Object.create(null); _posterRequests = Object.create(null);
+    navigationCache.clear();
+    return window.caches ? caches.delete(POSTER_CACHE).catch(function(){}) : Promise.resolve();
+  }
 
   function posterCacheRequest(cacheId, variant){
-    var key = String(cacheId || '') + '|' + String(variant || 'full') + '|' + (supportsWebP() ? 'w1' : 'w0');
+    var key = String(cacheId || '') + '|' + String(variant || 'full') + '|' + (supportsWebP() ? 'w1' : 'w0') + '|' + posterRevision;
     return new Request(BASE + 'poster-cache/' + encodeURIComponent(key), { credentials:'same-origin' });
   }
   /* WebP feature-detect once — non-supporting browsers get original JPG/PNG */
@@ -828,6 +841,7 @@ function confirmDialog(message, opts){
     variant = variant || 'full';
     q += '&variant=' + encodeURIComponent(variant);
     q += supportsWebP() ? '&webp=1' : '&webp=0';
+    q += '&art=' + posterRevision;
     if (kind === 'show') return API + '/shows/' + cacheId + '/poster' + q;
     if (kind === 'season') {
       // cacheId = showKey + '-s' + season
@@ -946,7 +960,7 @@ function confirmDialog(message, opts){
       toast(String(e));
     });
   }
-  var POSTER_PARALLEL = 4;
+  var POSTER_PARALLEL = 2;
   var _posterRequests = Object.create(null);
   var _posterQueue = [];
   var _posterActive = 0;
@@ -1037,7 +1051,7 @@ function confirmDialog(message, opts){
     var itemId = job.itemId;
     var kind = job.kind;
     var variant = job.variant || el.getAttribute('data-poster-variant') || 'full';
-    var memKey = String(itemId) + '|' + variant + '|' + (supportsWebP() ? 'w1' : 'w0');
+    var memKey = String(itemId) + '|' + variant + '|' + (supportsWebP() ? 'w1' : 'w0') + '|' + posterRevision;
     var key = posterCacheRequest(itemId, variant);
     return new Promise(function(resolve){
       var finished = false;
@@ -1087,7 +1101,7 @@ function confirmDialog(message, opts){
         _posterRequests[url].then(function(b){
           if (!paint(b)) { if (!finished) { markPosterFail(el); done(); } return; }
           if (typeof caches !== 'undefined') {
-            caches.open(POSTER_CACHE).then(function(c){ return c.put(key, new Response(b)); }).catch(function(){});
+            caches.open(POSTER_CACHE).then(function(c){ return c.put(key, new Response(b, { headers:{ 'X-Vaultcast-Cached-At':String(Date.now()) } })); }).catch(function(){});
           }
         }).catch(function(){
           if (stillWanted()) markPosterFail(el);
@@ -1100,7 +1114,8 @@ function confirmDialog(message, opts){
         : Promise.resolve(null);
       cacheP.then(function(cached){
         if (finished) return;
-        if (cached) {
+        var cachedAt = cached && Number(cached.headers.get('X-Vaultcast-Cached-At'));
+        if (cached && cachedAt > 0 && Date.now() - cachedAt >= 0 && Date.now() - cachedAt < POSTER_CACHE_MAX_AGE) {
           clearTimeout(cacheTimer);
           return cached.blob().then(function(b){
             if (paint(b)) return;
@@ -1273,6 +1288,19 @@ function confirmDialog(message, opts){
 
   function playItem(item, opts){
     opts = opts || {};
+    if (!opts.inline && !opts.lobby) {
+      if (item.media_kind === 'rom' || item.type === 'roms') { openGame(item); return; }
+      if (item.show_key && (state.view !== 'show' || String(state.showKey) !== String(item.show_key))) { state._pendingEpisode = item; openShow(item.show_key, item.season, item.episode); return; }
+      if (!item.show && (item.media_kind === 'video' || item.type === 'movies' || item.type === 'disney') && state.view !== 'movie') { openMovie(item.id); return; }
+    }
+    var pageHost = document.getElementById('detail-player');
+    var requestId = ++_playRequestId;
+    function showRetry(){
+      if (!pageHost || !pageHost.isConnected || requestId !== _playRequestId) return;
+      pageHost.appendChild(h('button', {className:'btn', type:'button', text:'Retry player', onClick:function(){
+        pageHost.innerHTML = ''; playItem(item, Object.assign({}, opts, {inline:true}));
+      }}));
+    }
     openPlayer._lobbyOpts = opts.lobby || null;
     // Lazy-fill poster/metadata cache when user opens an item that has no poster yet
     try {
@@ -1288,7 +1316,9 @@ function confirmDialog(message, opts){
     var pref = opts.audio != null ? opts.audio : getAudioPref(item.id);
     if (pref != null && !isNaN(pref)) body.audio = pref;
     api('/items/'+item.id+'/play', { method:'POST', body: body }).then(function(j){
+      if (requestId !== _playRequestId || (pageHost && !pageHost.isConnected)) return;
       if (!j.ok) {
+        showRetry();
         if (needsConvertExt(item) && state.user && state.user.role === 'admin') {
           if (confirm((j.error || 'Play failed') + '\n\nQueue ffmpeg convert to DirectPlay MP4?')) enqueueConvert(item);
         } else {
@@ -1296,8 +1326,19 @@ function confirmDialog(message, opts){
         }
         return;
       }
+      j.autoplay = opts.autoplay !== false;
       openPlayer(item, j);
-    }).catch(function(e){ toast(String(e)); });
+    }).catch(function(e){ if (requestId !== _playRequestId) return; showRetry(); toast(String(e)); });
+  }
+  var _playRequestId = 0;
+
+  function mountDetailPlayer(player, host, focus){
+    (host || document.body).appendChild(player);
+    if (host && focus) {
+      player.setAttribute('tabindex', '-1');
+      player.scrollIntoView({block:'start', behavior:'smooth'});
+      player.focus({preventScroll:true});
+    }
   }
 
   /* saved resume position (seconds) for an item; 0 = start from beginning */
@@ -1321,23 +1362,24 @@ function confirmDialog(message, opts){
     openPlayer._deskPlayStarted = false;
     openPlayer._deskRecoverTries = 0;
     openPlayer._deskRecovering = false;
+    var inlineHost = play.media_kind === 'audio' ? null : document.getElementById('detail-player');
     if (play && play.media_kind === 'rom' && item && item.game_path) state.gamePath = item.game_path;
-    pushNav({ player:true, itemId: item.id });
-    var overlay = h('div', { className:'player-overlay player-simple', id:'player-overlay' });
+    if (!inlineHost) pushNav({ player:true, itemId: item.id });
+    var overlay = h('div', { className:'player-overlay player-simple' + (inlineHost ? ' player-inline' : ''), id:'player-overlay' });
     if (state.gamePath) overlay.appendChild(shareButton(function(){ return routePath(); }, 'Copy link to this game'));
-    overlay.appendChild(h('button', {
+    if (!inlineHost) overlay.appendChild(h('button', {
       className:'player-close', id:'player-back', text:'\u00d7', title:'Back',
       onClick: function(){ try { history.back(); } catch (e) { closePlayer(); } }
     }));
 
     if (play.media_kind === 'rom') {
       try {
-        overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;width:100%;height:100%;z-index:1000;background:#000;margin:0;padding:0;overflow:hidden;display:block;';
+        if (!inlineHost) overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;width:100%;height:100%;z-index:1000;background:#000;margin:0;padding:0;overflow:hidden;display:block;';
       } catch (eRo) {}
       var root = h('div', { id:'emu-root' });
       root.style.cssText = 'position:absolute;top:0;left:0;right:0;bottom:0;width:100%;height:100%;background:#000;z-index:1;';
       overlay.appendChild(root);
-      document.body.appendChild(overlay);
+      mountDetailPlayer(overlay, inlineHost, true);
       loadEmulator(root, play, item, openPlayer._lobbyOpts || null);
       openPlayer._lobbyOpts = null;
       return;
@@ -1348,7 +1390,7 @@ function confirmDialog(message, opts){
     if (play.media_kind === 'audio') {
       media = h('audio', { id:'player-media', controls:true, autoplay:true, preload:'auto', src: src });
     } else {
-      media = h('video', { id:'player-media', controls:true, autoplay:true, playsinline:true, preload:'auto' });
+      media = h('video', { id:'player-media', controls:true, autoplay:play.autoplay !== false, playsinline:true, preload:'metadata' });
       media.setAttribute('webkit-playsinline', 'true');
       media.setAttribute('playsinline', 'true');
       if (play.mime) {
@@ -1399,7 +1441,7 @@ function confirmDialog(message, opts){
       var cur = media.currentSrc || media.src || '';
       if (!openPlayer._deskPlayStarted && !directTried && cur.indexOf('/stream/play') >= 0 && cur.indexOf('direct=1') < 0) {
         directTried = true;
-        try { media.src = cur + (cur.indexOf('?') >= 0 ? '&' : '?') + 'direct=1'; media.play(); } catch (eD) {}
+        try { media.src = cur + (cur.indexOf('?') >= 0 ? '&' : '?') + 'direct=1'; if (play.autoplay !== false || openPlayer._deskPlayStarted) media.play(); } catch (eD) {}
         return;
       }
       /* soft mid-play recover (token refresh + seek) before convert toast */
@@ -1444,15 +1486,15 @@ function confirmDialog(message, opts){
       });
       overlay.appendChild(convertBtn);
     }
-    document.body.appendChild(overlay);
-    if (document.body.classList.contains('tv') || document.body.classList.contains('mode-tv') || document.documentElement.getAttribute('data-client-mode')==='tv') {
+    mountDetailPlayer(overlay, inlineHost, play.autoplay !== false);
+    if (!inlineHost && (document.body.classList.contains('tv') || document.body.classList.contains('mode-tv') || document.documentElement.getAttribute('data-client-mode')==='tv')) {
       try {
         overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;width:100%;height:100%;z-index:1000;background:#000;margin:0;padding:0;overflow:hidden;display:block;';
         media.style.cssText = 'position:absolute;top:0;left:0;right:0;bottom:0;width:100%;height:100%;max-width:none;max-height:none;margin:0;padding:0;border:0;background:#000;z-index:1;opacity:1;visibility:visible;object-fit:contain;';
       } catch (eLay) {}
     }
     try {
-      var pr = media.play();
+      var pr = play.autoplay !== false ? media.play() : null;
       if (pr && pr.catch) pr.catch(function(){});
     } catch(e){}
     /* MKV/etc: if video stays at videoWidth=0 (black picture / audio-only), emphasise Convert */
@@ -1462,9 +1504,9 @@ function confirmDialog(message, opts){
         blackChecks++;
         var vw = 0;
         try { vw = media.videoWidth || 0; } catch (eV) {}
-        if (vw > 0 || blackChecks > 8 || !document.getElementById('player-overlay')) {
+        if (vw > 0 || blackChecks > 8 || !overlay.isConnected) {
           clearInterval(blackTimer);
-          if (vw > 0) return;
+          if (vw > 0 || !overlay.isConnected || !openPlayer._deskPlayStarted) return;
           if (state.user && state.user.role === 'admin') {
             if (convertBtn) {
               convertBtn.textContent = 'Convert — black video / no picture';
@@ -1655,7 +1697,7 @@ function confirmDialog(message, opts){
 
   function closePlayer(opts){
     opts = opts || {};
-    state.gamePath = null;
+    if (state.view !== 'game') state.gamePath = null;
     openPlayer._absTime = null; openPlayer._absDuration = null;
     if (!opts.preserveLobby) {
       try { lobbyEndHostSession(); } catch (eLobbyEnd) {}
@@ -1691,7 +1733,7 @@ function confirmDialog(message, opts){
   }
   function onAppPopState(ev){
     var st = ev.state;
-    if (document.getElementById('player-overlay')) {
+    if (document.getElementById('player-overlay') && !document.querySelector('.player-inline')) {
       closePlayer();
       return;
     }
@@ -1705,6 +1747,9 @@ function confirmDialog(message, opts){
     if (st.movieId != null) state.movieId = st.movieId;
     if (st.collectionId != null) state.collectionId = st.collectionId;
     state.movieSlug = st.movieSlug || null; state.showSlug = st.showSlug || null;
+    state.gamePath = st.gamePath || null;
+    state.sectionLetter = st.sectionLetter || '';
+    state.collectionsLetter = st.collectionsLetter || '';
     state.showSeason = st.showSeason != null ? st.showSeason : null; state.showEpisode = st.showEpisode != null ? st.showEpisode : null;
     if (st.settingsSection != null) state.settingsSection = st.settingsSection;
     if (st.playTab != null) state.playTab = st.playTab;
@@ -3344,7 +3389,7 @@ try {
   function currentMode(){
     var v = state.view;
     if (v === 'live') return 'live';
-    if (v === 'play') return 'play';
+    if (v === 'play' || v === 'game') return 'play';
     if (v === 'section' && state.sectionType === 'roms') return 'play';
     if (v === 'admin' || v === 'settings' || v === 'login' || v === 'welcome') return '';
     return 'vod';
@@ -3362,10 +3407,11 @@ try {
   var R = window.VaultcastRoutes;
   function routePath(extra){
     extra = extra || {};
-    if (state.gamePath && !extra.live) return R.build({ view:'play', gamePath: state.gamePath });
+    if (state.view === 'game' && state.gamePath && !extra.live) return R.build({ view:'play', gamePath: state.gamePath });
     return R.build({ systemSlug: state.view === 'play' && state.sectionSystem ? (state.sectionSystemSlug || null) : null, view: state.view, movieSlug: state.movieSlug, movieId: state.movieId, showSlug: state.showSlug, showKey: state.showKey,
       season: state.showSeason, episode: state.showEpisode, liveCh: extra.live || null, playTab: state.playTab, section: state.section,
-      collectionId: state.collectionId, searchQuery: state.searchQuery, settingsSection: state.settingsSection, adminTab: state.adminTab });
+      collectionId: state.collectionId, searchQuery: state.searchQuery, settingsSection: state.settingsSection, adminTab: state.adminTab,
+      sectionLetter:state.sectionLetter, collectionsLetter:state.collectionsLetter });
   }
   function navUrl(extra){ return BASE + routePath(extra); }
   function shareUrl(path){
@@ -3383,6 +3429,8 @@ try {
     upgradeLegacyHash();
     var rel = R.relative(location.pathname, BASE) + (location.search || '');
     var r = R.parse(rel);
+    state.sectionLetter = r.sectionLetter || '';
+    state.collectionsLetter = r.collectionsLetter || '';
     state.showSeason = null; state.showEpisode = null;
     if (r.view === 'movie' || r.view === 'show') {
       return api('/resolve?path=' + encodeURIComponent('/' + rel.split('?')[0])).then(function(j){
@@ -3406,7 +3454,7 @@ try {
             var it = d && (d.item || d);
             if (!it || !it.id) { toast('Game not found', { kind:'bad' }); return; }
             if (it.system) { state.sectionSystem = it.system; state.sectionSystemSlug = String(it.game_path || '').split('/')[0] || null; }
-            state._openGameItem = it;
+            state.gameItem = it; state.movieId = it.id; state.gamePath = it.game_path || null; state.view = 'game';
           });
         }
       });
@@ -4989,6 +5037,29 @@ try {
     return shell(wrap);
   }
 
+  function detailMatchButtons(item, showKey){
+    function withTools(callback){
+      window.__nsEnsureMatching(function(){ if (window.NSMatch) callback(window.NSMatch); });
+    }
+    var buttons = [h('button', { className:'btn ghost nsm-report-btn', type:'button', text:'⚑ Report', onClick:function(){
+      withTools(function(tools){ tools.reportDialog(showKey
+        ? {kind:'show', show_key:showKey, label:item.title || ''}
+        : {kind:'movie', item_id:item.id, label:(item.title || '') + (item.year ? ' (' + item.year + ')' : '')}); });
+    }})];
+    if (state.user && state.user.role === 'admin') buttons.push(h('button', { className:'btn ghost', type:'button', text:'Fix match', onClick:function(){
+      if (!state.user || state.user.role !== 'admin') return;
+      withTools(function(tools){
+        if (!state.user || state.user.role !== 'admin') return;
+        if (showKey) { tools.ui.openShow = showKey; openSettings('matching'); }
+        else tools.openMovieFix(item);
+      });
+    }}));
+    if (state.user && state.user.role === 'admin') buttons.push(h('button', {className:'btn ghost', type:'button', text:'Manual edit', onClick:function(){
+      withTools(function(tools){ if (state.user && state.user.role === 'admin') tools.editDialog(item, showKey); });
+    }}));
+    return buttons;
+  }
+
   function openShow(showKey, season, episode){
     if (state.showKey !== showKey) state.showSlug = null;
     state.showKey = showKey;
@@ -4999,24 +5070,35 @@ try {
   }
 
   function openMovie(itemId){
+    state._pendingEpisode = null;
     if (state.movieId !== itemId) state.movieSlug = null;
     state.movieId = itemId;
     state.view = 'movie';
     render();
   }
 
+  function openGame(item){
+    state._pendingEpisode = null;
+    state.gameItem = item;
+    state.movieId = item.id;
+    state.gamePath = item.game_path || null;
+    state.view = 'game';
+    render();
+  }
+
   var _movieLoadSeq = 0;
 
   function viewMovie(){
-    var wrap = h('div', { id:'movie-view' }, [ h('div', { className:'hero' }, [ h('h1', { text:'Movie' }), pendingContent() ]) ]);
+    var wrap = h('div', { id:'movie-view' }, [ h('div', { className:'hero' }, [ h('h1', { text:state.view === 'game' ? 'Game' : 'Movie' }), pendingContent() ]) ]);
     loadMovie(state.movieId);
     return shell(wrap);
   }
 
   function loadMovie(itemId){
     var seq = ++_movieLoadSeq;
+    var isGame = state.view === 'game';
     function stillHere(){
-      return seq === _movieLoadSeq && state.view === 'movie' && String(state.movieId) === String(itemId);
+      return seq === _movieLoadSeq && state.view === (isGame ? 'game' : 'movie') && String(state.movieId) === String(itemId);
     }
     function paintError(msg){
       if (!stillHere()) return;
@@ -5033,9 +5115,10 @@ try {
       if (!stillHere()) return;
       var root = $('#movie-view');
       if (!root) return;
-      if (!j || !j.ok || !j.item) { paintError('Movie not found'); return; }
+      if (!j || !j.ok || !j.item) { paintError(isGame ? 'Game not found' : 'Movie not found'); return; }
       var item = j.item;
-      if (item.slug && stillHere() && state.movieSlug !== item.slug) { state.movieSlug = item.slug; replaceNav(); }
+      if (isGame) { state.gameItem = item; state.gamePath = item.game_path || state.gamePath; replaceNav(); }
+      else if (item.slug && stillHere() && state.movieSlug !== item.slug) { state.movieSlug = item.slug; replaceNav(); }
       root.innerHTML = '';
       var poster = h('div', { className:'poster poster-pending movie-hero-poster', 'data-poster-fetch':'1', 'data-backdrop-src':'1', 'data-poster-variant':'full' }, [
         h('div', { className:'ph', text: item.title || 'Movie' })
@@ -5045,8 +5128,7 @@ try {
           if (item.section) navigate('section', item.section);
           else { state.view='home'; render(); }
         }}),
-        h('button', { className:'btn primary', text:'Play', onClick: function(){ playItem(item); } }),
-        shareButton(function(){ return 'movies/' + encodeURIComponent(item.slug || item.id); }, 'Copy link to this movie'),
+        shareButton(function(){ return isGame ? routePath() : 'movies/' + encodeURIComponent(item.slug || item.id); }, isGame ? 'Copy link to this game' : 'Copy link to this movie'),
         h('button', { className:'btn', text:'Find alternate', onClick: function(){
           openAlternateFinder({
             title: item.title || '',
@@ -5056,7 +5138,8 @@ try {
         }})
       ];
       if (!canManageDownloads()) actions = actions.filter(function(button){ return button.textContent !== 'Find alternate'; });
-      if (window.NSMatch) actions = actions.concat(window.NSMatch.movieButtons(item));
+      actions = actions.concat(detailMatchButtons(item, null));
+      if (isGame) actions = actions.filter(function(button){ return button.textContent !== 'Find alternate'; });
       if (item.file_exists === false) {
         actions.push(h('span', { className:'bad', text:'File missing on disk' }));
       }
@@ -5078,10 +5161,12 @@ try {
         box.appendChild(sel);
         box.appendChild(h('span', { className:'muted', text:' Stored locally; applied on DirectPlay when browser allows.' }));
       }).catch(function(){ /* probe is optional */ });
-      var meta = [item.year, item.ext, item.size ? fmtSize(item.size) : null, item.synopsis_source].filter(Boolean);
+      var meta = [item.system, item.year, item.ext, item.size ? fmtSize(item.size) : null, item.synopsis_source].filter(Boolean);
       var synopsisEl = item.synopsis
         ? h('p', { className:'synopsis', id:'movie-synopsis', text: item.synopsis })
         : h('p', { className:'muted', id:'movie-synopsis', text: 'No synopsis cached yet.' });
+      var playerHost = h('div', {id:'detail-player', className:'detail-player'});
+      root.appendChild(playerHost);
       root.appendChild(h('div', { className:'hero detail-hero', 'data-backdrop-host':'1', style:'display:flex;gap:20px;align-items:flex-end;flex-wrap:wrap' }, [
         poster,
         h('div', { style:'flex:1;min-width:200px' }, [
@@ -5097,8 +5182,11 @@ try {
         observePoster(poster, item.id, 'item');
         loadPosterNow(poster, item.id, 'item');
       }
-      root.appendChild(h('div', { id:'movie-collections' }));
-      mountMovieCollections(item.id);
+      if (!isGame) {
+        root.appendChild(h('div', { id:'movie-collections' }));
+        mountMovieCollections(item.id);
+      }
+      if (item.file_exists !== false) playItem(item, {inline:true, autoplay:false});
     }).catch(function(e){
       paintError(String(e && e.message || e || 'Could not load movie'));
     });
@@ -5577,6 +5665,7 @@ try {
       state.sectionPage = 1;
       state.sectionQ = q || '';
       if (opts.letter != null) state.sectionLetter = opts.letter || '';
+      syncUrl();
     }
     var page = append ? (state.sectionPage || 1) : 1;
     var asShows = sectionIsShowType(id);
@@ -5590,7 +5679,7 @@ try {
     if (!asShows && state.sectionSystem) path += '&system=' + encodeURIComponent(state.sectionSystem);
     path = appendSectionFilterParams(path);
     if (append) state.sectionLoadingMore = true;
-    var showcaseRequest = !append && sectionShowcaseKind(id)
+    var showcaseRequest = !append && !letter && sectionShowcaseKind(id)
       ? api('/sections/' + encodeURIComponent(id) + '/' + (sectionShowcaseKind(id) === 'recent' ? 'recent' : 'random') + '?n=16').catch(function(){ return null; })
       : null;
     var seq = ++_sectionLoadSeq;
@@ -5623,7 +5712,7 @@ try {
         var label = asShows ? (total+' shows') : (total+' titles');
         if (letter2) label = label + ' ' + String.fromCharCode(0x00B7) + ' ' + letter2;
         var heroLabel = label + (list.length && total > list.length ? (' ' + String.fromCharCode(0x00B7) + ' showing '+list.length) : '');
-        var showcaseKind = sectionShowcaseKind(id);
+        var showcaseKind = letter ? null : sectionShowcaseKind(id);
         /* billboard replaces the thin section-hero on Movies/Disney/TV/Anime */
         if (!showcaseKind) root.appendChild(sectionHeroEl(id, heroLabel));
         if (j.letters) state._sectionLetters = j.letters;
@@ -5902,7 +5991,9 @@ try {
       function paint(sel, fromTab){
         activeSeason = sel;
         if (fromTab) { state.showSeason = sel; state.showEpisode = null; syncUrl(); }
-        root.innerHTML = '';
+        var playerHost = root.querySelector('#detail-player');
+        Array.prototype.slice.call(root.children).forEach(function(child){ if (child !== playerHost) child.remove(); });
+        if (!playerHost) { playerHost = h('div', {id:'detail-player', className:'detail-player'}); root.appendChild(playerHost); }
         var heroPoster = h('div', { className:'poster poster-pending show-hero-poster', 'data-poster-fetch':'1', 'data-backdrop-src':'1', 'data-poster-variant':'full' }, [
           h('div', { className:'ph', text: show.title })
         ]);
@@ -5932,7 +6023,7 @@ try {
           }})
         ];
         if (!canManageDownloads()) heroActions = heroActions.filter(function(button){ return button.textContent !== 'Find alternate'; });
-        if (window.NSMatch) heroActions = heroActions.concat(window.NSMatch.showButtons(show, show.show_key || showKey));
+        heroActions = heroActions.concat(detailMatchButtons(show, show.show_key || showKey));
         if (missTotal > 0 && canManageDownloads()) {
           heroActions.push(h('button', {
             className:'btn',
@@ -6120,6 +6211,7 @@ try {
         firstPaint = false;
       }
       paint(selected);
+      if (state._pendingEpisode && String(state._pendingEpisode.show_key) === String(showKey)) { var pendingEpisode = state._pendingEpisode; state._pendingEpisode = null; playItem(pendingEpisode, {inline:true}); }
       loadDownloadStatus(false).then(function(fresh){
         if (!stillHere() || !fresh || JSON.stringify(fresh.downloading || []) === JSON.stringify(dl.downloading || [])) return;
         dl = fresh;
@@ -6451,6 +6543,7 @@ try {
     } else if (sec === 'maintenance' && isAdmin) {
       var jobsHost = h('div', {className:'stack'});
       function refreshJobs(){
+        clearTimeout(jobsHost._poll);
         api('/admin/maintenance').then(function(result){
           jobsHost.textContent = '';
           if (!result.ok) { jobsHost.textContent = result.error || 'Could not load tasks'; return; }
@@ -6461,13 +6554,18 @@ try {
             ]));
           });
           result.jobs.forEach(function(job){
-            var row=h('div',{className:'settings-card'},[h('strong',{text:result.tasks[job.task] || job.task}),h('p',{text:job.status+' · '+job.created_at+' · '+job.requested_by}),h('p',{className:'muted',text:job.error || ''})]);
+            var row=h('div',{className:'settings-card'},[h('strong',{text:result.tasks[job.task] || job.task}),h('p',{text:(job.result && job.result.continuation ? 'Pass complete · continuing' : job.status)+' · '+job.created_at+' · '+job.requested_by}),h('p',{className:'muted',text:job.error || ''})]);
+            if (job.progress) row.appendChild(h('p',{className:'muted',text:(job.progress.phase || 'Progress') + ': ' + job.progress.done + '/' + job.progress.total + ' · ' + (job.progress.file || '')}));
+            if (job.result && job.task === 'metadata') row.appendChild(h('p',{className:'muted',text:(job.result.stage ? 'Stage: ' + job.result.stage + ' · this pass checked ' : 'Checked ') + job.result.processed + ' artwork entries · ' + job.result.artwork_prepared + ' optimised · ' + (job.result.failed + job.result.artwork_failed) + ' failed' + (job.result.continuation ? ' · remaining work continues automatically in the next task' : '')}));
+            if (job.result && job.result.warning) row.appendChild(h('p',{className:'bad',text:job.result.warning}));
+            if (job.result && job.result.sidecars) row.appendChild(h('p',{className:'muted',text:'Beside media: ' + job.result.sidecars.written + ' files backed up · ' + job.result.sidecars.unchanged + ' unchanged · ' + job.result.sidecars.preserved + ' existing files preserved · ' + job.result.sidecars.failed + ' failed · ' + job.result.sidecars.skipped + ' unavailable/outside library'}));
             if (job.status==='queued'||job.status==='running') row.appendChild(h('button',{className:'btn',text:'Cancel',onClick:function(){api('/admin/maintenance/cancel',{method:'POST',body:{id:job.id}}).then(function(r){toast(r.message || r.error); refreshJobs();});}}));
             jobsHost.appendChild(row);
           });
+          if (result.jobs.some(function(job){return job.status==='queued'||job.status==='running';})) jobsHost._poll=setTimeout(function(){if(jobsHost.isConnected && state.view==='settings' && state.settingsSection==='maintenance')refreshJobs();},2000);
         });
       }
-      bodyKids=[h('h2',{text:'Background tasks'}),h('p',{className:'muted',text:'Maintenance runs only when requested. One task runs at a time. Cancellation stops at the next file or transaction boundary. Refresh to see the latest status.'}),
+      bodyKids=[h('h2',{text:'Background tasks'}),h('p',{className:'muted',text:'Scans and updates may queue preparation automatically. One task runs at a time. Artwork preparation continues automatically in bounded passes. Cancellation stops at the next file or transaction boundary. Progress refreshes automatically while this page is open.'}),
         h('button',{className:'btn',text:'Refresh status',onClick:refreshJobs}), jobsHost,
         h('p',{className:'muted',text:'Video conversion and artwork batches are started by administrators in their settings pages. Download transfers are controlled in Download queue. External OS schedules must be managed in Task Scheduler or cron.'}),
         h('button',{className:'btn',text:'Video conversion jobs',onClick:function(){openSettings('convert');}}),h('button',{className:'btn',text:'Artwork jobs',onClick:function(){openSettings('poster-optimise');}})];
@@ -7965,13 +8063,99 @@ try {
     return (n/1048576).toFixed(n>=10485760?0:1) + ' MB';
   }
 
+  function renderArtworkAudit(host){
+    var rows = [], selected = {}, running = false, stopped = false, page = 0;
+    var status = h('p', {className:'muted', role:'status', text:'Check library artwork references against files on disk.'});
+    var list = h('div', {className:'artwork-audit-list', style:'max-height:520px;overflow:auto'});
+    var all = h('input', {type:'checkbox', 'aria-label':'Select all artwork problems'});
+    var scan = h('button', {className:'btn', type:'button', text:'Check for missing / broken artwork'});
+    var stop = h('button', {className:'btn ghost', type:'button', text:'Stop', disabled:true, onClick:function(){stopped = true;}});
+    var repair = h('button', {className:'btn primary', type:'button', text:'Repair selected', disabled:true});
+    var panel = h('div', {className:'settings-card'}, [h('h3', {text:'Artwork integrity checker'}), status,
+      h('div', {className:'row-actions'}, [scan, stop, h('label', {}, [all, ' Select all results']), repair]), list]);
+    host.appendChild(panel);
+    function current(){ return panel.isConnected; }
+    function controls(){
+      var count = rows.filter(function(row){return !!selected[row.key];}).length;
+      repair.disabled = running || !count; scan.disabled = running; stop.disabled = !running; all.disabled = running;
+      all.checked = rows.length > 0 && count === rows.length; all.indeterminate = count > 0 && count < rows.length;
+      repair.textContent = 'Repair selected' + (count ? ' (' + count + ')' : '');
+    }
+    function openTools(row, edit){
+      var showKey = row.show_key;
+      api(showKey ? '/shows/' + encodeURIComponent(showKey) : '/items/' + encodeURIComponent(row.id) + '?synopsis=1').then(function(result){
+        if (!result.ok) throw new Error(result.error || 'Library entry not found');
+        var item = showKey ? result.show : result.item;
+        window.__nsEnsureMatching(function(){
+          if (!(state.user && state.user.role === 'admin') || !window.NSMatch) return;
+          if (edit) window.NSMatch.editDialog(item, showKey);
+          else if (showKey) {window.NSMatch.ui.openShow = showKey; openSettings('matching');}
+          else window.NSMatch.openMovieFix(item);
+        });
+      }).catch(function(error){toast(error.message, {kind:'bad'});});
+    }
+    function draw(){
+      list.innerHTML = '';
+      page = Math.max(0, Math.min(page, Math.ceil(rows.length / 100) - 1));
+      rows.slice(page * 100, page * 100 + 100).forEach(function(row){
+        var checkbox = h('input', {type:'checkbox', checked:!!selected[row.key], disabled:running, 'aria-label':'Select ' + row.title, onChange:function(event){selected[row.key] = event.target.checked; controls();}});
+        var actions = [h('button', {className:'btn ghost', type:'button', disabled:running, text:'Repair', onClick:function(){runRepairs([row]);}}),
+          h('button', {className:'btn ghost', type:'button', disabled:running, text:'Fix match', onClick:function(){openTools(row, false);}}),
+          h('button', {className:'btn ghost', type:'button', disabled:running, text:'Manual edit', onClick:function(){openTools(row, true);}})];
+        list.appendChild(h('div', {className:'panel', style:'padding:12px;margin:8px 0'}, [
+          h('label', {}, [checkbox, ' ' + (row.title || row.id) + ' · ' + row.kind + (row.season != null ? ' ' + row.season : '')]),
+          h('p', {className:row.missing ? 'bad' : 'muted', text:row.problems.join(' · ')}),
+          row.message ? h('p', {text:row.message}) : null, h('div', {className:'row-actions'}, actions)
+        ]));
+      });
+      if (rows.length > 100) list.appendChild(h('div', {className:'row-actions'}, [
+        h('button', {className:'btn', text:'Previous', disabled:!page, onClick:function(){page--;draw();}}),
+        h('span', {text:'Page ' + (page + 1) + ' of ' + Math.ceil(rows.length / 100)}),
+        h('button', {className:'btn', text:'Next', disabled:(page + 1) * 100 >= rows.length, onClick:function(){page++;draw();}})
+      ]));
+      controls();
+    }
+    all.onchange = function(){rows.forEach(function(row){selected[row.key] = all.checked;});draw();};
+    scan.onclick = function(){
+      running = true; stopped = false; rows = []; selected = {}; page = 0; draw();
+      function next(offset, revision){
+        if (!current()) return;
+        if (stopped) {running = false; status.textContent += ' · stopped';draw();return;}
+        api('/admin/posters/audit', {method:'POST', body:{offset:offset, revision:revision}}).then(function(result){
+          if (!current()) return;
+          if (!result.ok) throw new Error(result.error || 'Artwork check failed');
+          rows = rows.concat(result.items || []);
+          status.textContent = 'Checked ' + result.offset + '/' + result.total + ' artwork entries · ' + rows.length + ' problems';
+          if (result.more) {controls();setTimeout(function(){next(result.offset, result.revision);}, 50);}
+          else {running = false; status.textContent += rows.length ? ' · select entries to repair, match or edit' : ' · no problems found';draw();}
+        }).catch(function(error){running = false;status.textContent = error.message;draw();});
+      }
+      next(0);
+    };
+    function runRepairs(queue){
+      running = true; stopped = false; var completed = 0, resolved = 0; draw();
+      function next(){
+        if (!current()) return;
+        if (stopped || !queue.length) {running = false;status.textContent = 'Repaired ' + resolved + ' of ' + completed + ' checked entries' + (stopped ? ' · stopped' : '');draw();return;}
+        var row = queue.shift(); status.textContent = 'Repairing ' + (row.title || row.id) + ' · ' + queue.length + ' remaining';
+        api('/admin/posters/audit/repair', {method:'POST', body:{key:row.key}}).then(function(result){
+          if (!result.ok) throw new Error(result.error || 'Repair failed');
+          if (result.resolved) {resolved++; refreshArtwork(); rows = rows.filter(function(item){return item.key !== row.key;});delete selected[row.key];}
+          else {row.problems = result.item ? result.item.problems : row.problems;row.message = result.message;}
+        }).catch(function(error){row.message = error.message;}).then(function(){completed++;setTimeout(next, 50);});
+      }
+      next();
+    }
+    repair.onclick = function(){runRepairs(rows.filter(function(row){return selected[row.key];}));};
+  }
+
   function renderPosterOptimisePanel(){
     var host = $('#poster-optimise-panel');
     if (!host) return;
     host.innerHTML = '';
     var findState = {
       running: false, cancelled: false, offset: 0, scanned: 0, total: 0,
-      needs_total: 0, items: [], selected: {}, scopes: { movies:true, shows:true, seasons:true, games:true }, gen: 0
+      needs_total: 0, missing: 0, ready: 0, finished: false, items: [], selected: {}, scopes: { movies:true, shows:true, seasons:true, games:true }, gen: 0
     };
     var poCfg = {
       full_quality: 90, full_max_w: 1600, thumb_quality: 72, thumb_max_w: 320, compression_level: 4, overwrite: false
@@ -8006,9 +8190,7 @@ try {
 
     function scopeParam(){
       var keys = Object.keys(findState.scopes).filter(function(k){ return findState.scopes[k]; });
-      if (keys.length === 4 || keys.length === 0) return 'all';
-      if (keys.length === 1) return keys[0];
-      return 'all'; // multi-scope: client-filter after fetch
+      return keys.length === 4 ? 'all' : keys.join(',');
     }
 
     function statusLine(){
@@ -8019,8 +8201,8 @@ try {
       if (findState.running) {
         el.appendChild(h('span', { className:'cv-find-pulse' }));
         el.appendChild(h('span', { text: 'Scanning posters… ' + findState.scanned + '/' + (findState.total||'?') + ' · need ' + findState.needs_total }));
-      } else if (findState.items.length) {
-        el.appendChild(h('span', { text: 'Found ' + findState.items.length + ' needing WebP' + (findState.needs_total ? (' · ~' + findState.needs_total + ' total') : '') + (findState.cancelled ? ' (stopped)' : '') }));
+      } else if (findState.finished || findState.scanned || findState.total) {
+        el.appendChild(h('span', { text: findState.scanned + '/' + findState.total + ' library artwork entries · ' + findState.items.length + ' need WebP · ' + findState.ready + ' ready · ' + findState.missing + ' missing artwork' + (findState.cancelled ? ' (stopped)' : '') }));
       } else {
         el.appendChild(h('span', { className:'muted', text: 'Click Find all to scan for posters missing WebP / thumb variants.' }));
       }
@@ -8136,9 +8318,8 @@ try {
         mergeJobs(r.queue);
         var sum = r.summary || {};
         var meta = $('#po-summary');
-        if (meta) meta.textContent = (sum.ready||0) + ' ready · ' + (sum.needs||0) + ' need WebP · ' + (sum.total_originals||0) + ' originals'
-          + (sum.ffmpeg_webp === false ? ' · ffmpeg WebP missing!' : '');
-        if (sum.settings) applyPoCfg(sum.settings);
+        if (meta) meta.textContent = 'Poster cache: ' + (sum.ready||0) + ' ready · ' + (sum.needs||0) + ' need WebP · ' + (sum.total_originals||0) + ' cached originals. Find all checks the current library, including local artwork.';
+        // Queue polling must not overwrite unsaved slider/overwrite changes.
         var jobs = (r.queue && r.queue.jobs) || [];
         var hasQueued = jobs.some(function(j){ return j.status==='queued'; });
         var hasRunning = jobs.some(function(j){ return j.status==='running'; });
@@ -8152,7 +8333,7 @@ try {
               mergeJobs(r2.queue);
               if (r2.summary) {
                 var m2 = $('#po-summary');
-                if (m2) m2.textContent = (r2.summary.ready||0) + ' ready · ' + (r2.summary.needs||0) + ' need WebP · ' + (r2.summary.total_originals||0) + ' originals';
+                if (m2) m2.textContent = (r2.summary.ready||0) + ' ready · ' + (r2.summary.needs||0) + ' need WebP · ' + (r2.summary.total_originals||0) + ' cached originals';
               }
             }
             queuePoll.timer = setTimeout(pollQueue, 350);
@@ -8201,6 +8382,7 @@ try {
     }
 
     function stopFind(){
+      findState.gen++;
       findState.cancelled = true;
       findState.running = false;
       statusLine();
@@ -8209,26 +8391,30 @@ try {
 
     function findAll(){
       if (findState.running) return;
+      var scope = scopeParam();
+      var overwrite = collectPoCfg().overwrite;
+      if (!scope) return toast('Select at least one artwork type');
       findState.running = true;
       findState.cancelled = false;
       findState.offset = 0;
       findState.items = [];
       findState.selected = {};
       findState.needs_total = 0;
+      findState.finished = false; findState.scanned = 0; findState.total = 0; findState.missing = 0; findState.ready = 0;
       findState.gen++;
       var gen = findState.gen;
       statusLine();
       paintList();
 
       function tick(){
-        if (gen !== findState.gen || findState.cancelled) {
+        if (gen !== findState.gen) return;
+        if (findState.cancelled) {
           findState.running = false;
           statusLine();
           paintList();
           return;
         }
-        var scope = scopeParam();
-        api('/admin/posters/optimise/find?offset=' + findState.offset + '&limit=50&scope=' + encodeURIComponent(scope) + '&overwrite=' + (collectPoCfg().overwrite ? '1' : '0')).then(function(r){
+        api('/admin/posters/optimise/find?offset=' + findState.offset + '&limit=50&scope=' + encodeURIComponent(scope) + '&overwrite=' + (overwrite ? '1' : '0')).then(function(r){
           if (gen !== findState.gen) return;
           if (!r || !r.ok) {
             findState.running = false;
@@ -8238,20 +8424,9 @@ try {
           }
           findState.scanned = r.scanned || 0;
           findState.total = r.total || 0;
+          findState.missing += r.missing_artwork || 0;
+          findState.ready += r.ready || 0;
           (r.items || []).forEach(function(it){
-            // multi-scope client filter
-            var okScope = true;
-            if (scope === 'all') {
-              var any = false;
-              if (findState.scopes.movies && it.file.indexOf('movie_')===0) any = true;
-              if (findState.scopes.games && it.file.indexOf('game_')===0) any = true;
-              if (findState.scopes.shows && it.file.indexOf('show_')===0) any = true;
-              if (findState.scopes.seasons && it.file.indexOf('season_')===0) any = true;
-              // if all scopes true, any is forced
-              if (findState.scopes.movies && findState.scopes.games && findState.scopes.shows && findState.scopes.seasons) any = true;
-              okScope = any;
-            }
-            if (!okScope) return;
             if (!findState.items.some(function(x){ return x.file === it.file; })) findState.items.push(it);
           });
           findState.items.sort(function(a, b){
@@ -8263,6 +8438,7 @@ try {
           statusLine();
           paintList();
           if (r.done || r.next_offset == null) {
+            findState.finished = true;
             findState.running = false;
             statusLine();
             return;
@@ -8270,6 +8446,7 @@ try {
           findState.offset = r.next_offset;
           setTimeout(tick, 30);
         }).catch(function(e){
+          if (gen !== findState.gen) return;
           findState.running = false;
           statusLine();
           toast(String(e), { kind:'bad' });
@@ -8321,11 +8498,7 @@ try {
         h('div', { className:'row-actions', style:'margin-top:10px' }, [
           h('button', { className:'btn primary', text:'Save poster settings', onClick: function(){
             var cfg = collectPoCfg();
-            poCfg = cfg;
-            if (!state.settings) state.settings = {};
-            state.settings.poster_optimise = cfg;
             saveSettings({ poster_optimise: cfg });
-            toast('Poster WebP settings saved', { kind:'ok' });
           }}),
           h('button', { className:'btn ghost', text:'Reset defaults', onClick: function(){
             applyPoCfg({ full_quality:90, full_max_w:1600, thumb_quality:72, thumb_max_w:320, compression_level:4, overwrite:false });
@@ -8368,13 +8541,14 @@ h('div', { className:'cv-find-bar' }, [
       h('div', { id:'po-glass-list', className:'cv-glass-list' })
     ]));
 
+    renderArtworkAudit(host);
     statusLine();
     applyPoCfg(poCfg);
     api('/admin/posters/optimise/summary').then(function(r){
       var meta = $('#po-summary');
       if (!meta || !r) return;
-      meta.textContent = (r.ready||0) + ' ready · ' + (r.needs||0) + ' need WebP · ' + (r.total_originals||0) + ' originals'
-        + (r.ffmpeg_webp === false ? ' · ffmpeg WebP missing!' : '');
+      meta.textContent = 'Poster cache: ' + (r.ready||0) + ' ready · ' + (r.needs||0) + ' need WebP · ' + (r.total_originals||0) + ' cached originals. Find all checks the current library, including local artwork.'
+        + (r.ffmpeg_webp === false ? ' · ffmpeg WebP unavailable; PHP GD is used when available.' : '');
       if (r.settings) {
         applyPoCfg(r.settings);
         if (!state.settings) state.settings = {};
@@ -10436,6 +10610,7 @@ h('div', { className:'cv-find-bar' }, [
             ariaLabel: 'Collections alphabet index',
             onPick: function(L){
               state.collectionsLetter = L || '';
+              syncUrl();
               paintGrid();
               try { window.scrollTo(0, 0); } catch (eZ) {}
             }
@@ -13026,6 +13201,9 @@ function viewCollectionDetail(){
   function render(){ renderView(); syncUrl(); }
   function renderView(){
     var root = $('#app');
+    _playRequestId++;
+    if (document.querySelector('.player-inline')) closePlayer();
+    if (state.view !== 'game') state.gamePath = null;
     if ((state.view === 'section' || state.view === 'show') && root.firstChild) {
       var nextView;
       var published = false;
@@ -13071,7 +13249,7 @@ function viewCollectionDetail(){
     if (state.view === 'home') root.appendChild(viewHome());
     else if (state.view === 'section') root.appendChild(viewSection());
     else if (state.view === 'show') root.appendChild(viewShow());
-    else if (state.view === 'movie') root.appendChild(viewMovie());
+    else if (state.view === 'movie' || state.view === 'game') root.appendChild(viewMovie());
     else if (state.view === 'search') root.appendChild(viewSearch());
     else if (state.view === 'collections') root.appendChild(viewCollections());
     else if (state.view === 'collection') root.appendChild(viewCollectionDetail());
@@ -13183,19 +13361,76 @@ function viewCollectionDetail(){
 
   /* helpers for assets/js/matching.js (Ingest inbox / Fix matching / Label reports) */
   window.NSApp = { h: h, api: api, toast: toast, confirmDialog: confirmDialog, render: render, state: state,
-    openSettings: openSettings, openShow: openShow, openMovie: openMovie, fmtSize: fmtSize, version: APP_VERSION };
-  // Load matching tools when Settings needs them.
+    openSettings: openSettings, openShow: openShow, openMovie: openMovie, openGame:openGame, navigate:navigate, refreshArtwork:refreshArtwork, fmtSize: fmtSize, version: APP_VERSION };
+  // Load matching tools when Settings or a detail-page action needs them.
+  var matchingCallbacks = [];
   window.__nsEnsureMatching = function(cb){
     if (window.NSMatch) { if (cb) cb(); return; }
-    if (window.__nsMatchingLoading) { if (cb) { var t=setInterval(function(){ if (window.NSMatch){ clearInterval(t); cb(); } }, 50);} return; }
+    if (cb) matchingCallbacks.push(cb);
+    if (window.__nsMatchingLoading) return;
     window.__nsMatchingLoading = true;
     var sm = document.createElement('script');
-    sm.src = BASE + 'assets/js/matching.js?v=' + (window.__ASSET_VERSION__ || APP_VERSION);
+    sm.src = BASE + 'index.php?asset=assets/js/matching.js&v=' + (window.__ASSET_VERSION__ || APP_VERSION);
     sm.defer = true;
-    sm.onload = function(){ window.__nsMatchingLoading = false; if (cb) cb(); };
-    sm.onerror = function(){ window.__nsMatchingLoading = false; };
+    sm.onload = function(){
+      window.__nsMatchingLoading = false;
+      var callbacks = matchingCallbacks; matchingCallbacks = [];
+      callbacks.forEach(function(callback){ callback(); });
+    };
+    sm.onerror = function(){
+      window.__nsMatchingLoading = false; matchingCallbacks = [];
+      sm.remove(); toast('Could not load matching tools. Please try again.', {kind:'bad'});
+    };
     document.head.appendChild(sm);
   };
+
+  // Initial HTML images also need bounded scheduling; native lazy loading can
+  // enqueue whole horizontal rails and consume all HTTP/1.1 connections.
+  function enhanceFirstPosters(){
+    var first = document.getElementById('first-home');
+    if (!first) return;
+    var queue = [], active = 0, observer;
+    function pump(){
+      while (active < 2 && queue.length) {
+        var img = queue.shift();
+        if (img.isConnected === false) continue;
+        var url = img.getAttribute('data-first-src');
+        if (!url) continue;
+        img.removeAttribute('data-first-src'); active++;
+        (function(image){
+          var finished = false;
+          function done(){ if (finished) return; finished = true; active--; pump(); }
+          image.addEventListener('load', done, {once:true});
+          image.addEventListener('error', done, {once:true});
+          image.src = url;
+        })(img);
+      }
+    }
+    var images = first.querySelectorAll('img[data-first-src]');
+    if (typeof IntersectionObserver === 'undefined') {
+      Array.prototype.forEach.call(images, function(img){ queue.push(img); }); pump(); return;
+    }
+    observer = new IntersectionObserver(function(entries){
+      entries.forEach(function(entry){
+        if (!entry.isIntersecting) return;
+        observer.unobserve(entry.target); queue.push(entry.target);
+      });
+      pump();
+    }, {root:null, rootMargin:'80px 0px', threshold:0.01});
+    Array.prototype.forEach.call(images, function(img){ observer.observe(img); });
+  }
+
+  // Reuse the same interactive navigation as in-app transitions, retaining the
+  // first-response cards and avoiding another Home request or full repaint.
+  function enhanceHomeNavigation(){
+    var first = document.getElementById('first-home');
+    if (!first) return;
+    var enhanced = shell(null);
+    var header = first.querySelector('header');
+    var sections = first.querySelector('.first-sections');
+    if (header) first.replaceChild(enhanced.querySelector('header'), header);
+    if (sections) first.replaceChild(enhanced.querySelector('.subnav'), sections);
+  }
 
   // Enhance actual first-response content without clearing it or waiting for /home.
   function enhanceFirstPage(){
@@ -13237,7 +13472,9 @@ function viewCollectionDetail(){
     if (R.relative(location.pathname, BASE) !== '' || /^#\//.test(location.hash)) {
       return bootApp(); // Detail routes keep visible HTML underneath while their own data arrives.
     }
+    state.view = 'home';
     state._routed = true;
+    render();
     replaceNav();
     initial.home = null;
     setTimeout(loadLiveTeaser, 0);
@@ -13245,13 +13482,7 @@ function viewCollectionDetail(){
       api('/home').then(function(home){
         if (!home.ok || String((state.user || {}).id || '') !== String((initial.me.user || {}).id || '') || accessGated()) return;
         state.home = home;
-        var continueSlot = document.getElementById('first-continue');
-        if (state.view === 'home' && continueSlot) {
-          var continuing = cwOnePerShow(home.continue_watching || []);
-          var row = continuing.length ? rowEl('Continue watching', continuing.map(function(item){ return cardEl(item, item.progress); }), {meta:String(continuing.length)}) : null;
-          continueSlot.innerHTML = '';
-          if (row) continueSlot.appendChild(row);
-        }
+        if (state.view === 'home' && !document.getElementById('player-overlay')) render();
       }).catch(function(){ /* The server-rendered catalogue remains usable offline. */ });
     }
   }

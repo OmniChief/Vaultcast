@@ -23,6 +23,7 @@ class Catalogue {
     }
 
     public static function save(array $cat): bool {
+        $cat = LibraryEditor::filterCatalogue($cat);
         $ok = Store::set('catalogue', $cat);
         if ($ok) self::invalidateDerivedCaches();
         return $ok;
@@ -46,12 +47,30 @@ class Catalogue {
         }
     }
 
-    /** Shared MariaDB cache, invalidated by catalogue and metadata revisions. */
+    /** Revision-managed derived views: no hourly cold rebuild on a viewer request. */
+    private static $derivedRevisions = [];
+    private static function derivedRevision(string $prefix): string {
+        return 'v3|' . Store::revision('catalogue') . '|' . Store::revision('browse_epoch') . '|' . Store::revision('settings')
+            . ($prefix === 'showcase_recent' ? '|' . gmdate('Y-m-d') : '');
+    }
     private static function shmCacheGet(string $filePrefix, string $salt = ''): ?array {
-        return \Vaultcast\Repository::cacheGet('browse|' . Store::revision('catalogue') . '|' . Store::revision('browse_epoch') . '|' . $filePrefix . '|' . $salt);
+        $key = 'browse-current|' . $filePrefix . '|' . $salt;
+        $revision = self::derivedRevision($filePrefix);
+        self::$derivedRevisions[$key] = $revision;
+        $entry = \Vaultcast\Repository::cacheGet($key);
+        $hit = is_array($entry) && ($entry['revision'] ?? '') === $revision && is_array($entry['payload'] ?? null);
+        if (class_exists('RequestTiming', false)) RequestTiming::count($hit ? 'view_hit' : 'view_miss');
+        return $hit ? $entry['payload'] : null;
     }
     private static function shmCachePut(string $filePrefix, string $salt, array $payload): void {
-        \Vaultcast\Repository::cachePut('browse|' . Store::revision('catalogue') . '|' . Store::revision('browse_epoch') . '|' . $filePrefix . '|' . $salt, $payload, 3600);
+        $key = 'browse-current|' . $filePrefix . '|' . $salt;
+        $revision = self::$derivedRevisions[$key] ?? self::derivedRevision($filePrefix);
+        if ($revision !== self::derivedRevision($filePrefix)) return;
+        // Arbitrary search/filter pages expire; shared summaries remain revision-managed.
+        $defaultPage = ($filePrefix === 'browse_shows' && preg_match('/\|p=1\|per=48\|q=\|L=\|g=\|y=\|d=\|st=\|net=$/D', $salt))
+            || ($filePrefix === 'browse_items' && preg_match('/\|p=1\|per=48\|q=\|L=\|sys=\|g=\|y=\|d=\|a=$/D', $salt));
+        $ttl = in_array($filePrefix, ['browse_items','browse_shows'], true) && !$defaultPage ? 600 : 0;
+        \Vaultcast\Repository::cachePut($key, ['revision'=>$revision, 'payload'=>$payload], $ttl);
     }
 
     /** Public wrappers for browse/showcase SHM cache (index.php). */
@@ -66,6 +85,29 @@ class Catalogue {
     public static function movieFacetsCached(string $sectionId, array $items): array {
         $pack = self::movieFacetPack($sectionId, $items);
         return $pack['facets'];
+    }
+
+    public static function movieFacetsForBrowse(string $sectionId): array {
+        $pack = self::browseCacheGet('facets_movies', $sectionId);
+        if (isset($pack['facets'])) return ['facets'=>$pack['facets'], 'pending'=>false];
+        self::queueBrowseWarmup();
+        $previous = \Vaultcast\Repository::cacheGet('movie-facets-last|' . $sectionId);
+        return ['facets'=>$previous['facets'] ?? ['years'=>[], 'decades'=>[], 'genres'=>[]], 'pending'=>true];
+    }
+
+    public static function queueBrowseWarmup(): void {
+        $dir = STREAM_DATA . '/runtime';
+        if (!is_dir($dir)) @mkdir($dir, 0775, true);
+        $lock = @fopen($dir . '/browse-warmup.lock', 'c');
+        if (!$lock) return;
+        try {
+            if (!flock($lock, LOCK_EX | LOCK_NB)) return;
+            $state = \Vaultcast\Repository::cacheGet('browse-warmup-job');
+            if ($state) return;
+            $job = Maintenance::start('views', 'Prepare missing browse caches');
+            if (!empty($job['ok'])) \Vaultcast\Repository::cachePut('browse-warmup-job', ['id'=>$job['job']['id'] ?? null], 300);
+        } catch (Throwable $e) { error_log('Browse warmup: ' . $e->getMessage()); }
+        finally { flock($lock, LOCK_UN); fclose($lock); }
     }
 
     /**
@@ -103,6 +145,7 @@ class Catalogue {
         arsort($genres);
         $facets = ['years' => $years, 'decades' => $decades, 'genres' => $genres];
         self::shmCachePut('facets_movies', $sectionId, ['facets' => $facets, 'genres_by_id' => $byId]);
+        \Vaultcast\Repository::cachePut('movie-facets-last|' . $sectionId, ['facets'=>$facets], 0);
         return ['facets' => $facets, 'genres_by_id' => $byId];
     }
 
@@ -581,7 +624,7 @@ class Catalogue {
             $item['emu_core'] = self::guessEmuCore($ext, $rel, $full);
             $item['system'] = self::guessSystemFolder($rel);
         }
-        $poster = self::findPoster(dirname($full));
+        $poster = self::findPoster(dirname($full), $full);
         if (!$poster && ($type === 'tv' || $type === 'anime') && !empty($title['show'])) {
             $parts = explode('/', $rel);
             $showRoot = $rootReal . '/' . $parts[0];
@@ -908,10 +951,17 @@ class Catalogue {
         return $raw;
     }
 
-    private static function findPoster(string $dir): ?string {
+    private static function findPoster(string $dir, ?string $mediaPath = null): ?string {
         foreach (['poster.jpg','poster.png','folder.jpg','cover.jpg','cover.png','Poster.jpg'] as $name) {
             $p = $dir . '/' . $name;
             if (is_file($p)) return $p;
+        }
+        if ($mediaPath !== null) {
+            $stem = pathinfo($mediaPath, PATHINFO_FILENAME);
+            foreach (['jpg','jpeg','png','webp'] as $ext) {
+                $p = $dir . '/' . $stem . '-poster.' . $ext;
+                if (is_file($p)) return $p;
+            }
         }
         return null;
     }
@@ -988,6 +1038,7 @@ class Catalogue {
 
     /** Enrich a show row with TVMaze facets (genres/status/year/network). */
     public static function enrichShowMeta(array $show): array {
+        if (!empty($show['_meta_prepared'])) return $show;
         $key = (string)($show['show_key'] ?? $show['id'] ?? '');
         if ($key === '') return $show;
         $meta = self::tvMazeShowMeta($key);
@@ -1249,7 +1300,7 @@ class Catalogue {
     /** Group TV/Anime episodes into show-level entries. */
     public static function sectionShows(string $sectionId): array {
         $revision = Store::revision('catalogue') . '|' . Store::revision('browse_epoch') . '|' . Store::revision('settings');
-        $slot = 'section-shows-current-v2|' . $sectionId;
+        $slot = 'section-shows-current-v3|' . $sectionId;
         $cached = \Vaultcast\Repository::cacheGet($slot);
         if ($cached && ($cached['revision'] ?? '') === $revision) return $cached['shows'];
         $shows = self::buildSectionShows($sectionId);
@@ -1343,7 +1394,9 @@ class Catalogue {
                 'mtime' => $g['mtime'],
             ];
             // attach TVMaze genres/status/year/network for library filters
-            $out[] = self::enrichShowMeta($row);
+            $row = self::enrichShowMeta($row);
+            $row['_meta_prepared'] = true;
+            $out[] = $row;
         }
         usort($out, function ($a, $b) {
             return strcasecmp($a['title'], $b['title']);
@@ -1645,7 +1698,7 @@ class Catalogue {
                     !empty($meta['show_dir']) ? (string)$meta['show_dir'] : (!empty($meta['local_poster']) ? dirname((string)$meta['local_poster']) : null)
                 )),
                 'tvmaze_id' => is_array($tvmaze) ? ($tvmaze['id'] ?? null) : null,
-                'synopsis' => is_array($tvmaze) ? ($tvmaze['summary'] ?? null) : null,
+                'synopsis' => Posters::showSynopsisCached((string)$meta['show_key']) ?? (is_array($tvmaze) ? ($tvmaze['summary'] ?? null) : null),
                 'genres' => is_array($tvmaze) ? ($tvmaze['genres'] ?? []) : [],
                 'episode_source' => $source,
             ],
@@ -1680,7 +1733,7 @@ class Catalogue {
             'type' => $s['type'],
             'title' => $s['title'],
             'year' => $s['year'] ?? null,
-            'slug' => Slugs::show((string)($s['show_key'] ?? $s['id']), (string)$s['title'], $s['year'] ?? null),
+            'slug' => $s['slug'] ?? Slugs::show((string)($s['show_key'] ?? $s['id']), (string)$s['title'], $s['year'] ?? null),
             'episode_count' => $s['episode_count'] ?? 0,
             'available_count' => $s['available_count'] ?? null,
             'missing_count' => $s['missing_count'] ?? null,
@@ -1755,12 +1808,49 @@ class Catalogue {
         }
     }
 
-    /** Recently Updated showcase with short SHM cache (no ffprobe on cards). */
+    /** Run during maintenance, before the next viewer needs these derived views. */
+    public static function warmBrowseViews(): void {
+        foreach (\Vaultcast\Repository::document('catalogue', ['sections'=>[]])['sections'] ?? [] as $section) {
+            Maintenance::checkpoint();
+            $id = (string)$section['id'];
+            $type = (string)($section['type'] ?? '');
+            if (in_array($type, ['tv','anime'], true)) {
+                $revision = Store::revision('catalogue') . '|' . Store::revision('browse_epoch') . '|' . Store::revision('settings');
+                $shows = self::sectionShows($id);
+                foreach ($shows as &$show) $show['slug'] = Slugs::show((string)($show['show_key'] ?? $show['id']), (string)$show['title'], $show['year'] ?? null);
+                unset($show);
+                $after = Store::revision('catalogue') . '|' . Store::revision('browse_epoch') . '|' . Store::revision('settings');
+                if ($revision !== $after) continue;
+                \Vaultcast\Repository::cachePut('section-shows-current-v3|' . $id, ['revision'=>$revision, 'shows'=>$shows], 0);
+                self::showFacetsCached($id, $shows);
+                self::recentlyUpdatedPublic($id, 16);
+                $salt = $id . '|p=1|per=48|q=|L=|g=|y=|d=|st=|net=';
+                self::browseCacheGet('browse_shows', $salt);
+                self::browseCachePut('browse_shows', $salt, [
+                    'ok'=>true, 'page'=>1, 'per'=>48, 'total'=>count($shows), 'has_more'=>count($shows)>48,
+                    'letter'=>null, 'letters'=>self::letterCounts($shows), 'facets'=>self::showFacetsCached($id, $shows),
+                    'filters'=>['genre'=>null,'year'=>null,'decade'=>null,'status'=>null,'network'=>null],
+                    'shows'=>array_map(['Catalogue','publicShow'], array_slice($shows,0,48)), 'cached'=>true
+                ]);
+            } elseif (in_array($type, ['movies','disney'], true)) {
+                $facets = self::movieFacetsCached($id, self::sectionItems($id));
+                $salt = $id . '|p=1|per=48|q=|L=|sys=|g=|y=|d=|a=';
+                self::browseCacheGet('browse_items', $salt);
+                $out = \Vaultcast\Repository::browse($id, '', '', '', 1, 48);
+                $out['facets'] = $facets;
+                $out['items'] = self::publicItems($out['items']);
+                self::browseCachePut('browse_items', $salt, $out);
+                self::randomPublic($id, 16);
+            }
+        }
+    }
+
+    /** Recent rows stay valid until catalogue, metadata or settings change. */
     public static function recentlyUpdatedPublic(string $sectionId, int $n = 16): array {
         $n = max(1, min(40, $n));
         $salt = $sectionId . '|n=' . $n;
         $hit = self::shmCacheGet('showcase_recent', $salt);
-        if (is_array($hit) && isset($hit['items']) && is_array($hit['items']) && (time() - (int)($hit['_cached_at'] ?? 0)) < 90) {
+        if (is_array($hit) && isset($hit['items']) && is_array($hit['items'])) {
             $hit['cached'] = true;
             return $hit;
         }
@@ -1826,13 +1916,15 @@ class Catalogue {
             $isNewShow = ($min > ($now - 60 * 86400)) && ($span < 21 * 86400);
 
             if ($isNewShow && isset($showByTitle[$name])) {
-                $pub = self::publicShow($showByTitle[$name]);
+                $pub = $showByTitle[$name];
+                $pub['_recent_show'] = true;
                 $pub['showcase_kind'] = 'new_show';
                 $pub['showcase_label'] = 'New show';
                 $pub['mtime'] = $g['max'];
                 $newShowRows[] = ['sort' => $min, 'row' => $pub];
             } else {
-                $pub = self::publicItem($g['latest'], false);
+                $pub = $g['latest'];
+                $pub['show_key'] = self::showKey($sectionId, $name);
                 $pub['showcase_kind'] = 'new_episode';
                 $pub['showcase_label'] = 'New episode';
                 $episodeRows[] = ['sort' => $g['max'], 'row' => $pub];
@@ -1868,7 +1960,16 @@ class Catalogue {
             }
         }
         usort($picked, function ($a, $b) { return $b['sort'] <=> $a['sort']; });
-        return array_map(function ($c) { return $c['row']; }, array_slice($picked, 0, $n));
+        $selected = array_map(function ($c) { return $c['row']; }, array_slice($picked, 0, $n));
+        MediaFacts::preload(array_values(array_filter($selected, function ($row) { return empty($row['_recent_show']); })));
+        // Resolve metadata, facts and slugs only for the selected cards.
+        return array_map(function ($row) {
+            $pub = !empty($row['_recent_show']) ? self::publicShow($row) : self::publicItem($row, false);
+            $pub['showcase_kind'] = $row['showcase_kind'];
+            $pub['showcase_label'] = $row['showcase_label'];
+            $pub['mtime'] = $row['mtime'];
+            return $pub;
+        }, $selected);
     }
 
     public static function item(string $id): ?array {
@@ -1935,12 +2036,18 @@ class Catalogue {
     public static function home(array $user): array {
         $uid = (string)($user['id'] ?? 'guest');
         $cacheKey = self::homeCacheKey($user);
+        $started = microtime(true);
         $hit = self::cachedHome($user);
+        if (class_exists('RequestTiming', false)) RequestTiming::add('home_cache', $started);
         if ($hit !== null) return $hit;
+        $started = microtime(true);
         $out = self::homeLibrary();
+        if (class_exists('RequestTiming', false)) RequestTiming::add('home_library', $started);
+        $started = microtime(true);
         $settings = Store::settings();
         $out['continue_watching'] = self::continueWatching(\Vaultcast\Repository::progress($uid),
             max(0, min(100, (int)($settings['home']['continue_watching_limit'] ?? 20))));
+        if (class_exists('RequestTiming', false)) RequestTiming::add('continue_watching', $started);
         \Vaultcast\Repository::cachePut('home-current|' . $uid, ['revision'=>$cacheKey, 'home'=>$out], 0);
         return $out;
     }
@@ -2379,7 +2486,7 @@ class Catalogue {
                 $synopsis = Posters::showSynopsisCached($key);
                 $synopsisSource = $synopsis ? 'tvmaze' : null;
                 $synopsisPending = $synopsis === null;
-            } elseif ($type === 'movies' || $type === 'disney' || ($it['media_kind'] ?? '') === 'video') {
+            } elseif ($type === 'movies' || $type === 'disney' || in_array($it['media_kind'] ?? '', ['video', 'rom'], true)) {
                 if ($type === 'movies' || $type === 'disney' || empty($it['show'])) {
                     $c = Posters::movieSynopsisCached($it['id']);
                     $synopsis = $c['summary'];

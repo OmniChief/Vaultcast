@@ -12,7 +12,7 @@ declare(strict_types=1);
 class Matching {
     const STORE = 'match_overrides';
     const REPORTS = 'label_reports';
-    const FIELDS = ['show', 'season', 'episode', 'episode_title', 'title', 'year'];
+    const FIELDS = ['show', 'season', 'episode', 'episode_title', 'title', 'year', 'poster', 'show_poster'];
 
     /* ------------------------------------------------------------------ store */
 
@@ -100,7 +100,7 @@ class Matching {
     }
 
     /** Write overrides for many items and patch the catalogue in place (one save each). */
-    public static function saveItemFields(array $rows, string $source, string $by = 'admin', bool $keepManual = false): array {
+    public static function saveItemFields(array $rows, string $source, string $by = 'admin', bool $keepManual = false, bool $scheduleBackup = true): array {
         $o = self::overrides();
         $cat = Catalogue::get();
         $changed = 0;
@@ -156,8 +156,9 @@ class Matching {
             $cat['updated_at'] = date('c');
             Catalogue::save($cat);
             Store::invalidate('catalogue');
+            $backup = $scheduleBackup ? MetadataSidecars::schedule() : ['ok'=>true];
         }
-        return ['ok' => true, 'changed' => $changed, 'skipped' => $skipped, 'ids' => $updated];
+        return ['ok' => true, 'changed' => $changed, 'skipped' => $skipped, 'ids' => $updated] + (!empty($backup) && empty($backup['ok']) ? ['warning'=>$backup['warning']] : []);
     }
 
     /** Remove overrides and rebuild the items from disk names. */
@@ -278,6 +279,11 @@ class Matching {
     /* ---------------------------------------------------------------- TVMaze */
 
     private static function http(string $url, int $timeout = 12): ?string {
+        $left = Posters::remoteSecondsLeft();
+        if ($left !== null) {
+            if ($left < 0.05) return null;
+            $timeout = max(1, min($timeout, (int)ceil($left)));
+        }
         if (!function_exists('curl_init')) {
             $ctx = stream_context_create(['http' => ['timeout' => $timeout, 'header' => "User-Agent: Vaultcast/" . STREAM_VERSION . " (+matching)\r\nAccept: application/json\r\n"]]);
             $b = @file_get_contents($url, false, $ctx);
@@ -286,7 +292,7 @@ class Matching {
         $ch = curl_init($url);
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true, CURLOPT_FOLLOWLOCATION => true,
-            CURLOPT_CONNECTTIMEOUT => 6, CURLOPT_TIMEOUT => $timeout,
+            CURLOPT_CONNECTTIMEOUT => min(6, $timeout), CURLOPT_TIMEOUT => $timeout,
             CURLOPT_USERAGENT => 'Vaultcast/' . STREAM_VERSION . ' (+matching)', CURLOPT_HTTPHEADER => ['Accept: application/json'],
         ]);
         $raw = curl_exec($ch);
@@ -715,6 +721,8 @@ class Matching {
         }
         if ($targetKey !== $showKey) unset($o['shows'][$showKey]);
         self::saveOverrides($o);
+        MetadataSidecars::invalidateShow($targetKey);
+        if ($targetKey !== $showKey) MetadataSidecars::invalidateShow($showKey);
         self::purgeShowCaches($targetKey);
         if ($targetKey !== $showKey) self::purgeShowCaches($showKey);
         if (class_exists('Posters')) {
@@ -725,7 +733,8 @@ class Matching {
         }
         if ($id > 0) self::tvmazeGuideById($id, true);
         self::log('PIN ' . $targetKey . ' provider=' . $provider . ' id=' . $id . ($renameTo !== '' ? ' rename=' . $renameTo : ''));
-        return ['ok' => true, 'show_key' => $targetKey, 'pin' => $o['shows'][$targetKey] ?? null, 'meta_only' => $metaOnly, 'tvmaze_id' => $id ?: null];
+        $backup = MetadataSidecars::schedule();
+        return ['ok' => true, 'show_key' => $targetKey, 'pin' => $o['shows'][$targetKey] ?? null, 'meta_only' => $metaOnly, 'tvmaze_id' => $id ?: null] + (empty($backup['ok']) ? ['warning'=>$backup['warning']] : []);
     }
 
     public static function purgeShowCaches(string $showKey): void {
@@ -733,8 +742,10 @@ class Matching {
         if ($safe === '') return;
         foreach (['_episodes.json', '_seasons.json', '_miss.json'] as $suf) @unlink(STREAM_DATA . '/tvmaze/show_' . $safe . $suf);
         if (class_exists('Posters')) {
-            @unlink(Posters::showCachePath($showKey));
-            foreach (glob(Posters::dir() . '/season_' . $safe . '_s*.jpg') ?: [] as $f) @unlink($f);
+            Posters::clearCachedArtwork(Posters::showCachePath($showKey));
+            foreach (glob(Posters::dir() . '/season_' . $safe . '_s*') ?: [] as $f) {
+                if (preg_match('/^season_' . $safe . '_s\d+(?:_thumb)?\.(?:jpe?g|png|webp)$/D', basename($f))) @unlink($f);
+            }
         }
     }
 
@@ -853,10 +864,12 @@ class Matching {
         if ($title === '') return ['ok' => false, 'error' => 'title required'];
         $row = ['id' => $id, 'title' => $title, 'year' => $b['year'] ?? null];
         if (!empty($b['imdb_id'])) $row['imdb_id'] = (string)$b['imdb_id'];
-        $res = self::saveItemFields([$row], 'manual', self::actor());
+        $res = self::saveItemFields([$row], 'manual', self::actor(), false, false);
         if (class_exists('Posters')) {
-            $dest = Posters::movieCachePath($id);
-            @unlink($dest);
+            $isGame = ($it['media_kind'] ?? '') === 'rom';
+            $dest = $isGame ? Posters::gameCachePath($id) : Posters::movieCachePath($id);
+            MetadataSidecars::invalidateMovie($it);
+            Posters::clearCachedArtwork($dest);
             $synCache = Posters::movieSynopsisCachePath($id);
             @unlink($synCache);
             // The picked result's own synopsis is authoritative. Without this the detail page
@@ -879,9 +892,14 @@ class Matching {
                 $bin = self::http($img, 15);
                 if ($bin !== null && strlen($bin) > 500) @file_put_contents($dest, $bin, LOCK_EX);
             }
-            if ($posterPin !== null && !is_file($dest)) Posters::fetchMoviePoster($id, $title, null);
+            if ($posterPin !== null && !is_file($dest)) {
+                if ($isGame) { $it['title'] = $title; Posters::fetchGamePoster($it); }
+                else Posters::fetchMoviePoster($id, $title, null);
+            }
         }
         self::log('MOVIE ' . $id . ' => ' . $title . ' (' . ($b['year'] ?? '') . ')');
+        $backup = MetadataSidecars::schedule();
+        if (empty($backup['ok'])) $res['warning'] = $backup['warning'];
         return $res;
     }
 

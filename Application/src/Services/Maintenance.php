@@ -7,7 +7,7 @@ final class Maintenance
     private static $checked = 0.0;
     /** Background-only tasks started by the app itself (not listed in the maintenance UI). */
     const INTERNAL = ['ingest' => 'Import reviewed download'];
-    const TASKS = ['metadata' => 'Prepare artwork and synopses', 'scan' => 'Scan library folders', 'collections' => 'Match collections', 'downloads' => 'Import completed downloads', 'durations' => 'Fill Live media durations', 'facts' => 'Probe new media codecs and store show guides'];
+    const TASKS = ['views' => 'Prepare browsing pages', 'epg' => 'Refresh programme guide', 'metadata' => 'Prepare artwork and synopses', 'scan' => 'Scan library folders', 'collections' => 'Match collections', 'downloads' => 'Import completed downloads', 'durations' => 'Fill Live media durations', 'facts' => 'Probe new media codecs and store show guides'];
 
     public static function runCommand(string $task, ?string $target = null): array
     {
@@ -100,11 +100,41 @@ final class Maintenance
             switch ($job['task']) {
                 case 'scan':
                     $job['result'] = Catalogue::rescan();
+                    if (!isset($job['result']['ok']) || $job['result']['ok']) Catalogue::warmBrowseViews();
                     // Probe only new/changed files afterwards (queued; waits for this lock).
                     if (!isset($job['result']['ok']) || $job['result']['ok']) { try { self::start('facts', 'scan'); self::start('metadata', 'scan'); } catch (Throwable $ignored) {} }
                     break;
-                case 'metadata': $job['result'] = MetadataWarmup::run(); break;
-                case 'facts': $job['result'] = MediaFacts::refresh(function () { self::checkpoint(); }); break;
+                case 'metadata':
+                    $lastProgress = 0.0;
+                    $job['result'] = MetadataWarmup::run(function ($phase, $done, $total, $file) use (&$job, $id, &$lastProgress) {
+                        if ($done !== $total && microtime(true) - $lastProgress < 1) return;
+                        $lastProgress = microtime(true);
+                        $job['progress'] = ['phase'=>$phase, 'done'=>$done, 'total'=>$total, 'file'=>$file, 'at'=>date('c')];
+                        \Vaultcast\Repository::putDocument('maintenance-job:' . $id, $job);
+                    }, 120, 120, ($job['target'] ?? '') === 'resume' || strpos((string)($job['requested_by'] ?? ''), 'Continuation of ') === 0);
+                    self::checkpoint();
+                    // Do not let checkpoint throttling miss a cancellation at
+                    // the boundary where a fast pass schedules its successor.
+                    if (\Vaultcast\Repository::document('maintenance-cancel:' . $id, false)) throw new RuntimeException('Cancelled by administrator.');
+                    // Yield the global maintenance lock between bounded passes.
+                    // Persisted attempts and existing WebP files make the next pass resume.
+                    if ($job['result']['deferred'] || $job['result']['artwork_deferred'] || !empty($job['result']['sidecars']['deferred'])) {
+                        $next = self::start('metadata', 'Continuation of ' . $id, 'resume');
+                        $job['result']['continuation'] = $next['job']['id'];
+                    }
+                    break;
+                case 'facts':
+                    $job['result'] = MediaFacts::refresh(function () { self::checkpoint(); });
+                    $backup = MetadataSidecars::schedule();
+                    if (empty($backup['ok'])) $job['result']['warning'] = $backup['warning'];
+                    break;
+                case 'views':
+                    Catalogue::warmBrowseViews(); Catalogue::homeLibrary(); Collections::publicList();
+                    LiveGuideCache::warm(); $job['result']=['ok'=>true]; break;
+                case 'epg':
+                    if (empty(Store::settings()['features']['live'])) throw new RuntimeException('Live channels are disabled.');
+                    require_once STREAM_ROOT . '/src/Live/epg.php';
+                    $job['result'] = epg_refresh(false); break;
                 case 'collections': $job['result'] = Collections::refresh($job['target'] ?? null); break;
                 case 'downloads':
                     if (empty(Store::settings()['features']['downloads'])) throw new RuntimeException('Downloads are disabled.');
