@@ -99,7 +99,8 @@ final class FirstPage {
         $home = $startup['home'];
         $html = '<div class="app-shell xshell" id="first-home"><header class="topnav xnav">'
             . '<a class="brand" data-first-nav href="' . self::esc($base) . '"><span class="mark">▶</span><span class="brand-name">' . self::esc($site) . '</span></a>'
-            . '<nav class="mode-switch" aria-label="Mode"><a class="mode-tab active" data-first-nav href="' . self::esc($base) . '">Library</a>';
+            . '<nav class="mode-switch" aria-label="Mode">';
+        if (AreaAccess::allowed($user, 'library')) $html .= '<a class="mode-tab active" data-first-nav href="' . self::esc($base) . '">Library</a>';
         if (!empty($home['features']['live'])) $html .= '<a class="mode-tab" data-first-nav href="' . self::esc($base . 'live') . '">Watch Live</a>';
         foreach ($home['sections'] ?? [] as $section) if ($section['type'] === 'roms') {
             $html .= '<a class="mode-tab" data-first-nav href="' . self::esc($base . 'games') . '">Play</a>'; break;

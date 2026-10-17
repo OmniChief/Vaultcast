@@ -14,6 +14,7 @@ final class Startup {
         // Deleted, expired and unapproved accounts must never receive cached library data.
         $allowed = $user ? !empty($user['access_state']['active']) : (!$session && $guest);
         $page = $allowed ? FirstPage::home($user ?: guest_user()) : ['home'=>null, 'refresh'=>false];
+        if ($page['home'] !== null) $page['home'] = AreaAccess::home($page['home'], $user);
         return [
             'me' => ['ok'=>true, 'user'=>$user, 'authenticated'=>(bool)$user, 'guest_browsing'=>$guest],
             'home' => $page['home'],

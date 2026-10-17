@@ -2556,6 +2556,9 @@ class Catalogue {
         $ql = strtolower($q);
         $cat = \Vaultcast\Repository::document('catalogue', ['sections' => []]);
         $cat['items'] = \Vaultcast\Repository::searchItems($q);
+        $viewer = AreaAccess::viewer();
+        $cat['items'] = array_values(array_filter($cat['items'], static function(array $item) use ($viewer): bool { return AreaAccess::allowed($viewer, AreaAccess::itemArea($item)); }));
+        $cat['sections'] = array_values(array_filter($cat['sections'] ?? [], static function(array $section) use ($viewer): bool { return AreaAccess::allowed($viewer, ($section['type'] ?? '') === 'roms' ? 'games' : 'library'); }));
         MediaFacts::preload($cat['items']);
         $hits = [];
         $seenShows = [];

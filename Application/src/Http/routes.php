@@ -8,7 +8,7 @@ if ($path === '/') $path = '/status';
 $features = Store::settings()['features'] ?? [];
 // Access gate: expired / not-yet-approved users and deleted accounts are refused on every API
 // and stream request, whatever the UI shows. Admins always pass.
-$__denied = Access::gate($path, Auth::currentSession(), function (string $id) { return $id === '' ? null : Auth::findById($id); },
+$__denied = Access::gate($path, Auth::currentSession(), function (string $id) { $user = $id === '' ? null : Auth::findById($id); AreaAccess::remember($user); return $user; },
     (Store::settings()['auth']['require_login'] ?? true) !== false,
     function () use ($path) {
         $t = '';
@@ -17,6 +17,8 @@ $__denied = Access::gate($path, Auth::currentSession(), function (string $id) { 
         return preg_match('/^[a-f0-9]{48}$/', $t) ? \Vaultcast\Repository::playbackToken($t) : null;
     });
 if ($__denied !== null) json_out($__denied[1], $__denied[0]);
+$__areaDenied = AreaAccess::gate($path);
+if ($__areaDenied !== null) json_out($__areaDenied[1], $__areaDenied[0]);
 // Auth/session cookie already read above. Close any native PHP session so a long
 // stream/progress request cannot hold the session file lock across workers.
 release_request_locks();

@@ -912,6 +912,12 @@ function confirmDialog(message, opts){
 
   var _dlStatus = null;
   var _dlStatusAt = 0;
+  function userAreaAllowed(area){
+    if (state.user && state.user.role === 'admin') return true;
+    var areas = state.user && state.user.areas;
+    if (!areas && state.home) areas = state.home.areas;
+    return !areas || areas[area] === true;
+  }
   function canManageDownloads(){ return !!(state.user && state.user.role === 'admin' && state.home && state.home.features && state.home.features.downloads); }
   function loadDownloadStatus(force){
     if (!canManageDownloads()) { _dlStatus = null; return Promise.resolve({ok:true,downloading:[]}); }
@@ -3618,6 +3624,7 @@ try {
       ['play', 'Play', 'Retro games in your browser']
     ];
     modes = modes.filter(function(m){
+      if (!userAreaAllowed({vod:'library', live:'live', play:'games'}[m[0]])) return false;
       if (m[0] === 'live') return !!(state.home && state.home.features && state.home.features.live);
       if (m[0] === 'play') return !!romsSection();
       return true;
@@ -3634,7 +3641,7 @@ try {
           onClick: function(){ goMode(m[0]); }
         }, [ icon(m[0]), h('span', { className:'mode-label', text: m[1] }) ]);
       })),
-      h('div', { className:'nav-right' }, [ searchBoxEl(mode), accountMenu() ])
+      h('div', { className:'nav-right' }, [ userAreaAllowed('library') || userAreaAllowed('games') ? searchBoxEl(mode) : null, accountMenu() ])
     ]);
     return h('div', { className:'app-shell xshell' }, [
       header,
@@ -8046,10 +8053,42 @@ try {
             });
           });
         }});
-        table.appendChild(h('tr', {}, [ h('td',{}, [ h('strong', { text:u.username }), u.display_name && u.display_name !== u.username ? h('div', { className:'muted', text:u.display_name }) : null ].filter(Boolean)), h('td',{text:u.role}), h('td',{}, [accessBadge(u)]), h('td',{}, [expires]), h('td',{}, [ctrl]), h('td',{}, [del]) ]));
+        var edit = h('button', {className:'btn ghost', type:'button', text:'Edit user', onClick:function(){editUserAreas(u);}});
+        table.appendChild(h('tr', {}, [ h('td',{}, [ h('strong', { text:u.username }), u.display_name && u.display_name !== u.username ? h('div', { className:'muted', text:u.display_name }) : null ].filter(Boolean)), h('td',{text:u.role}), h('td',{}, [accessBadge(u)]), h('td',{}, [expires]), h('td',{}, [ctrl]), h('td',{}, [h('div', {className:'row-actions'}, [edit, del])]) ]));
       });
       el.appendChild(h('div', { className:'table-scroll' }, [table]));
     });
+  }
+
+  function editUserAreas(user){
+    var admin = user.role === 'admin', inputs = {}, areas = user.areas || {library:true, live:true, games:true};
+    var status = h('p', {className:'muted', role:'status', text:admin ? 'Admins always have access to every area.' : 'Choose which areas this user can open. Account expiry still applies.'});
+    var body = h('div', {className:'stack'}, [status]);
+    [['library','Library'], ['live','Watch Live'], ['games','Games']].forEach(function(entry){
+      var checkbox = h('input', {type:'checkbox', checked:admin || areas[entry[0]] === true, disabled:admin}); inputs[entry[0]] = checkbox;
+      body.appendChild(h('label', {className:'check-label'}, [checkbox, entry[1]]));
+    });
+    var save = h('button', {className:'btn primary', type:'button', text:'Save', disabled:admin});
+    body.appendChild(save);
+    var previousFocus = document.activeElement;
+    var overlay = h('div', {className:'confirm-overlay'});
+    var dialog = {close:function(){overlay.remove();document.removeEventListener('keydown', onKey);if (previousFocus && previousFocus.isConnected) previousFocus.focus();}};
+    function onKey(event){if (event.key === 'Escape') dialog.close();}
+    var card = h('div', {className:'confirm-card', role:'dialog', 'aria-modal':'true', 'aria-label':'Edit user ' + user.username, style:'max-width:520px;width:92vw;text-align:left'}, [
+      h('h3', {text:'Edit user · ' + user.username}), body,
+      h('button', {className:'btn ghost', type:'button', text:'Close', onClick:dialog.close})
+    ]);
+    overlay.appendChild(card);overlay.onclick = function(event){if (event.target === overlay) dialog.close();};
+    document.body.appendChild(overlay);document.addEventListener('keydown', onKey);
+    var focusTarget = card.querySelector('input:not(:disabled), button');if (focusTarget) focusTarget.focus();
+    save.onclick = function(){
+      var permissions = {}; Object.keys(inputs).forEach(function(area){permissions[area] = inputs[area].checked;});
+      save.disabled = true; status.textContent = 'Saving…';
+      api('/admin/users/' + encodeURIComponent(user.id) + '/areas', {method:'POST', body:{areas:permissions}}).then(function(result){
+        if (!result.ok) throw new Error(result.error || 'Could not save permissions');
+        dialog.close(); toast('Access areas updated for ' + user.username, {kind:'ok'}); loadUsers();
+      }).catch(function(error){status.textContent = error.message;save.disabled = false;});
+    };
   }
 
   function field(id, label, value, type){
@@ -13233,6 +13272,17 @@ function viewCollectionDetail(){
   function render(){ renderView(); syncUrl(); }
   function renderView(){
     var root = $('#app');
+    if (state.home && state.user && state.user.role !== 'admin') {
+      var requiredArea = /^(?:show|movie|collections|collection|colmember)$/.test(state.view) ? 'library'
+        : (/^(?:game|play)$/.test(state.view) ? 'games' : (state.view === 'live' ? 'live' : (state.view === 'section' ? (state.sectionType === 'roms' ? 'games' : 'library') : null)));
+      if (requiredArea && !userAreaAllowed(requiredArea)) {state.view = 'settings';state.settingsSection = 'account';}
+      if (state.view === 'search' && !userAreaAllowed('library') && !userAreaAllowed('games')) {state.view = 'settings';state.settingsSection = 'account';}
+      if (state.view === 'home' && !userAreaAllowed('library')) {
+        if (userAreaAllowed('live') && state.home.features && state.home.features.live) state.view = 'live';
+        else if (userAreaAllowed('games') && romsSection()) state.view = 'play';
+        else {state.view = 'settings';state.settingsSection = 'account';}
+      }
+    }
     _playRequestId++;
     if (document.querySelector('.player-inline')) closePlayer();
     if (state.view !== 'game') state.gamePath = null;

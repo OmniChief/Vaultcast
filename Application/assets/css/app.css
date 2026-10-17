@@ -2431,7 +2431,16 @@ html[data-client-mode="mobile"] .vod-filter { display: none !important; }
 html { scroll-padding-top: 90px; }
 body { overflow-x: hidden; }
 button, a, input, select, textarea, [role="button"] { touch-action: manipulation; }
-button, input, select, .btn { min-height: 44px; }
+button, input:not([type=checkbox]):not([type=radio]):not([type=range]), select, .btn { min-height: 44px; }
+input[type=checkbox]:not(.feature-switch-input):not([role=switch]),
+input[type=radio]:not([role=switch]) {
+  width:18px; height:18px; min-width:18px; min-height:18px; max-width:18px; max-height:18px;
+  flex:0 0 18px; padding:0; vertical-align:middle; align-self:center;
+}
+.settings-panel label:has(> input[type=checkbox]):not(.feature-card),
+.settings-panel label:has(> input[type=radio]) {
+  display:inline-flex; flex-direction:row; align-items:center; gap:8px; min-height:32px; cursor:pointer;
+}
 input, select, textarea { max-width: 100%; font-size: 16px; }
 .settings-main, .settings-panel, .settings-nav { min-width: 0; }
 .settings-nav-group.locked { display: none; }

@@ -15,12 +15,13 @@ class Stream {
     }
 
     /** Shared token storage for library playback and Live channel playback. */
-    public static function createToken(string $userId, string $itemId, string $path, string $kind): string {
+    public static function createToken(string $userId, string $itemId, string $path, string $kind, ?string $area = null): string {
         $ttl = max(3600, min(86400, (int)(Store::settings()['streaming']['token_ttl_seconds'] ?? 28800)));
         $token = bin2hex(random_bytes(24));
         $payload = [
             'token' => $token, 'item_id' => $itemId, 'user_id' => $userId,
             'path' => $path, 'expires' => time() + $ttl, 'media_kind' => $kind,
+            'area' => $area ?? ($kind === 'rom' ? 'games' : 'library'),
         ];
         if ($kind === 'rom') {
             $payload['rom_dir'] = dirname($path);
@@ -32,6 +33,8 @@ class Stream {
     public static function issueToken(array $user, string $itemId, array $opts = []): array {
         $item = Catalogue::item($itemId);
         if (!$item) json_error('Not found', 404);
+        $denied = AreaAccess::denied($user, AreaAccess::itemArea($item));
+        if ($denied) json_out($denied[1], $denied[0]);
         $path = $item['path'] ?? '';
         if (!is_file($path)) json_error('File missing', 404);
 

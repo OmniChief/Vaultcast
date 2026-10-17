@@ -151,6 +151,23 @@ if ($path === '/admin/users' && $method === 'GET') {
     json_out(['ok' => true, 'users' => $users, 'now' => time()]);
 }
 
+if (preg_match('#^/admin/users/([A-Za-z0-9_-]{1,64})/areas$#', $path, $m) && $method === 'POST') {
+    $target = Auth::findById($m[1]);
+    if (!$target) json_error('User not found', 404);
+    if (($target['role'] ?? '') === 'admin') json_error('Admins always have access to every area.');
+    $body = body_json();
+    if (!is_array($body['areas'] ?? null)) json_error('Choose the areas this user can access.');
+    $areas = [];
+    foreach (AreaAccess::AREAS as $area) {
+        if (!array_key_exists($area, $body['areas']) || !is_bool($body['areas'][$area])) json_error('Each area must be enabled or disabled.');
+        $areas[$area] = $body['areas'][$area];
+    }
+    $saved = \Vaultcast\Repository::updateUser((string)$target['id'], static function(array $user) use ($areas): array { $user['areas'] = $areas; return $user; });
+    Store::invalidate('users');
+    unset($saved['password_hash']);
+    json_out(['ok'=>true, 'user'=>$saved]);
+}
+
 if (preg_match('#^/admin/users/([A-Za-z0-9_-]{1,64})/access$#', $path, $m) && $method === 'POST') {
     $me = Auth::requireAdmin();
     $target = Auth::findById($m[1]);

@@ -101,13 +101,18 @@ final class Access
                 $user = $findUser((string)($session['user_id'] ?? ''));
                 if (!$user) return null;
                 $st = self::state($user, $now);
-                return $st['active'] ? null : [403, ['ok' => false, 'error' => self::message($st['state']), 'code' => 'access_denied', 'access' => $st]];
+                return $st['active'] ? AreaAccess::denied($user, 'live') : [403, ['ok' => false, 'error' => self::message($st['state']), 'code' => 'access_denied', 'access' => $st]];
             }
-            if ($uid === '' || $uid === 'public') return $requireLogin ? [403, ['ok' => false, 'error' => 'Sign in to play this.', 'code' => 'login_required']] : null;
+            if ($uid === '' || $uid === 'public') {
+                if ($requireLogin) return [403, ['ok' => false, 'error' => 'Sign in to play this.', 'code' => 'login_required']];
+                $viewer = $session ? $findUser((string)($session['user_id'] ?? '')) : null;
+                return $viewer ? AreaAccess::denied($viewer, ($p['area'] ?? '') === 'live' ? 'live' : (($p['media_kind'] ?? '') === 'rom' ? 'games' : 'library')) : null;
+            }
             $owner = $findUser($uid);
             if (!$owner) return [403, ['ok' => false, 'error' => 'This account no longer exists.', 'code' => 'access_denied']];
             $st = self::state($owner, $now);
-            return $st['active'] ? null : [403, ['ok' => false, 'error' => self::message($st['state']), 'code' => 'access_denied', 'access' => $st]];
+            $area = ($p['area'] ?? '') === 'live' ? 'live' : (($p['media_kind'] ?? '') === 'rom' ? 'games' : 'library');
+            return $st['active'] ? AreaAccess::denied($owner, $area) : [403, ['ok' => false, 'error' => self::message($st['state']), 'code' => 'access_denied', 'access' => $st]];
         }
         if ($session !== null) {
             $user = $findUser((string)($session['user_id'] ?? ''));

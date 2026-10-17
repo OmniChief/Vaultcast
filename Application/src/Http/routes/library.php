@@ -23,7 +23,8 @@ if ($path === '/resolve' && $method === 'GET') {
     }));
 }
 if ($path === '/home' && $method === 'GET') {
-    json_out(Catalogue::home(current_or_guest()));
+    $viewer = current_or_guest();
+    json_out(AreaAccess::home(Catalogue::home($viewer), $viewer));
 }
 
 if ($path === '/search' && $method === 'GET') {
@@ -83,7 +84,8 @@ if ($path === '/search/get' && $method === 'POST') {
 
 if ($path === '/sections' && $method === 'GET') {
     $cat = \Vaultcast\Repository::document('catalogue', ['sections'=>[]]);
-    json_out(['ok' => true, 'sections' => array_map(function ($section) { unset($section['path']); return $section; }, $cat['sections'] ?? []), 'scanned_at' => $cat['scanned_at'] ?? null]);
+    $sections = array_filter($cat['sections'] ?? [], static function(array $section): bool { return AreaAccess::allowed(AreaAccess::viewer(), ($section['type'] ?? '') === 'roms' ? 'games' : 'library'); });
+    json_out(['ok' => true, 'sections' => array_values(array_map(function ($section) { unset($section['path']); return $section; }, $sections)), 'scanned_at' => $cat['scanned_at'] ?? null]);
 }
 
 if (preg_match('#^/sections/([a-zA-Z0-9_-]+)/items$#', $path, $m) && $method === 'GET') {

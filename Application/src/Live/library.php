@@ -395,7 +395,8 @@ function relay_catalogue_file() {
         echo 'Missing';
         return;
     }
-    $token = Stream::createToken('live', $id, $path, 'video');
+    $viewer = AreaAccess::viewer();
+    $token = Stream::createToken($viewer ? (string)$viewer['id'] : 'live', $id, $path, 'video', 'live');
     header('Cache-Control: no-store');
     header('Location: ' . \Vaultcast\Database::basePath() . 'api/stream/play?t=' . $token, true, 302);
 }
