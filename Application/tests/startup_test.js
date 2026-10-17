@@ -7,7 +7,7 @@ function fixture(initial, user) {
   const ctx = {
     window: { __STREAM_STARTUP__: initial }, state: { user, view:'home' }, calls:0, renders:0, errors:0,
     api: function(){ this.calls++; return Promise.resolve({ok:true, sections:[]}); },
-    applyRoute: () => Promise.resolve(), applyClientMode: () => {},
+    applyRoute: () => Promise.resolve(),
     render: function(){ this.renders++; }, replaceNav: () => {}, _navSilent:false,
     h: (tag, attrs, kids) => ({tag, attrs, kids}), shell: x => x,
     $: () => ({innerHTML:'', appendChild: () => {ctx.errors++;}})

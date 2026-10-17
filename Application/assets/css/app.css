@@ -33,12 +33,12 @@
   --font: "Inter var", Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   color-scheme: dark;
 }
-/* Focus: keyboard users get a ring that hugs the element's own shape; mouse/touch clicks get none.
-   Remote/TV navigation always shows it (older TV engines lack :focus-visible). */
+
+/* Keyboard focus follows the element's shape. */
 :focus { outline: none; }
 :focus-visible { outline: var(--focus-ring); outline-offset: var(--focus-offset); }
 input:focus-visible, select:focus-visible, textarea:focus-visible { outline-offset: 1px; }
-body[data-navigation="remote"] :focus { outline: 4px solid var(--focus-color); outline-offset: var(--focus-offset); box-shadow: 0 0 0 8px color-mix(in srgb, var(--focus-color) 18%, transparent); }
+
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
 body.boot { overflow:hidden; }
@@ -124,9 +124,7 @@ img { max-width:100%; display:block; }
   .card { width:132px; }
   .topnav { gap:8px; }
 }
-/* TV / reduced motion */
-body.tv .card:hover { transform:none; }
-body.tv .topnav { backdrop-filter:none; }
+
 body.reduce-motion * { transition:none !important; animation:none !important; }
 /* Episode availability */
 .badge { display: inline-block; font-size: .72rem; padding: 2px 8px; border-radius: var(--radius-pill); vertical-align: middle; }
@@ -189,144 +187,9 @@ body.reduce-motion * { transition:none !important; animation:none !important; }
 }
 .poster.poster-failed .ph { opacity: .85; }
 .poster.poster-ready .ph { opacity: 0; }
-body.tv .card:focus,
-body.tv button:focus,
-body.tv a:focus,
-body.tv .panel:focus,
-body.tv video:focus,
-body.tv audio:focus,
-body.mode-tv .card:focus, body.mode-tv .btn:focus, body.mode-tv .linkish:focus {
-  outline: 3px solid #eab96b; outline-color: var(--focus-color);
-  outline-offset: 3px;
-}
-body.tv .card:focus {
-  transform: scale(1.05);
-  border-color: #e50914;
-  z-index: 3;
-  position: relative;
-}
-body.tv .tabs button:focus,
-body.tv .btn:focus {
-  background: #2a1216;
-  color: var(--text);
-}
+
 /* Navigation, audio selection and diagnostics */
-.mode-btn {
-  appearance: none;
-  border: 1px solid rgba(255,255,255,.15);
-  background: var(--surface-1);
-  color: inherit;
-  border-radius: var(--radius-sm);
-  width: 36px;
-  height: 32px;
-  line-height: 1;
-  font-size: 16px;
-  cursor: pointer;
-  padding: 0;
-}
-.mode-btn.active {
-  background: rgba(80,160,255,.25);
-  border-color: rgba(80,160,255,.55);
-}
-body.mode-mobile .topnav { flex-wrap: wrap; }
-body.mode-mobile .grid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
-body.mode-mobile .scroller .card { width: 120px; }
-body.mode-tv .topnav { font-size: 1.15rem; }
-body.mode-tv .btn, body.mode-tv .mode-btn {
-  min-height: 44px;
-}
-body.mode-tv .grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 0; }
-/* TV / old WebKit-Chromium: no aspect-ratio / gap / clamp.
-   Posters must have explicit pixel height or they collapse to thin strips. */
-body.tv .card,
-body.mode-tv .card,
-html[data-client-mode="tv"] .card,
-body[data-client-mode="tv"] .card {
-  width: 160px;
-  min-width: 160px;
-  max-width: 160px;
-  min-height: 0;
-  flex: 0 0 160px;
-}
-body.tv .card .poster,
-body.mode-tv .card .poster,
-html[data-client-mode="tv"] .card .poster,
-body[data-client-mode="tv"] .card .poster {
-  /* 160x240 = 2:3; do not rely on aspect-ratio */
-  width: 160px;
-  height: 240px;
-  min-height: 240px;
-  max-height: 240px;
-  padding: 10px;
-  overflow: hidden;
-  background-size: cover;
-  background-position: center;
-  background-repeat: no-repeat;
-}
-body.tv .show-hero-poster,
-body.mode-tv .show-hero-poster,
-html[data-client-mode="tv"] .show-hero-poster,
-body[data-client-mode="tv"] .show-hero-poster {
-  width: 140px;
-  height: 210px;
-  min-height: 210px;
-  max-height: 210px;
-}
-body.tv .movie-hero-poster,
-body.mode-tv .movie-hero-poster,
-html[data-client-mode="tv"] .movie-hero-poster,
-body[data-client-mode="tv"] .movie-hero-poster {
-  width: 160px;
-  height: 240px;
-  min-height: 240px;
-  max-height: 240px;
-}
-/* gap unsupported on many TV browsers; use margins */
-body.tv .scroller,
-body.mode-tv .scroller,
-html[data-client-mode="tv"] .scroller,
-body[data-client-mode="tv"] .scroller {
-  display: -webkit-box;
-  display: -webkit-flex;
-  display: flex;
-  -webkit-overflow-scrolling: touch;
-  overflow-x: auto;
-  overflow-y: hidden;
-  gap: 0;
-  padding: 4px 20px 16px;
-}
-body.tv .scroller .card,
-body.mode-tv .scroller .card,
-html[data-client-mode="tv"] .scroller .card,
-body[data-client-mode="tv"] .scroller .card {
-  margin-right: 12px;
-  margin-bottom: 0;
-}
-body.tv .grid,
-body.mode-tv .grid,
-html[data-client-mode="tv"] .grid,
-body[data-client-mode="tv"] .grid {
-  gap: 0;
-  padding: 0 20px 24px;
-}
-body.tv .grid .card,
-body.mode-tv .grid .card,
-html[data-client-mode="tv"] .grid .card,
-body[data-client-mode="tv"] .grid .card {
-  width: 160px;
-  min-width: 160px;
-  max-width: 160px;
-  margin: 0 12px 18px 0;
-  display: inline-block;
-  vertical-align: top;
-  float: none;
-}
-/* Keep focus ring visible on fixed-size cards */
-body.tv .card:focus,
-body.mode-tv .card:focus {
-  z-index: 3;
-  position: relative;
-}
+
 /* simple DirectPlay player — no fancy overlay chrome */
 .player-overlay.player-simple { padding:0; }
 .player-overlay.player-simple .player-close { position: absolute; z-index: 10; color: #fff; font-size: 28px; cursor: pointer; }
@@ -334,106 +197,14 @@ body.mode-tv .card:focus {
 .player-overlay.player-simple video,
 .player-overlay.player-simple audio {
   width:100%; height:100%; max-height:none; flex:1; background:#000; display:block;
-  /* absolute fill — old Tizen often collapses flex:1 + % height */
+
   position:absolute; top:0; left:0; right:0; bottom:0;
   z-index:1;
 }
 .player-overlay.player-simple .player-convert {
   position:absolute; bottom:16px; right:16px; z-index:5;
 }
-/* TV / old Samsung Tizen: header + player without gap/sticky/inset/vh */
-body.tv .topnav .brand,
-body.mode-tv .topnav .brand {
-  display: -webkit-box;
-  display: -webkit-flex;
-  display: flex;
-  -webkit-box-align: center;
-  -webkit-align-items: center;
-  align-items: center;
-  gap: 0;
-  margin-right: 16px;
-  -webkit-flex-shrink: 0;
-  flex-shrink: 0;
-}
-body.tv .topnav .brand .mark,
-body.mode-tv .topnav .brand .mark {
-  margin-right: 10px;
-}
-body.tv .nav-right,
-body.mode-tv .nav-right {
-  display: -webkit-box;
-  display: -webkit-flex;
-  display: flex;
-  gap: 0;
-  -webkit-box-align: center;
-  -webkit-align-items: center;
-  align-items: center;
-  margin-left: auto;
-}
-body.tv .nav-right > *,
-body.mode-tv .nav-right > * {
-  margin-left: 8px;
-}
-body.tv .hero h1,
-body.mode-tv .hero h1 {
-  font-size: 1.8rem;
-}
-body.tv .boot-screen,
-body.mode-tv .boot-screen,
-body.tv .app-shell,
-body.mode-tv .app-shell,
-body.tv .login-wrap,
-body.mode-tv .login-wrap {
-  min-height: 100%;
-}
-body.tv .player-overlay,
-body.mode-tv .player-overlay,
-html[data-client-mode="tv"] .player-overlay,
-body[data-client-mode="tv"] .player-overlay {
-  position: fixed !important;
-  top: 0 !important;
-  right: 0 !important;
-  bottom: 0 !important;
-  left: 0 !important;
-  width: 100% !important;
-  height: 100% !important;
-  z-index: 1000 !important;
-  background: #000 !important;
-  margin: 0 !important;
-  padding: 0 !important;
-  overflow: hidden !important;
-  display: block !important;
-}
-body.tv .player-overlay video,
-body.tv .player-overlay audio,
-body.mode-tv .player-overlay video,
-body.mode-tv .player-overlay audio,
-body.tv .player-overlay.player-simple video,
-body.tv .player-overlay.player-simple audio,
-body.mode-tv .player-overlay.player-simple video,
-body.mode-tv .player-overlay.player-simple audio {
-  position: absolute !important;
-  top: 0 !important;
-  left: 0 !important;
-  right: 0 !important;
-  bottom: 0 !important;
-  width: 100% !important;
-  height: 100% !important;
-  max-width: none !important;
-  max-height: none !important;
-  margin: 0 !important;
-  padding: 0 !important;
-  border: 0 !important;
-  background: #000 !important;
-  z-index: 1 !important;
-  display: block !important;
-  /* never transform/object-fit on Tizen <video> (black video plane) */
-}
-body.tv .player-overlay .player-close,
-body.mode-tv .player-overlay .player-close {
-  z-index: 20 !important;
-}
-/* desktop browse polish + admin groups + TV contrast / episodes */
+
 .section-pager { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--border); }
 .section-pager .load-more-btn {
   min-width: 160px;
@@ -474,66 +245,7 @@ body.mode-tv .player-overlay .player-close {
 }
 .admin-stack .check-label input { width: auto; }
 .row-actions .btn { min-height: 40px; }
-/* TV high contrast header + episode rows (no gap/sticky/inset/backdrop-filter) */
-body.tv .topnav,
-body.mode-tv .topnav,
-html[data-client-mode="tv"] .topnav,
-body[data-client-mode="tv"] .topnav { top: auto; z-index: 50; height: auto; display: flex; -webkit-flex-wrap: wrap; flex-wrap: wrap; -webkit-box-align: center; -webkit-align-items: center; align-items: center; gap: 0; padding: 8px 16px; overflow: visible; background: #05070a !important; border-bottom: 3px solid #e50914 !important; min-height: 72px; backdrop-filter: none !important; -webkit-backdrop-filter: none !important; position: relative !important; }
-body.tv .btn:focus,
-body.mode-tv .btn:focus {
-  outline: 3px solid #eab96b !important; outline-color: var(--focus-color) !important;
-  outline-offset: 3px !important;
-  background: #2a1216 !important;
-  color: #fff !important;
-}
-body.tv .btn,
-body.mode-tv .btn {
-  border: 2px solid #5a6a80;
-  background: #1a2430;
-  color: #fff;
-  font-weight: 700;
-  min-height: 48px;
-  font-size: 1.05rem;
-}
-body.tv .btn.primary,
-body.mode-tv .btn.primary {
-  background: #e50914 !important;
-  border-color: #ff6b73 !important;
-  color: #fff !important;
-}
-body.tv .muted,
-body.mode-tv .muted {
-  color: #c2ccd8 !important;
-}
-body.tv .section-pager,
-body.mode-tv .section-pager {
-  padding: 16px 20px 40px;
-  border-top: 2px solid #2a3340;
-  margin: 0;
-}
-/* TV section pager: Prev/Next replace load-more (no CSS gap) */
-body.tv .player-overlay #emu-root,
-body.mode-tv .player-overlay #emu-root,
-body.tv .player-overlay [id^="game-"],
-body.mode-tv .player-overlay [id^="game-"],
-body.tv .player-overlay canvas.ejs_canvas,
-body.mode-tv .player-overlay canvas.ejs_canvas {
-  position: absolute !important;
-  top: 0 !important;
-  left: 0 !important;
-  width: 100% !important;
-  height: 100% !important;
-  max-width: none !important;
-  max-height: none !important;
-  z-index: 1 !important;
-  opacity: 1 !important;
-  visibility: visible !important;
-  display: block !important;
-  background: #000 !important;
-  -webkit-transform: translateZ(0);
-  transform: translateZ(0);
-}
-/* TV DirectPlay: dedicated safe player chrome */
+
 /* Live (PseudoTV) */
 /* Live library can add items from the Vaultcast catalogue */
 body.view-live .app-shell { min-height:100vh; height:100vh; display:flex; flex-direction:column; padding-bottom:0; }
@@ -1913,11 +1625,7 @@ select option:focus {
   border: 1px solid rgba(124,108,255,.45);
   font-weight: 650; font-size: .82rem;
 }
-body.tv .vod-filter,
-body.mode-tv .vod-filter,
-body.mode-mobile .vod-filter,
-html[data-client-mode="tv"] .vod-filter,
-html[data-client-mode="mobile"] .vod-filter { display: none !important; }
+
 @media (max-width: 720px) {
   .vod-filter { display: none !important; }
 }
@@ -2444,7 +2152,7 @@ input[type=radio]:not([role=switch]) {
 input, select, textarea { max-width: 100%; font-size: 16px; }
 .settings-main, .settings-panel, .settings-nav { min-width: 0; }
 .settings-nav-group.locked { display: none; }
-body[data-navigation="remote"] { --gutter: clamp(24px, 4vw, 80px); }
+
 @media (pointer: coarse) {
   button, .btn, select { min-height: 48px; }
 }
@@ -2506,7 +2214,8 @@ body[data-navigation="remote"] { --gutter: clamp(24px, 4vw, 80px); }
 @media(prefers-reduced-motion:reduce) {
   *,*::before,*::after {scroll-behavior:auto!important;animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
 }
-/* ---------------- TV Studio (every rule scoped under .tvs-root) ---------------- */
+
+/* TV Studio (rules scoped under .tvs-root). */
 .tvs-root { display: contents; }
 .tvs-root .tvs-bar { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:14px; }
 .tvs-root .tvs-tabs { display:flex; gap:4px; padding:4px; background:var(--surface-1); border:1px solid var(--border); border-radius:var(--radius-pill); flex-wrap:wrap; }
@@ -2667,10 +2376,7 @@ body.has-az-rail .has-az-rail { padding-left: calc(var(--az-gutter) + 6px); }
   opacity: .38;
   transition: opacity .25s ease, background .25s ease, border-color .25s ease;
 }
-body.tv .az-rail,
-body.mode-tv .az-rail,
-html[data-client-mode="tv"] .az-rail,
-body[data-client-mode="tv"] .az-rail { display: none !important; }
+
 .az-rail:hover, .az-rail:focus-within, body.az-scrolling .az-rail {
   opacity: 1; background: rgba(14,16,23,.72) !important; border-color: var(--border) !important;
   -webkit-backdrop-filter: blur(12px) !important; backdrop-filter: blur(12px) !important;
@@ -2698,15 +2404,11 @@ body[data-client-mode="tv"] .az-rail { display: none !important; }
   }
   body.az-open .az-toggle { background: var(--accent); border-color: var(--accent); color: #fff; }
 }
-body.tv .az-toggle, html[data-client-mode="tv"] .az-toggle { display: none !important; }
+
 @media (prefers-reduced-motion: reduce) {
   .az-rail { transition: none; }
 }
-/* Forced phone layout on a wide screen: same compact toggle */
-html[data-client-mode="mobile"] body.has-az-rail #section-view, html[data-client-mode="mobile"] body.has-az-rail .has-az-rail { padding-left: 0; }
-html[data-client-mode="mobile"] .az-rail { display: none !important; left: auto !important; right: 12px !important; top: auto !important; bottom: 72px !important; max-height: 70vh; opacity: 1; background: rgba(14,16,23,.94) !important; border: 1px solid var(--border) !important; border-radius: var(--radius-xl); }
-html[data-client-mode="mobile"] body.az-open .az-rail { display: flex !important; }
-html[data-client-mode="mobile"] .az-toggle { display: inline-flex; align-items: center; justify-content: center; position: fixed; right: 12px; bottom: 16px; z-index: 56; min-width: 46px; height: 46px; padding: 0 12px; border-radius: var(--radius-pill); border: 1px solid var(--border); background: rgba(14,16,23,.85); color: var(--text); font: 700 .85rem/1 inherit; cursor: pointer; }
+
 /* Optional features: toggle rows */
 .feature-card { padding: 4px 0 0; overflow: hidden; }
 .settings-panel .feature-card label.feature-row,

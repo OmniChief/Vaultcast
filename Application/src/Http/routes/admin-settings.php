@@ -208,7 +208,7 @@ if ($path === '/admin/users' && $method === 'POST') {
         'password_hash' => password_hash($b['password'], PASSWORD_DEFAULT),
         'role' => ($b['role'] ?? 'user') === 'admin' ? 'admin' : 'user',
         'display_name' => $b['display_name'] ?? $username,
-        'prefs' => ['theme'=>'dark','autoplay'=>false,'tv_mode'=>'auto'],
+        'prefs' => ['theme'=>'dark','autoplay'=>false],
         'created_at' => date('c'),
     ];
     if ($created['role'] !== 'admin') {

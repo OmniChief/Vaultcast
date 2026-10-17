@@ -16,17 +16,12 @@
     window.__STREAM_VERSION__ = '{{VERSION}}';
     window.__ASSET_VERSION__ = '{{ASSET_VERSION}}';
     window.__STREAM_NETPLAY_SERVER__ = window.__STREAM_BASE__ + 'netplay';
-    // All screens run the same app. Remote navigation is an input preference.
-    window.__STREAM_TV__ = false;
-    window.__STREAM_ES5__ = false;
-    document.documentElement.className = 'modern';
   </script>
   <script src="index.php?asset=assets/js/routes.js&amp;v={{ASSET_VERSION}}" defer></script>
   <script src="index.php?asset=assets/js/netplay_sync.js&amp;v={{ASSET_VERSION}}" defer></script>
   <script src="index.php?asset=assets/js/request-cache.js&amp;v={{ASSET_VERSION}}" defer></script>
   <script src="index.php?asset=assets/js/app.js&amp;v={{ASSET_VERSION}}" defer></script>
-  <script src="index.php?asset=assets/js/navigation.js&amp;v={{ASSET_VERSION}}" defer></script>
 </head>
-<body class="mode-desktop" data-mode="vod"><div id="app"><!-- VAULTCAST_PAGE --></div><div id="toast" class="toast" hidden></div>
+<body data-mode="vod"><div id="app"><!-- VAULTCAST_PAGE --></div><div id="toast" class="toast" hidden></div>
 <noscript><p class="first-noscript">Enable JavaScript for playback, search and full catalogue navigation. Sign-in and the home page remain available.</p></noscript>
 </body></html>

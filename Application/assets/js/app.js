@@ -72,31 +72,6 @@
   };
 
 
-  /* One responsive client; TV changes input navigation only. */
-  var CLIENT_MODE_KEY = 'vaultcast-navigation';
-  function getClientMode(){
-    try {
-      var savedMode = localStorage.getItem(CLIENT_MODE_KEY);
-      if (savedMode === 'tv' || savedMode === 'desktop') return savedMode;
-    } catch(e){}
-    if (state.user && state.user.prefs && state.user.prefs.tv_mode === 'on') return 'tv';
-    return 'desktop';
-  }
-  function setClientMode(mode){
-    mode = mode === 'tv' ? 'tv' : 'desktop';
-    try { localStorage.setItem(CLIENT_MODE_KEY, mode); } catch(e){}
-    applyClientMode(mode);
-    render();
-  }
-  function applyClientMode(mode){
-    document.body.classList.remove('mode-mobile','mode-tv','tv');
-    document.body.classList.add('mode-desktop');
-    document.body.setAttribute('data-navigation', (mode || getClientMode()) === 'tv' ? 'remote' : 'auto');
-    document.body.setAttribute('data-client-mode', 'desktop');
-  }
-  function clientModeSwitcher(){
-    return h('button', {className:'mode-btn', type:'button', text:getClientMode()==='tv' ? 'Remote navigation' : 'Automatic layout', onClick:function(){setClientMode(getClientMode()==='tv' ? 'desktop' : 'tv');}});
-  }
   function audioPrefKey(itemId){ return 'vaultcast-audio:' + itemId; }
   function getAudioPref(itemId){
     try {
@@ -1493,12 +1468,6 @@ function confirmDialog(message, opts){
       overlay.appendChild(convertBtn);
     }
     mountDetailPlayer(overlay, inlineHost, play.autoplay !== false);
-    if (!inlineHost && (document.body.classList.contains('tv') || document.body.classList.contains('mode-tv') || document.documentElement.getAttribute('data-client-mode')==='tv')) {
-      try {
-        overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;width:100%;height:100%;z-index:1000;background:#000;margin:0;padding:0;overflow:hidden;display:block;';
-        media.style.cssText = 'position:absolute;top:0;left:0;right:0;bottom:0;width:100%;height:100%;max-width:none;max-height:none;margin:0;padding:0;border:0;background:#000;z-index:1;opacity:1;visibility:visible;object-fit:contain;';
-      } catch (eLay) {}
-    }
     try {
       var pr = play.autoplay !== false ? media.play() : null;
       if (pr && pr.catch) pr.catch(function(){});
@@ -4275,7 +4244,7 @@ try {
       guideEl(chans)
     ]));
     root.appendChild(h('div', { className:'live-foot muted' }, [
-      'Relay plays MP4 straight from the server. IPTV is HLS through the same-origin proxy (older Samsung Tizen may not support HLS). ',
+      'Relay plays MP4 straight from the server. IPTV is HLS through the same-origin proxy. ',
       h('a', { href: '#/settings/live-channels', text:'Live settings', onClick: function(e){ e.preventDefault(); openSettings('live-channels'); } })
     ]));
     tickLive();
@@ -4918,14 +4887,6 @@ try {
   }
 
 
-  function isDesktopAzMode(){
-    if (document.body.classList.contains('tv') || document.body.classList.contains('mode-tv')) return false;
-    /* phones get the rail behind a compact A–Z toggle (see mountAzRail) */
-    var m = document.documentElement.getAttribute('data-client-mode') || '';
-    if (m === 'tv') return false;
-    if (window.__STREAM_TV__) return false;
-    return true;
-  }
 
   function azLettersList(){
     var letters = ['#'];
@@ -4942,7 +4903,6 @@ try {
   }
 
   function buildAzRail(id, lettersMap, opts){
-    if (!isDesktopAzMode()) return null;
     opts = opts || {};
     var active = (opts.active != null ? opts.active : (state.sectionLetter || '')).toUpperCase();
     var onPick = opts.onPick || function(letter){ selectSectionLetter(id, letter); };
@@ -5437,7 +5397,6 @@ try {
     var old = root.querySelector('#vod-library-filter');
     if (old) old.remove();
     if (!sectionWantsVodFilters(id)) return;
-    if (!isDesktopAzMode()) return;
     facets = facets || state._sectionFacets || {};
     if (!state.sectionFilters) state.sectionFilters = defaultSectionFilters();
     var f = state.sectionFilters;
@@ -6397,7 +6356,7 @@ try {
     var prefs = u.prefs || {};
     var isAdmin = !!(u && u.role === 'admin');
     var groups = [
-      {title:'Your preferences', items:[{id:'account',label:'Account & playback'},{id:'layout',label:'Display & navigation'}]},
+      {title:'Your preferences', items:[{id:'account',label:'Account & playback'}]},
       {title:'Libraries',admin:true,items:[{id:'sections',label:'Folders & media types'},{id:'scan',label:'Scan libraries'},{id:'media',label:'Manage media'},{id:'collections',label:'Collections'},{id:'posters',label:'Artwork'},{id:'library',label:'Find & rename'},{id:'ingest',label:'Import inbox'},{id:'matching',label:'Correct metadata'},{id:'reports',label:'Label reports'}]},
       {title:'Users',admin:true,items:[{id:'users',label:'Accounts & access'}]},
       {title:'Playback',admin:true,items:[{id:'players',label:'Player files'},{id:'streaming',label:'Streaming'},{id:'video-optimise',label:'Video conversion'},{id:'poster-optimise',label:'Artwork optimisation'}]},
@@ -6523,11 +6482,6 @@ try {
             h('option', { value: 'dark', text: 'Dark', selected: prefs.theme !== 'light' }),
             h('option', { value: 'light', text: 'Light', selected: prefs.theme === 'light' })
           ])]),
-          h('label', {}, ['Navigation preference', h('select', { id: 'tvmode' }, [
-            h('option', { value: 'auto', text: 'Auto', selected: !prefs.tv_mode || prefs.tv_mode === 'auto' }),
-            h('option', { value: 'on', text: 'TV remote focus', selected: prefs.tv_mode === 'on' }),
-            h('option', { value: 'off', text: 'Automatic layout', selected: prefs.tv_mode === 'off' })
-          ])]),
           h('label', {}, ['New password (optional)', h('input', { id: 'pw', type: 'password', placeholder: 'Leave blank to keep' })]),
           h('label', { className: 'check-label' }, [ h('input', { id: 'reduce', type: 'checkbox', checked: !!prefs.reduce_motion }), ' Reduce motion' ]),
           h('label', { className: 'check-label' }, [ h('input', { id: 'autoplay', type: 'checkbox', checked: !!prefs.autoplay }), ' Autoplay' ]),
@@ -6617,25 +6571,6 @@ try {
         h('p',{className:'muted',text:'Keep your library light. Enable only the services you use. Media types and folders are managed under Libraries.'}),
         h('div',{className:'settings-card feature-card'}, featureRows.concat([ h('div',{className:'feature-card-foot'},[saveFeatures]) ]))
       ];
-    } else if (sec === 'layout') {
-      var cur = getClientMode();
-      function layoutCard(mode, title, blurb){
-        return h('button', {
-          className: 'settings-choice' + (cur === mode ? ' active' : ''), type: 'button',
-          onClick: function(){ setClientMode(mode); }
-        }, [
-          h('strong', { text: title }),
-          h('span', { className: 'muted', text: blurb })
-        ]);
-      }
-      bodyKids = [
-        h('h2', { text: 'Layout' }),
-        h('p', { className: 'muted', text: 'The same interface adapts to every screen. Use automatic layout or emphasize focus for a TV remote.' }),
-        h('div', { className: 'settings-choice-grid' }, [
-          layoutCard('desktop', 'Automatic', 'One layout that adapts to your screen, mouse and touch'),
-          layoutCard('tv', 'Remote navigation', 'The same app with prominent focus for directional controls')
-        ])
-      ];
     } else if (sec === 'system') {
       bodyKids = [
         h('h2', { text: 'server & processes' }),
@@ -6718,7 +6653,6 @@ try {
     api('/me/prefs', { method:'POST', body:{
       display_name: $('#dn').value,
       theme: $('#theme').value,
-      tv_mode: $('#tvmode').value,
       password: $('#pw').value || undefined,
       reduce_motion: $('#reduce').checked,
       autoplay: $('#autoplay').checked
@@ -13187,7 +13121,7 @@ function viewCollectionDetail(){
           feature('🎬', 'Films & series', 'Artwork, collections and resume points for every title, played directly with no re-encoding where possible.'),
           feature('📺', 'Live TV', 'Scheduled channels built from your library, plus IPTV with a full programme guide.'),
           feature('🕹️', 'Retro games', 'Play your ROM collection in the browser, and join friends in the online lobby.'),
-          feature('📱', 'Every screen', 'Install it as an app on your phone, or use a remote on the big screen.')
+          feature('📱', 'Every screen', 'Use it in your browser or install it as an app on your phone.')
         ])
       ]),
       h('footer', { className:'welcome-foot', text: site + ' · Private server. Ask your administrator for an account.' })
@@ -13277,7 +13211,6 @@ function viewCollectionDetail(){
   function applyPrefs(){
     var p = (state.user && state.user.prefs) || {};
     document.body.classList.toggle('reduce-motion', !!p.reduce_motion);
-    applyClientMode();
   }
 
   function render(){ renderView(); syncUrl(); }
@@ -13375,7 +13308,6 @@ function viewCollectionDetail(){
       state.home = j;
       return applyRoute().then(function(){
         state._routed = true;
-        applyClientMode();
         if (state.view === 'search' && state.searchQuery) { runGlobalSearch(state.searchQuery); replaceNav(); return; }
         _navSilent = true; render(); _navSilent = false;
         replaceNav();

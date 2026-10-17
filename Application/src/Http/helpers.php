@@ -53,7 +53,7 @@ function guest_user(): array {
         'username' => 'public',
         'role' => 'guest',
         'display_name' => 'Guest',
-        'prefs' => ['theme'=>'dark','autoplay'=>false,'tv_mode'=>'auto'],
+        'prefs' => ['theme'=>'dark','autoplay'=>false],
     ];
 }
 
