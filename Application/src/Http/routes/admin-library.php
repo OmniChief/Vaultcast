@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 if ($path === '/admin/posters/audit' && $method === 'POST') json_out(ArtworkAudit::scan(body_json()));
+if ($path === '/admin/posters/audit/status' && $method === 'POST') json_out(ArtworkAudit::status(body_json()));
 if ($path === '/admin/posters/audit/repair' && $method === 'POST') json_out(ArtworkAudit::repair(body_json()));
 if ($path === '/admin/posters/status' && $method === 'GET') {
     try {

@@ -8094,15 +8094,33 @@ try {
       repair.textContent = 'Repair selected' + (count ? ' (' + count + ')' : '');
     }
     function openTools(row, edit){
+      function saved(result){
+        if (!current()) return;
+        var oldKey = row.key;
+        var key = result.show_key ? 'show_' + result.show_key : oldKey;
+        var check = result.removed ? Promise.resolve({ok:true, resolved:true}) : api('/admin/posters/audit/status', {method:'POST', body:{key:key}});
+        check.then(function(updated){
+          if (!current()) return;
+          if (!updated.ok) throw new Error(updated.error || 'Could not refresh artwork result');
+          var scroll = list.scrollTop;
+          if (updated.resolved) {rows = rows.filter(function(item){return item.key !== oldKey;});delete selected[oldKey];}
+          else if (updated.item) {
+            var checked = selected[oldKey]; delete selected[oldKey];
+            Object.assign(row, updated.item); selected[row.key] = checked;
+            row.message = 'Saved. Artwork still needs attention; use Repair or upload a poster.';
+          }
+          status.textContent = rows.length + ' artwork problems remain'; draw(); list.scrollTop = scroll;
+        }).catch(function(error){row.message = 'Saved, but could not recheck: ' + error.message;draw();});
+      }
       var showKey = row.show_key;
       api(showKey ? '/shows/' + encodeURIComponent(showKey) : '/items/' + encodeURIComponent(row.id) + '?synopsis=1').then(function(result){
         if (!result.ok) throw new Error(result.error || 'Library entry not found');
         var item = showKey ? result.show : result.item;
         window.__nsEnsureMatching(function(){
           if (!(state.user && state.user.role === 'admin') || !window.NSMatch) return;
-          if (edit) window.NSMatch.editDialog(item, showKey);
-          else if (showKey) {window.NSMatch.ui.openShow = showKey; openSettings('matching');}
-          else window.NSMatch.openMovieFix(item);
+          if (edit) window.NSMatch.editDialog(item, showKey, saved);
+          else if (showKey) window.NSMatch.openShowFix(showKey, saved);
+          else window.NSMatch.openMovieFix(item, saved);
         });
       }).catch(function(error){toast(error.message, {kind:'bad'});});
     }

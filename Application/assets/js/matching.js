@@ -394,18 +394,18 @@
     load();
   }
 
-  function renderShowEditor(host, showKey){
+  function renderShowEditor(host, showKey, context){
     clear(host).appendChild(h('p', { className: 'muted pending-content', role: 'status' }));
     api('/admin/match/show/' + showKey).then(function(j){
       clear(host);
-      if (!j.ok) { host.appendChild(h('p', { className: 'bad', text: j.error || 'Show not found' })); host.appendChild(h('button', { className: 'btn', text: '← All shows', onClick: function(){ renderMatching(host); } })); return; }
+      if (!j.ok) { host.appendChild(h('p', { className: 'bad', text: j.error || 'Show not found' })); host.appendChild(h('button', { className: 'btn', text: context ? 'Close' : '← All shows', onClick: function(){ if (context) context.close(); else renderMatching(host); } })); return; }
       var pin = j.pin, guide = j.guide;
       var guideText = pin && pin.provider === 'none' ? 'Local only (no online match) - unnumbered files become Specials in folder order'
         : (guide ? ('TVMaze: ' + guide.name + (guide.premiered ? ' (' + String(guide.premiered).slice(0, 4) + ')' : '') + ' · #' + guide.id + (pin ? ' · pinned' : ' · auto') + ' · ' + (guide.episodes || []).length + ' episodes') : 'No TVMaze match');
       host.appendChild(h('div', { className: 'nsm-editor-head' }, [
-        h('button', { className: 'btn ghost', type: 'button', text: '← All shows', onClick: function(){ renderMatching(host); } }),
+        h('button', { className: 'btn ghost', type: 'button', text: context ? 'Close' : '← All shows', onClick: function(){ if (context) context.close(); else renderMatching(host); } }),
         h('div', { className: 'nsm-grow' }, [ h('h3', { text: j.show }), h('div', { className: 'muted', text: j.section + ' · ' + j.items.length + ' files · ' + guideText }) ]),
-        h('button', { className: 'btn ghost', type: 'button', text: 'Open show page', onClick: function(){ A.openShow(showKey); } })
+        context ? null : h('button', { className: 'btn ghost', type: 'button', text: 'Open show page', onClick: function(){ A.openShow(showKey); } })
       ]));
       // provider controls
       var pq = input({ type: 'search', value: (guide && guide.name) || j.show, placeholder: 'Title, year, TVMaze URL or IMDb ID' });
@@ -435,6 +435,7 @@
           if (!r.ok) return toast(r.error || 'Failed', { kind: 'bad' });
           toast(r.meta_only ? 'Synopsis and poster pinned (episode guide unchanged)' : 'Saved - now run Auto-match', { kind: 'ok' });
           if (r.warning) toast(r.warning, {kind:'warn'});
+          if (context) { A.refreshArtwork().then(function(){context.saved(r);}); return; }
           renderShowEditor(host, r.show_key || showKey);
         });
       }
@@ -455,7 +456,7 @@
         ])
       ]));
       pq.addEventListener('keydown', function(e){ if (e.key === 'Enter') searchProv(); });
-      host.appendChild(numberingPanel(showKey, function(){ renderShowEditor(host, showKey); }));
+      host.appendChild(numberingPanel(showKey, function(){ renderShowEditor(host, showKey, context); }));
 
       // guide datalist
       var dlId = 'nsm-guide-' + showKey;
@@ -528,7 +529,7 @@
             if (!res.ok) return toast(res.error || 'Failed', { kind: 'bad' });
             toast('Saved ' + res.changed + ' item' + (res.changed === 1 ? '' : 's'), { kind: 'ok' });
             if (res.warning) toast(res.warning, {kind:'warn'});
-            renderShowEditor(host, showKey);
+            renderShowEditor(host, showKey, context);
           });
         });
         actions.appendChild(bAuto);
@@ -541,7 +542,7 @@
               busy(bAll, false);
               if (!res.ok) return toast(res.error || 'Failed', { kind: 'bad' });
               toast('Updated ' + res.changed + ' episodes' + (res.skipped ? ' (' + res.skipped + ' manual kept)' : ''), { kind: 'ok' });
-              renderShowEditor(host, showKey);
+              renderShowEditor(host, showKey, context);
             });
           });
           actions.appendChild(bAll);
@@ -552,7 +553,7 @@
           if (!ids.length) return toast('Select rows first');
           A.confirmDialog('Remove saved fixes for ' + ids.length + ' file(s) and go back to what the file names say?', { okText: 'Reset', danger: true }).then(function(ok){
             if (!ok) return;
-            api('/admin/match/items/clear', { method: 'POST', body: { ids: ids } }).then(function(){ renderShowEditor(host, showKey); });
+            api('/admin/match/items/clear', { method: 'POST', body: { ids: ids } }).then(function(){ renderShowEditor(host, showKey, context); });
           });
         });
         actions.appendChild(bReset);
@@ -856,14 +857,19 @@
     if (isAdmin()) out.push(h('button', { className: 'btn ghost', type: 'button', text: 'Fix match', onClick: function(){ M.openMovieFix(item); }}));
     return out;
   };
-  M.openMovieFix = function(item){
+  M.openShowFix = function(showKey, onSaved){
+    if (!isAdmin()) return;
+    var body = h('div', {}), dialog = modal('Fix show match', [body], {wide:true});
+    renderShowEditor(body, showKey, {close:function(){dialog.close();}, saved:function(result){dialog.close(); if (onSaved) onSaved(result);}});
+  };
+  M.openMovieFix = function(item, onSaved){
     if (!isAdmin()) return;
     var body = h('div', {});
     var isGame = item.media_kind === 'rom' || item.type === 'roms';
     var m = modal(isGame ? 'Fix game match' : 'Fix movie match', [body], { wide: true });
-    movieFixForm(body, item.id, { title: item.title, year: item.year, type: isGame ? 'roms' : 'movies' }, function(){ m.close(); if (isGame) A.openGame(item); else A.openMovie(item.id); });
+    movieFixForm(body, item.id, { title: item.title, year: item.year, type: isGame ? 'roms' : 'movies' }, function(){ m.close(); if (onSaved) {onSaved({id:item.id});return;} if (isGame) A.openGame(item); else A.openMovie(item.id); });
   };
-  M.editDialog = function(item, showKey){
+  M.editDialog = function(item, showKey, onSaved){
     if (!isAdmin()) return;
     var title = input({value:item.title || ''}), year = input({type:'number', value:item.year || ''});
     var synopsis = h('textarea', {rows:'8', maxlength:'20000'}); synopsis.value = item.synopsis || '';
@@ -878,7 +884,7 @@
       h('label', {className:'nsm-field'}, [h('span', {text:'Upload poster (JPEG, PNG or WebP, up to 8 MB)'}), upload]),
       status, h('div', {className:'row-actions'}, [save, remove])
     ], {wide:true});
-    function refresh(r){ A.refreshArtwork().then(function(){m.close(); if (showKey) A.openShow(r.show_key || showKey); else if (item.media_kind === 'rom' || item.type === 'roms') A.openGame(item); else A.openMovie(item.id);}); }
+    function refresh(r){ A.refreshArtwork().then(function(){m.close(); if (onSaved) {onSaved(r);return;} if (showKey) A.openShow(r.show_key || showKey); else if (item.media_kind === 'rom' || item.type === 'roms') A.openGame(item); else A.openMovie(item.id);}); }
     function posterData(){
       var file = upload.files && upload.files[0];
       if (!file) return Promise.resolve(null);
@@ -899,7 +905,7 @@
         save.disabled = remove.disabled = true;
         return api('/admin/media/edit', {method:'POST', body:{id:showKey ? null : item.id, show_key:showKey || null, remove:true, confirm:'REMOVE'}}).then(function(r){
           if (!r.ok) throw new Error(r.error || 'Could not remove');
-          m.close(); A.navigate(item.media_kind === 'rom' ? 'play' : 'home');
+          m.close(); if (onSaved) {onSaved({removed:true});return;} A.navigate(item.media_kind === 'rom' ? 'play' : 'home');
         }).catch(function(error){status.textContent = error.message; save.disabled = remove.disabled = false;});
       });
     };

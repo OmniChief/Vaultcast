@@ -122,6 +122,14 @@ final class ArtworkAudit
         return ['ok'=>true, 'items'=>$rows, 'offset'=>$i, 'total'=>count($keys), 'more'=>$i < count($keys), 'revision'=>$revision];
     }
 
+    public static function status(array $body): array
+    {
+        $key = (string)($body['key'] ?? '');
+        $targets = self::targets();
+        $row = isset($targets[$key]) ? self::inspect($key, $targets[$key]) : null;
+        return ['ok'=>true, 'resolved'=>$row === null, 'item'=>$row];
+    }
+
     public static function repair(array $body): array
     {
         $key = (string)($body['key'] ?? ''); $targets = self::targets();
