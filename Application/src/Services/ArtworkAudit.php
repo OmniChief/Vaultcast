@@ -100,7 +100,18 @@ final class ArtworkAudit
     {
         $revision = \Vaultcast\Repository::revision('catalogue');
         if (isset($body['revision']) && $body['revision'] !== $revision) return ['ok'=>false, 'error'=>'Library changed during the check. Run the check again.'];
-        $targets = self::targets(); $keys = array_keys($targets); $offset = max(0, (int)($body['offset'] ?? 0));
+        $types = $body['types'] ?? ['movies','tv','anime','games'];
+        if (!is_array($types)) return ['ok'=>false, 'error'=>'Choose at least one artwork type'];
+        $types = array_values(array_intersect(['movies','tv','anime','games'], $types));
+        if (!$types) return ['ok'=>false, 'error'=>'Choose at least one artwork type'];
+        $targets = array_filter(self::targets(), static function(array $target) use ($types): bool {
+            $item = $target['item'];
+            $type = (string)($item['type'] ?? '');
+            if (($item['media_kind'] ?? '') === 'rom' || $type === 'roms') $type = 'games';
+            elseif ($type === 'disney' || (!in_array($type, ['tv','anime'], true) && ($item['media_kind'] ?? '') === 'video')) $type = 'movies';
+            return in_array($type, $types, true);
+        });
+        $keys = array_keys($targets); $offset = max(0, (int)($body['offset'] ?? 0));
         $end = min(count($keys), $offset + 40); $start = microtime(true); $rows = [];
         $i = $offset;
         for (; $i < $end; $i++) {

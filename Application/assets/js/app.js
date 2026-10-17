@@ -8071,13 +8071,25 @@ try {
     var scan = h('button', {className:'btn', type:'button', text:'Check for missing / broken artwork'});
     var stop = h('button', {className:'btn ghost', type:'button', text:'Stop', disabled:true, onClick:function(){stopped = true;}});
     var repair = h('button', {className:'btn primary', type:'button', text:'Repair selected', disabled:true});
+    var typeInputs = {};
+    var typePicker = h('fieldset', {className:'row-actions'}, [h('legend', {text:'Check artwork types'})].concat(
+      [['movies','Movies'], ['tv','TV'], ['anime','Anime'], ['games','Games']].map(function(entry){
+        var checkbox = h('input', {type:'checkbox', checked:true, onChange:function(){
+          rows = []; selected = {}; page = 0;
+          status.textContent = 'Choose one or more types, then start the check.'; draw();
+        }});
+        typeInputs[entry[0]] = checkbox;
+        return h('label', {}, [checkbox, ' ' + entry[1]]);
+      })
+    ));
     var panel = h('div', {className:'settings-card'}, [h('h3', {text:'Artwork integrity checker'}), status,
-      h('div', {className:'row-actions'}, [scan, stop, h('label', {}, [all, ' Select all results']), repair]), list]);
+      typePicker, h('div', {className:'row-actions'}, [scan, stop, h('label', {}, [all, ' Select all results']), repair]), list]);
     host.appendChild(panel);
     function current(){ return panel.isConnected; }
     function controls(){
       var count = rows.filter(function(row){return !!selected[row.key];}).length;
-      repair.disabled = running || !count; scan.disabled = running; stop.disabled = !running; all.disabled = running;
+      repair.disabled = running || !count; scan.disabled = running || !Object.keys(typeInputs).some(function(type){return typeInputs[type].checked;}); stop.disabled = !running; all.disabled = running;
+      Object.keys(typeInputs).forEach(function(type){typeInputs[type].disabled = running;});
       all.checked = rows.length > 0 && count === rows.length; all.indeterminate = count > 0 && count < rows.length;
       repair.textContent = 'Repair selected' + (count ? ' (' + count + ')' : '');
     }
@@ -8117,11 +8129,13 @@ try {
     }
     all.onchange = function(){rows.forEach(function(row){selected[row.key] = all.checked;});draw();};
     scan.onclick = function(){
+      var types = Object.keys(typeInputs).filter(function(type){return typeInputs[type].checked;});
+      if (!types.length) {status.textContent = 'Choose at least one artwork type.'; return;}
       running = true; stopped = false; rows = []; selected = {}; page = 0; draw();
       function next(offset, revision){
         if (!current()) return;
         if (stopped) {running = false; status.textContent += ' · stopped';draw();return;}
-        api('/admin/posters/audit', {method:'POST', body:{offset:offset, revision:revision}}).then(function(result){
+        api('/admin/posters/audit', {method:'POST', body:{offset:offset, revision:revision, types:types}}).then(function(result){
           if (!current()) return;
           if (!result.ok) throw new Error(result.error || 'Artwork check failed');
           rows = rows.concat(result.items || []);
