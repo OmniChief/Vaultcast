@@ -6883,7 +6883,7 @@ try {
         ])
       ];
     } else if (sec === 'updates' && isAdmin) {
-      var updHost = h('div', { className:'stack updates-panel' }, [ h('p', { className:'muted', text:'Checking GitHub for the latest release\u2026' }) ]);
+      var updHost = h('div', { className:'stack updates-panel' });
       bodyKids = [
         h('h2', { text:'Check for updates' }),
         h('p', { className:'muted', text:'Updates come from the signed-off GitHub releases of Vaultcast. Each download is verified against the SHA-256 checksums published with the release. Only the application files are replaced: your settings, database, media, caches and data folder are never touched, and the replaced files are backed up first.' }),
@@ -9112,7 +9112,17 @@ h('div', { className:'cv-find-bar' }, [
   }
 
   /* ---------------- Settings → Check for updates (admin) ---------------- */
-  function renderUpdatesPanel(host, branch){
+  function renderUpdatesPanel(host, branch, check){
+    if (!host.isConnected) return;
+    if (!check) {
+      host.replaceChildren(h('div',{className:'settings-card stack'},[
+        h('p',{text:'Installed version: '+(window.__STREAM_VERSION__ || 'Unknown')}),
+        h('p',{className:'muted',text:'Check GitHub for available updates and branches when you are ready.'}),
+        h('button',{className:'btn primary',type:'button',text:'Check for updates',onClick:function(){renderUpdatesPanel(host,branch,true);}})
+      ]));
+      return;
+    }
+    host.replaceChildren(h('p',{className:'muted',role:'status',text:'Checking GitHub for updates and available branches…'}));
     var requestToken = {};
     host._updateRequest = requestToken;
     function fileList(title, list, cls){
@@ -9123,7 +9133,7 @@ h('div', { className:'cv-find-bar' }, [
       ]);
     }
     function paint(r){
-      if (host._updateRequest !== requestToken) return;
+      if (!host.isConnected || host._updateRequest !== requestToken) return;
       host.textContent = '';
       r = r || {};
       var branches = r.branches || ['main'];
@@ -9132,8 +9142,11 @@ h('div', { className:'cv-find-bar' }, [
         return h('option', { value:name, text:name });
       }));
       selector.value = branches.indexOf(selected) >= 0 ? selected : 'main';
-      selector.onchange = function(){ renderUpdatesPanel(host, selector.value); };
-      var checkSelected = h('button', { className:'btn', type:'button', text:'Check selected branch', onClick:function(){ renderUpdatesPanel(host, selector.value); } });
+      selector.onchange = function(){
+        host.querySelectorAll('.updates-check-result').forEach(function(el){el.remove();});
+        host.appendChild(h('p',{className:'muted updates-check-result',text:'Press Check for updates to check '+selector.value+'.'}));
+      };
+      var checkSelected = h('button', { className:'btn', type:'button', text:'Check for updates', onClick:function(){ renderUpdatesPanel(host, selector.value, true); } });
       host.appendChild(h('div', { className:'settings-card stack' }, [
         h('p', { text:'Installed branch: ' + (r.current_branch || 'main') }),
         h('label', {}, [ h('span', { text:'Update branch' }), selector ]),
@@ -9142,8 +9155,8 @@ h('div', { className:'cv-find-bar' }, [
       ]));
       if (r.branches_error) host.appendChild(h('p', { className:'bad', text:r.branches_error }));
       if (!r || !r.ok) {
-        host.appendChild(h('div', { className:'settings-card' }, [ h('p', { className:'bad', text:(r && r.error) || 'Could not check for updates.' }),
-          h('button', { className:'btn', type:'button', text:'Try again', onClick:function(){ renderUpdatesPanel(host, selected); } }) ]));
+        host.appendChild(h('div', { className:'settings-card updates-check-result' }, [ h('p', { className:'bad', text:(r && r.error) || 'Could not check for updates.' }),
+          h('button', { className:'btn', type:'button', text:'Try again', onClick:function(){ renderUpdatesPanel(host, selector.value, true); } }) ]));
         return;
       }
       var latest = r.latest || {};
@@ -9162,7 +9175,7 @@ h('div', { className:'cv-find-bar' }, [
       }
       if (latest.url) rows.push(h('a', { href:latest.url, target:'_blank', rel:'noopener', className:'linkish', text:'Recent changes on GitHub' }));
       var status = h('p', { className:'muted', 'aria-live':'polite' });
-      var actions = [ h('button', { className:'btn', type:'button', text:'Check again', onClick:function(){ renderUpdatesPanel(host, selected); } }) ];
+      var actions = [ h('button', { className:'btn', type:'button', text:'Check again', onClick:function(){ renderUpdatesPanel(host, selector.value, true); } }) ];
       if (r.update_available) {
         var actionLabel = r.branch_change ? 'Switch to ' + latest.branch : 'Update now';
         var btn = h('button', { className:'btn primary', type:'button', text:actionLabel, onClick:function(){
@@ -9184,7 +9197,7 @@ h('div', { className:'cv-find-bar' }, [
       }
       rows.push(h('div', { className:'row-actions' }, actions));
       rows.push(status);
-      host.appendChild(h('div', { className:'settings-card stack' }, rows));
+      host.appendChild(h('div', { className:'settings-card stack updates-check-result' }, rows));
     }
     api('/admin/updates' + (branch ? '?branch=' + encodeURIComponent(branch) : '')).then(paint).catch(function(e){ paint({ ok:false, error:String(e && e.message || e) }); });
   }
