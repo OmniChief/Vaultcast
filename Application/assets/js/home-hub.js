@@ -1,6 +1,6 @@
 (function(){
   'use strict';
-  var A, data=null, owner=null, loaded=0, pending=null, noticeSeen={}, gameSession=null, cinema=null;
+  var A, data=null, owner=null, loaded=0, pending=null, noticeSeen={}, noticeOwner=null, gameSession=null, cinema=null;
   function h(tag,attrs,kids){var el=A.h(tag,attrs,kids==null?[]:(Array.isArray(kids)?kids:[kids]));if(tag==='textarea' && attrs && attrs.value!=null)el.value=attrs.value;return el;}
   function signed(){return !!(A.state.user && A.state.user.role!=='guest');}
   function request(path,body){return A.api('/hub/'+path,body===undefined?undefined:{method:'POST',body:body}).then(function(j){if(!j || !j.ok){var err=new Error(j && j.error || 'Could not complete request');err.status=j && j._status;throw err;}return j;});}
@@ -292,7 +292,7 @@
   }
   function pollInbox(){
     setTimeout(pollInbox,30000);if(!A || !signed() || document.hidden || !A.state.home)return;
-    refresh(true).then(function(j){j.notifications.forEach(function(n){if(noticeSeen[n.id])return;noticeSeen[n.id]=true;A.toast(n.from.name+' invited you to '+n.title+' · Open Home → Inbox',{ms:8000});});var today=new Date().toISOString().slice(0,10);j.upcoming.filter(function(ep){return ep.date===today;}).forEach(function(ep){var id=ep.card.id+ep.date+ep.season+ep.episode;if(noticeSeen[id])return;noticeSeen[id]=true;A.toast(ep.card.title+' · S'+ep.season+' E'+ep.episode+' is scheduled to air today',{ms:8000});});}).catch(function(){});
+    var uid=A.state.user.id;if(noticeOwner!==uid){noticeSeen={};noticeOwner=uid;}request('inbox').then(function(j){if(!signed()||A.state.user.id!==uid)return;if(data&&owner===uid)data.notifications=j.notifications;j.notifications.forEach(function(n){if(noticeSeen[n.id])return;noticeSeen[n.id]=true;A.toast(n.from.name+' invited you to '+n.title+' · Open Home → Inbox',{ms:8000});});var today=new Date().toISOString().slice(0,10);(data && owner===uid && data.upcoming || []).filter(function(ep){return ep.date===today;}).forEach(function(ep){var id=ep.card.id+ep.date+ep.season+ep.episode;if(noticeSeen[id])return;noticeSeen[id]=true;A.toast(ep.card.title+' · S'+ep.season+' E'+ep.episode+' is scheduled to air today',{ms:8000});});}).catch(function(){});
   }
   window.VaultcastHub={init:function(app){A=app;pollInbox();},view:view,details:details,controls:controls,cardAction:cardAction,gameStarted:gameStarted,go:go,
     lobbyOpened:function(room){var friend=A.state._hubInviteFriend;A.state._hubInviteFriend=null;if(friend)request('invite',{kind:'game',room_id:room.id,user_id:friend.id}).then(function(){A.toast('Invitation sent to '+friend.name);}).catch(error);}};

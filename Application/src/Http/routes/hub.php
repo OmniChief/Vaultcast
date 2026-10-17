@@ -4,11 +4,12 @@ if (strpos($path,'/hub/')===0) {
     header('Cache-Control: no-store');
     $viewer=current_or_guest();
     try {
-        if ($path==='/hub/dashboard' && $method==='GET') json_out(HomeHub::dashboard($viewer));
-        if ($path==='/hub/title' && $method==='GET') json_out(HomeHub::title((string)($_GET['key'] ?? ''),$viewer));
+        if ($path==='/hub/dashboard' && $method==='GET') {$started=microtime(true);$out=HomeHub::dashboard($viewer);RequestTiming::add('hub_dashboard',$started);json_out($out);}
+        if ($path==='/hub/title' && $method==='GET') {$started=microtime(true);$out=HomeHub::title((string)($_GET['key'] ?? ''),$viewer);RequestTiming::add('hub_title',$started);json_out($out);}
         if ($path==='/hub/rooms' && $method==='GET') json_out(HomeHub::rooms($viewer));
         if (preg_match('#^/hub/rooms/([a-f0-9]{16})$#',$path,$m) && $method==='GET') json_out(['ok'=>true,'room'=>HomeHub::room($m[1],$viewer)]);
         $user=Auth::requireUser();
+        if ($path==='/hub/inbox' && $method==='GET') json_out(HomeHub::inbox($user));
         if ($path==='/hub/games' && $method==='GET') json_out(HomeHub::gameList($user,(int)($_GET['page'] ?? 1),(string)($_GET['q'] ?? '')));
         if ($path==='/hub/people' && $method==='GET') json_out(HomeHub::people($user,(string)($_GET['q'] ?? '')));
         if ($path==='/hub/profile' && $method==='GET') json_out(HomeHub::friendProfile($user,(string)($_GET['id'] ?? '')));

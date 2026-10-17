@@ -30,9 +30,9 @@ final class HomeHub {
             if (!empty($item['show'])) return self::entity('show:' . Catalogue::showKey((string)$item['section'], (string)$item['show']), $user);
             $card = Catalogue::publicItem($item, false);
         } else {
-            $show = Catalogue::show($m[2]);
+            $show = Catalogue::showSummary($m[2]);
             if (!$show) throw new DomainException('This show is no longer in the library.');
-            $card = Catalogue::publicShow($show['show']);
+            $card = Catalogue::publicShow($show);
         }
         if (!self::visible($card, $user)) throw new DomainException('Your account cannot access this title.');
         $card['hub_key'] = $key;
@@ -53,6 +53,12 @@ final class HomeHub {
             return $data;
         });
         return ['ok'=>true, 'key'=>$card['hub_key'], 'enabled'=>$enabled];
+    }
+    public static function inbox(array $user): array {
+        $q=\Vaultcast\Database::connection()->prepare("SELECT JSON_EXTRACT(payload,'$.notifications') FROM vaultcast_documents WHERE name=?");
+        $q->execute([self::key((string)$user['id'])]);
+        $notifications=json_decode((string)$q->fetchColumn(),true);
+        return ['ok'=>true,'notifications'=>is_array($notifications)?array_values($notifications):[]];
     }
     public static function dashboard(array $user): array {
         $uid = (string)($user['id'] ?? '');
@@ -78,12 +84,16 @@ final class HomeHub {
                 if (count($recent)<8) $recent[]=$card;
             }
         }
-        if ($uid!=='' && $shelves['watchlist']) {
+        $watchShows=array_values(array_filter($shelves['watchlist'],static function($card){return ($card['kind'] ?? '')==='show';}));
+        if ($uid!=='' && $watchShows) {
+            $scope=[];$params=[$uid];
+            foreach ($watchShows as $card) {$scope[]='(i.section_id=? AND i.show_title=?)';$params[]=$card['section'];$params[]=$card['title'];}
+            $scope=implode(' OR ',$scope);
             $duration="COALESCE(JSON_EXTRACT(p.payload,'$.duration'),0)";
             $position="COALESCE(JSON_EXTRACT(p.payload,'$.position'),0)";
             $finished="(JSON_UNQUOTE(JSON_EXTRACT(p.payload,'$.watched'))='true' OR ($duration>0 AND ($position>$duration*0.92 OR $duration-$position<LEAST(180,$duration*0.25))))";
-            $q=\Vaultcast\Database::connection()->prepare("SELECT i.section_id,i.show_title,COUNT(DISTINCT CASE WHEN $finished THEN CONCAT(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(i.payload,'$.season')),''),':',COALESCE(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(i.payload,'$.episode')),'null'),i.id)) END) AS seen,SUBSTRING_INDEX(GROUP_CONCAT(CONCAT('S',COALESCE(JSON_UNQUOTE(JSON_EXTRACT(i.payload,'$.season')),'0'),' E',COALESCE(JSON_UNQUOTE(JSON_EXTRACT(i.payload,'$.episode')),'0')) ORDER BY p.updated_at DESC SEPARATOR ','),',',1) AS last_episode FROM vaultcast_progress p JOIN vaultcast_items i ON i.id=p.item_id WHERE p.user_id=? AND i.show_title<>'' GROUP BY i.section_id,i.show_title");
-            $q->execute([$uid]);$seen=[];
+            $q=\Vaultcast\Database::connection()->prepare("SELECT i.section_id,i.show_title,COUNT(DISTINCT CASE WHEN $finished THEN CONCAT(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(i.payload,'$.season')),''),':',COALESCE(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(i.payload,'$.episode')),'null'),i.id)) END) AS seen,SUBSTRING_INDEX(GROUP_CONCAT(CONCAT('S',COALESCE(JSON_UNQUOTE(JSON_EXTRACT(i.payload,'$.season')),'0'),' E',COALESCE(JSON_UNQUOTE(JSON_EXTRACT(i.payload,'$.episode')),'0')) ORDER BY p.updated_at DESC SEPARATOR ','),',',1) AS last_episode FROM vaultcast_progress p JOIN vaultcast_items i ON i.id=p.item_id WHERE p.user_id=? AND ($scope) GROUP BY i.section_id,i.show_title");
+            $q->execute($params);$seen=[];
             foreach ($q as $row) $seen[Catalogue::showKey($row['section_id'],$row['show_title'])]=['count'=>(int)$row['seen'],'last'=>$row['last_episode']];
             foreach ($shelves['watchlist'] as &$card) if (($card['kind'] ?? '')==='show') {
                 $entry=$seen[$card['show_key']] ?? [];
@@ -91,23 +101,12 @@ final class HomeHub {
             }
             unset($card);
         }
-        $guideNames=[]; $guides=[];
-        foreach ($shelves['favourites'] as $card) if (($card['kind'] ?? '')==='show') $guideNames[]='tvmaze-guide:'.$card['show_key'];
-        if ($guideNames) {
-            $s=\Vaultcast\Database::connection()->prepare('SELECT name,payload FROM vaultcast_documents WHERE name IN ('.implode(',',array_fill(0,count($guideNames),'?')).')');$s->execute($guideNames);
-            foreach ($s as $row) $guides[$row['name']]=json_decode($row['payload'],true);
+        $favouriteShows=[];
+        foreach ($shelves['favourites'] as $card) if (($card['kind'] ?? '')==='show') $favouriteShows[$card['show_key']]=$card;
+        foreach (self::releaseDates($uid,array_keys($favouriteShows)) as $ep) {
+            $card=$favouriteShows[$ep['show_key']] ?? null;
+            if ($card) {unset($ep['show_key']);$ep['card']=$card;$upcoming[]=$ep;}
         }
-        foreach ($shelves['favourites'] as $card) {
-            if (($card['kind'] ?? '') !== 'show') continue;
-            // Prepared by the existing facts worker; never call a metadata provider here.
-            $guide = $guides['tvmaze-guide:'.$card['show_key']] ?? [];
-            foreach ($guide['episodes'] ?? [] as $ep) {
-                $date = (string)($ep['airdate'] ?? '');
-                if ($date < gmdate('Y-m-d') || $date > gmdate('Y-m-d',time()+30*86400)) continue;
-                $upcoming[]=['card'=>$card,'date'=>$date,'season'=>$ep['season'] ?? 0,'episode'=>$ep['number'] ?? 0,'title'=>$ep['name'] ?? 'New episode'];
-            }
-        }
-        usort($upcoming,static function(array $a,array $b): int { return strcmp($a['date'],$b['date']); });
         foreach ($data['games'] ?? [] as $id=>$game) {
             if (!AreaAccess::allowed($user,'games')) break;
             $games[]=$game;
@@ -123,23 +122,57 @@ final class HomeHub {
             'friends'=>$friends,'upcoming'=>$upcoming,'notifications'=>array_values($data['notifications'] ?? []),
             'preferences'=>$data['preferences'] ?? [],'signed_in'=>($user['role'] ?? '')!=='guest'],$shelves);
     }
+    private static function releaseDates(string $uid,array $keys): array {
+        if (!$keys) return [];
+        sort($keys,SORT_STRING);
+        $names=array_map(static function($key){return 'tvmaze-guide:'.$key;},$keys);
+        $pdo=\Vaultcast\Database::connection();
+        $marks=implode(',',array_fill(0,count($names),'?'));
+        $q=$pdo->prepare("SELECT name,revision FROM vaultcast_documents WHERE name IN ($marks) ORDER BY name");
+        $q->execute($names);
+        $revision=hash('sha256',gmdate('Y-m-d').'|'.json_encode($keys).'|'.json_encode($q->fetchAll(PDO::FETCH_ASSOC)));
+        $slot='hub-release-dates-v1|'.$uid;
+        $cached=\Vaultcast\Repository::cacheGet($slot);
+        if (($cached['revision'] ?? '')===$revision) return $cached['episodes'];
+        $q=$pdo->prepare("SELECT name,payload FROM vaultcast_documents WHERE name IN ($marks)");$q->execute($names);
+        $episodes=[];$today=gmdate('Y-m-d');$until=gmdate('Y-m-d',time()+30*86400);
+        foreach ($q as $row) {
+            $guide=json_decode($row['payload'],true);$key=substr($row['name'],strlen('tvmaze-guide:'));
+            foreach ($guide['episodes'] ?? [] as $ep) {
+                $date=(string)($ep['airdate'] ?? '');
+                if ($date<$today || $date>$until) continue;
+                $episodes[]=['show_key'=>$key,'date'=>$date,'season'=>$ep['season'] ?? 0,'episode'=>$ep['number'] ?? 0,'title'=>$ep['name'] ?? 'New episode'];
+            }
+        }
+        usort($episodes,static function($a,$b){return strcmp($a['date'],$b['date']);});
+        // A fixed per-user slot avoids accumulating a file for each changed favourite list.
+        \Vaultcast\Repository::cachePut($slot,['revision'=>$revision,'episodes'=>$episodes],86400);
+        return $episodes;
+    }
     public static function title(string $key,array $user): array {
         $card=self::entity($key,$user); $key=$card['hub_key'];
-        $data=self::personal((string)($user['id'] ?? ''));
+        $membership=\Vaultcast\Database::connection()->prepare("SELECT JSON_CONTAINS_PATH(payload,'one',?) AS favourite,JSON_CONTAINS_PATH(payload,'one',?) AS watchlist FROM vaultcast_documents WHERE name=?");
+        $membership->execute(['$.favourites.'.json_encode($key),'$.watchlist.'.json_encode($key),self::key((string)($user['id'] ?? ''))]);
+        $flags=$membership->fetch() ?: [];
         $reviews=\Vaultcast\Repository::document('hub-reviews:'.$key,[]);
         $rows=array_values($reviews); usort($rows,static function(array $a,array $b): int {return $b['updated_at'] <=> $a['updated_at'];});
         $ratings=array_filter(array_column($rows,'rating'),static function($v): bool {return is_numeric($v) && $v>0;});
         $episodes=[];
         if (($card['kind'] ?? '')==='show') {
-            $show=Catalogue::show($card['show_key']);
-            $progress=\Vaultcast\Repository::progress((string)($user['id'] ?? ''));
-            foreach ($show['seasons'] ?? [] as $season) foreach ($season['episodes'] ?? [] as $ep) {
-                $id=(string)($ep['id'] ?? ''); if ($id==='') continue;
-                $p=$progress[$id] ?? [];
-                $episodes[$id]=['watched'=>!empty($p['watched']) || Catalogue::progressFinished($p,true), 'position'=>$p['position'] ?? 0];
+            // Read only this show's local ids and progress; no second guide/detail build.
+            $q=\Vaultcast\Database::connection()->prepare("SELECT i.id,i.show_title,CASE WHEN i.show_title='' THEN i.payload ELSE NULL END AS orphan,p.payload FROM vaultcast_items i LEFT JOIN vaultcast_progress p ON p.item_id=i.id AND p.user_id=? WHERE i.section_id=? AND (i.show_title=? OR i.show_title='')");
+            $q->execute([(string)($user['id'] ?? ''),$card['section'],$card['title']]);
+            foreach ($q as $row) {
+                if ($row['show_title']==='') {
+                    $orphan=json_decode($row['orphan'],true);
+                    $parts=explode('/',str_replace('\\','/',(string)($orphan['rel'] ?? '')));
+                    if (($parts[0] ?: ($orphan['title'] ?? '')) !== $card['title']) continue;
+                }
+                $p=$row['payload'] ? json_decode($row['payload'],true) : [];
+                $episodes[$row['id']]=['watched'=>!empty($p['watched']) || Catalogue::progressFinished($p,true),'position'=>$p['position'] ?? 0];
             }
         }
-        return ['ok'=>true,'card'=>$card,'favourite'=>isset($data['favourites'][$key]),'watchlist'=>isset($data['watchlist'][$key]),
+        return ['ok'=>true,'card'=>$card,'favourite'=>!empty($flags['favourite']),'watchlist'=>!empty($flags['watchlist']),
             'reviews'=>array_slice($rows,0,60),'own_review'=>$reviews[$user['id'] ?? ''] ?? null,'rating'=>$ratings ? round(array_sum($ratings)/count($ratings),1):null,'rating_count'=>count($ratings),'episodes'=>$episodes];
     }
     public static function review(array $user,array $body): array {
@@ -173,15 +206,15 @@ final class HomeHub {
         if (!$item || ($item['media_kind'] ?? '')!=='rom' || !self::visible($item,$user)) throw new DomainException('Choose an accessible game.');
         $session=(string)($body['session'] ?? '');
         if (!preg_match('/^[a-f0-9]{16,64}$/D',$session)) throw new DomainException('Invalid play session.');
-        $card=Catalogue::publicItem($item,false);
         $active=!empty($body['active']);$final=!empty($body['final']);
-        self::mutate(self::key($user['id']),function(array $data) use ($item,$session,$card,$active,$final): array {
+        self::mutate(self::key($user['id']),function(array $data) use ($item,$session,$active,$final): array {
             $now=time(); $previous=$data['play_sessions'][$session] ?? null;
             $row=$data['games'][$item['id']] ?? ['seconds'=>0,'sessions'=>0];
             if ($previous && $previous['item']!==$item['id']) throw new DomainException('Play session belongs to a different game.');
             $row['seconds']+= $previous && !empty($previous['active']) && ($active || $final) ? min(30,max(0,$now-$previous['at'])):0;
             if (!$previous) $row['sessions']++;
-            $row['last_played']=$now; $row['card']=$card;
+            $row['last_played']=$now;
+            if (!$previous || empty($row['card'])) $row['card']=Catalogue::publicItem($item,false);
             $data['games'][$item['id']]=$row;
             $data['play_sessions'][$session]=['item'=>$item['id'],'at'=>$now,'active'=>$active];
             $data['play_sessions']=array_slice($data['play_sessions'],-32,null,true);
@@ -270,7 +303,7 @@ final class HomeHub {
         if (!$it || ($it['media_kind'] ?? '')!=='video' || !self::visible($it,$user)) throw new DomainException('Choose an accessible video.');
         $id=bin2hex(random_bytes(8));$card=Catalogue::publicItem($it,false);
         $room=['id'=>$id,'item_id'=>$it['id'],'card'=>$card,'title'=>$card['title'],'host'=>self::profile($user),'host_id'=>$user['id'],
-            'position'=>0,'playing'=>false,'updated_at'=>microtime(true),'expires_at'=>time()+120,'members'=>[],'messages'=>[]];
+            'registry_at'=>time(),'position'=>0,'playing'=>false,'updated_at'=>microtime(true),'expires_at'=>time()+120,'members'=>[],'messages'=>[]];
         self::mutate('hub-cinemas',static function(array $all) use ($room,$id): array {
             foreach ($all as $oldId=>$old) if (($old['expires_at'] ?? 0)<time()) {
                 $delete=\Vaultcast\Database::connection()->prepare('DELETE FROM vaultcast_documents WHERE name=?');$delete->execute(['hub-cinema:'.$oldId]);
@@ -293,8 +326,8 @@ final class HomeHub {
     }
     public static function roomUpdate(string $id,array $user,array $body): array {
         self::room($id,$user);
-        $host=false;
-        $room=self::mutate('hub-cinema:'.$id,function(array $room) use ($user,$body,&$host): array {
+        $host=false;$publish=false;
+        $room=self::mutate('hub-cinema:'.$id,function(array $room) use ($user,$body,&$host,&$publish): array {
             if (($room['expires_at'] ?? 0)<time()) throw new DomainException('This cinema has ended.');
             $host=$room['host_id']===$user['id'];$now=microtime(true);
             $room['members']=array_filter($room['members'] ?? [],static function(array $m): bool {return $m['at']>time()-50;});
@@ -306,6 +339,7 @@ final class HomeHub {
                 if (!is_finite($position) || $position<0 || $position>172800) throw new DomainException('Invalid playback position.');
                 $room['position']=$position;$room['playing']=!empty($body['playing']);$room['updated_at']=$now;$room['expires_at']=time()+120;
                 if (!empty($body['end'])) $room['expires_at']=time()-1;
+                if (!empty($body['end']) || time()-(int)($room['registry_at'] ?? 0)>=30) {$room['registry_at']=time();$publish=true;}
             }
             $text=trim((string)($body['message'] ?? ''));
             if ($text!=='') {
@@ -316,7 +350,7 @@ final class HomeHub {
             }
             return $room;
         });
-        if ($host) self::mutate('hub-cinemas',static function(array $all) use ($id,$room): array {
+        if ($publish) self::mutate('hub-cinemas',static function(array $all) use ($id,$room): array {
             if ($room['expires_at']<time()) unset($all[$id]);
             else $all[$id]=array_intersect_key($room,array_flip(['id','item_id','title','host','expires_at']));return $all;
         });

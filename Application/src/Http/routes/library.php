@@ -31,27 +31,32 @@ if ($path === '/search' && $method === 'GET') {
     $q = trim($_GET['q'] ?? '');
     $limit = min(100, max(1, (int)($_GET['limit'] ?? 40)));
     if (!empty($_GET['suggest'])) {
+        $started=microtime(true);
         $hits = [];
-        if ($q !== '') {
+        $viewer=current_or_guest();
+        $library=AreaAccess::allowed($viewer,'library') && ($_GET['area'] ?? '')!=='games';
+        $games=AreaAccess::allowed($viewer,'games');
+        if ($q !== '' && ($library || $games)) {
             $needle = '%' . strtr($q, ['!'=>'!!','%'=>'!%','_'=>'!_']) . '%';
-            $sql = "SELECT i.payload FROM vaultcast_items i JOIN (SELECT MIN(id) id FROM vaultcast_items WHERE title LIKE ? ESCAPE '!' OR show_title LIKE ? ESCAPE '!' GROUP BY section_id,CASE WHEN show_title<>'' THEN show_title ELSE id END) found ON found.id=i.id ORDER BY CASE WHEN LOWER(CASE WHEN i.show_title<>'' THEN i.show_title ELSE i.title END)=LOWER(?) THEN 0 WHEN LOWER(CASE WHEN i.show_title<>'' THEN i.show_title ELSE i.title END) LIKE LOWER(?) ESCAPE '!' THEN 1 ELSE 2 END,i.title,i.id";
+            $scope=$library && $games ? '1=1' : ($games ? "media_kind='rom'" : "media_kind<>'rom'");
+            // Apply access restrictions before LIMIT; fetch at most five payloads from MariaDB.
+            $sql = "SELECT i.payload FROM vaultcast_items i JOIN (SELECT MIN(id) id FROM vaultcast_items WHERE ($scope) AND (title LIKE ? ESCAPE '!' OR show_title LIKE ? ESCAPE '!') GROUP BY section_id,CASE WHEN show_title<>'' THEN show_title ELSE id END) found ON found.id=i.id ORDER BY CASE WHEN LOWER(CASE WHEN i.show_title<>'' THEN i.show_title ELSE i.title END)=LOWER(?) THEN 0 WHEN LOWER(CASE WHEN i.show_title<>'' THEN i.show_title ELSE i.title END) LIKE LOWER(?) ESCAPE '!' THEN 1 ELSE 2 END,CASE WHEN i.show_title<>'' THEN i.show_title ELSE i.title END,i.id LIMIT 5";
             $stmt = \Vaultcast\Database::connection()->prepare($sql);
             $stmt->execute([$needle,$needle,$q,substr($needle,1)]);
-            $viewer = current_or_guest();
-            while ($row = $stmt->fetch()) {
+            foreach ($stmt as $row) {
                 $it = json_decode($row['payload'], true);
                 if (!is_array($it) || !AreaAccess::allowed($viewer, AreaAccess::itemArea($it))) continue;
-                if (($_GET['area'] ?? '') === 'games' && ($it['media_kind'] ?? '') !== 'rom') continue;
                 if (!empty($it['show'])) {
                     $key = Catalogue::showKey((string)$it['section'], (string)$it['show']);
-                    $hits[] = ['id'=>$key,'show_key'=>$key,'kind'=>'show','title'=>$it['show'],'type'=>$it['type'] ?? 'tv','year'=>$it['year'] ?? null];
-                } else $hits[] = $it;
-                if (count($hits) >= 5) break;
+                    $hits[] = ['id'=>$key,'show_key'=>$key,'kind'=>'show','title'=>Catalogue::fixText($it['show']),'type'=>$it['type'] ?? 'tv','year'=>$it['year'] ?? null];
+                } else {
+                    // Suggestions need labels and ids, not codec facts, artwork checks or the slug registry.
+                    $hits[] = ['id'=>$it['id'],'title'=>Catalogue::fixText($it['title'] ?? ''),'type'=>$it['type'] ?? '',
+                        'media_kind'=>$it['media_kind'] ?? '', 'system'=>$it['system'] ?? null,'year'=>$it['year'] ?? null];
+                }
             }
-            $stmt->closeCursor();
-            MediaFacts::preload(array_values(array_filter($hits, static function($it){return ($it['kind'] ?? '') !== 'show';})));
-            $hits = array_map(static function($it){return ($it['kind'] ?? '') === 'show' ? $it : Catalogue::publicItem($it);}, $hits);
         }
+        RequestTiming::add('search_suggestions',$started);
         json_out(['ok'=>true,'catalogue'=>$hits,'query'=>$q]);
     }
     $out = Catalogue::search($q, $limit);

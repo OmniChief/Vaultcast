@@ -1444,7 +1444,7 @@ class Catalogue {
         return self::$showPosterIndex[$showKey] ?? null;
     }
 
-    public static function show(string $showKey): ?array {
+    public static function showSummary(string $showKey): ?array {
         $cat = \Vaultcast\Repository::document('catalogue', ['sections' => []]);
         foreach ($cat['sections'] ?? [] as $sec) {
             $type = $sec['type'] ?? '';
@@ -1452,11 +1452,16 @@ class Catalogue {
             $shows = self::sectionShows($sec['id']);
             foreach ($shows as $s) {
                 if ($s['show_key'] === $showKey) {
-                    return self::showDetail($sec['id'], $s['title'], $s);
+                    return $s;
                 }
             }
         }
         return null;
+    }
+
+    public static function show(string $showKey): ?array {
+        $summary = self::showSummary($showKey);
+        return $summary ? self::showDetail($summary['section'], $summary['title'], $summary) : null;
     }
 
     private static function showDetail(string $sectionId, string $showName, array $meta): array {
@@ -2560,7 +2565,6 @@ class Catalogue {
         $viewer = AreaAccess::viewer();
         $cat['items'] = array_values(array_filter($cat['items'], static function(array $item) use ($viewer): bool { return AreaAccess::allowed($viewer, AreaAccess::itemArea($item)); }));
         $cat['sections'] = array_values(array_filter($cat['sections'] ?? [], static function(array $section) use ($viewer): bool { return AreaAccess::allowed($viewer, ($section['type'] ?? '') === 'roms' ? 'games' : 'library'); }));
-        MediaFacts::preload($cat['items']);
         $hits = [];
         $seenShows = [];
         foreach ($cat['sections'] ?? [] as $sec) {
@@ -2573,7 +2577,8 @@ class Catalogue {
                     $key = $show['show_key'] ?? $show['id'] ?? '';
                     if ($key === '' || isset($seenShows[$key])) continue;
                     $seenShows[$key] = true;
-                    $pub = self::publicShow($show);
+                    $pub = $show;
+                    $pub['_search_show'] = true;
                     $pub['match'] = 'show';
                     $tl = strtolower($title);
                     $pub['score'] = ($tl === $ql) ? 100 : (strpos($tl, $ql) === 0 ? 80 : 50);
@@ -2590,7 +2595,7 @@ class Catalogue {
                 if ($key !== '' && isset($seenShows[$key])) continue;
                 $hay = ($it['title'] ?? '') . ' ' . $show;
                 if (stripos($hay, $q) === false) continue;
-                $pub = self::publicItem($it);
+                $pub = $it;
                 $pub['match'] = 'episode';
                 $pub['score'] = 30;
                 $hits[] = $pub;
@@ -2599,7 +2604,7 @@ class Catalogue {
             $title = (string)($it['title'] ?? '');
             $hay = $title . ' ' . ($it['rel'] ?? '');
             if (stripos($hay, $q) === false) continue;
-            $pub = self::publicItem($it);
+            $pub = $it;
             $pub['match'] = 'item';
             $tl = strtolower($title);
             $pub['score'] = ($tl === $ql) ? 95 : (strpos($tl, $ql) === 0 ? 75 : 45);
@@ -2613,6 +2618,12 @@ class Catalogue {
         });
         $limit = max(1, min(100, $limit));
         $slice = array_slice($hits, 0, $limit);
+        // Rank cheap catalogue rows first; only prepare the cards we will send.
+        MediaFacts::preload(array_values(array_filter($slice,static function($it){return empty($it['_search_show']);})));
+        $slice=array_map(static function($it){
+            $card=!empty($it['_search_show']) ? self::publicShow($it) : self::publicItem($it,false);
+            $card['match']=$it['match'];$card['score']=$it['score'];return $card;
+        },$slice);
         $count = count($slice);
         $weak = $count === 0 || ($count < 3 && (($slice[0]['score'] ?? 0) < 80));
         return [
