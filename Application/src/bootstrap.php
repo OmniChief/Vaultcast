@@ -64,3 +64,4 @@ require_once __DIR__ . '/Http/helpers.php';
 
 // Apply pending storage migrations once per schema version (durable stamp check).
 Migrations::runIfNeeded();
+if (PHP_SAPI !== 'cli') PerformanceSetup::schedule();

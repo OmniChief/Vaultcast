@@ -46,12 +46,28 @@ class Catalogue {
         }
     }
 
-    /** Shared MariaDB cache, invalidated by catalogue and metadata revisions. */
+    /** Revision-managed derived views: no hourly cold rebuild on a viewer request. */
+    private static $derivedRevisions = [];
+    private static function derivedRevision(string $prefix): string {
+        return 'v3|' . Store::revision('catalogue') . '|' . Store::revision('browse_epoch') . '|' . Store::revision('settings')
+            . ($prefix === 'showcase_recent' ? '|' . gmdate('Y-m-d') : '');
+    }
     private static function shmCacheGet(string $filePrefix, string $salt = ''): ?array {
-        return \Vaultcast\Repository::cacheGet('browse|' . Store::revision('catalogue') . '|' . Store::revision('browse_epoch') . '|' . $filePrefix . '|' . $salt);
+        $key = 'browse-current|' . $filePrefix . '|' . $salt;
+        $revision = self::derivedRevision($filePrefix);
+        self::$derivedRevisions[$key] = $revision;
+        $entry = \Vaultcast\Repository::cacheGet($key);
+        $hit = is_array($entry) && ($entry['revision'] ?? '') === $revision && is_array($entry['payload'] ?? null);
+        if (class_exists('RequestTiming', false)) RequestTiming::count($hit ? 'view_hit' : 'view_miss');
+        return $hit ? $entry['payload'] : null;
     }
     private static function shmCachePut(string $filePrefix, string $salt, array $payload): void {
-        \Vaultcast\Repository::cachePut('browse|' . Store::revision('catalogue') . '|' . Store::revision('browse_epoch') . '|' . $filePrefix . '|' . $salt, $payload, 3600);
+        $key = 'browse-current|' . $filePrefix . '|' . $salt;
+        $revision = self::$derivedRevisions[$key] ?? self::derivedRevision($filePrefix);
+        if ($revision !== self::derivedRevision($filePrefix)) return;
+        // Arbitrary search/filter pages expire; shared summaries remain revision-managed.
+        $ttl = in_array($filePrefix, ['browse_items','browse_shows'], true) ? 600 : 0;
+        \Vaultcast\Repository::cachePut($key, ['revision'=>$revision, 'payload'=>$payload], $ttl);
     }
 
     /** Public wrappers for browse/showcase SHM cache (index.php). */
@@ -1755,12 +1771,29 @@ class Catalogue {
         }
     }
 
-    /** Recently Updated showcase with short SHM cache (no ffprobe on cards). */
+    /** Run during maintenance, before the next viewer needs these derived views. */
+    public static function warmBrowseViews(): void {
+        foreach (\Vaultcast\Repository::document('catalogue', ['sections'=>[]])['sections'] ?? [] as $section) {
+            Maintenance::checkpoint();
+            $id = (string)$section['id'];
+            $type = (string)($section['type'] ?? '');
+            if (in_array($type, ['tv','anime'], true)) {
+                $shows = self::sectionShows($id);
+                self::showFacetsCached($id, $shows);
+                self::recentlyUpdatedPublic($id, 16);
+            } elseif (in_array($type, ['movies','disney'], true)) {
+                self::movieFacetsCached($id, self::sectionItems($id));
+                self::randomPublic($id, 16);
+            }
+        }
+    }
+
+    /** Recent rows stay valid until catalogue, metadata or settings change. */
     public static function recentlyUpdatedPublic(string $sectionId, int $n = 16): array {
         $n = max(1, min(40, $n));
         $salt = $sectionId . '|n=' . $n;
         $hit = self::shmCacheGet('showcase_recent', $salt);
-        if (is_array($hit) && isset($hit['items']) && is_array($hit['items']) && (time() - (int)($hit['_cached_at'] ?? 0)) < 90) {
+        if (is_array($hit) && isset($hit['items']) && is_array($hit['items'])) {
             $hit['cached'] = true;
             return $hit;
         }
@@ -1826,13 +1859,15 @@ class Catalogue {
             $isNewShow = ($min > ($now - 60 * 86400)) && ($span < 21 * 86400);
 
             if ($isNewShow && isset($showByTitle[$name])) {
-                $pub = self::publicShow($showByTitle[$name]);
+                $pub = $showByTitle[$name];
+                $pub['_recent_show'] = true;
                 $pub['showcase_kind'] = 'new_show';
                 $pub['showcase_label'] = 'New show';
                 $pub['mtime'] = $g['max'];
                 $newShowRows[] = ['sort' => $min, 'row' => $pub];
             } else {
-                $pub = self::publicItem($g['latest'], false);
+                $pub = $g['latest'];
+                $pub['show_key'] = self::showKey($sectionId, $name);
                 $pub['showcase_kind'] = 'new_episode';
                 $pub['showcase_label'] = 'New episode';
                 $episodeRows[] = ['sort' => $g['max'], 'row' => $pub];
@@ -1868,7 +1903,16 @@ class Catalogue {
             }
         }
         usort($picked, function ($a, $b) { return $b['sort'] <=> $a['sort']; });
-        return array_map(function ($c) { return $c['row']; }, array_slice($picked, 0, $n));
+        $selected = array_map(function ($c) { return $c['row']; }, array_slice($picked, 0, $n));
+        MediaFacts::preload(array_values(array_filter($selected, function ($row) { return empty($row['_recent_show']); })));
+        // Resolve metadata, facts and slugs only for the selected cards.
+        return array_map(function ($row) {
+            $pub = !empty($row['_recent_show']) ? self::publicShow($row) : self::publicItem($row, false);
+            $pub['showcase_kind'] = $row['showcase_kind'];
+            $pub['showcase_label'] = $row['showcase_label'];
+            $pub['mtime'] = $row['mtime'];
+            return $pub;
+        }, $selected);
     }
 
     public static function item(string $id): ?array {

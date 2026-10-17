@@ -522,7 +522,8 @@ class Stream {
         elseif ($ext === 'png') $mime = 'image/png';
         else $mime = 'image/jpeg';
         header('Content-Type: ' . $mime);
-        header('Cache-Control: public, max-age=604800, immutable');
+        // Variant files can appear after background preparation; revalidate mutable URLs.
+        header('Cache-Control: public, max-age=3600');
         header('Vary: Accept');
         header('Content-Length: ' . filesize($path));
         if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'HEAD') {
@@ -552,7 +553,7 @@ class Stream {
 
     private static function posterMiss(): void {
         http_response_code(404);
-        header('Cache-Control: no-store');
+        header('Cache-Control: ' . (self::wantsRemotePoster() ? 'no-store' : 'private, max-age=15'));
         header('Content-Length: 0');
         exit;
     }

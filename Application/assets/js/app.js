@@ -807,7 +807,8 @@ function confirmDialog(message, opts){
   }
 
   /* Browser-first posters: Cache API keyed by item id, server only on miss */
-  var POSTER_CACHE = 'vaultcast-posters-v1';
+  var POSTER_CACHE = 'vaultcast-posters-v2';
+  var POSTER_CACHE_MAX_AGE = 60 * 60 * 1000;
   var _posterMem = Object.create(null);
 
   function posterCacheRequest(cacheId, variant){
@@ -828,6 +829,7 @@ function confirmDialog(message, opts){
     variant = variant || 'full';
     q += '&variant=' + encodeURIComponent(variant);
     q += supportsWebP() ? '&webp=1' : '&webp=0';
+    q += '&art=2'; // bypass original-image responses cached immutable by older builds
     if (kind === 'show') return API + '/shows/' + cacheId + '/poster' + q;
     if (kind === 'season') {
       // cacheId = showKey + '-s' + season
@@ -1087,7 +1089,7 @@ function confirmDialog(message, opts){
         _posterRequests[url].then(function(b){
           if (!paint(b)) { if (!finished) { markPosterFail(el); done(); } return; }
           if (typeof caches !== 'undefined') {
-            caches.open(POSTER_CACHE).then(function(c){ return c.put(key, new Response(b)); }).catch(function(){});
+            caches.open(POSTER_CACHE).then(function(c){ return c.put(key, new Response(b, { headers:{ 'X-Vaultcast-Cached-At':String(Date.now()) } })); }).catch(function(){});
           }
         }).catch(function(){
           if (stillWanted()) markPosterFail(el);
@@ -1100,7 +1102,8 @@ function confirmDialog(message, opts){
         : Promise.resolve(null);
       cacheP.then(function(cached){
         if (finished) return;
-        if (cached) {
+        var cachedAt = cached && Number(cached.headers.get('X-Vaultcast-Cached-At'));
+        if (cached && cachedAt > 0 && Date.now() - cachedAt >= 0 && Date.now() - cachedAt < POSTER_CACHE_MAX_AGE) {
           clearTimeout(cacheTimer);
           return cached.blob().then(function(b){
             if (paint(b)) return;
@@ -13190,7 +13193,7 @@ function viewCollectionDetail(){
     if (window.__nsMatchingLoading) { if (cb) { var t=setInterval(function(){ if (window.NSMatch){ clearInterval(t); cb(); } }, 50);} return; }
     window.__nsMatchingLoading = true;
     var sm = document.createElement('script');
-    sm.src = BASE + 'assets/js/matching.js?v=' + (window.__ASSET_VERSION__ || APP_VERSION);
+    sm.src = BASE + 'index.php?asset=assets/js/matching.js&v=' + (window.__ASSET_VERSION__ || APP_VERSION);
     sm.defer = true;
     sm.onload = function(){ window.__nsMatchingLoading = false; if (cb) cb(); };
     sm.onerror = function(){ window.__nsMatchingLoading = false; };

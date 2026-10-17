@@ -12,9 +12,13 @@ self.addEventListener('activate', function(event){
 self.addEventListener('fetch', function(event){
   var url = new URL(event.request.url);
   if (event.request.method !== 'GET' || url.origin !== BASE.origin) return;
-  if (url.pathname.indexOf(BASE.pathname + 'assets/') !== 0) return;
-  if (url.pathname.indexOf('/vendor/') >= 0) return;
-  if (!/\.(?:js|css|png|svg|woff2?)$/.test(url.pathname)) return;
+  var appAsset = url.pathname === BASE.pathname + 'index.php'
+    && /^assets\/(?:js\/[A-Za-z0-9_-]+\.js|css\/[A-Za-z0-9_-]+\.css)$/.test(url.searchParams.get('asset') || '');
+  if (!appAsset) {
+    if (url.pathname.indexOf(BASE.pathname + 'assets/') !== 0) return;
+    if (url.pathname.indexOf('/vendor/') >= 0) return;
+    if (!/\.(?:js|css|png|svg|woff2?)$/.test(url.pathname)) return;
+  }
   event.respondWith(caches.open(CACHE).then(function(cache){
     // Content-versioned assets are immutable for this app version.
     if (url.searchParams.has('v')) return cache.match(event.request).then(function(hit){

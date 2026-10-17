@@ -13,6 +13,10 @@ if (is_file($__maintenance) && (time() - (int)(json_decode((string)@file_get_con
         : '<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="15"><title>Updating</title><body style="font-family:system-ui;background:#0b1018;color:#edf2f7;display:grid;place-items:center;min-height:100vh;margin:0"><p>Vaultcast is updating. This page reloads by itself.</p>');
 }
 unset($__maintenance);
+require_once __DIR__ . '/src/Services/RequestTiming.php';
+RequestTiming::begin();
+require_once __DIR__ . '/src/Services/AssetDelivery.php';
+if (isset($_GET['asset'])) AssetDelivery::serve(__DIR__);
 require_once __DIR__ . '/src/Database.php';
 require_once __DIR__ . '/src/Repository.php';
 $path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
@@ -75,4 +79,4 @@ $config .= '<script>window.__SITE_NAME__=' . json_encode($siteName, JSON_HEX_TAG
 $config .= '<script>window.__STREAM_STARTUP__=' . json_encode($startup, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_INVALID_UTF8_SUBSTITUTE) . ';</script>';
 $assetVersion = substr(hash('sha256', hash_file('sha256', __DIR__ . '/assets/js/request-cache.js') . hash_file('sha256', __DIR__ . '/assets/js/app.js') . hash_file('sha256', __DIR__ . '/assets/js/routes.js') . hash_file('sha256', __DIR__ . '/assets/js/matching.js') . hash_file('sha256', __DIR__ . '/assets/js/netplay_sync.js') . hash_file('sha256', __DIR__ . '/assets/css/app.css')), 0, 16);
 // <base> keeps relative asset URLs working on deep links such as /tvshows/<show>/season-2.
-echo str_replace(['{{BASE_HREF}}', '<!-- VAULTCAST_CONFIG -->', '<!-- VAULTCAST_PAGE -->', '{{VERSION}}', '{{SITE_NAME}}', '{{ASSET_VERSION}}'], [htmlspecialchars($base, ENT_QUOTES, 'UTF-8'), $config, $firstPage, trim((string)file_get_contents(__DIR__ . '/VERSION')), htmlspecialchars($siteName, ENT_QUOTES, 'UTF-8'), $assetVersion], $shell);
+echo AssetDelivery::text(str_replace(['{{BASE_HREF}}', '<!-- VAULTCAST_CONFIG -->', '<!-- VAULTCAST_PAGE -->', '{{VERSION}}', '{{SITE_NAME}}', '{{ASSET_VERSION}}'], [htmlspecialchars($base, ENT_QUOTES, 'UTF-8'), $config, $firstPage, trim((string)file_get_contents(__DIR__ . '/VERSION')), htmlspecialchars($siteName, ENT_QUOTES, 'UTF-8'), $assetVersion], $shell));

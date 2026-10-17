@@ -68,7 +68,7 @@ final class FirstPage {
             $show = ($item['kind'] ?? '') === 'show';
             $name = (string)($item['show'] ?? $item['title'] ?? 'Untitled');
             if ($name === '') $name = (string)($item['title'] ?? 'Untitled');
-            $poster = $base . 'api/' . ($show ? 'shows/' : 'items/') . rawurlencode((string)$item['id']) . '/poster?fetch=0&variant=thumb';
+            $poster = $base . 'api/' . ($show ? 'shows/' : 'items/') . rawurlencode((string)$item['id']) . '/poster?fetch=0&variant=thumb&art=2';
             $html .= '<a class="card first-card" data-first-nav href="' . self::esc(self::cardUrl($item, $base)) . '">'
                 . '<div class="poster"><span class="ph">' . self::esc($name) . '</span>'
                 . '<img loading="lazy" decoding="async" width="160" height="240" src="' . self::esc($poster) . '" alt="" onerror="this.remove()"></div>'
@@ -92,9 +92,9 @@ final class FirstPage {
                 . '<label>Password<input name="password" type="password" autocomplete="current-password" required></label>'
                 . '<button class="btn primary" type="submit">Sign in</button><p class="bad" role="alert">' . self::esc($error) . '</p></form></main>';
         }
-        // Settings/admin deep links: no server-rendered library rows, so no poster requests; the app renders the route.
-        if (preg_match('#^(settings|admin)(/|$)#', ltrim($route, '/'))) {
-            return '<div class="app-shell xshell" id="first-home"><main class="view" id="main" aria-busy="true"></main></div>';
+        // Home artwork must not compete with a deep link's requested content.
+        if (trim($route, '/') !== '' && trim($route, '/') !== 'index.php') {
+            return '<div class="app-shell xshell" id="first-home"><main class="view" id="main" aria-busy="true"><p role="status">Opening your page…</p></main></div>';
         }
         $home = $startup['home'];
         $html = '<div class="app-shell xshell" id="first-home"><header class="topnav xnav">'

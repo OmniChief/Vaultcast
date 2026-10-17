@@ -143,14 +143,7 @@ final class MediaFacts
         }
         self::$map = [];
         Catalogue::invalidateDerivedCaches();
-        // Warm the per-show list cache (show art lookups) so the first list request after a scan is cache-only.
-        foreach ((Store::settings()['sections'] ?? []) as $sec) {
-            $t = is_array($sec) ? (string)($sec['type'] ?? '') : '';
-            if (($t === 'tv' || $t === 'anime') && !empty($sec['id'])) {
-                try { Catalogue::sectionShows((string)$sec['id']); } catch (\Throwable $e) {}
-            }
-        }
-        Catalogue::warmRandomShowcases();
+        Catalogue::warmBrowseViews();
         Catalogue::homeLibrary();
         Catalogue::showPosterHint('');
         $out['seconds'] = round(microtime(true) - $t0, 1);

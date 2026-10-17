@@ -100,6 +100,7 @@ final class Maintenance
             switch ($job['task']) {
                 case 'scan':
                     $job['result'] = Catalogue::rescan();
+                    if (!isset($job['result']['ok']) || $job['result']['ok']) Catalogue::warmBrowseViews();
                     // Probe only new/changed files afterwards (queued; waits for this lock).
                     if (!isset($job['result']['ok']) || $job['result']['ok']) { try { self::start('facts', 'scan'); self::start('metadata', 'scan'); } catch (Throwable $ignored) {} }
                     break;

@@ -30,11 +30,13 @@ final class Repository
     }
 
     public static function cacheGet(string $key): ?array {
+        if (class_exists('\RequestTiming', false)) \RequestTiming::count('cache_read');
         $f = self::cacheFile($key);
         $raw = is_file($f) ? @file_get_contents($f) : false;
         if ($raw === false || $raw === '') return null;
         $j = json_decode($raw, true);
         if (!is_array($j) || !isset($j['e']) || ((int)$j['e'] !== 0 && (int)$j['e'] <= time())) return null;
+        if (is_array($j['v'] ?? null) && class_exists('\RequestTiming', false)) \RequestTiming::count('cache_hit');
         return is_array($j['v'] ?? null) ? $j['v'] : null;
     }
 
@@ -83,9 +85,11 @@ final class Repository
 
     public static function document(string $name, $default = null)
     {
+        $started = microtime(true);
         $s = Database::connection()->prepare('SELECT payload FROM vaultcast_documents WHERE name = ?');
         $s->execute([$name]);
         $value = $s->fetchColumn();
+        if (class_exists('\RequestTiming', false)) \RequestTiming::add('db', $started);
         return $value === false ? $default : json_decode($value, true, 512, JSON_THROW_ON_ERROR);
     }
 
@@ -98,9 +102,12 @@ final class Repository
 
     public static function revision(string $name): int
     {
+        $started = microtime(true);
         $s = Database::connection()->prepare('SELECT revision FROM vaultcast_documents WHERE name = ?');
         $s->execute([$name]);
-        return (int)$s->fetchColumn();
+        $revision = (int)$s->fetchColumn();
+        if (class_exists('\RequestTiming', false)) \RequestTiming::add('db', $started);
+        return $revision;
     }
 
     public static function read(string $name, $default = null)
@@ -163,10 +170,12 @@ final class Repository
 
     public static function rows(string $sql, array $params = []): array
     {
+        $started = microtime(true);
         $s = Database::connection()->prepare($sql);
         $s->execute($params);
         $rows = [];
         while ($row = $s->fetch()) $rows[] = json_decode($row['payload'], true, 512, JSON_THROW_ON_ERROR);
+        if (class_exists('\RequestTiming', false)) \RequestTiming::add('db', $started);
         return $rows;
     }
 
