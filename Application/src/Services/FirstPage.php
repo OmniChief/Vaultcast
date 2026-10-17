@@ -104,10 +104,11 @@ final class FirstPage {
         foreach ($home['sections'] ?? [] as $section) if ($section['type'] === 'roms') {
             $html .= '<a class="mode-tab" data-first-nav href="' . self::esc($base . 'games') . '">Play</a>'; break;
         }
-        $html .= '</nav><div class="nav-right"><form action="' . self::esc($base . 'search') . '" method="get">'
-            . '<input type="search" name="q" aria-label="Search library" placeholder="Search your library…"></form>'
-            . '<a class="btn ghost" data-first-nav href="' . self::esc($base . 'settings') . '">Account</a></div></header>'
-            . '<nav class="first-sections" aria-label="Libraries"><a data-first-nav href="' . self::esc($base) . '">Home</a>';
+        $html .= '</nav><div class="nav-right"><form class="search-wrap" action="' . self::esc($base . 'search') . '" method="get">'
+            . '<input class="search-box" id="q" type="search" name="q" aria-label="Search library" placeholder="Search movies &amp; shows…"></form>'
+            . '<a class="icon-btn avatar" title="Account &amp; settings" aria-label="Open account and settings" data-first-nav href="' . self::esc($base . 'settings') . '"><span class="avatar-initial">'
+            . self::esc(mb_strtoupper(mb_substr(trim((string)($user['display_name'] ?? $user['username'] ?? '?')), 0, 1))) . '</span></a></div></header>'
+            . '<nav class="first-sections" aria-label="Libraries"><a class="subnav-btn active" aria-current="page" data-first-nav href="' . self::esc($base) . '">Home</a>';
         foreach ($home['sections'] ?? [] as $section) $html .= '<a data-first-nav href="' . self::esc($base . 'library/' . rawurlencode($section['id'])) . '">' . self::esc($section['label']) . '</a>';
         $featured = $home['continue_watching'][0] ?? $home['sections'][0]['items'][0] ?? null;
         $html .= '<a data-first-nav href="' . self::esc($base . 'collections') . '">Collections</a></nav><main class="view" id="main"><div class="vod-home">'

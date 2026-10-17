@@ -13193,6 +13193,18 @@ function viewCollectionDetail(){
     document.head.appendChild(sm);
   };
 
+  // Reuse the same interactive navigation as in-app transitions, retaining the
+  // first-response cards and avoiding another Home request or full repaint.
+  function enhanceHomeNavigation(){
+    var first = document.getElementById('first-home');
+    if (!first) return;
+    var enhanced = shell(null);
+    var header = first.querySelector('header');
+    var sections = first.querySelector('.first-sections');
+    if (header) first.replaceChild(enhanced.querySelector('header'), header);
+    if (sections) first.replaceChild(enhanced.querySelector('.subnav'), sections);
+  }
+
   // Enhance actual first-response content without clearing it or waiting for /home.
   function enhanceFirstPage(){
     var initial = window.__STREAM_STARTUP__;
@@ -13233,6 +13245,7 @@ function viewCollectionDetail(){
     if (R.relative(location.pathname, BASE) !== '' || /^#\//.test(location.hash)) {
       return bootApp(); // Detail routes keep visible HTML underneath while their own data arrives.
     }
+    enhanceHomeNavigation();
     state._routed = true;
     replaceNav();
     initial.home = null;

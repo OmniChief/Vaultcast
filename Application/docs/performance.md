@@ -156,3 +156,10 @@ corrupt-image reporting and coalesced matching/ingest preparation scheduling.
 Rematches invalidate unchanged managed sidecar artwork before resolving new images,
 preventing exported old artwork from being imported back into the cache. Per-folder
 locks coordinate exports and rematch invalidation; user-edited artwork is preserved.
+
+Home reloads now replace only the fallback header/library links with the same
+interactive navigation used by in-app transitions. The already visible cards
+and hero remain in place, and warm startup makes no additional Home request.
+The first-response fallback also uses styled search/account controls and marks
+Home active before JavaScript runs. Regression checks cover root/index.php and
+subdirectory installs, search/account actions, and deep/legacy route handoff.

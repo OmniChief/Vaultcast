@@ -7,6 +7,10 @@ foreach (['library/movies','library/tv','tvshows/greys-anatomy','movies/a-film',
     if (strpos($html, '<img') !== false || strpos($html, 'Home film') !== false || strpos($html, 'aria-busy="true"') === false) throw new RuntimeException('Unrelated Home content on ' . $route);
 }
 if (strpos(FirstPage::render($startup, '/', 'Vaultcast'), 'Home film') === false) throw new RuntimeException('Home lost real first-response content');
+$homeHtml = FirstPage::render($startup, '/', 'Vaultcast');
+foreach (['class="search-box" id="q"', 'class="icon-btn avatar"', 'class="subnav-btn active" aria-current="page"'] as $markup) {
+    if (strpos($homeHtml, $markup) === false) throw new RuntimeException('Home fallback navigation missing: ' . $markup);
+}
 $private = ['me'=>['user'=>null], 'home'=>null];
 if (strpos(FirstPage::render($private, '/', 'Vaultcast', '', 'movies/a-film'), 'Sign in') === false) throw new RuntimeException('Private deep link bypassed sign-in');
 echo "all passed\n";
