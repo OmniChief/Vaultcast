@@ -278,6 +278,11 @@ class Matching {
     /* ---------------------------------------------------------------- TVMaze */
 
     private static function http(string $url, int $timeout = 12): ?string {
+        $left = Posters::remoteSecondsLeft();
+        if ($left !== null) {
+            if ($left < 0.05) return null;
+            $timeout = max(1, min($timeout, (int)ceil($left)));
+        }
         if (!function_exists('curl_init')) {
             $ctx = stream_context_create(['http' => ['timeout' => $timeout, 'header' => "User-Agent: Vaultcast/" . STREAM_VERSION . " (+matching)\r\nAccept: application/json\r\n"]]);
             $b = @file_get_contents($url, false, $ctx);
@@ -286,7 +291,7 @@ class Matching {
         $ch = curl_init($url);
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true, CURLOPT_FOLLOWLOCATION => true,
-            CURLOPT_CONNECTTIMEOUT => 6, CURLOPT_TIMEOUT => $timeout,
+            CURLOPT_CONNECTTIMEOUT => min(6, $timeout), CURLOPT_TIMEOUT => $timeout,
             CURLOPT_USERAGENT => 'Vaultcast/' . STREAM_VERSION . ' (+matching)', CURLOPT_HTTPHEADER => ['Accept: application/json'],
         ]);
         $raw = curl_exec($ch);
@@ -733,8 +738,10 @@ class Matching {
         if ($safe === '') return;
         foreach (['_episodes.json', '_seasons.json', '_miss.json'] as $suf) @unlink(STREAM_DATA . '/tvmaze/show_' . $safe . $suf);
         if (class_exists('Posters')) {
-            @unlink(Posters::showCachePath($showKey));
-            foreach (glob(Posters::dir() . '/season_' . $safe . '_s*.jpg') ?: [] as $f) @unlink($f);
+            Posters::clearCachedArtwork(Posters::showCachePath($showKey));
+            foreach (glob(Posters::dir() . '/season_' . $safe . '_s*') ?: [] as $f) {
+                if (preg_match('/^season_' . $safe . '_s\d+(?:_thumb)?\.(?:jpe?g|png|webp)$/D', basename($f))) @unlink($f);
+            }
         }
     }
 
@@ -856,7 +863,7 @@ class Matching {
         $res = self::saveItemFields([$row], 'manual', self::actor());
         if (class_exists('Posters')) {
             $dest = Posters::movieCachePath($id);
-            @unlink($dest);
+            Posters::clearCachedArtwork($dest);
             $synCache = Posters::movieSynopsisCachePath($id);
             @unlink($synCache);
             // The picked result's own synopsis is authoritative. Without this the detail page

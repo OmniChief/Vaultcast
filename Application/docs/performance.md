@@ -54,7 +54,7 @@ retains its codec/audio checks.
 2. Compression and static caching take effect through the ordinary update alone.
    There is no nginx configuration step. A failed maintenance-worker launch is
    logged and retried after five minutes; successful queues are recorded under
-   `data/runtime/performance-v1.json` to avoid duplicate jobs. Existing TLS,
+   `data/runtime/performance-v2.json` to avoid duplicate jobs. Existing TLS,
    HTTP protocol, OPcache and worker-pool settings remain under host management;
    this branch does not depend on changing them.
 
@@ -79,3 +79,48 @@ The automated 6,000-episode fixture checks bounded projection and zero episode
 reads on warm Recently Updated responses. It uses fake storage for the catalogue
 and real file caches; its elapsed time is not a production-server benchmark.
 The artwork test performs actual GD WebP resizing of a local game sidecar.
+
+## Artwork preparation and Settings consistency (issue #51)
+
+Preparation now uses a revision-cached inventory from the current catalogue:
+one entry per movie/game, show and season. It never resolves shared TV art once
+per episode. A 5,000-episode regression fixture produces three TV artwork entries.
+Remote poster and synopsis work each have a five-second budget per entry;
+Matching's TVMaze fallback observes the same deadline. Each maintenance pass
+allows about two minutes of remote work and two minutes of encoding, plus the
+current entry and local inventory/page preparation. Remaining work queues another
+pass automatically, releasing the maintenance lock between passes. Progress and
+continuation IDs are visible in Background tasks.
+
+Attempts, including provider misses, persist for 24 hours against the target's
+signature. Changed catalogue entries can retry immediately. Failed image encodes
+also have a 24-hour cooldown against source size/mtime, so one corrupt file does
+not make continuations loop forever. Manual artwork optimisation remains available
+for immediate retries. Missing artwork is reported separately from worker errors;
+preparation cannot create an image a provider does not have. Cancelling stops the
+current pass before it queues a continuation; rerunning resumes saved work.
+
+Artwork Find all now scans library entries, imports local sidecars without network
+requests and reports ready, needing WebP and missing-artwork counts separately.
+Movies include legacy Disney libraries. Multiple scope selections are filtered on
+the server so totals match the selected inventory. The summary explicitly counts
+cached originals (which may include removed-library artwork), rather than claiming
+to be a movie count. Summary reads no longer query item metadata per cached poster.
+Queue polling preserves unsaved form controls, save confirmation follows the server
+response, and stopped scans cannot replace a newer scan's results.
+
+The conversion finder now uses the same stored media facts as library cards,
+including Disney movies, instead of running up to 40 live ffprobe calls inside an
+HTTP request. Until facts exist it uses the same extension fallback as the library;
+run the codec background task to obtain accurate codec verdicts.
+
+Validation includes inventory/count reconciliation, revision invalidation, local
+sidecar discovery, bounded/resumed work, provider-miss deduplication, cancellation,
+actual WebP resizing, conversion parity without ffprobe, and artwork Settings races.
+These are local regression checks; production completion time and page latency
+still need verification after installing the branch on the server.
+
+Fix Match also removes obsolete full/thumb WebP files together with replaced movie,
+show and season originals. Previously those variants could keep serving the old
+image after a successful rematch. Show pin changes bypass the preparation cooldown.
+The v2 setup stamp queues the corrected preparation once for earlier branch installs.

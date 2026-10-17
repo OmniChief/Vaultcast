@@ -1,7 +1,14 @@
 <?php
 /** Real WebP generation from a local game sidecar, in background maintenance only. */
 namespace Vaultcast {
-    class Repository { public static function document($name, $default = null) { return $default; } }
+    class Repository {
+        public static $docs = [];
+        public static function revision($name) { return 1; }
+        public static function cacheGet($name) { return null; }
+        public static function cachePut($name,$data,$ttl) {}
+        public static function document($name, $default = null) { return self::$docs[$name] ?? $default; }
+        public static function putDocument($name, $value) { self::$docs[$name] = $value; }
+    }
 }
 namespace {
     define('STREAM_DATA', sys_get_temp_dir() . '/vc-art-warm-' . getmypid());
@@ -21,12 +28,15 @@ namespace {
     }
     class Posters {
         public static function enabled() { return false; }
+        public static function beginRemoteBudget($seconds) {}
+        public static function endRemoteBudget() {}
         public static function dir() { return STREAM_DATA . '/posters'; }
         public static function gameCachePath($id) { return self::dir() . '/game_' . $id . '.jpg'; }
         public static function resolveItem($item, $remote) { if ($remote) throw new \RuntimeException('Remote request made while disabled'); return STREAM_DATA . '/local.png'; }
         public static function adoptFile($dest, $src) { if (!is_file($dest)) copy($src, $dest); return $dest; }
     }
     require __DIR__ . '/../src/Services/PosterOptimise.php';
+    require __DIR__ . '/../src/Services/ArtworkLibrary.php';
     require __DIR__ . '/../src/Services/MetadataWarmup.php';
     $image = imagecreatetruecolor(1200, 1800);
     $colour = imagecolorallocate($image, 80, 120, 200); imagefill($image, 0, 0, $colour);

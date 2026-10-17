@@ -6465,12 +6465,14 @@ try {
           });
           result.jobs.forEach(function(job){
             var row=h('div',{className:'settings-card'},[h('strong',{text:result.tasks[job.task] || job.task}),h('p',{text:job.status+' · '+job.created_at+' · '+job.requested_by}),h('p',{className:'muted',text:job.error || ''})]);
+            if (job.progress) row.appendChild(h('p',{className:'muted',text:(job.progress.phase || 'Progress') + ': ' + job.progress.done + '/' + job.progress.total + ' · ' + (job.progress.file || '')}));
+            if (job.result && job.task === 'metadata') row.appendChild(h('p',{className:'muted',text:'Checked ' + job.result.processed + ' artwork entries · ' + job.result.artwork_prepared + ' optimised · ' + (job.result.failed + job.result.artwork_failed) + ' failed' + (job.result.continuation ? ' · remaining work continues automatically in the next task' : '')}));
             if (job.status==='queued'||job.status==='running') row.appendChild(h('button',{className:'btn',text:'Cancel',onClick:function(){api('/admin/maintenance/cancel',{method:'POST',body:{id:job.id}}).then(function(r){toast(r.message || r.error); refreshJobs();});}}));
             jobsHost.appendChild(row);
           });
         });
       }
-      bodyKids=[h('h2',{text:'Background tasks'}),h('p',{className:'muted',text:'Maintenance runs only when requested. One task runs at a time. Cancellation stops at the next file or transaction boundary. Refresh to see the latest status.'}),
+      bodyKids=[h('h2',{text:'Background tasks'}),h('p',{className:'muted',text:'Scans and updates may queue preparation automatically. One task runs at a time. Artwork preparation continues automatically in bounded passes. Cancellation stops at the next file or transaction boundary. Refresh to see current progress.'}),
         h('button',{className:'btn',text:'Refresh status',onClick:refreshJobs}), jobsHost,
         h('p',{className:'muted',text:'Video conversion and artwork batches are started by administrators in their settings pages. Download transfers are controlled in Download queue. External OS schedules must be managed in Task Scheduler or cron.'}),
         h('button',{className:'btn',text:'Video conversion jobs',onClick:function(){openSettings('convert');}}),h('button',{className:'btn',text:'Artwork jobs',onClick:function(){openSettings('poster-optimise');}})];
@@ -7974,7 +7976,7 @@ try {
     host.innerHTML = '';
     var findState = {
       running: false, cancelled: false, offset: 0, scanned: 0, total: 0,
-      needs_total: 0, items: [], selected: {}, scopes: { movies:true, shows:true, seasons:true, games:true }, gen: 0
+      needs_total: 0, missing: 0, ready: 0, finished: false, items: [], selected: {}, scopes: { movies:true, shows:true, seasons:true, games:true }, gen: 0
     };
     var poCfg = {
       full_quality: 90, full_max_w: 1600, thumb_quality: 72, thumb_max_w: 320, compression_level: 4, overwrite: false
@@ -8009,9 +8011,7 @@ try {
 
     function scopeParam(){
       var keys = Object.keys(findState.scopes).filter(function(k){ return findState.scopes[k]; });
-      if (keys.length === 4 || keys.length === 0) return 'all';
-      if (keys.length === 1) return keys[0];
-      return 'all'; // multi-scope: client-filter after fetch
+      return keys.length === 4 ? 'all' : keys.join(',');
     }
 
     function statusLine(){
@@ -8022,8 +8022,8 @@ try {
       if (findState.running) {
         el.appendChild(h('span', { className:'cv-find-pulse' }));
         el.appendChild(h('span', { text: 'Scanning posters… ' + findState.scanned + '/' + (findState.total||'?') + ' · need ' + findState.needs_total }));
-      } else if (findState.items.length) {
-        el.appendChild(h('span', { text: 'Found ' + findState.items.length + ' needing WebP' + (findState.needs_total ? (' · ~' + findState.needs_total + ' total') : '') + (findState.cancelled ? ' (stopped)' : '') }));
+      } else if (findState.finished || findState.scanned || findState.total) {
+        el.appendChild(h('span', { text: findState.scanned + '/' + findState.total + ' library artwork entries · ' + findState.items.length + ' need WebP · ' + findState.ready + ' ready · ' + findState.missing + ' missing artwork' + (findState.cancelled ? ' (stopped)' : '') }));
       } else {
         el.appendChild(h('span', { className:'muted', text: 'Click Find all to scan for posters missing WebP / thumb variants.' }));
       }
@@ -8139,9 +8139,8 @@ try {
         mergeJobs(r.queue);
         var sum = r.summary || {};
         var meta = $('#po-summary');
-        if (meta) meta.textContent = (sum.ready||0) + ' ready · ' + (sum.needs||0) + ' need WebP · ' + (sum.total_originals||0) + ' originals'
-          + (sum.ffmpeg_webp === false ? ' · ffmpeg WebP missing!' : '');
-        if (sum.settings) applyPoCfg(sum.settings);
+        if (meta) meta.textContent = 'Poster cache: ' + (sum.ready||0) + ' ready · ' + (sum.needs||0) + ' need WebP · ' + (sum.total_originals||0) + ' cached originals. Find all checks the current library, including local artwork.';
+        // Queue polling must not overwrite unsaved slider/overwrite changes.
         var jobs = (r.queue && r.queue.jobs) || [];
         var hasQueued = jobs.some(function(j){ return j.status==='queued'; });
         var hasRunning = jobs.some(function(j){ return j.status==='running'; });
@@ -8155,7 +8154,7 @@ try {
               mergeJobs(r2.queue);
               if (r2.summary) {
                 var m2 = $('#po-summary');
-                if (m2) m2.textContent = (r2.summary.ready||0) + ' ready · ' + (r2.summary.needs||0) + ' need WebP · ' + (r2.summary.total_originals||0) + ' originals';
+                if (m2) m2.textContent = (r2.summary.ready||0) + ' ready · ' + (r2.summary.needs||0) + ' need WebP · ' + (r2.summary.total_originals||0) + ' cached originals';
               }
             }
             queuePoll.timer = setTimeout(pollQueue, 350);
@@ -8204,6 +8203,7 @@ try {
     }
 
     function stopFind(){
+      findState.gen++;
       findState.cancelled = true;
       findState.running = false;
       statusLine();
@@ -8212,26 +8212,30 @@ try {
 
     function findAll(){
       if (findState.running) return;
+      var scope = scopeParam();
+      var overwrite = collectPoCfg().overwrite;
+      if (!scope) return toast('Select at least one artwork type');
       findState.running = true;
       findState.cancelled = false;
       findState.offset = 0;
       findState.items = [];
       findState.selected = {};
       findState.needs_total = 0;
+      findState.finished = false; findState.scanned = 0; findState.total = 0; findState.missing = 0; findState.ready = 0;
       findState.gen++;
       var gen = findState.gen;
       statusLine();
       paintList();
 
       function tick(){
-        if (gen !== findState.gen || findState.cancelled) {
+        if (gen !== findState.gen) return;
+        if (findState.cancelled) {
           findState.running = false;
           statusLine();
           paintList();
           return;
         }
-        var scope = scopeParam();
-        api('/admin/posters/optimise/find?offset=' + findState.offset + '&limit=50&scope=' + encodeURIComponent(scope) + '&overwrite=' + (collectPoCfg().overwrite ? '1' : '0')).then(function(r){
+        api('/admin/posters/optimise/find?offset=' + findState.offset + '&limit=50&scope=' + encodeURIComponent(scope) + '&overwrite=' + (overwrite ? '1' : '0')).then(function(r){
           if (gen !== findState.gen) return;
           if (!r || !r.ok) {
             findState.running = false;
@@ -8241,20 +8245,9 @@ try {
           }
           findState.scanned = r.scanned || 0;
           findState.total = r.total || 0;
+          findState.missing += r.missing_artwork || 0;
+          findState.ready += r.ready || 0;
           (r.items || []).forEach(function(it){
-            // multi-scope client filter
-            var okScope = true;
-            if (scope === 'all') {
-              var any = false;
-              if (findState.scopes.movies && it.file.indexOf('movie_')===0) any = true;
-              if (findState.scopes.games && it.file.indexOf('game_')===0) any = true;
-              if (findState.scopes.shows && it.file.indexOf('show_')===0) any = true;
-              if (findState.scopes.seasons && it.file.indexOf('season_')===0) any = true;
-              // if all scopes true, any is forced
-              if (findState.scopes.movies && findState.scopes.games && findState.scopes.shows && findState.scopes.seasons) any = true;
-              okScope = any;
-            }
-            if (!okScope) return;
             if (!findState.items.some(function(x){ return x.file === it.file; })) findState.items.push(it);
           });
           findState.items.sort(function(a, b){
@@ -8266,6 +8259,7 @@ try {
           statusLine();
           paintList();
           if (r.done || r.next_offset == null) {
+            findState.finished = true;
             findState.running = false;
             statusLine();
             return;
@@ -8273,6 +8267,7 @@ try {
           findState.offset = r.next_offset;
           setTimeout(tick, 30);
         }).catch(function(e){
+          if (gen !== findState.gen) return;
           findState.running = false;
           statusLine();
           toast(String(e), { kind:'bad' });
@@ -8324,11 +8319,7 @@ try {
         h('div', { className:'row-actions', style:'margin-top:10px' }, [
           h('button', { className:'btn primary', text:'Save poster settings', onClick: function(){
             var cfg = collectPoCfg();
-            poCfg = cfg;
-            if (!state.settings) state.settings = {};
-            state.settings.poster_optimise = cfg;
             saveSettings({ poster_optimise: cfg });
-            toast('Poster WebP settings saved', { kind:'ok' });
           }}),
           h('button', { className:'btn ghost', text:'Reset defaults', onClick: function(){
             applyPoCfg({ full_quality:90, full_max_w:1600, thumb_quality:72, thumb_max_w:320, compression_level:4, overwrite:false });
@@ -8376,8 +8367,8 @@ h('div', { className:'cv-find-bar' }, [
     api('/admin/posters/optimise/summary').then(function(r){
       var meta = $('#po-summary');
       if (!meta || !r) return;
-      meta.textContent = (r.ready||0) + ' ready · ' + (r.needs||0) + ' need WebP · ' + (r.total_originals||0) + ' originals'
-        + (r.ffmpeg_webp === false ? ' · ffmpeg WebP missing!' : '');
+      meta.textContent = 'Poster cache: ' + (r.ready||0) + ' ready · ' + (r.needs||0) + ' need WebP · ' + (r.total_originals||0) + ' cached originals. Find all checks the current library, including local artwork.'
+        + (r.ffmpeg_webp === false ? ' · ffmpeg WebP unavailable; PHP GD is used when available.' : '');
       if (r.settings) {
         applyPoCfg(r.settings);
         if (!state.settings) state.settings = {};

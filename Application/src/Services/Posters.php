@@ -30,6 +30,12 @@ class Posters {
     public static function gameCachePath(string $itemId): string {
         return self::dir() . '/game_' . preg_replace('/[^a-f0-9]/', '', $itemId) . '.jpg';
     }
+    /** Rematching invalidates converted artwork together with its original. */
+    public static function clearCachedArtwork(string $original): void {
+        $stem = pathinfo(basename($original), PATHINFO_FILENAME);
+        if (!preg_match('/^(?:movie_|game_|show_|season_)[a-zA-Z0-9_-]+$/D', $stem)) return;
+        foreach (['.jpg', '.jpeg', '.png', '.webp', '_thumb.webp'] as $suffix) @unlink(self::dir() . '/' . $stem . $suffix);
+    }
     public static function enabled(): bool {
         // Once per request: Store::settings() re-reads runtime ini files, and list/show pages call this per item.
         static $on = null;
@@ -285,6 +291,9 @@ class Posters {
     public static function endRemoteBudget(): void { self::$remoteDeadline = null; }
     public static function remoteBudgetExpired(): bool {
         return self::$remoteDeadline !== null && microtime(true) >= self::$remoteDeadline;
+    }
+    public static function remoteSecondsLeft(): ?float {
+        return self::$remoteDeadline === null ? null : max(0.0, self::$remoteDeadline - microtime(true));
     }
 
     private static function throttle(): void {
@@ -995,6 +1004,8 @@ class Posters {
             }
         }
 
+        // A budget exhaustion is not a definitive provider miss.
+        if (($summary === null || $summary === '') && self::remoteBudgetExpired()) return null;
         @file_put_contents($cache, json_encode([
             'title' => $title,
             'year' => $year,

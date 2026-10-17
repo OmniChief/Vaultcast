@@ -255,9 +255,9 @@ class Convert {
     }
 
     /**
-     * Chunked library scan for DirectPlay gaps (real H.264/AAC via MediaProbe).
-     * Each call probes at most $limit video items starting at $offset so the
-     * Settings UI can poll without hanging php-fpm on a full-library walk.
+     * Chunked library scan for DirectPlay gaps using stored codec facts.
+     * Uses stored media facts, matching the library. Probing belongs to the
+     * background facts task, never a Settings HTTP request.
      */
     public static function findNeedsPage(int $offset = 0, int $limit = 35, array $types = []): array {
         $offset = max(0, $offset);
@@ -266,7 +266,7 @@ class Convert {
         $typeFilter = [];
         foreach ($types as $t) {
             $t = strtolower(trim((string)$t));
-            if ($t === 'movie') $t = 'movies';
+            if ($t === 'movie' || $t === 'disney') $t = 'movies';
             if (in_array($t, $allowed, true)) $typeFilter[$t] = true;
         }
         // Default only when caller sent no types. Invalid-only (e.g. games) => empty scan.
@@ -286,7 +286,7 @@ class Convert {
             if (!is_array($it)) continue;
             if (($it['media_kind'] ?? '') !== 'video') continue;
             $type = strtolower((string)($it['type'] ?? ''));
-            if ($type === 'movie') $type = 'movies';
+            if ($type === 'movie' || $type === 'disney') $type = 'movies';
             // Explicitly skip games / roms / unknown non-video libraries
             if ($type === 'games' || $type === 'game' || $type === 'rom') continue;
             if (!isset($typeFilter[$type])) continue;
@@ -307,12 +307,13 @@ class Convert {
             ];
         }
         $slice = array_slice($videos, $offset, $limit);
+        MediaFacts::preload($slice);
         $hits = [];
         foreach ($slice as $it) {
-            $full = (string)($it['path'] ?? '');
             $probe = null;
-            if ($full !== '' && class_exists('MediaProbe')) {
-                $probe = MediaProbe::probeSummary($full, 2, true);
+            $facts = MediaFacts::get($it);
+            if ($facts) {
+                $probe = ['video_codec'=>$facts['video_codec'] ?? '', 'audio_tracks'=>[['codec'=>$facts['audio_codec'] ?? '']]];
             }
 
             $needs = false;

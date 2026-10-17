@@ -42,7 +42,7 @@ final class MediaFacts
         foreach (array_chunk(array_values($ids), 200) as $batch) {
             foreach ($batch as $id) self::$map[$id] = null;
             try {
-                $s = \Vaultcast\Database::connection()->prepare('SELECT item_id,sig,needs_convert,present FROM vaultcast_media_facts WHERE item_id IN (' . implode(',', array_fill(0, count($batch), '?')) . ')');
+                $s = \Vaultcast\Database::connection()->prepare('SELECT item_id,sig,needs_convert,present,video_codec,audio_codec FROM vaultcast_media_facts WHERE item_id IN (' . implode(',', array_fill(0, count($batch), '?')) . ')');
                 $s->execute($batch);
                 foreach ($s as $row) self::$map[(string)$row['item_id']] = $row;
             } catch (\Throwable $e) { /* not migrated yet: extension fallback */ }

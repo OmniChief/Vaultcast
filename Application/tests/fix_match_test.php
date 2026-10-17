@@ -14,6 +14,16 @@ if (!class_exists('Catalogue')) { class Catalogue { public static function fixTe
 $fails = 0;
 function check($c, $m) { global $fails; echo ($c ? 'ok   ' : 'FAIL ') . $m . "\n"; if (!$c) $fails++; }
 
+// Rematching must not leave an old optimised image in front of the new original.
+$showKey = 'abcdef1234567890';
+$oldArt = ['show_' . $showKey . '.jpg', 'show_' . $showKey . '.webp', 'show_' . $showKey . '_thumb.webp', 'season_' . $showKey . '_s1.jpg', 'season_' . $showKey . '_s1.webp', 'season_' . $showKey . '_s1_thumb.webp'];
+foreach ($oldArt as $file) file_put_contents(Posters::dir() . '/' . $file, str_repeat('x', 200));
+Matching::purgeShowCaches($showKey);
+foreach ($oldArt as $file) check(!is_file(Posters::dir() . '/' . $file), 'show rematch removes ' . $file);
+foreach (['.jpg', '.webp', '_thumb.webp'] as $suffix) file_put_contents(Posters::dir() . '/movie_abcdef' . $suffix, str_repeat('x', 200));
+Posters::clearCachedArtwork(Posters::movieCachePath('abcdef'));
+check(glob(Posters::dir() . '/movie_abcdef*') === [], 'movie rematch removes original and WebP variants');
+
 $id = 'abcdef0123456789';
 $runner = 'Runner is a 2026 American action film starring Owen Wilson and Alan Richardson.';
 $body = ['title' => 'Runner', 'year' => 2026, 'match' => ['source' => 'wikipedia', 'id' => 81234567,

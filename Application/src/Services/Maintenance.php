@@ -104,7 +104,25 @@ final class Maintenance
                     // Probe only new/changed files afterwards (queued; waits for this lock).
                     if (!isset($job['result']['ok']) || $job['result']['ok']) { try { self::start('facts', 'scan'); self::start('metadata', 'scan'); } catch (Throwable $ignored) {} }
                     break;
-                case 'metadata': $job['result'] = MetadataWarmup::run(); break;
+                case 'metadata':
+                    $lastProgress = 0.0;
+                    $job['result'] = MetadataWarmup::run(function ($phase, $done, $total, $file) use (&$job, $id, &$lastProgress) {
+                        if ($done !== $total && microtime(true) - $lastProgress < 1) return;
+                        $lastProgress = microtime(true);
+                        $job['progress'] = ['phase'=>$phase, 'done'=>$done, 'total'=>$total, 'file'=>$file, 'at'=>date('c')];
+                        \Vaultcast\Repository::putDocument('maintenance-job:' . $id, $job);
+                    });
+                    self::checkpoint();
+                    // Do not let checkpoint throttling miss a cancellation at
+                    // the boundary where a fast pass schedules its successor.
+                    if (\Vaultcast\Repository::document('maintenance-cancel:' . $id, false)) throw new RuntimeException('Cancelled by administrator.');
+                    // Yield the global maintenance lock between bounded passes.
+                    // Persisted attempts and existing WebP files make the next pass resume.
+                    if ($job['result']['deferred'] || $job['result']['artwork_deferred']) {
+                        $next = self::start('metadata', 'Continuation of ' . $id);
+                        $job['result']['continuation'] = $next['job']['id'];
+                    }
+                    break;
                 case 'facts': $job['result'] = MediaFacts::refresh(function () { self::checkpoint(); }); break;
                 case 'collections': $job['result'] = Collections::refresh($job['target'] ?? null); break;
                 case 'downloads':
