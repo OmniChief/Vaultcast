@@ -1,5 +1,7 @@
 <?php
 declare(strict_types=1);
+ini_set('display_errors', '0');
+ini_set('log_errors', '1');
 // Maintenance mode while an update swaps core files (data/runtime/maintenance.json, written by
 // Updater). Checked before any other code loads; ignored after 15 minutes so it cannot lock the site.
 $__maintenance = __DIR__ . '/data/runtime/maintenance.json';
@@ -19,6 +21,8 @@ require_once __DIR__ . '/src/Services/AssetDelivery.php';
 if (isset($_GET['asset'])) AssetDelivery::serve(__DIR__);
 require_once __DIR__ . '/src/Database.php';
 require_once __DIR__ . '/src/Repository.php';
+require_once __DIR__ . '/src/Services/StartupFailure.php';
+StartupFailure::register();
 $path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
 $api = rtrim(\Vaultcast\Database::basePath(), '/') . '/api';
 if ($path === $api || strpos((string)$path, $api . '/') === 0) {
