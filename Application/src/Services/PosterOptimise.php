@@ -3,8 +3,8 @@ declare(strict_types=1);
 
 
 class PosterOptimise {
-    public const THUMB_MAX_W = 320;
-    public const FULL_MAX_W = 1600;
+    public const THUMB_MAX_W = 40;
+    public const FULL_MAX_W = 400;
     public const FULL_QUALITY = 90;
     public const THUMB_QUALITY = 72;
     public const COMPRESSION_LEVEL = 4;
@@ -18,6 +18,9 @@ class PosterOptimise {
         return [
             'full_quality' => self::FULL_QUALITY,
             'full_max_w' => self::FULL_MAX_W,
+            'medium_quality' => self::THUMB_QUALITY,
+            'medium_max_w' => 220,
+            'sizes_version' => 3,
             'thumb_quality' => self::THUMB_QUALITY,
             'thumb_max_w' => self::THUMB_MAX_W,
             'compression_level' => self::COMPRESSION_LEVEL,
@@ -33,12 +36,22 @@ class PosterOptimise {
             $all = Store::settings();
             if (is_array($all['poster_optimise'] ?? null)) $stored = $all['poster_optimise'];
         }
+        if (($stored['sizes_version'] ?? 0) < 3) {
+            if (($stored['full_max_w'] ?? 1600) === 1600) $stored['full_max_w'] = 400;
+            $stored['medium_max_w'] = $stored['thumb_max_w'] ?? 220;
+            $stored['medium_quality'] = $stored['thumb_quality'] ?? 72;
+            $stored['thumb_max_w'] = 40;
+            $stored['sizes_version'] = 3;
+        }
         if (is_array($override)) $stored = array_merge($stored, $override);
         $s = array_merge($s, $stored);
         $s['full_quality'] = max(40, min(100, (int)$s['full_quality']));
-        $s['full_max_w'] = max(400, min(2560, (int)($s['full_max_w'] ?? self::FULL_MAX_W)));
+        $s['full_max_w'] = max(100, min(700, (int)($s['full_max_w'] ?? self::FULL_MAX_W)));
         $s['thumb_quality'] = max(30, min(95, (int)$s['thumb_quality']));
-        $s['thumb_max_w'] = max(120, min(800, (int)$s['thumb_max_w']));
+        $s['thumb_max_w'] = max(16, min(64, (int)$s['thumb_max_w']));
+        $s['medium_max_w'] = max(80, min(360, (int)$s['medium_max_w']));
+        $s['medium_quality'] = max(30, min(95, (int)$s['medium_quality']));
+        $s['sizes_version'] = 3;
         $s['compression_level'] = max(0, min(6, (int)$s['compression_level']));
         $s['overwrite'] = !empty($s['overwrite']);
         return $s;
@@ -75,7 +88,9 @@ class PosterOptimise {
             'stem' => $stem,
             'original' => $original,
             'webp' => $dir . '/' . $stem . '.webp',
-            'thumb' => $dir . '/' . $stem . '_thumb.webp',
+            // Existing _thumb files are the medium variant; retain them without copying.
+            'medium' => $dir . '/' . $stem . '_thumb.webp',
+            'thumb' => $dir . '/' . $stem . '_tiny.webp',
         ];
     }
 
@@ -86,13 +101,15 @@ class PosterOptimise {
         $hasOrig = $orig && is_file($orig);
         $hasWebp = is_file($p['webp']) && filesize($p['webp']) > 40;
         $hasThumb = is_file($p['thumb']) && filesize($p['thumb']) > 40;
-        $needs = $hasOrig && (!$hasWebp || !$hasThumb || $overwrite);
+        $hasMedium = is_file($p['medium']) && filesize($p['medium']) > 40;
+        $needs = $hasOrig && (!$hasWebp || !$hasThumb || !$hasMedium || $overwrite);
         $label = $withLabel ? self::labelForStem($stem, $hasOrig ? basename($orig) : $file) : ['title'=>$file, 'kind'=>'item', 'id'=>$stem, 'poster_url'=>null];
         if (!$hasOrig) $reason = 'missing original';
         elseif ($overwrite && ($hasWebp || $hasThumb)) $reason = 're-optimise (overwrite WebP)';
         elseif (!$hasWebp && !$hasThumb) $reason = 'missing WebP + thumb';
         elseif (!$hasWebp) $reason = 'missing main WebP';
         elseif (!$hasThumb) $reason = 'missing thumb WebP';
+        elseif (!$hasMedium) $reason = 'missing medium WebP';
         else $reason = 'ready';
         return [
             'file' => $file,
@@ -104,6 +121,8 @@ class PosterOptimise {
             'original_bytes' => $hasOrig ? (int)filesize($orig) : 0,
             'has_webp' => $hasWebp,
             'has_thumb' => $hasThumb,
+            'has_medium' => $hasMedium,
+            'medium_bytes' => $hasMedium ? (int)filesize($p['medium']) : 0,
             'webp_bytes' => $hasWebp ? (int)filesize($p['webp']) : 0,
             'thumb_bytes' => $hasThumb ? (int)filesize($p['thumb']) : 0,
             'needs' => $needs,
@@ -148,13 +167,13 @@ class PosterOptimise {
             $title = $show !== null ? $show . ' · Season ' . (int)$m[2] : $unlinked;
         }
         $poster_url = null;
-        if ($kind === 'show') $poster_url = '/api/shows/' . $id . '/poster?fetch=0&variant=thumb';
+        if ($kind === 'show') $poster_url = '/api/shows/' . $id . '/poster?fetch=0&variant=medium';
         elseif ($kind === 'season') {
             if (preg_match('/^([a-f0-9]+)-s(\d+)$/i', $id, $sm)) {
-                $poster_url = '/api/shows/' . $sm[1] . '/seasons/' . $sm[2] . '/poster?fetch=0&variant=thumb';
+                $poster_url = '/api/shows/' . $sm[1] . '/seasons/' . $sm[2] . '/poster?fetch=0&variant=medium';
             }
         } else {
-            $poster_url = '/api/items/' . $id . '/poster?fetch=0&variant=thumb';
+            $poster_url = '/api/items/' . $id . '/poster?fetch=0&variant=medium';
         }
         return ['kind' => $kind, 'id' => $id, 'title' => $title, 'poster_url' => $poster_url];
     }
@@ -314,6 +333,10 @@ class PosterOptimise {
             else $errors[] = $r['error'];
         } else {
             $made[] = 'webp-exists';
+        }
+        if ($overwrite || !is_file($paths['medium']) || filesize($paths['medium']) < 40) {
+            $r = self::runFfmpegWebp($orig, $paths['medium'], (int)$cfg['medium_max_w'], (int)$cfg['medium_quality'], (int)$cfg['compression_level']);
+            if ($r['ok']) $made[] = 'medium'; else $errors[] = 'Medium: ' . $r['error'];
         }
         if ($needThumb) {
             $r = self::runFfmpegWebp($orig, $paths['thumb'], (int)$cfg['thumb_max_w'], (int)$cfg['thumb_quality'], (int)$cfg['compression_level']);
@@ -516,6 +539,8 @@ class PosterOptimise {
             $job['result'] = [
                 'made' => $r['made'] ?? [],
                 'webp_bytes' => $r['status']['webp_bytes'] ?? 0,
+                'medium_bytes' => $r['status']['medium_bytes'] ?? 0,
+                'has_medium' => $r['status']['has_medium'] ?? false,
                 'thumb_bytes' => $r['status']['thumb_bytes'] ?? 0,
                 'original_bytes' => $r['status']['original_bytes'] ?? 0,
                 'settings' => $r['settings'] ?? $jobOpts,
@@ -575,25 +600,18 @@ class PosterOptimise {
      * $wantWebp: client accepts image/webp
      */
     public static function pickServePath(string $resolvedPath, string $variant = 'full', bool $wantWebp = true): string {
-        $base = basename($resolvedPath);
+        if ($variant === 'original' || !$wantWebp || preg_match('/\.webp$/i', $resolvedPath)) return $resolvedPath;
         $dir = dirname($resolvedPath);
-        // If already a webp path, honour it
-        if (preg_match('/\.webp$/i', $base)) return $resolvedPath;
-        $stem = self::stemFromFile($base);
-        // Also handle when resolved path is outside cache with arbitrary name — only variant siblings in same dir with our naming
-        $webp = $dir . '/' . $stem . '.webp';
-        $thumb = $dir . '/' . $stem . '_thumb.webp';
-        $variant = strtolower($variant ?: 'full');
-        if ($variant === 'original' || !$wantWebp) {
-            return $resolvedPath;
+        $stem = self::stemFromFile(basename($resolvedPath));
+        $candidates = [];
+        if ($variant === 'thumb') $candidates[] = $dir . '/' . $stem . '_tiny.webp';
+        if ($variant === 'thumb' || $variant === 'medium') $candidates[] = $dir . '/' . $stem . '_thumb.webp';
+        $candidates[] = $dir . '/' . $stem . '.webp';
+        foreach ($candidates as $candidate) {
+            if (!is_file($candidate) || !is_readable($candidate) || filesize($candidate) <= 40) continue;
+            $info = @getimagesize($candidate);
+            if ($info && ($info['mime'] ?? '') === 'image/webp') return $candidate;
         }
-        if ($variant === 'thumb') {
-            if (is_file($thumb) && filesize($thumb) > 40) return $thumb;
-            if (is_file($webp) && filesize($webp) > 40) return $webp;
-            return $resolvedPath;
-        }
-        // full
-        if (is_file($webp) && filesize($webp) > 40) return $webp;
         return $resolvedPath;
     }
 

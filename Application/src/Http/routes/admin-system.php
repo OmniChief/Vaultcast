@@ -65,7 +65,7 @@ if ($path === '/admin/posters/optimise' && $method === 'POST') {
     @set_time_limit(180);
     $b = body_json();
     $opts = [];
-    foreach (['full_quality','full_max_w','thumb_quality','thumb_max_w','compression_level','overwrite'] as $k) {
+    foreach (['full_quality','full_max_w','medium_quality','medium_max_w','sizes_version','thumb_quality','thumb_max_w','compression_level','overwrite'] as $k) {
         if (array_key_exists($k, $b)) $opts[$k] = $b[$k];
     }
     if (!empty($b['file']) || !empty($b['stem'])) {

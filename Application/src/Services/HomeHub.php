@@ -82,7 +82,7 @@ final class HomeHub {
             $duration="COALESCE(JSON_EXTRACT(p.payload,'$.duration'),0)";
             $position="COALESCE(JSON_EXTRACT(p.payload,'$.position'),0)";
             $finished="(JSON_UNQUOTE(JSON_EXTRACT(p.payload,'$.watched'))='true' OR ($duration>0 AND ($position>$duration*0.92 OR $duration-$position<LEAST(180,$duration*0.25))))";
-            $q=\Vaultcast\Database::connection()->prepare("SELECT i.section_id,i.show_title,COUNT(DISTINCT CASE WHEN $finished THEN CONCAT(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(i.payload,'$.season')),''),':',COALESCE(JSON_UNQUOTE(JSON_EXTRACT(i.payload,'$.episode')),i.id)) END) AS seen,SUBSTRING_INDEX(GROUP_CONCAT(CONCAT('S',COALESCE(JSON_UNQUOTE(JSON_EXTRACT(i.payload,'$.season')),'0'),' E',COALESCE(JSON_UNQUOTE(JSON_EXTRACT(i.payload,'$.episode')),'0')) ORDER BY p.updated_at DESC SEPARATOR ','),',',1) AS last_episode FROM vaultcast_progress p JOIN vaultcast_items i ON i.id=p.item_id WHERE p.user_id=? AND i.show_title<>'' GROUP BY i.section_id,i.show_title");
+            $q=\Vaultcast\Database::connection()->prepare("SELECT i.section_id,i.show_title,COUNT(DISTINCT CASE WHEN $finished THEN CONCAT(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(i.payload,'$.season')),''),':',COALESCE(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(i.payload,'$.episode')),'null'),i.id)) END) AS seen,SUBSTRING_INDEX(GROUP_CONCAT(CONCAT('S',COALESCE(JSON_UNQUOTE(JSON_EXTRACT(i.payload,'$.season')),'0'),' E',COALESCE(JSON_UNQUOTE(JSON_EXTRACT(i.payload,'$.episode')),'0')) ORDER BY p.updated_at DESC SEPARATOR ','),',',1) AS last_episode FROM vaultcast_progress p JOIN vaultcast_items i ON i.id=p.item_id WHERE p.user_id=? AND i.show_title<>'' GROUP BY i.section_id,i.show_title");
             $q->execute([$uid]);$seen=[];
             foreach ($q as $row) $seen[Catalogue::showKey($row['section_id'],$row['show_title'])]=['count'=>(int)$row['seen'],'last'=>$row['last_episode']];
             foreach ($shelves['watchlist'] as &$card) if (($card['kind'] ?? '')==='show') {
@@ -120,7 +120,7 @@ final class HomeHub {
         }
         return array_merge(['ok'=>true,'recent'=>$recent,'history'=>$history,'games'=>array_slice($games,0,20),
             'game_stats'=>['seconds'=>array_sum(array_column($games,'seconds')),'games'=>count($games),'sessions'=>array_sum(array_column($games,'sessions'))],
-            'friends'=>$friends,'upcoming'=>array_slice($upcoming,0,30),'notifications'=>array_values($data['notifications'] ?? []),
+            'friends'=>$friends,'upcoming'=>$upcoming,'notifications'=>array_values($data['notifications'] ?? []),
             'preferences'=>$data['preferences'] ?? [],'signed_in'=>($user['role'] ?? '')!=='guest'],$shelves);
     }
     public static function title(string $key,array $user): array {

@@ -1182,9 +1182,9 @@ function confirmDialog(message, opts){
     if (!el || !itemId) return;
     el.setAttribute('data-poster-id', itemId);
     el.setAttribute('data-poster-kind', kind || 'item');
-    if (!el.getAttribute('data-poster-variant')) el.setAttribute('data-poster-variant', 'thumb');
+    if (!el.getAttribute('data-poster-variant')) el.setAttribute('data-poster-variant', 'medium');
     el.classList.add('poster-pending');
-    var variant = el.getAttribute('data-poster-variant') || 'thumb';
+    var variant = el.getAttribute('data-poster-variant') || 'medium';
     var memKey = String(itemId) + '|' + variant + '|' + (supportsWebP() ? 'w1' : 'w0');
     if (_posterMem[memKey]) {
       loadPosterNow(el, itemId, kind);
@@ -3410,7 +3410,7 @@ function confirmDialog(message, opts){
         max_players: 4
       }
     }).then(function(j){
-      if (!j || !j.ok) { toast((j && j.error) || 'Could not start session', { kind:'bad' }); return; }
+      if (!j || !j.ok) { state._lobbyTransfer=null;state._hubInviteFriend=null;toast((j && j.error) || 'Could not start session', { kind:'bad' }); return; }
       var sess = j.session;
       window.VaultcastHub.lobbyOpened(sess);
       lobbyStartHeartbeat(sess, j.host_key || key);
@@ -3425,7 +3425,7 @@ function confirmDialog(message, opts){
           player_slot: 1,
           host_key: j.host_key || key
       }, sess);
-    }).catch(function(e){ toast('Lobby create failed: ' + String(e && e.message ? e.message : e), { kind:'bad' }); });
+    }).catch(function(e){ state._lobbyTransfer=null;state._hubInviteFriend=null;toast('Lobby create failed: ' + String(e && e.message ? e.message : e), { kind:'bad' }); });
   }
   function viewLobby(){
     lobbyStopPoll();
@@ -3914,13 +3914,15 @@ try {
         else runGlobalSearch(v);
       }
     });
-    return h('label', { className:'search-wrap' }, [ icon('search'), input, h('kbd', { className:'kbd-hint', text:'/' }) ]);
+    var wrap=h('div', { className:'search-wrap' }, [ icon('search'), input, h('kbd', { className:'kbd-hint', text:'/' }) ]);
+    if(mode!=='live' && window.VaultcastLiveSearch)window.VaultcastLiveSearch.attach(wrap,input,{api:api,h:h,mode:mode,open:function(it){if(isShowItem(it))openShow(it.show_key||it.id);else if(it.media_kind==='rom')openGame(it);else if(it.show)openShow(it.show_key||it.id,it.season,it.episode);else openMovie(it.id);}});
+    return wrap;
   }
 
   function subnavEl(mode){
     var items = [];
     if (mode === 'home') {
-      [['overview','For you'],['watchlist','Watchlist'],['favourites','Favourites'],['calendar','Coming soon'],['friends','Friends'],['cinema','Watch together'],['history','History'],['stats','Game stats'],['inbox','Inbox']].forEach(function(t){items.push({label:t[1],active:(state.hubTab||'overview')===t[0],go:function(){window.VaultcastHub.go(t[0]);}});});
+      [['overview','For you'],['watchlist','Watchlist'],['favourites','Favourites'],['calendar','Release calendar'],['friends','Friends'],['cinema','Watch together'],['history','History'],['stats','Game stats'],['inbox','Inbox']].forEach(function(t){items.push({label:t[1],active:(state.hubTab||'overview')===t[0],go:function(){window.VaultcastHub.go(t[0]);}});});
     } else if (mode === 'vod') {
       items.push({ label:'Discover', active: state.view === 'library', go: function(){ navigate('library'); } });
       vodSections().forEach(function(s){
@@ -6986,7 +6988,7 @@ try {
     } else if (sec === 'poster-optimise') {
       bodyKids = [
         h('h2', { text: 'Poster optimisation' }),
-        h('p', { className: 'muted', text: 'Build three versions of each poster: original JPG/PNG, same-resolution WebP, and a smaller WebP thumbnail for library grids. Detail pages use full WebP; browsers without WebP fall back to the original.' }),
+        h('p', { className: 'muted', text: 'Keep the original JPG/PNG and build three WebP sizes: main WebP, medium WebP for library grids and tiny WebP for live search. Detail pages use full WebP; browsers without WebP fall back to the original.' }),
         h('div', { id: 'poster-optimise-panel', className: 'convert-admin po-admin' }, [ pendingContent({ className:'muted', }) ])
       ];
       setTimeout(function(){ renderPosterOptimisePanel(); }, 0);
@@ -8574,19 +8576,21 @@ try {
       needs_total: 0, missing: 0, ready: 0, finished: false, items: [], selected: {}, scopes: { movies:true, shows:true, seasons:true, games:true }, gen: 0
     };
     var poCfg = {
-      full_quality: 90, full_max_w: 1600, thumb_quality: 72, thumb_max_w: 320, compression_level: 4, overwrite: false
+      full_quality: 90, full_max_w: 400, medium_quality: 72, medium_max_w: 220, thumb_quality: 72, thumb_max_w: 40, sizes_version: 3, compression_level: 4, overwrite: false
     };
     /* hydrate from saved settings immediately (summary also returns settings) */
     if (state.settings && state.settings.poster_optimise && typeof state.settings.poster_optimise === 'object') {
-      poCfg = Object.assign({}, poCfg, state.settings.poster_optimise);
+      var savedPo=Object.assign({},state.settings.poster_optimise);if((savedPo.sizes_version||0)<3){if(!savedPo.full_max_w||savedPo.full_max_w===1600)savedPo.full_max_w=400;savedPo.medium_max_w=savedPo.thumb_max_w||220;savedPo.medium_quality=savedPo.thumb_quality||72;savedPo.thumb_max_w=40;savedPo.sizes_version=3;}poCfg = Object.assign({}, poCfg, savedPo);
     }
     function collectPoCfg(){
-      var fq = $('#po_full_q'), fw = $('#po_full_w'), tq = $('#po_thumb_q'), tw = $('#po_thumb_w'), cl = $('#po_comp'), ow = $('#po_overwrite');
+      var fq = $('#po_full_q'), fw = $('#po_full_w'), tq = $('#po_medium_q'), tw = $('#po_medium_w'), cl = $('#po_comp'), ow = $('#po_overwrite');
       return {
         full_quality: fq ? +fq.value : poCfg.full_quality,
         full_max_w: fw ? +fw.value : poCfg.full_max_w,
-        thumb_quality: tq ? +tq.value : poCfg.thumb_quality,
-        thumb_max_w: tw ? +tw.value : poCfg.thumb_max_w,
+        medium_quality: tq ? +tq.value : poCfg.medium_quality,
+        thumb_quality: 72, sizes_version:3,
+        medium_max_w: tw ? +tw.value : poCfg.medium_max_w,
+        thumb_max_w: $('#po_tiny_w') ? +$('#po_tiny_w').value : 40,
         compression_level: cl ? +cl.value : poCfg.compression_level,
         overwrite: ow ? !!ow.checked : !!poCfg.overwrite
       };
@@ -8594,11 +8598,12 @@ try {
     function applyPoCfg(cfg){
       if (!cfg) return;
       poCfg = Object.assign(poCfg, cfg);
-      var fq = $('#po_full_q'), fw = $('#po_full_w'), tq = $('#po_thumb_q'), tw = $('#po_thumb_w'), cl = $('#po_comp'), ow = $('#po_overwrite');
+      var fq = $('#po_full_q'), fw = $('#po_full_w'), tq = $('#po_medium_q'), tw = $('#po_medium_w'), cl = $('#po_comp'), ow = $('#po_overwrite');
       if (fq) { fq.value = String(poCfg.full_quality); var el=$('#po_full_q_val'); if(el) el.textContent=String(poCfg.full_quality); }
       if (fw) { fw.value = String(poCfg.full_max_w); var elw=$('#po_full_w_val'); if(elw) elw.textContent=String(poCfg.full_max_w)+'px'; }
-      if (tq) { tq.value = String(poCfg.thumb_quality); var el2=$('#po_thumb_q_val'); if(el2) el2.textContent=String(poCfg.thumb_quality); }
-      if (tw) { tw.value = String(poCfg.thumb_max_w); var el3=$('#po_thumb_w_val'); if(el3) el3.textContent=String(poCfg.thumb_max_w)+'px'; }
+      if (tq) { tq.value = String(poCfg.medium_quality); var el2=$('#po_medium_q_val'); if(el2) el2.textContent=String(poCfg.medium_quality); }
+      if (tw) { tw.value = String(poCfg.medium_max_w); var el3=$('#po_medium_w_val'); if(el3) el3.textContent=String(poCfg.medium_max_w)+'px'; }
+      var tiny=$('#po_tiny_w');if(tiny){tiny.value=String(poCfg.thumb_max_w||40);$('#po_tiny_w_val').textContent=tiny.value+'px';}
       if (cl) { cl.value = String(poCfg.compression_level); }
       if (ow) ow.checked = !!poCfg.overwrite;
     }
@@ -8642,11 +8647,11 @@ try {
         if (job && job.status === 'failed') rowCls += ' cv-bad';
         var posterStyle = {};
         // use original thumb endpoint for preview
-        var preview = API + '/items/' + encodeURIComponent(it.id || '') + '/poster?fetch=0&variant=thumb&webp=' + (supportsWebP()?'1':'0');
-        if (it.kind === 'show') preview = API + '/shows/' + encodeURIComponent(it.id) + '/poster?fetch=0&variant=thumb&webp=' + (supportsWebP()?'1':'0');
+        var preview = API + '/items/' + encodeURIComponent(it.id || '') + '/poster?fetch=0&variant=medium&webp=' + (supportsWebP()?'1':'0');
+        if (it.kind === 'show') preview = API + '/shows/' + encodeURIComponent(it.id) + '/poster?fetch=0&variant=medium&webp=' + (supportsWebP()?'1':'0');
         if (it.kind === 'season' && /^([a-f0-9]+)-s(\d+)$/i.test(it.id||'')) {
           var sm = String(it.id).match(/^([a-f0-9]+)-s(\d+)$/i);
-          preview = API + '/shows/' + sm[1] + '/seasons/' + sm[2] + '/poster?fetch=0&variant=thumb&webp=' + (supportsWebP()?'1':'0');
+          preview = API + '/shows/' + sm[1] + '/seasons/' + sm[2] + '/poster?fetch=0&variant=medium&webp=' + (supportsWebP()?'1':'0');
         }
         var fill = h('div', { className: 'cv-glass-fill' + (job && job.status==='running' ? ' is-pulsing' : ''), style: 'width:' + pct + '%' });
         var row = h('div', { className: rowCls, 'data-file': it.file }, [
@@ -8666,14 +8671,15 @@ try {
                 : h('div', { className:'cv-glass-reason', text: it.reason || 'Needs WebP / thumb' }),
               h('div', { className:'cv-glass-sub muted', text: 'orig ' + fmtShortBytes(it.original_bytes)
                 + (it.has_webp ? (' · webp ' + fmtShortBytes(it.webp_bytes)) : ' · no webp')
+                + (it.has_medium ? (' · medium ' + fmtShortBytes(it.medium_bytes)) : ' · no medium')
                 + (it.has_thumb ? (' · thumb ' + fmtShortBytes(it.thumb_bytes)) : ' · no thumb') })
             ]),
             h('div', { className:'cv-glass-side cv-glass-actions' }, [
               (job && (job.status==='queued' || job.status==='running'))
                 ? h('button', { className:'btn ghost cv-glass-btn', text: job.status==='running'?'Working…':'Queued', disabled: true })
-                : h('button', { className:'btn primary cv-glass-btn', text: (job && (job.status==='done' || job.status==='failed')) || (it.has_webp && it.has_thumb) ? 'Re-optimise' : 'Optimise', title: ((job && (job.status==='done' || job.status==='failed')) || (it.has_webp && it.has_thumb)) ? 'Re-encode WebP with current slider settings (overwrites existing)' : 'Create WebP + thumb', onClick: function(){
+                : h('button', { className:'btn primary cv-glass-btn', text: (job && (job.status==='done' || job.status==='failed')) || (it.has_webp && it.has_thumb && it.has_medium) ? 'Re-optimise' : 'Optimise', title: ((job && (job.status==='done' || job.status==='failed')) || (it.has_webp && it.has_thumb && it.has_medium)) ? 'Re-encode WebP with current slider settings (overwrites existing)' : 'Create WebP + thumb', onClick: function(){
                     var cfg = collectPoCfg();
-                    var reopt = (job && (job.status==='done' || job.status==='failed')) || (it.has_webp && it.has_thumb);
+                    var reopt = (job && (job.status==='done' || job.status==='failed')) || (it.has_webp && it.has_thumb && it.has_medium);
                     if (reopt) cfg.overwrite = true;
                     runFiles([it.file], cfg);
                   }})
@@ -8694,13 +8700,15 @@ try {
       var res = j.result || {};
       if (j.status === 'done') {
         if (res.webp_bytes != null) it.webp_bytes = +res.webp_bytes || 0;
+        if (res.has_medium != null) it.has_medium=!!res.has_medium;
+        if (res.medium_bytes != null) it.medium_bytes=+res.medium_bytes||0;
         if (res.thumb_bytes != null) it.thumb_bytes = +res.thumb_bytes || 0;
         if (res.original_bytes != null) it.original_bytes = +res.original_bytes || it.original_bytes || 0;
         it.has_webp = !!(it.webp_bytes > 40 || res.webp_bytes > 40);
         it.has_thumb = !!(it.thumb_bytes > 40 || res.thumb_bytes > 40);
         if (!it.has_webp && (res.made || []).some(function(m){ return String(m).indexOf('webp') === 0; })) it.has_webp = true;
         if (!it.has_thumb && (res.made || []).some(function(m){ return String(m).indexOf('thumb') === 0; })) it.has_thumb = true;
-        if (it.has_webp && it.has_thumb) {
+        if (it.has_webp && it.has_thumb && it.has_medium) {
           it.needs = false;
           it.reason = 'ready · webp ' + fmtShortBytes(it.webp_bytes) + ' · thumb ' + fmtShortBytes(it.thumb_bytes);
         } else if (it.has_webp) {
@@ -8776,7 +8784,7 @@ try {
           if (findState.items[i].file === f) { it = findState.items[i]; break; }
         }
         if (!it) return true;
-        return !(it.has_webp && it.has_thumb);
+        return !(it.has_webp && it.has_thumb && it.has_medium);
       });
       if (!filtered.length) return toast('Nothing to optimise (all have WebP — enable Overwrite or use Re-optimise)', { kind:'bad' });
       drainEnabled = true;
@@ -8874,27 +8882,31 @@ try {
     host.appendChild(h('div', { className:'cv-section settings-card stack cv-glass-wrap' }, [
       h('div', { className:'cv-glass-head' }, [
         h('h3', { className:'admin-section-title', text:'Batch poster WebP' }),
-        h('p', { className:'muted', text:'Library grids load thumb WebP; movie/TV detail uses main WebP (quality + max width). Original JPG/PNG always kept as fallback.' }),
+        h('p', { className:'muted', text:'Library grids load medium WebP; search uses tiny thumbnails; movie/TV detail uses main WebP (quality + max width). Original JPG/PNG always kept as fallback.' }),
         pendingContent({ id:'po-summary', className:'muted', })
       ]),
             h('div', { className:'po-webp-settings cv-section', style:'margin:8px 0 12px' }, [
         h('h4', { className:'admin-section-title', text:'WebP conversion settings', style:'margin:0 0 6px;font-size:15px' }),
-        h('p', { className:'muted', text:'Smaller WebP without ugly banding loads grids faster. Main max width caps detail posters; thumb max width caps library cards. Original JPG/PNG stays untouched. Overwrite re-encodes existing WebP on batch.' }),
+        h('p', { className:'muted', text:'Smaller WebP without ugly banding loads grids faster. Main max width caps detail posters; medium max width caps library cards; search thumbnails are generated only when you optimise artwork. Original JPG/PNG stays untouched. Overwrite re-encodes existing WebP on batch.' }),
         h('label', { className:'cv-field cv-slider' }, [
           h('div', { className:'cv-slider-head' }, [ h('span', { className:'cv-field-label', text:'Main WebP quality' }), h('span', { className:'cv-slider-val', id:'po_full_q_val', text:'90' }) ]),
           h('input', { id:'po_full_q', type:'range', min:'40', max:'100', step:'1', value:'90', onInput: function(e){ var el=$('#po_full_q_val'); if(el) el.textContent=e.target.value; } })
         ]),
         h('label', { className:'cv-field cv-slider' }, [
-          h('div', { className:'cv-slider-head' }, [ h('span', { className:'cv-field-label', text:'Main max width' }), h('span', { className:'cv-slider-val', id:'po_full_w_val', text:'1600px' }) ]),
-          h('input', { id:'po_full_w', type:'range', min:'400', max:'2560', step:'40', value:'1600', onInput: function(e){ var el=$('#po_full_w_val'); if(el) el.textContent=e.target.value+'px'; } })
+          h('div', { className:'cv-slider-head' }, [ h('span', { className:'cv-field-label', text:'Main max width' }), h('span', { className:'cv-slider-val', id:'po_full_w_val', text:'400px' }) ]),
+          h('input', { id:'po_full_w', type:'range', min:'100', max:'700', step:'10', value:'400', onInput: function(e){ var el=$('#po_full_w_val'); if(el) el.textContent=e.target.value+'px'; } })
         ]),
         h('label', { className:'cv-field cv-slider' }, [
-          h('div', { className:'cv-slider-head' }, [ h('span', { className:'cv-field-label', text:'Thumb WebP quality' }), h('span', { className:'cv-slider-val', id:'po_thumb_q_val', text:'72' }) ]),
-          h('input', { id:'po_thumb_q', type:'range', min:'30', max:'95', step:'1', value:'72', onInput: function(e){ var el=$('#po_thumb_q_val'); if(el) el.textContent=e.target.value; } })
+          h('div', { className:'cv-slider-head' }, [ h('span', { className:'cv-field-label', text:'Medium WebP quality' }), h('span', { className:'cv-slider-val', id:'po_medium_q_val', text:'72' }) ]),
+          h('input', { id:'po_medium_q', type:'range', min:'30', max:'95', step:'1', value:'72', onInput: function(e){ var el=$('#po_medium_q_val'); if(el) el.textContent=e.target.value; } })
         ]),
         h('label', { className:'cv-field cv-slider' }, [
-          h('div', { className:'cv-slider-head' }, [ h('span', { className:'cv-field-label', text:'Thumb max width' }), h('span', { className:'cv-slider-val', id:'po_thumb_w_val', text:'320px' }) ]),
-          h('input', { id:'po_thumb_w', type:'range', min:'120', max:'640', step:'10', value:'320', onInput: function(e){ var el=$('#po_thumb_w_val'); if(el) el.textContent=e.target.value+'px'; } })
+          h('div', { className:'cv-slider-head' }, [ h('span', { className:'cv-field-label', text:'Medium max width' }), h('span', { className:'cv-slider-val', id:'po_medium_w_val', text:'220px' }) ]),
+          h('input', { id:'po_medium_w', type:'range', min:'80', max:'360', step:'10', value:'220', onInput: function(e){ var el=$('#po_medium_w_val'); if(el) el.textContent=e.target.value+'px'; } })
+        ]),
+        h('label', { className:'cv-field cv-slider' }, [
+          h('div', { className:'cv-slider-head' }, [h('span', {className:'cv-field-label',text:'Search thumbnail width'}),h('span',{id:'po_tiny_w_val',className:'cv-slider-val',text:'40px'})]),
+          h('input',{id:'po_tiny_w',type:'range',min:'16',max:'64',step:'1',value:'40',onInput:function(e){$('#po_tiny_w_val').textContent=e.target.value+'px';}})
         ]),
         h('label', { className:'cv-field' }, [
           h('span', { className:'cv-field-label', text:'Compression level (0=fast, 6=smallest)' }),
@@ -8917,7 +8929,7 @@ try {
             saveSettings({ poster_optimise: cfg });
           }}),
           h('button', { className:'btn ghost', text:'Reset defaults', onClick: function(){
-            applyPoCfg({ full_quality:90, full_max_w:1600, thumb_quality:72, thumb_max_w:320, compression_level:4, overwrite:false });
+            applyPoCfg({ full_quality:90, full_max_w:400, medium_quality:72, medium_max_w:220, thumb_quality:72, thumb_max_w:40, sizes_version:3, compression_level:4, overwrite:false });
             toast('Form reset - click Save to apply');
           }})
         ])
@@ -8937,7 +8949,7 @@ h('div', { className:'cv-find-bar' }, [
           var cfg = collectPoCfg();
           var files = findState.items.filter(function(it){
             if (cfg.overwrite) return true;
-            return !(it.has_webp && it.has_thumb);
+            return !(it.has_webp && it.has_thumb && it.has_medium);
           }).map(function(it){ return it.file; });
           runFiles(files, cfg);
         }}),

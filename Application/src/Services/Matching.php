@@ -744,7 +744,7 @@ class Matching {
         if (class_exists('Posters')) {
             Posters::clearCachedArtwork(Posters::showCachePath($showKey));
             foreach (glob(Posters::dir() . '/season_' . $safe . '_s*') ?: [] as $f) {
-                if (preg_match('/^season_' . $safe . '_s\d+(?:_thumb)?\.(?:jpe?g|png|webp)$/D', basename($f))) @unlink($f);
+                if (preg_match('/^season_' . $safe . '_s\d+(?:_thumb|_tiny)?\.(?:jpe?g|png|webp)$/D', basename($f))) @unlink($f);
             }
         }
     }

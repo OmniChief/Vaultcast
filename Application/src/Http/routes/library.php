@@ -30,6 +30,30 @@ if ($path === '/home' && $method === 'GET') {
 if ($path === '/search' && $method === 'GET') {
     $q = trim($_GET['q'] ?? '');
     $limit = min(100, max(1, (int)($_GET['limit'] ?? 40)));
+    if (!empty($_GET['suggest'])) {
+        $hits = [];
+        if ($q !== '') {
+            $needle = '%' . strtr($q, ['!'=>'!!','%'=>'!%','_'=>'!_']) . '%';
+            $sql = "SELECT i.payload FROM vaultcast_items i JOIN (SELECT MIN(id) id FROM vaultcast_items WHERE title LIKE ? ESCAPE '!' OR show_title LIKE ? ESCAPE '!' GROUP BY section_id,CASE WHEN show_title<>'' THEN show_title ELSE id END) found ON found.id=i.id ORDER BY CASE WHEN LOWER(CASE WHEN i.show_title<>'' THEN i.show_title ELSE i.title END)=LOWER(?) THEN 0 WHEN LOWER(CASE WHEN i.show_title<>'' THEN i.show_title ELSE i.title END) LIKE LOWER(?) ESCAPE '!' THEN 1 ELSE 2 END,i.title,i.id";
+            $stmt = \Vaultcast\Database::connection()->prepare($sql);
+            $stmt->execute([$needle,$needle,$q,substr($needle,1)]);
+            $viewer = current_or_guest();
+            while ($row = $stmt->fetch()) {
+                $it = json_decode($row['payload'], true);
+                if (!is_array($it) || !AreaAccess::allowed($viewer, AreaAccess::itemArea($it))) continue;
+                if (($_GET['area'] ?? '') === 'games' && ($it['media_kind'] ?? '') !== 'rom') continue;
+                if (!empty($it['show'])) {
+                    $key = Catalogue::showKey((string)$it['section'], (string)$it['show']);
+                    $hits[] = ['id'=>$key,'show_key'=>$key,'kind'=>'show','title'=>$it['show'],'type'=>$it['type'] ?? 'tv','year'=>$it['year'] ?? null];
+                } else $hits[] = $it;
+                if (count($hits) >= 5) break;
+            }
+            $stmt->closeCursor();
+            MediaFacts::preload(array_values(array_filter($hits, static function($it){return ($it['kind'] ?? '') !== 'show';})));
+            $hits = array_map(static function($it){return ($it['kind'] ?? '') === 'show' ? $it : Catalogue::publicItem($it);}, $hits);
+        }
+        json_out(['ok'=>true,'catalogue'=>$hits,'query'=>$q]);
+    }
     $out = Catalogue::search($q, $limit);
     // Inline light filters ÔÇö avoid loading Acquisition.php on every search
     $acq = Store::settings()['acquisition'] ?? [];

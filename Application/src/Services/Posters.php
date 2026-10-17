@@ -34,7 +34,7 @@ class Posters {
     public static function clearCachedArtwork(string $original): void {
         $stem = pathinfo(basename($original), PATHINFO_FILENAME);
         if (!preg_match('/^(?:movie_|game_|show_|season_)[a-zA-Z0-9_-]+$/D', $stem)) return;
-        foreach (['.jpg', '.jpeg', '.png', '.webp', '_thumb.webp'] as $suffix) @unlink(self::dir() . '/' . $stem . $suffix);
+        foreach (['.jpg', '.jpeg', '.png', '.webp', '_thumb.webp', '_tiny.webp'] as $suffix) @unlink(self::dir() . '/' . $stem . $suffix);
     }
     public static function enabled(): bool {
         // Once per request: Store::settings() re-reads runtime ini files, and list/show pages call this per item.

@@ -18,7 +18,7 @@
     if(pending)return pending;
     var forOwner=owner;
     pending=request('dashboard').then(function(j){if(String(A.state.user && A.state.user.id || 'guest')!==String(forOwner))throw new Error('Account changed. Reopen Home.');if(owner===forOwner){data=j;loaded=Date.now();}return j;});
-    pending.then(function(){pending=null;},function(){pending=null;});return pending;
+    var current=pending;current.then(function(){if(pending===current)pending=null;},function(){if(pending===current)pending=null;});return current;
   }
   function openPath(path){history.pushState({},'',(window.__STREAM_BASE__||'/')+path);A.applyRoute().then(function(){A.render();A.replaceNav();});}
   function go(tab,room){A.state.hubTab=tab||'overview';A.state.cinemaId=room||null;A.navigate('home');}
@@ -132,6 +132,24 @@
       body.appendChild(h('p',{className:'muted',text:'A little less scrolling. Pick from your watchlist, or a handful from your library.'}));body.appendChild(select);body.appendChild(result);body.appendChild(button('Another pick',choose,'primary'));select.onchange=choose;choose();
     });
   }
+  function releaseCalendar(){
+    var types=h('select',{'aria-label':'Release type'},[h('option',{value:'all',text:'TV & anime'}),h('option',{value:'tv',text:'TV'}),h('option',{value:'anime',text:'Anime'})]);
+    var query=h('input',{type:'search',placeholder:'Filter favourite shows…','aria-label':'Filter release calendar'}),days=h('select',{'aria-label':'Date range'},[h('option',{value:'30',text:'Next 30 days'}),h('option',{value:'7',text:'Next 7 days'})]),list=h('div');
+    function paint(){
+      list.replaceChildren();var now=new Date(),today=[now.getFullYear(),String(now.getMonth()+1).padStart(2,'0'),String(now.getDate()).padStart(2,'0')].join('-'),end=new Date(now);end.setDate(end.getDate()+Number(days.value));
+      var last=[end.getFullYear(),String(end.getMonth()+1).padStart(2,'0'),String(end.getDate()).padStart(2,'0')].join('-');
+      var episodes=data.upcoming.filter(function(ep){return ep.date>=today && ep.date<=last && (types.value==='all'||ep.card.type===types.value) && ep.card.title.toLowerCase().includes(query.value.toLowerCase());});
+      if(!episodes.length){list.appendChild(empty('No announced episodes in this range. Favourite TV or anime shows to follow them here. Air dates appear after episode guides have been prepared.'));return;}
+      var previous='',group;
+      episodes.forEach(function(ep){
+        if(ep.date!==previous){previous=ep.date;group=h('section',{className:'hub-calendar-day'},[h('h3',{text:(ep.date===today?'Today · ':'')+new Date(ep.date+'T12:00:00').toLocaleDateString(undefined,{weekday:'long',month:'long',day:'numeric'})})]);list.appendChild(group);}
+        var poster=h('img',{src:(window.__STREAM_BASE__||'/')+'api/shows/'+encodeURIComponent(ep.card.show_key)+'/poster?fetch=0&variant=medium',alt:'',loading:'lazy',width:'48',height:'72',onError:function(e){e.currentTarget.hidden=true;}});
+        group.appendChild(h('div',{className:'hub-airing'},[poster,h('div',{},[h('strong',{text:ep.card.title}),h('small',{text:'S'+ep.season+' E'+ep.episode+' · '+ep.title})]),button('Open show',function(){A.openShow(ep.card.show_key);})]));
+      });
+    }
+    query.oninput=paint;types.onchange=paint;days.onchange=paint;paint();
+    return panel('Release calendar',[h('p',{className:'muted',text:'Upcoming episodes from your favourited TV and anime shows. Air dates use prepared episode guides and do not indicate library availability.'}),h('div',{className:'hub-calendar-filters'},[types,days,query]),list]);
+  }
   function view(){
     var root=h('div',{className:'home-hub'}),tab=A.state.hubTab||'overview';
     if(A.state.cinemaId)return A.shell(cinemaView(A.state.cinemaId));
@@ -151,7 +169,7 @@
         function shelf(){items.replaceChildren();var filtered=data[tab].filter(function(it){return (it.title||'').toLowerCase().indexOf(q.value.toLowerCase())>=0;});items.appendChild(cards(filtered,limit,tab));if(filtered.length>limit)items.appendChild(button('Show more',function(){limit+=24;shelf();}));}
         q.oninput=function(){limit=24;shelf();};body.appendChild(panel(title,[q,items]));shelf();
       } else if(tab==='friends')body.appendChild(signed()?friendsPage():empty('Sign in to connect with friends.'));
-      else if(tab==='calendar')body.appendChild(panel('On the horizon · next 30 days',[h('p',{className:'muted',text:'Air dates for your favourite shows, using prepared episode guides. A scheduled airing does not mean a file has arrived in your library.'})].concat(data.upcoming.length?data.upcoming.map(function(ep){return h('div',{className:'hub-airing'},[h('time',{datetime:ep.date,text:new Date(ep.date+'T12:00:00').toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'})}),h('div',{},[h('strong',{text:ep.card.title}),h('small',{text:'S'+ep.season+' E'+ep.episode+' · '+ep.title})]),button('Open show',function(){A.openShow(ep.card.show_key);})]);}):[empty('Favourite a series to follow its upcoming episodes here.')])));
+      else if(tab==='calendar')body.appendChild(releaseCalendar());
       else if(tab==='history')body.appendChild(panel('Your recent watches',cards(data.history,40)));
       else if(tab==='stats')body.appendChild(signed()?gameStats():empty('Sign in to keep your game statistics.'));
       else if(tab==='inbox')body.appendChild(panel('Your invitations',data.notifications.length?notices():[empty('All caught up. Your invitations appear here.')]));

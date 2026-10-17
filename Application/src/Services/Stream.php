@@ -515,7 +515,7 @@ class Stream {
 
         if (class_exists('PosterOptimise')) {
             $variant = strtolower((string)($_GET['variant'] ?? 'full'));
-            if ($variant !== 'thumb' && $variant !== 'full' && $variant !== 'original') $variant = 'full';
+            if ($variant !== 'medium' && $variant !== 'thumb' && $variant !== 'full' && $variant !== 'original') $variant = 'full';
             $wantWebp = PosterOptimise::clientWantsWebp();
             $path = PosterOptimise::pickServePath($path, $variant, $wantWebp);
         }
@@ -540,7 +540,7 @@ class Stream {
         $path = $original;
         if (class_exists('PosterOptimise')) {
             $variant = strtolower((string)($_GET['variant'] ?? 'full'));
-            if (!in_array($variant, ['thumb', 'full', 'original'], true)) $variant = 'full';
+            if (!in_array($variant, ['thumb', 'medium', 'full', 'original'], true)) $variant = 'full';
             $path = PosterOptimise::pickServePath($original, $variant, PosterOptimise::clientWantsWebp());
         }
         $minimum = strtolower(pathinfo($path, PATHINFO_EXTENSION)) === 'webp' ? 40 : 100;

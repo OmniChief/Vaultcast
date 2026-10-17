@@ -83,7 +83,7 @@ final class ArtworkAudit
             if (!empty($item[$field]) && !self::image((string)$item[$field])) $problems[] = 'Missing, unreadable or invalid database reference: ' . $field;
         }
         $paths = PosterOptimise::pathsForStem(pathinfo($target['path'], PATHINFO_FILENAME));
-        foreach (['original', 'webp', 'thumb'] as $variant) {
+        foreach (['original', 'webp', 'medium', 'thumb'] as $variant) {
             if ($paths[$variant] && file_exists($paths[$variant]) && !self::image($paths[$variant])) $problems[] = 'Invalid cached image: ' . $variant;
         }
         $resolved = self::resolved($target);
@@ -161,7 +161,7 @@ final class ArtworkAudit
         try {
             foreach ($members as $member) {
                 $paths = PosterOptimise::pathsForStem(pathinfo($member['path'], PATHINFO_FILENAME));
-                foreach (['original','webp','thumb'] as $variant) if ($paths[$variant] && is_file($paths[$variant]) && !self::image($paths[$variant])) @unlink($paths[$variant]);
+                foreach (['original','webp','medium','thumb'] as $variant) if ($paths[$variant] && is_file($paths[$variant]) && !self::image($paths[$variant])) @unlink($paths[$variant]);
                 $path = self::resolved($member);
                 if (!self::image($path)) {
                     Posters::clearFailed(in_array($member['kind'], ['shows','seasons'], true) ? 'show' : ($member['kind'] === 'games' ? 'game' : 'movie'), (string)($member['key'] ?? $id));
