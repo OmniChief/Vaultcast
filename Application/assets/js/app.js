@@ -731,7 +731,7 @@ function confirmDialog(message, opts){
     opts = opts || {};
     var method = String(opts.method || 'GET').toUpperCase();
     if (method !== 'GET') {
-      if (/^\/hub\/(?:game|rooms|shelf|review|friend|invite|dismiss|saves|lists)(?:\/|$)/.test(path)) return apiRequest(path,opts);
+      if (/^\/hub\/(?:game|rooms|shelf|review|friend|invite|dismiss|saves|lists|chat)(?:\/|$)/.test(path)) return apiRequest(path,opts);
       if (/^\/items\/[a-f0-9]+\/play$/.test(path) || path === '/admin/posters/audit') return apiRequest(path, opts);
       navigationCache.clear();
       return apiRequest(path, opts).then(function(j){ navigationCache.clear(); return j; }, function(error){ navigationCache.clear(); throw error; });
@@ -3936,7 +3936,7 @@ try {
   function subnavEl(mode){
     var items = [];
     if (mode === 'home') {
-      [['overview','For you'],['watchlist','Watchlist'],['favourites','Favourites'],['calendar','Release calendar'],['arrivals','New episodes'],['lists','My collections'],['friends','Friends'],['cinema','Watch together'],['history','History'],['stats','Game stats'],['inbox','Inbox']].forEach(function(t){items.push({label:t[1],active:(state.hubTab||'overview')===t[0],go:function(){window.VaultcastHub.go(t[0]);}});});
+      [['overview','For you'],['watchlist','Watchlist'],['favourites','Favourites'],['calendar','Release calendar'],['arrivals','New episodes'],['lists','My collections'],['friends','Friends'],['chat','Chat'],['cinema','Watch together'],['history','History'],['stats','Game stats'],['inbox','Inbox']].forEach(function(t){items.push({label:t[1],chatKind:t[0]==='inbox'?'mail':t[0]==='chat'?'dm':null,active:(state.hubTab||'overview')===t[0],go:function(){window.VaultcastHub.go(t[0]);}});});
     } else if (mode === 'vod') {
       items.push({ label:'Discover', active: state.view === 'library', go: function(){ navigate('library'); } });
       vodSections().forEach(function(s){
@@ -3964,7 +3964,7 @@ try {
     if (mode === 'play' && (state.playTab || 'games') === 'lobby') right.push(h('button', { className:'subnav-link', type:'button', onClick: openLobbyStartPicker }, [ icon('playFill'), h('span', { text:'Start multiplayer' }) ]));
     return h('nav', { className:'subnav', 'aria-label':'Section' }, [
       h('div', { className:'subnav-inner' }, items.map(function(it){
-        return h('button', { className:'subnav-btn' + (it.active ? ' active' : ''), type:'button', text: it.label, onClick: it.go });
+        return h('button', { className:'subnav-btn' + (it.active ? ' active' : ''), type:'button', 'data-chat-kind':it.chatKind||'', text:it.label+(it.chatKind&&state.chatUnreadOwner===(state.user&&state.user.id)&&state.chatUnread&&state.chatUnread[it.chatKind]?' •':''), onClick: it.go });
       })),
       right.length ? h('div', { className:'subnav-right' }, right) : null
     ]);
@@ -4530,9 +4530,11 @@ try {
   }
 
   function loadLiveTeaser(){
+    var host = $('#live-teaser');if(!host)return;
+    var generation=(host._liveGeneration||0)+1;host._liveGeneration=generation;
     liveApi('guide', '&hours=2&slim=1').then(function(g){
-      var host = $('#live-teaser');
-      if (!host || !g || !g.channels || !g.channels.length) return;
+      if (!host.isConnected || host!==$('#live-teaser') || host._liveGeneration!==generation || !g || !g.channels) return;
+      host.replaceChildren();if(!g.channels.length)return;
       if (!live.guide) live.guide = g; // slim data is enough for the first paint of cards
       host.appendChild(rowEl('On Watch Live now', sortLiveChannels(g.channels).slice(0, 16).map(function(ch){ return liveCardEl(ch, { compact:true }); }), {
         className:'row-live', more: function(){ goMode('live'); }, moreText:'Open guide'

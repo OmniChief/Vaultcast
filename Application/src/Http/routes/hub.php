@@ -10,6 +10,7 @@ if (strpos($path,'/hub/')===0) {
         if (preg_match('#^/hub/rooms/([a-f0-9]{16})$#',$path,$m) && $method==='GET') json_out(['ok'=>true,'room'=>HomeHub::room($m[1],$viewer)]);
         if ($path==='/hub/tonight' && $method==='GET') json_out(HomeExtras::tonight($viewer,(int)($_GET['minutes'] ?? 90)));
         $user=Auth::requireUser();
+        if ($path==='/hub/chat' || strpos($path,'/hub/chat/')===0) require __DIR__.'/chat.php';
         if ($path==='/hub/extras' && $method==='GET') json_out(HomeExtras::state($user));
         if (preg_match('#^/hub/lists/([a-f0-9]{16})/([a-f0-9]{16})$#',$path,$collection) && $method==='GET') json_out(HomeExtras::collection($user,$collection[1],$collection[2]));
         if ($path==='/hub/lists' && $method==='GET') json_out(HomeExtras::lists($user,(int)($_GET['page'] ?? 1),(string)($_GET['q'] ?? '')));

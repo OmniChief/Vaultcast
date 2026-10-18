@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 // Public routes
-if (preg_match('#^/profiles/([a-f0-9]{16})/avatar$#', $path, $m) && in_array($method, ['GET','HEAD'], true)) Profiles::serve($m[1]);
+if (preg_match('#^/profiles/([a-f0-9]{16,64})/avatar$#', $path, $m) && in_array($method, ['GET','HEAD'], true)) Profiles::serve($m[1]);
 if ($path === '/status' && $method === 'GET') {
     $settings = Store::settings();
     $sess = Auth::currentSession();

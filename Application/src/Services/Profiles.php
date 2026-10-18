@@ -5,14 +5,14 @@ final class Profiles
 {
     public static function avatarUrl(array $user): ?string
     {
-        if (empty($user['avatar_version']) || !preg_match('/^[a-f0-9]{16}$/D', (string)($user['id'] ?? ''))) return null;
+        if (empty($user['avatar_version']) || !preg_match('/^[a-f0-9]{16,64}$/D', (string)($user['id'] ?? ''))) return null;
         return \Vaultcast\Database::basePath() . 'api/profiles/' . $user['id'] . '/avatar?v=' . rawurlencode((string)$user['avatar_version']);
     }
 
     public static function saveAvatar(array $user, array $body): ?string
     {
         $id = (string)$user['id'];
-        if (!preg_match('/^[a-f0-9]{16}$/D', $id)) throw new InvalidArgumentException('Invalid profile');
+        if (!preg_match('/^[a-f0-9]{16,64}$/D', $id)) throw new InvalidArgumentException('Invalid profile');
         $dir = STREAM_DATA . '/avatars'; $path = $dir . '/' . $id . '.img';
         if (!empty($body['remove_avatar'])) { if (is_file($path)) @unlink($path); return null; }
         if (empty($body['avatar_data'])) return $user['avatar_version'] ?? null;

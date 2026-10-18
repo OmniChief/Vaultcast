@@ -86,3 +86,37 @@ CREATE TABLE IF NOT EXISTS vaultcast_media_facts (
     duration DOUBLE NOT NULL DEFAULT 0,
     INDEX duration_index (duration)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS vaultcast_chat_rooms (
+ id VARCHAR(64) CHARACTER SET ascii NOT NULL PRIMARY KEY,
+ kind VARCHAR(12) NOT NULL, title VARCHAR(100) NOT NULL, owner_id VARCHAR(64) NOT NULL,
+ peer_id VARCHAR(64) NOT NULL DEFAULT '', retention INT UNSIGNED NOT NULL DEFAULT 86400,
+ revision BIGINT UNSIGNED NOT NULL DEFAULT 1, updated_at BIGINT NOT NULL,
+ INDEX chat_owner (owner_id,kind), INDEX chat_activity (updated_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS vaultcast_chat_members (
+ room_id VARCHAR(64) CHARACTER SET ascii NOT NULL, user_id VARCHAR(64) NOT NULL,
+ read_id BIGINT UNSIGNED NOT NULL DEFAULT 0, muted TINYINT NOT NULL DEFAULT 0,
+ banned TINYINT NOT NULL DEFAULT 0, seen_at BIGINT NOT NULL DEFAULT 0,
+ typing_until BIGINT NOT NULL DEFAULT 0, PRIMARY KEY(room_id,user_id), INDEX chat_member (user_id,room_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS vaultcast_chat_messages (
+ id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+ room_id VARCHAR(64) CHARACTER SET ascii NOT NULL, sender_id VARCHAR(64) NOT NULL,
+ body TEXT NOT NULL, attachment VARCHAR(32) CHARACTER SET ascii NOT NULL DEFAULT '',
+ nonce VARCHAR(32) CHARACTER SET ascii NOT NULL, created_at BIGINT NOT NULL,
+ expires_at BIGINT NOT NULL DEFAULT 0, edited_at BIGINT NOT NULL DEFAULT 0,
+ UNIQUE KEY chat_nonce (sender_id,nonce), INDEX chat_history(room_id,id,sender_id,expires_at),
+ INDEX chat_expiry(expires_at), INDEX chat_sender(sender_id,created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS vaultcast_chat_files (
+ id CHAR(32) CHARACTER SET ascii NOT NULL PRIMARY KEY,
+ room_id VARCHAR(64) CHARACTER SET ascii NOT NULL, user_id VARCHAR(64) NOT NULL,
+ bytes INT UNSIGNED NOT NULL, received INT UNSIGNED NOT NULL DEFAULT 0,
+ mime VARCHAR(32) NOT NULL DEFAULT '', created_at BIGINT NOT NULL,
+ message_id BIGINT UNSIGNED NOT NULL DEFAULT 0,
+ INDEX chat_file_gc(message_id,created_at), INDEX chat_file_owner(user_id,created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS vaultcast_chat_presence (
+ user_id VARCHAR(64) NOT NULL PRIMARY KEY, seen_at BIGINT NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

@@ -252,6 +252,7 @@ final class Repository
             $s = $pdo->prepare('DELETE FROM vaultcast_users WHERE id=?');
             $s->execute([$id]);
             if ($s->rowCount() < 1) return false;
+            \Chat::removeUser($id);
             $pdo->prepare('DELETE FROM vaultcast_sessions WHERE user_id=?')->execute([$id]);
             $pdo->prepare('DELETE FROM vaultcast_progress WHERE user_id=?')->execute([$id]);
             $pdo->prepare("DELETE FROM vaultcast_playback_tokens WHERE JSON_UNQUOTE(JSON_EXTRACT(payload,'$.user_id'))=?")->execute([$id]);
