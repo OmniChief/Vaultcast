@@ -461,9 +461,8 @@ final class Updater
             self::maintenance(false);
             throw new UpdaterRolledBack('Update failed and was rolled back: ' . $e->getMessage() . ($problems ? ' (could not restore: ' . implode(', ', $problems) . ')' : ''));
         }
-        // Migrations: the new code runs them on the next request through the idempotent startup
-        // pattern (Migrations::runIfNeeded under its MariaDB lock). Clearing the stamps forces that pass.
-        foreach (glob(self::dataDir() . '/cache/migrations-*.done') ?: [] as $stamp) @unlink($stamp);
+        // Preserve completed migrations and prepared library data. A changed schema version
+        // has its own durable stamp and runs only the migrations that upgrade requires.
         if (function_exists('opcache_reset')) @opcache_reset();
         self::maintenance(false);
         self::pruneBackups(3);

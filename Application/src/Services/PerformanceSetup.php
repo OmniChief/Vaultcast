@@ -9,21 +9,24 @@ final class PerformanceSetup {
         $stamp = $runtime . '/performance-v7.json';
         $read = function () use ($stamp) {
             $state = json_decode((string)@file_get_contents($stamp), true);
-            return is_array($state) && (!empty($state['job']) || time() - (int)($state['attempted_at'] ?? 0) < 300);
+            return is_array($state) && (!empty($state['complete']) || !empty($state['job']) || time() - (int)($state['attempted_at'] ?? 0) < 300);
         };
         if ($read()) return;
         $lock = @fopen($runtime . '/performance-setup.lock', 'c');
         if (!$lock) return;
         try {
             if (!flock($lock, LOCK_EX | LOCK_NB) || $read()) return;
+            if(BrowseIndex::ready()){
+                @file_put_contents($stamp,json_encode(['complete'=>true,'reason'=>'Existing browse index retained']),LOCK_EX);
+                return;
+            }
             $state = ['attempted_at'=>time()];
             try {
                 $views = Maintenance::start('views', 'Prepared browsing update');
                 $state['views'] = $views['job']['id'] ?? null;
                 if (empty($views['ok']) || empty($views['job']['id'])) throw new RuntimeException('Could not queue browse preparation.');
                 $state['job'] = $views['job']['id'];
-                // Codec preparation belongs to its previous one-time rollout, not this index upgrade.
-                if (!is_file($runtime.'/performance-v6.json')) Maintenance::start('facts','Home runtime preparation');
+                // Codec probes and filesystem scans are explicit maintenance actions.
             } catch (Throwable $e) {
                 $state['error'] = $e->getMessage();
                 error_log('Vaultcast performance preparation: ' . $e->getMessage());
