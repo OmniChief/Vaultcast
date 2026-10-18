@@ -1376,16 +1376,7 @@ function confirmDialog(message, opts){
       var root = h('div', { id:'emu-root' });
       root.style.cssText = 'position:absolute;top:0;left:0;right:0;bottom:0;width:100%;height:100%;background:#000;z-index:1;';
       overlay.appendChild(root);
-      if (openPlayer._lobbyOpts && state.gameLobby) {
-        var multiplayer = state.gameLobby;
-        var roomButton = h('button', {className:'lobby-emulator-room', type:'button', onClick:function(event){event.stopPropagation();openLobbyNetplayMenu();}});
-        overlay.appendChild(roomButton);
-        setTimeout(function paintRoom(){
-          if (!overlay.isConnected || state.gameLobby !== multiplayer) return;
-          roomButton.textContent = 'Room ' + (multiplayer.session.room_code || '') + ' · P' + multiplayer.options.player_slot + ' · ' + lobbyConnection(multiplayer);
-          setTimeout(paintRoom, 1000);
-        }, 0);
-      }
+      if (openPlayer._lobbyOpts && state.gameLobby) mountLobbyRoomBadge(overlay,state.gameLobby);
       mountDetailPlayer(overlay, inlineHost, true);
       loadEmulator(root, play, item, openPlayer._lobbyOpts || null);
       openPlayer._lobbyOpts = null;
@@ -1963,6 +1954,15 @@ function confirmDialog(message, opts){
     emu.openNetplayMenu();
   }
 
+  function mountLobbyRoomBadge(overlay, multiplayer){
+    var roomButton = h('button', {className:'lobby-emulator-room', type:'button', onClick:function(event){event.stopPropagation();openLobbyNetplayMenu();}});
+    overlay.appendChild(roomButton);
+    setTimeout(function paintRoom(){
+      if (!overlay.isConnected || state.gameLobby !== multiplayer) return;
+      roomButton.textContent = 'Room ' + (multiplayer.session.room_code || '') + ' · P' + multiplayer.options.player_slot + ' · ' + lobbyConnection(multiplayer);
+      setTimeout(paintRoom,1000);
+    },0);
+  }
   function mountLobbyBoard(root, multiplayer){
     var session = multiplayer.session, options = multiplayer.options || {};
     var badge = h('span', {className:'lobby-status-pill', role:'status'});
@@ -2219,7 +2219,6 @@ function confirmDialog(message, opts){
               clearTimeout(np._streamMembershipTimer);
               np._streamMembershipTimer = setTimeout(function(){
                 if (emu._streamDisposed || !emu.isNetplay) return;
-                if (np._streamLoadingState) { np._streamResyncPending = true; return; }
                 np._streamSyncing = false; // Membership changes supersede the old handshake.
                 try { np.sync(); } catch (eS) { lobbyLog('sync_throw', { error: String(eS && eS.message ? eS.message : eS) }); console.warn('lobby users-updated sync', eS); }
               }, 120);
@@ -2792,7 +2791,7 @@ function confirmDialog(message, opts){
     // Establish a fresh epoch after membership changes or a verified mismatch.
     np.sync = function(){
       if (emu._streamDisposed || !emu.isNetplay || !np.owner || np._streamSyncing) return;
-      if (Object.keys(np.players || {}).some(function(id){ return np.players[id].sync_revision !== 9; })) {
+      if (Object.keys(np.players || {}).some(function(id){ return np.players[id].sync_revision !== 10; })) {
         syncFailed('All players need the latest branch update; refresh each player');
         return;
       }
@@ -2825,20 +2824,10 @@ function confirmDialog(message, opts){
           np._streamSyncWatchdog = setTimeout(function(){
             if (np._streamSyncing && np._streamSyncId === syncId) syncFailed('State synchronisation timed out');
           }, 15000);
-          // Both peers must pass through native unserialisation: restoring can
-          // rebuild internal core caches that are absent from the snapshot.
-          lobbyLoadSnapshot(emu, bytes, hash, held, syncId, function(){
-            if (emu._streamDisposed || np._streamSyncId !== syncId) return;
-            if (np._streamResyncPending) {
-              np._streamResyncPending = false;
-              np._streamSyncing = false;
-              np.sync();
-              return;
-            }
-            np._streamReadyUsers[np.playerID] = true;
-            lobbyScheduleSyncTrace(emu);
-            releaseHost();
-          });
+          lobbyResetNetplayFrames(emu,'host_snapshot');
+          np._streamReadyUsers[np.playerID] = true;
+          lobbyScheduleSyncTrace(emu);
+          releaseHost();
         } catch (err) {
           syncFailed(err && err.message ? err.message : String(err));
         }
@@ -3068,7 +3057,7 @@ function confirmDialog(message, opts){
         userid: np.playerID,
         sessionid: sid,
         player_slot: 1,
-        sync_revision: 9,
+        sync_revision: 10,
         sync_config: lobbySyncConfiguration(emu),
         netplay_protocol: 'vaultcast-lockstep-4'
       };
@@ -3129,7 +3118,7 @@ function confirmDialog(message, opts){
         userid: np.playerID,
         sessionid: sid,
         player_slot: lobbyOpts.player_slot,
-        sync_revision: 9,
+        sync_revision: 10,
         sync_config: lobbySyncConfiguration(emu),
         netplay_protocol: 'vaultcast-lockstep-4'
       };
@@ -3166,7 +3155,7 @@ function confirmDialog(message, opts){
             return;
           }
           np.players = users || np.players;
-          if (Object.keys(np.players || {}).some(function(id){ return np.players[id].sync_revision !== 9; })) {
+          if (Object.keys(np.players || {}).some(function(id){ return np.players[id].sync_revision !== 10; })) {
             fail('All players need the latest branch update; refresh each player');
             return;
           }
@@ -3235,15 +3224,7 @@ function confirmDialog(message, opts){
         if (session !== _emuSessionId || startedEmu._streamDisposed) return;
         if (ioError) { fail('Netplay: '+(ioError.message || String(ioError))); return; }
         installNetplayIoShim();
-        var transfer=state._lobbyTransfer;
-        if(role==='host' && transfer && String(transfer.id)===String(state.movieId)) {
-          state._lobbyTransfer=null;
-          try {
-            if (!lobbyEnsureNetplayFns(startedEmu)) throw new Error('Could not initialise multiplayer controls');
-            startedEmu.isNetplay=true;startedEmu.netplay.owner=true;startedEmu.netplay._streamAwaitingGo=true;
-            lobbyLoadSnapshot(startedEmu,transfer.bytes,transfer.hash,[],0,tryConnect);
-          } catch(err) {fail('Could not move the current game into multiplayer: '+err.message);}
-        } else tryConnect();
+        tryConnect();
       });
     }, delay);
   }
@@ -3488,21 +3469,57 @@ function confirmDialog(message, opts){
     return {core:emu.getCore(),variant:emu.supportsWebgl2 && emu.webgl2Enabled?'modern':'legacy',
       threaded:typeof window.SharedArrayBuffer==='function' && (threadSetting==='enabled' || threadSetting!=='disabled' && !!emu.config.threads),options:options};
   }
+  function promoteCurrentGameToLobby(item, options, session, emu){
+    var root=document.getElementById('movie-view'), player=document.getElementById('detail-player'), overlay=document.getElementById('player-overlay');
+    if (!root || !player || !overlay || emu!==window.EJS_emulator || emu._streamDisposed || !emu._streamFrameBridgeInstalled) throw new Error('This running game cannot enter multiplayer. Reopen it and retry.');
+    // Keep the canvas, WASM memory and audio context alive. Re-rendering the page
+    // destroys the current game and forces an unnecessary state round trip.
+    options.runtime=session.runtime || null;
+    emu.config.netplayUrl=lobbyNetplayServerUrl();
+    emu.config.gameId=lobbyNumericGameId(item.id,options.game_id);
+    emu.config.system=options.runtime ? options.runtime.core : emu.getCore();
+    emu.config.defaultOptions=options.runtime ? Object.assign({},options.runtime.options) : {};
+    emu.config.disableLocalStorage=true;
+    if(options.runtime)emu.config.threads=options.runtime.threaded;
+    emu.netplayEnabled=true;
+    if(!lobbyEnsureNetplayFns(emu))throw new Error('Could not initialise multiplayer controls');
+    emu.pause(true);
+    emu.isNetplay=true;emu.netplay.owner=true;emu.netplay._streamAwaitingGo=true;
+    // Pause/play are now frame-gated; leave the native task loop running.
+    emu.gameManager.functions.toggleMainLoop(1);
+    ['toggleFastForward','toggleSlowMotion','toggleRewind'].forEach(function(name){if(emu.gameManager.functions[name])emu.gameManager.functions[name](0);});
+    var bar=emu.elements.bottomBar || {};
+    ['restart','loadState','saveState','quickSave','quickLoad','cheat','settings','loadSavFiles'].forEach(function(name){(Array.isArray(bar[name]) ? bar[name] : []).forEach(function(node){if(node && node.style)node.style.display='none';});});
+    var multiplayer={options:options,session:session};
+    state.gameLobby=multiplayer;
+    try{sessionStorage.setItem('vaultcast-room-'+session.id,JSON.stringify({options:options,item_id:item.id}));}catch(eStore){}
+    mountLobbyBoard(root,multiplayer);
+    var board=root.querySelector('.lobby-room-panel');
+    if(board)root.insertBefore(board,player.nextSibling);
+    mountLobbyRoomBadge(overlay,multiplayer);
+    root.querySelectorAll('button').forEach(function(button){if(button.textContent==='Start lobby'){button.disabled=true;button.textContent='Lobby active';}});
+    syncUrl();
+    lobbyAfterGameStart(options);
+  }
+  var _lobbyHostOpening=false;
   function startLobbyHost(item, preserve){
     if (!item || !item.id) return;
     if (typeof preserve !== 'boolean') {chooseLobbyStart(item);return;}
-    var active=window.EJS_emulator;
+    if(_lobbyHostOpening)return;
+    var active=window.EJS_emulator, generation=_emuSessionId, runtime=null;
     if (preserve && (!active || !active.started || active._streamDisposed || active.isNetplay || String(state.movieId)!==String(item.id))) {
       toast('The current game is no longer available. Choose New game instead.',{kind:'bad'});return;
     }
-    state._lobbyTransfer=null;
-    if(preserve && active && active.started && !active.isNetplay && String(state.movieId)===String(item.id)) {
-      try {var bytes=lobbyCaptureState(active);state._lobbyTransfer={id:item.id,bytes:bytes,hash:window.VaultcastNetplaySync.stateHash(bytes),runtime:lobbyCaptureRuntime(active)};}
-      catch(err){toast('Could not preserve this game: '+err.message,{kind:'bad'});return;}
+    if(preserve) {
+      if(active._cloudRestoring){toast('Wait for the current save to finish loading before opening a lobby.');return;}
+      if(!active._streamFrameBridgeInstalled || !document.getElementById('detail-player')){toast('Reopen the game before moving it into multiplayer.',{kind:'bad'});return;}
+      try {runtime=lobbyCaptureRuntime(active);}
+      catch(err){toast('Could not prepare this game: '+err.message,{kind:'bad'});return;}
     }
     if (state.lobby.host || state.lobby.guest) {closePlayer();state.gameLobby=null;}
     if (!item || !item.id) return;
     var key = lobbyHostKey();
+    _lobbyHostOpening=true;
     toast('Opening lobby session…', { ms: 1400 });
     api('/lobby/sessions', {
       method:'POST',
@@ -3510,27 +3527,43 @@ function confirmDialog(message, opts){
         item_id: item.id,
         host_name: lobbyPlayerName(),
         host_key: key,
-        runtime: state._lobbyTransfer ? state._lobbyTransfer.runtime : null,
+        runtime: runtime,
         max_players: 4
       }
     }).then(function(j){
-      if (!j || !j.ok) { state._lobbyTransfer=null;state._hubInviteFriend=null;toast((j && j.error) || 'Could not start session', { kind:'bad' }); return; }
+      if (!j || !j.ok) { state._hubInviteFriend=null;toast((j && j.error) || 'Could not start session', { kind:'bad' }); return; }
       var sess = j.session;
+      if(preserve && (generation!==_emuSessionId || active!==window.EJS_emulator || active._streamDisposed || String(state.movieId)!==String(item.id))) {
+        state._hubInviteFriend=null;
+        api('/lobby/sessions/'+encodeURIComponent(sess.id),{method:'DELETE',body:{host_key:j.host_key || key}}).catch(function(){});
+        toast('The game closed before its lobby opened.',{kind:'bad'});return;
+      }
       window.VaultcastHub.lobbyOpened(sess);
       lobbyStartHeartbeat(sess, j.host_key || key);
       toast('Lobby session live — others can join (Room ' + (sess.room_code || '') + ')', { ms: 4200 });
-      openMultiplayerGame(item, {
-          role: 'host',
-          session_id: sess.id,
-          room_code: sess.room_code,
-          game_id: sess.game_id,
-          max_players: sess.max_players,
-          title: sess.title,
-          player_slot: 1,
-          host_key: j.host_key || key
-      }, sess);
-    }).catch(function(e){ state._lobbyTransfer=null;state._hubInviteFriend=null;toast('Lobby create failed: ' + String(e && e.message ? e.message : e), { kind:'bad' }); });
+      var options={role:'host',session_id:sess.id,room_code:sess.room_code,game_id:sess.game_id,
+        max_players:sess.max_players,title:sess.title,player_slot:1,host_key:j.host_key || key};
+      if(preserve) {
+        try{promoteCurrentGameToLobby(item,options,sess,active);}
+        catch(error){
+          lobbyEndHostSession();
+          if(active===window.EJS_emulator && !active._streamDisposed){
+            active.isNetplay=false;active._streamLobbyStarted=false;
+            if(active.netplay){active.netplay._streamAwaitingGo=false;if(active.netplay.socket)active.netplay.socket.disconnect();}
+            try{active.play(true);active.gameManager.functions.toggleMainLoop(1);}catch(resumeError){}
+          }
+          state.gameLobby=null;
+          document.querySelectorAll('.lobby-room-panel,.lobby-emulator-room').forEach(function(node){node.remove();});
+          var gameRoot=document.getElementById('movie-view');
+          if(gameRoot)gameRoot.querySelectorAll('button').forEach(function(button){if(button.textContent==='Lobby active'){button.disabled=false;button.textContent='Start lobby';}});
+          replaceNav();
+          throw error;
+        }
+      } else openMultiplayerGame(item,options,sess);
+    }).catch(function(e){state._hubInviteFriend=null;toast('Lobby create failed: '+String(e && e.message ? e.message : e),{kind:'bad'});})
+      .then(function(){_lobbyHostOpening=false;});
   }
+
   function viewLobby(){
     lobbyStopPoll();
     var wrap = h('div', { id:'lobby-view', className:'play-view lobby-view' });
