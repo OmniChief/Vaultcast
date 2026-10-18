@@ -4495,7 +4495,6 @@ try {
     var parts = [ billboardEl(home) ];
     var cw = cwOnePerShow(home.continue_watching);
     if (cw.length) parts.push(rowEl('Continue watching', cw.map(function(it){ return cardEl(it, it.progress); }), { meta: String(cw.length) }));
-    parts.push(h('div', { id:'live-teaser' }));
     vodSections().forEach(function(sec){
       var items = sec.items || [];
       if (!items.length) {
@@ -4509,12 +4508,6 @@ try {
         more: function(){ navigate('section', sec.id); }, moreText: 'Browse all ' + (sec.count || '')
       }));
     });
-    var rs = romsSection();
-    if (rs && (rs.items || []).length) {
-      parts.push(rowEl('From Play \u00b7 ' + rs.label, rs.items.map(function(it){ return cardEl(it); }), {
-        className:'row-play', more: function(){ goMode('play'); }, moreText:'Open Play'
-      }));
-    }
     if (!(home.sections || []).length) {
       var isAdmin = state.user && state.user.role === 'admin';
       var welcome = emptyState('Your library starts here', isAdmin ? 'Add a media folder, then scan to bring your collection together.' : 'Your library is being prepared. Sign in to manage it.');
@@ -4523,8 +4516,21 @@ try {
       }}));
       parts.push(welcome);
     }
-    setTimeout(loadLiveTeaser, 0);
     return shell(h('div', { className:'vod-home' }, parts));
+  }
+
+  function homeActivitySections(){
+    var parts = [];
+    if (userAreaAllowed('live')) parts.push(h('div', {id:'live-teaser'}));
+    var rs = romsSection();
+    if (userAreaAllowed('games') && rs && (rs.items || []).length) {
+      parts.push(rowEl('From Play \u00b7 ' + rs.label, rs.items.map(function(it){ return cardEl(it); }), {
+        className:'row-play', more: function(){ goMode('play'); }, moreText:'Open Play'
+      }));
+    }
+    var activity = h('div', {className:'home-activity'}, parts);
+    if (userAreaAllowed('live')) setTimeout(loadLiveTeaser, 0);
+    return activity;
   }
 
   function sectionHeroEl(id, text){
@@ -14228,7 +14234,7 @@ function viewCollectionDetail(){
   /* helpers for assets/js/matching.js (Ingest inbox / Fix matching / Label reports) */
   window.NSApp = { h: h, api: api, toast: toast, confirmDialog: confirmDialog, render: render, state: state, can:can,
     openSettings: openSettings, openShow: openShow, openMovie: openMovie, openGame:openGame, navigate:navigate, refreshArtwork:refreshArtwork, fmtSize: fmtSize, version: APP_VERSION,
-    shell:shell,cardEl:cardEl,applyRoute:applyRoute,replaceNav:replaceNav,openPlayer:openPlayer,playItem:playItem,copyText:copyText,shareUrl:shareUrl,startLobbyHost:startLobbyHost,captureGameState:lobbyCaptureState,quitGame:function(){closePlayer();} };
+    shell:shell,cardEl:cardEl,homeActivitySections:homeActivitySections,applyRoute:applyRoute,replaceNav:replaceNav,openPlayer:openPlayer,playItem:playItem,copyText:copyText,shareUrl:shareUrl,startLobbyHost:startLobbyHost,captureGameState:lobbyCaptureState,quitGame:function(){closePlayer();} };
   window.VaultcastHub.init(window.NSApp);
   window.VaultcastHomeExtras.init(window.NSApp);
   // Load matching tools when Settings or a detail-page action needs them.

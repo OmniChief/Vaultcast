@@ -175,7 +175,7 @@
     function paint(){
       if(!root.isConnected)return;body.replaceChildren();
       if(!signed())body.appendChild(h('div',{className:'hub-guest-note'},[h('p',{text:'You can explore and watch on your local network. Sign in for your own lists, friends and play history.'}),button('Sign in',function(){A.navigate('login');},'primary')]));
-      if(tab==='overview'){body.appendChild(overview());window.VaultcastHomeExtras.layout(root);}
+      if(tab==='overview'){body.appendChild(overview());window.VaultcastHomeExtras.layout(root);body.appendChild(A.homeActivitySections());}
       else if(tab==='arrivals'||tab==='lists')body.appendChild(signed()?window.VaultcastHomeExtras.view(tab):empty('Sign in for your personal Home.'));
       else if(tab==='watchlist' && signed())window.VaultcastHomeExtras.watchlist(body,data.watchlist.slice());
       else if(tab==='favourites'||tab==='watchlist'){
