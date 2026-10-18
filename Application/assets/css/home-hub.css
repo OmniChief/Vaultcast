@@ -158,3 +158,12 @@
 @media(max-width:540px){.chat-modal-body{padding:18px;gap:12px}.chat-modal-body>.btn{align-self:stretch}.chat-modal-body textarea{min-height:120px}}
 
 .chat-modal-body :disabled{opacity:.6}.chat-modal-body button[aria-busy=true]{cursor:progress}
+
+/* Paused video action, shared by on-demand and live playback. */
+.detail-centre-play{width:112px;height:112px;padding:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;background:#111827eF;border:2px solid #e9ddff;color:#fff;box-shadow:0 0 0 7px #0005,0 12px 50px #000a;cursor:pointer}
+.detail-centre-play .centre-play-icon{font-size:34px;line-height:1;padding-left:5px}
+.detail-centre-play .centre-play-label{font-size:16px;line-height:1.4;font-weight:700}
+.detail-centre-play:focus-visible{outline:4px solid #69efff;outline-offset:6px}
+.live-player.guide-open .detail-centre-play,.live-player.epg-open .detail-centre-play{display:none}
+.live-player.needs-tap .lp-tuning::after{display:none}
+@media(max-width:540px){.detail-centre-play{width:88px;height:88px}.detail-centre-play .centre-play-icon{font-size:28px}}

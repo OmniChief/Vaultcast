@@ -78,6 +78,19 @@
   }
   function cleanup(){if(!alive)return;clearInterval(progressTimer);clearTimeout(roll);clearTimeout(hlsTimer);if(hls)try{hls.destroy();}catch(e){}var pending=requests;requests=[];for(var i=0;i<pending.length;i++)try{pending[i].abort();}catch(e){}save(true);alive=false;}
   if(typeof media.play!=='function'||typeof media.canPlayType!=='function'){say('This browser has no usable inline player. Open the stream directly.');return;}
+  var centrePlay=document.getElementById('compat-centre-play'),centreLabel=document.getElementById('compat-centre-label');
+  function updateCentrePlay(){
+    if(!centrePlay)return;
+    centrePlay.style.display=(media.paused||media.ended)?'block':'none';
+    var caption=media.ended?'Replay':(media.currentTime>0?'Resume':'Play');
+    text(centreLabel,caption);centrePlay.setAttribute('aria-label',caption+' video');
+  }
+  if(centrePlay){
+    listen(centrePlay,'click',function(){play();});
+    var centreEvents=['play','playing','pause','ended','loadedmetadata','emptied'];
+    for(var centreIndex=0;centreIndex<centreEvents.length;centreIndex++)listen(media,centreEvents[centreIndex],updateCentrePlay);
+    updateCentrePlay();
+  }
   var duration=Number((config.progress||{}).duration)||0;if(duration&&resume>duration-10)resume=0;resumed=resume<5;
   var subtitleSelect=document.getElementById('compat-subtitles'),subtitleControls=document.getElementById('compat-subtitle-controls');
   if(subtitleSelect&&media.textTracks&&subtitleControls){

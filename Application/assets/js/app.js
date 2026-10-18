@@ -1476,10 +1476,10 @@ function confirmDialog(message, opts){
 
     overlay.appendChild(media);
     if (media.tagName==='VIDEO' && !play.hub_cinema_guest) {
-      var centrePlay=h('button',{className:'detail-centre-play',type:'button','aria-label':'Play video',text:'▶',onClick:function(){media.play().catch(function(err){toast(err.message || 'Could not start video');});}});
-      function updateCentrePlay(){centrePlay.hidden=!media.paused || media.ended;}
-      media.addEventListener('play',updateCentrePlay);media.addEventListener('pause',updateCentrePlay);media.addEventListener('ended',updateCentrePlay);
-      overlay.appendChild(centrePlay);updateCentrePlay();
+      addCentrePlay(overlay,media,function(){
+        var request=media.play();
+        if(request && request.catch)request.catch(function(err){toast(err.message || 'Could not start video');});
+      });
     }
     var convertBtn = null;
     if (needsConvertExt(item) && state.user && state.user.role === 'admin') {
@@ -5093,6 +5093,22 @@ try {
     toast('Tuning\u2026', { ms: 1200 });
     ensureLiveData(false).then(function(){ startLivePlayer(chId); }).catch(function(e){ toast('Live unavailable: ' + String(e && e.message || e), { kind:'bad' }); });
   }
+  function addCentrePlay(container,media,start){
+    var label=h('span',{className:'centre-play-label',text:'Play'});
+    var button=h('button',{className:'detail-centre-play',type:'button','aria-label':'Play video',onClick:function(e){
+      e.stopPropagation();
+      try{start();}catch(err){toast(err.message || 'Could not start video');}
+    }},[h('span',{'aria-hidden':'true',className:'centre-play-icon',text:'▶'}),label]);
+    function update(){
+      button.hidden=!media.paused && !media.ended;
+      label.textContent=media.ended?'Replay':(media.currentTime>0?'Resume':'Play');
+      button.setAttribute('aria-label',label.textContent+' video');
+      if(!button.hidden)container.classList.remove('idle');
+    }
+    ['play','playing','pause','ended','loadedmetadata','emptied'].forEach(function(event){media.addEventListener(event,update);});
+    container.appendChild(button);update();
+  }
+
   function startLivePlayer(chId){
     closePlayer();
     var list = liveChannels();
@@ -5161,6 +5177,7 @@ try {
       guide,
       epgFull
     ]);
+    addCentrePlay(overlay,video,safePlay);
     document.body.appendChild(overlay);
 
     function msg(t){ elMsg.textContent = t || ''; }
