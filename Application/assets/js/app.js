@@ -1945,6 +1945,7 @@ function confirmDialog(message, opts){
     var emu = window.EJS_emulator, np = emu && emu.netplay;
     if (!np || !np.socket) return 'Starting emulator';
     if (np.extra && np.extra.sessionid !== multiplayer.session.id) return 'Connecting';
+    if(np.socket.connected&&np._streamRecoveryPaused)return 'Paused · host can retry sync';
     if (np.socket.connected && emu.isNetplay && (np._streamSyncing || np._streamLoadingState || np._streamAwaitingState || np._streamAwaitingGo)) return 'Synchronising game';
     if (np.socket.connected && emu.isNetplay && np._streamLastVerifiedFrame) return 'State verified · frame ' + np._streamLastVerifiedFrame;
     if (np.socket.connected && emu.isNetplay) return 'Connected to room';
@@ -1967,6 +1968,7 @@ function confirmDialog(message, opts){
       h('div', {className:'lobby-room-heading'}, [h('div', {}, [h('div', {className:'eyebrow', text:'MULTIPLAYER LOBBY'}), h('h2', {text:session.room_code ? 'Room ' + session.room_code : 'Multiplayer room'}), h('p', {className:'muted', text:session.title || ''})]), badge]),
       seats, note, h('div', {className:'row-actions'}, [
         multiplayer.preview && !multiplayer.ended ? h('button', {className:'btn primary', text:'Join this room', onClick:function(){joinLobbySession(multiplayer.session);}}) : null,
+        !multiplayer.preview && options.role==='host' ? h('button',{className:'btn ghost',text:'Resynchronise game',onClick:function(){var active=window.EJS_emulator,np=active&&active.netplay;if(!np||!np.owner||!np.socket||!np.socket.connected||np._streamSyncing)return;np._streamRecoveries=[];np._streamRecoveryPaused=false;np.sync();}}) : null,
         !multiplayer.preview ? h('button', {className:'btn glass', text:'Open emulator Netplay menu', onClick:openLobbyNetplayMenu}) : null,
         h('button', {className:'btn ghost', text:'Copy room link', onClick:function(){var url=shareUrl(routePath());copyText(url).then(function(){toast('Room link copied');},function(){window.prompt('Copy room link',url);});}}),
         h('button', {className:'btn ghost danger', text:options.role === 'host' ? 'End room and leave' : 'Back to lobby', onClick:leaveMultiplayerPage})
@@ -2514,10 +2516,12 @@ function confirmDialog(message, opts){
     np._streamCheckpoints = {};
     np._streamExpectedChecks = {};
     np._streamLastVerifiedFrame = 0;
+    np._streamNextCheckFrame=window.VaultcastNetplaySync.CHECK_INTERVAL;
+    np._streamBuffering=true;np._streamLastAckFrame=0;np._streamRecoveryPaused=false;
     try { lobbyLog('frame_reset', { reason: reason || 'reset', abs_frame: abs, owner: !!np.owner, playerID: np.playerID || null }); } catch (eL) {}
   }
   var LOBBY_STATE_MAX_BYTES=8*1024*1024;
-  function lobbyCaptureState(emu, maximum){
+  function lobbyReadState(emu, maximum, read){
     maximum=maximum||LOBBY_STATE_MAX_BYTES;
     // EmulatorJS 4.2.1 getState() copies the allocated native buffer but never
     // frees it. Checkpoints must not leak a whole savestate on every sample.
@@ -2534,9 +2538,11 @@ function confirmDialog(message, opts){
       if (!Number.isSafeInteger(length) || length <= 0 || length > maximum || address + length > emu.Module.HEAPU8.length) {
         throw new Error('Invalid emulator state size (maximum '+Math.round(maximum/1048576)+' MiB)');
       }
-      return new Uint8Array(emu.Module.HEAPU8.subarray(address, address + length));
+      return read(emu.Module.HEAPU8.subarray(address, address + length));
     } finally { emu.Module._free(address); }
   }
+  function lobbyCaptureState(emu,maximum){return lobbyReadState(emu,maximum,function(bytes){return new Uint8Array(bytes);});}
+  function lobbyStateHash(emu){return lobbyReadState(emu,LOBBY_STATE_MAX_BYTES,window.VaultcastNetplaySync.stateHash);}
   function lobbySyncConfiguration(emu){
     return JSON.stringify({ core: emu.getCore(), emulator: window.VaultcastDependencies.emulatorVersion,
       webgl2: !!emu.supportsWebgl2, threads: !!emu.config.threads,
@@ -2564,7 +2570,7 @@ function confirmDialog(message, opts){
     if (!load || !load.closed) return;
     // load_state queues a native file task. Only after its file has closed AND
     // the resulting core state matches may we acknowledge the new epoch.
-    var actual = window.VaultcastNetplaySync.stateHash(lobbyCaptureState(emu));
+    var actual = lobbyStateHash(emu);
     if (actual !== load.hash) {
       load.verifyAttempts = (load.verifyAttempts || 0) + 1;
       if (load.verifyAttempts >= 3) {
@@ -2588,29 +2594,25 @@ function confirmDialog(message, opts){
     np.sendMessage({ ready: true, sync_id: syncId, userid: np.playerID });
   }
   function lobbyCheckFrameState(emu){
-    var np = emu.netplay, frame = np.currentFrame;
-    if (frame % 120 !== 0) return null;
-    var hash = window.VaultcastNetplaySync.stateHash(lobbyCaptureState(emu));
-    np._streamCheckpoints[frame] = hash;
-    Object.keys(np._streamCheckpoints).forEach(function(key){
-      if (Number(key) < frame - 240) delete np._streamCheckpoints[key];
-    });
-    if (!np.owner && np._streamExpectedChecks[frame]) {
-      var expected = np._streamExpectedChecks[frame];
-      delete np._streamExpectedChecks[frame];
-      if (expected !== hash) {
-        np._streamAwaitingState = true;
-        np._streamLastVerifiedFrame = 0;
-        np.setLoading(true);
-        lobbyLog('state_mismatch', { frame: frame, expected: expected, actual: hash, sync_id: np._streamSyncId });
-        np.sendMessage({ sync: true });
-        clearTimeout(np._streamRecoveryTimer);
-        np._streamRecoveryTimer = setTimeout(function(){
-          if (!emu._streamDisposed && np._streamAwaitingState) np._streamSyncFailure('Host did not respond to a synchronisation request');
-        }, 15000);
-      } else np._streamLastVerifiedFrame = frame;
+    var np=emu.netplay,frame=np.currentFrame,expected=np._streamExpectedChecks[frame];
+    if(np.owner){if(frame!==(np._streamNextCheckFrame||window.VaultcastNetplaySync.CHECK_INTERVAL))return null;}
+    else if(!expected)return null;
+    var started=performance.now(),hash=lobbyStateHash(emu),elapsed=performance.now()-started;
+    if(np.owner){
+      // Slow cores verify less frequently, without changing the agreed frame boundary.
+      var interval=elapsed>8?1800:window.VaultcastNetplaySync.CHECK_INTERVAL;
+      np._streamNextCheckFrame=frame+interval;
+      lobbyLog('state_checkpoint',{frame:frame,ms:Math.round(elapsed),next_frame:np._streamNextCheckFrame});
+      return {frame:frame,hash:hash,next_frame:np._streamNextCheckFrame};
     }
-    return { frame: frame, hash: hash };
+    delete np._streamExpectedChecks[frame];
+    if(expected!==hash){
+      np._streamAwaitingState=true;np._streamLastVerifiedFrame=0;np.setLoading(true);
+      lobbyLog('state_mismatch',{frame:frame,expected:expected,actual:hash,sync_id:np._streamSyncId});
+      np.sendMessage({sync:true});clearTimeout(np._streamRecoveryTimer);
+      np._streamRecoveryTimer=setTimeout(function(){if(!emu._streamDisposed&&np._streamAwaitingState&&!np._streamRecoveryPaused)np._streamSyncFailure('Host did not respond to a synchronisation request');},15000);
+    }else np._streamLastVerifiedFrame=frame;
+    return null;
   }
   // A bucket labelled F contains inputs used BEFORE host frame F+1 ran.
   // The guest must apply bucket 0 too, before running its first frame.
@@ -2643,7 +2645,7 @@ function confirmDialog(message, opts){
     // The native loader runs in task_queue_check at the end of a loop. Gating
     // every loop here prevents the queued snapshot from EVER being applied.
     if (np._streamLoadingState) return true;
-    if (np._streamSyncing || np._streamAwaitingState || np._streamAwaitingGo || np._streamHostPaused || np._streamUserPaused) return false;
+    if (np._streamSyncing || np._streamAwaitingState || np._streamAwaitingGo || np._streamHostPaused || np._streamUserPaused || np._streamRecoveryPaused) return false;
     var frame = np.currentFrame || 0;
     if (np.owner) {
       if (!window.VaultcastNetplaySync.hostMayRun(frame, np.players, np.playerID, np._streamAckUsers)) return false;
@@ -2651,7 +2653,11 @@ function confirmDialog(message, opts){
     }
     var bucket = np.inputsData[frame];
     np.wait = !bucket;
-    if (!bucket) return false;
+    if (!bucket){if(!np.owner)np._streamBuffering=true;return false;}
+    if(!np.owner&&np._streamBuffering){
+      for(var ahead=0;ahead<window.VaultcastNetplaySync.BUFFER_FRAMES;ahead++)if(!np.inputsData[frame+ahead])return false;
+      np._streamBuffering=false;
+    }
     emu.paused = false;
     // Host and guests apply the same ordered input bucket at the same boundary.
     lobbyApplyFrameInputs(emu, bucket);
@@ -2701,7 +2707,7 @@ function confirmDialog(message, opts){
           if (last < 0) lobbyNetplayTrace(emu, 'host_sent_frame_zero');
         }
       } else {
-        np.sendMessage({ frame_ack: np.currentFrame, sync_id: np._streamSyncId });
+        if(np.currentFrame-(np._streamLastAckFrame||0)>=window.VaultcastNetplaySync.ACK_EVERY){np.sendMessage({frame_ack:np.currentFrame,sync_id:np._streamSyncId});np._streamLastAckFrame=np.currentFrame;}
         lobbyAdvanceGuest(emu);
       }
       var keepFrom = window.VaultcastNetplaySync.pruneBefore(!!np.owner, np.currentFrame, np._streamLastHostFrame);
@@ -2783,7 +2789,7 @@ function confirmDialog(message, opts){
     // Establish a fresh epoch after membership changes or a verified mismatch.
     np.sync = function(){
       if (emu._streamDisposed || !emu.isNetplay || !np.owner || np._streamSyncing) return;
-      if (Object.keys(np.players || {}).some(function(id){ return np.players[id].sync_revision !== 5; })) {
+      if (Object.keys(np.players || {}).some(function(id){ return np.players[id].sync_revision !== 6; })) {
         syncFailed('All players need the latest branch update; refresh each player');
         return;
       }
@@ -2791,7 +2797,7 @@ function confirmDialog(message, opts){
         syncFailed('Players loaded different emulator cores or settings');
         return;
       }
-      np._streamSyncing = true;
+      np._streamSyncing = true;np._streamRecoveryPaused=false;
       var syncId = (np._streamSyncId || 0) + 1;
       np._streamSyncId = syncId;
       np._streamReadyUsers = {};
@@ -2864,6 +2870,7 @@ function confirmDialog(message, opts){
           lobbyLoadSnapshot(emu,bytes,data.state_hash,data.input_state,data.sync_id);
           return;
         }
+        if(data.recovery_paused&&!np.owner&&data.sync_id===np._streamSyncId){np._streamRecoveryPaused=true;clearTimeout(np._streamRecoveryTimer);np.setLoading(false);emu.pause(true);return;}
         if (data.ready && np.owner) {
           if (!np._streamSyncing || data.sync_id !== np._streamSyncId || !np.players[data.userid]) return;
           np._streamReadyUsers[data.userid] = true;
@@ -2891,7 +2898,9 @@ function confirmDialog(message, opts){
           var now = Date.now();
           np._streamRecoveries = (np._streamRecoveries || []).filter(function(time){ return now - time < 60000; });
           if (np._streamRecoveries.length >= 3) {
-            syncFailed('This core cannot stay synchronised across these players');
+            np._streamRecoveryPaused=true;np._streamSyncing=false;np.setLoading(false);emu.pause(true);
+            np.sendMessage({recovery_paused:true,sync_id:np._streamSyncId});
+            toast('Repeated state mismatches. The room is paused; the host can retry synchronisation from the players board.',{kind:'bad',ms:10000});
             return;
           }
           np._streamRecoveries.push(now);
@@ -2911,10 +2920,10 @@ function confirmDialog(message, opts){
           } else {
             if (data.checkpoint) {
               var check = data.checkpoint;
-              if (!Number.isInteger(check.frame) || check.frame <= frame || check.frame % 120 !== 0 || typeof check.hash !== 'string') {
+              if (!Number.isInteger(check.frame) || check.frame <= frame || check.frame!==np._streamNextCheckFrame || !Number.isInteger(check.next_frame) || check.next_frame<check.frame+window.VaultcastNetplaySync.CHECK_INTERVAL || check.next_frame>check.frame+1800 || typeof check.hash !== 'string') {
                 throw new Error('Invalid host frame checkpoint');
               }
-              np._streamExpectedChecks[check.frame] = check.hash;
+              np._streamExpectedChecks[check.frame] = check.hash;np._streamNextCheckFrame=check.next_frame;
             }
             data['sync-control'].forEach(function(value){
               if (!value || !Number.isInteger(value.frame) || value.frame < frame) return;
@@ -3045,7 +3054,7 @@ function confirmDialog(message, opts){
         userid: np.playerID,
         sessionid: sid,
         player_slot: 1,
-        sync_revision: 5,
+        sync_revision: 6,
         sync_config: lobbySyncConfiguration(emu),
         netplay_protocol: 'vaultcast-lockstep-4'
       };
@@ -3106,7 +3115,7 @@ function confirmDialog(message, opts){
         userid: np.playerID,
         sessionid: sid,
         player_slot: lobbyOpts.player_slot,
-        sync_revision: 5,
+        sync_revision: 6,
         sync_config: lobbySyncConfiguration(emu),
         netplay_protocol: 'vaultcast-lockstep-4'
       };
@@ -3143,7 +3152,7 @@ function confirmDialog(message, opts){
             return;
           }
           np.players = users || np.players;
-          if (Object.keys(np.players || {}).some(function(id){ return np.players[id].sync_revision !== 5; })) {
+          if (Object.keys(np.players || {}).some(function(id){ return np.players[id].sync_revision !== 6; })) {
             fail('All players need the latest branch update; refresh each player');
             return;
           }

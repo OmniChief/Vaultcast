@@ -3,11 +3,11 @@
    once its bucket has arrived. */
 (function(root){
   'use strict';
-  /* How many frames the host may run ahead of the slowest guest's acknowledgement.
-     3 (about 50 ms at 60 fps) stalled the host on every ordinary network/rAF jitter, which
-     halved the frame rate. 10 frames (about 166 ms) absorbs LAN/Wi-Fi jitter while still
-     bounding a backgrounded guest. */
-  var ACK_WINDOW = 10;
+  // Leave room for the guest's jitter buffer, acknowledgement batching and short scheduler stalls.
+  var ACK_WINDOW = 20;
+  var BUFFER_FRAMES = 3;
+  var ACK_EVERY = 3;
+  var CHECK_INTERVAL = 600;
 
   function hostMayRun(currentFrame, players, selfId, acks, windowFrames){
     var w = windowFrames || ACK_WINDOW;
@@ -64,7 +64,7 @@
     return core.length + ':' + (a >>> 0).toString(16) + ':' + (b >>> 0).toString(16);
   }
 
-  var api = { ACK_WINDOW: ACK_WINDOW, hostMayRun: hostMayRun, hostBucketsToSend: hostBucketsToSend, pruneBefore: pruneBefore, stateHash: stateHash };
+  var api = { ACK_WINDOW: ACK_WINDOW, BUFFER_FRAMES:BUFFER_FRAMES, ACK_EVERY:ACK_EVERY, CHECK_INTERVAL:CHECK_INTERVAL, hostMayRun: hostMayRun, hostBucketsToSend: hostBucketsToSend, pruneBefore: pruneBefore, stateHash: stateHash };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.VaultcastNetplaySync = api;
 })(this);
