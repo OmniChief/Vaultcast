@@ -27,7 +27,7 @@ final class HomeExtras {
         return ['ok'=>true,'lists'=>array_slice($out,($page-1)*12,12),'has_more'=>$page*12<count($out),'total'=>count($out)];
     }
     public static function collection(array $user,string $owner,string $id): array {
-        if (!preg_match('/^[a-f0-9]{16}$/D',$owner) || !preg_match('/^[a-f0-9]{16}$/D',$id)) throw new DomainException('Invalid collection.');
+        if (!preg_match('/^[a-f0-9]{16,64}$/D',$owner) || !preg_match('/^[a-f0-9]{16}$/D',$id)) throw new DomainException('Invalid collection.');
         $data=\Vaultcast\Repository::document(self::key($owner),[]);$list=$data['lists'][$id] ?? null;$mine=$owner===$user['id'];
         if (!$list || (!$mine && (empty($list['shared']) || !self::friend($user,$owner)))) throw new DomainException('Collection not found or private.');
         $stored=\Vaultcast\Repository::document('personal-list:'.$owner.':'.$id,[]);

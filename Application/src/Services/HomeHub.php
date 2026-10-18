@@ -299,10 +299,13 @@ final class HomeHub {
     }
     public static function rooms(array $user): array {
         $registry=\Vaultcast\Repository::document('hub-cinemas',[]);$rows=[];
-        foreach ($registry as $id=>$summary) if (($summary['expires_at'] ?? 0)>time()) {
-            $item=Catalogue::item($summary['item_id']);
-            if ($item && self::visible($item,$user)) $rows[]=$summary;
+        $live=array_filter($registry,static function($summary){return ($summary['expires_at'] ?? 0)>time();});
+        $ids=array_values(array_unique(array_column($live,'item_id')));$available=[];
+        if ($ids) {
+            $q=\Vaultcast\Database::connection()->prepare('SELECT id,media_kind FROM vaultcast_items WHERE id IN ('.implode(',',array_fill(0,count($ids),'?')).')');$q->execute($ids);
+            foreach ($q as $item) if (AreaAccess::allowed($user,AreaAccess::itemArea($item))) $available[$item['id']]=true;
         }
+        foreach ($live as $summary) if (isset($available[$summary['item_id']])) $rows[]=$summary;
         return ['ok'=>true,'rooms'=>array_slice($rows,0,30)];
     }
     public static function createRoom(array $user,array $body): array {

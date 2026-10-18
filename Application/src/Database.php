@@ -58,8 +58,18 @@ final class Database
     public static function connection(): \PDO
     {
         if (!self::$operationLock) {
-            $lock = fopen(dirname(__DIR__) . '/data/database-operation.lock', 'c');
-            if (!$lock || !flock($lock, LOCK_SH | LOCK_NB)) throw new \RuntimeException('A database reset is in progress. Try again shortly.');
+            $path = dirname(__DIR__) . '/data/database-operation.lock';
+            // Ordinary readers must also work when an administrator CLI created the lock file.
+            $lock = @fopen($path, 'rb');
+            if (!$lock) {
+                $lock = @fopen($path, 'x+');
+                if ($lock) @chmod($path, 0644);
+                else $lock = @fopen($path, 'rb');
+            }
+            if (!$lock || !flock($lock, LOCK_SH | LOCK_NB)) {
+                if (is_resource($lock)) fclose($lock);
+                throw new \RuntimeException('The database operation lock is unavailable. A reset may be in progress; retry shortly.');
+            }
             self::$operationLock = $lock;
         }
         if (!self::$pdo) self::$pdo = self::connect(self::config());
@@ -70,7 +80,8 @@ final class Database
     {
         self::connection();
         if (!flock(self::$operationLock, LOCK_EX | LOCK_NB)) {
-            flock(self::$operationLock, LOCK_SH | LOCK_NB);
+            fclose(self::$operationLock);
+            self::$operationLock = null;
             throw new \RuntimeException('Vaultcast is busy. Stop playback and background tasks, then retry the reset.');
         }
     }

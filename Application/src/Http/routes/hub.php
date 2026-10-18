@@ -12,7 +12,7 @@ if (strpos($path,'/hub/')===0) {
         $user=Auth::requireUser();
         if ($path==='/hub/chat' || strpos($path,'/hub/chat/')===0) require __DIR__.'/chat.php';
         if ($path==='/hub/extras' && $method==='GET') json_out(HomeExtras::state($user));
-        if (preg_match('#^/hub/lists/([a-f0-9]{16})/([a-f0-9]{16})$#',$path,$collection) && $method==='GET') json_out(HomeExtras::collection($user,$collection[1],$collection[2]));
+        if (preg_match('#^/hub/lists/([a-f0-9]{16,64})/([a-f0-9]{16})$#',$path,$collection) && $method==='GET') json_out(HomeExtras::collection($user,$collection[1],$collection[2]));
         if ($path==='/hub/lists' && $method==='GET') json_out(HomeExtras::lists($user,(int)($_GET['page'] ?? 1),(string)($_GET['q'] ?? '')));
         if ($path==='/hub/lists' && $method==='POST') json_out(HomeExtras::change($user,body_json()));
         if ($path==='/hub/arrivals' && $method==='GET') json_out(HomeExtras::arrivals($user));

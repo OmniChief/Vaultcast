@@ -1,6 +1,6 @@
 (function(){
   'use strict';
-  var A, data=null, owner=null, loaded=0, pending=null, noticeSeen={}, noticeOwner=null, gameSession=null, cinema=null;
+  var A, data=null, owner=null, loaded=0, pending=null, refreshSerial=0, noticeSeen={}, noticeOwner=null, gameSession=null, cinema=null;
   function h(tag,attrs,kids){var el=A.h(tag,attrs,kids==null?[]:(Array.isArray(kids)?kids:[kids]));if(tag==='textarea' && attrs && attrs.value!=null)el.value=attrs.value;return el;}
   function signed(){return !!(A.state.user && A.state.user.role!=='guest');}
   function request(path,body){return A.api('/hub/'+path,body===undefined?undefined:{method:'POST',body:body}).then(function(j){if(!j || !j.ok){var err=new Error(j && j.error || 'Could not complete request');err.status=j && j._status;throw err;}return j;});}
@@ -12,12 +12,13 @@
   function titleKey(it){return (it.kind==='show'||it.media_kind==='show'||it.show_key?'show:':'item:')+(it.show_key||it.id);}
   function avatar(person){function fallback(){return h('span',{className:'hub-avatar',text:(person.name||'?').slice(0,1).toUpperCase()});}return person.avatar_url?h('img',{className:'hub-avatar',src:person.avatar_url,alt:'',loading:'lazy',onError:function(e){e.currentTarget.replaceWith(fallback());}}):fallback();}
   function refresh(force){
+    if(force){pending=null;refreshSerial++;}
     var uid=A.state.user && A.state.user.id || 'guest';
     if(uid!==owner){data=null;pending=null;loaded=0;noticeSeen={};owner=uid;}
     if(!force && data && Date.now()-loaded<15000)return Promise.resolve(data);
     if(pending)return pending;
-    var forOwner=owner;
-    pending=request('dashboard').then(function(j){if(String(A.state.user && A.state.user.id || 'guest')!==String(forOwner))throw new Error('Account changed. Reopen Home.');if(owner===forOwner){data=j;loaded=Date.now();}return j;});
+    var forOwner=owner,forSerial=refreshSerial;
+    pending=request('dashboard').then(function(j){if(String(A.state.user && A.state.user.id || 'guest')!==String(forOwner))throw new Error('Account changed. Reopen Home.');if(forSerial!==refreshSerial)return pending||refresh();if(owner===forOwner){data=j;loaded=Date.now();}return j;});
     var current=pending;current.then(function(){if(pending===current)pending=null;},function(){if(pending===current)pending=null;});return current;
   }
   function openPath(path){history.pushState({},'',(window.__STREAM_BASE__||'/')+path);A.applyRoute().then(function(){A.render();A.replaceNav();});}

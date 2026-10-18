@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 final class Chat
 {
+    private const PUBLIC_USER_COLUMNS = "u.id,u.username,COALESCE(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(u.payload,'$.display_name')),'null'),'') AS display_name,COALESCE(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(u.payload,'$.avatar_version')),'null'),'') AS avatar_version";
     private static function db(): PDO { return \Vaultcast\Database::connection(); }
     private static function query(string $sql,array $args=[]): PDOStatement { $s=self::db()->prepare($sql);$s->execute($args);return $s; }
     private static function friends(array $user): array {
@@ -54,7 +55,7 @@ final class Chat
         self::general();$friends=self::friends($user);$people=[];
         if ($friends) {
             $marks=implode(',',array_fill(0,count($friends),'?'));
-            foreach (self::query('SELECT u.payload,COALESCE(p.seen_at,0) AS seen_at FROM vaultcast_users u LEFT JOIN vaultcast_chat_presence p ON p.user_id=u.id WHERE u.id IN ('.$marks.') ORDER BY u.username',$friends) as $r) {$u=json_decode($r['payload'],true);$people[]=array_merge(self::identity($u),['online'=>(int)$r['seen_at']>time()-75]);}
+            foreach (self::query('SELECT '.self::PUBLIC_USER_COLUMNS.',COALESCE(p.seen_at,0) AS seen_at FROM vaultcast_users u LEFT JOIN vaultcast_chat_presence p ON p.user_id=u.id WHERE u.id IN ('.$marks.') ORDER BY u.username',$friends) as $r) {$people[]=array_merge(self::identity($r),['online'=>(int)$r['seen_at']>time()-75]);}
         }
         $rows=self::query("SELECT r.*,m.read_id,m.muted,m.banned,(SELECT COUNT(*) FROM vaultcast_chat_messages x WHERE x.room_id=r.id AND x.id>COALESCE(m.read_id,0) AND x.sender_id<>? AND (x.expires_at=0 OR x.expires_at>?)) AS unread FROM vaultcast_chat_rooms r LEFT JOIN vaultcast_chat_members m ON m.room_id=r.id AND m.user_id=? WHERE (r.kind='public' OR m.user_id IS NOT NULL) AND ".($mail?"r.kind='mail'":"r.kind<>'mail'")." AND COALESCE(m.banned,0)=0 ORDER BY (r.id='general') DESC,(r.id=?) DESC,(m.user_id IS NOT NULL) DESC,r.updated_at DESC LIMIT 150",[$user['id'],time(),$user['id'],$focus])->fetchAll();
         $rows=array_values(array_filter($rows,static function($r) use ($user,$friends){return !in_array($r['kind'],['dm','mail'],true)||in_array($r['owner_id']===$user['id']?$r['peer_id']:$r['owner_id'],$friends,true);}));
@@ -65,12 +66,15 @@ final class Chat
         $kind=(string)($body['kind'] ?? 'public');if (!in_array($kind,['public','private','dm','mail'],true)) throw new DomainException('Invalid conversation type.');
         $title=trim((string)($body['title'] ?? ''));$peer=(string)($body['peer_id'] ?? '');
         if (in_array($kind,['dm','mail'],true)) {if (!in_array($peer,self::friends($user),true)||!Auth::findById($peer)) throw new DomainException('Choose an accepted friend.');}
+        if (in_array($kind,['public','private'],true)) $peer='';
         if ($kind==='dm') {$pair=[$user['id'],$peer];sort($pair);$id='dm-'.substr(hash('sha256',implode(':',$pair)),0,48);$title='Direct chat';}
         else {$token=(string)($body['nonce'] ?? '');$id=preg_match('/^[a-f0-9]{32}$/D',$token)?substr(hash('sha256',$user['id'].':'.$token),0,32):bin2hex(random_bytes(16));if ($title===''||mb_strlen($title)>100) throw new DomainException('Use a name or subject of 1–100 characters.');}
         $ttl=$kind==='mail'?0:self::retention($body['retention'] ?? 86400);
         \Vaultcast\Database::transaction(static function() use ($user,$kind,$title,$peer,$id,$ttl){
             // Serialize room creation per account, including concurrent browser tabs.
             if (!self::query('SELECT id FROM vaultcast_users WHERE id=? FOR UPDATE',[$user['id']])->fetchColumn()) throw new DomainException('Account no longer exists.');
+            $existing=self::query('SELECT * FROM vaultcast_chat_rooms WHERE id=?',[$id])->fetch();
+            if ($existing && ($existing['kind']!==$kind || ($kind!=='dm' && ($existing['owner_id']!==$user['id'] || $existing['peer_id']!==$peer)))) throw new DomainException('This creation token belongs to a different conversation. Reopen the form.');
             if ($kind!=='dm' && !self::query('SELECT id FROM vaultcast_chat_rooms WHERE id=? AND owner_id=?',[$id,$user['id']])->fetchColumn() && (int)self::query("SELECT COUNT(*) FROM vaultcast_chat_rooms WHERE owner_id=? AND kind=?",[$user['id'],$kind])->fetchColumn()>=($kind==='mail'?100:10)) throw new DomainException('Conversation limit reached. Remove an old room or thread first.');
             self::query('INSERT IGNORE INTO vaultcast_chat_rooms (id,kind,title,owner_id,peer_id,retention,updated_at) VALUES (?,?,?,?,?,?,?)',[$id,$kind,$title,$user['id'],$peer,$ttl,time()]);
             self::query('INSERT IGNORE INTO vaultcast_chat_members (room_id,user_id) VALUES (?,?)',[$id,$user['id']]);
@@ -88,15 +92,15 @@ final class Chat
     }
     public static function history(array $user,string $id,int $revision,int $before): array {
         $r=self::room($id,$user);$members=[];
-        $rows=self::query('SELECT u.payload,m.seen_at,m.typing_until,m.read_id FROM vaultcast_chat_members m JOIN vaultcast_users u ON u.id=m.user_id WHERE m.room_id=? AND m.banned=0 ORDER BY m.seen_at DESC LIMIT 100',[$id]);
-        foreach ($rows as $row) $members[]=array_merge(self::identity(json_decode($row['payload'],true)),['online'=>(int)$row['seen_at']>time()-50,'typing'=>(int)$row['typing_until']>time(),'read_id'=>$r['kind']==='dm'?(int)$row['read_id']:0]);
+        $rows=self::query('SELECT '.self::PUBLIC_USER_COLUMNS.',m.seen_at,m.typing_until,m.read_id FROM vaultcast_chat_members m JOIN vaultcast_users u ON u.id=m.user_id WHERE m.room_id=? AND m.banned=0 ORDER BY m.seen_at DESC LIMIT 100',[$id]);
+        foreach ($rows as $row) $members[]=array_merge(self::identity($row),['online'=>(int)$row['seen_at']>time()-50,'typing'=>(int)$row['typing_until']>time(),'read_id'=>$r['kind']==='dm'?(int)$row['read_id']:0]);
         unset($r['member']);$out=['ok'=>true,'room'=>$r,'members'=>$members,'server_time'=>time(),'unchanged'=>$before===0 && (int)$r['revision']===$revision];
         if ($out['unchanged']) return $out;
         $where=$before>0?' AND id<?':'';$args=[$id,time()];if ($before>0)$args[]=$before;
         $messages=self::query('SELECT * FROM vaultcast_chat_messages WHERE room_id=? AND (expires_at=0 OR expires_at>?)'.$where.' ORDER BY id DESC LIMIT 51',$args)->fetchAll();
         $out['has_more']=count($messages)>50;$messages=array_slice($messages,0,50);$authors=[];
         $ids=array_values(array_unique(array_column($messages,'sender_id')));
-        if ($ids) foreach (self::query('SELECT payload FROM vaultcast_users WHERE id IN ('.implode(',',array_fill(0,count($ids),'?')).')',$ids) as $u) {$p=json_decode($u['payload'],true);$authors[$p['id']]=self::identity($p);}
+        if ($ids) foreach (self::query('SELECT '.self::PUBLIC_USER_COLUMNS.' FROM vaultcast_users u WHERE u.id IN ('.implode(',',array_fill(0,count($ids),'?')).')',$ids) as $u) {$authors[$u['id']]=self::identity($u);}
         foreach ($messages as &$m) {$m['author']=$authors[$m['sender_id']] ?? ['id'=>$m['sender_id'],'name'=>'Deleted account','avatar_url'=>null];$m['id']=(int)$m['id'];$m['created_at']=(int)$m['created_at'];$m['expires_at']=(int)$m['expires_at'];unset($m['nonce']);}
         $out['messages']=array_reverse($messages);return $out;
     }
@@ -135,6 +139,7 @@ final class Chat
                 if (!$r['can_manage']) throw new DomainException('Only the owner or an administrator can manage this room.');
                 $ttl=self::retention($body['retention'] ?? $r['retention']);$title=$id==='general'?'General':trim((string)($body['title'] ?? $r['title']));
                 if ($title===''||mb_strlen($title)>100) throw new DomainException('Use a name of 1–100 characters.');
+                self::query('DELETE FROM vaultcast_chat_messages WHERE room_id=? AND expires_at>0 AND expires_at<=?',[$id,time()]);
                 self::query('UPDATE vaultcast_chat_rooms SET title=?,retention=? WHERE id=?',[$title,$ttl,$id]);
                 self::query('UPDATE vaultcast_chat_messages SET expires_at=CASE WHEN ?=0 THEN 0 ELSE created_at+? END WHERE room_id=?',[$ttl,$ttl,$id]);
             } elseif ($action==='invite'||$action==='kick') {
@@ -196,9 +201,21 @@ final class Chat
     }
     public static function cleanup(): void {
         if (\Vaultcast\Repository::cacheGet('chat-gc')) return;
-        \Vaultcast\Repository::cachePut('chat-gc',['at'=>time()],60);
-        self::query('DELETE FROM vaultcast_chat_messages WHERE expires_at>0 AND expires_at<=? LIMIT 200',[time()]);
-        $files=self::query('SELECT f.id FROM vaultcast_chat_files f LEFT JOIN vaultcast_chat_messages m ON m.id=f.message_id WHERE (f.message_id>0 AND m.id IS NULL) OR (f.message_id=0 AND f.created_at<?) LIMIT 50',[time()-3600])->fetchAll();
-        foreach ($files as $f) {if (@unlink(self::filePath($f['id']))||!is_file(self::filePath($f['id']))) self::query('DELETE FROM vaultcast_chat_files WHERE id=?',[$f['id']]);}
+        $lock=@fopen(STREAM_DATA.'/chat-gc.lock','c');if (!$lock) return;
+        try {
+            if (!flock($lock,LOCK_EX|LOCK_NB) || \Vaultcast\Repository::cacheGet('chat-gc')) return;
+            \Vaultcast\Repository::cachePut('chat-gc',['at'=>time()],60);
+            self::query('DELETE FROM vaultcast_chat_messages WHERE expires_at>0 AND expires_at<=? LIMIT 200',[time()]);
+            // Rotate through a bounded primary-key window instead of scanning all stored images.
+            $cursor=\Vaultcast\Repository::cacheGet('chat-gc-cursor')['id'] ?? '';
+            $files=self::query('SELECT f.*,m.id AS live_message FROM (SELECT id,message_id,created_at FROM vaultcast_chat_files WHERE id>? ORDER BY id LIMIT 100) f LEFT JOIN vaultcast_chat_messages m ON m.id=f.message_id ORDER BY f.id',[$cursor])->fetchAll();
+            foreach ($files as $f) {
+                if (($f['message_id'] && !$f['live_message']) || (!$f['message_id'] && $f['created_at']<time()-3600)) {
+                    $path=self::filePath($f['id']);if (@unlink($path)||!is_file($path)) self::query('DELETE FROM vaultcast_chat_files WHERE id=?',[$f['id']]);
+                }
+            }
+            $last=$files ? $files[count($files)-1]['id'] : '';
+            \Vaultcast\Repository::cachePut('chat-gc-cursor',['id'=>$last],0);
+        } finally {flock($lock,LOCK_UN);fclose($lock);}
     }
 }

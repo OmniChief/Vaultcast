@@ -26,7 +26,10 @@ final class Migrations
         $pdo = \Vaultcast\Database::connection();
         // Serialise concurrent first requests across PHP workers (MariaDB named lock).
         $got = (int)$pdo->query("SELECT GET_LOCK('vaultcast_migrations', 30)")->fetchColumn();
-        if ($got !== 1) return;
+        if ($got !== 1) {
+            if (is_file(self::stampFile())) return;
+            throw new RuntimeException('Database upgrade is still running. Retry shortly.');
+        }
         try {
             if (!is_file(self::stampFile())) {
                 self::run($pdo);

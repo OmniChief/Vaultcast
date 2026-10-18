@@ -16,7 +16,7 @@ final class GameSaves {
     }
     private static function key(array $user): string {return 'game-saves:'.$user['id'];}
     private static function directory(array $user): string {
-        if (!preg_match('/^[a-f0-9]{16}$/D',(string)$user['id'])) throw new DomainException('Invalid account.');
+        if (!preg_match('/^[a-f0-9]{16,64}$/D',(string)$user['id'])) throw new DomainException('Invalid account.');
         $dir=STREAM_DATA.'/game-saves/'.$user['id'];
         if (!is_dir($dir) && !@mkdir($dir,0775,true)) throw new DomainException('Cannot create save storage.');
         return $dir;
@@ -28,7 +28,7 @@ final class GameSaves {
     }
     private static function slot(string $slot): void {if (!in_array($slot,['1','2','auto'],true)) throw new DomainException('Choose manual slot 1, 2 or autosave.');}
     public static function removeUser(string $id): void {
-        if (!preg_match('/^[a-f0-9]{16}$/D',$id)) return;
+        if (!preg_match('/^[a-f0-9]{16,64}$/D',$id)) return;
         $dir=STREAM_DATA.'/game-saves/'.$id;if (!is_dir($dir)) return;
         foreach (glob($dir.'/_uploads/*',GLOB_ONLYDIR) ?: [] as $upload) if (preg_match('/^[a-f0-9]{32}$/D',basename($upload))) self::clearUpload($upload);
         @rmdir($dir.'/_uploads');
@@ -57,7 +57,9 @@ final class GameSaves {
         if ($pending>=8) throw new DomainException('Too many unfinished uploads. Retry after old uploads expire.');
         $upload=bin2hex(random_bytes(16));$path=$dir.'/'.$upload;
         if (!@mkdir($path,0775)) throw new DomainException('Cannot start save upload.');
-        $meta=['item_id'=>$id,'slot'=>$slot,'bytes'=>$bytes,'core'=>$core,'engine'=>$engine,'name'=>mb_substr(trim((string)($body['name'] ?? '')),0,80),
+        $current=\Vaultcast\Repository::document(self::key($user),[]);
+        $previousHash=$current['games'][$id]['slots'][$slot]['hash'] ?? '';
+        $meta=['previous_hash'=>$previousHash,'item_id'=>$id,'slot'=>$slot,'bytes'=>$bytes,'core'=>$core,'engine'=>$engine,'name'=>mb_substr(trim((string)($body['name'] ?? '')),0,80),
             'variant'=>($body['variant'] ?? '')==='legacy'?'legacy':'modern','threaded'=>!empty($body['threaded']),
             'signature'=>MediaFacts::sig($item),'title'=>Catalogue::fixText($item['title']),'system'=>$item['system'] ?? '', 'created_at'=>time()];
         if (@file_put_contents($path.'/meta.json',json_encode($meta),LOCK_EX)===false) throw new DomainException('Cannot write save upload.');
@@ -101,7 +103,10 @@ final class GameSaves {
             }
         }finally {fclose($out);}
         $hash=hash_file('sha256',$tmp);$dest=self::directory($user).'/'.$hash.'.state';
-        if (!@rename($tmp,$dest)) throw new DomainException('Cannot install save state.');
+        $current=\Vaultcast\Repository::document(self::key($user),[]);$currentHash=$current['games'][$meta['item_id']]['slots'][$meta['slot']]['hash'] ?? '';
+        if (array_key_exists('previous_hash',$meta) && $currentHash!==$meta['previous_hash'] && $currentHash!==$hash) throw new DomainException('This save slot changed during upload. The local save is retained; review the server slot before retrying.');
+        if (is_file($dest) && hash_file('sha256',$dest)===$hash) @unlink($tmp);
+        elseif (!@rename($tmp,$dest)) throw new DomainException('Cannot install save state.');
         $save=['hash'=>$hash,'bytes'=>$meta['bytes'],'core'=>$meta['core'],'engine'=>$meta['engine'],'signature'=>$meta['signature'],
             'variant'=>$meta['variant'],'threaded'=>$meta['threaded'],
             'name'=>$meta['slot']==='auto'?'Exit autosave':($meta['name'] ?: 'Save '.$meta['slot']),'updated_at'=>time()];
@@ -180,16 +185,22 @@ final class GameSaves {
         $item=self::item($user,$share['item_id']);$save=$share['save'];
         if ($save['signature']!==MediaFacts::sig($item)) throw new DomainException('This save belongs to a different version of the game file.');
         $source=self::directory(['id'=>$share['owner']]).'/'.$save['hash'].'.state';$dest=self::directory($user).'/'.$save['hash'].'.state';
-        if (!is_file($source) || ($source!==$dest && !@copy($source,$dest))) throw new DomainException('Shared save file is unavailable.');
+        if (!is_file($source)) throw new DomainException('Shared save file is unavailable.');
+        if ($source!==$dest && (!is_file($dest) || hash_file('sha256',$dest)!==$save['hash'])) {
+            $temporary=$dest.'.import-'.bin2hex(random_bytes(8));
+            try {
+                if (!@copy($source,$temporary) || hash_file('sha256',$temporary)!==$save['hash'] || !@rename($temporary,$dest)) throw new DomainException('Cannot copy this shared save. Retry the import.');
+            } finally {if (is_file($temporary)) @unlink($temporary);}
+        }
         $save['updated_at']=time();try {self::install($user,$share['item_id'],$slot,$save,$share['title'],(string)($item['system'] ?? ''));}catch (Throwable $e) {self::collect($user);throw $e;}return ['ok'=>true];
     }
     public static function download(array $user,string $id,string $slot,string $share=''): void {
         $owner=$user;
         if ($share!=='') {$shared=self::shared($user,$share);$owner=['id'=>$shared['owner']];$save=$shared['save'];}
         else {$save=self::own($user,$id,$slot);if (!empty($_GET['hash']) && $_GET['hash']!==$save['hash']) throw new DomainException('This save slot changed. Refresh the save list before loading.');}
-        $path=self::directory($owner).'/'.$save['hash'].'.state';if (!is_file($path)) throw new DomainException('Save file missing.');
+        $path=self::directory($owner).'/'.$save['hash'].'.state';$stream=@fopen($path,'rb');if (!$stream) throw new DomainException('Save file missing.');
         header('Content-Type: application/octet-stream');header('Content-Disposition: attachment; filename="vaultcast-'.$save['hash'].'.state"');
-        header('Cache-Control: private, no-store');header('Content-Length: '.filesize($path));header('X-Content-Type-Options: nosniff');
-        readfile($path);exit;
+        header('Cache-Control: private, no-store');header('Content-Length: '.fstat($stream)['size']);header('X-Content-Type-Options: nosniff');
+        fpassthru($stream);fclose($stream);exit;
     }
 }

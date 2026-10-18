@@ -10,6 +10,8 @@ final class FactoryReset
         $existing = Auth::findById($actor['id']);
         if (!$existing || !password_verify((string)($body['password'] ?? ''), $existing['password_hash'] ?? '')) throw new DomainException('Administrator password is incorrect.');
         \Vaultcast\Database::lockForReset();
+        $existing=Auth::findById($actor['id']);
+        if (!$existing || ($existing['role'] ?? '')!=='admin' || !password_verify((string)($body['password'] ?? ''),$existing['password_hash'] ?? '')) throw new DomainException('Administrator access changed. Sign in again before resetting.');
         require_once STREAM_ROOT . '/src/Installer.php';
         // New identity prevents old browser outboxes from restoring erased personal data.
         $admin = ['id'=>bin2hex(random_bytes(16)), 'username'=>$existing['username'], 'display_name'=>$existing['username'], 'role'=>'admin', 'password_hash'=>$existing['password_hash'], 'prefs'=>['theme'=>'dark','autoplay'=>false]];
