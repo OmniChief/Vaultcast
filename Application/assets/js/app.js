@@ -3229,13 +3229,15 @@ function confirmDialog(message, opts){
     /* Host a bit sooner; guest waits longer so host open-room can land first */
     var delay = role === 'host' ? 700 : 1600;
     setTimeout(function(){
-      lobbyEnsureSocketIo(function(){
+      lobbyEnsureSocketIo(function(ioError){
+        if (session !== _emuSessionId || startedEmu._streamDisposed) return;
+        if (ioError) { fail('Netplay: '+(ioError.message || String(ioError))); return; }
         installNetplayIoShim();
         var transfer=state._lobbyTransfer;
         if(role==='host' && transfer && String(transfer.id)===String(state.movieId)) {
           state._lobbyTransfer=null;
           try {
-            lobbyHardenNetplay(startedEmu);
+            if (!lobbyEnsureNetplayFns(startedEmu)) throw new Error('Could not initialise multiplayer controls');
             startedEmu.isNetplay=true;startedEmu.netplay.owner=true;startedEmu.netplay._streamAwaitingGo=true;
             lobbyLoadSnapshot(startedEmu,transfer.bytes,transfer.hash,[],0,tryConnect);
           } catch(err) {fail('Could not move the current game into multiplayer: '+err.message);}
@@ -3347,6 +3349,20 @@ function confirmDialog(message, opts){
       }, sess);
     }).catch(function(e){ toast(String(e), { kind:'bad' }); });
   }
+  function lobbyPickerGameCard(it, choose){
+    var card = h('button', { className:'lobby-picker-card', type:'button' });
+    var thumb = h('div', { className:'lobby-picker-thumb' });
+    if (it.has_poster) {
+      var im = h('img', { alt:'', loading:'lazy', src:lobbyPosterUrl(it.id) });
+      im.onerror = function(){im.remove();};
+      thumb.appendChild(im);
+    }
+    card.appendChild(thumb);
+    card.appendChild(h('strong', {text:it.title || 'ROM'}));
+    card.appendChild(h('span', {className:'muted',text:(it.system || '') + (it.mp_label ? ' · '+it.mp_label : ' · '+(it.max_players || 4)+'P')}));
+    card.onclick = function(){choose(it);};
+    return card;
+  }
   function openLobbyStartPicker(){
     var existing = document.getElementById('lobby-picker');
     if (existing) existing.remove();
@@ -3359,6 +3375,9 @@ function confirmDialog(message, opts){
     panel.appendChild(h('p', { className:'muted', text:'Host any game with up to four lobby seats. Guests join as P2, P3 or P4. The game determines which players can control anything; unused players can watch.' }));
     var q = h('input', { className:'search-box', type:'search', placeholder:'Search all games…', autocomplete:'off' });
     var grid = h('div', { className:'lobby-picker-grid', id:'lobby-picker-grid' });
+    var favourites = h('section',{className:'lobby-picker-favourites','aria-label':'Favourite games'});
+    favourites.hidden = true;
+    panel.appendChild(favourites);
     panel.appendChild(h('div', { className:'lobby-picker-search' }, [ q ]));
     panel.appendChild(grid);
     var page = 0;
@@ -3370,6 +3389,23 @@ function confirmDialog(message, opts){
     overlay.appendChild(panel);
     overlay.addEventListener('click', function(e){ if (e.target === overlay) overlay.remove(); });
     document.body.appendChild(overlay);
+    if (state.user && state.user.role !== 'guest') {
+      var favouriteOwner=state.user.id;
+      api('/hub/game-favourites').then(function(result){
+        if (!overlay.isConnected || !state.user || state.user.id!==favouriteOwner || !result.ok || !result.items.length) return;
+        favourites.hidden=false;
+        favourites.appendChild(h('h3',{text:'Favourite games'}));
+        var cards=h('div',{className:'lobby-picker-favourites-row'}), offset=0;
+        var moreFavourites=h('button',{className:'btn ghost',type:'button',text:'More favourites',onClick:appendFavourites});
+        favourites.appendChild(cards);favourites.appendChild(moreFavourites);
+        function appendFavourites(){
+          var end=Math.min(offset+12,result.items.length);
+          for(;offset<end;offset++) cards.appendChild(lobbyPickerGameCard(result.items[offset],function(it){overlay.remove();startLobbyHost(it);}));
+          moreFavourites.hidden=offset>=result.items.length;
+        }
+        appendFavourites();
+      }).catch(function(){ /* Search stays available if personal favourites fail. */ });
+    }
     function load(qq, append){
       var ticket = ++requestId;
       var nextPage = append ? page + 1 : 1;
@@ -3392,18 +3428,7 @@ function confirmDialog(message, opts){
           return;
         }
         items.forEach(function(it){
-          var card = h('button', { className:'lobby-picker-card', type:'button' });
-          var thumb = h('div', { className:'lobby-picker-thumb' });
-          if (it.has_poster) {
-            var im = h('img', { alt:'', loading:'lazy', src: lobbyPosterUrl(it.id) });
-            im.onerror = function(){ im.remove(); };
-            thumb.appendChild(im);
-          }
-          card.appendChild(thumb);
-          card.appendChild(h('strong', { text: it.title || 'ROM' }));
-          card.appendChild(h('span', { className:'muted', text: (it.system || '') + (it.mp_label ? (' · ' + it.mp_label) : (' · ' + (it.max_players || 2) + 'P')) }));
-          card.onclick = function(){ overlay.remove(); startLobbyHost(it); };
-          grid.appendChild(card);
+          grid.appendChild(lobbyPickerGameCard(it,function(selected){overlay.remove();startLobbyHost(selected);}));
         });
       }).catch(function(e){
         if (ticket !== requestId || !overlay.parentNode) return;
@@ -3426,8 +3451,36 @@ function confirmDialog(message, opts){
     setTimeout(function(){ try { q.focus(); } catch (e) {} }, 50);
   }
 
+  function chooseLobbyStart(item){
+    if (document.getElementById('lobby-start-choice')) return;
+    var active=window.EJS_emulator, previous=document.activeElement;
+    var canKeep=!!(active && active.started && !active._streamDisposed && !active.isNetplay && String(state.movieId)===String(item.id));
+    var overlay=h('div',{id:'lobby-start-choice',className:'confirm-overlay'});
+    function close(){overlay.remove();document.removeEventListener('keydown',key);if(previous && previous.isConnected)previous.focus();}
+    function choose(keep){close();startLobbyHost(item,keep);}
+    function key(e){if(e.key==='Escape'){e.preventDefault();close();}}
+    var fresh=h('button',{type:'button',className:'btn primary',text:'New game',onClick:function(){choose(false);}});
+    overlay.appendChild(h('div',{className:'confirm-card',role:'dialog','aria-modal':'true','aria-label':'Start lobby'},[
+      h('h2',{text:'Start lobby'}),
+      h('p',{text:canKeep?'Start a new game, or continue from your current game?':'Start a new game. To use your current position, start playing this game first.'}),
+      h('div',{className:'row-actions'},[
+        fresh,
+        h('button',{type:'button',className:'btn',text:'Current game',disabled:!canKeep,onClick:function(){choose(true);}}),
+        h('button',{type:'button',className:'btn ghost',text:'Cancel',onClick:close})
+      ])
+    ]));
+    overlay.addEventListener('click',function(e){if(e.target===overlay)close();});
+    document.addEventListener('keydown',key);
+    (document.fullscreenElement || document.body).appendChild(overlay);
+    fresh.focus();
+  }
   function startLobbyHost(item, preserve){
+    if (!item || !item.id) return;
+    if (typeof preserve !== 'boolean') {chooseLobbyStart(item);return;}
     var active=window.EJS_emulator;
+    if (preserve && (!active || !active.started || active._streamDisposed || active.isNetplay || String(state.movieId)!==String(item.id))) {
+      toast('The current game is no longer available. Choose New game instead.',{kind:'bad'});return;
+    }
     state._lobbyTransfer=null;
     if(preserve && active && active.started && !active.isNetplay && String(state.movieId)===String(item.id)) {
       try {var bytes=lobbyCaptureState(active);state._lobbyTransfer={id:item.id,bytes:bytes,hash:window.VaultcastNetplaySync.stateHash(bytes)};}
@@ -3501,7 +3554,7 @@ function confirmDialog(message, opts){
 
   function mountScreenController(emu){
     if (!emu || emu._screenControllerCleanup || !emu.elements || !emu.elements.parent) return;
-    var parent = emu.elements.parent, listeners = [], held = {}, active = {}, disposed = false;
+    var parent = emu.elements.parent, listeners = [], held = {}, active = {}, releases = {}, downSince = {}, disposed = false;
     var pref = {};
     try { pref = JSON.parse(localStorage.getItem('vaultcast.screenController') || '{}') || {}; } catch (ePref) {}
     var visible = typeof pref.visible === 'boolean' ? pref.visible : !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
@@ -3524,35 +3577,50 @@ function confirmDialog(message, opts){
       if (!input) return;
       delete active[key];
       held[input.index] = Math.max(0, (held[input.index] || 0) - 1);
-      if (!held[input.index]) send(input.index, 0);
+      if (!held[input.index]) {
+        var index=input.index, remaining=Math.max(0,80-(Date.now()-(downSince[index] || 0)));
+        releases[index]=setTimeout(function(){delete releases[index];if(!held[index])send(index,0);},remaining);
+      }
       if (!Object.keys(active).some(function(id){ return active[id].button === input.button; })) input.button.classList.remove('pressed');
     }
-    function releaseAll(){ Object.keys(active).forEach(release); }
+    function releaseAll(){
+      Object.keys(active).forEach(release);
+      Object.keys(releases).forEach(function(index){clearTimeout(releases[index]);delete releases[index];send(Number(index),0);});
+    }
     function press(key, button, index){
       if (active[key] || !visible || !emu.started || emu._streamDisposed) return;
       active[key] = {index:index, button:button};
       held[index] = (held[index] || 0) + 1;
-      if (held[index] === 1) send(index, index >= 16 ? 32767 : 1);
+      if (held[index] === 1) {
+        downSince[index]=Date.now();
+        if (Object.prototype.hasOwnProperty.call(releases,index)) {clearTimeout(releases[index]);delete releases[index];}
+        else send(index, index >= 16 ? 32767 : 1);
+      }
       button.classList.add('pressed');
     }
     function button(label, index){
       var node = h('button', {type:'button', text:label, 'aria-label':label, 'data-input':String(index)});
       if (window.PointerEvent) {
         listen(node, 'pointerdown', function(e){
-          if (e.button !== 0) return;
+          if (e.pointerType !== 'touch' && e.button !== 0) return;
           e.preventDefault(); e.stopPropagation();
           press('p'+e.pointerId, node, index);
           try { node.setPointerCapture(e.pointerId); } catch (eCapture) {}
         });
-        ['pointerup','pointercancel','lostpointercapture'].forEach(function(event){ listen(node,event,function(e){ e.preventDefault(); release('p'+e.pointerId); }); });
+        ['pointerup','pointercancel','lostpointercapture'].forEach(function(event){ listen(node,event,function(e){ e.preventDefault(); e.stopPropagation(); release('p'+e.pointerId); }); });
       } else {
         listen(node, 'touchstart', function(e){ e.preventDefault(); e.stopPropagation(); Array.prototype.forEach.call(e.changedTouches,function(t){press('t'+t.identifier,node,index);}); }, {passive:false});
-        ['touchend','touchcancel'].forEach(function(event){listen(node,event,function(e){e.preventDefault();Array.prototype.forEach.call(e.changedTouches,function(t){release('t'+t.identifier);});},{passive:false});});
+        ['touchend','touchcancel'].forEach(function(event){listen(node,event,function(e){e.preventDefault();e.stopPropagation();Array.prototype.forEach.call(e.changedTouches,function(t){release('t'+t.identifier);});},{passive:false});});
         listen(node, 'mousedown', function(e){if(e.button===0){e.preventDefault();press('mouse',node,index);}});
       }
       listen(node, 'keydown', function(e){if(e.key===' ' || e.key==='Enter'){e.preventDefault();e.stopPropagation();press('k'+index,node,index);}});
       listen(node, 'keyup', function(e){if(e.key===' ' || e.key==='Enter'){e.preventDefault();e.stopPropagation();release('k'+index);}});
       listen(node, 'blur', function(){release('k'+index);});
+      // Accessibility/remote activation may deliver a click without pointer events.
+      listen(node, 'click', function(e){
+        e.preventDefault();e.stopPropagation();
+        if (e.detail===0 && !held[index]) {press('click'+index,node,index);release('click'+index);}
+      });
       listen(node, 'contextmenu', function(e){e.preventDefault();});
       return node;
     }

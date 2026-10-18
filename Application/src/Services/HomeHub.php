@@ -60,6 +60,15 @@ final class HomeHub {
         $notifications=json_decode((string)$q->fetchColumn(),true);
         return ['ok'=>true,'notifications'=>is_array($notifications)?array_values($notifications):[]];
     }
+    public static function gameFavourites(array $user): array {
+        $data = self::personal((string)$user['id']);
+        $rows = array_values(array_filter($data['favourites'] ?? [], static function(array $row) use ($user): bool {
+            $card = $row['card'] ?? [];
+            return ($card['media_kind'] ?? '') === 'rom' && self::visible($card, $user);
+        }));
+        usort($rows, static function(array $a, array $b): int { return ($b['added_at'] ?? 0) <=> ($a['added_at'] ?? 0); });
+        return ['ok'=>true, 'items'=>array_map(static function(array $row): array { return $row['card']; }, $rows)];
+    }
     public static function dashboard(array $user): array {
         $uid = (string)($user['id'] ?? '');
         $data = $uid !== '' ? self::personal($uid) : [];

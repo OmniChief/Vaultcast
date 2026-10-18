@@ -132,3 +132,12 @@
 .screen-controller-center button{width:auto;min-width:50px;height:32px;padding:0 8px;font-size:12px;border-radius:12px}
 @media(max-width:480px){.screen-controller-pad{--controller-size:min(var(--controller-requested-size,44px),44px);left:5px;right:5px;gap:5px}.screen-controller-toolbar{top:4px;left:4px}.screen-controller-pad button{font-size:12px}}
 @media(max-height:420px){.screen-controller-pad{bottom:46px;--controller-size:32px}.screen-controller-pad button{font-size:11px}.screen-controller-toolbar{top:3px}.screen-controller-toolbar button,.screen-controller-toolbar select,.screen-controller-settings{padding:5px;min-height:30px}}
+
+.lobby-picker-favourites{margin:12px 0 18px}
+.lobby-picker-favourites[hidden]{display:none}
+.lobby-picker-favourites h3{margin:0 0 10px;font-size:1rem}
+.lobby-picker-favourites-row{display:flex;gap:10px;overflow-x:auto;padding-bottom:8px;scroll-snap-type:x proximity}
+.lobby-picker-favourites-row .lobby-picker-card{flex:0 0 130px;min-width:0;scroll-snap-align:start}
+.lobby-picker-favourites-row .lobby-picker-thumb{width:100%}
+
+.screen-controller-pad button{-webkit-tap-highlight-color:transparent}

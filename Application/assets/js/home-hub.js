@@ -39,7 +39,7 @@
     });
     if(window.VaultcastHomeExtras)box.appendChild(window.VaultcastHomeExtras.collectionButton(it)||h('span'));
     if(it.media_kind==='video'||it.kind==='show')box.appendChild(button('Watch together',function(){chooseVideo(it,createCinema);}));
-    if(it.media_kind==='rom')box.appendChild(button('Start lobby · keep my game',function(){A.startLobbyHost(it,true);},'primary'));
+    if(it.media_kind==='rom')box.appendChild(button('Start lobby',function(){A.startLobbyHost(it);},'primary'));
     return box;
   }
   function cardAction(card,it){
