@@ -11,21 +11,12 @@
   <!-- VAULTCAST_CONFIG -->
   <link rel="manifest" href="index.php?manifest=1">
   <link rel="icon" href="assets/img/mark.svg">
-  <link rel="stylesheet" href="index.php?asset=assets/css/app.css&amp;v={{ASSET_VERSION}}">
-  <link rel="stylesheet" href="index.php?asset=assets/css/home-hub.css&amp;v={{ASSET_VERSION}}">
   <script>
     window.__STREAM_VERSION__ = '{{VERSION}}';
     window.__ASSET_VERSION__ = '{{ASSET_VERSION}}';
     window.__STREAM_NETPLAY_SERVER__ = window.__STREAM_BASE__ + 'netplay';
   </script>
-  <script src="index.php?asset=assets/js/routes.js&amp;v={{ASSET_VERSION}}" defer></script>
-  <script src="index.php?asset=assets/js/netplay_sync.js&amp;v={{ASSET_VERSION}}" defer></script>
-  <script src="index.php?asset=assets/js/request-cache.js&amp;v={{ASSET_VERSION}}" defer></script>
-  <script src="index.php?asset=assets/js/chat.js&amp;v={{ASSET_VERSION}}" defer></script>
-  <script src="index.php?asset=assets/js/home-hub.js&amp;v={{ASSET_VERSION}}" defer></script>
-  <script src="index.php?asset=assets/js/home-extras.js&amp;v={{ASSET_VERSION}}" defer></script>
-  <script src="index.php?asset=assets/js/live-search.js&amp;v={{ASSET_VERSION}}" defer></script>
-  <script src="index.php?asset=assets/js/app.js&amp;v={{ASSET_VERSION}}" defer></script>
+  <script src="index.php?asset=assets/js/browser-bootstrap.js&amp;v={{ASSET_VERSION}}" defer></script>
 </head>
 <body data-mode="vod"><div id="app"><!-- VAULTCAST_PAGE --></div><div id="toast" class="toast" hidden></div>
 <noscript><p class="first-noscript">Enable JavaScript for playback, search and full catalogue navigation. Sign-in and the home page remain available.</p></noscript>

@@ -3997,7 +3997,7 @@ try {
           onClick: function(){ goMode(m[0]); }
         }, [ icon(m[0]), h('span', { className:'mode-label', text: m[1] }) ]);
       })),
-      h('div', { className:'nav-right' }, [ userAreaAllowed('library') || userAreaAllowed('games') ? searchBoxEl(mode) : null, accountMenu() ])
+      h('div', { className:'nav-right' }, [ userAreaAllowed('library') || userAreaAllowed('games') ? searchBoxEl(mode) : null, h('a',{className:'btn ghost',href:BASE+'?compat=on',text:'Compatibility',title:'Simplified browsing and playback'}), accountMenu() ])
     ]);
     return h('div', { className:'app-shell xshell' }, [
       header,
