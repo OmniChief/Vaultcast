@@ -398,7 +398,7 @@ h1, h2, h3 { letter-spacing: -0.022em; font-weight: 760; }
 }
 .search-wrap .search-box::-webkit-search-cancel-button { filter: invert(1) opacity(.5); }
 .xnav .search-box:focus-visible { outline: none; }
-.search-wrap:focus-within { border-color: color-mix(in srgb, var(--accent) 70%, transparent); background: rgba(255,255,255,.08); width: clamp(220px, 26vw, 380px); outline: var(--focus-ring); outline-offset: 2px; }
+.search-wrap:focus-within { border-color: color-mix(in srgb, var(--accent) 70%, transparent); background: rgba(255,255,255,.08); width: clamp(180px, 20vw, 320px); outline: var(--focus-ring); outline-offset: 2px; }
 .kbd-hint { font: 600 .7rem/1 var(--font); color: var(--faint); border: 1px solid var(--border); border-radius: var(--radius-xs); padding: 3px 6px; }
 .search-wrap:focus-within .kbd-hint { display: none; }
 .icon-btn {
@@ -2534,7 +2534,8 @@ body.has-az-rail .has-az-rail { padding-left: calc(var(--az-gutter) + 6px); }
 }
 
 /* Neon interface: static light, clear surfaces and local interaction feedback. */
-:root { --neon-violet:#aa98ff; --neon-line:color-mix(in srgb,var(--accent) 36%,transparent); }
+:root { --neon-violet:#aa98ff; }
+body { --neon-line:color-mix(in srgb,var(--accent) 36%,transparent); }
 body { background:radial-gradient(ellipse 1000px 540px at 0 0,#15395855,transparent 70%),radial-gradient(ellipse 900px 650px at 100% 0,#54318733,transparent 70%),var(--bg); }
 .topnav.xnav { background:#080e1df5; border-bottom-color:var(--neon-line); backdrop-filter:none; -webkit-backdrop-filter:none; box-shadow:0 1px 0 #83eaff0a,0 10px 28px #0003; }
 .xnav .brand { letter-spacing:.035em; }
@@ -2546,7 +2547,7 @@ body { background:radial-gradient(ellipse 1000px 540px at 0 0,#15395855,transpar
 .subnav-btn { border-radius:8px; }
 .subnav-btn.active { color:var(--accent); background:color-mix(in srgb,var(--accent) 10%,var(--bg2)); box-shadow:inset 0 -2px 0 var(--accent); }
 .search-wrap { border-radius:10px; background:#101b2b; }
-.search-wrap:focus-within { width:clamp(180px,20vw,320px); background:#111d31; box-shadow:0 0 18px color-mix(in srgb,var(--accent) 12%,transparent); }
+.search-wrap:focus-within { background:#111d31; box-shadow:0 0 18px color-mix(in srgb,var(--accent) 12%,transparent); }
 .btn { border-color:var(--border); background:#142037; border-radius:10px; }
 .btn.ghost { background:#0b1422; }
 .btn:hover:not(:disabled),.icon-btn:hover { border-color:var(--accent); }
@@ -2562,7 +2563,7 @@ body { background:radial-gradient(ellipse 1000px 540px at 0 0,#15395855,transpar
 .settings-nav { box-shadow:inset 0 1px 0 #8fd9ff0a; }
 .settings-nav-btn.active { color:var(--accent); border-color:var(--neon-line); background:color-mix(in srgb,var(--accent) 10%,var(--bg2)); box-shadow:inset 3px 0 0 var(--accent); }
 .settings-nav-title { color:#91a9c6; letter-spacing:.14em; }
-.menu-pop,.modal,.dialog { background:#0c1526; border-color:var(--border-strong); }
+.menu-pop,.confirm-card,.nsm-modal-card { background:#0c1526; border-color:var(--border-strong); }
 .menu-pop { backdrop-filter:none; -webkit-backdrop-filter:none; }
 .login-wrap { background:radial-gradient(ellipse at 20% 15%,#12485b66,transparent 55%),radial-gradient(ellipse at 85% 70%,#482b7055,transparent 55%),var(--bg); }
 .login-card { box-shadow:0 0 0 1px #6ee7ff12,0 24px 80px #0006; }
@@ -2570,6 +2571,9 @@ body { background:radial-gradient(ellipse 1000px 540px at 0 0,#15395855,transpar
 .first-hero h1 { color:var(--text); }
 input[type=checkbox],input[type=radio],input[type=range] { accent-color:var(--accent); }
 .toast { border-color:var(--neon-line); background:#0d1b2d; }
+.toast.toast-ok { background:#10372b; border-color:#5df4c177; }
+.toast.toast-bad { background:#411a29; border-color:#ff82a277; }
+.az-rail .az-btn.active,.avatar.signed-in .avatar-initial,.lc-pill:not(.iptv) { color:#071321; }
 @media (hover:hover) { .card { transition:transform .18s var(--ease),border-color .18s var(--ease); } }
 @media (forced-colors:active) {
   .mode-tab.active,.subnav-btn.active,.settings-nav-btn.active,.btn.primary { outline:2px solid Highlight; }
