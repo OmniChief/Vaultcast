@@ -70,7 +70,11 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && ($_POST['first_action'] 
     }
     $loginError = 'Incorrect username or password.';
 }
+$browserMode = (string)($_GET['compat'] ?? $_COOKIE['vaultcast_browser_mode'] ?? 'auto');
+if (!in_array($browserMode,['on','off','auto'],true)) $browserMode='auto';
+if (isset($_GET['compat']) && empty($_GET['detected'])) setcookie('vaultcast_browser_mode',$browserMode,['expires'=>time()+31536000,'path'=>$base,'secure'=>!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS']!=='off','httponly'=>false,'samesite'=>'Lax']);
 $startup = Startup::snapshot();
+if ($browserMode === 'on') { CompatibilityBrowser::render($startup,$base,$siteName,$loginError); exit; }
 $firstPage = FirstPage::render($startup, $base, $siteName, $loginError, substr((string)$path, strlen($base)));
 release_request_locks();
 require_once __DIR__ . '/src/Services/PlayerAssets.php';

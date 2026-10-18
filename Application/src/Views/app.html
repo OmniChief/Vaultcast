@@ -19,5 +19,6 @@
   <script src="index.php?asset=assets/js/browser-bootstrap.js&amp;v={{ASSET_VERSION}}" defer></script>
 </head>
 <body data-mode="vod"><div id="app"><!-- VAULTCAST_PAGE --></div><div id="toast" class="toast" hidden></div>
-<noscript><p class="first-noscript">Enable JavaScript for playback, search and full catalogue navigation. Sign-in and the home page remain available.</p></noscript>
+<noscript><meta http-equiv="refresh" content="0;url={{BASE_HREF}}?compat=on"><p><a href="{{BASE_HREF}}?compat=on">Open compatibility mode</a></p></noscript>
+<p id="browser-recovery" style="padding:12px;font:14px Arial,sans-serif"><a href="{{BASE_HREF}}?compat=on" style="color:#63b9dc">Compatibility mode</a></p>
 </body></html>
