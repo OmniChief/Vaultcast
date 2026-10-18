@@ -1511,13 +1511,19 @@ function confirmDialog(message, opts){
       });
     }
     var convertBtn = null;
-    if (needsConvertExt(item) && state.user && state.user.role === 'admin') {
-      convertBtn = h('button', {
-        className:'btn player-convert',
-        text:'Convert to DirectPlay MP4',
-        onClick: function(e){ enqueueConvert(item, e.currentTarget); }
-      });
-      overlay.appendChild(convertBtn);
+    var detailRoot = inlineHost && inlineHost.parentNode;
+    var detailReport = detailRoot && detailRoot.querySelector('.nsm-report-btn');
+    var detailActions = detailReport && detailReport.parentNode;
+    if (detailActions) {
+      detailActions.querySelectorAll('[data-player-convert]').forEach(function(button){button.remove();});
+      if (needsConvertExt(item) && state.user && state.user.role === 'admin') {
+        convertBtn = h('button', {
+          className:'btn ghost', type:'button', 'data-player-convert':item.id,
+          text:'Convert to DirectPlay MP4',
+          onClick:function(e){enqueueConvert(item,e.currentTarget);}
+        });
+        detailActions.appendChild(convertBtn);
+      }
     }
     mountDetailPlayer(overlay, inlineHost, play.autoplay !== false);
     try {
@@ -1538,14 +1544,6 @@ function confirmDialog(message, opts){
             if (convertBtn) {
               convertBtn.textContent = 'Convert — black video / no picture';
               convertBtn.classList.add('danger');
-            } else {
-              convertBtn = h('button', {
-                className:'btn player-convert danger',
-                text:'Convert — black video / no picture',
-                onClick: function(e){ enqueueConvert(item, e.currentTarget); }
-              });
-              var ov = document.getElementById('player-overlay');
-              if (ov) ov.appendChild(convertBtn);
             }
             toast('Video track not decoding (black picture). Convert to DirectPlay MP4.', { kind:'bad', ms: 6500 });
           } else {
