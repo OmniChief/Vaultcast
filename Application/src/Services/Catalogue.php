@@ -49,13 +49,14 @@ class Catalogue {
 
     /** Revision-managed derived views: no hourly cold rebuild on a viewer request. */
     private static $derivedRevisions = [];
-    private static function derivedRevision(string $prefix): string {
-        return 'v3|' . Store::revision('catalogue') . '|' . Store::revision('browse_epoch') . '|' . Store::revision('settings')
+    private static function derivedRevision(string $prefix,string $salt=''): string {
+        return 'v4|' . Store::revision('catalogue') . '|' . Store::revision('browse_epoch') . '|' . Store::revision('settings')
+            . (in_array($prefix,['browse_shows','facets_shows','showcase_recent','showcase_random'],true)?'|'.Store::revision('show-summary:'.explode('|',$salt)[0]):'')
             . ($prefix === 'showcase_recent' ? '|' . gmdate('Y-m-d') : '');
     }
     private static function shmCacheGet(string $filePrefix, string $salt = ''): ?array {
         $key = 'browse-current|' . $filePrefix . '|' . $salt;
-        $revision = self::derivedRevision($filePrefix);
+        $revision = self::derivedRevision($filePrefix,$salt);
         self::$derivedRevisions[$key] = $revision;
         $entry = \Vaultcast\Repository::cacheGet($key);
         $hit = is_array($entry) && ($entry['revision'] ?? '') === $revision && is_array($entry['payload'] ?? null);
@@ -64,8 +65,8 @@ class Catalogue {
     }
     private static function shmCachePut(string $filePrefix, string $salt, array $payload): void {
         $key = 'browse-current|' . $filePrefix . '|' . $salt;
-        $revision = self::$derivedRevisions[$key] ?? self::derivedRevision($filePrefix);
-        if ($revision !== self::derivedRevision($filePrefix)) return;
+        $revision = self::$derivedRevisions[$key] ?? self::derivedRevision($filePrefix,$salt);
+        if ($revision !== self::derivedRevision($filePrefix,$salt)) return;
         // Arbitrary search/filter pages expire; shared summaries remain revision-managed.
         $defaultPage = ($filePrefix === 'browse_shows' && preg_match('/\|p=1\|per=48\|q=\|L=\|g=\|y=\|d=\|st=\|net=$/D', $salt))
             || ($filePrefix === 'browse_items' && preg_match('/\|p=1\|per=48\|q=\|L=\|sys=\|g=\|y=\|d=\|a=$/D', $salt));
@@ -1299,18 +1300,20 @@ class Catalogue {
 
     /** Group TV/Anime episodes into show-level entries. */
     public static function sectionShows(string $sectionId): array {
-        $revision = Store::revision('catalogue') . '|' . Store::revision('browse_epoch') . '|' . Store::revision('settings');
-        $slot = 'section-shows-current-v3|' . $sectionId;
-        $cached = \Vaultcast\Repository::cacheGet($slot);
-        if ($cached && ($cached['revision'] ?? '') === $revision) return $cached['shows'];
-        $shows = self::buildSectionShows($sectionId);
-        \Vaultcast\Repository::cachePut($slot, ['revision'=>$revision, 'shows'=>$shows], 0);
-        return $shows;
+        return BrowseIndex::shows($sectionId);
+    }
+
+    public static function prepareShowSummary(string $sectionId,string $key): ?array {
+        $rows=self::buildSectionShows($sectionId,$key);$row=$rows[0] ?? null;
+        if ($row) $row['slug']=Slugs::show($key,(string)$row['title'],$row['year'] ?? null);
+        return $row;
     }
 
     /** Build show list for a TV/anime section (uncached). */
-    private static function buildSectionShows(string $sectionId): array {
-        $items = self::sectionItems($sectionId);
+    private static function buildSectionShows(string $sectionId,string $key): array {
+        $items = BrowseIndex::items($key);
+        $sectionType='tv';
+        foreach (\Vaultcast\Repository::document('catalogue',['sections'=>[]])['sections'] ?? [] as $section) if (($section['id'] ?? '')===$sectionId) {$sectionType=$section['type'] ?? 'tv';break;}
         $groups = [];
         foreach ($items as $it) {
             /* do not enrichItemArt per episode (is_file + poster disk walks × thousands). Art resolved once per show below. */
@@ -1324,8 +1327,8 @@ class Catalogue {
                 $groups[$name] = [
                     'title' => $name,
                     'section' => $sectionId,
-                    'type' => $it['type'] ?? 'tv',
-                    'year' => $it['year'],
+                    'type' => ($it['type'] ?? '') ?: $sectionType,
+                    'year' => $it['year'] ?? null,
                     'episodes' => [],
                     'seasons' => [],
                     'ep_keys' => [],
@@ -1340,7 +1343,7 @@ class Catalogue {
                 $dir = self::showDirFromItem($it, false);
                 if ($dir) $g['show_dir'] = $dir;
             }
-            $season = $it['season'];
+            $season = $it['season'] ?? null;
             $episode = $it['episode'] ?? null;
             if ($season !== null) $g['seasons'][$season] = true;
             if ($season !== null && $episode !== null) {
@@ -1404,59 +1407,18 @@ class Catalogue {
         return $out;
     }
 
-    private static $showPosterIndex = null;
-    private static $showPosterIndexMtime = null;
-
     /**
      * Lightweight show poster lookup. Does not build episode guides or call TVMaze.
      * @return array{title:string,local:?string,section:string}|null
      */
     public static function showPosterHint(string $showKey): ?array {
-        $revision = Store::revision('catalogue') . '|' . Store::revision('browse_epoch');
-        if (self::$showPosterIndex === null || self::$showPosterIndexMtime !== $revision) {
-            $entry = \Vaultcast\Repository::cacheGet('show-poster-index-v2');
-            if ($entry && ($entry['revision'] ?? '') === $revision) {
-                self::$showPosterIndex = $entry['hints'];
-            } else {
-                $map = [];
-                // Read only TV/anime records once per revision, not the whole library per image.
-                $sectionIds = [];
-                foreach (\Vaultcast\Repository::document('catalogue', ['sections'=>[]])['sections'] ?? [] as $section) {
-                    if (in_array($section['type'] ?? '', ['tv','anime'], true)) $sectionIds[] = (string)$section['id'];
-                }
-                $items = $sectionIds ? \Vaultcast\Repository::rows('SELECT payload FROM vaultcast_items WHERE section_id IN ('
-                    . implode(',', array_fill(0, count($sectionIds), '?')) . ')', $sectionIds) : [];
-                foreach ($items as $it) {
-                    $name = (string)($it['show'] ?? '');
-                    if ($name === '') $name = explode('/', str_replace('\\', '/', (string)($it['rel'] ?? '')))[0] ?: (string)($it['title'] ?? 'Unknown');
-                    $section = (string)($it['section'] ?? '');
-                    $key = self::showKey($section, $name);
-                    if (!isset($map[$key])) $map[$key] = ['title'=>$name, 'local'=>null,
-                        'section'=>$section, 'show_dir'=>self::showDirFromItem($it, false)];
-                    if (!empty($it['show_poster'])) $map[$key]['local'] = $it['show_poster'];
-                    elseif (!$map[$key]['local'] && !empty($it['poster'])) $map[$key]['local'] = $it['poster'];
-                }
-                self::$showPosterIndex = $map;
-                \Vaultcast\Repository::cachePut('show-poster-index-v2', ['revision'=>$revision, 'hints'=>$map], 0);
-            }
-            self::$showPosterIndexMtime = $revision;
-        }
-        return self::$showPosterIndex[$showKey] ?? null;
+        if ($showKey==='') return null;
+        $s=BrowseIndex::summary($showKey);
+        return $s ? ['title'=>$s['title'],'local'=>$s['local_poster'] ?? null,'section'=>$s['section'],'show_dir'=>$s['show_dir'] ?? null] : null;
     }
 
     public static function showSummary(string $showKey): ?array {
-        $cat = \Vaultcast\Repository::document('catalogue', ['sections' => []]);
-        foreach ($cat['sections'] ?? [] as $sec) {
-            $type = $sec['type'] ?? '';
-            if ($type !== 'tv' && $type !== 'anime') continue;
-            $shows = self::sectionShows($sec['id']);
-            foreach ($shows as $s) {
-                if ($s['show_key'] === $showKey) {
-                    return $s;
-                }
-            }
-        }
-        return null;
+        return BrowseIndex::summary($showKey);
     }
 
     public static function show(string $showKey): ?array {
@@ -1466,7 +1428,7 @@ class Catalogue {
 
     private static function showDetail(string $sectionId, string $showName, array $meta): array {
         // The section_show index narrows this to one show; retain orphan-folder fallback.
-        $items = \Vaultcast\Repository::rows("SELECT payload FROM vaultcast_items WHERE section_id=? AND (show_title=? OR show_title='') ORDER BY title,id", [$sectionId, $showName]);
+        $items = BrowseIndex::items((string)$meta['show_key']);
         MediaFacts::preload($items);
         $available = []; // "S{s}E{e}" => public item
         $unnumbered = [];
@@ -1481,7 +1443,7 @@ class Catalogue {
             $ep['show_key'] = $meta['show_key'];
             $ep['available'] = true;
             $ep['status'] = 'available';
-            $season = $it['season'];
+            $season = $it['season'] ?? null;
             $episode = $it['episode'];
             if ($season !== null && $episode !== null) {
                 $s = (int)$season;
@@ -1777,7 +1739,7 @@ class Catalogue {
     public static function randomPublic(string $sectionId, int $n = 16): array {
         $n = max(1, min(40, $n));
         $salt = $sectionId . '|n=' . $n;
-        $revision = Store::revision('catalogue') . '|' . Store::revision('browse_epoch') . '|' . Store::revision('settings');
+        $revision = Store::revision('catalogue') . '|' . Store::revision('browse_epoch') . '|' . Store::revision('settings').'|'.Store::revision('show-summary:'.$sectionId);
         $slot = 'showcase-random-current|' . $salt;
         $entry = \Vaultcast\Repository::cacheGet($slot);
         $hit = $entry && ($entry['revision'] ?? '') === $revision ? ($entry['payload'] ?? null) : null;
@@ -1813,31 +1775,31 @@ class Catalogue {
         }
     }
 
+    public static function warmShowViews(string $id): void {
+        $shows = self::sectionShows($id);
+        foreach ($shows as &$show) $show['slug'] = Slugs::show((string)($show['show_key'] ?? $show['id']), (string)$show['title'], $show['year'] ?? null);
+        unset($show);
+        self::showFacetsCached($id, $shows);
+        self::recentlyUpdatedPublic($id, 16);
+        $salt = $id . '|p=1|per=48|q=|L=|g=|y=|d=|st=|net=';
+        self::browseCacheGet('browse_shows', $salt);
+        self::browseCachePut('browse_shows', $salt, [
+            'ok'=>true, 'page'=>1, 'per'=>48, 'total'=>count($shows), 'has_more'=>count($shows)>48,
+            'letter'=>null, 'letters'=>self::letterCounts($shows), 'facets'=>self::showFacetsCached($id, $shows),
+            'filters'=>['genre'=>null,'year'=>null,'decade'=>null,'status'=>null,'network'=>null],
+            'shows'=>array_map(['Catalogue','publicShow'], array_slice($shows,0,48)), 'cached'=>true
+        ]);
+    }
+
     /** Run during maintenance, before the next viewer needs these derived views. */
     public static function warmBrowseViews(): void {
-        SearchIndex::warm();
+        BrowseIndex::warm();
         foreach (\Vaultcast\Repository::document('catalogue', ['sections'=>[]])['sections'] ?? [] as $section) {
             Maintenance::checkpoint();
             $id = (string)$section['id'];
             $type = (string)($section['type'] ?? '');
             if (in_array($type, ['tv','anime'], true)) {
-                $revision = Store::revision('catalogue') . '|' . Store::revision('browse_epoch') . '|' . Store::revision('settings');
-                $shows = self::sectionShows($id);
-                foreach ($shows as &$show) $show['slug'] = Slugs::show((string)($show['show_key'] ?? $show['id']), (string)$show['title'], $show['year'] ?? null);
-                unset($show);
-                $after = Store::revision('catalogue') . '|' . Store::revision('browse_epoch') . '|' . Store::revision('settings');
-                if ($revision !== $after) continue;
-                \Vaultcast\Repository::cachePut('section-shows-current-v3|' . $id, ['revision'=>$revision, 'shows'=>$shows], 0);
-                self::showFacetsCached($id, $shows);
-                self::recentlyUpdatedPublic($id, 16);
-                $salt = $id . '|p=1|per=48|q=|L=|g=|y=|d=|st=|net=';
-                self::browseCacheGet('browse_shows', $salt);
-                self::browseCachePut('browse_shows', $salt, [
-                    'ok'=>true, 'page'=>1, 'per'=>48, 'total'=>count($shows), 'has_more'=>count($shows)>48,
-                    'letter'=>null, 'letters'=>self::letterCounts($shows), 'facets'=>self::showFacetsCached($id, $shows),
-                    'filters'=>['genre'=>null,'year'=>null,'decade'=>null,'status'=>null,'network'=>null],
-                    'shows'=>array_map(['Catalogue','publicShow'], array_slice($shows,0,48)), 'cached'=>true
-                ]);
+                self::warmShowViews($id);
             } elseif (in_array($type, ['movies','disney'], true)) {
                 $facets = self::movieFacetsCached($id, self::sectionItems($id));
                 $salt = $id . '|p=1|per=48|q=|L=|sys=|g=|y=|d=|a=';
@@ -1985,7 +1947,7 @@ class Catalogue {
     private static function homeCacheKey(array $user): string {
         return 'home-v2|' . md5((string)($user['id'] ?? 'guest') . '|' . Store::revision('catalogue')
             . '|' . Store::revision('progress') . '|' . Store::revision('settings'))
-            . '|' . Store::revision('browse_epoch');
+            . '|' . Store::revision('browse_epoch').'|'.Store::revision('show-summaries');
     }
 
     public static function cachedHome(array $user): ?array {
@@ -1997,13 +1959,13 @@ class Catalogue {
     }
 
     public static function cachedHomeLibrary(): ?array {
-        $revision = Store::revision('catalogue') . '|' . Store::revision('settings') . '|' . Store::revision('browse_epoch');
+        $revision = Store::revision('catalogue') . '|' . Store::revision('settings') . '|' . Store::revision('browse_epoch').'|'.Store::revision('show-summaries');
         $entry = \Vaultcast\Repository::cacheGet('home-library-v2');
         return $entry && ($entry['revision'] ?? '') === $revision ? $entry['home'] : null;
     }
 
     public static function homeLibrary(): array {
-        $revision = Store::revision('catalogue') . '|' . Store::revision('settings') . '|' . Store::revision('browse_epoch');
+        $revision = Store::revision('catalogue') . '|' . Store::revision('settings') . '|' . Store::revision('browse_epoch').'|'.Store::revision('show-summaries');
         $entry = \Vaultcast\Repository::cacheGet('home-library-v2');
         if ($entry && ($entry['revision'] ?? '') === $revision) return $entry['home'];
         $settings = Store::settings();
@@ -2556,86 +2518,8 @@ class Catalogue {
      * Cross-section catalogue search. Shows + movies/disney/roms first.
      * Does not touch RSS / network.
      */
-    public static function search(string $q, int $limit = 40): array {
-        $q = trim($q);
-        if ($q === '') {
-            return ['ok' => true, 'query' => '', 'catalogue' => [], 'count' => 0, 'weak' => true];
-        }
-        $ql = strtolower($q);
-        $cat = \Vaultcast\Repository::document('catalogue', ['sections' => []]);
-        $cat['items'] = \Vaultcast\Repository::searchItems($q);
-        $viewer = AreaAccess::viewer();
-        $cat['items'] = array_values(array_filter($cat['items'], static function(array $item) use ($viewer): bool { return AreaAccess::allowed($viewer, AreaAccess::itemArea($item)); }));
-        $cat['sections'] = array_values(array_filter($cat['sections'] ?? [], static function(array $section) use ($viewer): bool { return AreaAccess::allowed($viewer, ($section['type'] ?? '') === 'roms' ? 'games' : 'library'); }));
-        $hits = [];
-        $seenShows = [];
-        foreach ($cat['sections'] ?? [] as $sec) {
-            $type = $sec['type'] ?? '';
-            $sid = $sec['id'] ?? '';
-            if ($type === 'tv' || $type === 'anime') {
-                foreach (self::sectionShows($sid) as $show) {
-                    $title = (string)($show['title'] ?? '');
-                    if ($title === '' || stripos($title, $q) === false) continue;
-                    $key = $show['show_key'] ?? $show['id'] ?? '';
-                    if ($key === '' || isset($seenShows[$key])) continue;
-                    $seenShows[$key] = true;
-                    $pub = $show;
-                    $pub['_search_show'] = true;
-                    $pub['match'] = 'show';
-                    $tl = strtolower($title);
-                    $pub['score'] = ($tl === $ql) ? 100 : (strpos($tl, $ql) === 0 ? 80 : 50);
-                    $hits[] = $pub;
-                }
-            }
-        }
-        foreach ($cat['items'] ?? [] as $it) {
-            if (!is_array($it)) continue;
-            $type = $it['type'] ?? '';
-            if ($type === 'tv' || $type === 'anime') {
-                $show = (string)($it['show'] ?? '');
-                $key = $show !== '' ? self::showKey($it['section'] ?? '', $show) : '';
-                if ($key !== '' && isset($seenShows[$key])) continue;
-                $hay = ($it['title'] ?? '') . ' ' . $show;
-                if (stripos($hay, $q) === false) continue;
-                $pub = $it;
-                $pub['match'] = 'episode';
-                $pub['score'] = 30;
-                $hits[] = $pub;
-                continue;
-            }
-            $title = (string)($it['title'] ?? '');
-            $hay = $title . ' ' . ($it['rel'] ?? '');
-            if (stripos($hay, $q) === false) continue;
-            $pub = $it;
-            $pub['match'] = 'item';
-            $tl = strtolower($title);
-            $pub['score'] = ($tl === $ql) ? 95 : (strpos($tl, $ql) === 0 ? 75 : 45);
-            $hits[] = $pub;
-        }
-        usort($hits, function ($a, $b) {
-            $sa = (int)($a['score'] ?? 0);
-            $sb = (int)($b['score'] ?? 0);
-            if ($sa !== $sb) return $sb - $sa;
-            return strcasecmp($a['title'] ?? '', $b['title'] ?? '');
-        });
-        $limit = max(1, min(100, $limit));
-        $slice = array_slice($hits, 0, $limit);
-        // Rank cheap catalogue rows first; only prepare the cards we will send.
-        MediaFacts::preload(array_values(array_filter($slice,static function($it){return empty($it['_search_show']);})));
-        $slice=array_map(static function($it){
-            $card=!empty($it['_search_show']) ? self::publicShow($it) : self::publicItem($it,false);
-            $card['match']=$it['match'];$card['score']=$it['score'];return $card;
-        },$slice);
-        $count = count($slice);
-        $weak = $count === 0 || ($count < 3 && (($slice[0]['score'] ?? 0) < 80));
-        return [
-            'ok' => true,
-            'query' => $q,
-            'catalogue' => $slice,
-            'count' => $count,
-            'total' => count($hits),
-            'weak' => $weak,
-        ];
+    public static function search(string $q, int $limit = 40,int $page=1): array {
+        return BrowseIndex::search($q,$limit,$page,AreaAccess::viewer() ?: guest_user());
     }
 
     /**

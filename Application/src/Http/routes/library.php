@@ -60,7 +60,7 @@ if ($path === '/search' && $method === 'GET') {
         RequestTiming::add('search_suggestions',$started);
         json_out(['ok'=>true,'catalogue'=>$hits,'query'=>$q]);
     }
-    $out = Catalogue::search($q, $limit);
+    $out = Catalogue::search($q, $limit,(int)($_GET['page'] ?? 1));
     // Inline light filters ÔÇö avoid loading Acquisition.php on every search
     $acq = Store::settings()['acquisition'] ?? [];
     $qualities = $acq['preferred_qualities'] ?? ['1080p', '720p'];

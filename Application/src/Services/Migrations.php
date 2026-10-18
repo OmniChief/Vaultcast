@@ -6,7 +6,7 @@
  */
 final class Migrations
 {
-    const VERSION = 6; // 2: library folder access pass for nginx (step 5); 3: re-run it, recording results; 4: media facts table; 5: arrival timestamps and indexed running times; 6: chat storage
+    const VERSION = 7; // 2: library folder access pass for nginx (step 5); 3: re-run it, recording results; 4: media facts table; 5: arrival timestamps and indexed running times; 6: chat storage; 7: prepared browsing
 
     public static function stampFile(): string
     {
@@ -76,8 +76,9 @@ final class Migrations
     {
         $log = [];
         foreach (explode(';', (string)file_get_contents(dirname(__DIR__) . '/schema.sql')) as $sql) {
-            if (stripos($sql, 'CREATE TABLE IF NOT EXISTS vaultcast_chat_') !== false) $pdo->exec($sql);
+            if (preg_match('/CREATE TABLE IF NOT EXISTS vaultcast_(chat_|browse_items|show_summaries)/i',$sql)) $pdo->exec($sql);
         }
+        if (is_file(STREAM_DATA.'/runtime/migrations-v6.done')) return ['prepared_browsing'=>true];
         if (is_file(STREAM_DATA.'/runtime/migrations-v5.done')) return ['chat'=>true];
         if (is_file(STREAM_DATA.'/runtime/migrations-v4.done')) {self::homeFeatures($pdo);return ['home_features'=>true];}
         // 1. Fix Match pins: files -> vaultcast_metadata_pins.

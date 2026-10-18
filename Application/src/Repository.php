@@ -98,6 +98,7 @@ final class Repository
         $s = Database::connection()->prepare('INSERT INTO vaultcast_documents (name, payload) VALUES (?, ?) ON DUPLICATE KEY UPDATE payload = VALUES(payload), revision = revision + 1');
         $s->execute([$name, self::encode($value)]);
         if (class_exists('Store', false)) \Store::invalidate($name);
+        if (strpos($name,'tvmaze-guide:')===0 && class_exists('BrowseIndex')) \BrowseIndex::dirty(substr($name,strlen('tvmaze-guide:')));
     }
 
     public static function revision(string $name): int
@@ -147,6 +148,7 @@ final class Repository
                 }
                 $delete = $pdo->prepare('DELETE FROM vaultcast_items WHERE generation <> ?');
                 $delete->execute([$generation]);
+                if (class_exists('BrowseIndex')) { \BrowseIndex::sync($value['items'] ?? [],$value['sections'] ?? []); \BrowseIndex::schedule(); }
                 unset($value['items']);
             } elseif ($name === 'progress') {
                 // Compatibility path for bulk maintenance/import; playback uses saveProgress.
@@ -304,12 +306,6 @@ final class Repository
             @touch($stamp);
             self::putDocument('progress', []);
         }
-    }
-
-    public static function searchItems(string $query): array
-    {
-        $needle = '%' . strtr($query, ['!' => '!!', '%' => '!%', '_' => '!_']) . '%';
-        return self::rows("SELECT payload FROM vaultcast_items WHERE title LIKE ? ESCAPE '!' OR show_title LIKE ? ESCAPE '!' OR JSON_UNQUOTE(JSON_EXTRACT(payload,'$.rel')) LIKE ? ESCAPE '!' ORDER BY title,id", [$needle,$needle,$needle]);
     }
 
     public static function migrateProgress(array $oldIds, string $newId): int

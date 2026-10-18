@@ -23,10 +23,7 @@ final class FirstPage {
             $type = (string)($section['type'] ?? 'movies');
             $shows = in_array($type, ['tv','anime'], true);
             if ($shows) {
-                $rows = \Vaultcast\Repository::rows("SELECT i.payload FROM vaultcast_items i JOIN
-                    (SELECT MIN(id) AS id FROM vaultcast_items WHERE section_id=?
-                     GROUP BY COALESCE(NULLIF(show_title,''), SUBSTRING_INDEX(JSON_UNQUOTE(JSON_EXTRACT(payload,'$.rel')), '/', 1))
-                     ORDER BY MIN(title) LIMIT 8) picks ON picks.id=i.id", [$id]);
+                $rows = BrowseIndex::firstShows($id);
             } else {
                 $rows = \Vaultcast\Repository::rows('SELECT payload FROM vaultcast_items WHERE section_id=? ORDER BY title,id LIMIT 8', [$id]);
             }

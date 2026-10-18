@@ -90,5 +90,6 @@ final class MetadataPins
         if (is_array(self::$memory)) { self::$memory[$kind . ':' . $id] = $pin; return; }
         $s = \Vaultcast\Database::connection()->prepare('INSERT INTO vaultcast_metadata_pins (kind, target_id, payload, updated_at) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE payload = VALUES(payload), updated_at = VALUES(updated_at)');
         $s->execute([$kind, $id, json_encode($pin, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), time()]);
+        if ($kind==='show_meta' && class_exists('BrowseIndex')) BrowseIndex::dirty($id);
     }
 }

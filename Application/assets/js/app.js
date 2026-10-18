@@ -6592,23 +6592,28 @@ try {
     });
   }
 
-  function runGlobalSearch(q){
-    q = (q || '').trim();
+  var globalSearchSerial=0;
+  function runGlobalSearch(q,page){
+    q = (q || '').trim();page=Math.max(1,Number(page)||1);
+    var serial=++globalSearchSerial,searchOwner=state.user&&state.user.id;
     state.searchQuery = q;
     state.searchRss = null;
     state.view = 'search';
     if (!q) {
+      state.searchBusy = false;
       state.searchResult = { ok:true, catalogue:[], count:0, weak:true, query:'' };
       render();
       return;
     }
     state.searchBusy = true;
     render();
-    api('/search?q='+encodeURIComponent(q)+'&limit=40').then(function(r){
+    api('/search?q='+encodeURIComponent(q)+'&limit=40&page='+page).then(function(r){
+      if(serial!==globalSearchSerial||state.view!=='search'||searchOwner!==(state.user&&state.user.id))return;
       state.searchBusy = false;
       state.searchResult = r;
       render();
     }).catch(function(e){
+      if(serial!==globalSearchSerial||state.view!=='search'||searchOwner!==(state.user&&state.user.id))return;
       state.searchBusy = false;
       state.searchResult = { ok:false, error:String(e), catalogue:[], count:0 };
       render();
@@ -6689,6 +6694,11 @@ try {
           h('span', { className:'meta', text: String(res.total || res.count || 0) })
         ]),
         h('div', { className:'grid' }, (res.catalogue||[]).map(function(it){ return cardEl(it); }))
+      ]));
+      if((res.page||1)>1||res.has_more)kids.push(h('div',{className:'row-actions',style:'padding:0 var(--gutter) 24px'},[
+        h('button',{className:'btn ghost',type:'button',text:'Previous',disabled:!!state.searchBusy||(res.page||1)<=1,onClick:function(){runGlobalSearch(q,(res.page||1)-1);}}),
+        h('span',{className:'muted',text:'Page '+(res.page||1)+' · '+(res.total||0)+' matches'}),
+        h('button',{className:'btn primary',type:'button',text:'Next',disabled:!!state.searchBusy||!res.has_more,onClick:function(){runGlobalSearch(q,(res.page||1)+1);}})
       ]));
       if (res.weak || res.rss_fallback_enabled) {
         kids.push(h('div', { className:'panel', style:'margin:8px 20px' }, [

@@ -896,6 +896,7 @@ class Posters {
             ];
         }
         @file_put_contents($cachePath, json_encode($out, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), LOCK_EX);
+        BrowseIndex::dirty($showKey);
         @unlink($negPath);
         return $out;
     }

@@ -120,3 +120,20 @@ CREATE TABLE IF NOT EXISTS vaultcast_chat_files (
 CREATE TABLE IF NOT EXISTS vaultcast_chat_presence (
  user_id VARCHAR(64) NOT NULL PRIMARY KEY, seen_at BIGINT NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS vaultcast_browse_items (
+ item_id VARCHAR(64) CHARACTER SET ascii NOT NULL PRIMARY KEY,
+ section_id VARCHAR(120) NOT NULL, media_kind VARCHAR(20) NOT NULL, type VARCHAR(20) NOT NULL,
+ title VARCHAR(512) NOT NULL, search_path TEXT NOT NULL, show_key VARCHAR(16) CHARACTER SET ascii NOT NULL DEFAULT '',
+ show_name VARCHAR(512) NOT NULL DEFAULT '', season INT NULL, episode INT NULL, year INT NULL,
+ system_name VARCHAR(120) NOT NULL DEFAULT '', modified_at BIGINT NOT NULL DEFAULT 0,
+ source_sig CHAR(64) CHARACTER SET ascii NOT NULL,
+ INDEX browse_section(section_id,title(100)), INDEX browse_show(show_key,item_id), INDEX browse_title(title(120))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS vaultcast_show_summaries (
+ show_key VARCHAR(16) CHARACTER SET ascii NOT NULL PRIMARY KEY,
+ section_id VARCHAR(120) NOT NULL, title VARCHAR(512) NOT NULL, type VARCHAR(20) NOT NULL,
+ source_sig CHAR(32) CHARACTER SET ascii NOT NULL, prepared_sig CHAR(32) CHARACTER SET ascii NOT NULL DEFAULT '',
+ payload LONGTEXT NOT NULL,
+ INDEX summary_section(section_id,title(120))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

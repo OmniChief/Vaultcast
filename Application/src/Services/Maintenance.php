@@ -7,7 +7,7 @@ final class Maintenance
     private static $checked = 0.0;
     /** Background-only tasks started by the app itself (not listed in the maintenance UI). */
     const INTERNAL = ['ingest' => 'Import reviewed download'];
-    const TASKS = ['search' => 'Prepare live search index', 'views' => 'Prepare browsing pages', 'epg' => 'Refresh programme guide', 'metadata' => 'Prepare artwork and synopses', 'scan' => 'Scan library folders', 'collections' => 'Match collections', 'downloads' => 'Import completed downloads', 'durations' => 'Fill Live media durations', 'facts' => 'Probe new media codecs and store show guides'];
+    const TASKS = ['browse'=>'Prepare search and show summaries','search' => 'Prepare live search index', 'views' => 'Prepare browsing pages', 'epg' => 'Refresh programme guide', 'metadata' => 'Prepare artwork and synopses', 'scan' => 'Scan library folders', 'collections' => 'Match collections', 'downloads' => 'Import completed downloads', 'durations' => 'Fill Live media durations', 'facts' => 'Probe new media codecs and store show guides'];
 
     public static function runCommand(string $task, ?string $target = null): array
     {
@@ -106,6 +106,7 @@ final class Maintenance
             $job['status'] = 'running'; $job['started_at'] = date('c');
             \Vaultcast\Repository::putDocument('maintenance-job:' . $id, $job);
             switch ($job['task']) {
+                case 'browse': BrowseIndex::warm(); $job['result']=['ok'=>true]; break;
                 case 'search': SearchIndex::warm(); $job['result']=['ok'=>true]; break;
                 case 'scan':
                     $job['result'] = Catalogue::rescan();

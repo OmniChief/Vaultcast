@@ -18,7 +18,7 @@ final class FactoryReset
         $settings = \Vaultcast\Installer::defaults([]);
         \Vaultcast\Database::transaction(static function($pdo) use ($admin, $settings): void {
             // DELETE is transactional and works with the installer's restricted DB account.
-            foreach (['vaultcast_chat_files','vaultcast_chat_messages','vaultcast_chat_members','vaultcast_chat_rooms','vaultcast_chat_presence','vaultcast_sessions','vaultcast_playback_tokens','vaultcast_progress','vaultcast_metadata_pins','vaultcast_media_facts','vaultcast_items','vaultcast_users','vaultcast_cache','vaultcast_documents'] as $table) $pdo->exec('DELETE FROM `' . $table . '`');
+            foreach (['vaultcast_browse_items','vaultcast_show_summaries','vaultcast_chat_files','vaultcast_chat_messages','vaultcast_chat_members','vaultcast_chat_rooms','vaultcast_chat_presence','vaultcast_sessions','vaultcast_playback_tokens','vaultcast_progress','vaultcast_metadata_pins','vaultcast_media_facts','vaultcast_items','vaultcast_users','vaultcast_cache','vaultcast_documents'] as $table) $pdo->exec('DELETE FROM `' . $table . '`');
             $insert = $pdo->prepare('INSERT INTO vaultcast_documents (name,payload) VALUES (?,?)');
             foreach (['schema_version'=>1, 'settings'=>$settings, 'users'=>[], 'catalogue'=>['sections'=>[], 'scanned_at'=>null, 'item_count'=>0]] as $name=>$value) $insert->execute([$name, \Vaultcast\Repository::encode($value)]);
             $insert = $pdo->prepare('INSERT INTO vaultcast_users (id,username,password_hash,role,payload) VALUES (?,?,?,?,?)');
