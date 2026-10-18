@@ -230,15 +230,17 @@
     root.appendChild(h('div',{className:'hub-cinema-heading'},[h('h1',{text:'Film night'}),button('Copy invite link',function(){A.copyText(A.shareUrl('home/cinema/'+id)).then(function(){A.toast('Cinema link copied');}).catch(error);}),button('Leave',function(){go('cinema');})]));root.appendChild(player);root.appendChild(info);
     var text=h('input',{maxlength:400,placeholder:'Say something…','aria-label':'Room message'}),form=h('form',{className:'hub-chat-form'},[text,h('button',{className:'btn',type:'submit',text:'Send'})]);info.appendChild(form);
     var state={id:id,root:root,media:null,host:false,applying:false,room:null,busy:false,lastMember:0,lastMessage:0,ready:false,unlocked:false};cinema=state;
-    function send(extra){if(!signed())return Promise.resolve();var media=state.media,payload=Object.assign(state.host && media?{position:media.currentTime||0,playing:!media.paused && !media.ended && !state.buffering}:{},extra||{});state.outbox=(state.outbox||Promise.resolve()).catch(function(){}).then(function(){return request('rooms/'+id,payload);});return state.outbox;}
+    function send(extra){if(!signed())return Promise.resolve();var media=state.media,payload=Object.assign(state.host && media?{position:A.openPlayer._absTime?A.openPlayer._absTime():(media.currentTime||0),playing:!media.paused && !media.ended && !state.buffering}:{},extra||{});state.outbox=(state.outbox||Promise.resolve()).catch(function(){}).then(function(){return request('rooms/'+id,payload);});return state.outbox;}
     form.onsubmit=function(e){e.preventDefault();if(!signed()){A.toast('Sign in to join the room conversation.');return;}var msg=text.value.trim();if(!msg)return;send({message:msg}).then(function(){text.value='';}).catch(error);};
     var unlock=button('Join playback',function(){if(state.media){state.unlocked=true;state.media.play().then(function(){unlock.remove();}).catch(error);}},'primary');player.appendChild(unlock);
     function synchronize(room){
       var media=state.media;if(!media || !state.ready || state.host)return;
       var target=room.position+(room.playing?Math.max(0,room.server_time-room.updated_at):0);
       state.applying=true;
-      if(isFinite(media.duration))target=Math.min(target,Math.max(0,media.duration-0.25));
-      if(Math.abs((media.currentTime||0)-target)>1.5)media.currentTime=target;
+      var duration=A.openPlayer._absDuration?A.openPlayer._absDuration():media.duration;
+      if(isFinite(duration))target=Math.min(target,Math.max(0,duration-0.25));
+      var position=A.openPlayer._absTime?A.openPlayer._absTime():(media.currentTime||0);
+      if(Math.abs(position-target)>1.5){if(A.openPlayer._seekAbsolute)A.openPlayer._seekAbsolute(target);else media.currentTime=target;}
       media.playbackRate=1;
       if(!room.playing && !media.paused)media.pause();
       if(room.playing && media.paused && state.unlocked)media.play().catch(function(){state.unlocked=false;});

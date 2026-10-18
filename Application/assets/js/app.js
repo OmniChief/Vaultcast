@@ -121,6 +121,13 @@
     function fullDuration(){ return probeDuration || Number(play.duration) || 0; }
     function absTime(){ return (remux.active ? remux.offset : 0) + (media.currentTime || 0); }
     openPlayer._absTime = absTime;
+    openPlayer._seekAbsolute = function(seconds){
+      if(remux.seeking)return;
+      seconds=Math.max(0,Number(seconds)||0);
+      var relative=seconds-(remux.active?remux.offset:0);
+      if(remux.active && !inBuffered(relative))return switchViaRemux(remux.track,seconds);
+      media.currentTime=relative;
+    };
     openPlayer._absDuration = function(){ return remux.active ? fullDuration() : (media.duration || 0); };
     function remuxSrc(index, at){
       return streamPlayUrl(play.remux_url) + '&a=' + encodeURIComponent(index) + '&ss=' + Math.max(0, at).toFixed(3);
@@ -1700,7 +1707,7 @@ function confirmDialog(message, opts){
   function closePlayer(opts){
     opts = opts || {};
     if (state.view !== 'game') state.gamePath = null;
-    openPlayer._absTime = null; openPlayer._absDuration = null;
+    openPlayer._absTime = null; openPlayer._absDuration = null; openPlayer._seekAbsolute = null;
     if (!opts.preserveLobby) {
       try { lobbyEndHostSession(); } catch (eLobbyEnd) {}
     }
