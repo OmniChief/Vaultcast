@@ -84,6 +84,7 @@ class Auth {
         // Sign-in works for gated users so the welcome page can show "awaiting access" / "expired";
         // every other request is refused by Access::gate until an admin grants access.
         $user['access_state'] = Access::state($user);
+        $user = Permissions::publicUser($user);
         return ['ok' => true, 'token' => $token, 'user' => $user];
     }
 }

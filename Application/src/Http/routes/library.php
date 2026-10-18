@@ -77,7 +77,7 @@ if ($path === '/search' && $method === 'GET') {
     ];
     $out['rss_fallback_enabled'] = !empty($filters['rss_fallback_search']);
     $viewer = current_or_guest();
-    if (($viewer['role'] ?? '') !== 'admin') { $out['rss_fallback_enabled'] = false; $filters = []; }
+    if (!Permissions::allowed($viewer,'rss_search')) { $out['rss_fallback_enabled'] = false; $filters = []; }
     $out['filters'] = $filters;
     $out['version'] = STREAM_VERSION;
     json_out($out);

@@ -683,6 +683,7 @@ class Matching {
 
     /** Pin a show to a TVMaze id (or "none"), optionally renaming the show to the provider title. */
     public static function pinShow(string $showKey, array $b): array {
+        $b=Permissions::selection($b);
         $items = self::showItems($showKey);
         if (!$items) return ['ok' => false, 'error' => 'Show not found'];
         $provider = (string)($b['provider'] ?? 'tvmaze');
@@ -857,6 +858,7 @@ class Matching {
 
     /** Movie rematch: title/year (+ optional poster from provider). */
     public static function rematchMovie(string $id, array $b): array {
+        $b=Permissions::selection($b);
         $cat = Catalogue::get();
         $it = $cat['items'][$id] ?? null;
         if (!$it) return ['ok' => false, 'error' => 'Item not found'];

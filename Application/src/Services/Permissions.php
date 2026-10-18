@@ -1,0 +1,88 @@
+<?php
+declare(strict_types=1);
+
+final class Permissions {
+    const CAPABILITIES = ['rss_search'=>'Search RSS sources','downloads_request'=>'Request downloads','fix_match'=>'Fix movie, show and game matches','metadata_edit'=>'Edit titles, synopsis and posters'];
+    private static $roles;
+    public static function roles(): array {
+        if(self::$roles===null)self::$roles=\Vaultcast\Repository::document('permission_roles',['curator'=>['name'=>'Curator','permissions'=>[]]]);
+        return self::$roles;
+    }
+    public static function allowed(?array $user,string $permission): bool {
+        if(!isset(self::CAPABILITIES[$permission])||!$user)return false;
+        $role=$user['role'] ?? 'user';if($role==='admin')return true;if($role==='user'||!isset(self::roles()[$role]))return false;
+        return ($user['permissions'][$permission] ?? self::roles()[$role]['permissions'][$permission] ?? false)===true;
+    }
+    public static function publicUser(array $user): array {
+        $user['capabilities']=[];foreach(self::CAPABILITIES as $key=>$label)$user['capabilities'][$key]=self::allowed($user,$key);return $user;
+    }
+    public static function require(string $permission): array {
+        $user=Auth::requireUser();if(!self::allowed($user,$permission))json_error('This action requires the '.$permission.' permission.',403);return $user;
+    }
+    public static function validate($permissions): array {
+        if(!is_array($permissions))throw new InvalidArgumentException('Permissions must be a set of enabled or disabled capabilities.');
+        foreach($permissions as $key=>$value)if(!isset(self::CAPABILITIES[$key])||!is_bool($value))throw new InvalidArgumentException('Unknown permission or invalid permission value.');
+        return $permissions;
+    }
+    public static function saveRole(array $body): array {
+        return \Vaultcast\Database::transaction(static function(PDO $pdo)use($body):array{
+            self::lock($pdo);self::$roles=null;$roles=self::roles();$id=(string)($body['id'] ?? '');
+            if($id==='admin'||$id==='user')throw new InvalidArgumentException('Admin and User are protected roles.');
+            if($id!==''&&!isset($roles[$id]))throw new InvalidArgumentException('Role no longer exists.');
+            if(!empty($body['delete'])){
+                $s=$pdo->prepare('SELECT COUNT(*) FROM vaultcast_users WHERE role=?');$s->execute([$id]);if((int)$s->fetchColumn())throw new InvalidArgumentException('Assign another role to its users before deleting this role.');
+                unset($roles[$id]);
+            }else{
+                $name=trim((string)($body['name'] ?? ''));if($name===''||mb_strlen($name)>60)throw new InvalidArgumentException('Use a role name of 1–60 characters.');
+                if(in_array(mb_strtolower($name),['admin','administrator','user','guest'],true))throw new InvalidArgumentException('Choose a different role name.');
+                foreach($roles as $key=>$role)if($key!==$id&&mb_strtolower($role['name'])===mb_strtolower($name))throw new InvalidArgumentException('A role already has this name.');
+                if($id===''){if(count($roles)>=30)throw new InvalidArgumentException('Up to 30 custom roles are supported.');$id='role_'.bin2hex(random_bytes(6));}
+                $roles[$id]=['name'=>$name,'permissions'=>self::validate($body['permissions'] ?? [])];
+            }
+            \Vaultcast\Repository::putDocument('permission_roles',$roles);self::$roles=$roles;return ['ok'=>true,'roles'=>$roles];
+        });
+    }
+    public static function lock(PDO $pdo): void {
+        $pdo->exec("INSERT IGNORE INTO vaultcast_documents(name,payload) VALUES ('permission_roles','{\"curator\":{\"name\":\"Curator\",\"permissions\":{}}}')");
+        $pdo->query("SELECT name FROM vaultcast_documents WHERE name='permission_roles' FOR UPDATE")->fetch();self::$roles=null;
+    }
+    private static function selectionKey(array $user,array $match): string {return 'role-match:'.$user['id'].':'.hash('sha256',json_encode([$match['source'] ?? '',(string)($match['id'] ?? '')]));}
+    public static function rememberSelections(array $result): void {
+        $user=AreaAccess::viewer();if(!$user||($user['role'] ?? '')==='admin')return;
+        foreach($result['results'] ?? [] as $match)\Vaultcast\Repository::cachePut(self::selectionKey($user,$match),$match,3600);
+    }
+    public static function selection(array $body): array {
+        $user=AreaAccess::viewer();if(!$user||($user['role'] ?? '')==='admin')return $body;
+        if(!empty($body['match'])){
+            if(!is_array($body['match']))json_error('Invalid metadata selection.');
+            $match=\Vaultcast\Repository::cacheGet(self::selectionKey($user,$body['match']));if(!$match)json_error('Search again to refresh this metadata selection.');
+            $body['match']=$match;$body['image']=$match['image'] ?? null;
+        }elseif(!empty($body['image']))json_error('Choose artwork from a metadata search or upload a poster.',403);
+        return $body;
+    }
+    private static function item(string $id,array $user): void {
+        $item=Catalogue::item($id);if(!$item)json_error('Item not found',404);
+        if(!AreaAccess::allowed($user,AreaAccess::itemArea($item)))json_error('This media area is not available to your account.',403);
+    }
+    public static function adminRoute(string $path,string $method): void {
+        $user=Auth::requireUser();if(($user['role'] ?? '')==='admin')return;
+        $permission=null;
+        $showRead=$method==='GET'&&($path==='/admin/match/shows'||preg_match('#^/admin/match/show/[a-f0-9]{16}$#D',$path));
+        $matchWrite=$method==='POST'&&(in_array($path,['/admin/match/search','/admin/match/items','/admin/match/items/clear'],true)||preg_match('#^/admin/match/show/[a-f0-9]{16}/(?:propose|apply|pin|numbering(?:/preview)?)$#D',$path)||preg_match('#^/admin/match/movie/[a-f0-9]{16}$#D',$path));
+        if($showRead||$matchWrite)$permission='fix_match';
+        if($path==='/admin/media/edit'&&$method==='POST')$permission='metadata_edit';
+        if(!$permission||!self::allowed($user,$permission))json_error('Forbidden',403);
+        if(strpos($path,'/admin/match/show')===0&&!AreaAccess::allowed($user,'library'))json_error('Library access required',403);
+        if(preg_match('#^/admin/match/movie/([a-f0-9]{16})$#D',$path,$m))self::item($m[1],$user);
+        if($method==='POST'){
+            $body=body_json();
+            if($path==='/admin/match/search'&&!AreaAccess::allowed($user,($body['kind'] ?? '')==='game'?'games':'library'))json_error('Media area access required',403);
+            if($path==='/admin/media/edit'){
+                if(!empty($body['remove']))json_error('Only administrators can remove library entries.',403);
+                if(!empty($body['show_key'])){if(!AreaAccess::allowed($user,'library'))json_error('Library access required',403);}else self::item((string)($body['id'] ?? ''),$user);
+            }
+            if($path==='/admin/match/items')foreach((array)($body['rows'] ?? []) as $row){if(!is_array($row))json_error('Invalid metadata row.');self::item((string)($row['id'] ?? ''),$user);if(array_key_exists('poster',$row)||array_key_exists('show_poster',$row))json_error('Use the poster upload editor to change artwork.',403);}
+            if($path==='/admin/match/items/clear')foreach((array)($body['ids'] ?? []) as $id)self::item((string)$id,$user);
+        }
+    }
+}

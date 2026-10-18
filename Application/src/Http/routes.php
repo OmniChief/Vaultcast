@@ -24,7 +24,9 @@ if ($__areaDenied !== null) json_out($__areaDenied[1], $__areaDenied[0]);
 release_request_locks();
 $downloadRoute = preg_match('#^/(downloads(?:/|$)|search/(rss|get)(?:/|$)|items/[^/]+/alternate(?:/|$)|shows/[^/]+/(alternate|fetch-missing|episodes/\d+/\d+/(fetch|cancel))(?:/|$)|admin/(acquisition|transmission|downloads)(?:/|$))#', $path);
 if ($downloadRoute) {
-    Auth::requireAdmin();
+    Permissions::require($path==='/search/rss'||preg_match('#^/(?:shows|items)/[^/]+/alternate$#D',$path)?'rss_search':'downloads_request');
+    if (strpos($path,'/admin/')===0) Auth::requireAdmin();
+    if (!AreaAccess::allowed(AreaAccess::viewer(),'library')) json_error('Library access required',403);
     if (empty($features['downloads'])) json_error('Enable download integrations in Settings first.', 404);
 }
 if (strpos($path, '/player-assets/') === 0 && in_array($method, ['GET','HEAD'], true)) {
@@ -37,7 +39,7 @@ if (strpos($path, '/diagnostics') === 0) Auth::requireAdmin();
 if (strpos($path, '/live/') === 0) {
     require __DIR__ . '/routes/live.php';
 } elseif (strpos($path, '/admin/') === 0) {
-    Auth::requireAdmin();
+    Permissions::adminRoute($path,$method);
     foreach (['admin-settings','admin-updates','admin-library','admin-conversion','admin-media','admin-system','downloads','collections'] as $handler) {
         require __DIR__ . '/routes/' . $handler . '.php';
     }

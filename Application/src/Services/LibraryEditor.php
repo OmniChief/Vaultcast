@@ -66,7 +66,7 @@ final class LibraryEditor
             if ($poster) $row[$showKey !== '' ? 'show_poster' : 'poster'] = $poster;
             $rows[] = $row;
         }
-        $result = Matching::saveItemFields($rows, 'manual', (string)(Auth::requireAdmin()['username'] ?? 'admin'), false, false);
+        $result = Matching::saveItemFields($rows, 'manual', (string)(Permissions::require('metadata_edit')['username'] ?? 'admin'), false, false);
         if (empty($result['ok'])) return $result;
         if ($showKey !== '') {
             if ($target !== $showKey) {

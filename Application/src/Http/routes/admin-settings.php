@@ -153,7 +153,24 @@ if ($path === '/admin/users' && $method === 'GET') {
         $u['is_self'] = (string)$u['id'] === (string)$me['id'];
     }
     unset($u);
-    json_out(['ok' => true, 'users' => $users, 'now' => time()]);
+    json_out(['ok' => true, 'users' => $users, 'now' => time(), 'permission_choices'=>Permissions::CAPABILITIES,'roles'=>Permissions::roles()]);
+}
+
+if ($path==='/admin/roles' && $method==='POST') {
+    Auth::requireAdmin();try{json_out(Permissions::saveRole(body_json()));}catch(InvalidArgumentException $e){json_error($e->getMessage());}
+}
+if (preg_match('#^/admin/users/([A-Za-z0-9_-]{1,64})/permissions$#', $path, $m) && $method === 'POST') {
+    Auth::requireAdmin();$body=body_json();$role=(string)($body['role'] ?? 'user');
+    try{$permissions=Permissions::validate($body['permissions'] ?? []);}catch(InvalidArgumentException $e){json_error($e->getMessage());}
+    $areas=[];foreach(AreaAccess::AREAS as $area){if(!is_bool($body['areas'][$area] ?? null))json_error('Choose each library area.');$areas[$area]=$body['areas'][$area];}
+    try{$saved=\Vaultcast\Database::transaction(static function(PDO $pdo)use($m,$role,$permissions,$areas):array{
+        Permissions::lock($pdo);if($role!=='user'&&!isset(Permissions::roles()[$role]))throw new InvalidArgumentException('Choose an existing custom role or User.');
+        return \Vaultcast\Repository::updateUser($m[1],static function(array $user)use($role,$permissions,$areas):array{
+            if(($user['role'] ?? '')==='admin')throw new InvalidArgumentException('Administrator permissions cannot be changed here.');
+            $user['role']=$role;$user['permissions']=$role==='user'?[]:$permissions;$user['areas']=$areas;return $user;
+        });
+    });}catch(InvalidArgumentException $e){json_error($e->getMessage());}
+    Store::invalidate('users');unset($saved['password_hash']);json_out(['ok'=>true,'user'=>Permissions::publicUser($saved)]);
 }
 
 if (preg_match('#^/admin/users/([A-Za-z0-9_-]{1,64})/areas$#', $path, $m) && $method === 'POST') {
@@ -211,7 +228,8 @@ if ($path === '/admin/users' && $method === 'POST') {
         'id' => bin2hex(random_bytes(8)),
         'username' => $username,
         'password_hash' => password_hash($b['password'], PASSWORD_DEFAULT),
-        'role' => ($b['role'] ?? 'user') === 'admin' ? 'admin' : 'user',
+        'role' => (string)($b['role'] ?? 'user'),
+        'permissions' => [],
         'display_name' => $b['display_name'] ?? $username,
         'prefs' => ['theme'=>'dark','autoplay'=>false],
         'created_at' => date('c'),
@@ -220,6 +238,6 @@ if ($path === '/admin/users' && $method === 'POST') {
         try { $created['access'] = Access::forNewUser(isset($b['access']) ? (string)$b['access'] : null, isset($b['access_date']) ? (string)$b['access_date'] : null, (string)(Auth::requireAdmin()['username'] ?? 'admin')); }
         catch (InvalidArgumentException $e) { json_error($e->getMessage()); }
     }
-    \Vaultcast\Repository::createUser($created);
+    \Vaultcast\Database::transaction(static function(PDO $pdo)use($created):void{Permissions::lock($pdo);if(!in_array($created['role'],['admin','user'],true)&&!isset(Permissions::roles()[$created['role']]))json_error('Choose an existing role.');\Vaultcast\Repository::createUser($created);});
     json_out(['ok' => true]);
 }

@@ -10,6 +10,7 @@ final class Startup {
         if ($user) {
             unset($user['password_hash'], $user['_session']);
             $user['access_state'] = Access::state($user);
+            $user = Permissions::publicUser($user);
         }
         // Deleted, expired and unapproved accounts must never receive cached library data.
         $allowed = $user ? !empty($user['access_state']['active']) : (!$session && $guest);

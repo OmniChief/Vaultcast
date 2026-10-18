@@ -145,6 +145,7 @@ if (strpos($path, '/admin/match') === 0 || strpos($path, '/admin/ingest') === 0 
         $kind = (string)($b['kind'] ?? 'tv');
         $res = $kind === 'game' ? PublicMetadata::search('game', (string)($b['q'] ?? ''), $b['source'] ?? null) : Ingest::search($kind, (string)($b['q'] ?? ''), isset($b['source']) ? (string)$b['source'] : null);
         if (empty($res['sources'])) $res['sources'] = PublicMetadata::sources($kind);
+        Permissions::rememberSelections($res);
         json_out($res);
     }
     if ($path === '/admin/match/items' && $method === 'POST') {

@@ -92,6 +92,7 @@ if ($path === '/me' && $method === 'GET') {
     unset($user['password_hash']);
     $user['_session'] = $sess;
     $user['access_state'] = Access::state($user);
+    $user = Permissions::publicUser($user);
     $pendingConvert = 0;
     if (($user['role'] ?? '') === 'admin') {
         $pendingConvert = count(Convert::pendingRequests());
@@ -131,7 +132,7 @@ if ($path === '/me/prefs' && $method === 'POST') {
             }
             return $u;
     });
-    unset($saved['password_hash']);
+    unset($saved['password_hash']);$saved=Permissions::publicUser($saved);
     json_out(['ok' => true, 'user' => $saved]);
 }
 

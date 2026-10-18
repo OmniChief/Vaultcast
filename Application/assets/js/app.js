@@ -504,7 +504,7 @@
                 h('strong', { text: it.title || it.name || 'Result' }),
                 h('div', { className:'muted', text: [it.size, it.seeds!=null?('seeds '+it.seeds):null, it.quality, it.language].filter(Boolean).join(' · ') })
               ]),
-              h('button', { className:'btn primary', text:'Get', onClick: function(){
+              h('button', { className:'btn primary', text:'Get', disabled:!canManageDownloads(), onClick: function(){
                 api('/search/get', { method:'POST', body:{
                   title: it.title || it.name || title,
                   magnet: it.magnet || '',
@@ -905,7 +905,9 @@ function confirmDialog(message, opts){
     if (!areas && state.home) areas = state.home.areas;
     return !areas || areas[area] === true;
   }
-  function canManageDownloads(){ return !!(state.user && state.user.role === 'admin' && state.home && state.home.features && state.home.features.downloads); }
+  function can(permission){return !!(state.user&&(state.user.role==='admin'||state.user.role!=='user'&&state.user.capabilities&&state.user.capabilities[permission]===true));}
+  function canSearchRss(){return can('rss_search')&&!!(state.home&&state.home.features&&state.home.features.downloads);}
+  function canManageDownloads(){return can('downloads_request')&&!!(state.home&&state.home.features&&state.home.features.downloads);}
   function loadDownloadStatus(force){
     if (!canManageDownloads()) { _dlStatus = null; return Promise.resolve({ok:true,downloading:[]}); }
     var now = Date.now();
@@ -5402,16 +5404,16 @@ try {
         ? {kind:'show', show_key:showKey, label:item.title || ''}
         : {kind:'movie', item_id:item.id, label:(item.title || '') + (item.year ? ' (' + item.year + ')' : '')}); });
     }})];
-    if (state.user && state.user.role === 'admin') buttons.push(h('button', { className:'btn ghost', type:'button', text:'Fix match', onClick:function(){
-      if (!state.user || state.user.role !== 'admin') return;
+    if (can('fix_match')) buttons.push(h('button', { className:'btn ghost', type:'button', text:'Fix match', onClick:function(){
+      if (!can('fix_match')) return;
       withTools(function(tools){
-        if (!state.user || state.user.role !== 'admin') return;
-        if (showKey) { tools.ui.openShow = showKey; openSettings('matching'); }
+        if (!can('fix_match')) return;
+        if (showKey) { tools.openShowFix(showKey,function(result){openShow(result&&result.show_key||showKey);}); }
         else tools.openMovieFix(item);
       });
     }}));
-    if (state.user && state.user.role === 'admin') buttons.push(h('button', {className:'btn ghost', type:'button', text:'Manual edit', onClick:function(){
-      withTools(function(tools){ if (state.user && state.user.role === 'admin') tools.editDialog(item, showKey); });
+    if (can('metadata_edit')) buttons.push(h('button', {className:'btn ghost', type:'button', text:'Manual edit', onClick:function(){
+      withTools(function(tools){ if (can('metadata_edit')) tools.editDialog(item, showKey); });
     }}));
     return buttons;
   }
@@ -5494,7 +5496,7 @@ try {
           });
         }})
       ];
-      if (!canManageDownloads()) actions = actions.filter(function(button){ return button.textContent !== 'Find alternate'; });
+      if (!canSearchRss()) actions = actions.filter(function(button){ return button.textContent !== 'Find alternate'; });
       actions = actions.concat(detailMatchButtons(item, null));
       if (isGame) actions = actions.filter(function(button){ return button.textContent !== 'Find alternate'; });
       if (item.file_exists === false) {
@@ -6381,7 +6383,7 @@ try {
             });
           }})
         ];
-        if (!canManageDownloads()) heroActions = heroActions.filter(function(button){ return button.textContent !== 'Find alternate'; });
+        if (!canSearchRss()) heroActions = heroActions.filter(function(button){ return button.textContent !== 'Find alternate'; });
         heroActions = heroActions.concat(detailMatchButtons(show, show.show_key || showKey));
         if (missTotal > 0 && canManageDownloads()) {
           heroActions.push(h('button', {
@@ -6621,6 +6623,7 @@ try {
   }
 
   function runRssSearch(q){
+    if(!canSearchRss())return;
     q = (q || state.searchQuery || '').trim();
     if (!q) return toast('Enter a search query first');
     state.searchBusy = true;
@@ -6646,6 +6649,7 @@ try {
   }
 
   function getRssHit(item, btn){
+    if(!canManageDownloads())return;
     if (btn) { btn.disabled = true; btn.textContent = '…'; }
     api('/search/get', { method:'POST', body:{
       title: item.title || 'RSS get',
@@ -6667,13 +6671,13 @@ try {
   function viewSearch(){
     var q = state.searchQuery || '';
     var res = state.searchResult || { catalogue:[], count:0, weak:true };
-    var rss = canManageDownloads() ? state.searchRss : null;
+    var rss = canSearchRss() ? state.searchRss : null;
     var kids = [
       h('div', { className:'hero' }, [
         h('h1', { text: q ? ('Search: '+q) : 'Search' }),
         h('p', { className:'muted', text: state.searchBusy ? 'Searching…' : (
           (res.count||0)+' catalogue hit'+(res.count===1?'':'s')
-          + (res.weak && canManageDownloads() ? ' · Search download sources' : '')
+          + (res.weak && canSearchRss() ? ' · Search download sources' : '')
         ) })
       ])
     ];
@@ -6683,7 +6687,7 @@ try {
       kids.push(emptyState(
         q ? 'No catalogue matches' : 'Type a title to search',
         q ? 'Try a different title or check your library filters.' : 'Press / then type. Catalogue results appear first.',
-        canManageDownloads() && q && res.rss_fallback_enabled !== false ? [
+        canSearchRss() && q && res.rss_fallback_enabled !== false ? [
           h('button', { className:'btn primary', text: state.searchBusy?'Searching RSS…':'Search RSS / downloads', onClick: function(){ runRssSearch(q); } })
         ] : null
       ));
@@ -6700,7 +6704,7 @@ try {
         h('span',{className:'muted',text:'Page '+(res.page||1)+' · '+(res.total||0)+' matches'}),
         h('button',{className:'btn primary',type:'button',text:'Next',disabled:!!state.searchBusy||!res.has_more,onClick:function(){runGlobalSearch(q,(res.page||1)+1);}})
       ]));
-      if (res.weak || res.rss_fallback_enabled) {
+      if (canSearchRss() && (res.weak || res.rss_fallback_enabled)) {
         kids.push(h('div', { className:'panel', style:'margin:8px 20px' }, [
           h('p', { className:'muted', text:'Catalogue results are limited. Optionally search RSS for preferred qualities (admin: min seeds, qualities, languages).' }),
           h('div', { className:'row-actions' }, [
@@ -6745,7 +6749,7 @@ try {
               h('div', { className:'row-actions' }, [
                 h('button', {
                   className:'btn primary',
-                  text:'Get',
+                  text:'Get', disabled:!canManageDownloads(),
                   onClick: function(e){ getRssHit(it, e.currentTarget); }
                 })
               ])
@@ -7701,7 +7705,7 @@ try {
               });
             }}) ])
           ]),
-          h('div', { id:'user_list' })
+          h('div', {id:'role_list',className:'settings-card stack'}), h('div', { id:'user_list' })
         ]));
         loadUsers();
       } else if (tab === 'scan') {
@@ -8415,6 +8419,8 @@ try {
       var el = $('#user_list'); if(!el) return;
       el.innerHTML = '';
       if (!r.ok) { el.appendChild(h('p', { className:'bad', text:r.error || 'Could not load users' })); return; }
+      state.userRoles=r.roles||{};state.permissionChoices=r.permission_choices||{};renderRoles();
+      var roleSelect=$('#nu_role');if(roleSelect){var selectedRole=roleSelect.value;roleSelect.querySelectorAll('[data-custom-role]').forEach(function(o){o.remove();});Object.keys(state.userRoles).forEach(function(id){roleSelect.appendChild(h('option',{value:id,text:state.userRoles[id].name,'data-custom-role':true}));});roleSelect.value=selectedRole;if(!roleSelect.value)roleSelect.value='user';}
       var table = h('table', { className:'table ua-table' }, [ h('tr', {}, [h('th',{text:'User'}),h('th',{text:'Role'}),h('th',{text:'Access'}),h('th',{text:'Expires'}),h('th',{text:'Change access'}),h('th',{text:''})]) ]);
       (r.users||[]).forEach(function(u){
         var a = u.access_state || {};
@@ -8454,41 +8460,34 @@ try {
           });
         }});
         var edit = h('button', {className:'btn ghost', type:'button', text:'Edit user', onClick:function(){editUserAreas(u);}});
-        table.appendChild(h('tr', {}, [ h('td',{}, [ h('strong', { text:u.username }), u.display_name && u.display_name !== u.username ? h('div', { className:'muted', text:u.display_name }) : null ].filter(Boolean)), h('td',{text:u.role}), h('td',{}, [accessBadge(u)]), h('td',{}, [expires]), h('td',{}, [ctrl]), h('td',{}, [h('div', {className:'row-actions'}, [edit, del])]) ]));
+        table.appendChild(h('tr', {}, [ h('td',{}, [ h('strong', { text:u.username }), u.display_name && u.display_name !== u.username ? h('div', { className:'muted', text:u.display_name }) : null ].filter(Boolean)), h('td',{text:(state.userRoles[u.role]||{}).name||u.role}), h('td',{}, [accessBadge(u)]), h('td',{}, [expires]), h('td',{}, [ctrl]), h('td',{}, [h('div', {className:'row-actions'}, [edit, del])]) ]));
       });
       el.appendChild(h('div', { className:'table-scroll' }, [table]));
     });
   }
 
+  function renderRoles(){
+    var host=$('#role_list');if(!host)return;host.innerHTML='';host.appendChild(h('h3',{text:'Roles & permissions'}));host.appendChild(h('p',{className:'muted',text:'Admin has full access. User keeps standard access. Custom roles grant only the permissions selected here; individual user overrides take precedence.'}));
+    Object.keys(state.userRoles||{}).forEach(function(id){host.appendChild(h('button',{className:'btn ghost',text:'Edit '+state.userRoles[id].name,onClick:function(){editRole(id);}}));});host.appendChild(h('button',{className:'btn primary',text:'Add role',onClick:function(){editRole(null);}}));
+  }
+  function permissionDialog(title,body){var overlay=h('div',{className:'confirm-overlay'}),previous=document.activeElement;function close(){overlay.remove();document.removeEventListener('keydown',key);if(previous&&previous.isConnected)previous.focus();}function key(e){if(e.key==='Escape')close();}var card=h('div',{className:'confirm-card',role:'dialog','aria-modal':'true','aria-label':title,style:'max-width:650px;width:94vw;max-height:90vh;overflow:auto;text-align:left'},[h('h3',{text:title}),body,h('button',{className:'btn ghost',text:'Close',onClick:close})]);overlay.appendChild(card);document.body.appendChild(overlay);document.addEventListener('keydown',key);overlay.onclick=function(e){if(e.target===overlay)close();};var focus=card.querySelector('input,select,button');if(focus)focus.focus();return {close:close};}
+  function editRole(id){
+    var role=(state.userRoles||{})[id]||{name:'',permissions:{}},name=h('input',{value:role.name,maxlength:60,'aria-label':'Role name'}),choices={},status=h('p',{role:'status',className:'muted'}),body=h('div',{className:'stack'},[h('label',{},['Role name',name])]);
+    Object.keys(state.permissionChoices).forEach(function(key){var input=h('input',{type:'checkbox',checked:role.permissions[key]===true});choices[key]=input;body.appendChild(h('label',{className:'check-label'},[input,state.permissionChoices[key]]));});
+    var save=h('button',{className:'btn primary',text:'Save role'});body.appendChild(status);body.appendChild(save);var dialog=permissionDialog(id?'Edit role':'Add role',body);
+    function submit(remove){save.disabled=true;var permissions={};Object.keys(choices).forEach(function(key){permissions[key]=choices[key].checked;});api('/admin/roles',{method:'POST',body:{id:id||'',name:name.value,permissions:permissions,delete:!!remove}}).then(function(r){if(!r.ok)throw new Error(r.error||'Could not save role');dialog.close();loadUsers();toast('Role updated');}).catch(function(e){status.textContent=e.message;save.disabled=false;});}
+    save.onclick=function(){submit(false);};if(id)body.appendChild(h('button',{className:'btn danger',text:'Delete role',onClick:function(){confirmDialog('Delete '+role.name+'?',{danger:true}).then(function(ok){if(ok)submit(true);});}}));
+  }
   function editUserAreas(user){
-    var admin = user.role === 'admin', inputs = {}, areas = user.areas || {library:true, live:true, games:true};
-    var status = h('p', {className:'muted', role:'status', text:admin ? 'Admins always have access to every area.' : 'Choose which areas this user can open. Account expiry still applies.'});
-    var body = h('div', {className:'stack'}, [status]);
-    [['library','Library'], ['live','Watch Live'], ['games','Games']].forEach(function(entry){
-      var checkbox = h('input', {type:'checkbox', checked:admin || areas[entry[0]] === true, disabled:admin}); inputs[entry[0]] = checkbox;
-      body.appendChild(h('label', {className:'check-label'}, [checkbox, entry[1]]));
-    });
-    var save = h('button', {className:'btn primary', type:'button', text:'Save', disabled:admin});
-    body.appendChild(save);
-    var previousFocus = document.activeElement;
-    var overlay = h('div', {className:'confirm-overlay'});
-    var dialog = {close:function(){overlay.remove();document.removeEventListener('keydown', onKey);if (previousFocus && previousFocus.isConnected) previousFocus.focus();}};
-    function onKey(event){if (event.key === 'Escape') dialog.close();}
-    var card = h('div', {className:'confirm-card', role:'dialog', 'aria-modal':'true', 'aria-label':'Edit user ' + user.username, style:'max-width:520px;width:92vw;text-align:left'}, [
-      h('h3', {text:'Edit user · ' + user.username}), body,
-      h('button', {className:'btn ghost', type:'button', text:'Close', onClick:dialog.close})
-    ]);
-    overlay.appendChild(card);overlay.onclick = function(event){if (event.target === overlay) dialog.close();};
-    document.body.appendChild(overlay);document.addEventListener('keydown', onKey);
-    var focusTarget = card.querySelector('input:not(:disabled), button');if (focusTarget) focusTarget.focus();
-    save.onclick = function(){
-      var permissions = {}; Object.keys(inputs).forEach(function(area){permissions[area] = inputs[area].checked;});
-      save.disabled = true; status.textContent = 'Saving…';
-      api('/admin/users/' + encodeURIComponent(user.id) + '/areas', {method:'POST', body:{areas:permissions}}).then(function(result){
-        if (!result.ok) throw new Error(result.error || 'Could not save permissions');
-        dialog.close(); toast('Access areas updated for ' + user.username, {kind:'ok'}); loadUsers();
-      }).catch(function(error){status.textContent = error.message;save.disabled = false;});
-    };
+    var admin=user.role==='admin',areas=user.areas||{library:true,live:true,games:true},inputs={},overrides={},status=h('p',{className:'muted',role:'status',text:admin?'Admin has full access.':'Choose a role, media areas and optional per-user overrides. Account expiry still applies.'}),role=h('select',{'aria-label':'Role',disabled:admin},admin?[h('option',{value:'admin',text:'Admin'})]:[h('option',{value:'user',text:'User'})]);
+    if(!admin)Object.keys(state.userRoles||{}).forEach(function(id){role.appendChild(h('option',{value:id,text:state.userRoles[id].name}));});role.value=user.role;
+    var body=h('div',{className:'stack'},[status,h('label',{},['Role',role]),h('h4',{text:'Media areas'})]);
+    [['library','Library'],['live','Watch Live'],['games','Games']].forEach(function(entry){var checkbox=h('input',{type:'checkbox',checked:admin||areas[entry[0]]===true,disabled:admin});inputs[entry[0]]=checkbox;body.appendChild(h('label',{className:'check-label'},[checkbox,entry[1]]));});
+    body.appendChild(h('h4',{text:'Permission overrides'}));
+    Object.keys(state.permissionChoices||{}).forEach(function(key){var select=h('select',{'aria-label':state.permissionChoices[key]},[h('option',{value:'inherit',text:'Use role default'}),h('option',{value:'allow',text:'Allow'}),h('option',{value:'deny',text:'Deny'})]);select.value=user.permissions&&typeof user.permissions[key]==='boolean'?(user.permissions[key]?'allow':'deny'):'inherit';overrides[key]=select;body.appendChild(h('label',{},[state.permissionChoices[key],select]));});
+    function defaults(){Object.keys(overrides).forEach(function(key){var select=overrides[key];select.disabled=admin||role.value==='user';var inherited=admin||!!(state.userRoles[role.value]&&state.userRoles[role.value].permissions[key]);select.options[0].textContent='Use role default ('+(inherited?'allowed':'denied')+')';});}role.onchange=defaults;defaults();
+    var save=h('button',{className:'btn primary',text:'Save',disabled:admin});body.appendChild(save);var dialog=permissionDialog('Edit user · '+user.username,body);
+    save.onclick=function(){var areaValues={},permissions={};Object.keys(inputs).forEach(function(key){areaValues[key]=inputs[key].checked;});Object.keys(overrides).forEach(function(key){if(overrides[key].value!=='inherit')permissions[key]=overrides[key].value==='allow';});save.disabled=true;api('/admin/users/'+encodeURIComponent(user.id)+'/permissions',{method:'POST',body:{role:role.value,areas:areaValues,permissions:permissions}}).then(function(r){if(!r.ok)throw new Error(r.error||'Could not save user');dialog.close();loadUsers();toast('User permissions updated');}).catch(function(e){status.textContent=e.message;save.disabled=false;});};
   }
 
   function field(id, label, value, type){
@@ -13869,7 +13868,7 @@ function viewCollectionDetail(){
   });
 
   /* helpers for assets/js/matching.js (Ingest inbox / Fix matching / Label reports) */
-  window.NSApp = { h: h, api: api, toast: toast, confirmDialog: confirmDialog, render: render, state: state,
+  window.NSApp = { h: h, api: api, toast: toast, confirmDialog: confirmDialog, render: render, state: state, can:can,
     openSettings: openSettings, openShow: openShow, openMovie: openMovie, openGame:openGame, navigate:navigate, refreshArtwork:refreshArtwork, fmtSize: fmtSize, version: APP_VERSION,
     shell:shell,cardEl:cardEl,applyRoute:applyRoute,replaceNav:replaceNav,openPlayer:openPlayer,playItem:playItem,copyText:copyText,shareUrl:shareUrl,startLobbyHost:startLobbyHost,captureGameState:lobbyCaptureState,quitGame:function(){closePlayer();} };
   window.VaultcastHub.init(window.NSApp);
