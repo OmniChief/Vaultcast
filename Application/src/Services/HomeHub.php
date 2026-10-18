@@ -353,11 +353,15 @@ final class HomeHub {
             if (count($room['members'])>=32 && !isset($room['members'][$user['id']])) throw new DomainException('This cinema already has 32 viewers.');
             $room['members'][$user['id']]=array_merge(self::profile($user),['at'=>time()]);
             $room['members']=array_filter($room['members'],static function(array $m): bool {return $m['at']>time()-50;});
-            if ($host && array_key_exists('position',$body)) {
+            // Messages and membership heartbeats must never change playback,
+            // including requests from another device signed into the host account.
+            if ($host && ($body['action'] ?? '')==='playback' && empty($body['message']) && array_key_exists('position',$body)) {
                 $position=(float)($body['position'] ?? $room['position']);
                 if (!is_finite($position) || $position<0 || $position>172800) throw new DomainException('Invalid playback position.');
                 $room['position']=$position;$room['playing']=!empty($body['playing']);$room['updated_at']=$now;$room['expires_at']=time()+120;
-                if (!empty($body['end'])) $room['expires_at']=time()-1;
+            }
+            if ($host) {
+                $room['expires_at']=!empty($body['end']) ? time()-1 : time()+120;
                 if (!empty($body['end']) || time()-(int)($room['registry_at'] ?? 0)>=30) {$room['registry_at']=time();$publish=true;}
             }
             $text=trim((string)($body['message'] ?? ''));

@@ -240,7 +240,7 @@
     root.appendChild(h('div',{className:'hub-cinema-heading'},[h('h1',{text:'Film night'}),button('Copy invite link',function(){A.copyText(A.shareUrl('home/cinema/'+id)).then(function(){A.toast('Cinema link copied');}).catch(error);}),button('Leave',function(){go('cinema');})]));root.appendChild(player);root.appendChild(info);
     var text=h('input',{maxlength:400,placeholder:'Say something…','aria-label':'Room message'}),form=h('form',{className:'hub-chat-form'},[text,h('button',{className:'btn',type:'submit',text:'Send'})]);info.appendChild(form);
     var state={id:id,root:root,media:null,host:false,applying:false,room:null,busy:false,lastMember:0,lastMessage:0,ready:false,unlocked:false};cinema=state;
-    function send(extra){if(!signed())return Promise.resolve();var media=state.media,payload=Object.assign(state.host && media?{position:A.openPlayer._absTime?A.openPlayer._absTime():(media.currentTime||0),playing:!media.paused && !media.ended && !state.buffering}:{},extra||{});state.outbox=(state.outbox||Promise.resolve()).catch(function(){}).then(function(){return request('rooms/'+id,payload);});return state.outbox;}
+    function send(extra,playback){if(!signed())return Promise.resolve();var media=state.media,payload=Object.assign(playback && state.host && media?{action:'playback',position:A.openPlayer._absTime?A.openPlayer._absTime():(media.currentTime||0),playing:!media.paused && !media.ended && !state.buffering}:{},extra||{});state.outbox=(state.outbox||Promise.resolve()).catch(function(){}).then(function(){if(!root.isConnected || cinema!==state)return;return request('rooms/'+id,payload);});return state.outbox;}
     form.onsubmit=function(e){e.preventDefault();if(!signed()){A.toast('Sign in to join the room conversation.');return;}var msg=text.value.trim();if(!msg)return;send({message:msg}).then(function(){text.value='';}).catch(error);};
     var unlock=button('Join playback',function(){if(state.media){state.unlocked=true;state.media.play().then(function(){unlock.remove();}).catch(error);}},'primary');player.appendChild(unlock);
     function synchronize(room){
@@ -264,8 +264,8 @@
         state.media=root.querySelector('video');if(!state.media)throw new Error('This room requires a browser video player.');
         if(!state.host){state.media.controls=false;player.appendChild(unlock);}else unlock.remove();
         state.media.addEventListener('loadedmetadata',function(){state.ready=true;synchronize(state.room);});if(state.media.readyState>=1)state.ready=true;
-        ['play','pause','seeked'].forEach(function(event){state.media.addEventListener(event,function(){if(state.host && !state.applying && root.isConnected)send().catch(error);});});
-        ['waiting','stalled','seeking','playing'].forEach(function(event){state.media.addEventListener(event,function(){state.buffering=event!=='playing';if(state.host && root.isConnected)send().catch(error);});});
+        ['play','pause','seeked'].forEach(function(event){state.media.addEventListener(event,function(){if(state.host && !state.applying && root.isConnected)send(null,true).catch(error);});});
+        ['waiting','stalled','seeking','playing'].forEach(function(event){state.media.addEventListener(event,function(){state.buffering=event!=='playing';if(state.host && root.isConnected)send(null,true).catch(error);});});
         if(state.host)info.appendChild(button('End cinema for everyone',function(){send({end:true}).then(function(){go('cinema');}).catch(error);}));
       }).catch(error);
     }
