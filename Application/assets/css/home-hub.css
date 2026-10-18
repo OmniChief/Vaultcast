@@ -107,3 +107,28 @@
   .app-shell.xshell{padding-bottom:0}
   .toast{bottom:calc(16px + env(safe-area-inset-bottom,0px))}
 }
+
+.has-screen-controller .ejs_virtualGamepad_parent{display:none!important}
+.screen-controller{--controller-size:44px;position:absolute;inset:0;z-index:12;pointer-events:none;font-family:system-ui,sans-serif;color:#ecfaff}
+.screen-controller [hidden]{display:none!important}
+.screen-controller-toolbar{position:absolute;top:8px;left:8px;display:flex;align-items:flex-start;flex-wrap:wrap;gap:6px;max-width:calc(100% - 16px);pointer-events:auto}
+.screen-controller-toolbar button,.screen-controller-toolbar select,.screen-controller-settings{font:inherit;font-size:12px;color:#ecfaff;background:#101a2bef;border:1px solid #4bd9ed80;border-radius:10px;padding:8px;min-height:36px}
+.screen-controller-toolbar button,.screen-controller-settings summary{cursor:pointer}
+.screen-controller-settings{max-width:200px}
+.screen-controller-settings label{display:flex;align-items:center;gap:8px;margin-top:8px;font-size:12px}
+.screen-controller-settings input{width:110px;min-width:0;accent-color:#55e3f5}
+.screen-controller-pad{position:absolute;left:10px;right:10px;bottom:60px;display:flex;align-items:flex-end;justify-content:space-between;gap:8px;pointer-events:none;padding-top:44px}
+.screen-controller-pad button{display:flex;align-items:center;justify-content:center;width:var(--controller-size);height:var(--controller-size);min-width:0;padding:0;border:1px solid #64e9ffb0;border-radius:35%;background:#122239e8;color:#f4fbff;font:600 14px system-ui,sans-serif;box-shadow:0 0 12px #20d9ef24;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;pointer-events:auto;cursor:pointer}
+.screen-controller-pad button.pressed{background:#158b9f;box-shadow:0 0 16px #57e9ff80;transform:scale(.94)}
+.screen-controller button:focus-visible,.screen-controller select:focus-visible,.screen-controller summary:focus-visible{outline:2px solid #fff;outline-offset:2px}
+.screen-controller-directions{display:grid;grid-template-columns:repeat(3,var(--controller-size));grid-template-rows:auto repeat(2,var(--controller-size));gap:3px}
+.screen-controller-caption{grid-column:1 / -1;font-size:11px;text-align:center;text-shadow:0 1px 3px #000}
+.screen-controller-directions button:nth-of-type(1){grid-column:2;grid-row:2}
+.screen-controller-directions button:nth-of-type(2){grid-column:1;grid-row:3}
+.screen-controller-directions button:nth-of-type(3){grid-column:2;grid-row:3}
+.screen-controller-directions button:nth-of-type(4){grid-column:3;grid-row:3}
+.screen-controller-actions{display:grid;grid-template-columns:repeat(3,var(--controller-size));gap:5px;align-items:end}
+.screen-controller-center{position:absolute;top:0;left:50%;transform:translateX(-50%);display:flex;gap:6px}
+.screen-controller-center button{width:auto;min-width:50px;height:32px;padding:0 8px;font-size:12px;border-radius:12px}
+@media(max-width:480px){.screen-controller-pad{--controller-size:min(var(--controller-requested-size,44px),44px);left:5px;right:5px;gap:5px}.screen-controller-toolbar{top:4px;left:4px}.screen-controller-pad button{font-size:12px}}
+@media(max-height:420px){.screen-controller-pad{bottom:46px;--controller-size:32px}.screen-controller-pad button{font-size:11px}.screen-controller-toolbar{top:3px}.screen-controller-toolbar button,.screen-controller-toolbar select,.screen-controller-settings{padding:5px;min-height:30px}}

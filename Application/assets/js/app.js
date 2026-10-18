@@ -1594,6 +1594,7 @@ function confirmDialog(message, opts){
       var emu = window.EJS_emulator;
       if (emu) {
         if (emu._cloudBeforeExit) emu._cloudBeforeExit();
+        if (emu._screenControllerCleanup) emu._screenControllerCleanup();
         emu._streamDisposed = true;
         if (emu._hubStatsCleanup) emu._hubStatsCleanup();
         emu.isNetplay = false;
@@ -3498,6 +3499,132 @@ function confirmDialog(message, opts){
   }
 
 
+  function mountScreenController(emu){
+    if (!emu || emu._screenControllerCleanup || !emu.elements || !emu.elements.parent) return;
+    var parent = emu.elements.parent, listeners = [], held = {}, active = {}, disposed = false;
+    var pref = {};
+    try { pref = JSON.parse(localStorage.getItem('vaultcast.screenController') || '{}') || {}; } catch (ePref) {}
+    var visible = typeof pref.visible === 'boolean' ? pref.visible : !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+    var size = Math.max(32, Math.min(64, Number(pref.size) || 44));
+    var opacity = Math.max(30, Math.min(100, Number(pref.opacity) || 80));
+    var scheme = typeof emu.getControlScheme === 'function' ? emu.getControlScheme() : emu.getCore(true);
+    var analog = ['psx','psp','n64'].indexOf(scheme) !== -1;
+    var shell = h('div', {className:'screen-controller', 'aria-label':'On-screen controller'});
+    var panel = h('div', {className:'screen-controller-pad', role:'group', 'aria-label':'Player 1 controls'});
+    var toolbar = h('div', {className:'screen-controller-toolbar'});
+    var toggle = h('button', {type:'button', text:'Controller', 'aria-expanded':String(visible)});
+    var settings = h('details', {className:'screen-controller-settings'}, [h('summary', {text:'Adjust'})]);
+    function listen(node, event, fn, options){ node.addEventListener(event, fn, options); listeners.push(function(){ node.removeEventListener(event, fn, options); }); }
+    function send(index, value){
+      if (disposed || emu._streamDisposed || !emu.started || !emu.gameManager) return;
+      emu.gameManager.simulateInput(0, index, value);
+    }
+    function release(key){
+      var input = active[key];
+      if (!input) return;
+      delete active[key];
+      held[input.index] = Math.max(0, (held[input.index] || 0) - 1);
+      if (!held[input.index]) send(input.index, 0);
+      if (!Object.keys(active).some(function(id){ return active[id].button === input.button; })) input.button.classList.remove('pressed');
+    }
+    function releaseAll(){ Object.keys(active).forEach(release); }
+    function press(key, button, index){
+      if (active[key] || !visible || !emu.started || emu._streamDisposed) return;
+      active[key] = {index:index, button:button};
+      held[index] = (held[index] || 0) + 1;
+      if (held[index] === 1) send(index, index >= 16 ? 32767 : 1);
+      button.classList.add('pressed');
+    }
+    function button(label, index){
+      var node = h('button', {type:'button', text:label, 'aria-label':label, 'data-input':String(index)});
+      if (window.PointerEvent) {
+        listen(node, 'pointerdown', function(e){
+          if (e.button !== 0) return;
+          e.preventDefault(); e.stopPropagation();
+          press('p'+e.pointerId, node, index);
+          try { node.setPointerCapture(e.pointerId); } catch (eCapture) {}
+        });
+        ['pointerup','pointercancel','lostpointercapture'].forEach(function(event){ listen(node,event,function(e){ e.preventDefault(); release('p'+e.pointerId); }); });
+      } else {
+        listen(node, 'touchstart', function(e){ e.preventDefault(); e.stopPropagation(); Array.prototype.forEach.call(e.changedTouches,function(t){press('t'+t.identifier,node,index);}); }, {passive:false});
+        ['touchend','touchcancel'].forEach(function(event){listen(node,event,function(e){e.preventDefault();Array.prototype.forEach.call(e.changedTouches,function(t){release('t'+t.identifier);});},{passive:false});});
+        listen(node, 'mousedown', function(e){if(e.button===0){e.preventDefault();press('mouse',node,index);}});
+      }
+      listen(node, 'keydown', function(e){if(e.key===' ' || e.key==='Enter'){e.preventDefault();e.stopPropagation();press('k'+index,node,index);}});
+      listen(node, 'keyup', function(e){if(e.key===' ' || e.key==='Enter'){e.preventDefault();e.stopPropagation();release('k'+index);}});
+      listen(node, 'blur', function(){release('k'+index);});
+      listen(node, 'contextmenu', function(e){e.preventDefault();});
+      return node;
+    }
+    function directions(label, indices){
+      return h('div', {className:'screen-controller-directions', role:'group', 'aria-label':label}, [
+        h('span',{className:'screen-controller-caption',text:label}),
+        button('↑',indices[0]),button('←',indices[2]),button('↓',indices[1]),button('→',indices[3])
+      ]);
+    }
+    var left = h('div',{className:'screen-controller-left'},[directions('D-pad',[4,5,6,7])]);
+    if (analog) left.appendChild(directions('Stick',[19,18,17,16]));
+    if (scheme === 'psx') left.appendChild(directions('Right stick',[23,22,21,20]));
+    if (analog) {
+      var directionMode = h('select', {'aria-label':'Directional control'});
+      Array.prototype.forEach.call(left.children,function(group,i){
+        directionMode.appendChild(h('option',{value:String(i),text:i===0?'D-pad':i===1?'Left stick':'Right stick'}));
+        group.hidden = i !== (scheme==='n64' || scheme==='psp' ? 1 : 0);
+      });
+      directionMode.value = scheme==='n64' || scheme==='psp' ? '1' : '0';
+      listen(directionMode,'change',function(){releaseAll();Array.prototype.forEach.call(left.children,function(group,i){group.hidden=i!==Number(directionMode.value);});});
+      toolbar.appendChild(directionMode);
+    }
+    var buttons = [['B',0],['A',8],['Y',1],['X',9],['L',10],['R',11]];
+    if (['nes','gb','segaMS','segaGG','ngp','pce'].indexOf(scheme)!==-1) buttons = [['B',0],['A',8]];
+    if (scheme === 'ngp') buttons = [['A',0],['B',8]];
+    if (scheme === 'pce') buttons = [['II',0],['I',8]];
+    if (scheme === 'gba') buttons = [['B',0],['A',8],['L',10],['R',11]];
+    if (scheme === 'psx' || scheme === 'psp') buttons = [['×',0],['○',8],['□',1],['△',9],['L',10],['R',11]];
+    if (scheme === 'psx') buttons = buttons.concat([['L2',12],['R2',13],['L3',14],['R3',15]]);
+    if (scheme === 'n64') buttons = [['A',0],['B',1],['Z',12],['L',10],['R',11],['C ↑',23],['C ↓',22],['C ←',21],['C →',20]];
+    if (['segaMD','segaCD','sega32x','sega','segaSaturn'].indexOf(scheme)!==-1) buttons = [['A',1],['B',0],['C',8],['X',10],['Y',9],['Z',11]];
+    if (['atari2600','atari7800'].indexOf(scheme)!==-1) buttons = [['Fire',0],['Fire 2',8]];
+    var right = h('div',{className:'screen-controller-actions'},buttons.map(function(input){return button(input[0],input[1]);}));
+    panel.appendChild(left);
+    panel.appendChild(h('div',{className:'screen-controller-center'},[button(scheme==='arcade' || scheme==='mame' ? 'Coin' : 'Select',2),button('Start',3)]));
+    panel.appendChild(right);
+    function persist(){try{localStorage.setItem('vaultcast.screenController',JSON.stringify({visible:visible,size:size,opacity:opacity}));}catch(eStore){}}
+    function paint(){
+      panel.hidden = !visible;
+      settings.hidden = !visible;
+      toggle.setAttribute('aria-expanded',String(visible));
+      toggle.textContent = visible ? 'Hide controller' : 'Show controller';
+      shell.style.setProperty('--controller-size',size+'px');
+      shell.style.setProperty('--controller-requested-size',size+'px');
+      panel.style.opacity = String(opacity/100);
+    }
+    [['Size',32,64,size],['Opacity',30,100,opacity]].forEach(function(option){
+      var range = h('input',{type:'range',min:String(option[1]),max:String(option[2]),value:String(option[3]),'aria-label':'Controller '+option[0].toLowerCase()});
+      listen(range,'input',function(){if(option[0]==='Size')size=Number(range.value);else opacity=Number(range.value);paint();persist();});
+      settings.appendChild(h('label',{},[h('span',{text:option[0]}),range]));
+    });
+    listen(toggle,'click',function(){releaseAll();visible=!visible;paint();persist();});
+    listen(shell,'keydown',function(e){e.stopPropagation();});
+    listen(shell,'keyup',function(e){e.stopPropagation();});
+    listen(shell,'click',function(e){e.stopPropagation();});
+    listen(window,'blur',releaseAll);
+    listen(document,'visibilitychange',releaseAll);
+    listen(document,'fullscreenchange',releaseAll);
+    if (!window.PointerEvent) listen(window,'mouseup',function(){release('mouse');});
+    toolbar.appendChild(toggle);toolbar.appendChild(settings);
+    shell.appendChild(toolbar);shell.appendChild(panel);parent.appendChild(shell);
+    parent.classList.add('has-screen-controller');
+    paint();
+    emu._screenControllerCleanup = function(){
+      releaseAll();disposed=true;
+      listeners.forEach(function(remove){remove();});
+      parent.classList.remove('has-screen-controller');
+      shell.remove();
+      emu._screenControllerCleanup=null;
+    };
+  }
+
   function loadEmulator(root, play, item, lobbyOpts){
     lobbyOpts = lobbyOpts || null;
     /* Always tear down any prior EmulatorJS session before creating a new one */
@@ -3629,6 +3756,7 @@ try {
         /* loader.js wires these; direct new EmulatorJS() does not — without "start",
            lobbyAfterGameStart never runs (no open-room/join-room, no Joined toast). */
         if (!emu || typeof emu.on !== 'function') return;
+        mountScreenController(emu);
         if (lobbyOpts) lobbyInstallFrameBridge(emu);
         try {
           if (typeof window.EJS_ready === 'function') emu.on('ready', window.EJS_ready);
