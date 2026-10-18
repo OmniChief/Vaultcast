@@ -42,3 +42,29 @@
 @media(max-width:900px){.cloud-slots{grid-template-columns:1fr}.episode-row{flex-wrap:wrap}.episode-spoiler-reveal{max-width:100%}}
 
 .card.episode-spoiler-hidden .sub{visibility:hidden}.card.episode-spoiler-hidden .meta .title{color:var(--text);filter:none}.card.episode-spoiler-hidden .poster .ph{visibility:hidden}
+
+/* Home follows the shared neon palette. */
+.home-hub { --hub-line:var(--border-strong); --hub-ink:var(--accent); }
+.hub-hero { border-color:var(--neon-line); border-radius:22px; background:radial-gradient(ellipse at 90% 20%,#7850d43b,transparent 60%),linear-gradient(115deg,#0b2936,#10162c 65%,#17162e); box-shadow:inset 0 1px 0 #aff6ff1a,0 20px 48px #0003; }
+.hub-hero::before { content:''; position:absolute; inset:0; z-index:-1; pointer-events:none; background:linear-gradient(#7ddfff09 1px,transparent 1px),linear-gradient(90deg,#7ddfff09 1px,transparent 1px); background-size:48px 48px; }
+.hub-hero .eyebrow { color:var(--accent); }
+.hub-hero h1 { color:#effbff; }
+.hub-hero p { color:#b5c8dd; }
+.hub-hero .btn.primary { background:linear-gradient(115deg,var(--accent),var(--accent-2)); color:#071321; border-color:var(--accent); box-shadow:0 0 22px #59e9ff20; }
+.hub-orbit { border-color:#66dfff24; }
+.hub-orbit span { border-color:#aa98ff30; }
+.hub-panel { border-color:var(--hub-line); background:linear-gradient(135deg,#101c2f,#0c1323); box-shadow:inset 0 1px 0 #9ce9ff08; }
+.hub-panel-head { border-bottom-color:var(--border); }
+.hub-panel-head h2 { color:var(--text); }
+.hub-card-save { background:#0b192ce8; border-color:var(--neon-line); color:var(--accent); }
+.hub-card-save:hover,.hub-card-save[aria-pressed=true] { background:var(--accent); color:#071321; }
+.hub-watch-status { color:#a9bfd9; }
+.hub-stats strong,.hub-calendar-day h3 { color:var(--accent); }
+.cloud-slot { background:#0a1526; border-color:var(--border-strong); }
+.live-search-results { background:#0c1628; border-color:var(--neon-line); box-shadow:0 18px 48px #0008; }
+.live-search-result:hover,.live-search-result[aria-selected=true] { background:#59e9ff12; box-shadow:inset 2px 0 0 var(--accent); }
+@media(max-width:540px) { .hub-hero { border-radius:16px; } }
+
+.hub-modal-card { background:#0c1526; border-color:var(--neon-line); }
+.hub-title-actions .selected { color:var(--accent); border-color:var(--neon-line); background:color-mix(in srgb,var(--accent) 10%,var(--bg2)); }
+.hub-airing time { color:var(--accent); border-color:var(--neon-line); background:#59e9ff08; }
