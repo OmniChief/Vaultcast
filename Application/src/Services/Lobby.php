@@ -101,6 +101,7 @@ class Lobby {
             'title' => (string)($s['title'] ?? ''),
             'system' => (string)($s['system'] ?? ''),
             'emu_core' => (string)($s['emu_core'] ?? ''),
+            'runtime' => $s['runtime'] ?? null,
             'host_name' => (string)($s['host_name'] ?? 'Host'),
             'players_filled' => $filled,
             'max_players' => $max,
@@ -127,6 +128,7 @@ class Lobby {
             foreach ($all as $s) {
                 if (!is_array($s)) continue;
                 $pub = self::publicSession($s);
+                unset($pub['runtime']); // Full boot options arrive with the join response.
                 // keep full sessions visible so host presence is not mistaken for "ended"
                 $out[] = $pub;
             }
@@ -137,7 +139,20 @@ class Lobby {
         });
     }
 
-    public static function create(array $item, string $hostName, string $hostKey, ?int $maxOverride = null, array $profile = []): array {
+    private static function runtimeConfig(array $runtime): ?array {
+        if (!$runtime) return null;
+        $core = (string)($runtime['core'] ?? '');
+        if (!preg_match('/^[a-zA-Z0-9_]{1,48}$/D', $core)) throw new DomainException('Invalid emulator core.');
+        $variant = (string)($runtime['variant'] ?? '');
+        if (!in_array($variant, ['legacy','modern'], true)) throw new DomainException('Invalid emulator build.');
+        $options = [];
+        foreach (array_slice((array)($runtime['options'] ?? []), 0, 128, true) as $key => $value) {
+            if (!is_string($key) || !preg_match('/^[a-zA-Z0-9_-]{1,96}$/D', $key) || !is_string($value) || strlen($value)>256 || preg_match('/[\r\n\x00]/', $value)) continue;
+            $options[$key] = $value;
+        }
+        return ['core'=>$core, 'variant'=>$variant, 'threaded'=>!empty($runtime['threaded']), 'options'=>$options];
+    }
+    public static function create(array $item, string $hostName, string $hostKey, ?int $maxOverride = null, array $profile = [], array $runtime = []): array {
         $cap = self::capability($item);
         if (!$cap) {
             return ['ok' => false, 'error' => 'Choose a game from the library'];
@@ -156,6 +171,7 @@ class Lobby {
             'title' => (string)($item['title'] ?? 'ROM'),
             'system' => (string)($item['system'] ?? ''),
             'emu_core' => (string)($item['emu_core'] ?? ''),
+            'runtime' => self::runtimeConfig($runtime),
             'host_name' => $hostName,
             'host_user_id' => $profile['user_id'] ?? null,
             'host_key' => hash('sha256', $hostKey),

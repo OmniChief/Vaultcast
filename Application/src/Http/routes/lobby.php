@@ -56,7 +56,7 @@ if ($path === '/lobby/sessions' && $method === 'POST') {
         $hostKey = bin2hex(random_bytes(16));
     }
     $max = isset($body['max_players']) ? (int)$body['max_players'] : null;
-    $res = Lobby::create($item, $hostName, $hostKey, $max, Profiles::lobbyIdentity());
+    $res = Lobby::create($item, $hostName, $hostKey, $max, Profiles::lobbyIdentity(), is_array($body['runtime'] ?? null) ? $body['runtime'] : []);
     if (empty($res['ok'])) json_error($res['error'] ?? 'Could not create session', 400);
     json_out($res);
 }

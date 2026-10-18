@@ -1687,7 +1687,7 @@ function confirmDialog(message, opts){
     closeEmuAudioContexts();
     try { window.EJS_emulator = undefined; } catch (e5) {}
     try { delete window.EJS_emulator; } catch (e6) {}
-    var gKeys = ['EJS_player','EJS_core','EJS_gameUrl','EJS_biosUrl','EJS_externalFiles','EJS_pathtodata','EJS_startOnLoaded','EJS_gameID','EJS_gameName','EJS_ready','EJS_onGameStart','EJS_Buttons','EJS_netplayServer','EJS_DEBUG_XX','EJS_EXPERIMENTAL_NETPLAY','EJS_forceLegacyCores','EJS_disableLocalStorage','EJS_threads','EJS_netplayICEServers'];
+    var gKeys = ['EJS_player','EJS_core','EJS_gameUrl','EJS_biosUrl','EJS_externalFiles','EJS_pathtodata','EJS_startOnLoaded','EJS_gameID','EJS_gameName','EJS_ready','EJS_onGameStart','EJS_Buttons','EJS_netplayServer','EJS_DEBUG_XX','EJS_EXPERIMENTAL_NETPLAY','EJS_forceLegacyCores','EJS_disableLocalStorage','EJS_threads','EJS_netplayICEServers','EJS_defaultOptions'];
     for (var gi = 0; gi < gKeys.length; gi++) {
       try { window[gKeys[gi]] = undefined; } catch (eG) {}
       try { delete window[gKeys[gi]]; } catch (eG2) {}
@@ -1908,6 +1908,7 @@ function confirmDialog(message, opts){
   }
 
   function openMultiplayerGame(item, options, session){
+    options.runtime = session.runtime || null;
     var multiplayer = {options:options, session:session};
     try {sessionStorage.setItem('vaultcast-room-' + session.id, JSON.stringify({options:options, item_id:item.id}));} catch (eStore) {}
     state._openingLobby = true;
@@ -1923,6 +1924,7 @@ function confirmDialog(message, opts){
       state.gameLobby = {session:session, preview:true};
       if (!saved || String(saved.item_id) !== String(item.id) || !saved.options) return;
       var options = saved.options;
+      options.runtime = session.runtime || null;
       if (options.role === 'host' && options.host_key) return api('/lobby/sessions/' + roomId + '/heartbeat', {method:'POST', body:{host_key:options.host_key}}).then(function(heartbeat){
         if (!heartbeat.ok) return;
         lobbyStartHeartbeat(heartbeat.session, options.host_key); state.gameLobby = {session:heartbeat.session, options:options};
@@ -2529,7 +2531,7 @@ function confirmDialog(message, opts){
   function lobbyStateHash(emu){return lobbyReadState(emu,LOBBY_STATE_MAX_BYTES,window.VaultcastNetplaySync.stateHash);}
   function lobbySyncConfiguration(emu){
     return JSON.stringify({ core: emu.getCore(), emulator: window.VaultcastDependencies.emulatorVersion,
-      webgl2: !!emu.supportsWebgl2, threads: !!emu.config.threads,
+      webgl2: !!(emu.supportsWebgl2 && emu.webgl2Enabled), threads: !!emu.config.threads,
       defaults: emu.defaultCoreOpts || {}, options: emu.gameManager.getCoreOptions() || '' });
   }
   function lobbyCancelStateLoad(emu){
@@ -2790,7 +2792,7 @@ function confirmDialog(message, opts){
     // Establish a fresh epoch after membership changes or a verified mismatch.
     np.sync = function(){
       if (emu._streamDisposed || !emu.isNetplay || !np.owner || np._streamSyncing) return;
-      if (Object.keys(np.players || {}).some(function(id){ return np.players[id].sync_revision !== 8; })) {
+      if (Object.keys(np.players || {}).some(function(id){ return np.players[id].sync_revision !== 9; })) {
         syncFailed('All players need the latest branch update; refresh each player');
         return;
       }
@@ -3066,7 +3068,7 @@ function confirmDialog(message, opts){
         userid: np.playerID,
         sessionid: sid,
         player_slot: 1,
-        sync_revision: 8,
+        sync_revision: 9,
         sync_config: lobbySyncConfiguration(emu),
         netplay_protocol: 'vaultcast-lockstep-4'
       };
@@ -3127,7 +3129,7 @@ function confirmDialog(message, opts){
         userid: np.playerID,
         sessionid: sid,
         player_slot: lobbyOpts.player_slot,
-        sync_revision: 8,
+        sync_revision: 9,
         sync_config: lobbySyncConfiguration(emu),
         netplay_protocol: 'vaultcast-lockstep-4'
       };
@@ -3164,7 +3166,7 @@ function confirmDialog(message, opts){
             return;
           }
           np.players = users || np.players;
-          if (Object.keys(np.players || {}).some(function(id){ return np.players[id].sync_revision !== 8; })) {
+          if (Object.keys(np.players || {}).some(function(id){ return np.players[id].sync_revision !== 9; })) {
             fail('All players need the latest branch update; refresh each player');
             return;
           }
@@ -3474,6 +3476,18 @@ function confirmDialog(message, opts){
     (document.fullscreenElement || document.body).appendChild(overlay);
     fresh.focus();
   }
+  function lobbyCaptureRuntime(emu){
+    var options={}, text=emu.gameManager.getCoreOptions() || '';
+    text.split('\n').forEach(function(line){
+      var setting=line.split('; ')[0].split('|'), key=setting[0];
+      if (!/^[a-zA-Z0-9_-]{1,96}$/.test(key)) return;
+      var value=setting.length>1 ? setting[1] : emu.settings && emu.settings[key];
+      if (typeof value==='string' && value.length<=256 && Object.keys(options).length<128) options[key]=value;
+    });
+    var threadSetting=emu.preGetSetting('ejs_threads');
+    return {core:emu.getCore(),variant:emu.supportsWebgl2 && emu.webgl2Enabled?'modern':'legacy',
+      threaded:typeof window.SharedArrayBuffer==='function' && (threadSetting==='enabled' || threadSetting!=='disabled' && !!emu.config.threads),options:options};
+  }
   function startLobbyHost(item, preserve){
     if (!item || !item.id) return;
     if (typeof preserve !== 'boolean') {chooseLobbyStart(item);return;}
@@ -3483,7 +3497,7 @@ function confirmDialog(message, opts){
     }
     state._lobbyTransfer=null;
     if(preserve && active && active.started && !active.isNetplay && String(state.movieId)===String(item.id)) {
-      try {var bytes=lobbyCaptureState(active);state._lobbyTransfer={id:item.id,bytes:bytes,hash:window.VaultcastNetplaySync.stateHash(bytes)};}
+      try {var bytes=lobbyCaptureState(active);state._lobbyTransfer={id:item.id,bytes:bytes,hash:window.VaultcastNetplaySync.stateHash(bytes),runtime:lobbyCaptureRuntime(active)};}
       catch(err){toast('Could not preserve this game: '+err.message,{kind:'bad'});return;}
     }
     if (state.lobby.host || state.lobby.guest) {closePlayer();state.gameLobby=null;}
@@ -3496,6 +3510,7 @@ function confirmDialog(message, opts){
         item_id: item.id,
         host_name: lobbyPlayerName(),
         host_key: key,
+        runtime: state._lobbyTransfer ? state._lobbyTransfer.runtime : null,
         max_players: 4
       }
     }).then(function(j){
@@ -3711,6 +3726,7 @@ function confirmDialog(message, opts){
       root.style.cssText = 'position:absolute;top:0;left:0;right:0;bottom:0;width:100%;height:100%;margin:0;padding:0;background:#000;z-index:1;';
     } catch (eR) {}
     var core = resolveEmuCore(play, item);
+    var lobbyRuntime = lobbyOpts && lobbyOpts.runtime;
     /* do not open EmulatorJS settings when PS1 BIOS is missing */
     if (core === 'psx' && !(play && play.bios_url)) {
       showPsxBiosMissing(root, play, item, function(){
@@ -3744,7 +3760,7 @@ function confirmDialog(message, opts){
       div.style.cssText = 'width:100%;height:100%;max-width:none;position:absolute;top:0;left:0;right:0;bottom:0;background:#000;';
       root.appendChild(div);
       window.EJS_player = '#' + gameId;
-      window.EJS_core = core;
+      window.EJS_core = lobbyRuntime ? lobbyRuntime.core : core;
       window.EJS_gameUrl = gameUrl;
       /* PS1 BIOS when present on server (data/bios/psx); else EmulatorJS settings UI */
       try { delete window.EJS_biosUrl; } catch (eBiosDel) { window.EJS_biosUrl = undefined; }
@@ -3766,9 +3782,10 @@ function confirmDialog(message, opts){
       // Use the same core variant and initial settings on desktop and mobile.
       // PSP requires WebGL2; other lobbies use the portable WebGL1 core build.
       var cloudCore=window.VaultcastHomeExtras.corePreference(item);
-      window.EJS_forceLegacyCores = lobbyOpts ? core !== 'ppsspp' : !!(cloudCore && cloudCore.variant==='legacy');
+      window.EJS_forceLegacyCores = lobbyRuntime ? lobbyRuntime.variant==='legacy' : lobbyOpts ? core !== 'ppsspp' : !!(cloudCore && cloudCore.variant==='legacy');
       window.EJS_disableLocalStorage = !!lobbyOpts;
-      window.EJS_threads = lobbyOpts ? core === 'ppsspp' : !!(cloudCore && cloudCore.threaded);
+      window.EJS_threads = lobbyRuntime ? !!lobbyRuntime.threaded : lobbyOpts ? core === 'ppsspp' : !!(cloudCore && cloudCore.threaded);
+      window.EJS_defaultOptions = lobbyRuntime ? Object.assign({},lobbyRuntime.options,{webgl2Enabled:lobbyRuntime.variant==='modern'?'enabled':'disabled',ejs_threads:lobbyRuntime.threaded?'enabled':'disabled'}) : undefined;
       // loader.js is an async IIFE: its script onload is NOT instance-ready.
       // Hold lobby core startup until EJS_ready has installed the frame bridge.
       window.EJS_startOnLoaded = false;
@@ -3813,9 +3830,10 @@ try {
         window.EJS_ready = function(){
           if(session!==_emuSessionId)return;
           var emu=window.EJS_emulator;if(!emu || emu._streamDisposed || emu._streamSoloBootStarted)return;
-          lobbyInstallFrameBridge(emu);emu._streamSoloBootStarted=true;
           var button=emu.elements && emu.elements.parent && emu.elements.parent.querySelector('.ejs_start_button');
-          if(button)emu.startButtonClicked(button);
+          if(!button)return;
+          lobbyInstallFrameBridge(emu);emu._streamSoloBootStarted=true;
+          emu.startButtonClicked(button);
         };
         window.EJS_onGameStart = function(){ if (session === _emuSessionId) { _emuLoading = false; window.VaultcastHub.gameStarted(item); } };
       }
@@ -3853,6 +3871,10 @@ try {
         try {
           if (typeof window.EJS_onGameStart === 'function') emu.on('start', window.EJS_onGameStart);
         } catch (eS) {}
+        if (emu.elements && emu.elements.parent && emu.elements.parent.querySelector('.ejs_start_button')) {
+          var readyNow = window.EJS_ready;
+          setTimeout(function(){if(session===_emuSessionId && !emu._streamDisposed && typeof readyNow==='function')readyNow();},0);
+        }
         /* If Start already fired before we attached (softLoad / race), run once now */
         try {
           if (emu.started && typeof window.EJS_onGameStart === 'function') {
@@ -3874,6 +3896,7 @@ try {
               gameId: window.EJS_gameID,
               gameName: window.EJS_gameName,
               buttonOpts: window.EJS_Buttons,
+              defaultOptions: window.EJS_defaultOptions,
               forceLegacyCores: window.EJS_forceLegacyCores,
               disableLocalStorage: window.EJS_disableLocalStorage,
               threads: window.EJS_threads,
