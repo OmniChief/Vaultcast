@@ -167,6 +167,14 @@ final class Chat
             $id=bin2hex(random_bytes(16));self::query('INSERT INTO vaultcast_chat_files (id,room_id,user_id,bytes,created_at) VALUES (?,?,?,?,?)',[$id,$room,$user['id'],$bytes,time()]);return ['ok'=>true,'id'=>$id,'chunk_bytes'=>262144];
         });
     }
+    public static function uploadedImage(array $user,string $room,array $file): string {
+        if(!is_uploaded_file((string)($file['tmp_name'] ?? '')) || ($file['error'] ?? UPLOAD_ERR_NO_FILE)!==UPLOAD_ERR_OK)throw new DomainException('Image upload failed.');
+        $bytes=(int)filesize($file['tmp_name']);$info=@getimagesize($file['tmp_name']);
+        if($bytes<1 || $bytes>4194304 || !$info || !in_array($info['mime'],['image/jpeg','image/png','image/gif','image/webp'],true) || $info[0]*$info[1]>16777216)throw new DomainException('Choose an image up to 4 MiB and 16 megapixels.');
+        $upload=self::upload($user,$room,['bytes'=>$bytes]);$id=$upload['id'];
+        if(!move_uploaded_file($file['tmp_name'],self::filePath($id))){self::query('DELETE FROM vaultcast_chat_files WHERE id=? AND user_id=?',[$id,$user['id']]);throw new DomainException('Could not store the image.');}
+        self::query('UPDATE vaultcast_chat_files SET received=?,mime=? WHERE id=? AND user_id=?',[$bytes,$info['mime'],$id,$user['id']]);return $id;
+    }
     public static function chunk(array $user,string $id,int $part): array {
         $data=file_get_contents('php://input',false,null,0,262145);if ($data===false||strlen($data)>262144) throw new DomainException('Invalid image chunk.');
         return \Vaultcast\Database::transaction(static function() use ($user,$id,$part,$data){
