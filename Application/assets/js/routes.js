@@ -56,7 +56,7 @@
     if (head === '') return { view:'home' };
     if (head === 'home') {
       var tab = parts[1] || 'overview';
-      if (['overview','favourites','watchlist','calendar','friends','history','stats','inbox','cinema'].indexOf(tab) < 0) return {view:'notfound'};
+      if (['overview','favourites','watchlist','calendar','friends','history','stats','inbox','cinema','arrivals','lists'].indexOf(tab) < 0) return {view:'notfound'};
       return {view:'home',hubTab:tab,cinemaId:tab === 'cinema' && /^[a-f0-9]{16}$/.test(parts[2] || '') ? parts[2] : null};
     }
     if (head === 'library' && !parts[1]) return {view:'library'};

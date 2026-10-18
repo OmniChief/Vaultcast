@@ -2281,6 +2281,7 @@ class Catalogue {
             'show_slug' => $isShowEp ? Slugs::show(self::showKey($it['section'] ?? '', $it['show']), self::fixText((string)$it['show'])) : null,
             'ext' => $it['ext'],
             'size' => $it['size'],
+            'duration' => ($it['media_kind'] ?? '')==='video'?(float)(MediaFacts::get($it)['duration'] ?? 0):0,
             'mtime' => $it['mtime'],
             'media_kind' => $it['media_kind'],
             'emu_core' => $it['emu_core'] ?? null,

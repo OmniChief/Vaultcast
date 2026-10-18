@@ -724,7 +724,7 @@ function confirmDialog(message, opts){
     opts = opts || {};
     var method = String(opts.method || 'GET').toUpperCase();
     if (method !== 'GET') {
-      if (/^\/hub\/(?:game|rooms|shelf|review|friend|invite|dismiss)(?:\/|$)/.test(path)) return apiRequest(path,opts);
+      if (/^\/hub\/(?:game|rooms|shelf|review|friend|invite|dismiss|saves|lists)(?:\/|$)/.test(path)) return apiRequest(path,opts);
       if (/^\/items\/[a-f0-9]+\/play$/.test(path) || path === '/admin/posters/audit') return apiRequest(path, opts);
       navigationCache.clear();
       return apiRequest(path, opts).then(function(j){ navigationCache.clear(); return j; }, function(error){ navigationCache.clear(); throw error; });
@@ -1268,6 +1268,7 @@ function confirmDialog(message, opts){
       ])
     ]);
     window.VaultcastHub.cardAction(el,item);
+    window.VaultcastHomeExtras.protectCard(el,item,progress);
     return el;
   }
 
@@ -1581,6 +1582,7 @@ function confirmDialog(message, opts){
     try {
       var emu = window.EJS_emulator;
       if (emu) {
+        if (emu._cloudBeforeExit) emu._cloudBeforeExit();
         emu._streamDisposed = true;
         if (emu._hubStatsCleanup) emu._hubStatsCleanup();
         emu.isNetplay = false;
@@ -2503,7 +2505,8 @@ function confirmDialog(message, opts){
     np._streamLastVerifiedFrame = 0;
     try { lobbyLog('frame_reset', { reason: reason || 'reset', abs_frame: abs, owner: !!np.owner, playerID: np.playerID || null }); } catch (eL) {}
   }
-  function lobbyCaptureState(emu){
+  function lobbyCaptureState(emu, maximum){
+    maximum=maximum||8*1024*1024;
     // EmulatorJS 4.2.1 getState() copies the allocated native buffer but never
     // frees it. Checkpoints must not leak a whole savestate on every sample.
     // Check before allocating so unsupported runtimes cannot leak a buffer or
@@ -2516,8 +2519,8 @@ function confirmDialog(message, opts){
     var length = Number(info[0]), address = Number(info[1]);
     if (!Number.isSafeInteger(address) || address <= 0) throw new Error('Invalid emulator state address');
     try {
-      if (!Number.isSafeInteger(length) || length <= 0 || length > 8 * 1024 * 1024 || address + length > emu.Module.HEAPU8.length) {
-        throw new Error('Invalid emulator state size (maximum 8 MiB)');
+      if (!Number.isSafeInteger(length) || length <= 0 || length > maximum || address + length > emu.Module.HEAPU8.length) {
+        throw new Error('Invalid emulator state size (maximum '+Math.round(maximum/1048576)+' MiB)');
       }
       return new Uint8Array(emu.Module.HEAPU8.subarray(address, address + length));
     } finally { emu.Module._free(address); }
@@ -2794,7 +2797,7 @@ function confirmDialog(message, opts){
           lobbyRestoreControllerState(emu, held);
           var bytes = lobbyCaptureState(emu);
           if (!(bytes instanceof Uint8Array) || !bytes.length) throw new Error('Could not save host state');
-          if (bytes.length > 8 * 1024 * 1024) throw new Error('Host state exceeds the 8 MiB transfer limit');
+          if (bytes.length > maximum) throw new Error('Host state exceeds the 8 MiB transfer limit');
           lobbyResetNetplayFrames(emu, 'host_snapshot');
           lobbyScheduleSyncTrace(emu);
           np._streamReadyUsers[np.playerID] = true;
@@ -3535,9 +3538,10 @@ function confirmDialog(message, opts){
       window.EJS_pathtodata = dataPath;
       // Use the same core variant and initial settings on desktop and mobile.
       // PSP requires WebGL2; other lobbies use the portable WebGL1 core build.
-      window.EJS_forceLegacyCores = !!lobbyOpts && core !== 'ppsspp';
+      var cloudCore=window.VaultcastHomeExtras.corePreference(item);
+      window.EJS_forceLegacyCores = lobbyOpts ? core !== 'ppsspp' : !!(cloudCore && cloudCore.variant==='legacy');
       window.EJS_disableLocalStorage = !!lobbyOpts;
-      window.EJS_threads = !!lobbyOpts && core === 'ppsspp';
+      window.EJS_threads = lobbyOpts ? core === 'ppsspp' : !!(cloudCore && cloudCore.threaded);
       // loader.js is an async IIFE: its script onload is NOT instance-ready.
       // Hold lobby core startup until EJS_ready has installed the frame bridge.
       window.EJS_startOnLoaded = false;
@@ -3736,7 +3740,7 @@ try {
     state.searchQuery = '';
     if (mode === 'live') navigate('live');
     else if (mode === 'play') { state.sectionQ = ''; state.sectionSystem = ''; if (!state.playTab) state.playTab = 'games'; navigate('play'); }
-    else if (mode === 'home') { state.hubTab='overview';state.cinemaId=null;navigate('home'); }
+    else if (mode === 'home') { state.hubTab=(state.user && state.user.prefs || {}).home_landing || 'overview';state.cinemaId=null;navigate('home'); }
     else navigate('library');
   }
 
@@ -3765,10 +3769,11 @@ try {
   }
   /* Apply location.pathname to state. Returns a promise (slug routes are resolved by the server). */
   function applyRoute(){
+    if(window.VaultcastHomeExtras)window.VaultcastHomeExtras.captureShare();
     upgradeLegacyHash();
     var rel = R.relative(location.pathname, BASE) + (location.search || '');
     var r = R.parse(rel);
-    state.hubTab = r.hubTab || 'overview'; state.cinemaId = r.cinemaId || null;
+    state.hubTab = r.hubTab || ((state.user && state.user.prefs || {}).home_landing) || 'overview'; state.cinemaId = r.cinemaId || null;
     state.sectionLetter = r.sectionLetter || '';
     state.collectionsLetter = r.collectionsLetter || '';
     state.showSeason = null; state.showEpisode = null;
@@ -3922,7 +3927,7 @@ try {
   function subnavEl(mode){
     var items = [];
     if (mode === 'home') {
-      [['overview','For you'],['watchlist','Watchlist'],['favourites','Favourites'],['calendar','Release calendar'],['friends','Friends'],['cinema','Watch together'],['history','History'],['stats','Game stats'],['inbox','Inbox']].forEach(function(t){items.push({label:t[1],active:(state.hubTab||'overview')===t[0],go:function(){window.VaultcastHub.go(t[0]);}});});
+      [['overview','For you'],['watchlist','Watchlist'],['favourites','Favourites'],['calendar','Release calendar'],['arrivals','New episodes'],['lists','My collections'],['friends','Friends'],['cinema','Watch together'],['history','History'],['stats','Game stats'],['inbox','Inbox']].forEach(function(t){items.push({label:t[1],active:(state.hubTab||'overview')===t[0],go:function(){window.VaultcastHub.go(t[0]);}});});
     } else if (mode === 'vod') {
       items.push({ label:'Discover', active: state.view === 'library', go: function(){ navigate('library'); } });
       vodSections().forEach(function(s){
@@ -6531,9 +6536,10 @@ try {
           actions.push(shareButton(epPath, 'Copy link to ' + (code || 'this episode')));
           var isTarget = (state.showEpisode != null && +ep.episode === +state.showEpisode && +ep.season === +sel) || (wantEpItem && ep.id === wantEpItem);
           return h('div', {
-            className: 'panel episode-row' + (isAvail ? '' : ' episode-missing') + (isTarget ? ' episode-target' : ''),
+            className: 'panel episode-row' + (((state.user||{}).prefs||{}).hide_spoilers?' episode-spoiler-hidden':'') + (isAvail ? '' : ' episode-missing') + (isTarget ? ' episode-target' : ''),
             'data-episode-target': isTarget ? '1' : null,
             'data-hub-episode': isAvail ? ep.id : null,
+            'data-episode-code':code,
             style: 'padding:12px 14px;display:flex;justify-content:space-between;gap:12px;align-items:center;' + (isAvail ? 'cursor:pointer;' : ''),
             tabindex: isAvail ? '0' : null,
             role: isAvail ? 'button' : null,
@@ -6735,7 +6741,7 @@ try {
     var prefs = u.prefs || {};
     var isAdmin = !!(u && u.role === 'admin');
     var groups = [
-      {title:'Your preferences', items:[{id:'account',label:'Account & playback'}]},
+      {title:'Your preferences', items:[{id:'account',label:'Account & playback'},{id:'cloud-saves',label:'Cloud saves'}]},
       {title:'Libraries',admin:true,items:[{id:'sections',label:'Folders & media types'},{id:'scan',label:'Scan libraries'},{id:'media',label:'Manage media'},{id:'collections',label:'Collections'},{id:'posters',label:'Artwork'},{id:'library',label:'Find & rename'},{id:'ingest',label:'Import inbox'},{id:'matching',label:'Correct metadata'},{id:'reports',label:'Label reports'}]},
       {title:'Users',admin:true,items:[{id:'users',label:'Accounts & access'}]},
       {title:'Playback',admin:true,items:[{id:'players',label:'Player files'},{id:'streaming',label:'Streaming'},{id:'video-optimise',label:'Video conversion'},{id:'poster-optimise',label:'Artwork optimisation'}]},
@@ -6882,6 +6888,9 @@ try {
           h('button', { className: 'btn primary', text: 'Sign in', onClick: function(){ state._wantAdmin = false; state.view = 'login'; render(); } })
         ])
       ];
+    } else if (sec === 'cloud-saves') {
+      var savesHost=h('div');bodyKids=[h('h2',{text:'Cloud saves'}),savesHost];
+      setTimeout(function(){window.VaultcastHomeExtras.savesPanel(savesHost);},0);
     } else if (sec === 'updates' && isAdmin) {
       var updHost = h('div', { className:'stack updates-panel' });
       bodyKids = [
@@ -13507,7 +13516,7 @@ function viewCollectionDetail(){
         h('button', { className:'btn primary', text:'Check again', onClick: function(){
           status.textContent = 'Checking…';
           api('/me').then(function(j){
-            if (j.ok && j.user) state.user = j.user;
+            if (j.ok && j.user) {state.user = j.user;document.dispatchEvent(new Event('vaultcast-account-ready'));}
             if (!j.ok || !j.user) { state.user = null; showWelcome(); return; }
             if (accessGated()) { status.textContent = 'Still waiting. Try again once your administrator has granted access.'; return; }
             restoreReturnHash(); bootApp();
@@ -13576,7 +13585,7 @@ function viewCollectionDetail(){
     if (button) { button.disabled = true; button.textContent = 'Signing in…'; }
     api('/login', { method:'POST', body:{ username: $('#lu').value, password: $('#lp').value } }).then(function(j){
       if (!j.ok) { $('#login-err').textContent = j.error || 'Login failed'; return; }
-      state.user = j.user;
+      state.user = j.user;document.dispatchEvent(new Event('vaultcast-account-ready'));
       if (button) button.textContent = 'Opening your library…';
       if (state._wantAdmin) {
         if (state.user.role !== 'admin') {
@@ -13636,6 +13645,7 @@ function viewCollectionDetail(){
   function applyPrefs(){
     var p = (state.user && state.user.prefs) || {};
     document.body.classList.toggle('reduce-motion', !!p.reduce_motion);
+    if(state.user && state._homePrefUser!==state.user.id){state._homePrefUser=state.user.id;if(state.view==='home' && R.relative(location.pathname,BASE)==='' && p.home_landing)state.hubTab=p.home_landing;}
   }
 
   function render(){ renderView(); syncUrl(); }
@@ -13815,8 +13825,9 @@ function viewCollectionDetail(){
   /* helpers for assets/js/matching.js (Ingest inbox / Fix matching / Label reports) */
   window.NSApp = { h: h, api: api, toast: toast, confirmDialog: confirmDialog, render: render, state: state,
     openSettings: openSettings, openShow: openShow, openMovie: openMovie, openGame:openGame, navigate:navigate, refreshArtwork:refreshArtwork, fmtSize: fmtSize, version: APP_VERSION,
-    shell:shell,cardEl:cardEl,applyRoute:applyRoute,replaceNav:replaceNav,openPlayer:openPlayer,playItem:playItem,copyText:copyText,shareUrl:shareUrl,startLobbyHost:startLobbyHost };
+    shell:shell,cardEl:cardEl,applyRoute:applyRoute,replaceNav:replaceNav,openPlayer:openPlayer,playItem:playItem,copyText:copyText,shareUrl:shareUrl,startLobbyHost:startLobbyHost,captureGameState:lobbyCaptureState,quitGame:function(){closePlayer();} };
   window.VaultcastHub.init(window.NSApp);
+  window.VaultcastHomeExtras.init(window.NSApp);
   // Load matching tools when Settings or a detail-page action needs them.
   var matchingCallbacks = [];
   window.__nsEnsureMatching = function(cb){
@@ -13943,7 +13954,7 @@ function viewCollectionDetail(){
   }
   var initialMe = window.__STREAM_STARTUP__ && window.__STREAM_STARTUP__.me;
   var meP = (initialMe ? Promise.resolve(initialMe) : api('/me')).then(function(j){
-    if (j.ok && j.user) state.user = j.user;
+    if (j.ok && j.user) {state.user = j.user;document.dispatchEvent(new Event('vaultcast-account-ready'));}
     if (j.ok && typeof j.pending_convert_count === 'number') updateConvertNotif(j.pending_convert_count);
     return j;
   }).catch(function(){ return null; });

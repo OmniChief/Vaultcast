@@ -45,10 +45,12 @@ CREATE TABLE IF NOT EXISTS vaultcast_items (
     system_name VARCHAR(120) NOT NULL DEFAULT '',
     initial CHAR(1) CHARACTER SET ascii NOT NULL DEFAULT '#',
     modified_at BIGINT NOT NULL DEFAULT 0,
+    added_at BIGINT NOT NULL DEFAULT 0,
     generation CHAR(32) CHARACTER SET ascii NOT NULL,
     payload LONGTEXT NOT NULL,
     INDEX section_title (section_id, title(120)),
     INDEX section_modified (section_id, modified_at),
+    INDEX section_added (section_id, added_at),
     INDEX section_show (section_id, show_title(120)),
     INDEX media_section (media_kind, section_id),
     INDEX section_system (section_id, system_name, initial),
@@ -80,5 +82,7 @@ CREATE TABLE IF NOT EXISTS vaultcast_media_facts (
     audio_codec VARCHAR(32) NOT NULL DEFAULT '',
     needs_convert TINYINT(1) NOT NULL DEFAULT 0,
     present TINYINT(1) NOT NULL DEFAULT 1,
-    probed_at BIGINT NOT NULL DEFAULT 0
+    probed_at BIGINT NOT NULL DEFAULT 0,
+    duration DOUBLE NOT NULL DEFAULT 0,
+    INDEX duration_index (duration)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

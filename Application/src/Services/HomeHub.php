@@ -97,9 +97,16 @@ final class HomeHub {
             foreach ($q as $row) $seen[Catalogue::showKey($row['section_id'],$row['show_title'])]=['count'=>(int)$row['seen'],'last'=>$row['last_episode']];
             foreach ($shelves['watchlist'] as &$card) if (($card['kind'] ?? '')==='show') {
                 $entry=$seen[$card['show_key']] ?? [];
+                $card['watched_episodes']=(int)($entry['count'] ?? 0);
                 $card['watch_status']=($entry['count'] ?? 0).' episodes watched'.(!empty($entry['last'])?' · Last: '.$entry['last']:'');
             }
             unset($card);
+        }
+        $watchIds=[];foreach ($shelves['watchlist'] as $card) if (($card['kind'] ?? '')!=='show') $watchIds[]=$card['id'];
+        if ($uid!=='' && $watchIds) {
+            $q=\Vaultcast\Database::connection()->prepare('SELECT item_id,payload FROM vaultcast_progress WHERE user_id=? AND item_id IN ('.implode(',',array_fill(0,count($watchIds),'?')).')');$q->execute(array_merge([$uid],$watchIds));$progress=[];
+            foreach ($q as $row) $progress[$row['item_id']]=json_decode($row['payload'],true);
+            foreach ($shelves['watchlist'] as &$card) if (isset($progress[$card['id']])) {$card['progress']=$progress[$card['id']];$card['watched']=!empty($card['progress']['watched']) || Catalogue::progressFinished($card['progress'],false);}unset($card);
         }
         $favouriteShows=[];
         foreach ($shelves['favourites'] as $card) if (($card['kind'] ?? '')==='show') $favouriteShows[$card['show_key']]=$card;

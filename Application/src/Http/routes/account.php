@@ -119,6 +119,10 @@ if ($path === '/me/prefs' && $method === 'POST') {
             foreach (['theme','autoplay','default_quality','reduce_motion','language'] as $k) {
                 if (array_key_exists($k, $b)) $prefs[$k] = $b[$k];
             }
+            if (array_key_exists('hide_spoilers',$b)) $prefs['hide_spoilers']=!empty($b['hide_spoilers']);
+            if (array_key_exists('home_compact',$b)) $prefs['home_compact']=!empty($b['home_compact']);
+            if (array_key_exists('home_panels',$b) && is_array($b['home_panels'])) $prefs['home_panels']=array_values(array_unique(array_intersect($b['home_panels'],['recent','games','watchlist','friends','calendar','stats'])));
+            if (isset($b['home_landing']) && in_array($b['home_landing'],['overview','watchlist','favourites','calendar','friends','cinema','history','stats','inbox','arrivals','lists'],true)) $prefs['home_landing']=$b['home_landing'];
             if (array_key_exists('live_cat_formats', $b)) $prefs['live_cat_formats'] = relay_clean_formats($b['live_cat_formats']);
             $u['prefs'] = $prefs;
             if (!empty($b['display_name'])) $u['display_name'] = trim($b['display_name']);

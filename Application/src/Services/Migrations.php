@@ -6,7 +6,7 @@
  */
 final class Migrations
 {
-    const VERSION = 4; // 2: library folder access pass for nginx (step 5); 3: re-run it, recording results; 4: media facts table (step 6)
+    const VERSION = 5; // 2: library folder access pass for nginx (step 5); 3: re-run it, recording results; 4: media facts table; 5: arrival timestamps and indexed running times
 
     public static function stampFile(): string
     {
@@ -58,10 +58,21 @@ final class Migrations
         return $out;
     }
 
+    private static function homeFeatures(PDO $pdo): void {
+        if (!$pdo->query("SHOW COLUMNS FROM vaultcast_items LIKE 'added_at'")->fetch()) {
+            $pdo->exec('ALTER TABLE vaultcast_items ADD added_at BIGINT NOT NULL DEFAULT 0, ADD INDEX section_added (section_id,added_at)');
+        }
+        MediaFacts::ensureTable($pdo);
+        if (!$pdo->query("SHOW COLUMNS FROM vaultcast_media_facts LIKE 'duration'")->fetch()) {
+            $pdo->exec('ALTER TABLE vaultcast_media_facts ADD duration DOUBLE NOT NULL DEFAULT 0, ADD INDEX duration_index (duration)');
+        }
+    }
+
     /** @return array<string,mixed> what each step did */
     public static function run(PDO $pdo): array
     {
         $log = [];
+        if (is_file(STREAM_DATA.'/runtime/migrations-v4.done')) {self::homeFeatures($pdo);return ['home_features'=>true];}
         // 1. Fix Match pins: files -> vaultcast_metadata_pins.
         foreach (explode(';', (string)file_get_contents(dirname(__DIR__) . '/schema.sql')) as $sql) {
             if (stripos($sql, 'vaultcast_metadata_pins') !== false && trim($sql) !== '') $pdo->exec($sql);
@@ -86,6 +97,7 @@ final class Migrations
         // 6. Codec / needs-convert facts table; the background 'facts' task fills it.
         MediaFacts::ensureTable($pdo);
         $log['media_facts_table'] = true;
+        self::homeFeatures($pdo);
         error_log('Vaultcast storage migration v' . self::VERSION . ': ' . json_encode($log));
         return $log;
     }

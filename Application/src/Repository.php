@@ -139,11 +139,11 @@ final class Repository
                 $pdo->exec("INSERT IGNORE INTO vaultcast_documents (name,payload) VALUES ('catalogue','{}')");
                 $pdo->query("SELECT name FROM vaultcast_documents WHERE name='catalogue' FOR UPDATE")->fetch();
                 $generation = bin2hex(random_bytes(16));
-                $upsert = $pdo->prepare('INSERT INTO vaultcast_items (id,section_id,media_kind,title,show_title,system_name,initial,modified_at,generation,payload) VALUES (?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE section_id=VALUES(section_id), media_kind=VALUES(media_kind), title=VALUES(title), show_title=VALUES(show_title), system_name=VALUES(system_name), initial=VALUES(initial), modified_at=VALUES(modified_at), generation=VALUES(generation), payload=VALUES(payload)');
+                $upsert = $pdo->prepare('INSERT INTO vaultcast_items (id,section_id,media_kind,title,show_title,system_name,initial,modified_at,added_at,generation,payload) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE section_id=VALUES(section_id), media_kind=VALUES(media_kind), title=VALUES(title), show_title=VALUES(show_title), system_name=VALUES(system_name), initial=VALUES(initial), modified_at=VALUES(modified_at), generation=VALUES(generation), payload=VALUES(payload)');
                 foreach ($value['items'] ?? [] as $item) {
                     $initial = mb_strtoupper(mb_substr(trim($item['title'] ?? ''), 0, 1, 'UTF-8'), 'UTF-8');
                     if (!preg_match('/^[A-Z]$/D', $initial)) $initial = '#';
-                    $upsert->execute([$item['id'], $item['section'], $item['media_kind'] ?? '', $item['title'] ?? '', $item['show'] ?? '', trim($item['system'] ?? ''), $initial, (int)($item['mtime'] ?? 0), $generation, self::encode($item)]);
+                    $upsert->execute([$item['id'], $item['section'], $item['media_kind'] ?? '', $item['title'] ?? '', $item['show'] ?? '', trim($item['system'] ?? ''), $initial, (int)($item['mtime'] ?? 0), time(), $generation, self::encode($item)]);
                 }
                 $delete = $pdo->prepare('DELETE FROM vaultcast_items WHERE generation <> ?');
                 $delete->execute([$generation]);
@@ -248,17 +248,22 @@ final class Repository
     /** Remove a user with their sessions, playback tokens and watch progress. */
     public static function deleteUser(string $id): bool
     {
-        return Database::transaction(function (\PDO $pdo) use ($id): bool {
+        $removed=Database::transaction(function (\PDO $pdo) use ($id): bool {
             $s = $pdo->prepare('DELETE FROM vaultcast_users WHERE id=?');
             $s->execute([$id]);
             if ($s->rowCount() < 1) return false;
             $pdo->prepare('DELETE FROM vaultcast_sessions WHERE user_id=?')->execute([$id]);
             $pdo->prepare('DELETE FROM vaultcast_progress WHERE user_id=?')->execute([$id]);
             $pdo->prepare("DELETE FROM vaultcast_playback_tokens WHERE JSON_UNQUOTE(JSON_EXTRACT(payload,'$.user_id'))=?")->execute([$id]);
+            $pdo->prepare('DELETE FROM vaultcast_documents WHERE name IN (?,?,?)')->execute(['home-hub:'.$id,'home-extra:'.$id,'game-saves:'.$id]);
+            $pdo->prepare('DELETE FROM vaultcast_documents WHERE name LIKE ?')->execute(['personal-list:'.$id.':%']);
+            $pdo->prepare("DELETE FROM vaultcast_documents WHERE name LIKE 'shared-save:%' AND JSON_UNQUOTE(JSON_EXTRACT(payload,'$.owner'))=?")->execute([$id]);
             self::putDocument('users', []);
             self::putDocument('progress', []);
             return true;
         });
+        if ($removed) \GameSaves::removeUser($id);
+        return $removed;
     }
 
     public static function progress(string $userId): array

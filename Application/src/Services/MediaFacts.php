@@ -18,7 +18,9 @@ final class MediaFacts
     audio_codec VARCHAR(32) NOT NULL DEFAULT \'\',
     needs_convert TINYINT(1) NOT NULL DEFAULT 0,
     present TINYINT(1) NOT NULL DEFAULT 1,
-    probed_at BIGINT NOT NULL DEFAULT 0
+    probed_at BIGINT NOT NULL DEFAULT 0,
+    duration DOUBLE NOT NULL DEFAULT 0,
+    INDEX duration_index (duration)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci';
 
     public static function ensureTable(PDO $pdo): void
@@ -42,7 +44,7 @@ final class MediaFacts
         foreach (array_chunk(array_values($ids), 200) as $batch) {
             foreach ($batch as $id) self::$map[$id] = null;
             try {
-                $s = \Vaultcast\Database::connection()->prepare('SELECT item_id,sig,needs_convert,present,video_codec,audio_codec FROM vaultcast_media_facts WHERE item_id IN (' . implode(',', array_fill(0, count($batch), '?')) . ')');
+                $s = \Vaultcast\Database::connection()->prepare('SELECT item_id,sig,needs_convert,present,video_codec,audio_codec,duration FROM vaultcast_media_facts WHERE item_id IN (' . implode(',', array_fill(0, count($batch), '?')) . ')');
                 $s->execute($batch);
                 foreach ($s as $row) self::$map[(string)$row['item_id']] = $row;
             } catch (\Throwable $e) { /* not migrated yet: extension fallback */ }
@@ -86,7 +88,7 @@ final class MediaFacts
         self::ensureTable($pdo);
         $known = [];
         foreach ($pdo->query('SELECT item_id, sig FROM vaultcast_media_facts') as $r) $known[(string)$r['item_id']] = (string)$r['sig'];
-        $ins = $pdo->prepare('REPLACE INTO vaultcast_media_facts (item_id, sig, video_codec, audio_codec, needs_convert, present, probed_at) VALUES (?,?,?,?,?,?,?)');
+        $ins = $pdo->prepare('REPLACE INTO vaultcast_media_facts (item_id, sig, video_codec, audio_codec, needs_convert, present, probed_at,duration) VALUES (?,?,?,?,?,?,?,?)');
         $out = ['ok' => true, 'probed' => 0, 'unchanged' => 0, 'missing' => 0, 'removed' => 0, 'guides' => 0];
         $seen = []; $shows = [];
         $t0 = microtime(true);
@@ -98,16 +100,16 @@ final class MediaFacts
                 $shows[Catalogue::showKey((string)($it['section'] ?? ''), (string)$it['show'])] = (string)$it['show'];
             }
             $sig = self::sig($it);
-            if (($known[$id] ?? null) === $sig && self::audio($it)) { $out['unchanged']++; continue; }
+            if (($known[$id] ?? null) === $sig && array_key_exists('duration',self::audio($it))) { $out['unchanged']++; continue; }
             if ($checkpoint) $checkpoint();
             $path = (string)($it['path'] ?? '');
             if ($path === '' || !is_file($path)) {
-                $ins->execute([$id, $sig, '', '', 0, 0, time()]); $out['missing']++; continue;
+                $ins->execute([$id, $sig, '', '', 0, 0, time(),0]); $out['missing']++; continue;
             }
             $p = MediaProbe::probeSummary($path, 15, true);
             \Vaultcast\Repository::putDocument('media-audio:' . $id, ['sig' => $sig, 'probe' => [
                 'audio_tracks' => $p['audio_tracks'] ?? [], 'audio_count' => $p['audio_count'] ?? 0,
-                'multi_audio' => !empty($p['multi_audio']),
+                'multi_audio' => !empty($p['multi_audio']), 'duration'=>$p['duration'] ?? 0,
             ]]);
             $vc = (string)($p['video_codec'] ?? '');
             $ac = (string)($p['audio_tracks'][0]['codec'] ?? '');
@@ -118,7 +120,7 @@ final class MediaFacts
             } else {
                 $nc = self::codecsNeedConvert($vc, $ac);
             }
-            $ins->execute([$id, $sig, substr($vc, 0, 32), substr($ac, 0, 32), $nc ? 1 : 0, 1, time()]);
+            $ins->execute([$id, $sig, substr($vc, 0, 32), substr($ac, 0, 32), $nc ? 1 : 0, 1, time(),(float)($p['duration'] ?? 0)]);
             $out['probed']++;
         }
         $stale = array_diff_key($known, $seen);
