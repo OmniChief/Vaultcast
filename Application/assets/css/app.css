@@ -953,8 +953,11 @@ input[type=checkbox], input[type=radio], input[type=range] { accent-color: var(-
   .mode-tab .ico { width: 22px; height: 22px; }
   .app-shell.xshell { padding-bottom: calc(100px + env(safe-area-inset-bottom, 0px)); }
   .toast { bottom: calc(96px + env(safe-area-inset-bottom, 0px)); }
-  .billboard-inner { grid-template-columns: 1fr; }
-  .billboard-poster { display: none; }
+  .billboard-inner { grid-template-columns: minmax(0,1fr) clamp(110px,22vw,180px); gap:20px; }
+  .billboard-copy { min-width:0; }
+  .billboard-copy h1 { overflow-wrap:anywhere; }
+  .billboard-poster { display:flex; width:100%; box-sizing:border-box; padding:10px; transform:none; }
+  .billboard-empty .billboard-inner { grid-template-columns:minmax(0,1fr); }
   .billboard { min-height: 58vh; }
   .billboard.billboard-empty { min-height: 200px; }
   .live-hero { grid-template-columns: 1fr; }
@@ -963,6 +966,8 @@ input[type=checkbox], input[type=radio], input[type=range] { accent-color: var(-
   .subnav-link span { display: none; }
 }
 @media (max-width: 520px) {
+  .billboard-inner { grid-template-columns:minmax(0,1fr); gap:20px; padding-top:28px; }
+  .billboard-poster { grid-column:1; grid-row:1; justify-self:center; width:clamp(120px,38vw,190px); max-width:100%; }
   .xnav .brand-name { display: none; }
   .card { width: 124px; }
   .grid, .section-grid { grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 18px 12px; }
