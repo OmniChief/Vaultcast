@@ -2570,7 +2570,7 @@ body { background:radial-gradient(ellipse 1000px 540px at 0 0,#15395855,transpar
 .first-hero { background:radial-gradient(ellipse at 80% 0,#4a369944,transparent 65%),linear-gradient(120deg,#0c2531,#101529); }
 .first-hero h1 { color:var(--text); }
 input[type=checkbox],input[type=radio],input[type=range] { accent-color:var(--accent); }
-.toast { border-color:var(--neon-line); background:#0d1b2d; }
+.toast { border-color:var(--neon-line); background:#0d1b2d; width:max-content; max-width:calc(100vw - 32px); overflow-wrap:anywhere; text-align:center; }
 .toast.toast-ok { background:#10372b; border-color:#5df4c177; }
 .toast.toast-bad { background:#411a29; border-color:#ff82a277; }
 .az-rail .az-btn.active,.avatar.signed-in .avatar-initial,.lc-pill:not(.iptv) { color:#071321; }
