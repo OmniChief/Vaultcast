@@ -9,6 +9,7 @@ final class Database
 {
     private static $pdo;
     private static $config;
+    private static $operationLock;
     public static function configFile(): string {
         $legacy = dirname(__DIR__) . '/config.php';
         return is_file($legacy) ? $legacy : dirname(__DIR__) . '/data/config.php';
@@ -56,8 +57,22 @@ final class Database
 
     public static function connection(): \PDO
     {
+        if (!self::$operationLock) {
+            $lock = fopen(dirname(__DIR__) . '/data/database-operation.lock', 'c');
+            if (!$lock || !flock($lock, LOCK_SH | LOCK_NB)) throw new \RuntimeException('A database reset is in progress. Try again shortly.');
+            self::$operationLock = $lock;
+        }
         if (!self::$pdo) self::$pdo = self::connect(self::config());
         return self::$pdo;
+    }
+
+    public static function lockForReset(): void
+    {
+        self::connection();
+        if (!flock(self::$operationLock, LOCK_EX | LOCK_NB)) {
+            flock(self::$operationLock, LOCK_SH | LOCK_NB);
+            throw new \RuntimeException('Vaultcast is busy. Stop playback and background tasks, then retry the reset.');
+        }
     }
 
     public static function basePath(): string

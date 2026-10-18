@@ -1,5 +1,10 @@
 <?php
 declare(strict_types=1);
+if ($path === '/admin/factory-reset' && $method === 'POST') {
+    try { json_out(FactoryReset::run(body_json())); }
+    catch (RuntimeException $error) { json_error($error->getMessage(), 409); }
+    catch (DomainException $error) { json_error($error->getMessage(), 400); }
+}
 if ($path === '/admin/player-assets') {
     try {
         if ($method === 'GET') json_out(PlayerAssets::status());

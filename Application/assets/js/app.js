@@ -7736,6 +7736,29 @@ try {
       } else if (tab === 'posters') {
         body.appendChild(renderPostersAdmin(s));
       } else if (tab === 'advanced') {
+        var resetPassword=h('input',{type:'password',autocomplete:'current-password','aria-label':'Administrator password'});
+        var resetPhrase=h('input',{type:'text',autocomplete:'off',spellcheck:false,placeholder:'RESET VAULTCAST','aria-label':'Reset confirmation phrase'});
+        var resetStatus=h('p',{className:'muted',role:'status'});
+        var resetButton=h('button',{className:'btn danger',type:'button',text:'Reset Vaultcast',disabled:true,onClick:function(){
+          resetButton.disabled=true;resetStatus.textContent='Resetting Vaultcast…';
+          api('/admin/factory-reset',{method:'POST',body:{password:resetPassword.value,confirmation:resetPhrase.value}}).then(function(j){
+            resetPassword.value='';
+            if(!j.ok)throw new Error(j.error||'Reset failed');
+            location.assign(j.redirect);
+          }).catch(function(e){resetStatus.textContent=e.message;resetButton.disabled=true;});
+        }});
+        function resetReady(){resetButton.disabled=resetPhrase.value!=='RESET VAULTCAST'||!resetPassword.value;}
+        resetPassword.oninput=resetPhrase.oninput=resetReady;
+        var dragons=h('details',{className:'settings-card'},[
+          h('summary',{text:'Here be dragons'}),
+          h('h3',{text:'Start fresh'}),
+          h('p',{text:'Permanently erase library records, settings, matches, watch history, favourites, collections, social activity, cloud save records and all user accounts. Your administrator account is recreated with its current username and password. Everyone else is signed out and removed.'}),
+          h('p',{text:'Media files, posters and other files on disk are untouched. Cloud saves lose their records and shared links stop working. Database connection details and installed server tools are kept. You will return to library folder settings with no folders configured.'}),
+          h('p',{text:'This cannot be undone. Stop playback and background tasks first. Take a database backup if you may need this data again.'}),
+          h('label',{},['Your administrator password',resetPassword]),
+          h('label',{},['Type RESET VAULTCAST to confirm',resetPhrase]),resetButton,resetStatus
+        ]);
+        body.appendChild(dragons);
         var lib = s.library || {};
         var diag = s.diagnostics || {};
         var rootsTa = h('textarea', { id:'lib_roots', rows:'4', style:'width:100%;font-family:monospace' });
