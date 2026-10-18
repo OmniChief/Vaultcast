@@ -18,3 +18,11 @@ a{color:#70e9fa;text-decoration:none}a:hover{text-decoration:underline}h1,h2,h3,
 .compat-programme p{margin:5px 0}
 .compat-next{border-color:#7162ac}
 .compat-fields textarea{width:95%;max-width:720px}
+
+.compat-result{margin:10px 0;padding:10px;border:1px solid #293d54;border-radius:8px;overflow:auto;word-wrap:break-word}
+.compat-result dt{font-weight:bold;color:#a9c9ee;margin-top:7px}.compat-result dd{margin:4px 0 12px 12px}
+.compat-success{color:#91edbc}.compat-person{display:inline-block;padding:8px 14px;margin:4px;border:1px solid #36516c;border-radius:20px}
+.compat-person img{vertical-align:middle;margin-right:8px}.compat-suggestions{display:block;clear:both}
+.compat-compact .compat-shelf{margin:16px 0}.compat-compact .compat-panel{padding:12px}.compat-compact .compat-hero{padding:18px}
+.compat-light{background:#edf3fb;color:#172638}.compat-light .compat-header,.compat-light .compat-subnav,.compat-light .compat-panel,.compat-light .compat-hero,.compat-light .compat-card{background:#fff;color:#172638;border-color:#b7c9df}
+.compat-light h1,.compat-light h2,.compat-light h3,.compat-light strong,.compat-light .compat-brand{color:#14283e}.compat-light a{color:#254e8d}.compat-light input,.compat-light textarea,.compat-light select{background:#fff;color:#172638;border-color:#9fb4ce}.compat-light .compat-note,.compat-light .compat-synopsis{color:#475d78}.compat-light .compat-result dt{color:#31527c}

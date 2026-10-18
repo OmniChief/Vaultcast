@@ -13,6 +13,7 @@ function release_request_locks(): void {
 }
 
 function json_out($data, int $code = 200): void {
+    if(class_exists('CompatibilityApi',false) && CompatibilityApi::$context!==null)throw new CompatibilityApiResult($data,$code);
     release_request_locks();
     http_response_code($code);
     header('Content-Type: application/json; charset=utf-8');
@@ -28,6 +29,7 @@ function json_error(string $msg, int $code = 400): void {
 }
 
 function body_json(): array {
+    if(class_exists('CompatibilityApi',false) && CompatibilityApi::$context!==null)return CompatibilityApi::$context['body'];
     $raw = file_get_contents('php://input');
     if ($raw === false || $raw === '') return [];
     $j = json_decode($raw, true);
@@ -35,6 +37,7 @@ function body_json(): array {
 }
 
 function request_path(): string {
+    if(class_exists('CompatibilityApi',false) && CompatibilityApi::$context!==null)return CompatibilityApi::$context['path'];
     $uri = $_SERVER['REQUEST_URI'] ?? '/';
     $path = parse_url($uri, PHP_URL_PATH);
     $prefix = rtrim(\Vaultcast\Database::basePath(), '/') . '/api';

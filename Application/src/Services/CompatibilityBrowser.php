@@ -4,6 +4,10 @@ declare(strict_types=1);
 final class CompatibilityBrowser {
     use CompatibilityEnhancements;
     use CompatibilityLibraryFeatures;
+    use CompatibilityPersonal;
+    use CompatibilityTools;
+    use CompatibilityAdministration;
+    use CompatibilityViewing;
     private static $base;
     private static $viewer;
     private static $personal;
@@ -68,11 +72,16 @@ final class CompatibilityBrowser {
     private static function home(array $home): string {
         $name=self::$signed?((self::$viewer['display_name'] ?? '') ?: self::$viewer['username']):'';
         $html='<div class="compat-hero">'.self::heading('YOUR SPACE. YOUR STORIES.',$name!==''?'Welcome back, '.$name:'Make yourself at home.','Your favourites, your next episode and something new to discover.').'<div class="compat-actions">'.(AreaAccess::allowed(self::$viewer,'library')?self::link('Explore the library',['view'=>'library']):'').(!empty($home['features']['live'])?self::link('Watch Live',['view'=>'live']):'').'</div></div>';
-        $continue=array_slice($home['continue_watching'] ?? [],0,6);if(!$continue)$continue=self::recentProgress();
-        if($continue)$html.='<section class="compat-shelf"><h2>Continue watching</h2>'.self::cards($continue).'</section>';
+        $panels=[];$continue=array_slice($home['continue_watching'] ?? [],0,6);if(!$continue)$continue=self::recentProgress();
+        if($continue)$panels['recent']='<section class="compat-shelf"><h2>Continue watching</h2>'.self::cards($continue).'</section>';
         $personal=self::personal();$favourites=[];
         foreach($personal['favourites'] ?? [] as $row){$card=$row['card'] ?? [];if(($card['media_kind'] ?? '')!=='rom' && AreaAccess::allowed(self::$viewer,AreaAccess::itemArea($card)))$favourites[]=$card;if(count($favourites)>=6)break;}
         if($favourites)$html.='<section class="compat-shelf"><div class="compat-row-head"><h2>Your favourites</h2>'.self::link('View all',['view'=>'favourites']).'</div>'.self::cards($favourites).'</section>';
+        $watch=[];foreach($personal['watchlist'] ?? [] as $entry)if(AreaAccess::itemArea($entry['card'] ?? [])==='library'&&AreaAccess::allowed(self::$viewer,'library')){$watch[]=$entry['card'];if(count($watch)>=6)break;}
+        if($watch)$panels['watchlist']='<section class="compat-shelf"><h2>Your next watch</h2>'.self::cards($watch).self::link('Manage watchlist',['view'=>'watchlist']).'</section>';
+        if(self::$signed){$panels['friends']='<section class="compat-panel"><h2>Your people</h2>'.self::link('Friends',['view'=>'friends']).self::link('Messages',['view'=>'inbox']).self::link('Invitations',['view'=>'invitations']).'</section>';$panels['calendar']='<section class="compat-panel"><h2>Coming up</h2>'.self::link('Release calendar',['view'=>'calendar']).self::link('New episodes',['view'=>'arrivals','scope'=>'following']).'</section>';}
+        foreach((array)self::preference('home_panels',['recent','watchlist','friends','calendar']) as $key)if(isset($panels[$key]))$html.=$panels[$key];
+        $html.='<div class="compat-actions">'.self::link('Find a watch',['view'=>'tonight']).self::link('New arrivals',['view'=>'arrivals']).(self::$signed?self::link('Customise Home',['view'=>'home-options']):'').'</div>';
         $html.='<section class="compat-shelf"><h2>Your library</h2><div class="compat-categories">';$featured=[];
         foreach($home['sections'] ?? [] as $section){if(($section['type'] ?? '')==='roms')continue;$html.=self::link(($section['label'] ?? $section['type']).' · '.($section['count'] ?? $section['item_count'] ?? 0),['view'=>'section','id'=>$section['id']]);foreach(array_slice($section['items'] ?? [],0,2) as $item)if(count($featured)<8)$featured[]=$item;}
         $html.='</div></section>';if($featured)$html.='<section class="compat-shelf"><h2>Discover</h2>'.self::cards($featured).'</section>';
@@ -88,7 +97,15 @@ final class CompatibilityBrowser {
     }
     private static function content(array $home): string {
         $view=(string)($_GET['view'] ?? 'home');$id=(string)($_GET['id'] ?? '');$page=max(1,min(1000,(int)($_GET['page'] ?? 1)));$query=mb_substr(trim((string)($_GET['q'] ?? '')),0,200);
-        if($view==='home')return self::home($home);
+        $viewing=self::viewingPage($view,$id);if($viewing!==null)return $viewing;
+        $admin=self::administrationPage($view,$id);if($admin!==null)return $admin;
+        $tool=self::toolPage($view,$id);if($tool!==null)return $tool;
+        $personal=self::personalPage($view,$id,$page,$query);if($personal!==null)return $personal;
+        if($view==='home'){
+            $landing=(string)self::preference('home_landing','overview');
+            if(empty($_GET['overview'])&&in_array($landing,['watchlist','favourites','calendar','arrivals','lists','friends'],true)){header('Location: '.self::url(['view'=>$landing]),true,302);return ''; }
+            return self::home($home);
+        }
         if($view==='reviews')return self::reviews($id);
         if(in_array($view,['lists','personal-list','choose-list','delete-list'],true))return self::personalLists($view,$id,$page,$query);
         if($view==='library'){
@@ -96,16 +113,20 @@ final class CompatibilityBrowser {
             foreach($home['sections'] ?? [] as $section)if(($section['type'] ?? '')!=='roms')$html.=self::link($section['label'] ?? $section['type'],['view'=>'section','id'=>$section['id']]);
             return $html.'</div>'.self::searchForm(['view'=>'search'],'');
         }
+        if($view==='watchlist')return self::watchlistPage($page,$query);
         if(in_array($view,['favourites','watchlist'],true)){
             if(!self::$signed)throw new RuntimeException('Sign in to view your personal lists.');$rows=array_values(array_filter(self::personal()[$view] ?? [],static function($row){return AreaAccess::itemArea($row['card'] ?? [])==='library' && AreaAccess::allowed(self::$viewer,'library');}));
+            if($query!=='')$rows=array_values(array_filter($rows,static function($row)use($query){return mb_stripos($row['card']['title'] ?? '',$query)!==false;}));
             usort($rows,static function($a,$b){return ($b['added_at'] ?? 0)<=>($a['added_at'] ?? 0);});
             $items=array_map(static function($row){return $row['card'];},array_slice($rows,($page-1)*16,16));
-            return self::heading('YOUR SPACE',$view==='favourites'?'Favourites':'Watchlist').self::cards($items).self::pages(['view'=>$view],$page,$page*16<count($rows));
+            return self::heading('YOUR SPACE',$view==='favourites'?'Favourites':'Watchlist').self::searchForm(['view'=>$view],$query).self::cards($items).self::pages(['view'=>$view,'q'=>$query],$page,$page*16<count($rows));
         }
         if($view==='calendar'){
-            if(!self::$signed)throw new RuntimeException('Sign in to view your release calendar.');$rows=HomeHub::releaseCalendar(self::$viewer);$html=self::heading('COMING UP','Release calendar','Upcoming episodes for your favourite shows and anime.').'<ul class="compat-list">';
-            foreach(array_slice($rows,($page-1)*16,16) as $ep)$html.='<li><span class="compat-date">'.self::esc($ep['date']).'</span><a href="'.self::esc(self::mediaUrl($ep['card'])).'"><strong>'.self::esc($ep['card']['title']).'</strong><span class="compat-note"> · S'.(int)$ep['season'].' E'.(int)$ep['episode'].' · '.self::esc($ep['title']).'</span></a></li>';
-            return $html.($rows?'':'<li>No upcoming episodes are currently cached. Favourite a show to follow its releases.</li>').'</ul>'.self::pages(['view'=>'calendar'],$page,$page*16<count($rows));
+            if(!self::$signed)throw new RuntimeException('Sign in to view your release calendar.');$rows=HomeHub::releaseCalendar(self::$viewer);$days=($_GET['days'] ?? '')==='7'?7:30;$type=(string)($_GET['type'] ?? 'all');$until=gmdate('Y-m-d',time()+$days*86400);
+            $rows=array_values(array_filter($rows,static function($ep)use($until,$type,$query){return $ep['date']<=$until&&($type==='all'||($ep['card']['type'] ?? '')===$type)&&($query===''||mb_stripos($ep['card']['title'],$query)!==false);}));
+            $html=self::heading('COMING UP','Release calendar','Upcoming episodes for your favourite shows and anime.').'<form method="get" action="'.self::esc(self::$base).'"><input type="hidden" name="compat" value="on"><input type="hidden" name="view" value="calendar">'.self::field('Show title','q',$query).self::select('Type','type',['all'=>'TV and anime','tv'=>'TV','anime'=>'Anime'],$type).self::select('Date range','days',['7'=>'Next 7 days','30'=>'Next 30 days'],(string)$days).'<button type="submit">Apply filters</button></form><ul class="compat-list">';
+            foreach(array_slice($rows,($page-1)*16,16) as $ep)$html.='<li><span class="compat-date">'.self::esc($ep['date']).'</span><a href="'.self::esc(self::mediaUrl($ep['card'])).'"><strong>'.self::esc($ep['card']['title']).'</strong><span class="compat-note"> · S'.(int)$ep['season'].' E'.(int)$ep['episode'].' · '.self::esc(self::preference('hide_spoilers',false)?'Episode title hidden':$ep['title']).'</span></a></li>';
+            return $html.($rows?'':'<li>No upcoming episodes are currently cached. Favourite a show to follow its releases.</li>').'</ul>'.self::pages(['view'=>'calendar','q'=>$query,'type'=>$type,'days'=>$days],$page,$page*16<count($rows));
         }
         if(in_array($view,['account','friends','profile','inbox','chat','compose','create-room','delete-message'],true)){
             if(!self::$signed)throw new RuntimeException('Sign in to use your account and messaging.');
@@ -140,7 +161,9 @@ final class CompatibilityBrowser {
             $seasons=$detail['seasons'] ?? [];$season=(int)($_GET['season'] ?? ($seasons[0]['season'] ?? 0));$html.='<form method="get" action="'.self::esc(self::$base).'"><input type="hidden" name="compat" value="on"><input type="hidden" name="view" value="show"><input type="hidden" name="id" value="'.self::esc($id).'"><label>Season <select name="season">';$episodes=[];
             foreach($seasons as $row){$selected=(int)$row['season']===$season;$html.='<option value="'.(int)$row['season'].'"'.($selected?' selected="selected"':'').'>'.self::esc($row['label']).'</option>';if($selected)$episodes=$row['episodes'];}
             $html.='</select></label><button type="submit">Open season</button></form><ul class="compat-list">';$episodes=array_values(array_filter($episodes,static function($ep){return !empty($ep['id'])&&($ep['available'] ?? true)!==false&&($ep['status'] ?? '')!=='missing';}));
-            foreach(array_slice($episodes,($page-1)*16,16) as $ep)$html.='<li>'.self::link('Episode '.($ep['episode'] ?? '?').' - '.($ep['episode_title'] ?? $ep['title'] ?? 'Play'),['view'=>'item','id'=>$ep['id']]).'</li>';
+            $visible=array_slice($episodes,($page-1)*16,16);$seen=[];
+            if(self::$signed&&$visible){$ids=array_column($visible,'id');$q=\Vaultcast\Database::connection()->prepare('SELECT item_id,payload FROM vaultcast_progress WHERE user_id=? AND item_id IN ('.implode(',',array_fill(0,count($ids),'?')).')');$q->execute(array_merge([self::$viewer['id']],$ids));foreach($q as $row){$p=json_decode($row['payload'],true);$seen[$row['item_id']]=!empty($p['watched'])||Catalogue::progressFinished($p,true);}}
+            foreach($visible as $ep){$watched=!empty($seen[$ep['id']]);$title=(!$watched&&self::preference('hide_spoilers',false))?'Details hidden':($ep['episode_title'] ?? $ep['title'] ?? 'Play');$html.='<li>'.self::link('Episode '.($ep['episode'] ?? '?').' - '.$title.($watched?' · Watched':''),['view'=>'item','id'=>$ep['id']]).'</li>';}
             return $html.'</ul>'.self::pages(['view'=>'show','id'=>$id,'season'=>$season],$page,$page*16<count($episodes));
         }
         if($view==='item'){
@@ -222,7 +245,7 @@ final class CompatibilityBrowser {
             if(!hash_equals(self::token(),(string)($_POST['compat_token'] ?? ''))){http_response_code(403);$body='<p class="compat-error">This form expired. Reload the page and try again.</p>';}
             elseif($_POST['compat_action']==='logout'){Auth::destroySession();header('Location: '.self::url(),true,303);return;}
             elseif(!in_array($_POST['compat_action'],['shelf','play'],true)){
-                try{if(!self::$signed || !$home)throw new RuntimeException('Sign in to use this form.');$destination=self::enhancedPost($view,$_POST);header('Location: '.self::url($destination),true,303);return;}
+                try{if((!self::$signed && !in_array(($_POST['compat_action'] ?? ''),['report','convert-request'],true)) || !$home)throw new RuntimeException('Sign in to use this form.');$destination=self::enhancedPost($view,$_POST);header('Location: '.self::url($destination),true,303);return;}
                 catch(Throwable $e){http_response_code(400);$body='<div class="compat-panel compat-error">'.self::esc($e instanceof DomainException || $e instanceof RuntimeException || $e instanceof InvalidArgumentException?$e->getMessage():'Could not save this change.').'</div>'.self::link('Back',['view'=>$view,'id'=>(string)($_GET['id'] ?? '')]);}
             }
             elseif($_POST['compat_action']==='shelf'){
@@ -247,7 +270,7 @@ final class CompatibilityBrowser {
             $nav.='<div class="compat-subnav">';
             if(in_array($view,['library','section','show','item','search','collections','collection'],true)){
                 $nav.=self::link('Discover',['view'=>'library']);foreach($home['sections'] ?? [] as $section)if(($section['type'] ?? '')!=='roms')$nav.=self::link($section['label'] ?? $section['type'],['view'=>'section','id'=>$section['id']]);$nav.=self::link('Collections',['view'=>'collections']);
-            }else{foreach(['home'=>'Overview','favourites'=>'Favourites','watchlist'=>'Watchlist','calendar'=>'Release calendar','lists'=>'Custom lists','friends'=>'Friends','inbox'=>'Inbox','chat'=>'Chat'] as $key=>$label){if($key!=='home'&&!self::$signed)continue;$nav.='<a'.($view===$key?' class="active" aria-current="page"':'').' href="'.self::esc(self::url(['view'=>$key])).'">'.self::esc($label).'</a>';}}
+            }else{foreach(['home'=>'Overview','favourites'=>'Favourites','watchlist'=>'Watchlist','calendar'=>'Release calendar','history'=>'History','arrivals'=>'New arrivals','tonight'=>'Find a watch','cinema'=>'Watch together','invitations'=>'Invitations','home-options'=>'Customise Home','lists'=>'Custom lists','friends'=>'Friends','inbox'=>'Inbox','chat'=>'Chat'] as $key=>$label){if($key!=='home'&&!self::$signed)continue;$nav.='<a'.($view===$key?' class="active" aria-current="page"':'').' href="'.self::esc(self::url($key==='home'?['view'=>'home','overview'=>'1']:['view'=>$key])).'">'.self::esc($label).'</a>';}}
             $nav.='</div>';
         }
         if($home && $view!=='home'){
@@ -260,6 +283,6 @@ final class CompatibilityBrowser {
         }
         $css=(string)file_get_contents(STREAM_ROOT.'/assets/css/compatibility.css');$scriptVersion=substr(hash_file('sha256',STREAM_ROOT.'/assets/js/compatibility.js'),0,16);release_request_locks();
         header('Content-Type: text/html; charset=utf-8');
-        echo '<!DOCTYPE html><html lang="en"><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'.self::esc($site).'</title><style>'.$css.'</style></head><body><a class="compat-skip" href="#compat-content">Skip to content</a>'.$nav.'<div id="compat-shell"><div id="compat-content" role="main">'.$body.'</div><div class="compat-footer"><span>Compatibility mode · '.self::esc(STREAM_VERSION).'</span><a href="'.self::esc($base.'?compat=auto').'">Automatic detection</a><a href="'.self::esc($base.'?compat=off').'">Full interface</a></div></div><script src="'.self::esc($base.'index.php?asset=assets/js/compatibility.js&v='.$scriptVersion).'"></script></body></html>';
+        echo '<!DOCTYPE html><html lang="en"><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'.self::esc($site).'</title><style>'.$css.'</style></head><body class="'.(self::preference('theme','dark')==='light'?'compat-light ':'').(self::preference('home_compact',false)?'compat-compact':'').'"><a class="compat-skip" href="#compat-content">Skip to content</a>'.$nav.'<div id="compat-shell"><div id="compat-content" role="main">'.$body.'</div><div class="compat-footer"><span>Compatibility mode · '.self::esc(STREAM_VERSION).'</span><a href="'.self::esc($base.'?compat=auto').'">Automatic detection</a><a href="'.self::esc($base.'?compat=off').'">Full interface</a></div></div><script>window.__VC_COMPAT_BASE__='.json_encode($base,JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT).';</script><script src="'.self::esc($base.'index.php?asset=assets/js/compatibility.js&v='.$scriptVersion).'"></script></body></html>';
     }
 }

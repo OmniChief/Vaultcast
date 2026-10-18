@@ -7,6 +7,7 @@ if ($path === '/admin/posters/status' && $method === 'GET') {
     try {
         json_out(Posters::coverage());
     } catch (Throwable $e) {
+        if($e instanceof CompatibilityApiResult)throw $e;
         json_out(['ok' => false, 'error' => 'Poster status failed: ' . $e->getMessage()], 200);
     }
 }
@@ -22,6 +23,7 @@ if ($path === '/admin/posters/fetch' && $method === 'POST') {
         $kinds = $b['kinds'] ?? ($_GET['kinds'] ?? ['shows', 'movies', 'games']);
         json_out(Posters::prefetchMissing($limit, $kinds));
     } catch (Throwable $e) {
+        if($e instanceof CompatibilityApiResult)throw $e;
         json_out([
             'ok' => false,
             'error' => 'Poster fetch failed: ' . $e->getMessage(),

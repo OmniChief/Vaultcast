@@ -6,7 +6,7 @@ trait CompatibilityEnhancements {
         $html='<form class="compat-panel compat-fields" method="post" action="'.self::esc(self::url($params)).'"'.($upload?' enctype="multipart/form-data"':'').'><input type="hidden" name="compat_action" value="'.self::esc($action).'"><input type="hidden" name="compat_token" value="'.self::esc(self::token()).'">';
         foreach($hidden as $key=>$value)$html.='<input type="hidden" name="'.self::esc($key).'" value="'.self::esc($value).'">';return $html;
     }
-    private static function field(string $label,string $name,string $value='',string $type='text',int $max=100): string {return '<label>'.self::esc($label).'<input type="'.self::esc($type).'" name="'.self::esc($name).'" value="'.self::esc($value).'" maxlength="'.$max.'"></label>';}
+    private static function field(string $label,string $name,string $value='',string $type='text',int $max=100): string {return '<label>'.self::esc($label).'<input type="'.self::esc($type).'" name="'.self::esc($name).'" value="'.self::esc($value).'" maxlength="'.$max.'"'.($type==='number'?' step="any"':'').'></label>';}
     private static function select(string $label,string $name,array $choices,string $value): string {
         $html='<label>'.self::esc($label).'<select name="'.self::esc($name).'">';foreach($choices as $key=>$text)$html.='<option value="'.self::esc($key).'"'.((string)$key===$value?' selected="selected"':'').'>'.self::esc($text).'</option>';return $html.'</select></label>';
     }
@@ -17,7 +17,7 @@ trait CompatibilityEnhancements {
         $html.='<label>Avatar · JPEG or PNG, up to 1 MiB<input type="file" name="avatar" accept="image/jpeg,image/png"></label><label class="compat-check"><input type="checkbox" name="remove_avatar" value="1"> Remove current avatar</label>';
         foreach(['autoplay_on_open'=>'Automatically start videos when opened','autoplay_next'=>'Automatically play the next episode / collection film','reduce_motion'=>'Reduce motion'] as $key=>$label)$html.='<label class="compat-check"><input type="checkbox" name="'.$key.'" value="1"'.(($key==='reduce_motion'?!empty($prefs[$key]):($prefs[$key] ?? true)!==false)?' checked="checked"':'').'> '.$label.'</label>';
         $html.=self::select('Preferred subtitles','subtitle_language',[''=>'Off','en'=>'English','es'=>'Spanish','fr'=>'French','de'=>'German','it'=>'Italian','pt'=>'Portuguese','ja'=>'Japanese','ko'=>'Korean','zh'=>'Chinese'],(string)($prefs['subtitle_language'] ?? '')).'<button type="submit">Save account settings</button></form>';
-        return $html.self::link('Friends',['view'=>'friends']).self::link('Inbox',['view'=>'inbox']).self::link('Live chat',['view'=>'chat']).self::form([],'Sign out','logout');
+        return $html.self::link('Tools and settings',['view'=>'tools']).self::accountOptions().self::link('Friends',['view'=>'friends']).self::link('Inbox',['view'=>'inbox']).self::link('Live chat',['view'=>'chat']).self::form([],'Sign out','logout');
     }
     private static function uploaded(string $name,int $limit): ?array {
         $file=$_FILES[$name] ?? null;if(!$file || ($file['error'] ?? UPLOAD_ERR_NO_FILE)===UPLOAD_ERR_NO_FILE)return null;
@@ -25,6 +25,10 @@ trait CompatibilityEnhancements {
     }
     private static function enhancedPost(string $view,array $body): array {
         $action=(string)($body['compat_action'] ?? '');$user=self::$viewer;$id=(string)($_GET['id'] ?? '');
+        $viewing=self::viewingPost($view,$body);if($viewing!==null)return $viewing;
+        $admin=self::administrationPost($view,$body);if($admin!==null)return $admin;
+        $tool=self::toolPost($view,$body);if($tool!==null)return $tool;
+        $personal=self::personalPost($view,$body);if($personal!==null)return $personal;
         $library=self::libraryPost($view,$body);if($library!==null)return $library;
         if($action==='profile'){
             $name=trim((string)($body['display_name'] ?? ''));if($name==='' || mb_strlen($name)>100)throw new RuntimeException('Use a display name of 1–100 characters.');
@@ -67,16 +71,18 @@ trait CompatibilityEnhancements {
         Chat::pulse(self::$viewer);$mail=$view==='inbox';$list=Chat::listing(self::$viewer,$mail,$id);$html=self::heading($mail?'PRIVATE MESSAGES':'YOUR COMMUNITY',$mail?'Inbox':'Live chat').'<div class="compat-actions">'.self::link('Inbox',['view'=>'inbox']).self::link('Live chat',['view'=>'chat']).self::link('New message',['view'=>'compose']).self::link('Friends',['view'=>'friends']).(!$mail?self::link('Create room',['view'=>'create-room']):'').'</div>';
         if($id===''){$html.='<ul class="compat-list">';foreach($list['rooms'] as $room){$title=$room['title'];if($room['kind']==='dm')foreach($list['friends'] as $person)if($person['id']===($room['owner_id']===self::$viewer['id']?$room['peer_id']:$room['owner_id']))$title=$person['name'];$html.='<li>'.self::link($title.(!empty($room['unread'])?' · '.$room['unread'].' unread':''),['view'=>$view,'id'=>$room['id']]).'</li>';}return $html.($list['rooms']?'':'<li>No conversations yet.</li>').'</ul>';}
         foreach($list['rooms'] as $room)if($room['id']===$id && empty($room['joined']))return $html.self::heading('ROOM',(string)$room['title']).self::form(['view'=>'chat','id'=>$id],'Join room','chat_join');
-        $before=max(0,(int)($_GET['before'] ?? 0));$data=Chat::history(self::$viewer,$id,-1,$before);$html.='<h3>'.self::esc($data['room']['title']).'</h3><div class="compat-actions">'.self::link('Latest messages',['view'=>$view,'id'=>$id]).self::link('Refresh',['view'=>$view,'id'=>$id]);
+        $before=max(0,(int)($_GET['before'] ?? 0));$data=Chat::history(self::$viewer,$id,-1,$before);$html.=self::link('Conversation options',['view'=>'chat-options','id'=>$id,'room_view'=>$view]);$html.='<h3>'.self::esc($data['room']['title']).'</h3><div class="compat-actions">'.self::link('Conversation options',['view'=>'chat-options','id'=>$id,'room_view'=>$view]).self::link('Latest messages',['view'=>$view,'id'=>$id]).self::link('Refresh',['view'=>$view,'id'=>$id]);
         $auto=($_GET['refresh'] ?? '')==='1';$html.=self::link($auto?'Disable auto-refresh':'Auto-refresh every 20 seconds',['view'=>$view,'id'=>$id,'refresh'=>$auto?'0':'1']).'</div>';
         if($auto && !$before)$html.='<p id="compat-refresh" data-url="'.self::esc(self::url(['view'=>$view,'id'=>$id,'refresh'=>'1'])).'" class="compat-note">Auto-refresh pauses while you write.</p>';
         if($data['has_more'] && $data['messages'])$html.=self::link('Older messages',['view'=>$view,'id'=>$id,'before'=>$data['messages'][0]['id']]);
-        $html.='<div class="compat-messages">';foreach($data['messages'] as $message){$html.='<div class="compat-message'.($message['sender_id']===self::$viewer['id']?' mine':'').'"><p><a href="'.self::esc(self::url(['view'=>'profile','id'=>$message['author']['id']])).'">'.self::esc($message['author']['name']).'</a> <small>'.self::esc(gmdate('d M H:i',(int)$message['created_at'])).' UTC</small></p><p class="compat-message-text">'.self::esc($message['body']).'</p>';
+        $html.='<p id="compat-chat-status" class="compat-note" role="status"></p><div id="compat-chat-messages" class="compat-messages">';foreach($data['messages'] as $message){$html.='<div class="compat-message'.($message['sender_id']===self::$viewer['id']?' mine':'').'"><p><a href="'.self::esc(self::url(['view'=>'profile','id'=>$message['author']['id']])).'">'.self::esc($message['author']['name']).'</a> <small>'.self::esc(gmdate('d M H:i',(int)$message['created_at'])).' UTC</small></p><p class="compat-message-text">'.self::esc($message['body']).'</p>';
             if($message['attachment'])$html.='<a href="'.self::esc(self::$base.'api/hub/chat/files/'.$message['attachment']).'"><img class="compat-chat-image" src="'.self::esc(self::$base.'api/hub/chat/files/'.$message['attachment']).'" alt="Shared image or GIF" loading="lazy"></a>';
+            if($message['sender_id']===self::$viewer['id'])$html.=self::link('Edit',['view'=>'edit-message','room_view'=>$view,'id'=>$id,'message_id'=>$message['id']]);
             if($message['sender_id']===self::$viewer['id'] || $data['room']['can_manage'])$html.=self::link('Delete message',['view'=>'delete-message','room_view'=>$view,'id'=>$id,'message_id'=>$message['id']]);$html.='</div>';
         }
-        $html.='</div>'.self::beginForm(['view'=>$view,'id'=>$id],'chat_send',true,['nonce'=>bin2hex(random_bytes(16))]).'<label>Message<textarea name="text" rows="4" maxlength="4000"></textarea></label><label>Image / GIF · up to 4 MiB<input type="file" name="message_image" accept="image/jpeg,image/png,image/gif,image/webp"></label><button type="submit">Send message</button></form>';
+        $html.='</div>'.str_replace('<form ','<form id="compat-chat-compose" ',self::beginForm(['view'=>$view,'id'=>$id],'chat_send',true,['nonce'=>bin2hex(random_bytes(16))])).'<label>Message<textarea name="text" rows="4" maxlength="4000"></textarea></label><label>Image / GIF · up to 4 MiB<input type="file" name="message_image" accept="image/jpeg,image/png,image/gif,image/webp"></label><button type="submit">Send message</button></form>';
         if(!$mail && $id!=='general' && $data['room']['can_manage'] && in_array($data['room']['kind'],['public','private'],true) && $list['friends']){$choices=[];foreach($list['friends'] as $friend)$choices[$friend['id']]=$friend['name'];$html.=self::beginForm(['view'=>'chat','id'=>$id],'chat_invite').self::select('Invite a friend','user_id',$choices,'').'<button type="submit">Invite friend</button></form>';}
+        if(!$before)$html.='<script>window.__VC_COMPAT_CHAT__='.json_encode(['id'=>$id,'view'=>$view,'revision'=>$data['room']['revision'],'can_manage'=>!empty($data['room']['can_manage']),'user_id'=>self::$viewer['id']],JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT).';</script>';
         if(!$before && $data['messages'])Chat::change(self::$viewer,$id,['action'=>'pulse','read_id'=>(int)end($data['messages'])['id']]);return $html;
     }
     private static function compose(string $id,bool $room=false): string {
