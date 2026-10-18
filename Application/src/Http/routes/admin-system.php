@@ -3,7 +3,10 @@ declare(strict_types=1);
 if ($path === '/admin/maintenance' && $method === 'GET') json_out(Maintenance::status());
 if ($path === '/admin/maintenance' && $method === 'POST') {
     $body = body_json(); $admin = Auth::requireAdmin();
-    json_out(Maintenance::start((string)($body['task'] ?? ''), $admin['username']));
+    $task = (string)($body['task'] ?? '');
+    $target = $task === 'game-metadata' ? trim((string)($body['target'] ?? '')) : '';
+    if ($target !== '' && !\Vaultcast\Repository::rows('SELECT payload FROM vaultcast_items WHERE id=? AND media_kind=? LIMIT 1', [$target, 'rom'])) throw new InvalidArgumentException('Game not found.');
+    json_out(Maintenance::start($task, $admin['username'], $target !== '' ? $target : null));
 }
 if ($path === '/admin/maintenance/cancel' && $method === 'POST') json_out(Maintenance::cancel((string)(body_json()['id'] ?? '')));
 

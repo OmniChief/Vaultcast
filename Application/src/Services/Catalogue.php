@@ -2458,7 +2458,7 @@ class Catalogue {
                 $synopsisPending = $synopsis === null;
             } elseif ($type === 'movies' || $type === 'disney' || in_array($it['media_kind'] ?? '', ['video', 'rom'], true)) {
                 if ($type === 'movies' || $type === 'disney' || empty($it['show'])) {
-                    $c = Posters::movieSynopsisCached($it['id']);
+                    $c = ($it['media_kind'] ?? '')==='rom'?Posters::gameSynopsisCached($it['id']):Posters::movieSynopsisCached($it['id']);
                     $synopsis = $c['summary'];
                     $synopsisSource = $c['source'];
                     $synopsisPending = !empty($c['pending']);
@@ -2501,6 +2501,8 @@ class Catalogue {
                 $key = self::showKey($it['section'] ?? '', $it['show']);
                 $synopsis = Posters::showSynopsis($key, $it['show']);
                 $source = $synopsis ? 'tvmaze' : null;
+            } elseif (($it['media_kind'] ?? '') === 'rom') {
+                $synopsis=Posters::gameSynopsis($it);$source=Posters::gameSynopsisCached($it['id'])['source'];
             } elseif ($type === 'movies' || $type === 'disney' || (($it['media_kind'] ?? '') === 'video' && empty($it['show']))) {
                 $synopsis = Posters::movieSynopsis($it['id'], $it['title'] ?? '', isset($it['year']) ? (int)$it['year'] : null);
                 $source = $synopsis ? 'wikipedia' : null;

@@ -7,7 +7,7 @@ final class MetadataWarmup
     public static function run(?callable $progress = null, float $remoteBudget = 120, float $artworkBudget = 120, bool $resume = false): array
     {
         if (PHP_SAPI !== 'cli') throw new RuntimeException('Metadata warmup requires the maintenance worker.');
-        $revision = \Vaultcast\Repository::revision('catalogue') . '|' . \Vaultcast\Repository::revision('settings') . '|' . \Vaultcast\Repository::revision('match_overrides');
+        $revision = 'game-metadata-v2|' . \Vaultcast\Repository::revision('catalogue') . '|' . \Vaultcast\Repository::revision('settings') . '|' . \Vaultcast\Repository::revision('match_overrides');
         $state = \Vaultcast\Repository::document('metadata-cycle-v2', []);
         if (($state['revision'] ?? '') !== $revision || (!$resume && ($state['phase'] ?? '') === 'complete')) {
             $state = ['revision'=>$revision, 'phase'=>'metadata', 'offset'=>0];
@@ -32,6 +32,7 @@ final class MetadataWarmup
                         Maintenance::checkpoint();
                         $key = $keys[$i]; $target = $targets[$key]; $it = $target['item'];
                         $signature = sha1(json_encode([$target, $pins['shows'][$target['key'] ?? ''] ?? null]));
+                        if($target['kind']==='games')$signature=sha1($signature.'|game-metadata-v'.GameMetadata::VERSION);
                         $recent = ($attempts[$key]['signature'] ?? '') === $signature && ($attempts[$key]['at'] ?? 0) > time() - 86400;
                         if ($remote && !$recent && microtime(true) - $started >= max(0, min(120, $remoteBudget))) break;
                         if ($progress) $progress('Artwork and synopses', $i, count($keys), (string)($it['show'] ?? $it['title'] ?? $key));
@@ -39,6 +40,7 @@ final class MetadataWarmup
                         Posters::beginRemoteBudget($fetch ? 5 : 0.4);
                         try {
                             ArtworkLibrary::prepare($target, $fetch);
+                            if($fetch && $target['kind']==='games'){Posters::beginRemoteBudget(5);Posters::gameSynopsis($it);}
                             if ($fetch && $target['kind'] === 'movies') {
                                 Posters::beginRemoteBudget(5);
                                 Posters::movieSynopsis((string)$it['id'], (string)$it['title'], isset($it['year']) ? (int)$it['year'] : null);

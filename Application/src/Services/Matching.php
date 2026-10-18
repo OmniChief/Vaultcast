@@ -915,11 +915,11 @@ class Matching {
         if (!$c || empty($c['source']) || !isset($c['id']) || (string)$c['id'] === '') return null;
         $summary = trim((string)($c['summary'] ?? ''));
         if ($summary === '') return null;
-        $url = (string)($c['url'] ?? '');
+        $url = (string)($c['summary_url'] ?? $c['url'] ?? '');
         return [
             'title' => $title, 'year' => $year, 'summary' => function_exists('mb_substr') ? mb_substr($summary, 0, 4000) : $summary,
             'source' => preg_match('#^https://#i', $url) ? $url : ((string)$c['source'] . ':' . (string)$c['id']),
-            'provider' => (string)$c['source'], 'provider_id' => (string)$c['id'],
+            'provider' => (string)($c['summary_provider'] ?? $c['source']), 'provider_id' => (string)($c['summary_id'] ?? $c['id']),
             'pinned' => true, 'fetched_at' => date('c'),
         ];
     }

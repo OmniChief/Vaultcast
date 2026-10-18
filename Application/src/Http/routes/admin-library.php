@@ -145,7 +145,9 @@ if (strpos($path, '/admin/match') === 0 || strpos($path, '/admin/ingest') === 0 
     if ($path === '/admin/match/search' && $method === 'POST') {
         $b = body_json();
         $kind = (string)($b['kind'] ?? 'tv');
-        $res = $kind === 'game' ? PublicMetadata::search('game', (string)($b['q'] ?? ''), $b['source'] ?? null) : Ingest::search($kind, (string)($b['q'] ?? ''), isset($b['source']) ? (string)$b['source'] : null);
+        $context=[];
+        if($kind==='game'&&!empty($b['item_id'])){$context=Catalogue::item((string)$b['item_id']) ?? [];if(($context['media_kind'] ?? '')!=='rom'||!AreaAccess::allowed(AreaAccess::viewer(),'games'))json_error('Choose an accessible game.',403);}
+        $res = $kind === 'game' ? PublicMetadata::search('game', (string)($b['q'] ?? ''), $b['source'] ?? null,$context) : Ingest::search($kind, (string)($b['q'] ?? ''), isset($b['source']) ? (string)$b['source'] : null);
         if (empty($res['sources'])) $res['sources'] = PublicMetadata::sources($kind);
         Permissions::rememberSelections($res);
         json_out($res);

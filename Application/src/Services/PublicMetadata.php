@@ -26,6 +26,7 @@ final class PublicMetadata
 
     /** Metadata sources Fix Match can search, per kind. */
     const SOURCES = [
+        'libretro' => ['label'=>'Libretro','kinds'=>['game']],
         'tvmaze'    => ['label' => 'TVmaze',    'kinds' => ['tv', 'anime']],
         'wikipedia' => ['label' => 'Wikipedia', 'kinds' => ['movie', 'tv', 'anime', 'game']],
         'itunes'    => ['label' => 'iTunes',    'kinds' => ['movie', 'tv']],
@@ -50,9 +51,9 @@ final class PublicMetadata
         $out = [];
         foreach (self::SOURCES as $id => $def) {
             if (!in_array($kind, $def['kinds'], true)) continue;
-            $ok = empty($def['needs_key']) || self::omdbKey() !== '';
+            $ok = $id==='libretro'?GameMetadata::libretroEnabled():(empty($def['needs_key']) || self::omdbKey() !== '');
             $out[] = ['id' => $id, 'label' => $def['label'], 'available' => $ok,
-                'hint' => $ok ? null : 'Needs an OMDb API key. Add it in Settings > Posters.'];
+                'hint' => $ok ? null : ($id==='libretro'?'Enable Libretro in Settings > Artwork. No API key is required.':'Needs an OMDb API key. Add it in Settings > Posters.')];
         }
         return $out;
     }
@@ -62,9 +63,10 @@ final class PublicMetadata
     }
 
     /** @param string|null $source one source id, or null/'all' for every available source. */
-    public static function search(string $kind, string $query, ?string $source = null): array
+    public static function search(string $kind, string $query, ?string $source = null,array $context=[]): array
     {
         $query = mb_substr(trim($query), 0, 200);
+        if($kind==='game')return self::searchGame($query,$source,$context);
         $year = null;
         $title = $query;
         if (preg_match('/^(.*?)\s+\(?((?:19|20)\d{2})\)?$/', $query, $m) && trim($m[1]) !== '') {
@@ -102,6 +104,23 @@ final class PublicMetadata
         return ['ok' => true, 'kind' => $kind, 'query' => $query, 'source' => $source ?: 'all', 'sources' => $sources, 'results' => array_slice($rows, 0, 20)];
     }
 
+    private static function searchGame(string $query,?string $source,array $context): array {
+        $sources=self::sources('game');$empty=['ok'=>true,'kind'=>'game','query'=>$query,'source'=>$source ?: 'all','sources'=>$sources,'results'=>[]];
+        if($query==='')return $empty;
+        if($source==='libretro'&&!GameMetadata::libretroEnabled())return $empty+['unavailable'=>'Enable Libretro in Settings > Artwork. No API key is required.'];
+        if($source&&!in_array($source,['all','libretro','wikipedia'],true))return $empty;
+        $item=$context;
+        if(GameMetadata::key($query)!==GameMetadata::key((string)($context['title'] ?? '')))unset($item['path'],$item['rel']);
+        unset($item['id']);$item['title']=$query;$rows=[];$art=[];
+        if(!$source||$source==='all'||$source==='libretro')$art=GameMetadata::boxarts($item);
+        $wiki=GameMetadata::wikipedia($item);$identity=GameMetadata::identity($item);$matched=null;
+        foreach($wiki as $row)if(GameMetadata::key($row['page_title'] ?? $row['title'])===GameMetadata::key($identity['title'])){$matched=$row;break;}
+        foreach($art as $row){if($matched){$row['summary']=$matched['summary'];$row['summary_provider']='wikipedia';$row['summary_url']=$matched['url'];$row['summary_id']=$matched['id'];}$row['match_score']=100;$rows[]=$row;}
+        if(!$source||$source==='all'||$source==='wikipedia')$rows=array_merge($rows,$wiki);
+        $out=['ok'=>true,'kind'=>'game','query'=>$query,'source'=>$source ?: 'all','sources'=>$sources,'results'=>array_slice($rows,0,20)];
+        if($source==='libretro'&&!GameMetadata::libretroEnabled())$out['unavailable']='Enable Libretro in Settings > Artwork. No API key is required.';
+        return $out;
+    }
     private static function searchSource(string $sid, string $kind, string $title, ?int $year): array
     {
         $isTv = $kind === 'tv' || $kind === 'anime';
@@ -137,7 +156,7 @@ final class PublicMetadata
             $wiki = self::fetchJson('https://en.wikipedia.org/w/api.php?' . http_build_query([
                 'action' => 'query', 'format' => 'json', 'formatversion' => 2, 'generator' => 'search',
                 'gsrsearch' => $title . ' ' . $word, 'gsrlimit' => 8, 'gsrnamespace' => 0,
-                'prop' => 'pageimages|extracts', 'piprop' => 'thumbnail', 'pithumbsize' => 240,
+                'prop' => 'pageimages|extracts', 'piprop' => 'thumbnail|original', 'pithumbsize' => 320, 'pilicense' => 'any',
                 'exintro' => 1, 'explaintext' => 1, 'exchars' => 600,
             ]));
             $re = $kind === 'game' ? '/\b(video game|videogame|game)\b/i' : ($isTv ? '/\b(series|television|TV|sitcom|show)\b/i' : '/\bfilm\b/i');
@@ -149,7 +168,7 @@ final class PublicMetadata
                 $rows[] = ['kind' => $kind === 'game' ? 'game' : ($isTv ? 'tv' : 'movie'), 'source' => 'wikipedia', 'id' => $page['pageid'],
                     'title' => preg_replace('/\s*\([^)]*\)$/', '', $name), 'page_title' => $name,
                     'year' => isset($date[0]) ? (int)$date[0] : null, 'summary' => $summary,
-                    'image' => $page['thumbnail']['source'] ?? null,
+                    'image' => $page['thumbnail']['source'] ?? $page['original']['source'] ?? null,
                     'url' => 'https://en.wikipedia.org/wiki/' . rawurlencode(str_replace(' ', '_', $name))];
             }
         } elseif ($sid === 'omdb') {

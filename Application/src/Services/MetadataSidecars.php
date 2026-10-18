@@ -186,7 +186,7 @@ final class MetadataSidecars
             $stem = $kind === 'shows' ? 'tvshow' : sprintf('season%02d', $target['season']);
             if ($kind === 'seasons') $fields['seasonnumber'] = $target['season'];
         } elseif ($kind === 'movies' || $kind === 'games') {
-            $synopsis = Posters::movieSynopsisCached((string)$it['id']);
+            $synopsis = $kind==='games'?Posters::gameSynopsisCached((string)$it['id']):Posters::movieSynopsisCached((string)$it['id']);
             $fields['plot'] = $synopsis['summary'] ?? $fields['plot'];
             $metadata['synopsis'] = $synopsis;
             $metadata['poster_match'] = MetadataPins::get('movie_poster', (string)$it['id']);

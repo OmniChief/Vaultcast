@@ -781,7 +781,7 @@
     var tabs = h('div', { className: 'nsm-src-tabs', role: 'tablist' }), source = 'all';
     function run(){
       clear(res).appendChild(h('p', { className: 'muted', text: 'Searching…' }));
-      api('/admin/match/search', { method: 'POST', body: { kind: cur.type === 'roms' ? 'game' : 'movie', q: q.value, source: source } }).then(function(r){
+      api('/admin/match/search', { method: 'POST', body: { kind: cur.type === 'roms' || cur.media_kind === 'rom' ? 'game' : 'movie', q: q.value, source: source, item_id:itemId } }).then(function(r){
         clear(res);
         sourceTabs(tabs, r.sources, source, function(id){ source = id; run(); });
         if (r.unavailable) { res.appendChild(h('p', { className: 'muted', text: r.unavailable })); return; }
@@ -800,7 +800,7 @@
     save.addEventListener('click', function(){
       if (!t.value.trim()) return toast('Title required', { kind: 'bad' });
       busy(save, true, 'Saving…');
-      api('/admin/match/movie/' + itemId, { method: 'POST', body: { title: t.value.trim(), year: num(y.value), imdb_id: chosen && chosen.source === 'omdb' ? chosen.id : null, image: chosen && chosen.image ? chosen.image : null, match: chosen ? { source: chosen.source, id: chosen.id, title: chosen.title, year: chosen.year || null, summary: chosen.summary || '', url: chosen.url || null, image: chosen.image || null, page_title: chosen.page_title || null } : null } }).then(function(r){
+      api('/admin/match/movie/' + itemId, { method: 'POST', body: { title: t.value.trim(), year: num(y.value), imdb_id: chosen && chosen.source === 'omdb' ? chosen.id : null, image: chosen && chosen.image ? chosen.image : null, match: chosen ? { source: chosen.source, id: chosen.id, title: chosen.title, year: chosen.year || null, summary: chosen.summary || '', url: chosen.url || null, image: chosen.image || null, page_title: chosen.page_title || null, summary_provider:chosen.summary_provider || null, summary_url:chosen.summary_url || null, summary_id:chosen.summary_id || null } : null } }).then(function(r){
         busy(save, false);
         if (!r.ok) return toast(r.error || 'Failed', { kind: 'bad' });
         if (r.warning) toast(r.warning, {kind:'warn'});

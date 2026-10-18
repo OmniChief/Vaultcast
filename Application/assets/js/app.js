@@ -5754,7 +5754,14 @@ try {
     if (can('metadata_edit')) buttons.push(h('button', {className:'btn ghost', type:'button', text:'Manual edit', onClick:function(){
       withTools(function(tools){ if (can('metadata_edit')) tools.editDialog(item, showKey); });
     }}));
+    if (state.user && state.user.role === 'admin' && (item.type === 'roms' || item.media_kind === 'rom')) buttons.push(h('button', {className:'btn ghost', type:'button', text:'Refresh poster and synopsis', onClick:function(){ queueGameMetadata(item.id); }}));
     return buttons;
+  }
+
+  function queueGameMetadata(itemId){
+    return api('/admin/maintenance', {method:'POST', body:{task:'game-metadata', target:itemId || ''}}).then(function(){
+      toast('Game metadata refresh queued. Progress is available in Settings → Maintenance. Reopen the game when complete.');
+    }).catch(function(e){toast(e.message || 'Could not queue game metadata refresh');});
   }
 
   function openShow(showKey, season, episode){
@@ -8349,8 +8356,9 @@ try {
     var wrap = h('div', { className:'stack admin-stack posters-admin' });
     wrap.appendChild(h('div', { className:'settings-card stack' }, [
       h('h3', { className:'admin-section-title', text:'Remote posters' }),
-      h('p', { className:'muted', text:'Movies/Disney: OMDb (when key set) → Wikipedia. TV/Anime: TVMaze with cleaned-title + search fallback (respects Fix matching pins). Games: libretro Named_Boxarts via GitHub (thumbnails.libretro.com is down) → Wikipedia. Hard misses are deferred 7 days so Keep fetching can walk the whole library. Local poster.jpg / folder.jpg always wins; remote art is cached on the server.' }),
+      h('p', { className:'muted', text:'Movies/Disney: OMDb (when key set) → Wikipedia. TV/Anime: TVMaze with cleaned-title + search fallback (respects Fix matching pins). Games: Libretro boxart (no API key), with Wikipedia descriptions matched to the same title and platform. Wikipedia also supplies artwork when Libretro has no match. Hard misses are deferred 7 days so Keep fetching can walk the whole library. Local poster.jpg / folder.jpg always wins; remote art is cached on the server.' }),
       h('label', { className:'check-label' }, [ h('input', { id:'poster_en', type:'checkbox', checked: posters.enabled!==false }), ' Enable remote posters' ]),
+      h('label', { className:'check-label' }, [ h('input', {id:'poster_libretro',type:'checkbox',checked:posters.libretro_enabled!==false}), ' Prefer Libretro game boxart (no API key required; Wikipedia fallback)' ]),
       fieldEl('poster_provider','Provider', posters.provider||'omdb+tvmaze'),
       fieldEl('poster_omdb','OMDb API key', posters.omdb_api_key||''),
       fieldEl('poster_tmdb','TMDB API key (optional: Find collections)', posters.tmdb_api_key||''),
@@ -8359,6 +8367,7 @@ try {
       h('button', { className:'btn primary', text:'Save poster settings', onClick: function(){
         saveSettings({ posters: {
           enabled: $('#poster_en').checked,
+          libretro_enabled: $('#poster_libretro').checked,
           provider: $('#poster_provider').value,
           omdb_api_key: ($('#poster_omdb').value||'').trim(),
           tmdb_api_key: ($('#poster_tmdb').value||'').trim(),
@@ -8368,6 +8377,11 @@ try {
       }})
     ]));
     wrap.appendChild(h('div', { className:'settings-card stack' }, [
+      h('h3', {className:'admin-section-title', text:'Game posters and synopses'}),
+      h('p', {className:'muted', text:'Retry missing game posters and synopses using the current lookup method. Games already in your library only: no folder scan or movie/TV processing. Existing artwork and manually chosen metadata are preserved. Save provider settings before starting. Progress and cancellation are available in Maintenance.'}),
+      h('button', {className:'btn', type:'button', text:'Refresh game posters and synopses', onClick:function(){queueGameMetadata();}})
+    ]));
+    wrap.appendChild(h('div', {className:'settings-card stack'}, [
       h('h3', { className:'admin-section-title', text:'Coverage' }),
       pendingContent({ id:'poster_cov_summary', className:'muted', }),
       h('div', { id:'poster_cov_grid', className:'poster-cov-grid' }),

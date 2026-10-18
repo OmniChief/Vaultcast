@@ -32,6 +32,7 @@ class Store {
     public static function settings(): array {
         if (PHP_SAPI !== 'cli' && self::$settings !== null) return self::$settings;
         $settings = self::get('settings', []);
+        if(is_array($settings)){if(!is_array($settings['posters'] ?? null))$settings['posters']=[];$settings['posters']+=['libretro_enabled'=>true];}
         return self::$settings = self::managedMediaAccel(self::managedTransmission(self::normalizeFeatures(is_array($settings) ? $settings : [])));
     }
     /**

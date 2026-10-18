@@ -156,6 +156,7 @@ final class Installer
             'app_name' => 'Vaultcast', 'base_path' => Database::basePath(),
             'sections' => $sections,
             'auth' => ['session_ttl_seconds' => 604800],
+            'posters'=>['enabled'=>true,'libretro_enabled'=>true],
             // Windows: on when the installer's nginx config has the /_vaultcast_media/ location
             // (setup.json mediaAccel); Store::managedMediaAccel() also applies it to existing installs.
             'streaming' => ['nginx_accel' => PHP_OS_FAMILY !== 'Windows' || self::windowsMediaAccel(), 'token_ttl_seconds' => 28800],

@@ -769,7 +769,7 @@ class Posters {
                     if ($id === '') { $failed[] = ['kind' => 'game', 'title' => $title]; continue; }
                     $path = self::fetchGamePoster($it);
                     if ($path) { $done[] = ['kind' => 'game', 'title' => $title, 'path' => $path]; $byKind['games']++; self::clearFailed('game', $id); }
-                    else { $failed[] = ['kind' => 'game', 'title' => $title]; self::markFailed('game', $id); }
+                    else { $failed[] = ['kind' => 'game', 'title' => $title]; if(!self::remoteBudgetExpired())self::markFailed('game', $id); }
                 }
             } catch (Throwable $e) {
                 $failed[] = ['kind' => $kind, 'title' => $title];
@@ -1195,6 +1195,7 @@ class Posters {
     /** @return bool true when this key failed recently (default 7 days) */
     public static function recentlyFailed(string $kind, string $key, int $ttl = 604800): bool {
         if ($key === '') return false;
+        if($kind==='game')$kind='game-v2-'.(GameMetadata::libretroEnabled()?'libretro':'wikipedia');
         $map = self::failCacheLoad();
         $id = $kind . ':' . $key;
         $ts = (int)($map[$id] ?? 0);
@@ -1202,6 +1203,7 @@ class Posters {
     }
     public static function markFailed(string $kind, string $key): void {
         if ($key === '') return;
+        if($kind==='game')$kind='game-v2-'.(GameMetadata::libretroEnabled()?'libretro':'wikipedia');
         $map = self::failCacheLoad();
         $map[$kind . ':' . $key] = time();
         // prune old (>30d)
@@ -1212,6 +1214,7 @@ class Posters {
         self::failCacheSave($map);
     }
     public static function clearFailed(string $kind, string $key): void {
+        if($kind==='game')$kind='game-v2-'.(GameMetadata::libretroEnabled()?'libretro':'wikipedia');
         $map = self::failCacheLoad();
         $id = $kind . ':' . $key;
         if (isset($map[$id])) {
@@ -1221,7 +1224,7 @@ class Posters {
     }
 
     /**
-     * ROM / game poster: libretro Named_Boxarts (GitHub raw — thumbnails.libretro.com is 404), then Wikipedia.
+     * ROM / game poster: indexed public Libretro boxart, then the matched Wikipedia game page.
      */
     public static function fetchGamePoster(array $item): ?string {
         $pin = self::moviePosterPin((string)$item['id']);
@@ -1240,43 +1243,34 @@ class Posters {
         $title = trim((string)($item['title'] ?? ''));
         $core = strtolower((string)($item['emu_core'] ?? ($item['core'] ?? '')));
         $system = strtolower((string)($item['system'] ?? ''));
-        // Strip common ROM dump tags: (U), [!], (Rev A), etc. — keep a copy for region hints
-        $base = preg_replace('/\s*[\(\[][^\)\]]*[\)\]]/u', '', $title);
-        $base = trim(preg_replace('/\s+/', ' ', (string)$base));
-        if ($base === '') $base = $title;
-        $libSys = self::libretroSystem($core, $system);
-        if ($libSys && $base !== '') {
-            foreach (self::libretroNameVariants($base, $title) as $name) {
-                foreach (self::libretroBoxartUrls($libSys, $name) as $url) {
-                    self::throttle();
-                    $bin = self::httpGet($url, true, 10);
-                    if ($bin !== null && strlen($bin) > 100 && self::looksLikeImage($bin)) {
-                        $saved = self::writeCacheFile($dest, $bin);
-                        if ($saved) {
-                            self::clearFailed('game', $id);
-                            return $saved;
-                        }
-                    }
-                }
+        // Match real Libretro filenames once per platform instead of guessing many 404 URLs.
+        foreach(GameMetadata::boxarts($item) as $match){
+            if(self::remoteBudgetExpired())break;
+            foreach([$match['image'], 'https://raw.githubusercontent.com/libretro-thumbnails/'.rawurlencode((string)Posters::libretroSystem($core,$system)).'/master/Named_Boxarts/'.rawurlencode(substr($match['id'],strpos($match['id'],':')+1))] as $url){
+                $saved=self::downloadToCache($dest,$url);if($saved){self::clearFailed('game',$id);return $saved;}
+                if(self::remoteBudgetExpired())break;
             }
         }
-        if ($base !== '') {
-            $candidates = [
-                $base . ' (video game)',
-                $base . ' (game)',
-                $base,
-            ];
-            foreach ($candidates as $cand) {
-                $img = self::wikipediaImage($cand);
-                if (!$img) continue;
-                $saved = self::downloadToCache($dest, $img);
-                if ($saved) {
-                    self::clearFailed('game', $id);
-                    return $saved;
-                }
-            }
-        }
+        $match=GameMetadata::automaticWikipedia($item);
+        if(!empty($match['image'])){$saved=self::downloadToCache($dest,$match['image']);if($saved){self::clearFailed('game',$id);return $saved;}}
         return null;
+    }
+    public static function gameMetadataRequest(string $url): ?string {
+        self::throttle();return self::httpGet($url,false,6);
+    }
+    public static function gameSynopsisCached(string $id): array {
+        $pin=MetadataPins::get('movie_synopsis',$id);
+        if($pin!==null&&is_string($pin['summary'] ?? null))return ['summary'=>$pin['summary'],'source'=>$pin['provider'] ?? $pin['source'] ?? 'pin','pending'=>false];
+        $path=self::movieSynopsisCachePath($id);$cached=is_file($path)?json_decode((string)@file_get_contents($path),true):null;
+        if(!is_array($cached)||($cached['game_lookup_version'] ?? 0)!==GameMetadata::VERSION)return ['summary'=>null,'source'=>null,'pending'=>true];
+        $summary=(string)($cached['summary'] ?? '');return ['summary'=>$summary!==''?$summary:null,'source'=>$cached['source'] ?? null,'pending'=>$summary===''&&(int)($cached['retry_at'] ?? 0)<=time()];
+    }
+    public static function gameSynopsis(array $item): ?string {
+        $id=(string)($item['id'] ?? '');if($id==='')return null;$cached=self::gameSynopsisCached($id);if(!$cached['pending'])return $cached['summary'];
+        $match=GameMetadata::automaticWikipedia($item);$summary=$match['summary'] ?? null;
+        if(!$summary&&self::remoteBudgetExpired())return null;
+        $identity=GameMetadata::identity($item);$data=['title'=>$identity['title'],'system'=>$identity['system'],'summary'=>$summary,'source'=>$match['url'] ?? null,'fetched_at'=>date('c'),'game_lookup_version'=>GameMetadata::VERSION,'retry_at'=>time()+3600];
+        @file_put_contents(self::movieSynopsisCachePath($id),json_encode($data,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES),LOCK_EX);return $summary;
     }
     /** True when bytes look like JPEG/PNG/WebP/GIF (avoid caching HTML 404 bodies). */
     private static function looksLikeImage(string $bin): bool {
@@ -1288,20 +1282,21 @@ class Posters {
         if ($h4 === 'RIFF' && substr($bin, 8, 4) === 'WEBP') return true;
         return false;
     }
-    /**
-     * Libretro boxart URL candidates. thumbnails.libretro.com currently 404s every path;
-     * GitHub raw hosts the same Named_Boxarts trees.
-     * @return list<string>
-     */
-    private static function libretroBoxartUrls(string $libSys, string $name): array {
-        $enc = str_replace('%2F', '/', rawurlencode($name));
-        $file = $enc . '.png';
-        return [
-            'https://raw.githubusercontent.com/libretro-thumbnails/' . $libSys . '/master/Named_Boxarts/' . $file,
-            'https://cdn.jsdelivr.net/gh/libretro-thumbnails/' . $libSys . '@master/Named_Boxarts/' . $file,
+    public static function libretroSystem(string $core, string $systemLabel): ?string {
+        $labels=[
+            '/mega[ _-]*drive|genesis|segamd/i'=>'Sega_-_Mega_Drive_-_Genesis',
+            '/super[ _-]*nintendo|\bsnes\b|super[ _-]*famicom/i'=>'Nintendo_-_Super_Nintendo_Entertainment_System',
+            '/game[ _-]*boy[ _-]*advance|\bgba\b/i'=>'Nintendo_-_Game_Boy_Advance',
+            '/game[ _-]*boy[ _-]*colou?r|\bgbc\b/i'=>'Nintendo_-_Game_Boy_Color',
+            '/game[ _-]*boy|^gb$/i'=>'Nintendo_-_Game_Boy',
+            '/nintendo[ _-]*64|^n64$/i'=>'Nintendo_-_Nintendo_64',
+            '/nintendo[ _-]*ds|^nds$/i'=>'Nintendo_-_Nintendo_DS',
+            '/master[ _-]*system|^sms$/i'=>'Sega_-_Master_System_-_Mark_III',
+            '/game[ _-]*gear|^gg$/i'=>'Sega_-_Game_Gear',
+            '/playstation|\bps[ _-]*[1x]\b/i'=>'Sony_-_PlayStation',
+            '/nintendo[ _-]*entertainment|\bnes\b|^famicom$/i'=>'Nintendo_-_Nintendo_Entertainment_System',
         ];
-    }
-    private static function libretroSystem(string $core, string $systemLabel): ?string {
+        foreach($labels as $pattern=>$platform)if(preg_match($pattern,$systemLabel))return $platform;
         $map = [
             'nes' => 'Nintendo_-_Nintendo_Entertainment_System',
             'fds' => 'Nintendo_-_Nintendo_Entertainment_System',
@@ -1361,65 +1356,6 @@ class Posters {
             return 'Nintendo_-_Nintendo_Entertainment_System';
         }
         return null;
-    }
-    /**
-     * Libretro Named_Boxarts filenames usually include a region: "Title (USA).png".
-     * @return list<string>
-     */
-    private static function libretroNameVariants(string $base, string $rawTitle = ''): array {
-        $out = [];
-        $clean = preg_replace("/[^\\w\\s\\-\\'!\\.,&]/u", '', $base);
-        $clean = trim(preg_replace('/\\s+/', ' ', (string)$clean));
-        if ($clean === '') return $out;
-        $regions = [];
-        $raw = $rawTitle !== '' ? $rawTitle : $base;
-        if (preg_match('/\\((?:U|USA|US)\\b/i', $raw) || preg_match('/\\[U\\]/i', $raw)) {
-            $regions[] = 'USA';
-        }
-        if (preg_match('/\\((?:E|Europe|EU)\\b/i', $raw) || preg_match('/\\[E\\]/i', $raw)) {
-            $regions[] = 'Europe';
-        }
-        if (preg_match('/\\((?:J|Japan|JP)\\b/i', $raw) || preg_match('/\\[J\\]/i', $raw)) {
-            $regions[] = 'Japan';
-        }
-        if (preg_match('/\\((?:W|World)\\b/i', $raw)) {
-            $regions[] = 'World';
-        }
-        if ($regions === []) {
-            // Dump tags missing — try common regions (USA first for No-Intro (U) libraries)
-            $regions = ['USA', 'Europe', 'Japan', 'World'];
-        }
-        // Prefer region-qualified names first (libretro Named_Boxarts almost always includes region).
-        $forms = [];
-        foreach ($regions as $r) {
-            $forms[] = $clean . ' (' . $r . ')';
-        }
-        $forms[] = $clean;
-        if (in_array('USA', $regions, true) || in_array('Europe', $regions, true)) {
-            $forms[] = $clean . ' (USA, Europe)';
-            $forms[] = $clean . ' (Europe, USA)';
-        }
-        if (preg_match('/^(.+),\\s*The$/i', $clean, $m)) {
-            $forms[] = 'The ' . $m[1];
-            foreach ($regions as $r) $forms[] = 'The ' . $m[1] . ' (' . $r . ')';
-        } elseif (preg_match('/^The\\s+(.+)$/i', $clean, $m)) {
-            $forms[] = $m[1] . ', The';
-            foreach ($regions as $r) $forms[] = $m[1] . ', The (' . $r . ')';
-        }
-        if (strpos($clean, '&') !== false) {
-            $and = str_replace('&', 'and', $clean);
-            $forms[] = $and;
-            foreach ($regions as $r) $forms[] = $and . ' (' . $r . ')';
-        }
-        // Dr. Mario style: dump may drop the period
-        if (strpos($clean, '. ') !== false) {
-            $forms[] = str_replace('. ', ' ', $clean);
-        }
-        foreach ($forms as $f) {
-            $f = trim($f);
-            if ($f !== '' && !in_array($f, $out, true)) $out[] = $f;
-        }
-        return array_slice($out, 0, 8);
     }
     /** True when a Wikipedia summary payload is about a film. */
     public static function wikiIsFilm(array $data): bool {

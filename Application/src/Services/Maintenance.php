@@ -7,7 +7,7 @@ final class Maintenance
     private static $checked = 0.0;
     /** Background-only tasks started by the app itself (not listed in the maintenance UI). */
     const INTERNAL = ['ingest' => 'Import reviewed download'];
-    const TASKS = ['browse'=>'Prepare search and show summaries','search' => 'Prepare live search index', 'views' => 'Prepare browsing pages', 'epg' => 'Refresh programme guide', 'metadata' => 'Prepare artwork and synopses', 'scan' => 'Scan library folders', 'collections' => 'Match collections', 'downloads' => 'Import completed downloads', 'durations' => 'Fill Live media durations', 'facts' => 'Probe new media codecs and store show guides'];
+    const TASKS = ['browse'=>'Prepare search and show summaries','search' => 'Prepare live search index', 'views' => 'Prepare browsing pages', 'epg' => 'Refresh programme guide', 'metadata' => 'Prepare artwork and synopses', 'game-metadata' => 'Refresh game posters and synopses', 'scan' => 'Scan library folders', 'collections' => 'Match collections', 'downloads' => 'Import completed downloads', 'durations' => 'Fill Live media durations', 'facts' => 'Probe new media codecs and store show guides'];
 
     public static function runCommand(string $task, ?string $target = null): array
     {
@@ -113,6 +113,15 @@ final class Maintenance
                     if (!isset($job['result']['ok']) || $job['result']['ok']) Catalogue::warmBrowseViews();
                     // Probe only new/changed files afterwards (queued; waits for this lock).
                     if (!isset($job['result']['ok']) || $job['result']['ok']) { try { self::start('facts', 'scan'); self::start('metadata', 'scan'); } catch (Throwable $ignored) {} }
+                    break;
+                case 'game-metadata':
+                    $lastProgress = 0.0;
+                    $job['result'] = GameMetadataRefresh::run($job['target'] ?? null, function ($done, $total, $file) use (&$job, $id, &$lastProgress) {
+                        if ($done !== $total && microtime(true) - $lastProgress < 1) return;
+                        $lastProgress = microtime(true);
+                        $job['progress'] = ['phase'=>'Game posters and synopses', 'done'=>$done, 'total'=>$total, 'file'=>$file, 'at'=>date('c')];
+                        \Vaultcast\Repository::putDocument('maintenance-job:' . $id, $job);
+                    });
                     break;
                 case 'metadata':
                     $lastProgress = 0.0;
