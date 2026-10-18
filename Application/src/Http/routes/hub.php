@@ -20,6 +20,7 @@ if (strpos($path,'/hub/')===0) {
         if ($path==='/hub/saves/download' && $method==='GET') GameSaves::download($user,(string)($_GET['item_id'] ?? ''),(string)($_GET['slot'] ?? ''),(string)($_GET['share'] ?? ''));
         if (preg_match('#^/hub/saves/upload/([a-f0-9]{32})/(\d+)$#',$path,$upload) && $method==='POST') json_out(GameSaves::chunk($user,$upload[1],(int)$upload[2]));
         if ($path==='/hub/saves/begin' && $method==='POST') json_out(GameSaves::begin($user,body_json()));
+        if (preg_match('#^/hub/saves/abort/([a-f0-9]{32})$#',$path,$upload) && $method==='POST') json_out(GameSaves::abort($user,$upload[1]));
         if (preg_match('#^/hub/saves/finish/([a-f0-9]{32})$#',$path,$upload) && $method==='POST') json_out(GameSaves::finish($user,$upload[1]));
         if ($path==='/hub/saves/edit' && $method==='POST') json_out(GameSaves::edit($user,body_json()));
         if ($path==='/hub/saves/revoke' && $method==='POST') json_out(GameSaves::revoke($user,(string)(body_json()['token'] ?? '')));

@@ -736,6 +736,7 @@ function confirmDialog(message, opts){
   }
   function apiRequest(path, opts){
     opts = opts || {};
+    var requestUser=state.user && state.user.id;
     var headers = opts.headers || {};
     if (opts.body && typeof opts.body === 'object' && !(opts.body instanceof FormData)) {
       headers['Content-Type'] = 'application/json';
@@ -746,8 +747,9 @@ function confirmDialog(message, opts){
     return fetch(API + path, fetchOpts)
       .then(function(r){
         return r.json().catch(function(){ return { ok:false, error:'Bad JSON' }; }).then(function(j){
-          if (r.status === 401 || r.status === 403) navigationCache.clear();
-          if (r.status === 401) {
+          var sameUser=requestUser===(state.user && state.user.id);
+          if ((r.status === 401 || r.status === 403) && sameUser) navigationCache.clear();
+          if (r.status === 401 && sameUser) {
             state.user = null;
             if (state.view === 'admin' || state._wantAdmin) {
               state._wantAdmin = true;
@@ -757,7 +759,7 @@ function confirmDialog(message, opts){
               showWelcome();
             }
           }
-          if (r.status === 403 && j && j.code === 'access_denied' && state.user && state.user.role !== 'admin') {
+          if (sameUser && r.status === 403 && j && j.code === 'access_denied' && state.user && state.user.role !== 'admin') {
             state.user.access_state = j.access || { state:'expired', active:false };
             if (state.view !== 'welcome') showWelcome();
           }

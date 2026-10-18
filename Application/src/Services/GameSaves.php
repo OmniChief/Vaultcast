@@ -84,6 +84,10 @@ final class GameSaves {
         foreach (glob($dir.'/*') ?: [] as $file) if (preg_match('/^(?:chunk\d+|meta\.json|assembled\.state)$/D',basename($file)) && is_file($file)) @unlink($file);
         @rmdir($dir);
     }
+    public static function abort(array $user,string $token): array {
+        if (!self::$locked) return self::locked($user,static function() use ($user,$token){return self::abort($user,$token);});
+        [$dir]=self::upload($user,$token);self::clearUpload($dir);return ['ok'=>true];
+    }
     public static function finish(array $user,string $token): array {
         if (!self::$locked) return self::locked($user,static function() use ($user,$token){return self::finish($user,$token);});
         [$dir,$meta]=self::upload($user,$token);$item=self::item($user,$meta['item_id']);
@@ -177,7 +181,7 @@ final class GameSaves {
         if ($save['signature']!==MediaFacts::sig($item)) throw new DomainException('This save belongs to a different version of the game file.');
         $source=self::directory(['id'=>$share['owner']]).'/'.$save['hash'].'.state';$dest=self::directory($user).'/'.$save['hash'].'.state';
         if (!is_file($source) || ($source!==$dest && !@copy($source,$dest))) throw new DomainException('Shared save file is unavailable.');
-        $save['updated_at']=time();self::install($user,$share['item_id'],$slot,$save,$share['title'],(string)($item['system'] ?? ''));return ['ok'=>true];
+        $save['updated_at']=time();try {self::install($user,$share['item_id'],$slot,$save,$share['title'],(string)($item['system'] ?? ''));}catch (Throwable $e) {self::collect($user);throw $e;}return ['ok'=>true];
     }
     public static function download(array $user,string $id,string $slot,string $share=''): void {
         $owner=$user;
