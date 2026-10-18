@@ -13607,7 +13607,9 @@ function viewCollectionDetail(){
         document.body.classList.remove('view-live');
         stopLiveTimers();
         closeMenus();
-        root.replaceChildren(nextView);
+        // Keep navigation usable in browsers without Element.replaceChildren.
+        while (root.firstChild) root.removeChild(root.firstChild);
+        root.appendChild(nextView);
       };
       nextView = state.view === 'section' ? viewSection(publish) : viewShow(publish);
       return;
