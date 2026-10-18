@@ -37,7 +37,7 @@
   }
   if(document.addEventListener)document.addEventListener('keydown',remoteNavigation,false);else if(document.attachEvent)document.attachEvent('onkeydown',remoteNavigation);
   var config=window.__VC_COMPAT_PLAYER__,media=document.getElementById('compat-media');
-  if(!config||!media)return;
+  if(!config||!media){var openPlay=document.getElementById('compat-open-play');if(openPlay)openPlay.submit();return;}
   var message=document.getElementById('compat-player-message'),base=config.base||'/',alive=true,hls=null,roll=null,progressTimer=null,requests=[],resume=Number((config.progress||{}).position)||0,resumed=false,remux=false,loadingHls=false,recovered=false,tuning=false,hlsTimer=null;
   var started=new Date().getTime();
   function text(node,value){if(!node)return;while(node.firstChild)node.removeChild(node.firstChild);node.appendChild(document.createTextNode(value));}
@@ -103,8 +103,14 @@
     else if(!resumed&&resume>=5){try{media.currentTime=resume;}catch(e){resumed=true;say('Resume is unavailable; playback starts from the beginning.');}}
     if(config.autoplay)play();
   });
+  var nextPreference=document.getElementById('compat-auto-next');
+  if(nextPreference)listen(nextPreference,'change',function(){if(config.signed&&window.JSON&&window.XMLHttpRequest)json('/me/prefs',{autoplay_next:nextPreference.checked},function(error){if(error)say('Next-play setting changed for this video, but could not be saved to your account.');});});
   listen(media,'seeked',function(){resumed=true;});listen(media,'pause',save);
-  listen(media,'ended',function(){save();if(config.relay)retune();});
+  listen(media,'ended',function(){
+    save(true);if(config.relay){retune();return;}
+    var enabled=document.getElementById('compat-auto-next'),next=document.getElementById('compat-next-play');
+    if(enabled&&enabled.checked&&next&&next.form){next.disabled=true;next.form.submit();}
+  });
   listen(media,'error',function(){if(config.hls&&!remux){beginHls();return;}say('The browser could not play this format. Try Open compatible stream when available, or use the direct stream link.');});
   if(config.item_id&&config.save_progress&&window.JSON&&window.XMLHttpRequest)progressTimer=setInterval(save,20000);
   if(config.relay&&config.relay.end>new Date().getTime())roll=setTimeout(retune,Math.min(config.relay.end-new Date().getTime()+1000,2147483647));

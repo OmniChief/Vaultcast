@@ -1224,7 +1224,7 @@ function confirmDialog(message, opts){
     });
   }
 
-  function cardEl(item, progress){
+  function cardEl(item, progress, options){
     var isShow = isShowItem(item);
     var pKind = posterKindFor(item);
     var pid = posterIdFor(item);
@@ -1253,7 +1253,7 @@ function confirmDialog(message, opts){
     }
     function activate(){
       if (isShow) openShow(item.show_key || item.id);
-      else if ((item.type === 'movies' || item.type === 'disney' || item.media_kind === 'video') && !item.show) openMovie(item.id);
+      else if ((item.type === 'movies' || item.type === 'disney' || item.media_kind === 'video') && !item.show) openMovie(item.id,options && options.collection?{collection:options.collection}:undefined);
       else playItem(item);
     }
     var cardTitle = item.title || 'Untitled';
@@ -1323,7 +1323,11 @@ function confirmDialog(message, opts){
         }
         return;
       }
-      j.autoplay = opts.autoplay !== false;
+      j.autoplay = opts.autoplay != null ? opts.autoplay !== false : (state.user && state.user.prefs || {}).autoplay_on_open !== false;
+      j.from_start=!!(opts.fromStart || item._sequenceFromStart);
+      if(item._sequenceFromStart)j.autoplay=true;
+      var sequence=state._movieSequence;
+      if(sequence && String(sequence.itemId)===String(item.id))j.sequence_collection=sequence.collection;
       openPlayer(item, j);
     }).catch(function(e){ if (requestId !== _playRequestId) return; showRetry(); toast(String(e)); });
   }
@@ -1340,6 +1344,7 @@ function confirmDialog(message, opts){
 
   /* saved resume position (seconds) for an item; 0 = start from beginning */
   function resumePositionFor(item, play){
+    if(play && play.from_start)return 0;
     var p = (play && play.progress) || (item && item.progress) || null;
     if (!p) return 0;
     var pos = Number(p.position) || 0, dur = Number(p.duration) || 0;
@@ -1479,6 +1484,30 @@ function confirmDialog(message, opts){
       addCentrePlay(overlay,media,function(){
         var request=media.play();
         if(request && request.catch)request.catch(function(err){toast(err.message || 'Could not start video');});
+      });
+    }
+    if(media.tagName==='VIDEO' && typeof play.hub_cinema_guest==='undefined' && (item.show_key || item.show || play.sequence_collection)){
+      var autoNext=h('input',{type:'checkbox',checked:(state.user && state.user.prefs || {}).autoplay_next!==false,'aria-label':'Automatically play next'});
+      autoNext.addEventListener('change',function(){
+        if(!state.user || state.user.role==='guest')return;
+        state.user.prefs=state.user.prefs||{};state.user.prefs.autoplay_next=autoNext.checked;
+        api('/me/prefs',{method:'POST',body:{autoplay_next:autoNext.checked}}).then(function(result){if(!result.ok)toast(result.error || 'Could not save autoplay preference');}).catch(function(){toast('Could not save autoplay preference');});
+      });
+      var nextControl=h('label',{className:'player-auto-next'},[autoNext,play.sequence_collection?' Play collection in order':' Play next episode']);
+      overlay.appendChild(nextControl);
+      var nextBusy=false,sequenceRequest=_playRequestId;
+      media.addEventListener('ended',function(){
+        if(!autoNext.checked || nextBusy || !overlay.isConnected)return;
+        nextBusy=true;
+        postProgress(item.id,openPlayer._absDuration?openPlayer._absDuration():(media.duration||0),openPlayer._absDuration?openPlayer._absDuration():(media.duration||0));
+        api('/items/'+encodeURIComponent(item.id)+'/next'+(play.sequence_collection?'?collection='+encodeURIComponent(play.sequence_collection):'')).then(function(result){
+          if(!overlay.isConnected || sequenceRequest!==_playRequestId || !autoNext.checked || !media.ended)return;
+          if(!result.ok)throw new Error(result.error || 'Could not open the next title');
+          if(!result.item){toast('You have reached the end.');return;}
+          var next=result.item;next._sequenceFromStart=true;
+          if(next.show_key){state._pendingEpisode=next;openShow(next.show_key,next.season,next.episode);}
+          else openMovie(next.id,{collection:play.sequence_collection,autoplay:true,fromStart:true});
+        }).catch(function(err){if(overlay.isConnected)toast(err.message || 'Could not open the next title');}).then(function(){nextBusy=false;});
       });
     }
     var convertBtn = null;
@@ -5731,6 +5760,7 @@ try {
   }
 
   function openShow(showKey, season, episode){
+    state._movieSequence=null;
     if (state.showKey !== showKey) state.showSlug = null;
     state.showKey = showKey;
     state.showSeason = season != null ? season : null;
@@ -5739,7 +5769,8 @@ try {
     render();
   }
 
-  function openMovie(itemId){
+  function openMovie(itemId, sequence){
+    state._movieSequence=sequence?{itemId:itemId,collection:sequence.collection,autoplay:!!sequence.autoplay,fromStart:!!sequence.fromStart}:null;
     state._pendingEpisode = null;
     if (state.movieId !== itemId) state.movieSlug = null;
     state.movieId = itemId;
@@ -5860,7 +5891,7 @@ try {
         root.appendChild(h('div', { id:'movie-collections' }));
         mountMovieCollections(item.id);
       }
-      if (item.file_exists !== false && !(multiplayer && multiplayer.preview)) playItem(item, {inline:true, autoplay:false, lobby:multiplayer ? multiplayer.options : null});
+      if (item.file_exists !== false && !(multiplayer && multiplayer.preview)) playItem(item, {inline:true, autoplay:!isGame && ((state._movieSequence && String(state._movieSequence.itemId)===String(item.id) && state._movieSequence.autoplay) || (state.user && state.user.prefs || {}).autoplay_on_open!==false), fromStart:!!(state._movieSequence && String(state._movieSequence.itemId)===String(item.id) && state._movieSequence.fromStart), lobby:multiplayer ? multiplayer.options : null});
     }).catch(function(e){
       paintError(String(e && e.message || e || 'Could not load movie'));
     });
@@ -5880,7 +5911,7 @@ try {
         (col.parts || []).forEach(function(p){
           if (!p || !p.present || !p.item) return;
           if (p.current || String(p.item_id||'') === String(itemId)) return;
-          cards.push(cardEl(p.item));
+          cards.push(cardEl(p.item,null,{collection:col.id}));
         });
         if (!cards.length) return;
         host.appendChild(rowEl(col.name || 'More in this collection', cards, {
@@ -7208,7 +7239,8 @@ try {
           ])]),
           h('label', {}, ['New password (optional)', h('input', { id: 'pw', type: 'password', placeholder: 'Leave blank to keep' })]),
           h('label', { className: 'check-label' }, [ h('input', { id: 'reduce', type: 'checkbox', checked: !!prefs.reduce_motion }), ' Reduce motion' ]),
-          h('label', { className: 'check-label' }, [ h('input', { id: 'autoplay', type: 'checkbox', checked: !!prefs.autoplay }), ' Autoplay' ]),
+          h('label', { className: 'check-label' }, [ h('input', { id: 'autoplay', type: 'checkbox', checked: prefs.autoplay_on_open !== false }), ' Automatically start videos when opened' ]),
+          h('label', { className:'check-label' }, [ h('input', { id:'autoplay_next', type:'checkbox', checked:prefs.autoplay_next !== false }), ' Automatically play the next episode / collection film' ]),
           h('div', { className: 'row-actions' }, [
             h('button', { className: 'btn primary', text: 'Save preferences', onClick: savePrefs }),
             h('button', {className: 'btn', text: 'Sign out', onClick: function(){ api('/logout', {method:'POST'}).then(function(result){
@@ -7383,6 +7415,8 @@ try {
       password: $('#pw').value || undefined,
       reduce_motion: $('#reduce').checked,
       autoplay: $('#autoplay').checked,
+      autoplay_on_open: $('#autoplay').checked,
+      autoplay_next: $('#autoplay_next').checked,
       remove_avatar:!!($('#remove_avatar') && $('#remove_avatar').checked)
     };
     var file = $('#profile_avatar') && $('#profile_avatar').files[0];
@@ -11452,7 +11486,7 @@ h('div', { className:'cv-find-bar' }, [
       root.innerHTML = '';
       var p = st && st.ok ? (st.parts || []).filter(function(x){ return x.index === ref.index; })[0] : null;
       if (!p) { root.appendChild(h('p', { className:'bad', text:(st && st.error) || 'Not found' })); return; }
-      if (p.present && p.item) { if (p.item.show_key) openShow(p.item.show_key); else openMovie(p.item.id); return; }
+      if (p.present && p.item) { if (p.item.show_key) openShow(p.item.show_key); else openMovie(p.item.id,{collection:ref.id}); return; }
       var col = st.collection || {};
       root.appendChild(h('button', { className:'btn ghost', text:'← ' + (col.name || 'Collection'), onClick: function(){ state.collectionId = ref.id; state.view = 'collection'; render(); } }));
       root.appendChild(h('div', { className:'movie-detail col-member', style:'display:flex;gap:24px;flex-wrap:wrap;margin-top:12px' }, [
@@ -11503,7 +11537,7 @@ function viewCollectionDetail(){
           ]),
           p.present && p.item ? h('button', { className:'btn', text:'Open', onClick: function(){
             if (p.item.show_key) openShow(p.item.show_key);
-            else openMovie(p.item.id);
+            else openMovie(p.item.id,{collection:col.id});
           } }) : h('button', { className:'btn ghost', text:'Info', onClick: function(){
             state.colMember = { id: col.id, index: p.index }; state.view = 'colmember'; render();
           } })

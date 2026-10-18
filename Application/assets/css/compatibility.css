@@ -12,3 +12,9 @@ a{color:#70e9fa;text-decoration:none}a:hover{text-decoration:underline}h1,h2,h3,
 .compat-centre-play span{display:block;line-height:28px}
 .compat-centre-play span:first-child{font-size:34px;line-height:42px;padding-left:5px}
 .compat-centre-play:focus,.compat-centre-play:hover{border-color:#69efff;outline:3px solid #69efff}
+
+.compat-rating{font-size:22px;color:#f6da91;font-weight:bold}
+.compat-programme{padding:10px 0;border-top:1px solid #293145}
+.compat-programme p{margin:5px 0}
+.compat-next{border-color:#7162ac}
+.compat-fields textarea{width:95%;max-width:720px}

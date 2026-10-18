@@ -167,3 +167,7 @@
 .live-player.guide-open .detail-centre-play,.live-player.epg-open .detail-centre-play{display:none}
 .live-player.needs-tap .lp-tuning::after{display:none}
 @media(max-width:540px){.detail-centre-play{width:88px;height:88px}.detail-centre-play .centre-play-icon{font-size:28px}}
+
+.player-auto-next{position:absolute;z-index:9;top:14px;right:14px;padding:9px 12px;border:1px solid #ffffff44;border-radius:10px;background:#101526eF;color:#fff;font-size:14px;line-height:1.4;cursor:pointer}
+.player-auto-next input{margin-right:6px;vertical-align:middle}
+.player-auto-next:focus-within{outline:3px solid #69efff;outline-offset:3px}

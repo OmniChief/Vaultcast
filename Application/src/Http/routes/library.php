@@ -334,6 +334,10 @@ if (preg_match('#^/items/([a-f0-9]+)/poster$#', $path, $m) && ($method === 'GET'
     Stream::poster($m[1]);
 }
 
+if (preg_match('#^/items/([a-f0-9]+)/next$#', $path, $m) && $method === 'GET') {
+    json_out(['ok'=>true,'item'=>PlaybackSequence::next(current_or_guest(),$m[1],(string)($_GET['collection'] ?? ''))]);
+}
+
 if (preg_match('#^/items/([a-f0-9]+)/play$#', $path, $m) && $method === 'POST') {
     json_out(Stream::issueToken(current_or_guest(), $m[1], body_json()));
 }

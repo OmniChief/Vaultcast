@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 final class CompatibilityBrowser {
     use CompatibilityEnhancements;
+    use CompatibilityLibraryFeatures;
     private static $base;
     private static $viewer;
     private static $personal;
@@ -30,7 +31,7 @@ final class CompatibilityBrowser {
         return self::$personal;
     }
     private static function isShow(array $item): bool {return ($item['kind'] ?? '')==='show'||($item['media_kind'] ?? '')==='show'||(!empty($item['show_key'])&&empty($item['media_kind']));}
-    private static function mediaUrl(array $item): string {return self::url(['view'=>self::isShow($item)?'show':'item','id'=>self::isShow($item)?($item['show_key'] ?? $item['id']):$item['id']]);}
+    private static function mediaUrl(array $item,array $context=[]): string {return self::url($context+['view'=>self::isShow($item)?'show':'item','id'=>self::isShow($item)?($item['show_key'] ?? $item['id']):$item['id']]);}
     private static function poster(array $item,string $size='card'): string {
         $show=self::isShow($item);$id=$show?($item['show_key'] ?? $item['id']):($item['id'] ?? '');$title=$item['title'] ?? 'Untitled';
         $url=self::$base.'api/'.($show?'shows/':'items/').rawurlencode((string)$id).'/poster?variant='.($size==='detail'?'full':'medium');
@@ -38,11 +39,11 @@ final class CompatibilityBrowser {
         if($id!=='' && ($item['has_poster'] ?? true))$html.='<img data-compat-poster="1" loading="lazy" src="'.self::esc($url).'" alt="'.self::esc($title).'" width="240" height="360">';
         return $html.'</span>';
     }
-    private static function cards(array $items): string {
+    private static function cards(array $items,array $context=[]): string {
         $html='<ul class="compat-cards">';$count=0;
         foreach($items as $item){if(($item['media_kind'] ?? '')==='rom'||($item['type'] ?? '')==='roms'||!AreaAccess::allowed(self::$viewer,AreaAccess::itemArea($item)))continue;
             $count++;$meta=[];if(!empty($item['year']))$meta[]=$item['year'];if(!empty($item['season_count']))$meta[]=$item['season_count'].' seasons';if(!empty($item['episode']))$meta[]='Episode '.$item['episode'];
-            $html.='<li><a class="compat-card" href="'.self::esc(self::mediaUrl($item)).'">'.self::poster($item).'<strong>'.self::esc($item['title'] ?? 'Untitled').'</strong><small>'.self::esc(implode(' · ',$meta)).'</small>';
+            $html.='<li><a class="compat-card" href="'.self::esc(self::mediaUrl($item,$context)).'">'.self::poster($item).'<strong>'.self::esc($item['title'] ?? 'Untitled').'</strong><small>'.self::esc(implode(' · ',$meta)).'</small>';
             $progress=$item['progress'] ?? [];$duration=(float)($progress['duration'] ?? 0);$position=(float)($progress['position'] ?? 0);
             if($duration>0 && $position>0)$html.='<span class="compat-progress"><span style="width:'.min(100,(int)round($position/$duration*100)).'%"></span></span>';
             $html.='</a></li>';
@@ -79,7 +80,7 @@ final class CompatibilityBrowser {
     }
     private static function player(string $url,bool $audio=false,array $tracks=[],array $config=[]): string {
         if(!preg_match('#^(?:https?://|/)#i',$url))throw new RuntimeException('Invalid stream address.');
-        $config['base']=self::$base;if(!empty($config['hls']))$config['hls_url']=PlayerAssets::manifest()['hls'];$tag=$audio?'audio':'video';$html=($audio?'':'<div class="compat-video-stage">').'<'.$tag.' id="compat-media" controls="controls"'.(!empty($config['autoplay'])?' autoplay="autoplay"':'').' preload="none" width="640" height="360" src="'.self::esc($url).'">';
+        $config+=['autoplay'=>(self::$viewer['prefs']['autoplay_on_open'] ?? true)!==false];$config['base']=self::$base;if(!empty($config['hls']))$config['hls_url']=PlayerAssets::manifest()['hls'];$tag=$audio?'audio':'video';$html=($audio?'':'<div class="compat-video-stage">').'<'.$tag.' id="compat-media" controls="controls"'.(!empty($config['autoplay'])?' autoplay="autoplay"':'').' preload="none" width="640" height="360" src="'.self::esc($url).'">';
         $preferred=(string)(self::$viewer['prefs']['subtitle_language'] ?? '');$chosen=false;$trackLinks='';$selector='<div id="compat-subtitle-controls" style="display:none"><label>Subtitles <select id="compat-subtitles"><option value="-1">Off</option>';
         foreach($tracks as $index=>$track){$default=!$chosen && $preferred!=='' && ($track['language'] ?? '')===$preferred;if($default)$chosen=true;$html.='<track kind="subtitles" src="'.self::esc($track['url'] ?? '').'" label="'.self::esc($track['label'] ?? 'Subtitles').'" srclang="'.self::esc($track['language'] ?? 'en').'"'.($default?' default="default"':'').'>';$selector.='<option value="'.(int)$index.'"'.($default?' selected="selected"':'').'>'.self::esc($track['label'] ?? 'Subtitles').'</option>';$trackLinks.='<a class="compat-button" href="'.self::esc($track['url'] ?? '').'">'.self::esc($track['label'] ?? 'Subtitles').' file</a>';}
         $selector.='</select></label></div>';
@@ -88,6 +89,8 @@ final class CompatibilityBrowser {
     private static function content(array $home): string {
         $view=(string)($_GET['view'] ?? 'home');$id=(string)($_GET['id'] ?? '');$page=max(1,min(1000,(int)($_GET['page'] ?? 1)));$query=mb_substr(trim((string)($_GET['q'] ?? '')),0,200);
         if($view==='home')return self::home($home);
+        if($view==='reviews')return self::reviews($id);
+        if(in_array($view,['lists','personal-list','choose-list','delete-list'],true))return self::personalLists($view,$id,$page,$query);
         if($view==='library'){
             self::allow('library');$html=self::heading('BROWSE YOUR WORLD','Library','Films, shows, anime and more, all in one place.').'<div class="compat-categories">';
             foreach($home['sections'] ?? [] as $section)if(($section['type'] ?? '')!=='roms')$html.=self::link($section['label'] ?? $section['type'],['view'=>'section','id'=>$section['id']]);
@@ -118,7 +121,7 @@ final class CompatibilityBrowser {
         if($view==='collection'){
             self::allow('library');if(!Collections::get($id))throw new RuntimeException('Collection not found.');$collection=Collections::status($id);$html=self::heading('COLLECTION',(string)$collection['collection']['name'],strip_tags((string)($collection['collection']['description'] ?? '')));$items=[];$missing=[];
             foreach(array_slice($collection['parts'],($page-1)*16,16) as $part){if(!empty($part['present']) && !empty($part['item']))$items[]=$part['item'];else $missing[]=$part['title'] ?? 'Unavailable title';}
-            $html.=self::cards($items);if($missing){$html.='<h3>Not in your library</h3><ul class="compat-list">';foreach($missing as $title)$html.='<li>'.self::esc($title).'</li>';$html.='</ul>';}
+            $html.=self::cards($items,['collection'=>$id]);if($missing){$html.='<h3>Not in your library</h3><ul class="compat-list">';foreach($missing as $title)$html.='<li>'.self::esc($title).'</li>';$html.='</ul>';}
             return $html.self::pages(['view'=>'collection','id'=>$id],$page,$page*16<count($collection['parts']));
         }
         if($view==='search'){
@@ -133,7 +136,7 @@ final class CompatibilityBrowser {
         }
         if($view==='show'){
             self::allow('library');$detail=Catalogue::show($id);if(!$detail)throw new RuntimeException('Show not found.');
-            $show=$detail['show'];$show['id']=$id;$show['show_key']=$id;$show['kind']='show';$html='<div class="compat-detail">'.self::poster($show,'detail').'<div class="compat-detail-copy">'.self::heading('SERIES',(string)$show['title']).(!empty($show['synopsis'])?'<p class="compat-synopsis">'.self::esc(strip_tags($show['synopsis'])).'</p>':'').self::shelfActions($show).'</div></div>';
+            $show=$detail['show'];$show['id']=$id;$show['show_key']=$id;$show['kind']='show';$html='<div class="compat-detail">'.self::poster($show,'detail').'<div class="compat-detail-copy">'.self::heading('SERIES',(string)$show['title']).(!empty($show['synopsis'])?'<p class="compat-synopsis">'.self::esc(strip_tags($show['synopsis'])).'</p>':'').self::shelfActions($show).self::titleFeatures($show).'</div></div>';
             $seasons=$detail['seasons'] ?? [];$season=(int)($_GET['season'] ?? ($seasons[0]['season'] ?? 0));$html.='<form method="get" action="'.self::esc(self::$base).'"><input type="hidden" name="compat" value="on"><input type="hidden" name="view" value="show"><input type="hidden" name="id" value="'.self::esc($id).'"><label>Season <select name="season">';$episodes=[];
             foreach($seasons as $row){$selected=(int)$row['season']===$season;$html.='<option value="'.(int)$row['season'].'"'.($selected?' selected="selected"':'').'>'.self::esc($row['label']).'</option>';if($selected)$episodes=$row['episodes'];}
             $html.='</select></label><button type="submit">Open season</button></form><ul class="compat-list">';$episodes=array_values(array_filter($episodes,static function($ep){return !empty($ep['id'])&&($ep['available'] ?? true)!==false&&($ep['status'] ?? '')!=='missing';}));
@@ -142,18 +145,28 @@ final class CompatibilityBrowser {
         }
         if($view==='item'){
             self::allow('library');$item=Catalogue::item($id);if(!$item||AreaAccess::itemArea($item)!=='library')throw new RuntimeException('Media not found.');
+            $collection=mb_substr((string)($_GET['collection'] ?? ''),0,100);$playParams=['view'=>'item','id'=>$id];if($collection!=='')$playParams['collection']=$collection;
             $detail=Catalogue::itemDetail($id);$card=$detail['item'];$html=self::heading(!empty($card['show'])?'EPISODE':'LIBRARY',(string)$card['title']);
             if(($_SERVER['REQUEST_METHOD'] ?? '')==='POST'&&($_POST['compat_action'] ?? '')==='play'){
                 if(!is_file((string)($item['path'] ?? '')))throw new RuntimeException('The media file is unavailable.');
-                $play=Stream::issueToken(self::$viewer,$id);$html.=self::player($play['url'],($play['media_kind'] ?? '')==='audio',$play['subtitles'] ?? [],['autoplay'=>!empty(self::$viewer['prefs']['autoplay']),'item_id'=>$id,'progress'=>!empty($_POST['from_start'])?null:($play['progress'] ?? null),'save_progress'=>(self::$viewer['id'] ?? '')!=='public','remux_url'=>!empty($play['remux_allowed'])?($play['remux_url'] ?? null):null]);
+                $play=Stream::issueToken(self::$viewer,$id);$html.=self::player($play['url'],($play['media_kind'] ?? '')==='audio',$play['subtitles'] ?? [],['autoplay'=>true,'signed'=>self::$signed,'item_id'=>$id,'progress'=>(!empty($_POST['from_start']) || !empty($_POST['sequence']))?null:($play['progress'] ?? null),'save_progress'=>(self::$viewer['id'] ?? '')!=='public','remux_url'=>!empty($play['remux_allowed'])?($play['remux_url'] ?? null):null]);
+                if(($play['media_kind'] ?? '')==='video'){
+                    $next=PlaybackSequence::next(self::$viewer,$id,$collection);
+                    if($next){$nextParams=['view'=>'item','id'=>$next['id']];if($collection!=='')$nextParams['collection']=$collection;
+                        $html.='<div class="compat-panel compat-next"><label class="compat-check"><input id="compat-auto-next" type="checkbox"'.((self::$viewer['prefs']['autoplay_next'] ?? true)!==false?' checked="checked"':'').'> Automatically play '.($collection!==''?'the next film':'the next episode').'</label><p>Up next: '.self::esc($next['title']).'</p>'.self::beginForm($nextParams,'play',false,['sequence'=>'1','from_start'=>'1']).'<button id="compat-next-play" type="submit">Play next now</button></form></div>';
+                    }
+                }
                 if(!empty($play['remux_allowed'])&&!empty($play['remux_url']))$html.='<p><a class="compat-button" data-compat-remux="1" href="'.self::esc($play['remux_url']).'">Open compatible stream</a></p>';
             }else{
                 $saved=self::$signed?\Vaultcast\Repository::progressItem((string)self::$viewer['id'],$id):null;
-                if(($saved['position'] ?? 0)>=5 && !Catalogue::progressFinished($saved,!empty($item['show'])))$html.='<p class="compat-note">Resume at '.gmdate(($saved['position'] ?? 0)>=3600?'H:i:s':'i:s',(int)$saved['position']).'</p>'.self::form(['view'=>'item','id'=>$id],'Resume','play').self::form(['view'=>'item','id'=>$id],'Start from beginning','play',['from_start'=>'1']);
-                else $html.=self::form(['view'=>'item','id'=>$id],'Play','play',['from_start'=>'1']);
+                if(($saved['position'] ?? 0)>=5 && !Catalogue::progressFinished($saved,!empty($item['show'])))$html.='<p class="compat-note">Resume at '.gmdate(($saved['position'] ?? 0)>=3600?'H:i:s':'i:s',(int)$saved['position']).'</p>'.self::form($playParams,'Resume','play').self::form($playParams,'Start from beginning','play',['from_start'=>'1']);
+                else $html.=self::form($playParams,'Play','play',['from_start'=>'1']);
             }
-            $next=self::nextEpisode($item);if($next)$html.=self::link('Next episode · S'.$next['season'].' E'.$next['episode'],['view'=>'item','id'=>$next['item_id']]);
-            $html.='<div class="compat-detail">'.self::poster($card,'detail').'<div class="compat-detail-copy"><h3>'.self::esc($card['title']).'</h3><p class="compat-note">'.self::esc(implode(' · ',array_filter([$card['year'] ?? null,strtoupper($card['ext'] ?? '')]))).'</p>'.(!empty($card['synopsis'])?'<p class="compat-synopsis">'.self::esc(strip_tags($card['synopsis'])).'</p>':'').self::shelfActions($card).'</div></div>';
+            if(!isset($play) && empty($_GET['paused']) && (self::$viewer['prefs']['autoplay_on_open'] ?? true)!==false){
+                $html=preg_replace('/<form class="compat-action"/','<form id="compat-open-play" class="compat-action"',$html,1);
+            }
+            $next=isset($play)?null:self::nextEpisode($item);if($next)$html.=self::link('Next episode · S'.$next['season'].' E'.$next['episode'],['view'=>'item','id'=>$next['item_id']]);
+            $html.='<div class="compat-detail">'.self::poster($card,'detail').'<div class="compat-detail-copy"><h3>'.self::esc($card['title']).'</h3><p class="compat-note">'.self::esc(implode(' · ',array_filter([$card['year'] ?? null,strtoupper($card['ext'] ?? '')]))).'</p>'.(!empty($card['synopsis'])?'<p class="compat-synopsis">'.self::esc(strip_tags($card['synopsis'])).'</p>':'').self::shelfActions($card).self::watchedControl($item).self::titleFeatures($card).'</div></div>';
             return $html;
         }
         if($view==='live')return self::live($id,$page,$query);
@@ -162,7 +175,7 @@ final class CompatibilityBrowser {
     private static function live(string $id,int $page,string $query): string {
         self::allow('live');if(empty(Store::settings()['features']['live']))throw new RuntimeException('Watch Live is disabled.');
         require_once STREAM_ROOT.'/src/Live/store.php';require_once STREAM_ROOT.'/src/Live/epg.php';require_once STREAM_ROOT.'/src/Live/schedule.php';
-        $station=relay_load_station();$guide=LiveGuideCache::read(2,true,self::$viewer,static function($hours,$slim)use($station){return epg_unified_guide($station,$hours,$slim,self::$viewer);});
+        $schedule=mb_substr((string)($_GET['schedule'] ?? ''),0,100);$station=relay_load_station();$guide=LiveGuideCache::read(2,$schedule==='',self::$viewer,static function($hours,$slim)use($station){return epg_unified_guide($station,$hours,$slim,self::$viewer);});
         $html='<h2>Watch Live</h2>';if($id!==''){
             $channel=null;foreach($guide['channels'] ?? [] as $ch)if((string)$ch['id']===$id)$channel=$ch;
             if(!$channel)throw new RuntimeException('Channel unavailable.');$html.='<h3>'.self::esc($channel['name']).'</h3>';
@@ -179,9 +192,26 @@ final class CompatibilityBrowser {
                 $html.=self::link('Retune to live',['view'=>'live','id'=>$id]).'<p><a class="compat-button" href="'.self::esc(self::$base.'api/live/m3u?channel='.rawurlencode($id)).'">Open channel playlist</a></p><p class="compat-note">If automatic retuning is unavailable, use the channel playlist or retune when this programme ends.</p>';
             }
         }
+        if($schedule!==''){
+            $selected=null;foreach($guide['channels'] ?? [] as $channel)if((string)$channel['id']===$schedule)$selected=$channel;
+            if(!$selected)throw new RuntimeException('Channel unavailable.');
+            $html.='<section class="compat-panel"><h3>'.self::esc($selected['name']).' · Programme guide</h3>'.self::link('Watch channel',['view'=>'live','id'=>$schedule]).'<p class="compat-note">Times shown in UTC. Schedule covers the next two hours.</p>';
+            $programs=array_values(array_filter($selected['programs'] ?? [],static function($program){return (int)($program['endUnix'] ?? 0)>(int)(microtime(true)*1000);}));
+            $schedulePage=max(1,min(1000,(int)($_GET['schedule_page'] ?? 1)));
+            foreach(array_slice($programs,($schedulePage-1)*16,16) as $program)$html.=self::programme($program);
+            if(!$programs)$html.='<p>No programme details available.</p>';
+            if($schedulePage>1)$html.=self::link('Earlier programmes',['view'=>'live','schedule'=>$schedule,'schedule_page'=>$schedulePage-1]);
+            if($schedulePage*16<count($programs))$html.=self::link('Later programmes',['view'=>'live','schedule'=>$schedule,'schedule_page'=>$schedulePage+1]);
+            $html.='</section>';
+        }
         $html.=self::searchForm(['view'=>'live'],$query);$channels=array_values(array_filter($guide['channels'] ?? [],static function($ch)use($query){return $query===''||mb_stripos($ch['name'] ?? '',$query)!==false;}));
         usort($channels,static function($a,$b){return (int)($a['number'] ?? 0)<=>(int)($b['number'] ?? 0);});$html.='<ul class="compat-list">';
-        foreach(array_slice($channels,($page-1)*16,16) as $ch)$html.='<li>'.self::link(($ch['number'] ?? '').' - '.($ch['name'] ?? 'Channel'),['view'=>'live','id'=>$ch['id']]).(!empty($ch['now']['title'])?' '.self::esc($ch['now']['title']):'').'</li>';
+        foreach(array_slice($channels,($page-1)*16,16) as $ch){
+            $html.='<li>'.self::link(($ch['number'] ?? '').' - '.($ch['name'] ?? 'Channel'),['view'=>'live','id'=>$ch['id']]).self::link('Programme guide',['view'=>'live','schedule'=>$ch['id']]);
+            if(!empty($ch['now']))$html.=self::programme($ch['now'],'Now · ');
+            if(!empty($ch['next']))$html.=self::programme($ch['next'],'Next · ');
+            $html.='</li>';
+        }
         return $html.'</ul>'.self::pages(['view'=>'live','q'=>$query],$page,$page*16<count($channels));
     }
     public static function render(array $startup,string $base,string $site,string $error=''): void {
@@ -217,7 +247,7 @@ final class CompatibilityBrowser {
             $nav.='<div class="compat-subnav">';
             if(in_array($view,['library','section','show','item','search','collections','collection'],true)){
                 $nav.=self::link('Discover',['view'=>'library']);foreach($home['sections'] ?? [] as $section)if(($section['type'] ?? '')!=='roms')$nav.=self::link($section['label'] ?? $section['type'],['view'=>'section','id'=>$section['id']]);$nav.=self::link('Collections',['view'=>'collections']);
-            }else{foreach(['home'=>'Overview','favourites'=>'Favourites','watchlist'=>'Watchlist','calendar'=>'Release calendar','friends'=>'Friends','inbox'=>'Inbox','chat'=>'Chat'] as $key=>$label){if($key!=='home'&&!self::$signed)continue;$nav.='<a'.($view===$key?' class="active" aria-current="page"':'').' href="'.self::esc(self::url(['view'=>$key])).'">'.self::esc($label).'</a>';}}
+            }else{foreach(['home'=>'Overview','favourites'=>'Favourites','watchlist'=>'Watchlist','calendar'=>'Release calendar','lists'=>'Custom lists','friends'=>'Friends','inbox'=>'Inbox','chat'=>'Chat'] as $key=>$label){if($key!=='home'&&!self::$signed)continue;$nav.='<a'.($view===$key?' class="active" aria-current="page"':'').' href="'.self::esc(self::url(['view'=>$key])).'">'.self::esc($label).'</a>';}}
             $nav.='</div>';
         }
         if($home && $view!=='home'){

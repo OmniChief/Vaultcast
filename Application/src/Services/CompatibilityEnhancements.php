@@ -15,7 +15,7 @@ trait CompatibilityEnhancements {
         if($avatar)$html.='<img class="compat-avatar" src="'.self::esc($avatar).'" alt="Your avatar" width="72" height="72">';
         $html.=self::beginForm(['view'=>'account'],'profile',true).'<h3>Profile and playback</h3>'.self::field('Display name','display_name',($user['display_name'] ?? '') ?: $user['username']);
         $html.='<label>Avatar · JPEG or PNG, up to 1 MiB<input type="file" name="avatar" accept="image/jpeg,image/png"></label><label class="compat-check"><input type="checkbox" name="remove_avatar" value="1"> Remove current avatar</label>';
-        foreach(['autoplay'=>'Automatically start an opened player','reduce_motion'=>'Reduce motion'] as $key=>$label)$html.='<label class="compat-check"><input type="checkbox" name="'.$key.'" value="1"'.(!empty($prefs[$key])?' checked="checked"':'').'> '.$label.'</label>';
+        foreach(['autoplay_on_open'=>'Automatically start videos when opened','autoplay_next'=>'Automatically play the next episode / collection film','reduce_motion'=>'Reduce motion'] as $key=>$label)$html.='<label class="compat-check"><input type="checkbox" name="'.$key.'" value="1"'.(($key==='reduce_motion'?!empty($prefs[$key]):($prefs[$key] ?? true)!==false)?' checked="checked"':'').'> '.$label.'</label>';
         $html.=self::select('Preferred subtitles','subtitle_language',[''=>'Off','en'=>'English','es'=>'Spanish','fr'=>'French','de'=>'German','it'=>'Italian','pt'=>'Portuguese','ja'=>'Japanese','ko'=>'Korean','zh'=>'Chinese'],(string)($prefs['subtitle_language'] ?? '')).'<button type="submit">Save account settings</button></form>';
         return $html.self::link('Friends',['view'=>'friends']).self::link('Inbox',['view'=>'inbox']).self::link('Live chat',['view'=>'chat']).self::form([],'Sign out','logout');
     }
@@ -25,12 +25,13 @@ trait CompatibilityEnhancements {
     }
     private static function enhancedPost(string $view,array $body): array {
         $action=(string)($body['compat_action'] ?? '');$user=self::$viewer;$id=(string)($_GET['id'] ?? '');
+        $library=self::libraryPost($view,$body);if($library!==null)return $library;
         if($action==='profile'){
             $name=trim((string)($body['display_name'] ?? ''));if($name==='' || mb_strlen($name)>100)throw new RuntimeException('Use a display name of 1–100 characters.');
             $avatarBody=['remove_avatar'=>!empty($body['remove_avatar'])];$file=self::uploaded('avatar',1048576);
             if($file){$info=@getimagesize($file['tmp_name']);if(!$info || !in_array($info['mime'],['image/jpeg','image/png'],true))throw new RuntimeException('Choose a JPEG or PNG avatar.');$avatarBody['avatar_data']='data:'.$info['mime'].';base64,'.base64_encode((string)file_get_contents($file['tmp_name']));}
             $language=(string)($body['subtitle_language'] ?? '');if(!in_array($language,['','en','es','fr','de','it','pt','ja','ko','zh'],true))throw new RuntimeException('Choose a subtitle language.');$avatar=Profiles::saveAvatar($user,$avatarBody);
-            \Vaultcast\Repository::updateUser($user['id'],static function(array $record)use($name,$avatar,$body,$language): array{$record['display_name']=$name;$record['avatar_version']=$avatar;$record['prefs']['autoplay']=!empty($body['autoplay']);$record['prefs']['reduce_motion']=!empty($body['reduce_motion']);$record['prefs']['subtitle_language']=$language;return $record;});return ['view'=>'account'];
+            \Vaultcast\Repository::updateUser($user['id'],static function(array $record)use($name,$avatar,$body,$language): array{$record['display_name']=$name;$record['avatar_version']=$avatar;$record['prefs']['autoplay_on_open']=!empty($body['autoplay_on_open']);$record['prefs']['autoplay_next']=!empty($body['autoplay_next']);$record['prefs']['autoplay']=$record['prefs']['autoplay_on_open'];$record['prefs']['reduce_motion']=!empty($body['reduce_motion']);$record['prefs']['subtitle_language']=$language;return $record;});return ['view'=>'account'];
         }
         if($action==='friend'){HomeHub::friendship($user,['user_id'=>(string)($body['user_id'] ?? ''),'action'=>(string)($body['friend_action'] ?? 'request')]);return ['view'=>'profile','id'=>(string)$body['user_id']];}
         if($action==='chat_create'){
@@ -116,7 +117,7 @@ trait CompatibilityEnhancements {
         return $html.self::cards($items).self::pages($params,$page,$more);
     }
     private static function nextEpisode(array $item): ?array {
-        if(empty($item['show']) || !isset($item['season'],$item['episode']))return null;$key=Catalogue::showKey((string)$item['section'],(string)$item['show']);
-        if(!BrowseIndex::ready())return null;$q=\Vaultcast\Database::connection()->prepare("SELECT item_id,season,episode FROM vaultcast_browse_items WHERE show_key=? AND media_kind='video' AND (season>? OR (season=? AND episode>?)) ORDER BY season,episode,item_id LIMIT 1");$q->execute([$key,(int)$item['season'],(int)$item['season'],(int)$item['episode']]);$next=$q->fetch(PDO::FETCH_ASSOC);return $next ?: null;
+        if(empty($item['show']))return null;$next=PlaybackSequence::next(self::$viewer,(string)$item['id']);
+        return $next?['item_id'=>$next['id'],'season'=>$next['season'],'episode'=>$next['episode']]:null;
     }
 }

@@ -120,6 +120,7 @@ if ($path === '/me/prefs' && $method === 'POST') {
             foreach (['theme','autoplay','default_quality','reduce_motion','language'] as $k) {
                 if (array_key_exists($k, $b)) $prefs[$k] = $b[$k];
             }
+            foreach (['autoplay_on_open','autoplay_next'] as $key) if(array_key_exists($key,$b)) $prefs[$key]=!empty($b[$key]);
             if (array_key_exists('hide_spoilers',$b)) $prefs['hide_spoilers']=!empty($b['hide_spoilers']);
             if (array_key_exists('home_compact',$b)) $prefs['home_compact']=!empty($b['home_compact']);
             if (array_key_exists('home_panels',$b) && is_array($b['home_panels'])) $prefs['home_panels']=array_values(array_unique(array_intersect($b['home_panels'],['recent','games','watchlist','friends','calendar','stats'])));
