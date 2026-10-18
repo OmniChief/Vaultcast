@@ -3752,11 +3752,32 @@ try {
         window.EJS_onGameStart = function(){ if (session === _emuSessionId) { _emuLoading = false; window.VaultcastHub.gameStarted(item); } };
       }
 
+      // loader.js loads its dependencies asynchronously; its script.onload can
+      // fire before EJS_emulator exists. Mount from the actual lifecycle events
+      // as well as the direct-constructor path.
+      function ensureScreenController(){
+        if (session !== _emuSessionId) return;
+        var emu = window.EJS_emulator;
+        if (!emu || emu._streamDisposed) return;
+        try { mountScreenController(emu); }
+        catch (err) { console.warn('On-screen controller setup failed', err); }
+      }
+      var readyWithController = window.EJS_ready;
+      window.EJS_ready = function(){
+        ensureScreenController();
+        if (typeof readyWithController === 'function') return readyWithController.apply(this, arguments);
+      };
+      var startWithController = window.EJS_onGameStart;
+      window.EJS_onGameStart = function(){
+        ensureScreenController();
+        if (typeof startWithController === 'function') return startWithController.apply(this, arguments);
+      };
+
       function wireEjsLifecycle(emu){
         /* loader.js wires these; direct new EmulatorJS() does not — without "start",
            lobbyAfterGameStart never runs (no open-room/join-room, no Joined toast). */
         if (!emu || typeof emu.on !== 'function') return;
-        mountScreenController(emu);
+        ensureScreenController();
         if (lobbyOpts) lobbyInstallFrameBridge(emu);
         try {
           if (typeof window.EJS_ready === 'function') emu.on('ready', window.EJS_ready);
