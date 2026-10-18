@@ -2516,8 +2516,9 @@ function confirmDialog(message, opts){
     np._streamLastVerifiedFrame = 0;
     try { lobbyLog('frame_reset', { reason: reason || 'reset', abs_frame: abs, owner: !!np.owner, playerID: np.playerID || null }); } catch (eL) {}
   }
+  var LOBBY_STATE_MAX_BYTES=8*1024*1024;
   function lobbyCaptureState(emu, maximum){
-    maximum=maximum||8*1024*1024;
+    maximum=maximum||LOBBY_STATE_MAX_BYTES;
     // EmulatorJS 4.2.1 getState() copies the allocated native buffer but never
     // frees it. Checkpoints must not leak a whole savestate on every sample.
     // Check before allocating so unsupported runtimes cannot leak a buffer or
@@ -2808,7 +2809,7 @@ function confirmDialog(message, opts){
           lobbyRestoreControllerState(emu, held);
           var bytes = lobbyCaptureState(emu);
           if (!(bytes instanceof Uint8Array) || !bytes.length) throw new Error('Could not save host state');
-          if (bytes.length > maximum) throw new Error('Host state exceeds the 8 MiB transfer limit');
+          if (bytes.length > LOBBY_STATE_MAX_BYTES) throw new Error('Host state exceeds the 8 MiB transfer limit');
           lobbyResetNetplayFrames(emu, 'host_snapshot');
           lobbyScheduleSyncTrace(emu);
           np._streamReadyUsers[np.playerID] = true;
@@ -2839,7 +2840,7 @@ function confirmDialog(message, opts){
         if (data.state != null) {
           if (np.owner || typeof data.sync_id !== 'number' || data.sync_id <= (np._streamSyncId || 0)) return;
           var bytes = lobbyDecodeStateBytes(data.state);
-          if (!bytes || !bytes.length) throw new Error('Invalid host state');
+          if (!bytes || !bytes.length || bytes.length > LOBBY_STATE_MAX_BYTES) throw new Error('Invalid or oversized host state');
           if (typeof data.state_hash !== 'string' || window.VaultcastNetplaySync.stateHash(bytes) !== data.state_hash) {
             throw new Error('Host snapshot checksum is invalid; update and refresh every player');
           }
@@ -3016,7 +3017,7 @@ function confirmDialog(message, opts){
       return;
     }
     var roomName = String(lobbyOpts.room_code || lobbyOpts.title || 'Lobby').slice(0, 20);
-    var max = Math.max(2, Math.min(4, +(lobbyOpts.max_players || 2)));
+    var max = Math.max(2, Math.min(4, Math.floor(Number(lobbyOpts.max_players)) || 2));
     var role = lobbyOpts.role === 'host' ? 'host' : (lobbyOpts.role === 'guest' ? 'guest' : '');
     if (!role) return;
     var attempts = 0;
@@ -3708,6 +3709,7 @@ try {
 
   var APP_VERSION = window.__STREAM_VERSION__;
   var ICONS = {
+    home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10l9-7 9 7v10a1 1 0 0 1-1 1h-5v-8H9v8H4a1 1 0 0 1-1-1z"/></svg>',
     vod: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4.5" width="18" height="12.5" rx="2.6" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M10.2 8.2v5.1l4.4-2.55z" fill="currentColor"/><path d="M8 20h8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
     live: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="2.3" fill="currentColor"/><path d="M8.2 8.2a5.4 5.4 0 0 0 0 7.6M15.8 8.2a5.4 5.4 0 0 1 0 7.6M5.3 5.3a9.5 9.5 0 0 0 0 13.4M18.7 5.3a9.5 9.5 0 0 1 0 13.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
     play: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.2 7.5h9.6a4.2 4.2 0 0 1 4.2 4.2v.9a3.9 3.9 0 0 1-6.9 2.5l-.5-.6h-3.2l-.5.6a3.9 3.9 0 0 1-6.9-2.5v-.9a4.2 4.2 0 0 1 4.2-4.2z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M7.6 9.9v3M6.1 11.4h3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="15.6" cy="10.5" r="1.05" fill="currentColor"/><circle cx="17.6" cy="12.6" r="1.05" fill="currentColor"/></svg>',
@@ -3999,7 +4001,7 @@ try {
           onClick: function(){ goMode(m[0]); }
         }, [ icon(m[0]), h('span', { className:'mode-label', text: m[1] }) ]);
       })),
-      h('div', { className:'nav-right' }, [ userAreaAllowed('library') || userAreaAllowed('games') ? searchBoxEl(mode) : null, h('a',{className:'btn ghost',href:BASE+'?compat=on',text:'Compatibility',title:'Simplified browsing and playback'}), accountMenu() ])
+      h('div', { className:'nav-right' }, [ userAreaAllowed('library') || userAreaAllowed('games') ? searchBoxEl(mode) : null, accountMenu() ])
     ]);
     return h('div', { className:'app-shell xshell' }, [
       header,
