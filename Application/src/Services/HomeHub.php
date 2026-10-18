@@ -138,6 +138,11 @@ final class HomeHub {
             'friends'=>$friends,'upcoming'=>$upcoming,'notifications'=>array_values($data['notifications'] ?? []),
             'preferences'=>$data['preferences'] ?? [],'signed_in'=>($user['role'] ?? '')!=='guest'],$shelves);
     }
+    public static function releaseCalendar(array $user): array {
+        $data=self::personal((string)$user['id']);$shows=[];
+        foreach($data['favourites'] ?? [] as $entry){$card=$entry['card'] ?? [];if(($card['kind'] ?? '')==='show' && self::visible($card,$user))$shows[$card['show_key']]=$card;}
+        $out=[];foreach(self::releaseDates((string)$user['id'],array_keys($shows)) as $episode){$episode['card']=$shows[$episode['show_key']];unset($episode['show_key']);$out[]=$episode;}return $out;
+    }
     private static function releaseDates(string $uid,array $keys): array {
         if (!$keys) return [];
         sort($keys,SORT_STRING);

@@ -4,30 +4,77 @@ declare(strict_types=1);
 final class CompatibilityBrowser {
     private static $base;
     private static $viewer;
+    private static $personal;
+    private static $signed=false;
     private static function esc($text): string { return htmlspecialchars((string)$text,ENT_QUOTES|ENT_SUBSTITUTE,'UTF-8'); }
     private static function url(array $params=[]): string { return self::$base.'?'.http_build_query(['compat'=>'on']+$params,'','&',PHP_QUERY_RFC3986); }
     private static function link(string $label,array $params=[]): string { return '<a class="compat-button" href="'.self::esc(self::url($params)).'">'.self::esc($label).'</a>'; }
     private static function form(array $params,string $label,string $action, array $fields=[]): string {
-        $html='<form method="post" action="'.self::esc(self::url($params)).'"><input type="hidden" name="compat_action" value="'.self::esc($action).'">';
+        $html='<form class="compat-action" method="post" action="'.self::esc(self::url($params)).'"><input type="hidden" name="compat_action" value="'.self::esc($action).'"><input type="hidden" name="compat_token" value="'.self::esc(self::token()).'">';
         foreach($fields as $key=>$value)$html.='<input type="hidden" name="'.self::esc($key).'" value="'.self::esc($value).'">';
         return $html.'<button type="submit">'.self::esc($label).'</button></form>';
     }
     private static function allow(string $area): void { if(!AreaAccess::allowed(self::$viewer,$area))throw new RuntimeException('Your account does not have access to this section.'); }
     private static function searchForm(array $params,string $query): string {
-        $html='<form method="get" action="'.self::esc(self::$base).'"><input type="hidden" name="compat" value="on">';
+        $html='<form class="compat-search" method="get" action="'.self::esc(self::$base).'"><input type="hidden" name="compat" value="on">';
         foreach($params as $key=>$value)$html.='<input type="hidden" name="'.self::esc($key).'" value="'.self::esc($value).'">';
         return $html.'<label>Search <input type="text" name="q" value="'.self::esc($query).'" maxlength="200"></label><button type="submit">Search</button></form>';
     }
     private static function pages(array $params,int $page,bool $more): string {
-        return '<p>'.($page>1?self::link('Previous',['page'=>$page-1]+$params):'').' Page '.$page.' '.($more?self::link('Next',['page'=>$page+1]+$params):'').'</p>';
+        return '<div class="compat-pages">'.($page>1?self::link('Previous',['page'=>$page-1]+$params):'').' Page '.$page.' '.($more?self::link('Next',['page'=>$page+1]+$params):'').'</div>';
+    }
+    private static function token(): string { return hash('sha256','compat-form|'.($_COOKIE[Auth::COOKIE] ?? 'anonymous')); }
+    private static function personal(): array {
+        if(self::$personal===null)self::$personal=self::$signed ? \Vaultcast\Repository::document('home-hub:'.self::$viewer['id'],[]) : [];
+        return self::$personal;
+    }
+    private static function isShow(array $item): bool {return ($item['kind'] ?? '')==='show'||($item['media_kind'] ?? '')==='show'||(!empty($item['show_key'])&&empty($item['media_kind']));}
+    private static function mediaUrl(array $item): string {return self::url(['view'=>self::isShow($item)?'show':'item','id'=>self::isShow($item)?($item['show_key'] ?? $item['id']):$item['id']]);}
+    private static function poster(array $item,string $size='card'): string {
+        $show=self::isShow($item);$id=$show?($item['show_key'] ?? $item['id']):($item['id'] ?? '');$title=$item['title'] ?? 'Untitled';
+        $url=self::$base.'api/'.($show?'shows/':'items/').rawurlencode((string)$id).'/poster?variant='.($size==='detail'?'full':'medium');
+        $html='<span class="compat-poster compat-poster-'.$size.'"><span class="compat-poster-fallback">'.self::esc(mb_substr((string)$title,0,1)).'</span>';
+        if($id!=='' && ($item['has_poster'] ?? true))$html.='<img data-compat-poster="1" loading="lazy" src="'.self::esc($url).'" alt="'.self::esc($title).'" width="240" height="360">';
+        return $html.'</span>';
     }
     private static function cards(array $items): string {
-        $html='<ul class="compat-list">';
-        foreach($items as $item){if(($item['media_kind'] ?? '')==='rom'||($item['type'] ?? '')==='roms')continue;
-            $show=($item['kind'] ?? '')==='show'||($item['media_kind'] ?? '')==='show';
-            $html.='<li>'.self::link(($item['title'] ?? 'Untitled').(!empty($item['year'])?' ('.$item['year'].')':''),['view'=>$show?'show':'item','id'=>$show?($item['show_key'] ?? $item['id']):$item['id']]).'</li>';
+        $html='<ul class="compat-cards">';$count=0;
+        foreach($items as $item){if(($item['media_kind'] ?? '')==='rom'||($item['type'] ?? '')==='roms'||!AreaAccess::allowed(self::$viewer,AreaAccess::itemArea($item)))continue;
+            $count++;$meta=[];if(!empty($item['year']))$meta[]=$item['year'];if(!empty($item['season_count']))$meta[]=$item['season_count'].' seasons';if(!empty($item['episode']))$meta[]='Episode '.$item['episode'];
+            $html.='<li><a class="compat-card" href="'.self::esc(self::mediaUrl($item)).'">'.self::poster($item).'<strong>'.self::esc($item['title'] ?? 'Untitled').'</strong><small>'.self::esc(implode(' · ',$meta)).'</small>';
+            $progress=$item['progress'] ?? [];$duration=(float)($progress['duration'] ?? 0);$position=(float)($progress['position'] ?? 0);
+            if($duration>0 && $position>0)$html.='<span class="compat-progress"><span style="width:'.min(100,(int)round($position/$duration*100)).'%"></span></span>';
+            $html.='</a></li>';
         }
-        return $html.'</ul>';
+        return $count?$html.'</ul>':'<p class="compat-empty">Nothing here yet.</p>';
+    }
+    private static function shelfActions(array $card): string {
+        if(!self::$signed)return '<p class="compat-note">Sign in to save favourites and a watchlist.</p>';
+        $key=(!empty($card['show_key'])?'show:':'item:').(!empty($card['show_key'])?$card['show_key']:$card['id']);$personal=self::personal();$html='<div class="compat-actions">';
+        foreach(['favourites'=>'Favourite','watchlist'=>'Watchlist'] as $shelf=>$label){$active=isset($personal[$shelf][$key]);$html.=self::form(['view'=>self::isShow($card)?'show':'item','id'=>self::isShow($card)?($card['show_key'] ?? $card['id']):$card['id']],$active?'Remove from '.$label:'Add to '.$label,'shelf',['key'=>$key,'shelf'=>$shelf,'enabled'=>$active?'0':'1']);}
+        return $html.'</div>';
+    }
+    private static function heading(string $eyebrow,string $title,string $description=''): string {return '<div class="compat-heading"><p class="compat-eyebrow">'.self::esc($eyebrow).'</p><h2>'.self::esc($title).'</h2>'.($description!==''?'<p class="compat-note">'.self::esc($description).'</p>':'').'</div>';}
+    private static function recentProgress(): array {
+        if(!self::$signed || !AreaAccess::allowed(self::$viewer,'library'))return [];
+        $q=\Vaultcast\Database::connection()->prepare('SELECT i.payload AS item,p.payload AS progress FROM vaultcast_progress p JOIN vaultcast_items i ON i.id=p.item_id WHERE p.user_id=? ORDER BY p.updated_at DESC LIMIT 24');$q->execute([self::$viewer['id']]);$rows=$q->fetchAll(PDO::FETCH_ASSOC);$items=[];$seen=[];
+        foreach($rows as $row){$item=json_decode($row['item'],true);$progress=json_decode($row['progress'],true);if(!is_array($item)||!is_array($progress)||AreaAccess::itemArea($item)!=='library'||!empty($progress['watched'])||($progress['position'] ?? 0)<5||Catalogue::progressFinished($progress,!empty($item['show'])))continue;
+            $key=!empty($item['show'])?Catalogue::showKey((string)$item['section'],(string)$item['show']):$item['id'];if(isset($seen[$key]))continue;$seen[$key]=true;$card=Catalogue::publicItem($item,false);$card['progress']=$progress;$items[]=$card;if(count($items)>=6)break;
+        }
+        return $items;
+    }
+    private static function home(array $home): string {
+        $name=self::$signed?((self::$viewer['display_name'] ?? '') ?: self::$viewer['username']):'';
+        $html='<div class="compat-hero">'.self::heading('YOUR SPACE. YOUR STORIES.',$name!==''?'Welcome back, '.$name:'Make yourself at home.','Your favourites, your next episode and something new to discover.').'<div class="compat-actions">'.(AreaAccess::allowed(self::$viewer,'library')?self::link('Explore the library',['view'=>'library']):'').(!empty($home['features']['live'])?self::link('Watch Live',['view'=>'live']):'').'</div></div>';
+        $continue=array_slice($home['continue_watching'] ?? [],0,6);if(!$continue)$continue=self::recentProgress();
+        if($continue)$html.='<section class="compat-shelf"><h2>Continue watching</h2>'.self::cards($continue).'</section>';
+        $personal=self::personal();$favourites=[];
+        foreach($personal['favourites'] ?? [] as $row){$card=$row['card'] ?? [];if(($card['media_kind'] ?? '')!=='rom' && AreaAccess::allowed(self::$viewer,AreaAccess::itemArea($card)))$favourites[]=$card;if(count($favourites)>=6)break;}
+        if($favourites)$html.='<section class="compat-shelf"><div class="compat-row-head"><h2>Your favourites</h2>'.self::link('View all',['view'=>'favourites']).'</div>'.self::cards($favourites).'</section>';
+        $html.='<section class="compat-shelf"><h2>Your library</h2><div class="compat-categories">';$featured=[];
+        foreach($home['sections'] ?? [] as $section){if(($section['type'] ?? '')==='roms')continue;$html.=self::link(($section['label'] ?? $section['type']).' · '.($section['count'] ?? $section['item_count'] ?? 0),['view'=>'section','id'=>$section['id']]);foreach(array_slice($section['items'] ?? [],0,2) as $item)if(count($featured)<8)$featured[]=$item;}
+        $html.='</div></section>';if($featured)$html.='<section class="compat-shelf"><h2>Discover</h2>'.self::cards($featured).'</section>';
+        return $html;
     }
     private static function player(string $url,bool $audio=false,array $tracks=[],array $config=[]): string {
         if(!preg_match('#^(?:https?://|/)#i',$url))throw new RuntimeException('Invalid stream address.');
@@ -37,10 +84,39 @@ final class CompatibilityBrowser {
     }
     private static function content(array $home): string {
         $view=(string)($_GET['view'] ?? 'home');$id=(string)($_GET['id'] ?? '');$page=max(1,min(1000,(int)($_GET['page'] ?? 1)));$query=mb_substr(trim((string)($_GET['q'] ?? '')),0,200);
-        if($view==='home'){
-            $html='<h2>Your library</h2><ul class="compat-list">';
-            foreach($home['sections'] ?? [] as $section)if(($section['type'] ?? '')!=='roms')$html.='<li>'.self::link($section['label'] ?? $section['name'] ?? $section['type'],['view'=>'section','id'=>$section['id']]).'</li>';
-            return $html.'</ul>'.self::searchForm(['view'=>'search'],'');
+        if($view==='home')return self::home($home);
+        if($view==='library'){
+            self::allow('library');$html=self::heading('BROWSE YOUR WORLD','Library','Films, shows, anime and more, all in one place.').'<div class="compat-categories">';
+            foreach($home['sections'] ?? [] as $section)if(($section['type'] ?? '')!=='roms')$html.=self::link($section['label'] ?? $section['type'],['view'=>'section','id'=>$section['id']]);
+            return $html.'</div>'.self::searchForm(['view'=>'search'],'');
+        }
+        if(in_array($view,['favourites','watchlist'],true)){
+            if(!self::$signed)throw new RuntimeException('Sign in to view your personal lists.');$rows=array_values(array_filter(self::personal()[$view] ?? [],static function($row){return AreaAccess::itemArea($row['card'] ?? [])==='library' && AreaAccess::allowed(self::$viewer,'library');}));
+            usort($rows,static function($a,$b){return ($b['added_at'] ?? 0)<=>($a['added_at'] ?? 0);});
+            $items=array_map(static function($row){return $row['card'];},array_slice($rows,($page-1)*16,16));
+            return self::heading('YOUR SPACE',$view==='favourites'?'Favourites':'Watchlist').self::cards($items).self::pages(['view'=>$view],$page,$page*16<count($rows));
+        }
+        if($view==='calendar'){
+            if(!self::$signed)throw new RuntimeException('Sign in to view your release calendar.');$rows=HomeHub::releaseCalendar(self::$viewer);$html=self::heading('COMING UP','Release calendar','Upcoming episodes for your favourite shows and anime.').'<ul class="compat-list">';
+            foreach(array_slice($rows,($page-1)*16,16) as $ep)$html.='<li><span class="compat-date">'.self::esc($ep['date']).'</span><a href="'.self::esc(self::mediaUrl($ep['card'])).'"><strong>'.self::esc($ep['card']['title']).'</strong><span class="compat-note"> · S'.(int)$ep['season'].' E'.(int)$ep['episode'].' · '.self::esc($ep['title']).'</span></a></li>';
+            return $html.($rows?'':'<li>No upcoming episodes are currently cached. Favourite a show to follow its releases.</li>').'</ul>'.self::pages(['view'=>'calendar'],$page,$page*16<count($rows));
+        }
+        if($view==='account'){
+            $html=self::heading('YOUR ACCOUNT',self::$signed?((self::$viewer['display_name'] ?? '') ?: self::$viewer['username']):'Guest browsing');
+            $html.='<div class="compat-panel"><h3>Display and playback</h3><p>This interface keeps browsing and playback available on older browsers.</p><p class="compat-note">Games and advanced administration use the full interface.</p><a class="compat-button" href="'.self::esc(self::$base.'?compat=auto').'">Automatic detection</a><a class="compat-button" href="'.self::esc(self::$base.'?compat=off').'">Full interface</a></div>';
+            return $html.(self::$signed?self::form([],'Sign out','logout'):self::link('Sign in',['view'=>'login']));
+        }
+        if($view==='collections'){
+            self::allow('library');$rows=Collections::publicList()['collections'] ?? [];if($query!=='')$rows=array_values(array_filter($rows,static function($row)use($query){return mb_stripos($row['name'],$query)!==false;}));
+            $html=self::heading('LIBRARY','Collections').self::searchForm(['view'=>'collections'],$query).'<ul class="compat-cards">';
+            foreach(array_slice($rows,($page-1)*16,16) as $collection){$cover=$collection['cover_item'] ?? ['id'=>'','title'=>$collection['name'],'has_poster'=>false];$html.='<li><a class="compat-card" href="'.self::esc(self::url(['view'=>'collection','id'=>$collection['id']])).'">'.self::poster($cover).'<strong>'.self::esc($collection['name']).'</strong><small>'.(int)$collection['available_count'].' / '.(int)$collection['part_count'].' available</small></a></li>';}
+            return $html.'</ul>'.self::pages(['view'=>'collections','q'=>$query],$page,$page*16<count($rows));
+        }
+        if($view==='collection'){
+            self::allow('library');if(!Collections::get($id))throw new RuntimeException('Collection not found.');$collection=Collections::status($id);$html=self::heading('COLLECTION',(string)$collection['collection']['name'],strip_tags((string)($collection['collection']['description'] ?? '')));$items=[];$missing=[];
+            foreach(array_slice($collection['parts'],($page-1)*16,16) as $part){if(!empty($part['present']) && !empty($part['item']))$items[]=$part['item'];else $missing[]=$part['title'] ?? 'Unavailable title';}
+            $html.=self::cards($items);if($missing){$html.='<h3>Not in your library</h3><ul class="compat-list">';foreach($missing as $title)$html.='<li>'.self::esc($title).'</li>';$html.='</ul>';}
+            return $html.self::pages(['view'=>'collection','id'=>$id],$page,$page*16<count($collection['parts']));
         }
         if($view==='search'){
             $html='<h2>Search</h2>'.self::searchForm(['view'=>'search'],$query);if($query==='')return $html;
@@ -51,14 +127,18 @@ final class CompatibilityBrowser {
             self::allow('library');$section=null;foreach($home['sections'] ?? [] as $s)if($s['id']===$id)$section=$s;
             if(!$section||($section['type'] ?? '')==='roms')throw new RuntimeException('Library unavailable.');
             if(in_array($section['type'],['tv','anime'],true)){
-                $rows=array_values(array_filter(BrowseIndex::shows($id),static function($row)use($query){return $query===''||mb_stripos($row['title'],$query)!==false;}));
-                $more=$page*16<count($rows);$items=array_slice($rows,($page-1)*16,16);
+                if(BrowseIndex::ready()){
+                    $args=[$id];$where='section_id=?';if($query!==''){$where.=' AND title LIKE ?';$args[]='%'.addcslashes($query,'%_\\').'%';}
+                    $q=\Vaultcast\Database::connection()->prepare('SELECT payload,(source_sig<>prepared_sig) AS dirty FROM vaultcast_show_summaries WHERE '.$where.' ORDER BY title,show_key LIMIT 17 OFFSET '.(($page-1)*16));$q->execute($args);$rows=[];
+                    foreach($q as $row){$rows[]=json_decode($row['payload'],true);if($row['dirty'])BrowseIndex::schedule();}$more=count($rows)>16;$items=array_slice($rows,0,16);
+                }else{$rows=array_values(array_filter(BrowseIndex::shows($id),static function($row)use($query){return $query===''||mb_stripos($row['title'],$query)!==false;}));$more=$page*16<count($rows);$items=array_slice($rows,($page-1)*16,16);}
+                foreach($items as &$showCard){$showCard['kind']='show';$showCard['media_kind']='show';}unset($showCard);
             }else{$result=\Vaultcast\Repository::browse($id,$query,'','',$page,16);$items=$result['items'];$more=$result['has_more'];}
             return '<h2>'.self::esc($section['label'] ?? $section['type']).'</h2>'.self::searchForm(['view'=>'section','id'=>$id],$query).self::cards($items).self::pages(['view'=>'section','id'=>$id,'q'=>$query],$page,$more);
         }
         if($view==='show'){
             self::allow('library');$detail=Catalogue::show($id);if(!$detail)throw new RuntimeException('Show not found.');
-            $html='<h2>'.self::esc($detail['show']['title']).'</h2>';if(!empty($detail['show']['synopsis']))$html.='<p>'.self::esc(strip_tags($detail['show']['synopsis'])).'</p>';
+            $show=$detail['show'];$show['id']=$id;$show['show_key']=$id;$show['kind']='show';$html='<div class="compat-detail">'.self::poster($show,'detail').'<div class="compat-detail-copy">'.self::heading('SERIES',(string)$show['title']).(!empty($show['synopsis'])?'<p class="compat-synopsis">'.self::esc(strip_tags($show['synopsis'])).'</p>':'').self::shelfActions($show).'</div></div>';
             $seasons=$detail['seasons'] ?? [];$season=(int)($_GET['season'] ?? ($seasons[0]['season'] ?? 0));$html.='<form method="get" action="'.self::esc(self::$base).'"><input type="hidden" name="compat" value="on"><input type="hidden" name="view" value="show"><input type="hidden" name="id" value="'.self::esc($id).'"><label>Season <select name="season">';$episodes=[];
             foreach($seasons as $row){$selected=(int)$row['season']===$season;$html.='<option value="'.(int)$row['season'].'"'.($selected?' selected="selected"':'').'>'.self::esc($row['label']).'</option>';if($selected)$episodes=$row['episodes'];}
             $html.='</select></label><button type="submit">Open season</button></form><ul class="compat-list">';$episodes=array_values(array_filter($episodes,static function($ep){return !empty($ep['id'])&&($ep['available'] ?? true)!==false&&($ep['status'] ?? '')!=='missing';}));
@@ -67,13 +147,13 @@ final class CompatibilityBrowser {
         }
         if($view==='item'){
             self::allow('library');$item=Catalogue::item($id);if(!$item||AreaAccess::itemArea($item)!=='library')throw new RuntimeException('Media not found.');
-            $detail=Catalogue::itemDetail($id);$card=$detail['item'];$html='<h2>'.self::esc($card['title']).'</h2>';
+            $detail=Catalogue::itemDetail($id);$card=$detail['item'];$html=self::heading(!empty($card['show'])?'EPISODE':'LIBRARY',(string)$card['title']);
             if(($_SERVER['REQUEST_METHOD'] ?? '')==='POST'&&($_POST['compat_action'] ?? '')==='play'){
                 if(!is_file((string)($item['path'] ?? '')))throw new RuntimeException('The media file is unavailable.');
                 $play=Stream::issueToken(self::$viewer,$id);$html.=self::player($play['url'],($play['media_kind'] ?? '')==='audio',$play['subtitles'] ?? [],['item_id'=>$id,'progress'=>$play['progress'] ?? null,'save_progress'=>(self::$viewer['id'] ?? '')!=='public','remux_url'=>!empty($play['remux_allowed'])?($play['remux_url'] ?? null):null]);
                 if(!empty($play['remux_allowed'])&&!empty($play['remux_url']))$html.='<p><a class="compat-button" data-compat-remux="1" href="'.self::esc($play['remux_url']).'">Open compatible stream</a></p>';
-            }else $html.=self::form(['view'=>'item','id'=>$id],'Open player','play');
-            if(!empty($card['synopsis']))$html.='<p>'.self::esc(strip_tags($card['synopsis'])).'</p>';
+            }else $html.=self::form(['view'=>'item','id'=>$id],'Play / Resume','play');
+            $html.='<div class="compat-detail">'.self::poster($card,'detail').'<div class="compat-detail-copy"><h3>'.self::esc($card['title']).'</h3><p class="compat-note">'.self::esc(implode(' · ',array_filter([$card['year'] ?? null,strtoupper($card['ext'] ?? '')]))).'</p>'.(!empty($card['synopsis'])?'<p class="compat-synopsis">'.self::esc(strip_tags($card['synopsis'])).'</p>':'').self::shelfActions($card).'</div></div>';
             return $html;
         }
         if($view==='live')return self::live($id,$page,$query);
@@ -105,14 +185,39 @@ final class CompatibilityBrowser {
         return $html.'</ul>'.self::pages(['view'=>'live','q'=>$query],$page,$page*16<count($channels));
     }
     public static function render(array $startup,string $base,string $site,string $error=''): void {
-        self::$base=$base;self::$viewer=$startup['me']['user'] ?? guest_user();AreaAccess::remember(self::$viewer);
-        if(($_SERVER['REQUEST_METHOD'] ?? '')==='POST'&&($_POST['compat_action'] ?? '')==='logout'){Auth::destroySession();header('Location: '.self::url(),true,303);return;}
-        $home=$startup['home'] ?? null;$body='';
-        if(!$home){
-            if(!empty($startup['me']['user']))$body='<p>'.self::esc(Access::message($startup['me']['user']['access_state']['state'] ?? 'pending')).'</p>';
-            else $body='<h2>Sign in</h2><form method="post" action="'.self::esc(self::url()).'"><input type="hidden" name="first_action" value="login"><p><label>Username <input type="text" name="username" autocomplete="username"></label></p><p><label>Password <input type="password" name="password" autocomplete="current-password"></label></p><button type="submit">Sign in</button></form><p>'.self::esc($error).'</p>';
-        }else{try{$body=self::content($home);}catch(Throwable $e){http_response_code(400);$body='<h2>Unable to open this page</h2><p>'.self::esc(get_class($e)==='RuntimeException'?$e->getMessage():'Please try again.').'</p>'.self::link('Home');error_log('Vaultcast compatibility browser: '.$e->getMessage());}}
+        self::$base=$base;self::$signed=!empty($startup['me']['user']);self::$personal=null;
+        self::$viewer=$startup['me']['user'] ?? guest_user();AreaAccess::remember(self::$viewer);
+        $home=$startup['home'] ?? null;$body='';$view=(string)($_GET['view'] ?? 'home');
+        if(($_SERVER['REQUEST_METHOD'] ?? '')==='POST' && isset($_POST['compat_action'])){
+            if(!hash_equals(self::token(),(string)($_POST['compat_token'] ?? ''))){http_response_code(403);$body='<p class="compat-error">This form expired. Reload the page and try again.</p>';}
+            elseif($_POST['compat_action']==='logout'){Auth::destroySession();header('Location: '.self::url(),true,303);return;}
+            elseif($_POST['compat_action']==='shelf'){
+                try{
+                    if(!self::$signed || !$home)throw new RuntimeException('Sign in to manage your lists.');
+                    HomeHub::save(self::$viewer,['key'=>(string)($_POST['key'] ?? ''),'shelf'=>(string)($_POST['shelf'] ?? ''),'enabled'=>($_POST['enabled'] ?? '')==='1']);
+                    header('Location: '.self::url(['view'=>$view,'id'=>(string)($_GET['id'] ?? '')]),true,303);return;
+                }catch(Throwable $e){http_response_code(400);$body='<p class="compat-error">'.self::esc($e instanceof DomainException || $e instanceof RuntimeException?$e->getMessage():'Could not save your list.').'</p>';}
+            }
+        }
+        if($body===''){
+            if(!$home || ($view==='login'&&!self::$signed)){
+                if(self::$signed)$body='<div class="compat-panel"><p>'.self::esc(Access::message($startup['me']['user']['access_state']['state'] ?? 'pending')).'</p></div>';
+                else $body='<div class="compat-login compat-panel">'.self::heading('WELCOME BACK','Sign in','Your library, your favourites and your next episode.').'<form method="post" action="'.self::esc(self::url()).'"><input type="hidden" name="first_action" value="login"><p><label>Username <input type="text" name="username" autocomplete="username"></label></p><p><label>Password <input type="password" name="password" autocomplete="current-password"></label></p><button type="submit">Sign in</button></form><p class="compat-error">'.self::esc($error).'</p></div>';
+            }else{try{$body=self::content($home);}catch(Throwable $e){http_response_code(400);$body='<div class="compat-panel"><h2>Unable to open this page</h2><p>'.self::esc($e instanceof RuntimeException || $e instanceof DomainException?$e->getMessage():'Please try again.').'</p>'.self::link('Home').'</div>';error_log('Vaultcast compatibility browser: '.$e->getMessage());}}
+        }
+        $nav='<div class="compat-header"><a class="compat-brand" href="'.self::esc(self::url()).'"><span class="compat-logo">&#9654;</span> '.self::esc($site).'</a><div class="compat-major-nav">';
+        $tabs=['home'=>'Home'];if($home && AreaAccess::allowed(self::$viewer,'library'))$tabs['library']='Library';if(!empty($home['features']['live']))$tabs['live']='Watch Live';$tabs['account']=self::$signed?'Account':'Sign in';
+        foreach($tabs as $key=>$label){$target=$key==='account'&&!self::$signed?'login':$key;$selected=$view===$target || ($key==='library'&&in_array($view,['section','show','item','search','collections','collection'],true));$nav.='<a'.($selected?' class="active" aria-current="page"':'').' href="'.self::esc(self::url(['view'=>$target])).'">'.self::esc($label).'</a>';}
+        $nav.='</div></div>';
+        if($home){
+            $nav.='<div class="compat-subnav">';
+            if(in_array($view,['library','section','show','item','search','collections','collection'],true)){
+                $nav.=self::link('Discover',['view'=>'library']);foreach($home['sections'] ?? [] as $section)if(($section['type'] ?? '')!=='roms')$nav.=self::link($section['label'] ?? $section['type'],['view'=>'section','id'=>$section['id']]);$nav.=self::link('Collections',['view'=>'collections']);
+            }else{foreach(['home'=>'Overview','favourites'=>'Favourites','watchlist'=>'Watchlist','calendar'=>'Release calendar'] as $key=>$label){if($key!=='home'&&!self::$signed)continue;$nav.='<a'.($view===$key?' class="active" aria-current="page"':'').' href="'.self::esc(self::url(['view'=>$key])).'">'.self::esc($label).'</a>';}}
+            $nav.='</div>';
+        }
         $css=(string)file_get_contents(STREAM_ROOT.'/assets/css/compatibility.css');$scriptVersion=substr(hash_file('sha256',STREAM_ROOT.'/assets/js/compatibility.js'),0,16);release_request_locks();
-        header('Content-Type: text/html; charset=utf-8');echo '<!DOCTYPE html><html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'.self::esc($site).'</title><style>'.$css.'</style></head><body><div id="compat-shell"><h1>'.self::esc($site).'</h1><p>Compatibility mode</p><div class="compat-nav">'.self::link('Home').(AreaAccess::allowed(self::$viewer,'library')?self::link('Search',['view'=>'search']):'').(!empty($home['features']['live'])?self::link('Watch Live',['view'=>'live']):'').'<a class="compat-button" href="'.self::esc($base.'?compat=auto').'">Automatic detection</a><a class="compat-button" href="'.self::esc($base.'?compat=off').'">Full interface</a>'.(!empty($startup['me']['user'])?self::form([],'Sign out','logout'):'').'</div>'.$body.'</div><script src="'.self::esc($base.'index.php?asset=assets/js/compatibility.js&v='.$scriptVersion).'"></script></body></html>';
+        header('Content-Type: text/html; charset=utf-8');
+        echo '<!DOCTYPE html><html lang="en"><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'.self::esc($site).'</title><style>'.$css.'</style></head><body><a class="compat-skip" href="#compat-content">Skip to content</a>'.$nav.'<div id="compat-shell"><div id="compat-content" role="main">'.$body.'</div><div class="compat-footer"><span>Compatibility mode · '.self::esc(STREAM_VERSION).'</span><a href="'.self::esc($base.'?compat=auto').'">Automatic detection</a><a href="'.self::esc($base.'?compat=off').'">Full interface</a></div></div><script src="'.self::esc($base.'index.php?asset=assets/js/compatibility.js&v='.$scriptVersion).'"></script></body></html>';
     }
 }

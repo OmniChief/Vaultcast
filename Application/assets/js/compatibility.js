@@ -1,4 +1,13 @@
 (function(){
+  // Decorative artwork must not replace the usable title when a cache file is missing.
+  var images=document.getElementsByTagName('img'),art;
+  for(var imageIndex=0;imageIndex<images.length;imageIndex++){
+    art=images[imageIndex];
+    if(art.getAttribute('data-compat-poster')){
+      art.onerror=function(){this.style.display='none';};
+      if(art.complete&&typeof art.naturalWidth==='number'&&art.naturalWidth===0)art.style.display='none';
+    }
+  }
   var config=window.__VC_COMPAT_PLAYER__,media=document.getElementById('compat-media');
   if(!config||!media)return;
   var message=document.getElementById('compat-player-message'),base=config.base||'/',alive=true,hls=null,roll=null,progressTimer=null,requests=[],resume=Number((config.progress||{}).position)||0,resumed=false,remux=false,loadingHls=false,recovered=false,tuning=false,hlsTimer=null;
