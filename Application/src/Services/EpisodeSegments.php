@@ -9,12 +9,39 @@ final class EpisodeSegments {
         curl_exec($ch);$code=(int)curl_getinfo($ch,CURLINFO_HTTP_CODE);curl_close($ch);
         return [$code,json_decode($body,true)];
     }
+    private static function fingerprint(array $item): string { return hash('sha256',json_encode([$item['id'],$item['mtime'] ?? null,$item['size'] ?? null])); }
+    public static function saved(array $item): ?array {
+        $record=\Vaultcast\Repository::document('episode-segments:'.$item['id']);
+        return is_array($record)&&($record['fingerprint'] ?? '')===self::fingerprint($item)?$record:null;
+    }
+    public static function edit(array $item,array $body): array {
+        if(empty($item['show'])||!is_numeric($item['episode'] ?? null))json_error('TV or anime episode required');
+        $key='episode-segments:'.$item['id'];
+        if(($body['action'] ?? '')==='reset'){\Vaultcast\Repository::putDocument($key,null);return ['ok'=>true,'segments'=>[]];}
+        $rows=$body['segments'] ?? null;$duration=$body['duration'] ?? 0;
+        if(!is_array($rows)||count($rows)>16||!is_numeric($duration)||!is_finite((float)$duration)||$duration<0||$duration>21600)json_error('Invalid episode timings');
+        $segments=[];foreach($rows as $row){
+            if(!is_array($row)||!in_array($row['kind'] ?? '',['intro','outro'],true)||!is_numeric($row['start'] ?? null)||!is_numeric($row['end'] ?? null))json_error('Enter valid start and end times');
+            $start=(float)$row['start'];$end=(float)$row['end'];
+            if(!is_finite($start)||!is_finite($end)||$start<0||$end<=$start||$end>21600||($duration>0&&$end>$duration))json_error('End must follow start and be within the episode');
+            $segments[]=['kind'=>$row['kind'],'start'=>$start,'end'=>$end];
+        }
+        usort($segments,static function($a,$b){return $a['start']<=>$b['start'];});
+        $record=['ok'=>true,'segments'=>$segments,'source'=>'Admin','duration'=>(float)$duration,'fingerprint'=>self::fingerprint($item),'updated_at'=>time()];
+        \Vaultcast\Repository::putDocument($key,$record);return $record;
+    }
+    private static function persist(array $item,array $out,float $duration,$pin): array {
+        $out['duration']=$duration;$out['fingerprint']=self::fingerprint($item);$out['match_pin']=$pin;$out['updated_at']=time();
+        // Recheck for an administrator correction after the remote lookup finishes.
+        $saved=self::saved($item);if(($saved['source'] ?? '')==='Admin')return $saved;
+        \Vaultcast\Repository::putDocument('episode-segments:'.$item['id'],$out);return $out;
+    }
     public static function get(array $item,array $user,float $duration): array {
         $empty=['ok'=>true,'segments'=>[],'source'=>'TheIntroDB'];
         if(!AreaAccess::allowed($user,'library')||empty($item['show'])||!is_numeric($item['season'] ?? null)||!is_numeric($item['episode'] ?? null)||($user['prefs']['skip_segments'] ?? true)===false)return $empty;
         $season=(int)$item['season'];$episode=(int)$item['episode'];if($season<0||$episode<1||$season>1000||$episode>10000||$duration<300||$duration>21600)return $empty;
         $showKey=Catalogue::showKey((string)$item['section'],(string)$item['show']);
-        $pin=Matching::pinnedTvmazeId($showKey);if($pin===0)return $empty;
+        $pin=Matching::pinnedTvmazeId($showKey);$saved=self::saved($item);if($saved&&(($saved['source'] ?? '')==='Admin'||($saved['match_pin'] ?? null)===$pin))return $saved;if($pin===0)return $empty;
         $guide=MediaFacts::guide($showKey);
         if(!$guide){$path=STREAM_DATA.'/tvmaze/show_'.$showKey.'_episodes.json';if(is_file($path))$guide=json_decode((string)file_get_contents($path),true);}
         $tvmazeId=$pin ?? (int)($guide['id'] ?? 0);$externals=$pin&&$pin!==(int)($guide['id'] ?? 0)?[]:($guide['externals'] ?? []);
@@ -26,7 +53,7 @@ final class EpisodeSegments {
         if(!empty($externals['thetvdb']))$query['tvdb_id']=(int)$externals['thetvdb'];
         elseif(preg_match('/^tt[0-9]{7,10}$/D',(string)($externals['imdb'] ?? '')))$query['imdb_id']=$externals['imdb'];
         else return $empty;
-        $cacheKey='episode-segments-v4:'.hash('sha256',json_encode([$query,$item['mtime'] ?? null,$item['size'] ?? null]));$cached=\Vaultcast\Repository::cacheGet($cacheKey);if(is_array($cached))return $cached;
+        $cacheKey='episode-segments-v4:'.hash('sha256',json_encode([$query,$item['mtime'] ?? null,$item['size'] ?? null]));$cached=\Vaultcast\Repository::cacheGet($cacheKey);if(is_array($cached)){if(!empty($cached['segments']))return self::persist($item,$cached,$duration,$pin);return $cached;}
         [$status,$data]=self::json('https://api.theintrodb.org/v4/media?'.http_build_query($query));
         if($status!==200||!is_array($data)){\Vaultcast\Repository::cachePut($cacheKey,$empty,$status===404?86400:300);return $empty;}
         if(($data['type'] ?? '')!=='tv'||isset($data['season'])&&(int)$data['season']!==$season||isset($data['episode'])&&(int)$data['episode']!==$episode){\Vaultcast\Repository::cachePut($cacheKey,$empty,86400);return $empty;}
@@ -42,6 +69,6 @@ final class EpisodeSegments {
             $segments[]=['kind'=>$kind,'start'=>$start,'end'=>min($duration,$end)];
         }}
         usort($segments,static function($a,$b){return $a['start']<=>$b['start'];});$out=$empty;$out['segments']=$segments;
-        \Vaultcast\Repository::cachePut($cacheKey,$out,$segments?604800:86400);return $out;
+        \Vaultcast\Repository::cachePut($cacheKey,$out,$segments?604800:86400);return $segments?self::persist($item,$out,$duration,$pin):$out;
     }
 }

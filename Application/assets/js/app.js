@@ -1381,6 +1381,20 @@ function confirmDialog(message, opts){
     return (hh ? hh + ':' + (mm < 10 ? '0' : '') : '') + mm + ':' + (ss < 10 ? '0' : '') + ss;
   }
 
+  function editEpisodeSegments(item){
+    if(!state.user||state.user.role!=='admin'||!window.VaultcastHub)return;
+    window.VaultcastHub.modal('Edit intro / credits',function(body,close){
+      body.classList.add('live-editor');var rows=h('div'),status=h('p',{className:'muted',text:'Loading saved episode timings…'}),entries=[],duration=0,busy=false;
+      body.appendChild(h('p',{className:'muted',text:'Times are in seconds from the start of this episode. Empty timings disable skipping for this episode. Admin corrections are kept until you reset them.'}));body.appendChild(status);body.appendChild(rows);
+      function add(segment){var kind=h('select',{'aria-label':'Segment type'},[h('option',{value:'intro',text:'Intro'}),h('option',{value:'outro',text:'Credits'})]),start=h('input',{type:'number',min:0,step:'.1',value:segment.start==null?'':segment.start,'aria-label':'Start in seconds',placeholder:'Start (seconds)'}),end=h('input',{type:'number',min:0,step:'.1',value:segment.end==null?'':segment.end,'aria-label':'End in seconds',placeholder:'End (seconds)'}),row=h('div',{className:'row',style:'display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px'});kind.value=segment.kind||'intro';var entry={kind:kind,start:start,end:end,row:row};entries.push(entry);row.appendChild(kind);row.appendChild(start);row.appendChild(end);row.appendChild(h('button',{className:'btn ghost',text:'Remove',onClick:function(){entries=entries.filter(function(value){return value!==entry;});row.remove();}}));rows.appendChild(row);}
+      var controls=h('div',{className:'row'},[h('button',{className:'btn',text:'Add timing',onClick:function(){if(entries.length<16)add({});}})]);body.appendChild(controls);
+      function refreshPlayer(){var overlay=document.getElementById('player-overlay');if(overlay&&overlay._segmentItem===item.id&&overlay._reloadSegments)overlay._reloadSegments();}
+      function save(reset){if(busy)return;var segments=[];if(!reset){for(var i=0;i<entries.length;i++){var entry=entries[i],start=Number(entry.start.value),end=Number(entry.end.value);if(entry.start.value===''||entry.end.value===''||!isFinite(start)||!isFinite(end)||start<0||end<=start||(duration>0&&end>duration)){status.textContent='Enter a valid start and end within the episode.';return;}segments.push({kind:entry.kind.value,start:start,end:end});}}busy=true;status.textContent='Saving…';api('/items/'+encodeURIComponent(item.id)+'/segments',{method:'POST',body:reset?{action:'reset'}:{segments:segments,duration:duration}}).then(function(j){busy=false;if(!j.ok){status.textContent=j.error||'Could not save timings';return;}refreshPlayer();close();toast(reset?'Timings reset; provider lookup will run when playback starts.':'Episode timings saved');}).catch(function(){busy=false;status.textContent='Could not save timings';});}
+      var saveButton=h('button',{className:'btn primary',text:'Save timings',disabled:true,onClick:function(){save(false);}}),resetButton=h('button',{className:'btn ghost',text:'Reset to provider',disabled:true,onClick:function(){confirmDialog('Remove saved timings and use TheIntroDB again?',{okText:'Reset timings'}).then(function(ok){if(ok)save(true);});}});controls.appendChild(saveButton);controls.appendChild(resetButton);
+      api('/items/'+encodeURIComponent(item.id)+'/segments?edit=1').then(function(j){if(!body.isConnected)return;if(!j.ok){status.textContent=j.error||'Could not load timings';return;}duration=Number(j.duration)||0;var overlay=document.getElementById('player-overlay');if(!duration&&overlay&&overlay._segmentItem===item.id&&openPlayer._absDuration)duration=Number(openPlayer._absDuration())||0;(j.segments||[]).forEach(add);status.textContent=(j.source?'Saved source: '+j.source+'. ':'No saved timings. ')+(duration?'Episode length: '+Math.round(duration)+' seconds.':'');saveButton.disabled=resetButton.disabled=false;}).catch(function(){status.textContent='Could not load timings';});
+    });
+  }
+
   function mountEpisodeSkipping(overlay,media,item,play){
     var prefs=state.user&&state.user.prefs||{};
     if(media.tagName!=='VIDEO'||!item.show||item.episode==null||typeof play.hub_cinema_guest!=='undefined'||prefs.skip_segments===false)return;
@@ -1404,7 +1418,7 @@ function confirmDialog(message, opts){
     preference('auto_skip_intro',intro);preference('auto_skip_outro',outro);
     function load(){if(requested||!current()||duration()<300)return;requested=true;api('/items/'+encodeURIComponent(item.id)+'/segments?duration='+Math.round(duration())).then(function(j){if(!current()||!j.ok)return;segments=(j.segments||[]).filter(function(segment){return (segment.kind==='intro'||segment.kind==='outro')&&isFinite(segment.start)&&isFinite(segment.end)&&segment.start>=0&&segment.end>segment.start;});bar.hidden=!segments.length;update();}).catch(function(){});}
     media.addEventListener('playing',load);['timeupdate','seeked','play','pause'].forEach(function(event){media.addEventListener(event,update);});
-    overlay._skipCleanup=function(){alive=false;clearTimeout(undoTimer);};if(!media.paused)load();
+    overlay._segmentItem=item.id;overlay._reloadSegments=function(){requested=false;segments=[];handled={};active=null;bar.hidden=true;skip.hidden=full.hidden=true;undo.hidden=true;clearTimeout(undoTimer);load();};if(state.user&&state.user.role==='admin')tools.appendChild(h('button',{className:'btn ghost',text:'Edit intro / credits',onClick:function(){editEpisodeSegments(item);}}));overlay._skipCleanup=function(){alive=false;clearTimeout(undoTimer);};if(!media.paused)load();
   }
 
   function openPlayer(item, play){
@@ -7209,6 +7223,7 @@ try {
               }));
             }
           }
+          if(isAvail&&state.user&&state.user.role==='admin')actions.push(h('button',{className:'btn ghost',type:'button',text:'Edit intro / credits',onClick:function(e){e.stopPropagation();editEpisodeSegments(ep);}}));
           var epPoster=h('button',{className:'episode-play-button',type:'button',disabled:!isAvail,'aria-label':isAvail?'Play '+(code||title):'Episode unavailable',title:isAvail?'Play '+(code||title):'Episode unavailable',text:'▶',onClick:function(e){e.stopPropagation();if(isAvail)playItem(ep);}});
           var epPath = showPath + '/season-' + ep.season + (ep.episode != null && ep.episode !== '' ? '/episode-' + ep.episode : (ep.id ? '/' + encodeURIComponent(ep.id) : ''));
           actions.push(shareButton(epPath, 'Copy link to ' + (code || 'this episode')));
