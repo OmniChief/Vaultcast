@@ -29,7 +29,7 @@
       timer=setTimeout(function(){
         if(cache.has(q)){paint(cache.get(q),q);return;}
         controller=typeof AbortController!=='undefined'?new AbortController():null;
-        A.api('/search?q='+encodeURIComponent(q)+'&limit=5&suggest=1'+(A.mode==='play'?'&area=games':''),controller?{signal:controller.signal}:{}).then(function(r){
+        A.api('/search?q='+encodeURIComponent(q)+'&limit=5&suggest=1'+(A.mode==='play'?'&area=games':'&area=library'),controller?{signal:controller.signal}:{}).then(function(r){
           if(mine!==version||!input.isConnected||document.activeElement!==input)return;
           if(!r||!r.ok)return;var items=r.catalogue||[];cache.set(q,items);if(cache.size>30)cache.delete(cache.keys().next().value);paint(items,q);
         }).catch(function(){if(mine===version)close();});

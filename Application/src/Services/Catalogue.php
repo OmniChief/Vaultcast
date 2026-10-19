@@ -2521,8 +2521,8 @@ class Catalogue {
      * Cross-section catalogue search. Shows + movies/disney/roms first.
      * Does not touch RSS / network.
      */
-    public static function search(string $q, int $limit = 40,int $page=1): array {
-        return BrowseIndex::search($q,$limit,$page,AreaAccess::viewer() ?: guest_user());
+    public static function search(string $q, int $limit = 40,int $page=1,string $area=''): array {
+        return BrowseIndex::search($q,$limit,$page,AreaAccess::viewer() ?: guest_user(),$area==='games',false,$area==='library');
     }
 
     /**

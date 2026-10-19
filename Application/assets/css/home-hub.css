@@ -297,3 +297,8 @@ body[data-theme] .hub-modal-card{background:var(--bg2);color:var(--text);border-
 @container recent-watches (min-width:508px){.hub-recent-cards>.card:nth-child(-n+4){display:block}}
 @container recent-watches (min-width:638px){.hub-recent-cards>.card:nth-child(-n+5){display:block}}
 @container recent-watches (min-width:768px){.hub-recent-cards>.card:nth-child(-n+6){display:block}}
+
+.topnav.xnav .search-wrap,.topnav.xnav .search-wrap:focus-within{flex:0 1 auto;width:fit-content;max-width:100%}
+.topnav.xnav .search-wrap .search-box{flex:0 1 auto;width:auto;max-width:100%;min-width:0}
+.topnav.xnav .search-wrap>.ico,.topnav.xnav .search-wrap>.kbd-hint,.topnav.xnav .nav-right>.avatar{flex-shrink:0}
+@media(max-width:540px){.topnav.xnav .search-wrap{min-width:0}.topnav.xnav .search-wrap .kbd-hint{display:none}.topnav.xnav .live-search-results{min-width:0;width:min(320px,calc(100vw - 32px));max-width:calc(100vw - 32px);left:auto;right:0}}

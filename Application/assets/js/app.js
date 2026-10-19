@@ -4289,10 +4289,11 @@ try {
   }
 
   function searchBoxEl(mode){
-    var ph = mode === 'live' ? 'Filter channels…' : (mode === 'play' ? 'Search games…' : 'Search movies & shows…');
-    var val = mode === 'live' ? (live.filter || '') : (mode === 'play' ? (state.sectionQ || '') : (state.searchQuery || ''));
+    var gamesSearch=mode==='play'||(mode!=='live'&&!userAreaAllowed('library')&&userAreaAllowed('games'));
+    var ph = mode === 'live' ? 'Filter channels…' : (gamesSearch ? 'Search games…' : 'Search movies & shows…');
+    var val = mode === 'live' ? (live.filter || '') : (gamesSearch ? (state.sectionQ || '') : (state.searchQuery || ''));
     var input = h('input', {
-      className:'search-box', id:'q', type:'search', placeholder: ph, value: val, autocomplete:'off', spellcheck:'false',
+      className:'search-box', id:'q', type:'search', size:ph.length, placeholder: ph, value: val, autocomplete:'off', spellcheck:'false',
       'aria-label': ph,
       onInput: function(e){
         if (mode !== 'live') return;
@@ -4305,7 +4306,7 @@ try {
         if (e.key !== 'Enter') return;
         var v = (e.target.value || '').trim();
         if (mode === 'live') { live.filter = v; paintLive(); return; }
-        if (mode === 'play') {
+        if (gamesSearch) {
           var rs = romsSection();
           if (!rs) return;
           state.sectionLetter = '';
@@ -4319,7 +4320,7 @@ try {
       }
     });
     var wrap=h('div', { className:'search-wrap' }, [ icon('search'), input, h('kbd', { className:'kbd-hint', text:'/' }) ]);
-    if(mode!=='live' && window.VaultcastLiveSearch)window.VaultcastLiveSearch.attach(wrap,input,{api:api,h:h,mode:mode,open:function(it){if(isShowItem(it))openShow(it.show_key||it.id);else if(it.media_kind==='rom')openGame(it);else if(it.show)openShow(it.show_key||it.id,it.season,it.episode);else openMovie(it.id);}});
+    if(mode!=='live' && window.VaultcastLiveSearch)window.VaultcastLiveSearch.attach(wrap,input,{api:api,h:h,mode:gamesSearch?'play':mode,open:function(it){if(isShowItem(it))openShow(it.show_key||it.id);else if(it.media_kind==='rom')openGame(it);else if(it.show)openShow(it.show_key||it.id,it.season,it.episode);else openMovie(it.id);}});
     return wrap;
   }
 
@@ -5092,7 +5093,7 @@ try {
             live.filter ? '' : 'Browse your playlist feeds and add favourites in Live settings \u2192 IPTV.',
             live.filter ? null : [ h('button', { className:'btn', type:'button', text:'Open Live settings', onClick: function(){ openSettings('live-channels'); } }) ])
     ]));
-    if(tab==='guide')root.appendChild(h('section', { className:'live-section', id:'live-guide' }, [
+    if(tab==='now'||tab==='guide')root.appendChild(h('section', { className:'live-section', id:'live-guide' }, [
       h('div', { className:'row-head' }, [
         h('h2', { text:'Guide' }),
         h('span', { className:'meta', text: 'Relay schedule + IPTV XMLTV' + (live.guide && live.guide.epgUpdatedAt ? ' \u00b7 EPG ' + String(live.guide.epgUpdatedAt).slice(0, 16).replace('T', ' ') : '') })
@@ -7094,7 +7095,7 @@ try {
     }
     state.searchBusy = true;
     render();
-    api('/search?q='+encodeURIComponent(q)+'&limit=40&page='+page).then(function(r){
+    api('/search?q='+encodeURIComponent(q)+'&area=library&limit=40&page='+page).then(function(r){
       if(serial!==globalSearchSerial||state.view!=='search'||searchOwner!==(state.user&&state.user.id))return;
       state.searchBusy = false;
       state.searchResult = r;

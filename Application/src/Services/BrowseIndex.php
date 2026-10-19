@@ -170,11 +170,11 @@ final class BrowseIndex
     public static function items(string $key): array {
         return \Vaultcast\Repository::rows('SELECT i.payload FROM vaultcast_items i JOIN '.self::source().' b ON b.item_id=i.id WHERE b.show_key=? ORDER BY i.title,i.id',[$key]);
     }
-    public static function search(string $query,int $limit,int $page,array $viewer,bool $games=false,bool $suggest=false): array {
+    public static function search(string $query,int $limit,int $page,array $viewer,bool $games=false,bool $suggest=false,bool $libraryOnly=false): array {
         $query=mb_substr(trim($query),0,200);$limit=max(1,min(100,$limit));$page=max(1,min(1000,$page));
         $empty=['ok'=>true,'query'=>$query,'catalogue'=>[],'count'=>0,'total'=>0,'weak'=>true,'page'=>$page,'has_more'=>false];if($query==='')return $empty;
         $sections=[];foreach (\Vaultcast\Repository::document('catalogue',['sections'=>[]])['sections'] ?? [] as $s) {
-            $area=($s['type'] ?? '')==='roms'?'games':'library';if(AreaAccess::allowed($viewer,$area)&&(!$games||$area==='games'))$sections[]=(string)$s['id'];
+            $area=($s['type'] ?? '')==='roms'?'games':'library';if(AreaAccess::allowed($viewer,$area)&&(!$games||$area==='games')&&(!$libraryOnly||$area==='library'))$sections[]=(string)$s['id'];
         }
         if(!$sections)return $empty;
         $source=self::source();$scope='b.section_id IN ('.implode(',',array_fill(0,count($sections),'?')).')';

@@ -104,7 +104,7 @@ final class FirstPage {
             $html .= '<a class="mode-tab" aria-label="Play" data-first-nav href="' . self::esc($base . 'games') . '"><span class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.2 7.5h9.6a4.2 4.2 0 0 1 4.2 4.2v.9a3.9 3.9 0 0 1-6.9 2.5l-.5-.6h-3.2l-.5.6a3.9 3.9 0 0 1-6.9-2.5v-.9a4.2 4.2 0 0 1 4.2-4.2z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M7.6 9.9v3M6.1 11.4h3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="15.6" cy="10.5" r="1.05" fill="currentColor"/><circle cx="17.6" cy="12.6" r="1.05" fill="currentColor"/></svg></span><span class="mode-label">Play</span></a>'; break;
         }
         $html .= '</nav><div class="nav-right"><form class="search-wrap" action="' . self::esc($base . 'search') . '" method="get">'
-            . '<input class="search-box" id="q" type="search" name="q" aria-label="Search library" placeholder="Search movies &amp; shows…"></form>'
+            . '<input class="search-box" id="q" size="22" type="search" name="q" aria-label="Search library" placeholder="Search movies &amp; shows…"></form>'
             . '<a class="icon-btn avatar" title="Account &amp; settings" aria-label="Open account and settings" data-first-nav href="' . self::esc($base . 'settings') . '"><span class="avatar-initial">'
             . self::esc(mb_strtoupper(mb_substr(trim((string)($user['display_name'] ?? $user['username'] ?? '?')), 0, 1))) . '</span></a></div></header>'
             . '<nav class="first-sections" aria-label="Home"><a class="subnav-btn active" aria-current="page" data-first-nav href="' . self::esc($base) . '">For you</a>';

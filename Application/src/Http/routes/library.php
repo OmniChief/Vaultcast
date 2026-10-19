@@ -33,10 +33,10 @@ if ($path === '/search' && $method === 'GET') {
     if (!empty($_GET['suggest'])) {
         $started=microtime(true);
         $viewer=current_or_guest();
-        $indexed=SearchIndex::suggest($q,$viewer,($_GET['area'] ?? '')==='games');
+        $indexed=SearchIndex::suggest($q,$viewer,($_GET['area'] ?? '')==='games',($_GET['area'] ?? '')==='library');
         $hits = $indexed ?? [];
         $library=AreaAccess::allowed($viewer,'library') && ($_GET['area'] ?? '')!=='games';
-        $games=AreaAccess::allowed($viewer,'games');
+        $games=AreaAccess::allowed($viewer,'games') && ($_GET['area'] ?? '')!=='library';
         if ($indexed===null && $q !== '' && ($library || $games)) {
             $needle = '%' . strtr($q, ['!'=>'!!','%'=>'!%','_'=>'!_']) . '%';
             $scope=$library && $games ? '1=1' : ($games ? "media_kind='rom'" : "media_kind<>'rom'");
@@ -60,7 +60,7 @@ if ($path === '/search' && $method === 'GET') {
         RequestTiming::add('search_suggestions',$started);
         json_out(['ok'=>true,'catalogue'=>$hits,'query'=>$q]);
     }
-    $out = Catalogue::search($q, $limit,(int)($_GET['page'] ?? 1));
+    $out = Catalogue::search($q, $limit,(int)($_GET['page'] ?? 1),(string)($_GET['area'] ?? ''));
     // Inline light filters ÔÇö avoid loading Acquisition.php on every search
     $acq = Store::settings()['acquisition'] ?? [];
     $qualities = $acq['preferred_qualities'] ?? ['1080p', '720p'];
