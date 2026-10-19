@@ -1381,6 +1381,32 @@ function confirmDialog(message, opts){
     return (hh ? hh + ':' + (mm < 10 ? '0' : '') : '') + mm + ':' + (ss < 10 ? '0' : '') + ss;
   }
 
+  function mountEpisodeSkipping(overlay,media,item,play){
+    var prefs=state.user&&state.user.prefs||{};
+    if(media.tagName!=='VIDEO'||!item.show||item.episode==null||typeof play.hub_cinema_guest!=='undefined'||prefs.skip_segments===false)return;
+    var owner=state.user&&state.user.id,segments=[],requested=false,active=null,handled={},undoTimer=null,alive=true;
+    var tools=overlay.classList.contains('player-inline')?detailPlayerTools(overlay.closest('.detail-player')):overlay;
+    var skip=h('button',{className:'btn primary',text:'Skip intro',hidden:true}),undo=h('button',{className:'btn',text:'Undo skip',hidden:true}),full=h('button',{className:'btn primary player-skip-fullscreen',text:'Skip intro',hidden:true});
+    var intro=h('input',{type:'checkbox',checked:!!prefs.auto_skip_intro}),outro=h('input',{type:'checkbox',checked:!!prefs.auto_skip_outro});
+    var bar=h('div',{className:'player-segment-controls',hidden:true},[h('a',{href:'https://theintrodb.org/',target:'_blank',rel:'noopener noreferrer',text:'TheIntroDB',title:'Community intro and credits timestamps'}),skip,undo,h('label',{},[intro,' Auto-skip intros']),h('label',{},[outro,' Auto-skip credits'])]);tools.appendChild(bar);overlay.appendChild(full);
+    function current(){return alive&&overlay.isConnected&&owner===(state.user&&state.user.id);}
+    function duration(){return Number(openPlayer._absDuration?openPlayer._absDuration():media.duration)||0;}
+    function position(){return Number(openPlayer._absTime?openPlayer._absTime():media.currentTime)||0;}
+    function seek(to){if(openPlayer._seekAbsolute)openPlayer._seekAbsolute(to);else media.currentTime=to;}
+    function skipActive(){if(!current()||!active)return;var segment=active,id=segment.kind+':'+segment.start;handled[id]=true;var from=position();try{seek(Math.min(segment.end,Math.max(0,duration()-.05)));}catch(seekError){return;}undo.hidden=false;undo.onclick=function(){if(!current())return;handled[id]=true;try{seek(from);}catch(seekError){}undo.hidden=true;};clearTimeout(undoTimer);undoTimer=setTimeout(function(){undo.hidden=true;},8000);active=null;update();}
+    skip.onclick=full.onclick=skipActive;
+    function update(){if(!current())return;var at=position(),length=duration();active=null;
+      if(!media.seeking&&length>0)for(var i=0;i<segments.length;i++){var segment=segments[i];if(segment.end<=length+1&&at>=segment.start&&at<segment.end-.25){active=segment;break;}}
+      skip.hidden=full.hidden=!active;if(!active)return;skip.textContent=full.textContent=active.kind==='intro'?'Skip intro':'Skip credits';
+      var id=active.kind+':'+active.start;if(!media.paused&&!handled[id]&&(active.kind==='intro'?intro.checked:outro.checked))skipActive();
+    }
+    function preference(key,checkbox){checkbox.addEventListener('change',function(){prefs[key]=checkbox.checked;if(state.user&&state.user.role!=='guest'){state.user.prefs=state.user.prefs||{};state.user.prefs[key]=checkbox.checked;var body={};body[key]=checkbox.checked;api('/me/prefs',{method:'POST',body:body}).then(function(j){if(!j.ok)toast(j.error||'Could not save skipping preference',{kind:'bad'});}).catch(function(){toast('Could not save skipping preference',{kind:'bad'});});}update();});}
+    preference('auto_skip_intro',intro);preference('auto_skip_outro',outro);
+    function load(){if(requested||!current()||duration()<300)return;requested=true;api('/items/'+encodeURIComponent(item.id)+'/segments?duration='+Math.round(duration())).then(function(j){if(!current()||!j.ok)return;segments=(j.segments||[]).filter(function(segment){return (segment.kind==='intro'||segment.kind==='outro')&&isFinite(segment.start)&&isFinite(segment.end)&&segment.start>=0&&segment.end>segment.start;});bar.hidden=!segments.length;update();}).catch(function(){});}
+    media.addEventListener('playing',load);['timeupdate','seeked','play','pause'].forEach(function(event){media.addEventListener(event,update);});
+    overlay._skipCleanup=function(){alive=false;clearTimeout(undoTimer);};if(!media.paused)load();
+  }
+
   function openPlayer(item, play){
     /* Keep the active lobby when opening its game. */
     closePlayer({ preserveLobby: !!(openPlayer._lobbyOpts) });
@@ -1575,6 +1601,7 @@ function confirmDialog(message, opts){
       }, 400);
     }
     playerTrackControls(overlay, media, item, play);
+    mountEpisodeSkipping(overlay,media,item,play);
   }
   var _emuSessionId = 0;
   var _emuLoading = false;
@@ -1756,6 +1783,7 @@ function confirmDialog(message, opts){
     }
     if (_liveCleanup) { try { _liveCleanup(); } catch (eLc) {} _liveCleanup = null; }
     var o = $('#player-overlay');
+    if(o&&o._skipCleanup)o._skipCleanup();
     try { silenceMediaTree(o); } catch (eSil) {}
     try {
       var media = document.getElementById('player-media');
@@ -7538,6 +7566,9 @@ try {
           h('label', { className: 'check-label' }, [ h('input', { id: 'reduce', type: 'checkbox', checked: !!prefs.reduce_motion }), ' Reduce motion' ]),
           h('label', { className: 'check-label' }, [ h('input', { id: 'autoplay', type: 'checkbox', checked: prefs.autoplay_on_open !== false }), ' Automatically start videos when opened' ]),
           h('label', { className:'check-label' }, [ h('input', { id:'autoplay_next', type:'checkbox', checked:prefs.autoplay_next !== false }), ' Automatically play the next episode / collection film' ]),
+          h('label',{className:'check-label'},[h('input',{id:'skip_segments',type:'checkbox',checked:prefs.skip_segments!==false}),' Offer intro and credits skipping for TV / anime (TheIntroDB)']),
+          h('label',{className:'check-label'},[h('input',{id:'auto_skip_intro',type:'checkbox',checked:!!prefs.auto_skip_intro}),' Automatically skip TV / anime intros']),
+          h('label',{className:'check-label'},[h('input',{id:'auto_skip_outro',type:'checkbox',checked:!!prefs.auto_skip_outro}),' Automatically skip TV / anime credits']),
           h('div', { className: 'row-actions' }, [
             h('button', { className: 'btn primary', text: 'Save preferences', onClick: savePrefs }),
             h('button', {className: 'btn', text: 'Sign out', onClick: function(){ api('/logout', {method:'POST'}).then(function(result){
@@ -7718,6 +7749,9 @@ try {
       autoplay: $('#autoplay').checked,
       autoplay_on_open: $('#autoplay').checked,
       autoplay_next: $('#autoplay_next').checked,
+      skip_segments:$('#skip_segments').checked,
+      auto_skip_intro:$('#auto_skip_intro').checked,
+      auto_skip_outro:$('#auto_skip_outro').checked,
       remove_avatar:!!($('#remove_avatar') && $('#remove_avatar').checked)
     };
     var file = $('#profile_avatar') && $('#profile_avatar').files[0];

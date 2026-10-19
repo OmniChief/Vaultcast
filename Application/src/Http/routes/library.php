@@ -1,5 +1,10 @@
 <?php
 declare(strict_types=1);
+if(preg_match('#^/items/([a-f0-9]{8,64})/segments$#D',$path,$segmentItem)&&$method==='GET'){
+    $item=Catalogue::item($segmentItem[1]);if(!$item)json_error('Episode unavailable',404);
+    if(!AreaAccess::allowed(current_or_guest(),'library'))json_error('Library access required',403);
+    json_out(EpisodeSegments::get($item,current_or_guest(),(float)($_GET['duration'] ?? 0)));
+}
 // Clean-URL resolver: /movies/<slug>, /tvshows/<slug>[/season-<n>[/episode-<m>|/<itemId>]]
 if ($path === '/resolve' && $method === 'GET') {
     json_out(UrlRoutes::resolve((string)($_GET['path'] ?? ''), function (string $kind, string $slug): ?string {

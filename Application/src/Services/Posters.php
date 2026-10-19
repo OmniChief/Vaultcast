@@ -870,6 +870,7 @@ class Posters {
         $summary = isset($data['summary']) ? trim(html_entity_decode(strip_tags((string)$data['summary']), ENT_QUOTES | ENT_HTML5, 'UTF-8')) : '';
         $out = [
             'id' => $tvId,
+            'externals' => $data['externals'] ?? [],
             'name' => $data['name'] ?? $showName,
             'premiered' => $data['premiered'] ?? null,
             'summary' => $summary !== '' ? $summary : null,
