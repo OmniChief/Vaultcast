@@ -103,6 +103,7 @@ class Lobby {
             'emu_core' => (string)($s['emu_core'] ?? ''),
             'runtime' => $s['runtime'] ?? null,
             'host_name' => (string)($s['host_name'] ?? 'Host'),
+            'visibility' => ($s['visibility'] ?? 'public')==='private'?'private':'public',
             'players_filled' => $filled,
             'max_players' => $max,
             'open_slots' => max(0, $max - $filled),
@@ -120,13 +121,14 @@ class Lobby {
         ];
     }
 
-    public static function listOpen(): array {
-        return self::withLock(function (array $all) {
-            self::purgeExpired($all);
-            self::writeAll($all);
+    public static function listOpen(string $viewer=''): array {
+        return self::withLock(function (array $all) use ($viewer) {
+            $before=count($all);self::purgeExpired($all);
+            if (count($all)!==$before) self::writeAll($all);
             $out = [];
             foreach ($all as $s) {
                 if (!is_array($s)) continue;
+                if (($s['visibility'] ?? 'public')==='private' && ($viewer==='' || $viewer!==($s['host_user_id'] ?? ''))) continue;
                 $pub = self::publicSession($s);
                 unset($pub['runtime']); // Full boot options arrive with the join response.
                 // keep full sessions visible so host presence is not mistaken for "ended"
@@ -152,7 +154,7 @@ class Lobby {
         }
         return ['core'=>$core, 'variant'=>$variant, 'threaded'=>!empty($runtime['threaded']), 'options'=>$options];
     }
-    public static function create(array $item, string $hostName, string $hostKey, ?int $maxOverride = null, array $profile = [], array $runtime = []): array {
+    public static function create(array $item, string $hostName, string $hostKey, ?int $maxOverride = null, array $profile = [], array $runtime = [], string $visibility = 'public'): array {
         $cap = self::capability($item);
         if (!$cap) {
             return ['ok' => false, 'error' => 'Choose a game from the library'];
@@ -174,6 +176,7 @@ class Lobby {
             'runtime' => self::runtimeConfig($runtime),
             'host_name' => $hostName,
             'host_user_id' => $profile['user_id'] ?? null,
+            'visibility' => $visibility==='private'?'private':'public',
             'host_key' => hash('sha256', $hostKey),
             'max_players' => $max,
             'join_label_template' => (string)$cap['join_label'],

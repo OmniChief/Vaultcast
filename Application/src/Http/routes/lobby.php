@@ -37,7 +37,8 @@ if (preg_match('#^/lobby/sessions/([a-f0-9]{16})$#', $path, $m) && $method === '
     json_out(['ok'=>true, 'session'=>Lobby::publicSession($session)]);
 }
 if ($path === '/lobby/sessions' && $method === 'GET') {
-    json_out(['ok' => true, 'sessions' => Lobby::listOpen(), 'heartbeat_seconds' => Lobby::HEARTBEAT_SECONDS]);
+    header('Cache-Control: no-store');
+    json_out(['ok' => true, 'sessions' => Lobby::listOpen((string)(Profiles::lobbyIdentity()['user_id'] ?? '')), 'heartbeat_seconds' => Lobby::HEARTBEAT_SECONDS]);
 }
 
 if ($path === '/lobby/sessions' && $method === 'POST') {
@@ -56,7 +57,7 @@ if ($path === '/lobby/sessions' && $method === 'POST') {
         $hostKey = bin2hex(random_bytes(16));
     }
     $max = isset($body['max_players']) ? (int)$body['max_players'] : null;
-    $res = Lobby::create($item, $hostName, $hostKey, $max, Profiles::lobbyIdentity(), is_array($body['runtime'] ?? null) ? $body['runtime'] : []);
+    $res = Lobby::create($item, $hostName, $hostKey, $max, Profiles::lobbyIdentity(), is_array($body['runtime'] ?? null) ? $body['runtime'] : [], (string)($body['visibility'] ?? 'public'));
     if (empty($res['ok'])) json_error($res['error'] ?? 'Could not create session', 400);
     json_out($res);
 }

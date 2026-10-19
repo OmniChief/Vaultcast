@@ -3278,12 +3278,16 @@ function confirmDialog(message, opts){
     if (!root) return;
     var list = root.querySelector('#lobby-session-list');
     if (!list) return;
-    var sessions = state.lobby.sessions || [];
+    var all = state.lobby.sessions || [],query=root.querySelector('#lobby-room-search'),openOnly=root.querySelector('#lobby-open-only');
+    var text=query?query.value.toLowerCase().trim():'';
+    var sessions=all.filter(function(s){return (!openOnly||!openOnly.checked||s.open_slots>0)&&(!text||[s.title,s.system,s.host_name].join(' ').toLowerCase().indexOf(text)>=0);});
+    var count=root.querySelector('[data-lobby-count]');if(count)count.textContent=all.length+' rooms · '+all.reduce(function(n,s){return n+(s.open_slots||0);},0)+' open seats';
+    var signature=JSON.stringify(sessions);if(list._roomSignature===signature)return;list._roomSignature=signature;
     list.innerHTML = '';
     if (!sessions.length) {
       list.appendChild(emptyState(
-        'No live sessions',
-        'When someone starts a multiplayer game from Lobby, it shows up here for drop-in joins on your LAN or Tailscale network.',
+        all.length?'No matching rooms':'Be the start of a great game night',
+        all.length?'Try a different search or include full rooms.':'Choose a favourite, invite your friends, or continue an adventure from a cloud save.',
         [ h('button', { className:'btn primary', type:'button', text:'Start multiplayer', onClick: openLobbyStartPicker }) ]
       ));
       return;
@@ -3294,7 +3298,7 @@ function confirmDialog(message, opts){
   }
   function lobbyPosterUrl(itemId){
     if (!itemId) return '';
-    return API + '/items/' + encodeURIComponent(itemId) + '/poster';
+    return API + '/items/' + encodeURIComponent(itemId) + '/poster?fetch=0&variant=medium';
   }
   function lobbySessionCard(s){
     var filled = s.players_filled || 1;
@@ -3321,8 +3325,9 @@ function confirmDialog(message, opts){
         h('div', { className:'lobby-card-kicker muted', text: (s.system || 'Game') + (s.mp_label ? (' · ' + s.mp_label) : '') }),
         h('h3', { className:'lobby-card-title', text: s.title || 'Session' }),
         h('div', { className:'lobby-card-meta muted', text: 'Host · ' + (s.host_name || 'Anonymous') + ' · ' + slots + ' players' }),
-        h('div', { className:'lobby-card-room muted', text: s.room_code ? ('Room ' + s.room_code) : '' }),
-        h('div', { className:'lobby-card-actions' }, [ joinBtn ])
+        h('div', { className:'lobby-card-room muted', text: (s.visibility==='private'?'Private · invite link':'Public · drop in')+(s.open_slots?' · '+s.open_slots+' seats available':' · Full') }),
+        h('div', { className:'lobby-room-avatars' }, (s.players||[]).map(function(p){return h('span',{className:'lobby-room-person',title:p.name+' · P'+p.slot},[p.avatar_url?h('img',{src:p.avatar_url,alt:'',loading:'lazy'}):h('span',{text:(p.name||'?').slice(0,1)}),h('small',{text:'P'+p.slot+' '+p.name})]);})),
+        h('div', { className:'lobby-card-actions' }, [ joinBtn,s.game_path?h('button',{className:'btn',text:'Copy invite',onClick:function(){copyText(shareUrl(R.build({view:'play',gamePath:s.game_path,roomId:s.id}))).then(function(){toast('Room invite copied');}).catch(function(e){toast(e.message,{kind:'bad'});});}}):null,h('button',{className:'btn',text:'Game details',onClick:function(){api('/items/'+encodeURIComponent(s.item_id)+'?synopsis=0').then(function(j){if(j.ok&&j.item)openGame(j.item);else toast(j.error||'Game unavailable',{kind:'bad'});}).catch(function(e){toast(e.message,{kind:'bad'});});}}) ])
       ])
     ]);
   }
@@ -3529,9 +3534,16 @@ function confirmDialog(message, opts){
     lobbyAfterGameStart(options);
   }
   var _lobbyHostOpening=false;
-  function startLobbyHost(item, preserve){
+  function startLobbyHost(item, preserve, setup){
     if (!item || !item.id) return;
     if (typeof preserve !== 'boolean') {chooseLobbyStart(item);return;}
+    if(!setup){window.VaultcastHub.modal('Host '+(item.title||'a game'),function(body,close){
+      var visibility=h('select',{'aria-label':'Room visibility'},[h('option',{value:'public',text:'Public · anyone can find and join'}),h('option',{value:'private',text:'Private · invite link only'})]),seats=h('select',{'aria-label':'Lobby seats'},[2,3,4].map(function(n){return h('option',{value:n,text:n+' players',selected:n===4});}));
+      body.classList.add('lobby-setup');body.appendChild(h('p',{className:'muted',text:preserve?'Continue from your current game state. Guests synchronise with your game when they join.':'Start a fresh game and welcome your next teammates.'}));
+      body.appendChild(h('label',{},['Visibility',visibility]));body.appendChild(h('label',{},['Seats, including you',seats]));body.appendChild(h('p',{className:'muted',text:'Private rooms are unlisted. Share the room link with people you want to invite. Game access is still required. The game determines how many players can control it.'}));
+      body.appendChild(h('button',{className:'btn primary',text:'Open lobby',onClick:function(){var options={visibility:visibility.value,max_players:Number(seats.value)};close();startLobbyHost(item,preserve,options);}}));
+    });return;}
+
     if(_lobbyHostOpening)return;
     var active=window.EJS_emulator, generation=_emuSessionId, runtime=null;
     if (preserve && (!active || !active.started || active._streamDisposed || active.isNetplay || String(state.movieId)!==String(item.id))) {
@@ -3555,7 +3567,8 @@ function confirmDialog(message, opts){
         host_name: lobbyPlayerName(),
         host_key: key,
         runtime: runtime,
-        max_players: 4
+        max_players: setup.max_players,
+        visibility: setup.visibility
       }
     }).then(function(j){
       if (!j || !j.ok) { state._hubInviteFriend=null;toast((j && j.error) || 'Could not start session', { kind:'bad' }); return; }
@@ -3594,16 +3607,11 @@ function confirmDialog(message, opts){
   function viewLobby(){
     lobbyStopPoll();
     var wrap = h('div', { id:'lobby-view', className:'play-view lobby-view' });
-    wrap.appendChild(h('div', { className:'lobby-hero' }, [
-      h('div', { className:'lobby-hero-text' }, [
-        h('h1', { text:'Lobby' }),
-        h('p', { className:'muted', text:'Join a live session or host any game from your library. Play together where the game supports it, or watch from an unused player slot.' })
-      ]),
-      h('div', { className:'lobby-hero-actions' }, [
-        h('button', { className:'btn primary', type:'button', text:'Start multiplayer', onClick: openLobbyStartPicker }),
-        h('button', { className:'btn glass', type:'button', text:'Refresh', onClick: function(){ fetchLobbySessions().then(paintLobbySessions).catch(function(e){ toast(String(e), { kind:'bad' }); }); } })
-      ])
-    ]));
+    function refresh(){return fetchLobbySessions().then(paintLobbySessions).catch(function(e){toast(e.message||String(e),{kind:'bad'});});}
+    wrap.appendChild(h('section',{className:'play-hero lobby-welcome page-hero page-hero-layout'},[lastGamePoster(),heroClock('Find your next player two'),heroArt('games'),h('div',{className:'hero-copy'},[h('span',{className:'eyebrow',text:'GOOD GAMES. BETTER COMPANY.'}),h('h1',{text:'Your next game night starts here.'}),h('p',{className:'muted',text:'Drop into a public room, bring your friends to a private one, or pick up a saved adventure together.'}),h('div',{className:'row-actions'},[h('button',{className:'btn primary',text:'Host a game',onClick:openLobbyStartPicker}),h('button',{className:'btn',text:'Host from cloud save',onClick:function(){openSettings('cloud-saves');}}),h('button',{className:'btn',text:'Browse games',onClick:function(){goPlayTab('games');}}),h('button',{className:'btn',text:'Refresh rooms',onClick:refresh})])])]));
+    wrap.appendChild(h('div',{className:'lobby-getting-started'},[['01','Pick your adventure','Find favourites in Host a game, or choose a cloud save to continue.'],['02','Make it your room','Go public for drop-in players or private to invite your friends.'],['03','Play together','Keep the host game open. Share your room link from the player board.']].map(function(step){return h('div',{},[h('span',{text:step[0]}),h('div',{},[h('strong',{text:step[1]}),h('p',{text:step[2]})])]);})));
+    var search=h('input',{id:'lobby-room-search',type:'search',placeholder:'Find a game, console or host…','aria-label':'Search multiplayer rooms',onInput:paintLobbySessions}),openOnly=h('input',{id:'lobby-open-only',type:'checkbox',onChange:paintLobbySessions});
+    wrap.appendChild(h('div',{className:'lobby-discovery hub-calendar-filters'},[h('strong',{'data-lobby-count':'',text:'Finding rooms…'}),search,h('label',{},[openOnly,' Open seats only'])]));
     wrap.appendChild(h('div', { id:'lobby-session-list', className:'lobby-session-list' }, [
       pendingContent({ className:'muted', })
     ]));
@@ -3621,6 +3629,7 @@ function confirmDialog(message, opts){
     });
     state.lobby.pollTimer = setInterval(function(){
       if (state.playTab !== 'lobby' || state.view !== 'play') { lobbyStopPoll(); return; }
+      if(document.hidden||state.lobby.loading)return;
       fetchLobbySessions().then(paintLobbySessions).catch(function(){});
     }, 5000);
     return shell(wrap);
@@ -4347,9 +4356,7 @@ try {
       return null;
     }
     var right = [];
-    if (mode === 'live') right.push(h('button', { className:'subnav-link', type:'button', title:'Relay channels, IPTV feeds & favourites', onClick: function(){ openSettings('live-channels'); } }, [ icon('gear'), h('span', { text:'Live settings' }) ]));
     if (mode === 'play' && (state.playTab || 'games') === 'games') right.push(h('button', { className:'subnav-link', type:'button', onClick: surpriseGame }, [ icon('dice'), h('span', { text:'Surprise me' }) ]));
-    if (mode === 'play' && (state.playTab || 'games') === 'lobby') right.push(h('button', { className:'subnav-link', type:'button', onClick: openLobbyStartPicker }, [ icon('playFill'), h('span', { text:'Start multiplayer' }) ]));
     return h('nav', { className:'subnav', 'aria-label':'Section' }, [
       h('div', { className:'subnav-inner' }, items.map(function(it){
         return h('button', { className:'subnav-btn' + (it.active ? ' active' : ''), type:'button', 'data-chat-kind':it.chatKind||'', text:it.label+(it.chatKind&&state.chatUnreadOwner===(state.user&&state.user.id)&&state.chatUnread&&state.chatUnread[it.chatKind]?' •':''), onClick: it.go });
