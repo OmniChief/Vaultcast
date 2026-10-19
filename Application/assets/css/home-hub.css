@@ -354,3 +354,13 @@ body[data-theme] .settings-choice.active,body[data-theme] .settings-live-subnav-
  .page-hero .hero-copy>h1,.page-hero .hub-hero-copy>h1,.page-hero .billboard-copy>h1{font-size:clamp(1.45rem,6vw,2rem)}
  .page-hero .hub-hero-actions .btn,.page-hero .row-actions .btn{padding:9px 12px;font-size:.8rem}
 }
+
+.last-game-art>.last-game-poster,.last-game-art>.home-hero-poster{border:1px solid var(--border-strong);background-color:var(--bg2)}
+.console-action-group{display:contents}
+.play-hero .row-actions{align-items:center;gap:10px}
+.play-hero .row-actions .console-chip{min-height:40px;margin:0;font:inherit;font-size:.85rem;padding:9px 14px;border-radius:10px}
+.play-hero .row-actions .console-chip.active{background:var(--hero-glow);border-color:var(--accent);color:var(--accent)}
+.featured-synopsis{display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden;line-height:1.65;font-size:.95rem;margin:0 0 14px;max-width:65ch}
+.featured-synopsis[hidden]{display:none}
+.collections-hero-poster img{width:100%;height:100%;aspect-ratio:2/3;object-fit:cover}
+@media(max-width:540px){.featured-synopsis{-webkit-line-clamp:3;font-size:.85rem}.play-hero .row-actions .console-chip{font-size:.8rem;padding:9px 12px}}

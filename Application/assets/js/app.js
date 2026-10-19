@@ -4362,7 +4362,7 @@ try {
     var theme = state.user && state.user.prefs && state.user.prefs.theme || state.settings && state.settings.theme || 'dark';
     document.body.setAttribute('data-theme', ['dark','light','retro-scifi'].indexOf(theme)>=0 ? theme : 'dark');
   }
-  function librarySummary(home){home=home||state.home||{};return (home.item_count||0)+' titles'+(home.scanned_at?' · library scanned '+String(home.scanned_at).slice(0,10):'');}
+  function librarySummary(home){home=home||state.home||{};return (home.item_count||0)+' titles available';}
   function heroClock(meta){
     var now=new Date();
     return h('div',{className:'live-hero-side hero-clock-panel'},[
@@ -4389,7 +4389,7 @@ try {
     function paint(item){
       if(!holder.isConnected||owner!==(state.user&&state.user.id)||!item)return;
       var poster=h('div',{className:'poster poster-pending last-game-poster'},[h('div',{className:'ph',text:item.title||'Game'})]);
-      holder.replaceChildren(poster,h('figcaption',{text:'Last played · '+(item.title||'Game')}));
+      holder.replaceChildren(poster,h('figcaption',{text:'Last played'}));
       observePoster(poster,posterIdFor(item),posterKindFor(item));
     }
     setTimeout(function(){
@@ -4490,8 +4490,25 @@ try {
     }
   }
 
+  var featuredSynopsisCache=new Map();
+  function paintFeaturedSynopsis(bb,feat){
+    var copy=bb.querySelector('.billboard-copy');if(!copy)return;
+    var text=copy.querySelector('.featured-synopsis');
+    if(!text){text=h('p',{className:'featured-synopsis muted',hidden:true});var title=copy.querySelector('h1');copy.insertBefore(text,title.nextSibling);}
+    var show=feat.show_key||(isShowItem(feat)?feat.id:null),key=(show?'show:':'item:')+(show||feat.id||'');bb._synopsisKey=key;
+    function paint(value){if(bb._synopsisKey!==key)return;var plain=document.createElement('textarea');plain.innerHTML=String(value||'').replace(/<[^>]*>/g,' ');text.textContent=plain.value.replace(/\s+/g,' ').trim();text.hidden=!text.textContent;}
+    paint(feat.synopsis||feat.summary||feat.overview);
+    if(text.textContent||(!show&&!feat.id))return;
+    setTimeout(function(){
+      if(!bb.isConnected||document.hidden||bb._synopsisKey!==key)return;
+      var cached=featuredSynopsisCache.get(key);
+      if(!cached||Date.now()-cached.at>300000){cached={at:Date.now(),promise:api('/featured/synopsis?'+(show?'show=':'item=')+encodeURIComponent(show||feat.id)).then(function(j){return j.ok?j.synopsis:null;})};featuredSynopsisCache.set(key,cached);if(featuredSynopsisCache.size>60)featuredSynopsisCache.delete(featuredSynopsisCache.keys().next().value);}
+      cached.promise.then(paint).catch(function(){featuredSynopsisCache.delete(key);});
+    },0);
+  }
   function billboardPaintFeat(bb, home, feat, eyebrow){
     if (!bb || !feat) return;
+    paintFeaturedSynopsis(bb,feat);
     var resume = feat.progress || null;
     var isShow = isShowItem(feat);
     var eyebrowEl = bb.querySelector('.eyebrow');
@@ -4634,6 +4651,7 @@ try {
         billboardPaintFeat(bb, home, cw[idx], cwEyebrow(cw[idx]));
       }, BILLBOARD_CW_MS);
     }
+    paintFeaturedSynopsis(bb,feat);
     return bb;
   }
 
@@ -6184,6 +6202,7 @@ try {
       }, BILLBOARD_CW_MS);
     }
     standardBillboard(bb,footText);bb.appendChild(heroArt('library'));
+    paintFeaturedSynopsis(bb,feat);
     return bb;
   }
 
@@ -6500,32 +6519,29 @@ try {
     if(state.sectionSystem&&!entries.some(function(entry){return entry.name===state.sectionSystem;}))entries.push({name:state.sectionSystem,count:0});
     entries.sort(function(a, b){ return a.name.localeCompare(b.name); });
     var active = state.sectionSystem || '';
-    var totalAll = entries.reduce(function(s, e){ return s + e.count; }, 0);
     var chips = [
       h('button', {
         type:'button',
-        className: 'console-chip' + (!active ? ' active' : ''),
+        className: 'btn console-chip' + (!active ? ' active' : ''),
         'aria-pressed':String(!active),
-        text: 'All' + (totalAll ? (' · ' + totalAll) : ''),
+        text: 'All games',
         onClick: function(){ selectConsoleSystem(id, ''); }
       })
     ];
     entries.forEach(function(e){
       chips.push(h('button', {
         type:'button',
-        className: 'console-chip' + (active === e.name ? ' active' : ''),
+        className: 'btn console-chip' + (active === e.name ? ' active' : ''),
         'aria-pressed':String(active===e.name),
         title: e.name + ' (' + e.count + ')',
         text: e.name + ' · ' + e.count,
         onClick: function(){ selectConsoleSystem(id, active === e.name ? '' : e.name); }
       }));
     });
-    var bar = h('div', { id:'play-console-filter', className:'console-filter', role:'group', 'aria-label':'Filter by console' }, [
-      h('div', { className:'console-filter-label muted', text:'Console' }),
-      h('div', { className:'console-chip-row' }, chips)
-    ]);
-    var hero = root.querySelector('.play-hero, .section-hero');
-    if (hero) hero.appendChild(bar);
+    var bar=h('div',{id:'play-console-filter',className:'console-action-group',role:'group','aria-label':'Filter games by console'},chips);
+    var hero=root.querySelector('.play-hero, .section-hero');
+    var actions=hero&&hero.querySelector('.row-actions');
+    if(actions)actions.appendChild(bar);
   }
   function selectConsoleSystem(id, system){
     state.sectionSystem = system || '';
@@ -11492,7 +11508,7 @@ h('div', { className:'cv-find-bar' }, [
   function viewCollections(){
     var wrap = h('div', { id:'collections-view', className:'panel-collections' }, [
       h('section',{className:'collections-hero page-hero page-hero-layout'},[
-        homePosterEl(),h('div',{className:'hero-copy'},[h('div',{className:'eyebrow',text:'Library'}),h('h1',{text:'Collections'}),h('p',{className:'muted',text:'Film series and show groups, together in one place. Pick a poster to explore its titles.'})]),heroClock('Collections from your library'),heroArt('library')
+        h('div',{className:'page-hero-poster collections-hero-poster'},[h('img',{src:BASE+'index.php?asset=assets/img/collections-poster.jpg',alt:'A futuristic archive of collected treasures',width:512,height:768,decoding:'async'})]),h('div',{className:'hero-copy'},[h('div',{className:'eyebrow',text:'Library'}),h('h1',{text:'Collections'}),h('p',{className:'muted',text:'Film series and show groups, together in one place. Pick a poster to explore its titles.'}),h('div',{className:'row-actions'},[h('button',{className:'btn primary',text:'Browse collections',onClick:function(){var list=$('#pub_col_list');if(list)list.scrollIntoView({behavior:'smooth',block:'start'});}}),h('button',{className:'btn',text:'Surprise me',onClick:function(){var cards=$all('#pub_col_list .collection-card');if(!cards.length){toast('No collections available yet');return;}var card=cards[Math.floor(Math.random()*cards.length)];card.click();card.scrollIntoView({behavior:'smooth',block:'center'});}}),h('button',{className:'btn',text:'Explore Library',onClick:function(){navigate('library');}}),state.user&&state.user.role==='admin'?h('button',{className:'btn',text:'Manage collections',onClick:function(){openSettings('collections');}}):null])]),heroClock('Collections from your library'),heroArt('library')
       ]),
       h('div', { id:'pub_col_list', className:'collections-grid' }, [ pendingContent({ className:'muted', }) ])
     ]);

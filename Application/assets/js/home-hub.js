@@ -157,6 +157,14 @@
     query.oninput=paint;types.onchange=paint;days.onchange=paint;paint();
     return panel('Release calendar',[h('p',{className:'muted',text:'Upcoming episodes from your favourited TV and anime shows. Air dates use prepared episode guides and do not indicate library availability.'}),h('div',{className:'hub-calendar-filters'},[types,days,query]),list]);
   }
+  function homeMood(){
+    var hour=new Date().getHours(),bucket=hour<6?'late':hour<12?'morning':hour<17?'afternoon':'night';
+    var lines={late:['One more adventure.','For the midnight explorers.','The stars are still watching.'],morning:['Rise and grind.','A fresh day. A new story.','Good stories start early.'],afternoon:['Your next escape awaits.','Take a break. Find a world.','Make room for a little adventure.'],night:['The night is young.','Dim the lights. Find your story.','Tonight belongs to you.']}[bucket];
+    var key='vaultcast-home-mood-'+bucket,previous=-1;try{var saved=sessionStorage.getItem(key);previous=saved===null?-1:Number(saved);}catch(e){}
+    var pick=Math.floor(Math.random()*(previous>=0?lines.length-1:lines.length));if(pick>=previous&&previous>=0)pick++;
+    if(pick>=lines.length)pick=0;try{sessionStorage.setItem(key,String(pick));}catch(e){}
+    return lines[pick];
+  }
   function view(){
     var root=h('div',{className:'home-hub'}),tab=A.state.hubTab||'overview';
     if(A.state.cinemaId)return A.shell(cinemaView(A.state.cinemaId));
@@ -170,7 +178,7 @@
     }
 
     var name=A.state.user && (A.state.user.display_name||A.state.user.username),hour=new Date().getHours(),resume=((A.state.home||{}).continue_watching||[])[0];
-    root.appendChild(h('section',{className:'hub-hero page-hero page-hero-layout'},[A.homePosterEl(),A.heroClock(A.librarySummary()),
+    root.appendChild(h('section',{className:'hub-hero page-hero page-hero-layout'},[A.homePosterEl(),A.heroClock(homeMood()),
       h('div',{className:'hub-orbit', 'aria-hidden':'true'},[h('span'),h('span'),h('span')]),
       h('div',{className:'hub-hero-copy'},[h('span',{className:'eyebrow',text:'YOUR SPACE. YOUR STORIES.'}),h('h1',{text:(hour<12?'Good morning':hour<18?'Good afternoon':'Good evening')+(name?', '+name:'. Make yourself at home')+'.'}),h('p',{text:'One more episode. A new high score. A night with your people. It all starts here.'}),
       h('div',{className:'hub-hero-actions'},[resume?button('▶ Continue '+(resume.show||resume.title),function(){A.playItem(resume);},'primary'):null,button('Fit my time',function(){window.VaultcastHomeExtras.tonight();}),signed()?button('Customise Home',function(){window.VaultcastHomeExtras.customize();}):null,button('✦ Pick my next watch',pickTonight,resume?'ghost':'primary'),button('Watch together',function(){go('cinema');}),button('Explore the library',function(){A.navigate('library');})])])

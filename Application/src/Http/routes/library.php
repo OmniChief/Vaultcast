@@ -27,6 +27,21 @@ if ($path === '/home' && $method === 'GET') {
     json_out(AreaAccess::home(Catalogue::home($viewer), $viewer));
 }
 
+if ($path==='/featured/synopsis' && $method==='GET') {
+    $viewer=current_or_guest();
+    if (!AreaAccess::allowed($viewer,'library')) json_error('Library access required',403);
+    $show=(string)($_GET['show'] ?? '');$item=(string)($_GET['item'] ?? '');$synopsis=null;
+    if ($show!=='' && preg_match('/^[a-f0-9]{8,64}$/D',$show)) $synopsis=Posters::showSynopsisCached($show);
+    elseif ($item!=='' && preg_match('/^[a-f0-9]{8,64}$/D',$item)) {
+        $row=Catalogue::item($item);
+        if ($row && AreaAccess::itemArea($row)==='library') {
+            if (!empty($row['show'])) $synopsis=Posters::showSynopsisCached(Catalogue::showKey((string)$row['section'],(string)$row['show']));
+            else $synopsis=Posters::movieSynopsisCached($item)['summary'];
+        }
+    }
+    json_out(['ok'=>true,'synopsis'=>$synopsis]);
+}
+
 if ($path === '/search' && $method === 'GET') {
     $q = trim($_GET['q'] ?? '');
     $limit = min(100, max(1, (int)($_GET['limit'] ?? 40)));
