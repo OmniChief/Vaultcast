@@ -1589,7 +1589,7 @@ function confirmDialog(message, opts){
         api('/me/prefs',{method:'POST',body:{autoplay_next:autoNext.checked}}).then(function(result){if(!result.ok)toast(result.error || 'Could not save autoplay preference');}).catch(function(){toast('Could not save autoplay preference');});
       });
       var nextControl=h('label',{className:'player-auto-next'},[autoNext,play.sequence_collection?' Play collection in order':' Play next episode']);
-      overlay.appendChild(nextControl);
+      // Mount below the audio controls once the player tools exist.
       var nextBusy=false,sequenceRequest=_playRequestId;
       media.addEventListener('ended',function(){
         if(!autoNext.checked || nextBusy || !overlay.isConnected)return;
@@ -1648,6 +1648,7 @@ function confirmDialog(message, opts){
       }, 400);
     }
     playerTrackControls(overlay, media, item, play);
+    if(nextControl){var tracks=(inlineHost?detailPlayerTools(inlineHost):overlay).querySelector('.player-tracks');if(tracks)tracks.insertAdjacentElement('afterend',nextControl);}
     mountEpisodeSkipping(overlay,media,item,play);
   }
   var _emuSessionId = 0;

@@ -168,9 +168,9 @@
 .live-player.needs-tap .lp-tuning::after{display:none}
 @media(max-width:540px){.detail-centre-play{width:88px;height:88px}.detail-centre-play .centre-play-icon{font-size:28px}}
 
-.player-auto-next{position:absolute;z-index:9;top:14px;right:14px;padding:9px 12px;border:1px solid #ffffff44;border-radius:10px;background:#101526eF;color:#fff;font-size:14px;line-height:1.4;cursor:pointer}
+.player-auto-next{display:block;position:relative;padding:10px 14px;border:1px solid var(--border);border-radius:var(--radius-sm,10px);background:var(--bg2);color:var(--text);font-size:14px;line-height:1.4;cursor:pointer;box-sizing:border-box}.player-auto-next input{accent-color:var(--accent)}
 .player-auto-next input{margin-right:6px;vertical-align:middle}
-.player-auto-next:focus-within{outline:3px solid #69efff;outline-offset:3px}
+.player-auto-next:focus-within{outline:3px solid var(--accent);outline-offset:3px}
 
 .home-activity{display:grid;grid-template-columns:minmax(0,1fr);gap:22px;margin-top:22px;min-width:0;max-width:100%}
 .home-activity #live-teaser,.home-activity .rail{min-width:0;max-width:100%}
