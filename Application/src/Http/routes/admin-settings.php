@@ -1,5 +1,10 @@
 <?php
 declare(strict_types=1);
+if ($path==='/admin/site-artwork' && $method==='POST') {
+    try {json_out(SiteArtwork::save(body_json()));}
+    catch (InvalidArgumentException $error) {json_error($error->getMessage(),422);}
+    catch (RuntimeException $error) {json_error($error->getMessage(),400);}
+}
 if ($path === '/admin/factory-reset' && $method === 'POST') {
     try { json_out(FactoryReset::run(body_json())); }
     catch (RuntimeException $error) { json_error($error->getMessage(), 409); }

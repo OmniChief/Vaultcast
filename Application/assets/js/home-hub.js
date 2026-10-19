@@ -170,7 +170,7 @@
     }
 
     var name=A.state.user && (A.state.user.display_name||A.state.user.username),hour=new Date().getHours(),resume=((A.state.home||{}).continue_watching||[])[0];
-    root.appendChild(h('section',{className:'hub-hero'},[A.heroClock(),
+    root.appendChild(h('section',{className:'hub-hero page-hero page-hero-layout'},[A.homePosterEl(),A.heroClock(A.librarySummary()),
       h('div',{className:'hub-orbit', 'aria-hidden':'true'},[h('span'),h('span'),h('span')]),
       h('div',{className:'hub-hero-copy'},[h('span',{className:'eyebrow',text:'YOUR SPACE. YOUR STORIES.'}),h('h1',{text:(hour<12?'Good morning':hour<18?'Good afternoon':'Good evening')+(name?', '+name:'. Make yourself at home')+'.'}),h('p',{text:'One more episode. A new high score. A night with your people. It all starts here.'}),
       h('div',{className:'hub-hero-actions'},[resume?button('▶ Continue '+(resume.show||resume.title),function(){A.playItem(resume);},'primary'):null,button('Fit my time',function(){window.VaultcastHomeExtras.tonight();}),signed()?button('Customise Home',function(){window.VaultcastHomeExtras.customize();}):null,button('✦ Pick my next watch',pickTonight,resume?'ghost':'primary'),button('Watch together',function(){go('cinema');}),button('Explore the library',function(){A.navigate('library');})])])
@@ -292,7 +292,7 @@
   }
   function gameStarted(item){
     if(!signed())return;
-    window.VaultcastHomeExtras.gameStarted(item);
+    window.VaultcastHomeExtras.gameStarted(item);A.state._lastGame=item;A.state._lastGameOwner=A.state.user&&A.state.user.id;A.state._lastGameAt=Date.now();
     var emulator=window.EJS_emulator;if(!emulator || emulator._hubStatsStarted)return;emulator._hubStatsStarted=true;
     var token=Array.from(crypto.getRandomValues(new Uint8Array(12))).map(function(v){return v.toString(16).padStart(2,'0');}).join('');
     gameSession={item:item,token:token};

@@ -4362,12 +4362,42 @@ try {
     var theme = state.user && state.user.prefs && state.user.prefs.theme || state.settings && state.settings.theme || 'dark';
     document.body.setAttribute('data-theme', ['dark','light','retro-scifi'].indexOf(theme)>=0 ? theme : 'dark');
   }
-  function heroClock(){
-    var now = new Date();
-    return h('div',{className:'hero-time'},[
-      h('time',{className:'hero-clock',text:fmtClock(now.getTime())}),
-      h('span',{className:'hero-date',text:now.toLocaleDateString([], {weekday:'long',day:'numeric',month:'long'})})
+  function librarySummary(home){home=home||state.home||{};return (home.item_count||0)+' titles'+(home.scanned_at?' · library scanned '+String(home.scanned_at).slice(0,10):'');}
+  function heroClock(meta){
+    var now=new Date();
+    return h('div',{className:'live-hero-side hero-clock-panel'},[
+      h('time',{className:'live-clock hero-clock',text:fmtClock(now.getTime())}),
+      h('div',{className:'muted hero-date',text:now.toLocaleDateString([], {weekday:'long',day:'numeric',month:'long'})}),
+      meta?h('div',{className:'hero-clock-meta',text:meta}):null
     ]);
+  }
+  function homePosterEl(){return h('div',{className:'page-hero-poster home-hero-poster'},[h('img',{src:BASE+'api/site/home-poster',alt:'Home artwork',width:512,height:768,decoding:'async'})]);}
+  function standardBillboard(bb,meta){
+    bb.classList.add('page-hero');bb.removeAttribute('data-backdrop-host');
+    var backdrop=bb.querySelector('.billboard-bg');if(backdrop)backdrop.remove();
+    var inner=bb.querySelector('.billboard-inner'),poster=bb.querySelector('.billboard-poster'),foot=bb.querySelector('.billboard-foot');
+    if(!inner)return;
+    inner.classList.add('page-hero-layout');
+    if(!poster)poster=homePosterEl();else {poster.classList.add('page-hero-poster');poster.removeAttribute('data-backdrop-src');}
+    inner.insertBefore(poster,inner.firstChild);inner.appendChild(heroClock(meta||(foot&&foot.textContent)||''));
+    if(foot)foot.remove();
+  }
+  function lastGamePoster(){
+    var holder=h('figure',{className:'page-hero-poster last-game-art'},[homePosterEl(),h('figcaption',{text:'Ready to play'})]);
+    var owner=state.user&&state.user.id;
+    if(!owner||state.user.role==='guest')return holder;
+    function paint(item){
+      if(!holder.isConnected||owner!==(state.user&&state.user.id)||!item)return;
+      var poster=h('div',{className:'poster poster-pending last-game-poster'},[h('div',{className:'ph',text:item.title||'Game'})]);
+      holder.replaceChildren(poster,h('figcaption',{text:'Last played · '+(item.title||'Game')}));
+      observePoster(poster,posterIdFor(item),posterKindFor(item));
+    }
+    setTimeout(function(){
+      if(!holder.isConnected)return;
+      if(state._lastGameOwner===owner&&Date.now()-(state._lastGameAt||0)<30000){paint(state._lastGame);return;}
+      api('/hub/last-game').then(function(j){if(!j.ok||owner!==(state.user&&state.user.id))return;state._lastGame=j.game;state._lastGameOwner=owner;state._lastGameAt=Date.now();paint(j.game);}).catch(function(){});
+    },0);
+    return holder;
   }
   setInterval(function(){
     if(document.hidden)return;
@@ -4609,7 +4639,7 @@ try {
 
   function viewHome(){
     var home = state.home || { continue_watching:[], sections:[] };
-    var libraryHero=billboardEl(home);libraryHero.classList.add('library-hero');libraryHero.appendChild(h('div',{className:'hero-section-label',text:'Library'}));libraryHero.appendChild(heroClock());libraryHero.appendChild(heroArt('library'));
+    var libraryHero=billboardEl(home);libraryHero.classList.add('library-hero');standardBillboard(libraryHero,librarySummary(home));libraryHero.appendChild(heroArt('library'));
     var parts = [ libraryHero ];
     var cw = cwOnePerShow(home.continue_watching);
     if (cw.length) parts.push(rowEl('Continue watching', cw.map(function(it){ return cardEl(it, it.progress); }), { meta: String(cw.length) }));
@@ -4659,7 +4689,6 @@ try {
       h('p', { className:'muted', text: isPlay ? 'Your next adventure. A new high score. Pick a favourite or discover something new.' : text })
     ];
     if (isPlay) {
-      kids.push(heroClock(),heroArt('games'));
       kids.push(h('div', { className:'row-actions' }, [
         h('button', { className:'btn primary', type:'button', onClick: surpriseGame }, [ icon('dice'), h('span', { text:'Surprise me' }) ]),
         h('button',{className:'btn glass',text:'Multiplayer lobby',onClick:function(){goPlayTab('lobby');}}),
@@ -4668,7 +4697,10 @@ try {
         state.sectionQ || state.sectionSystem ? h('button', { className:'btn glass', type:'button', text: state.sectionSystem && !state.sectionQ ? 'Clear console' : 'Clear search', onClick: function(){ var rs = romsSection(); state.sectionSystem=''; if (rs) loadSection(rs.id, ''); var b = $('#q'); if (b) b.value = ''; } }) : null
       ]));
     }
-    return h('div', { className:'hero section-hero' + (isPlay ? ' play-hero' : '') }, kids);
+    if(isPlay)return h('div',{className:'hero section-hero play-hero page-hero page-hero-layout'},[
+      lastGamePoster(),h('div',{className:'hero-copy'},kids),heroClock(text||''),heroArt('games')
+    ]);
+    return h('div', { className:'hero section-hero' }, kids);
   }
 
   function surpriseGame(){
@@ -6151,7 +6183,7 @@ try {
         if (foot && footText) foot.textContent = footText;
       }, BILLBOARD_CW_MS);
     }
-    bb.appendChild(heroClock());bb.appendChild(heroArt('library'));
+    standardBillboard(bb,footText);bb.appendChild(heroArt('library'));
     return bb;
   }
 
@@ -6598,9 +6630,10 @@ try {
           grid.appendChild(el);
         });
         var heroP = root.querySelector('.section-hero p');
-        var shownLabel = (asShows ? (total+' shows') : (total+' titles')) + ' ?? showing '+shown;
-        if (heroP) heroP.textContent = shownLabel;
-        var bbFoot = root.querySelector('#section-showcase .billboard-foot');
+        var shownLabel = (asShows ? (total+' shows') : (total+' titles')) + ' · showing '+shown;
+        var heroMeta=root.querySelector('.section-hero .hero-clock-meta');
+        if(heroMeta)heroMeta.textContent=shownLabel;else if(heroP)heroP.textContent=shownLabel;
+        var bbFoot = root.querySelector('#section-showcase .hero-clock-meta, #section-showcase .billboard-foot');
         if (bbFoot) bbFoot.textContent = shownLabel;
       }
 
@@ -7862,6 +7895,17 @@ try {
     return shell(panel);
   }
 
+  function sitePosterSettings(){
+    var file=h('input',{type:'file',accept:'image/jpeg,image/png,image/webp','aria-label':'Upload Home poster'}),preview=h('img',{src:BASE+'api/site/home-poster',alt:'Current Home poster',width:96,height:144});
+    function save(reset,button){
+      var selected=file.files&&file.files[0];if(!reset&&!selected){toast('Choose a poster first');return;}
+      if(selected&&!reset&&selected.size>2097152){toast('Choose a poster up to 2 MB');return;}
+      button.disabled=true;
+      var read=reset?Promise.resolve({reset:true}):new Promise(function(resolve,reject){var reader=new FileReader();reader.onerror=function(){reject(new Error('Could not read poster'));};reader.onload=function(){resolve({poster_data:reader.result});};reader.readAsDataURL(selected);});
+      read.then(function(body){return api('/admin/site-artwork',{method:'POST',body:body});}).then(function(result){if(!result.ok)throw new Error(result.error||'Could not save poster');preview.src=BASE+'api/site/home-poster?v='+Date.now();file.value='';toast(reset?'Default Home poster restored':'Home poster updated');}).catch(function(e){toast(e.message,{kind:'bad'});}).finally(function(){button.disabled=false;});
+    }
+    return h('section',{className:'settings-card stack site-poster-settings'},[h('h3',{text:'Home poster'}),h('p',{className:'muted',text:'A shared poster for the Home header. Upload JPEG, PNG or WebP up to 2 MB / 12 megapixels. Portrait 2:3 artwork works best. Your upload is kept through app updates.'}),preview,file,h('div',{className:'row-actions'},[h('button',{className:'btn primary',type:'button',text:'Upload poster',onClick:function(e){save(false,e.currentTarget);}}),h('button',{className:'btn',type:'button',text:'Restore bundled artwork',onClick:function(e){save(true,e.currentTarget);}})])]);
+  }
   function fillAdmin(){
     api('/admin/settings').then(function(j){
       if (!j.ok) return toast(j.error||'Admin denied');
@@ -7879,6 +7923,7 @@ try {
           fieldEl('app_name','App display name', s.app_name),
           fieldEl('app_tagline','Subtitle / tagline', s.app_tagline||''),
           fieldEl('theme','Theme (dark or light)', s.theme||'dark'),
+          sitePosterSettings(),
           h('h3', { className:'admin-section-title', text:'Links' }),
           fieldEl('public_base_url','Public base URL for shared links (optional, e.g. https://media.example.com/)', s.public_base_url||'', 'url'),
           h('p', { className:'muted', text:'Leave empty to share links using the address you are browsing on (its protocol, host and port).' }),
@@ -11445,16 +11490,16 @@ h('div', { className:'cv-find-bar' }, [
     return h('div', { className:'stack find-collections' }, [ h('div', { className:'row-actions' }, [btn, stop]), bar, status ]);
   }
   function viewCollections(){
-    var wrap = h('div', { id:'collections-view', className:'panel panel-collections' }, [
-      h('div', { className:'hero' }, [
-        h('h1', { text:'Collections' }),
-        h('p', { className:'muted', text:'Film series & show groups — tap a poster to expand its titles' })
+    var wrap = h('div', { id:'collections-view', className:'panel-collections' }, [
+      h('section',{className:'collections-hero page-hero page-hero-layout'},[
+        homePosterEl(),h('div',{className:'hero-copy'},[h('div',{className:'eyebrow',text:'Library'}),h('h1',{text:'Collections'}),h('p',{className:'muted',text:'Film series and show groups, together in one place. Pick a poster to explore its titles.'})]),heroClock('Collections from your library'),heroArt('library')
       ]),
       h('div', { id:'pub_col_list', className:'collections-grid' }, [ pendingContent({ className:'muted', }) ])
     ]);
     api('/collections').then(function(r){
       var list = $('#pub_col_list'); if (!list) return;
       var root = $('#collections-view');
+      if(root&&r.ok){var meta=root.querySelector('.hero-clock-meta');if(meta)meta.textContent=(r.collections||[]).length+' collections';}
       if (!r.ok || !(r.collections||[]).length) {
         list.innerHTML = '';
         list.className = 'collections-grid';
@@ -14374,7 +14419,7 @@ function viewCollectionDetail(){
   /* helpers for assets/js/matching.js (Ingest inbox / Fix matching / Label reports) */
   window.NSApp = { h: h, api: api, toast: toast, confirmDialog: confirmDialog, render: render, state: state, can:can,
     openSettings: openSettings, openShow: openShow, openMovie: openMovie, openGame:openGame, navigate:navigate, refreshArtwork:refreshArtwork, fmtSize: fmtSize, version: APP_VERSION,
-    shell:shell,heroClock:heroClock,cardEl:cardEl,homeActivitySections:homeActivitySections,applyRoute:applyRoute,replaceNav:replaceNav,openPlayer:openPlayer,playItem:playItem,copyText:copyText,shareUrl:shareUrl,startLobbyHost:startLobbyHost,captureGameState:lobbyCaptureState,quitGame:function(){closePlayer();} };
+    shell:shell,heroClock:heroClock,homePosterEl:homePosterEl,librarySummary:librarySummary,cardEl:cardEl,homeActivitySections:homeActivitySections,applyRoute:applyRoute,replaceNav:replaceNav,openPlayer:openPlayer,playItem:playItem,copyText:copyText,shareUrl:shareUrl,startLobbyHost:startLobbyHost,captureGameState:lobbyCaptureState,quitGame:function(){closePlayer();} };
   window.VaultcastHub.init(window.NSApp);
   window.VaultcastHomeExtras.init(window.NSApp);
   // Load matching tools when Settings or a detail-page action needs them.

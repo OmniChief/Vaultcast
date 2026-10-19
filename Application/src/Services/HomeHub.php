@@ -60,6 +60,17 @@ final class HomeHub {
         $notifications=json_decode((string)$q->fetchColumn(),true);
         return ['ok'=>true,'notifications'=>is_array($notifications)?array_values($notifications):[]];
     }
+    public static function lastGame(array $user): array {
+        if (!AreaAccess::allowed($user,'games'))return ['ok'=>true,'game'=>null];
+        $data=self::personal((string)$user['id']);$games=$data['games'] ?? [];
+        uasort($games,static function($a,$b){return ($b['last_played'] ?? 0)<=>($a['last_played'] ?? 0);});
+        foreach (array_chunk(array_keys($games),100) as $ids) {
+            $rows=\Vaultcast\Repository::rows('SELECT payload FROM vaultcast_items WHERE media_kind=? AND id IN ('.implode(',',array_fill(0,count($ids),'?')).')',array_merge(['rom'],$ids));
+            $items=[];foreach ($rows as $item)$items[$item['id']]=$item;
+            foreach ($ids as $id) if (isset($items[$id]) && self::visible($items[$id],$user)) return ['ok'=>true,'game'=>Catalogue::publicItem($items[$id],false),'last_played'=>$games[$id]['last_played'] ?? null];
+        }
+        return ['ok'=>true,'game'=>null];
+    }
     public static function gameFavourites(array $user): array {
         $data = self::personal((string)$user['id']);
         $rows = array_values(array_filter($data['favourites'] ?? [], static function(array $row) use ($user): bool {
