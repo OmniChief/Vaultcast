@@ -273,8 +273,18 @@ final class HomeHub {
         $mostTime=$games;$mostSessions=$games;
         usort($mostTime,static function($a,$b){return ($b['seconds']<=>$a['seconds'])?:strcmp($a['title'],$b['title']);});
         usort($mostSessions,static function($a,$b){return ($b['sessions']<=>$a['sessions'])?:strcmp($a['title'],$b['title']);});
+        $featured=null;
+        if (!empty($mostTime[0]['seconds'])) {
+            $top=$mostTime[0];$item=Catalogue::item($top['id']);
+            if ($item && ($item['media_kind'] ?? '')==='rom' && self::visible($item,$user)) {
+                $summary=Posters::gameSynopsisCached($top['id']);
+                $featured=['card'=>Catalogue::publicItem($item,false),'synopsis'=>trim(html_entity_decode(strip_tags((string)($summary['summary'] ?? '')),ENT_QUOTES|ENT_HTML5,'UTF-8')),
+                    'seconds'=>$top['seconds'],'sessions'=>$top['sessions'],'average_session'=>$top['sessions']?(int)round($top['seconds']/$top['sessions']):0,
+                    'share'=>$seconds?(int)round(100*$top['seconds']/$seconds):0,'last_played'=>$data['games'][$top['id']]['last_played'] ?? null];
+            }
+        }
         return ['ok'=>true,'totals'=>['seconds'=>$seconds,'sessions'=>$sessions,'games'=>count($games),'platforms'=>count($platforms),'average_session'=>$sessions?(int)round($seconds/$sessions):0],
-            'most_played'=>array_slice($mostTime,0,6),'most_sessions'=>array_slice($mostSessions,0,6),'platforms'=>array_values($platforms)];
+            'featured'=>$featured,'most_played'=>array_slice($mostTime,0,6),'most_sessions'=>array_slice($mostSessions,0,6),'platforms'=>array_values($platforms)];
     }
     public static function gameList(array $user,int $page,string $query): array {
         if (!AreaAccess::allowed($user,'games')) throw new DomainException('Games are not enabled for your account.');

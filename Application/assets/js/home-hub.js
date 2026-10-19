@@ -152,12 +152,19 @@
     }
     paint();return h('div',{},[h('div',{className:'game-chart-toggle',role:'group','aria-label':'Console chart measure'},[timeButton,sessionButton]),chart]);
   }
+  function featuredGame(game){
+    if(!game)return empty('Every great collection starts with one adventure.');
+    var card=game.card,poster=h('div',{className:'game-signature-poster'},[h('span',{'aria-hidden':'true',text:(card.title||'Game').slice(0,1)})]);
+    poster.appendChild(h('img',{src:(window.__STREAM_BASE__||'/')+'api/items/'+encodeURIComponent(card.id)+'/poster?fetch=0&variant=medium',alt:card.title+' poster',width:192,height:288,loading:'lazy',decoding:'async',onError:function(e){e.currentTarget.hidden=true;}}));
+    var last=game.last_played?new Date(game.last_played*1000):null;
+    return h('section',{className:'game-stats-champion'},[poster,h('div',{className:'game-signature-copy'},[h('span',{className:'eyebrow',text:'Your most-played world'}),h('h3',{text:card.title}),h('p',{className:'muted',text:[card.system,card.year].filter(Boolean).join(' · ')}),h('p',{className:'game-signature-synopsis',text:game.synopsis||'No synopsis is available for this game yet.'}),h('div',{className:'hub-stats game-signature-stats'},[stat(time(game.seconds),'Time played'),stat(game.sessions,'Sessions'),stat(time(game.average_session),'Average session'),stat(game.share+'%','Of your play time')]),last&&!isNaN(last.getTime())?h('p',{className:'muted game-signature-last',text:'Last played '+last.toLocaleDateString()}):null,button('Open game',function(){A.openGame(card);},'primary')])]);
+  }
   function gameInsights(){
     var host=h('div',{className:'game-stats-insights'},[empty('Preparing your play statistics…')]),owner=A.state.user&&A.state.user.id;
     function load(){request('game-stats').then(function(j){
       if(!host.isConnected||owner!==(A.state.user&&A.state.user.id))return;
-      var totals=j.totals,champion=j.most_played[0];host.replaceChildren(
-        panel('Your play signature',[h('div',{className:'hub-stats game-stats-summary'},[stat(time(totals.seconds),'Total play time'),stat(totals.games,'Games explored'),stat(totals.sessions,'Play sessions'),stat(time(totals.average_session),'Average session'),stat(totals.platforms,'Consoles explored')]),champion&&champion.seconds>0?h('p',{className:'game-stats-champion',text:'Your most-played world: '+champion.title+' · '+time(champion.seconds)}):empty('Every great collection starts with one adventure.')]),
+      var totals=j.totals;host.replaceChildren(
+        panel('Your play signature',[h('div',{className:'hub-stats game-stats-summary'},[stat(time(totals.seconds),'Total play time'),stat(totals.games,'Games explored'),stat(totals.sessions,'Play sessions'),stat(time(totals.average_session),'Average session'),stat(totals.platforms,'Consoles explored')]),featuredGame(j.featured)]),
         h('div',{className:'hub-two game-chart-grid'},[panel('Most played',gameBars(j.most_played,'seconds')),panel('Your console universe',consoleChart(j.platforms)),panel('Games you return to',gameBars(j.most_sessions,'sessions'))])
       );
     }).catch(function(e){if(host.isConnected&&owner===(A.state.user&&A.state.user.id))host.replaceChildren(panel('Statistics unavailable',[empty(e.message),button('Retry',load)]));});}
