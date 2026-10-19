@@ -4263,7 +4263,7 @@ try {
       group('Stay connected',[action('Private inbox',function(){hub('inbox');},'mail'),action('Chat & direct messages',function(){hub('chat');},'dm'),action('Invitations',function(){hub('inbox');},'invites'),action('Friends',function(){hub('friends');}),action('Watch together',function(){hub('cinema');})]);
       if(userAreaAllowed('games'))group('Your games',[action('Cloud saves',function(){openSettings('cloud-saves');}),action('Game statistics',function(){hub('stats');})]);
     }else group('Get started',[action('Sign in',function(){navigate('login');})]);
-    group('Preferences',[action('For you',function(){hub('overview');}),action('Account & playback',function(){openSettings('account');}),action('Settings',function(){openSettings(signed&&user.role==='admin'?'general':'account');})]);
+    group('Preferences',[action('For you',function(){hub('overview');}),action('Account & playback',function(){openSettings('account');}),signed&&user.role==='admin'?action('Check for updates',function(){openSettings('updates');}):null,action('Settings',function(){openSettings(signed&&user.role==='admin'?'general':'account');})]);
     if(signed)drawer.appendChild(action('Sign out',function(){
       api('/logout',{method:'POST'}).then(function(result){
         if(!result.ok)throw new Error(result.error||'Could not sign out');
