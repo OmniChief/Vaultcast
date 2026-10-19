@@ -4432,7 +4432,7 @@ try {
       h('nav', { className:'mode-switch', role:'tablist', 'aria-label':'Mode' }, modes.map(function(m){
         return h('button', {
           className:'mode-tab mode-' + m[0] + (mode === m[0] ? ' active' : ''), type:'button', role:'tab',
-          'aria-selected': mode === m[0] ? 'true' : 'false', title: m[2],
+          'aria-selected': mode === m[0] ? 'true' : 'false', 'aria-label':m[1], title: m[2],
           onClick: function(){ goMode(m[0]); }
         }, [ icon(m[0]), h('span', { className:'mode-label', text: m[1] }) ]);
       })),
