@@ -4185,6 +4185,7 @@ try {
 
   function rowEl(title, cards, opts){
     opts = opts || {};
+    if (opts.fit) cards = cards.slice(0,shelfCapacity(opts.className && opts.className.indexOf('row-live')>=0));
     var sc = h('div', { className:'scroller' }, cards);
     function page(dir){
       try { sc.scrollBy({ left: dir * Math.max(240, sc.clientWidth * 0.85), behavior:'smooth' }); }
@@ -4213,13 +4214,78 @@ try {
     closeMenus();
   });
 
+  var accountDrawerClose = null;
+  function accountHasUnread(){
+    var owner=state.user&&state.user.id;
+    return !!(owner && ((state.chatUnreadOwner===owner && state.chatUnread && (state.chatUnread.mail||state.chatUnread.dm)) || (state.inviteOwner===owner && state.inviteCount>0)));
+  }
+  function updateAccountIndicators(){
+    $all('[data-account-dot]').forEach(function(el){el.hidden=!accountHasUnread();});
+    $all('[data-account-notice]').forEach(function(el){
+      var kind=el.getAttribute('data-account-notice'),owner=state.user&&state.user.id;
+      var count=kind==='invites'?(state.inviteOwner===owner?state.inviteCount:0):(state.chatUnreadOwner===owner&&state.chatUnread&&state.chatUnread[kind]?1:0);
+      el.hidden=!count;el.textContent=kind==='invites'?String(count||''):'New';
+    });
+  }
+  document.addEventListener('vaultcast-notices-changed',updateAccountIndicators);
+  function openAccountDrawer(trigger){
+    if(accountDrawerClose){accountDrawerClose();return;}
+    var user=state.user,owner=user&&user.id,signed=!!(user&&user.role!=='guest'),previous=document.activeElement,app=$('#app'),oldInert=app&&app.inert;
+    var overlay=h('div',{className:'account-drawer-overlay'}),drawer=h('aside',{className:'account-drawer',id:'account-drawer',role:'dialog','aria-modal':'true','aria-labelledby':'account-drawer-title',tabindex:'-1'});
+    var closing=false;
+    function close(restore){
+      if(closing)return;closing=true;accountDrawerClose=null;
+      document.removeEventListener('keydown',keys,true);document.removeEventListener('vaultcast-account-ready',accountChanged);
+      if(app)app.inert=oldInert;
+      document.body.classList.remove('account-drawer-open');if(trigger)trigger.setAttribute('aria-expanded','false');
+      overlay.classList.remove('is-open');
+      setTimeout(function(){overlay.remove();},220);
+      if(restore!==false&&previous&&previous.isConnected)previous.focus();
+    }
+    function accountChanged(){if(owner!==(state.user&&state.user.id))close(false);}
+    function keys(e){
+      if(e.key==='Escape'){e.preventDefault();e.stopImmediatePropagation();close();}
+      if(e.key==='Tab'){
+        var nodes=Array.from(drawer.querySelectorAll('button:not([disabled]),a[href],input,[tabindex="0"]')).filter(function(el){return !el.hidden&&el.getClientRects().length;});
+        var first=nodes[0],last=nodes[nodes.length-1];
+        if(!first){e.preventDefault();drawer.focus();}
+        else if(e.shiftKey&&(document.activeElement===first||!drawer.contains(document.activeElement))){e.preventDefault();last.focus();}
+        else if(!e.shiftKey&&(document.activeElement===last||!drawer.contains(document.activeElement))){e.preventDefault();first.focus();}
+      }
+    }
+    function action(label,callback,notice){return h('button',{className:'account-drawer-link',type:'button',onClick:function(){close(false);callback();}},[h('span',{text:label}),notice?h('span',{className:'account-drawer-badge','data-account-notice':notice,hidden:true}):null,icon('chevR')]);}
+    function hub(tab){window.VaultcastHub.go(tab);}
+    function group(title,items){drawer.appendChild(h('section',{className:'account-drawer-group'},[h('h3',{text:title})].concat(items)));}
+    drawer.appendChild(h('div',{className:'account-drawer-head'},[h('h2',{id:'account-drawer-title',text:'Your space'}),h('button',{className:'icon-btn',type:'button','aria-label':'Close account menu',text:'×',onClick:function(){close();}})]));
+    drawer.appendChild(h('div',{className:'account-drawer-profile'},[user?profileAvatar(user):icon('user'),h('div',{},[h('strong',{text:user?(user.display_name||user.username):'Welcome to Vaultcast'}),h('small',{text:signed?(user.role==='admin'?'Administrator':'Your personal space'):'Sign in for your own lists and messages'})])]));
+    if(signed){
+      group('Your collection',[action('My profile',function(){window.VaultcastChat.profile(owner);}),action('Favourites',function(){hub('favourites');}),action('Watchlist',function(){hub('watchlist');}),action('My collections',function(){hub('lists');}),action('History',function(){hub('history');}),action('Release calendar',function(){hub('calendar');}),action('New episodes',function(){hub('arrivals');})]);
+      group('Stay connected',[action('Private inbox',function(){hub('inbox');},'mail'),action('Chat & direct messages',function(){hub('chat');},'dm'),action('Invitations',function(){hub('inbox');},'invites'),action('Friends',function(){hub('friends');}),action('Watch together',function(){hub('cinema');})]);
+      if(userAreaAllowed('games'))group('Your games',[action('Cloud saves',function(){openSettings('cloud-saves');}),action('Game statistics',function(){hub('stats');})]);
+    }else group('Get started',[action('Sign in',function(){navigate('login');})]);
+    group('Preferences',[action('For you',function(){hub('overview');}),action('Account & playback',function(){openSettings('account');}),action('Settings',function(){openSettings(signed&&user.role==='admin'?'general':'account');})]);
+    if(signed)drawer.appendChild(action('Sign out',function(){
+      api('/logout',{method:'POST'}).then(function(result){
+        if(!result.ok)throw new Error(result.error||'Could not sign out');
+        closePlayer();state.user=null;state.home=null;state._guest=false;
+        document.dispatchEvent(new Event('vaultcast-account-ready'));
+        return api('/me').then(function(me){state._guestBrowsing=!!me.guest_browsing;state._guest=state._guestBrowsing;if(state._guest)return loadHome();showWelcome();});
+      }).catch(function(e){toast(e.message||'Could not sign out',{kind:'bad'});});
+    }));
+    overlay.appendChild(drawer);overlay.addEventListener('click',function(e){if(e.target===overlay)close();});document.body.appendChild(overlay);
+    if(app)app.inert=true;
+    document.body.classList.add('account-drawer-open');if(trigger)trigger.setAttribute('aria-expanded','true');
+    accountDrawerClose=close;document.addEventListener('keydown',keys,true);document.addEventListener('vaultcast-account-ready',accountChanged);
+    updateAccountIndicators();requestAnimationFrame(function(){if(!closing){overlay.classList.add('is-open');drawer.querySelector('button').focus();}});
+    if(signed)api('/hub/inbox').then(function(j){if(!j.ok||owner!==(state.user&&state.user.id))return;state.inviteOwner=owner;state.inviteCount=(j.notifications||[]).length;updateAccountIndicators();}).catch(function(){});
+  }
   function accountMenu(){
     var user = state.user;
     return h('button', {
-      className: 'icon-btn avatar' + (user ? ' signed-in' : ''), type: 'button',
-      title: 'Account & settings', 'aria-label': 'Open account and settings',
-      onClick: function(){ openSettings('account'); }
-    }, [user ? profileAvatar(user) : icon('user')]);
+      className: 'icon-btn avatar' + (user ? ' signed-in' : ''), type:'button',
+      title:'Your space', 'aria-label':'Open your account menu', 'aria-haspopup':'dialog','aria-controls':'account-drawer','aria-expanded':'false',
+      onClick:function(e){openAccountDrawer(e.currentTarget);}
+    },[user?profileAvatar(user):icon('user'),h('span',{className:'account-avatar-dot','data-account-dot':'1',hidden:!accountHasUnread()})]);
   }
 
   function searchBoxEl(mode){
@@ -4294,8 +4360,32 @@ try {
     ]);
   }
 
+  function applyTheme(){
+    var theme = state.user && state.user.prefs && state.user.prefs.theme || state.settings && state.settings.theme || 'dark';
+    document.body.setAttribute('data-theme', ['dark','light','retro-scifi'].indexOf(theme)>=0 ? theme : 'dark');
+  }
+  function heroClock(){
+    var now = new Date();
+    return h('div',{className:'hero-time'},[
+      h('time',{className:'hero-clock',text:fmtClock(now.getTime())}),
+      h('span',{className:'hero-date',text:now.toLocaleDateString([], {weekday:'long',day:'numeric',month:'long'})})
+    ]);
+  }
+  setInterval(function(){
+    if(document.hidden)return;
+    var now = new Date();
+    $all('.hero-clock').forEach(function(el){el.textContent=fmtClock(now.getTime());});
+    $all('.hero-date').forEach(function(el){el.textContent=now.toLocaleDateString([], {weekday:'long',day:'numeric',month:'long'});});
+  },30000);
+  function heroArt(kind){return h('div',{className:'hero-art hero-art-'+kind,'aria-hidden':'true'},[h('span'),h('span'),h('span')]);}
+  function shelfCapacity(liveCards){
+    var width=Math.min(window.innerWidth,1900),gutter=Math.max(16,Math.min(56,width*.036)),card=liveCards?Math.max(250,Math.min(340,width*.25)):Math.max(138,Math.min(210,width*.115));
+    return Math.max(1,Math.floor((width-gutter*2-48+14)/(card+14)));
+  }
+
   function shell(content){
     var mode = currentMode();
+    applyTheme();
     try { document.body.setAttribute('data-mode', mode || 'none'); } catch (e) {}
     var modes = [
       ['home', 'Home', 'Your lists, friends and next great night'],
@@ -4492,7 +4582,8 @@ try {
 
   function viewHome(){
     var home = state.home || { continue_watching:[], sections:[] };
-    var parts = [ billboardEl(home) ];
+    var libraryHero=billboardEl(home);libraryHero.classList.add('library-hero');libraryHero.appendChild(h('div',{className:'hero-section-label',text:'Library'}));libraryHero.appendChild(heroClock());libraryHero.appendChild(heroArt('library'));
+    var parts = [ libraryHero ];
     var cw = cwOnePerShow(home.continue_watching);
     if (cw.length) parts.push(rowEl('Continue watching', cw.map(function(it){ return cardEl(it, it.progress); }), { meta: String(cw.length) }));
     vodSections().forEach(function(sec){
@@ -4504,8 +4595,8 @@ try {
         ]));
         return;
       }
-      parts.push(rowEl(sec.label, items.map(function(it){ return cardEl(it); }), {
-        more: function(){ navigate('section', sec.id); }, moreText: 'Browse all ' + (sec.count || '')
+      parts.push(rowEl(sec.label, items.slice(0,shelfCapacity(false)).map(function(it){ return cardEl(it); }), {
+        fit:true, more: function(){ navigate('section', sec.id); }, moreText: 'Browse all ' + (sec.count || '')
       }));
     });
     if (!(home.sections || []).length) {
@@ -4524,8 +4615,8 @@ try {
     if (userAreaAllowed('live')) parts.push(h('div', {id:'live-teaser'}));
     var rs = romsSection();
     if (userAreaAllowed('games') && rs && (rs.items || []).length) {
-      parts.push(rowEl('From Play \u00b7 ' + rs.label, rs.items.map(function(it){ return cardEl(it); }), {
-        className:'row-play', more: function(){ goMode('play'); }, moreText:'Open Play'
+      parts.push(rowEl('From Play \u00b7 ' + rs.label, rs.items.slice(0,shelfCapacity(false)).map(function(it){ return cardEl(it); }), {
+        className:'row-play', fit:true, more: function(){ goMode('play'); }, moreText:'Open Play'
       }));
     }
     var activity = h('div', {className:'home-activity'}, parts);
@@ -4536,13 +4627,17 @@ try {
   function sectionHeroEl(id, text){
     var isPlay = state.view === 'play';
     var kids = [
-      h('div', { className:'eyebrow', text: isPlay ? 'Play' : 'VoD' }),
-      h('h1', { text: isPlay ? (state.sectionLabel || 'Games') : (state.sectionLabel || id) }),
-      h('p', { className:'muted', text: text })
+      h('div', { className:'eyebrow', text: isPlay ? 'Play · ' + (state.sectionLabel || 'Games') : 'Library' }),
+      h('h1', { text: isPlay ? "Let’s game" + (state.user ? ', ' + (state.user.display_name || state.user.username) : '') + '.' : (state.sectionLabel || id) }),
+      h('p', { className:'muted', text: isPlay ? 'Your next adventure. A new high score. Pick a favourite or discover something new.' : text })
     ];
     if (isPlay) {
+      kids.push(heroClock(),heroArt('games'));
       kids.push(h('div', { className:'row-actions' }, [
         h('button', { className:'btn primary', type:'button', onClick: surpriseGame }, [ icon('dice'), h('span', { text:'Surprise me' }) ]),
+        h('button',{className:'btn glass',text:'Multiplayer lobby',onClick:function(){goPlayTab('lobby');}}),
+        h('button',{className:'btn glass',text:'Game favourites',onClick:function(){window.VaultcastHub.go('favourites');}}),
+        h('button',{className:'btn glass',text:'Cloud saves',onClick:function(){openSettings('cloud-saves');}}),
         state.sectionQ || state.sectionSystem ? h('button', { className:'btn glass', type:'button', text: state.sectionSystem && !state.sectionQ ? 'Clear console' : 'Clear search', onClick: function(){ var rs = romsSection(); state.sectionSystem=''; if (rs) loadSection(rs.id, ''); var b = $('#q'); if (b) b.value = ''; } }) : null
       ]));
     }
@@ -4866,8 +4961,8 @@ try {
       if (!host.isConnected || host!==$('#live-teaser') || host._liveGeneration!==generation || !g || !g.channels) return;
       host.replaceChildren();if(!g.channels.length)return;
       if (!live.guide) live.guide = g; // slim data is enough for the first paint of cards
-      host.appendChild(rowEl('On Watch Live now', sortLiveChannels(g.channels).slice(0, 16).map(function(ch){ return liveCardEl(ch, { compact:true }); }), {
-        className:'row-live', more: function(){ goMode('live'); }, moreText:'Open guide'
+      host.appendChild(rowEl('On Watch Live now', sortLiveChannels(g.channels).slice(0,shelfCapacity(true)).map(function(ch){ return liveCardEl(ch, { compact:true }); }), {
+        className:'row-live', fit:true, more: function(){ goMode('live'); }, moreText:'Open guide'
       }));
     }).catch(function(){});
   }
@@ -4976,7 +5071,7 @@ try {
     }
     if (!feat) feat = pool[0] || null;
     var now = Date.now();
-    var right = h('div', { className:'live-hero-side' }, [
+    var right = h('div', { className:'live-hero-side' }, [heroArt('live'),
       h('div', { className:'live-clock', id:'live-clock', text: fmtClock(now) }),
       h('div', { className:'muted', text: new Date(now).toLocaleDateString([], { weekday:'long', day:'numeric', month:'long' }) }),
       h('div', { className:'live-count', text: total + ' channel' + (total === 1 ? '' : 's') + ' live' })
@@ -6013,6 +6108,7 @@ try {
         if (foot && footText) foot.textContent = footText;
       }, BILLBOARD_CW_MS);
     }
+    bb.appendChild(heroClock());bb.appendChild(heroArt('library'));
     return bb;
   }
 
@@ -6028,7 +6124,7 @@ try {
     /* Top of section — Home-parity billboard sits above A–Z grid (rail is body-fixed) */
     root.insertBefore(host, root.firstChild);
 
-    var n = 16;
+    var n = shelfCapacity(false);
     var path = kind === 'recent'
       ? '/sections/' + encodeURIComponent(id) + '/recent?n=' + n
       : '/sections/' + encodeURIComponent(id) + '/random?n=' + n;
@@ -6067,7 +6163,7 @@ try {
       var bb = sectionShowcaseBillboard(list, kind, footText || (title + ' \u00b7 ' + list.length));
       if (bb) host.appendChild(bb);
       host.appendChild(rowEl(title, list.map(function(it){ return cardEl(it); }), {
-        className: 'row-showcase row-showcase-' + kind,
+        className: 'row-showcase row-showcase-' + kind, fit:true,
         meta: String(list.length)
       }));
     }).catch(function(){
@@ -6395,7 +6491,7 @@ try {
     path = appendSectionFilterParams(path);
     if (append) state.sectionLoadingMore = true;
     var showcaseRequest = !append && !letter && sectionShowcaseKind(id)
-      ? api('/sections/' + encodeURIComponent(id) + '/' + (sectionShowcaseKind(id) === 'recent' ? 'recent' : 'random') + '?n=16').catch(function(){ return null; })
+      ? api('/sections/' + encodeURIComponent(id) + '/' + (sectionShowcaseKind(id) === 'recent' ? 'recent' : 'random') + '?n=' + shelfCapacity(false)).catch(function(){ return null; })
       : null;
     var seq = ++_sectionLoadSeq;
     function stillHere(){ return seq === _sectionLoadSeq && state.section === id && (state.view === 'section' || state.view === 'play'); }
@@ -7245,7 +7341,8 @@ try {
           h('div', {className:'profile-avatar-editor'}, [profileAvatar(u), h('label', {}, ['Avatar (JPEG, PNG or WebP, up to 1 MB)', h('input', {id:'profile_avatar', type:'file', accept:'image/jpeg,image/png,image/webp'})])]),
           h('label', {className:'check-label'}, [h('input', {id:'remove_avatar', type:'checkbox'}), 'Remove avatar (use initials)']),
           h('label', {}, ['Theme', h('select', { id: 'theme' }, [
-            h('option', { value: 'dark', text: 'Dark', selected: prefs.theme !== 'light' }),
+            h('option', { value: 'dark', text: 'Dark Neon (default)', selected: !prefs.theme || prefs.theme === 'dark' }),
+            h('option', { value: 'retro-scifi', text: 'Retro Sci-Fi', selected: prefs.theme === 'retro-scifi' }),
             h('option', { value: 'light', text: 'Light', selected: prefs.theme === 'light' })
           ])]),
           h('label', {}, ['New password (optional)', h('input', { id: 'pw', type: 'password', placeholder: 'Leave blank to keep' })]),
@@ -14051,12 +14148,15 @@ function viewCollectionDetail(){
 
   function applyPrefs(){
     var p = (state.user && state.user.prefs) || {};
+    applyTheme();
     document.body.classList.toggle('reduce-motion', !!p.reduce_motion);
     if(state.user && state._homePrefUser!==state.user.id){state._homePrefUser=state.user.id;if(state.view==='home' && R.relative(location.pathname,BASE)==='' && p.home_landing)state.hubTab=p.home_landing;}
   }
 
   function render(){ renderView(); syncUrl(); }
   function renderView(){
+    if(accountDrawerClose)accountDrawerClose(false);
+    applyTheme();
     var root = $('#app');
     if (state.home && state.user && state.user.role !== 'admin') {
       var requiredArea = /^(?:show|movie|collections|collection|colmember)$/.test(state.view) ? 'library'
@@ -14234,7 +14334,7 @@ function viewCollectionDetail(){
   /* helpers for assets/js/matching.js (Ingest inbox / Fix matching / Label reports) */
   window.NSApp = { h: h, api: api, toast: toast, confirmDialog: confirmDialog, render: render, state: state, can:can,
     openSettings: openSettings, openShow: openShow, openMovie: openMovie, openGame:openGame, navigate:navigate, refreshArtwork:refreshArtwork, fmtSize: fmtSize, version: APP_VERSION,
-    shell:shell,cardEl:cardEl,homeActivitySections:homeActivitySections,applyRoute:applyRoute,replaceNav:replaceNav,openPlayer:openPlayer,playItem:playItem,copyText:copyText,shareUrl:shareUrl,startLobbyHost:startLobbyHost,captureGameState:lobbyCaptureState,quitGame:function(){closePlayer();} };
+    shell:shell,heroClock:heroClock,cardEl:cardEl,homeActivitySections:homeActivitySections,applyRoute:applyRoute,replaceNav:replaceNav,openPlayer:openPlayer,playItem:playItem,copyText:copyText,shareUrl:shareUrl,startLobbyHost:startLobbyHost,captureGameState:lobbyCaptureState,quitGame:function(){closePlayer();} };
   window.VaultcastHub.init(window.NSApp);
   window.VaultcastHomeExtras.init(window.NSApp);
   // Load matching tools when Settings or a detail-page action needs them.
