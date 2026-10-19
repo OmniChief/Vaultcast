@@ -4384,6 +4384,12 @@ try {
     inner.insertBefore(poster,inner.firstChild);inner.appendChild(heroClock(meta||(foot&&foot.textContent)||''));
     if(foot)foot.remove();
   }
+  function linkHeroPoster(poster,item,action){
+    if(!poster)return;
+    poster.classList.add('hero-poster-link');poster.setAttribute('role','link');poster.setAttribute('tabindex','0');poster.setAttribute('aria-label','Open '+(item.title||item.showTitle||'title'));poster.title='Open '+(item.title||item.showTitle||'title');
+    function open(e){e.preventDefault();e.stopPropagation();if(action){action();return;}if(item.media_kind==='rom'||item.type==='roms')openGame(item);else if(item.show_key)openShow(item.show_key);else if(isShowItem(item))openShow(item.id);else openMovie(item.id);}
+    poster.onclick=open;poster.onkeydown=function(e){if(e.key==='Enter')open(e);};
+  }
   function lastGamePoster(){
     var holder=h('figure',{className:'page-hero-poster last-game-art'},[homePosterEl(),h('figcaption',{className:'card-showcase-badge',text:'Ready to play'})]);
     var owner=state.user&&state.user.id;
@@ -4392,6 +4398,7 @@ try {
       if(!holder.isConnected||owner!==(state.user&&state.user.id)||!item)return;
       var poster=h('div',{className:'poster poster-pending last-game-poster'},[h('div',{className:'ph',text:item.title||'Game'})]);
       holder.replaceChildren(poster,h('figcaption',{className:'card-showcase-badge',text:'Last played'}));
+      linkHeroPoster(holder,item);
       observePoster(poster,posterIdFor(item),posterKindFor(item));
     }
     setTimeout(function(){
@@ -4516,6 +4523,7 @@ try {
     var progWrap = bb.querySelector('.billboard-progress');
     var actionsEl = bb.querySelector('.billboard-copy .row-actions');
     var poster = bb.querySelector('.billboard-poster');
+    linkHeroPoster(poster,feat);
     if (eyebrowEl) eyebrowEl.textContent = eyebrow;
     if (titleEl) titleEl.textContent = cleanTitle(feat);
     var meta = [];
@@ -4606,6 +4614,7 @@ try {
     }
     var isShow = isShowItem(feat);
     var poster = h('div', { className:'poster poster-pending billboard-poster', 'data-backdrop-src':'1', 'data-poster-variant':'full' }, [ h('div', { className:'ph', text: cleanTitle(feat) }) ]);
+    linkHeroPoster(poster,feat);
     var meta = [];
     if (feat.show && feat.season != null) meta.push(epCode(feat.season, feat.episode) + ' \u00b7 ' + episodeDisplayTitle(feat));
     if (feat.year) meta.push(String(feat.year));
@@ -4900,6 +4909,7 @@ try {
     var el = h('div', { className: 'lc-poster poster-pending' + (cls ? ' ' + cls : '') });
     if (meta && meta.posterId) {
       observePoster(el, meta.posterId, 'item');
+      if(cls==='live-hero-poster')linkHeroPoster(el,meta,function(){var owner=state.user&&state.user.id;api('/items/'+encodeURIComponent(meta.catalogueId)+'?synopsis=0').then(function(j){if(owner!==(state.user&&state.user.id))return;if(!j.ok||!j.item)throw new Error(j.error||'Title unavailable');var item=j.item;if(item.show_key)openShow(item.show_key);else openMovie(item.id);}).catch(function(e){toast(e.message,{kind:'bad'});});});
     } else {
       el.classList.remove('poster-pending');
       el.classList.add('lc-poster-empty');
@@ -6151,6 +6161,7 @@ try {
     var resume = feat.progress || null;
     var isShow = isShowItem(feat);
     var poster = h('div', { className:'poster poster-pending billboard-poster', 'data-backdrop-src':'1', 'data-poster-variant':'full' }, [ h('div', { className:'ph', text: cleanTitle(feat) }) ]);
+    linkHeroPoster(poster,feat);
     var meta = [];
     if (feat.show && feat.season != null) meta.push(epCode(feat.season, feat.episode) + ' \u00b7 ' + episodeDisplayTitle(feat));
     if (feat.year) meta.push(String(feat.year));

@@ -440,3 +440,5 @@ body[data-theme="retro-scifi"] .page-hero .hero-clock{font-family:ui-monospace,"
  .topnav.xnav .search-wrap .search-box{width:100%;min-width:0;flex:1 1 auto}
  .topnav.xnav>.mode-switch{grid-column:1;grid-row:3;order:2;justify-self:center;width:max-content;max-width:100%;margin:0}
 }
+
+.hero-poster-link{cursor:pointer}.hero-poster-link:focus-visible{outline:2px solid var(--accent);outline-offset:5px}.hero-poster-link:hover{box-shadow:0 0 20px var(--hero-glow)}
