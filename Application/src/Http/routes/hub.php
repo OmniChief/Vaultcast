@@ -11,6 +11,7 @@ if (strpos($path,'/hub/')===0) {
         if ($path==='/hub/tonight' && $method==='GET') json_out(HomeExtras::tonight($viewer,(int)($_GET['minutes'] ?? 90)));
         $user=Auth::requireUser();
         if ($path==='/hub/last-game' && $method==='GET') json_out(HomeHub::lastGame($user));
+        if ($path==='/hub/game-stats' && $method==='GET') json_out(HomeHub::gameStatistics($user));
         if ($path==='/hub/game-favourites' && $method==='GET') json_out(HomeHub::gameFavourites($user));
         if ($path==='/hub/chat' || strpos($path,'/hub/chat/')===0) require __DIR__.'/chat.php';
         if ($path==='/hub/extras' && $method==='GET') json_out(HomeExtras::state($user));

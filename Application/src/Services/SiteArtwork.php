@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 final class SiteArtwork {
+    const SECTIONS=['cinema','watchlist','favourites','calendar','arrivals','friends','history','stats'];
     private static function path(): string {return STREAM_DATA.'/site/home-poster.img';}
     public static function save(array $body): array {
         $path=self::path();
@@ -19,7 +20,7 @@ final class SiteArtwork {
         return ['ok'=>true];
     }
     public static function serve(string $kind='home'): void {
-        $path=$kind==='collections'?STREAM_ROOT.'/assets/img/collections-poster.jpg':(is_file(self::path())?self::path():STREAM_ROOT.'/assets/img/home-poster.jpg');
+        $path=$kind==='collections'?STREAM_ROOT.'/assets/img/collections-poster.jpg':(in_array($kind,self::SECTIONS,true)?STREAM_ROOT.'/assets/img/home-'.$kind.'.jpg':(is_file(self::path())?self::path():STREAM_ROOT.'/assets/img/home-poster.jpg'));
         $info=@getimagesize($path);if (!$info) json_error('Poster unavailable',404);
         $etag='"'.hash_file('sha256',$path).'"';
         header('Content-Type: '.$info['mime']);header('X-Content-Type-Options: nosniff');

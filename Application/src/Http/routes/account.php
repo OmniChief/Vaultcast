@@ -3,6 +3,7 @@ declare(strict_types=1);
 // Public routes
 if ($path==='/site/home-poster' && in_array($method,['GET','HEAD'],true)) SiteArtwork::serve();
 if ($path==='/site/collections-poster' && in_array($method,['GET','HEAD'],true)) SiteArtwork::serve('collections');
+if (preg_match('#^/site/home-section/(cinema|watchlist|favourites|calendar|arrivals|friends|history|stats)$#D',$path,$art) && in_array($method,['GET','HEAD'],true)) SiteArtwork::serve($art[1]);
 if (preg_match('#^/profiles/([a-f0-9]{16,64})/avatar$#', $path, $m) && in_array($method, ['GET','HEAD'], true)) Profiles::serve($m[1]);
 if ($path === '/status' && $method === 'GET') {
     $settings = Store::settings();

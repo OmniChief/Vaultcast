@@ -123,11 +123,51 @@
     ]);
   }
   function stat(value,label){return h('div',{},[h('strong',{text:String(value)}),h('small',{text:label})]);}
+  function gameBars(rows,metric){
+    rows=rows.filter(function(row){return row[metric]>0;});
+    if(!rows.length)return empty(metric==='seconds'?'Play a game to start your play-time chart.':'Your game sessions will appear here.');
+    var maximum=Math.max.apply(null,rows.map(function(row){return row[metric];}));
+    return h('div',{className:'game-chart-bars'},rows.map(function(row,index){
+      var value=metric==='seconds'?time(row[metric]):row[metric]+' sessions';
+      return h('div',{className:'game-chart-bar'},[h('div',{className:'game-chart-bar-label'},[h('span',{text:row.title,title:row.title}),h('strong',{text:value})]),h('div',{className:'game-chart-track','aria-hidden':'true'},[h('span',{style:'width:'+Math.max(2,100*row[metric]/maximum)+'%;--bar-color:var(--stats-color-'+(index%6)+')'})])]);
+    }));
+  }
+  function consoleChart(platforms){
+    var chart=h('div'),metric='seconds',timeButton=button('Play time',function(){metric='seconds';paint();}),sessionButton=button('Sessions',function(){metric='sessions';paint();});
+    function svg(tag,attrs,text){var el=document.createElementNS('http://www.w3.org/2000/svg',tag);Object.keys(attrs||{}).forEach(function(key){el.setAttribute(key,attrs[key]);});if(text!==undefined)el.textContent=text;return el;}
+    function paint(){
+      timeButton.setAttribute('aria-pressed',String(metric==='seconds'));sessionButton.setAttribute('aria-pressed',String(metric==='sessions'));chart.replaceChildren();
+      var sorted=platforms.filter(function(row){return row[metric]>0;}).slice().sort(function(a,b){return b[metric]-a[metric];}),parts=sorted.slice(0,5),rest=sorted.slice(5);
+      if(rest.length)parts.push({name:'Other consoles',seconds:rest.reduce(function(n,p){return n+p.seconds;},0),sessions:rest.reduce(function(n,p){return n+p.sessions;},0)});
+      var total=parts.reduce(function(n,p){return n+p[metric];},0);
+      if(!total){chart.appendChild(empty('Your console breakdown appears as you play.'));return;}
+      var picture=svg('svg',{viewBox:'0 0 200 200',class:'game-console-donut',role:'img','aria-label':metric==='seconds'?'Play time by console':'Sessions by console'}),legend=h('div',{className:'game-chart-legend'}),offset=0,segments=[];
+      picture.appendChild(svg('circle',{cx:100,cy:100,r:76,fill:'none',stroke:'var(--surface-3)','stroke-width':26}));
+      function highlight(index){segments.forEach(function(segment,i){segment.style.opacity=index<0||i===index?'1':'.25';});}
+      parts.forEach(function(part,index){var pct=100*part[metric]/total,color='var(--stats-color-'+index+')',segment=svg('circle',{cx:100,cy:100,r:76,fill:'none',stroke:color,'stroke-width':26,pathLength:100,'stroke-dasharray':pct+' '+(100-pct),'stroke-dashoffset':-offset,transform:'rotate(-90 100 100)'});offset+=pct;segment.appendChild(svg('title',{},part.name+': '+Math.round(pct)+'%'));picture.appendChild(segment);segments.push(segment);
+        var entry=h('button',{type:'button',className:'game-chart-legend-item',onMouseenter:function(){highlight(index);},onMouseleave:function(){highlight(-1);},onFocus:function(){highlight(index);},onBlur:function(){highlight(-1);}},[h('span',{className:'game-chart-swatch',style:'background:'+color,'aria-hidden':'true'}),h('span',{text:part.name}),h('strong',{text:Math.round(pct)+'%'}),h('small',{text:metric==='seconds'?time(part[metric]):part[metric]+' sessions'})]);legend.appendChild(entry);
+      });
+      picture.appendChild(svg('text',{x:100,y:99,'text-anchor':'middle',class:'game-donut-total'},metric==='seconds'?time(total):String(total)));picture.appendChild(svg('text',{x:100,y:120,'text-anchor':'middle',class:'game-donut-label'},metric==='seconds'?'PLAY TIME':'SESSIONS'));
+      chart.appendChild(h('div',{className:'game-console-layout'},[picture,legend]));
+    }
+    paint();return h('div',{},[h('div',{className:'game-chart-toggle',role:'group','aria-label':'Console chart measure'},[timeButton,sessionButton]),chart]);
+  }
+  function gameInsights(){
+    var host=h('div',{className:'game-stats-insights'},[empty('Preparing your play statistics…')]),owner=A.state.user&&A.state.user.id;
+    function load(){request('game-stats').then(function(j){
+      if(!host.isConnected||owner!==(A.state.user&&A.state.user.id))return;
+      var totals=j.totals,champion=j.most_played[0];host.replaceChildren(
+        panel('Your play signature',[h('div',{className:'hub-stats game-stats-summary'},[stat(time(totals.seconds),'Total play time'),stat(totals.games,'Games explored'),stat(totals.sessions,'Play sessions'),stat(time(totals.average_session),'Average session'),stat(totals.platforms,'Consoles explored')]),champion&&champion.seconds>0?h('p',{className:'game-stats-champion',text:'Your most-played world: '+champion.title+' · '+time(champion.seconds)}):empty('Every great collection starts with one adventure.')]),
+        h('div',{className:'hub-two game-chart-grid'},[panel('Most played',gameBars(j.most_played,'seconds')),panel('Your console universe',consoleChart(j.platforms)),panel('Games you return to',gameBars(j.most_sessions,'sessions'))])
+      );
+    }).catch(function(e){if(host.isConnected&&owner===(A.state.user&&A.state.user.id))host.replaceChildren(panel('Statistics unavailable',[empty(e.message),button('Retry',load)]));});}
+    setTimeout(function(){if(host.isConnected)load();},0);return host;
+  }
   function gameStats(){
     var list=h('div'),page=1,seq=0,q=h('input',{type:'search',placeholder:'Filter your games…','aria-label':'Filter game statistics'}),more=button('Load more',function(){page++;load(false);});
     function load(reset){var mine=++seq;if(reset){page=1;list.replaceChildren();}more.disabled=true;request('games?page='+page+'&q='+encodeURIComponent(q.value)).then(function(j){if(mine!==seq || !list.isConnected)return;j.items.forEach(function(g){list.appendChild(h('div',{className:'hub-game-row'},[h('strong',{text:g.card.title}),h('span',{text:time(g.seconds)+' · '+g.sessions+' sessions'}),button('Play',function(){A.openGame(g.card);})]));});if(!list.children.length)list.appendChild(empty('No recorded sessions match this search.'));more.hidden=!j.has_more;more.disabled=false;}).catch(function(e){if(mine===seq){if(!reset)page--;more.disabled=false;error(e);}});}
     q.oninput=function(){clearTimeout(q.timer);q.timer=setTimeout(function(){load(true);},250);};
-    var result=panel('Every session counts',[h('div',{className:'hub-stats'},[stat(time(data.game_stats.seconds),'Total play time'),stat(data.game_stats.games,'Games played'),stat(data.game_stats.sessions,'Sessions')]),q,list,more]);setTimeout(function(){load(true);},0);return result;
+    var result=h('div',{className:'game-stats-dashboard'},[gameInsights(),panel('Your game log',[q,list,more])]);setTimeout(function(){load(true);},0);return result;
   }
   function pickTonight(){
     var candidates=(data && data.watchlist.length?data.watchlist:((A.state.home||{}).sections||[]).reduce(function(out,s){return s.type==='roms'?out:out.concat(s.items||[]);},[]));
@@ -178,7 +218,7 @@
     }
 
     var name=A.state.user && (A.state.user.display_name||A.state.user.username),hour=new Date().getHours(),resume=((A.state.home||{}).continue_watching||[])[0];
-    root.appendChild(h('section',{className:'hub-hero page-hero page-hero-layout'},[tab==='lists'?A.collectionsPosterEl():A.homePosterEl(),A.heroClock(homeMood()),
+    root.appendChild(h('section',{className:'hub-hero page-hero page-hero-layout'},[tab==='lists'?A.collectionsPosterEl():A.homeSectionPosterEl(tab),A.heroClock(homeMood()),
       h('div',{className:'hub-orbit', 'aria-hidden':'true'},[h('span'),h('span'),h('span')]),
       h('div',{className:'hub-hero-copy'},[h('span',{className:'eyebrow',text:'YOUR SPACE. YOUR STORIES.'}),h('h1',{text:(hour<12?'Good morning':hour<18?'Good afternoon':'Good evening')+(name?', '+name:'. Make yourself at home')+'.'}),h('p',{text:'One more episode. A new high score. A night with your people. It all starts here.'}),
       h('div',{className:'hub-hero-actions'},[resume?button('▶ Continue '+(resume.show||resume.title),function(){A.playItem(resume);},'primary'):null,button('Fit my time',function(){window.VaultcastHomeExtras.tonight();}),signed()?button('Customise Home',function(){window.VaultcastHomeExtras.customize();}):null,button('✦ Pick my next watch',pickTonight,resume?'ghost':'primary'),button('Watch together',function(){go('cinema');}),button('Explore the library',function(){A.navigate('library');})])])

@@ -4327,7 +4327,7 @@ try {
   function subnavEl(mode){
     var items = [];
     if (mode === 'home') {
-      [['overview','For you'],['watchlist','Watchlist'],['favourites','Favourites'],['calendar','Release calendar'],['arrivals','New episodes'],['lists','My collections'],['friends','Friends'],['chat','Chat'],['cinema','Watch together'],['history','History'],['stats','Game stats'],['inbox','Inbox']].forEach(function(t){items.push({label:t[1],chatKind:t[0]==='inbox'?'mail':t[0]==='chat'?'dm':null,active:(state.hubTab||'overview')===t[0],go:function(){window.VaultcastHub.go(t[0]);}});});
+      [['overview','For you'],['watchlist','Watchlist'],['favourites','Favourites'],['calendar','Release calendar'],['arrivals','New episodes'],['lists','My collections'],['friends','Friends'],['cinema','Watch together'],['history','History'],['stats','Game stats'],['chat','Chat'],['inbox','Inbox']].forEach(function(t){items.push({label:t[1],chatKind:t[0]==='inbox'?'mail':t[0]==='chat'?'dm':null,active:(state.hubTab||'overview')===t[0],go:function(){window.VaultcastHub.go(t[0]);}});});
     } else if (mode === 'vod') {
       items.push({ label:'Discover', active: state.view === 'library', go: function(){ navigate('library'); } });
       vodSections().forEach(function(s){
@@ -4372,6 +4372,7 @@ try {
     ]);
   }
   function homePosterEl(){return h('div',{className:'page-hero-poster home-hero-poster'},[h('img',{src:BASE+'api/site/home-poster',alt:'Home artwork',width:512,height:768,decoding:'async'})]);}
+  function homeSectionPosterEl(tab){if(['cinema','watchlist','favourites','calendar','arrivals','friends','history','stats'].indexOf(tab)<0)return homePosterEl();return h('div',{className:'page-hero-poster home-hero-poster'},[h('img',{src:BASE+'api/site/home-section/'+tab,alt:'Artwork for '+({cinema:'Watch together',calendar:'Release calendar',arrivals:'New episodes',stats:'Game stats'}[tab]||tab),width:512,height:768,decoding:'async'})]);}
   function collectionsPosterEl(){return h('div',{className:'page-hero-poster collections-hero-poster'},[h('img',{src:BASE+'api/site/collections-poster',alt:'A futuristic archive of collected treasures',width:512,height:768,decoding:'async'})]);}
   function standardBillboard(bb,meta){
     bb.classList.add('page-hero');bb.removeAttribute('data-backdrop-host');
@@ -14433,7 +14434,7 @@ function viewCollectionDetail(){
   /* helpers for assets/js/matching.js (Ingest inbox / Fix matching / Label reports) */
   window.NSApp = { h: h, api: api, toast: toast, confirmDialog: confirmDialog, render: render, state: state, can:can,
     openSettings: openSettings, openShow: openShow, openMovie: openMovie, openGame:openGame, navigate:navigate, refreshArtwork:refreshArtwork, fmtSize: fmtSize, version: APP_VERSION,
-    shell:shell,heroClock:heroClock,homePosterEl:homePosterEl,collectionsPosterEl:collectionsPosterEl,librarySummary:librarySummary,cardEl:cardEl,homeActivitySections:homeActivitySections,applyRoute:applyRoute,replaceNav:replaceNav,openPlayer:openPlayer,playItem:playItem,copyText:copyText,shareUrl:shareUrl,startLobbyHost:startLobbyHost,captureGameState:lobbyCaptureState,quitGame:function(){closePlayer();} };
+    shell:shell,heroClock:heroClock,homePosterEl:homePosterEl,homeSectionPosterEl:homeSectionPosterEl,collectionsPosterEl:collectionsPosterEl,librarySummary:librarySummary,cardEl:cardEl,homeActivitySections:homeActivitySections,applyRoute:applyRoute,replaceNav:replaceNav,openPlayer:openPlayer,playItem:playItem,copyText:copyText,shareUrl:shareUrl,startLobbyHost:startLobbyHost,captureGameState:lobbyCaptureState,quitGame:function(){closePlayer();} };
   window.VaultcastHub.init(window.NSApp);
   window.VaultcastHomeExtras.init(window.NSApp);
   // Load matching tools when Settings or a detail-page action needs them.

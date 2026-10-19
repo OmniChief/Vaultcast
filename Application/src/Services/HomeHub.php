@@ -259,6 +259,23 @@ final class HomeHub {
         $rows=\Vaultcast\Repository::rows('SELECT payload FROM vaultcast_users WHERE username LIKE ? AND id<>? ORDER BY username LIMIT 20',['%'.addcslashes($q,'%_\\').'%',$user['id']]);
         return ['ok'=>true,'people'=>array_map([self::class,'profile'],$rows)];
     }
+    public static function gameStatistics(array $user): array {
+        if (!AreaAccess::allowed($user,'games')) throw new DomainException('Games access required.');
+        $data=self::personal((string)$user['id']);$games=[];$platforms=[];$seconds=0;$sessions=0;
+        foreach ($data['games'] ?? [] as $id=>$row) {
+            $spent=max(0,(int)($row['seconds'] ?? 0));$visits=max(0,(int)($row['sessions'] ?? 0));
+            $platform=trim((string)($row['card']['system'] ?? '')) ?: 'Unspecified console';
+            $games[]=['id'=>(string)$id,'title'=>(string)($row['card']['title'] ?? 'Game'),'seconds'=>$spent,'sessions'=>$visits];
+            if (!isset($platforms[$platform])) $platforms[$platform]=['name'=>$platform,'seconds'=>0,'sessions'=>0,'games'=>0];
+            $platforms[$platform]['seconds']+=$spent;$platforms[$platform]['sessions']+=$visits;$platforms[$platform]['games']++;
+            $seconds+=$spent;$sessions+=$visits;
+        }
+        $mostTime=$games;$mostSessions=$games;
+        usort($mostTime,static function($a,$b){return ($b['seconds']<=>$a['seconds'])?:strcmp($a['title'],$b['title']);});
+        usort($mostSessions,static function($a,$b){return ($b['sessions']<=>$a['sessions'])?:strcmp($a['title'],$b['title']);});
+        return ['ok'=>true,'totals'=>['seconds'=>$seconds,'sessions'=>$sessions,'games'=>count($games),'platforms'=>count($platforms),'average_session'=>$sessions?(int)round($seconds/$sessions):0],
+            'most_played'=>array_slice($mostTime,0,6),'most_sessions'=>array_slice($mostSessions,0,6),'platforms'=>array_values($platforms)];
+    }
     public static function gameList(array $user,int $page,string $query): array {
         if (!AreaAccess::allowed($user,'games')) throw new DomainException('Games are not enabled for your account.');
         $data=self::personal($user['id']);$query=mb_strtolower(trim($query));
