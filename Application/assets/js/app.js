@@ -985,6 +985,7 @@ function confirmDialog(message, opts){
     if (!el) return;
     el.classList.add('poster-failed');
     el.classList.remove('poster-pending');
+    el.removeAttribute('data-community-key');var badge=el.querySelector('.community-poster-rating');if(badge)badge.remove();
     el.removeAttribute('data-poster-loaded');
     el.removeAttribute('data-poster-queued');
     var ph = el.querySelector('.ph');
@@ -1195,10 +1196,26 @@ function confirmDialog(message, opts){
     }, { root: null, rootMargin: '180px 0px', threshold: 0.01 });
     return _posterObserver;
   }
+  var communityRatings=new Map(),communityQueue=[],communityTimer=null;
+  function paintCommunityBadge(poster,key,value){
+    if(poster.getAttribute('data-community-key')!==key)return;var old=poster.querySelector('.community-poster-rating');if(old)old.remove();
+    if(value&&value.rating!=null&&value.count>0)poster.appendChild(h('span',{className:'community-poster-rating',text:String(value.rating)+'⭐',title:'Community rating: '+value.rating+' / 10 · '+value.count+' ratings','aria-label':'Community rating '+value.rating+' out of 10'}));
+  }
+  function communityPoster(poster,key){
+    if(!poster||!key||!/^(item|show):[a-f0-9]{8,64}$/.test(key))return;
+    poster.setAttribute('data-community-key',key);var saved=communityRatings.get(key);
+    if(saved&&Date.now()-saved.at<60000){paintCommunityBadge(poster,key,saved.value);return;}
+    communityQueue.push({poster:poster,key:key});if(communityTimer)return;
+    communityTimer=setTimeout(function flush(){communityTimer=null;var pending=communityQueue.splice(0).filter(function(entry){return entry.poster.isConnected&&entry.poster.getAttribute('data-community-key')===entry.key;});if(!pending.length)return;var keys=Array.from(new Set(pending.map(function(entry){return entry.key;})));
+      for(var offset=0;offset<keys.length;offset+=80)(function(batch){api('/hub/ratings',{method:'POST',body:{keys:batch}}).then(function(j){if(!j.ok)return;Object.keys(j.ratings||{}).forEach(function(key){var value=j.ratings[key];communityRatings.set(key,{at:Date.now(),value:value});pending.forEach(function(entry){if(entry.key===key)paintCommunityBadge(entry.poster,key,value);});});while(communityRatings.size>600)communityRatings.delete(communityRatings.keys().next().value);}).catch(function(){});})(keys.slice(offset,offset+80));
+    },40);
+  }
+  function refreshCommunityRating(key){communityRatings.delete(key);document.querySelectorAll('[data-community-key]').forEach(function(poster){if(poster.getAttribute('data-community-key')===key)communityPoster(poster,key);});}
   function observePoster(el, itemId, kind){
     if (!el || !itemId) return;
     el.setAttribute('data-poster-id', itemId);
     el.setAttribute('data-poster-kind', kind || 'item');
+    communityPoster(el,(kind==='show'||kind==='season'?'show:':'item:')+String(itemId).replace(kind==='season'?/-s[0-9]+$/:/$^/,''));
     if (!el.getAttribute('data-poster-variant')) el.setAttribute('data-poster-variant', 'medium');
     el.classList.add('poster-pending');
     var variant = el.getAttribute('data-poster-variant') || 'medium';
@@ -7022,11 +7039,12 @@ try {
       var wantEpItem = state._showEpisodeItem; state._showEpisodeItem = null;
       if (state.showSeason != null && seasons.some(function(s){ return s.season === state.showSeason; })) selected = state.showSeason;
       else if (wantEpItem) seasons.forEach(function(s){ (s.episodes || []).forEach(function(ep){ if (ep.id === wantEpItem) selected = s.season; }); });
+      var openSeasons=new Set();if(state.showSeason!=null||wantEpItem)openSeasons.add(selected);
       function paint(sel, fromTab){
         activeSeason = sel;
         if (fromTab) { state.showSeason = sel; state.showEpisode = null; syncUrl(); }
         var playerHost = root.querySelector('#detail-player');
-        Array.prototype.slice.call(root.children).forEach(function(child){ if (child !== playerHost) child.remove(); });
+        Array.prototype.slice.call(root.children).forEach(function(child){ if (child !== playerHost&&!child.classList.contains('detail-player-tools')) child.remove(); });
         if (!playerHost) { playerHost = h('div', {id:'detail-player', className:'detail-player'}); root.appendChild(playerHost); }
         var heroPoster = h('div', { className:'poster poster-pending show-hero-poster', 'data-poster-fetch':'1', 'data-backdrop-src':'1', 'data-poster-variant':'full' }, [
           h('div', { className:'ph', text: show.title })
@@ -7105,50 +7123,15 @@ try {
           h('h2', { text: 'More from this show' }),
           h('span', { className:'meta', text: (seasons.length||0) + ' season' + (seasons.length===1?'':'s') })
         ]));
-        var tabs = h('div', { className:'tabs', style:'padding:0 20px' }, seasons.map(function(s){
-          var label = s.label || ('Season '+s.season);
-          if (s.missing_count) label += ' ('+s.missing_count+' missing)';
-          return h('button', {
-            className: s.season===sel ? 'active' : '',
-            text: label,
-            onClick: function(){ paint(s.season, true); }
-          });
-        }).concat([ shareButton(function(){ return showPath + '/season-' + sel; }, 'Copy link to this season') ]));
-        root.appendChild(tabs);
-        var cur = null;
-        for (var si=0;si<seasons.length;si++){ if (seasons[si].season===sel) { cur=seasons[si]; break; } }
-        if (!cur) cur = seasons[0];
-        var eps = (cur && cur.episodes) || [];
-        if (cur && cur.missing_count > 0 && canManageDownloads()) {
-          root.appendChild(h('div', { className:'row-actions', style:'padding:0 20px 8px' }, [
-            h('button', {
-              className:'btn',
-              text:'Fetch missing in '+(cur.label || ('Season '+cur.season)),
-              onClick: function(){ fetchMissingShow(show.show_key || show.id, cur.season); }
-            })
-          ]));
-        }
-        if (!eps.length) {
-          root.appendChild(h('p', { className:'muted', style:'padding:12px 20px', text:'No episodes listed for this season.' }));
-          return;
-        }
-        // Season poster for the selected season (fetch on first view)
-        var seasonPosterId = (show.show_key || show.id) && cur && cur.season != null
-          ? ((show.show_key || show.id) + '-s' + String(cur.season))
-          : null;
-        if (seasonPosterId && (cur.has_poster || true)) {
-          var seasonArt = h('div', {
-            className: 'poster poster-pending season-poster',
-            style: 'width:120px;height:180px;border-radius:10px;flex-shrink:0;margin:0 20px 12px'
-          }, [ h('div', { className:'ph', text: cur.label || ('Season '+cur.season) }) ]);
-          seasonArt.setAttribute('data-poster-fetch', '1');
-          root.appendChild(h('div', { style:'padding:4px 0 0;display:flex;align-items:flex-end;gap:14px' }, [
-            seasonArt,
-            h('div', { className:'muted', text: (cur.label || ('Season '+cur.season)) + ' · ' + (cur.available_count||0) + ' available' + (cur.missing_count ? (' · '+cur.missing_count+' missing') : '') })
-          ]));
-          observePoster(seasonArt, seasonPosterId, 'season');
-          loadPosterNow(seasonArt, seasonPosterId, 'season');
-        }
+        var accordionList=h('div',{className:'show-season-accordions'});
+        seasons.slice().sort(function(a,b){return Number(b.season)-Number(a.season);}).forEach(function(cur){
+          var label=cur.label||('Season '+cur.season),body=h('div',{className:'show-season-body'}),built=false;
+          var art=h('div',{className:'poster poster-pending show-season-art'},[h('div',{className:'ph',text:label})]);
+          var summary=h('summary',{className:'show-season-summary'},[art,h('span',{className:'show-season-heading'},[h('strong',{text:label}),h('small',{text:(cur.available_count||0)+' available'+(cur.missing_count?' · '+cur.missing_count+' missing':'')})]),h('span',{className:'show-season-chevron','aria-hidden':'true',text:'⌄'})]);
+          var accordion=h('details',{className:'show-season-accordion'},[summary,body]);accordionList.appendChild(accordion);
+          function build(){if(built)return;built=true;var eps=cur.episodes||[];
+            body.appendChild(h('div',{className:'row-actions season-actions'},[shareButton(showPath+'/season-'+cur.season,'Copy link to '+label),cur.missing_count>0&&canManageDownloads()?h('button',{className:'btn',text:'Fetch missing in '+label,onClick:function(){fetchMissingShow(show.show_key||show.id,cur.season);}}):null]));
+            if(!eps.length){body.appendChild(h('p',{className:'muted',text:'No episodes listed for this season.'}));return;}
         var list = h('div', { className:'stack episode-list', style:'padding:12px 20px 28px' }, eps.map(function(ep){
           var code = epCode(ep.season, ep.episode);
           var title = episodeDisplayTitle(ep);
@@ -7175,11 +7158,6 @@ try {
           if (ep.size) subParts.push(fmtSize(ep.size));
           var actions = [];
           if (isAvail) {
-            actions.push(h('button', {
-              className:'btn primary',
-              text:'Play',
-              onClick: function(e){ e.stopPropagation(); playItem(ep); }
-            }));
             if (window.NSMatch) { var nsmRb = window.NSMatch.episodeButton(ep, show); if (nsmRb) actions.push(nsmRb); }
             /* Convert removed from show detail ? use Settings ? Convert */
           } else if (canManageDownloads()) {
@@ -7203,34 +7181,17 @@ try {
               }));
             }
           }
-          var epPoster = null;
-          if (ep.show_key || show.show_key) {
-            var epItem = ep;
-            if (!epItem.show_key) epItem = Object.assign({}, ep, { show_key: show.show_key || show.id, type: show.type || ep.type || 'tv' });
-            var epKind = posterKindFor(epItem);
-            var epPid = posterIdFor(epItem);
-            if (epPid) {
-              epPoster = h('div', {
-                className: 'poster poster-pending',
-                style: 'width:48px;height:72px;border-radius:6px;flex-shrink:0'
-              }, [ h('div', { className:'ph', text: code || 'Ep' }) ]);
-              epPoster.setAttribute('data-poster-fetch', '1');
-              observePoster(epPoster, epPid, epKind);
-            }
-          }
+          var epPoster=h('button',{className:'episode-play-button',type:'button',disabled:!isAvail,'aria-label':isAvail?'Play '+(code||title):'Episode unavailable',title:isAvail?'Play '+(code||title):'Episode unavailable',text:'▶',onClick:function(e){e.stopPropagation();if(isAvail)playItem(ep);}});
           var epPath = showPath + '/season-' + ep.season + (ep.episode != null && ep.episode !== '' ? '/episode-' + ep.episode : (ep.id ? '/' + encodeURIComponent(ep.id) : ''));
           actions.push(shareButton(epPath, 'Copy link to ' + (code || 'this episode')));
-          var isTarget = (state.showEpisode != null && +ep.episode === +state.showEpisode && +ep.season === +sel) || (wantEpItem && ep.id === wantEpItem);
+          var isTarget = (state.showEpisode != null && +ep.episode === +state.showEpisode && +ep.season === +cur.season) || (wantEpItem && ep.id === wantEpItem);
           return h('div', {
             className: 'panel episode-row' + (((state.user||{}).prefs||{}).hide_spoilers?' episode-spoiler-hidden':'') + (isAvail ? '' : ' episode-missing') + (isTarget ? ' episode-target' : ''),
             'data-episode-target': isTarget ? '1' : null,
             'data-hub-episode': isAvail ? ep.id : null,
             'data-episode-code':code,
             style: 'padding:12px 14px;display:flex;justify-content:space-between;gap:12px;align-items:center;' + (isAvail ? 'cursor:pointer;' : ''),
-            tabindex: isAvail ? '0' : null,
-            role: isAvail ? 'button' : null,
-            onClick: isAvail ? function(){ playItem(ep); } : null,
-            onKeydown: isAvail ? function(e){ if(e.key==='Enter') playItem(ep); } : null
+            tabindex: isTarget ? '-1' : null
           }, [
             epPoster,
             h('div', { style:'min-width:0;flex:1' }, [
@@ -7242,10 +7203,15 @@ try {
             h('div', { className:'row-actions' }, actions)
           ].filter(Boolean));
         }));
-        root.appendChild(list);
-        var target = list.querySelector('[data-episode-target]');
-        if (target && firstPaint) setTimeout(function(){ if (!stillHere()) return; try { target.scrollIntoView({ block:'center', behavior:'smooth' }); target.focus({ preventScroll:true }); } catch (eT) {} }, 60);
-        firstPaint = false;
+
+            body.appendChild(list);if(window.VaultcastHub.episodeRows)window.VaultcastHub.episodeRows(root);
+            var target=list.querySelector('[data-episode-target="1"]');if(target&&firstPaint)setTimeout(function(){if(stillHere()&&target.isConnected){target.scrollIntoView({block:'center',behavior:'smooth'});target.focus({preventScroll:true});}},60);
+          }
+          accordion.addEventListener('toggle',function(){if(!stillHere()||!accordion.isConnected)return;if(accordion.open){if(state.showSeason!==cur.season)state.showEpisode=null;openSeasons.add(cur.season);build();state.showSeason=cur.season;activeSeason=cur.season;}else{openSeasons.delete(cur.season);if(state.showSeason===cur.season)state.showSeason=openSeasons.size?Array.from(openSeasons).pop():null;}syncUrl();});
+          if(openSeasons.has(cur.season)){accordion.open=true;build();}
+          // Cached season art loads only as its header approaches the viewport.
+          setTimeout(function(){if(art.isConnected&&stillHere())observePoster(art,(show.show_key||show.id)+'-s'+cur.season,'season');},0);
+        });root.appendChild(accordionList);if(window.VaultcastHub.episodeRows)window.VaultcastHub.episodeRows(root);firstPaint=false;
       }
       paint(selected);
       if (state._pendingEpisode && String(state._pendingEpisode.show_key) === String(showKey)) { var pendingEpisode = state._pendingEpisode; state._pendingEpisode = null; playItem(pendingEpisode, {inline:true}); }
@@ -14576,7 +14542,7 @@ function viewCollectionDetail(){
   /* helpers for assets/js/matching.js (Ingest inbox / Fix matching / Label reports) */
   window.NSApp = { h: h, api: api, toast: toast, confirmDialog: confirmDialog, render: render, state: state, can:can,
     openSettings: openSettings, openShow: openShow, openMovie: openMovie, openGame:openGame, navigate:navigate, refreshArtwork:refreshArtwork, fmtSize: fmtSize, version: APP_VERSION,
-    shell:shell,heroClock:heroClock,homePosterEl:homePosterEl,homeSectionPosterEl:homeSectionPosterEl,collectionsPosterEl:collectionsPosterEl,librarySummary:librarySummary,cardEl:cardEl,homeActivitySections:homeActivitySections,applyRoute:applyRoute,replaceNav:replaceNav,openPlayer:openPlayer,playItem:playItem,copyText:copyText,shareUrl:shareUrl,startLobbyHost:startLobbyHost,captureGameState:lobbyCaptureState,quitGame:function(){closePlayer();} };
+    shell:shell,communityPoster:communityPoster,refreshCommunityRating:refreshCommunityRating,heroClock:heroClock,homePosterEl:homePosterEl,homeSectionPosterEl:homeSectionPosterEl,collectionsPosterEl:collectionsPosterEl,librarySummary:librarySummary,cardEl:cardEl,homeActivitySections:homeActivitySections,applyRoute:applyRoute,replaceNav:replaceNav,openPlayer:openPlayer,playItem:playItem,copyText:copyText,shareUrl:shareUrl,startLobbyHost:startLobbyHost,captureGameState:lobbyCaptureState,quitGame:function(){closePlayer();} };
   window.VaultcastHub.init(window.NSApp);
   window.VaultcastHomeExtras.init(window.NSApp);
   // Load matching tools when Settings or a detail-page action needs them.

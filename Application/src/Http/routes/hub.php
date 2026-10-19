@@ -5,6 +5,7 @@ if (strpos($path,'/hub/')===0) {
     $viewer=current_or_guest();
     try {
         if ($path==='/hub/dashboard' && $method==='GET') {$started=microtime(true);$out=HomeHub::dashboard($viewer);RequestTiming::add('hub_dashboard',$started);json_out($out);}
+        if ($path==='/hub/ratings' && $method==='POST') {$keys=body_json()['keys'] ?? [];if(!is_array($keys))throw new DomainException('Invalid titles.');json_out(HomeHub::ratings($keys,$viewer));}
         if ($path==='/hub/title' && $method==='GET') {$started=microtime(true);$out=HomeHub::title((string)($_GET['key'] ?? ''),$viewer);RequestTiming::add('hub_title',$started);json_out($out);}
         if ($path==='/hub/rooms' && $method==='GET') json_out(HomeHub::rooms($viewer));
         if (preg_match('#^/hub/rooms/([a-f0-9]{16})$#',$path,$m) && $method==='GET') json_out(['ok'=>true,'room'=>HomeHub::room($m[1],$viewer)]);

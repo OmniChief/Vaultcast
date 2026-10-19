@@ -43,13 +43,13 @@
     return box;
   }
   function cardAction(card,it){
-    if(!A || !it.id || it.media_kind==='audio')return;
-    var shelf=it.media_kind==='rom'?'favourites':'watchlist',key=titleKey(it),active=!!(data && (data[shelf]||[]).some(function(row){return titleKey(row)===key;}));
-    var b=button(active?'✓':shelf==='favourites'?'♡':'+',function(){
-      if(!signed()){A.toast('Sign in to save your own titles.');return;}
-      b.disabled=true;request('shelf',{key:key,shelf:shelf,enabled:!active}).then(function(j){active=j.enabled;b.textContent=active?'✓':shelf==='favourites'?'♡':'+';b.setAttribute('aria-pressed',String(active));loaded=0;A.toast(active?'Saved to '+shelf:'Removed from '+shelf);}).catch(error).then(function(){b.disabled=false;});
-    });b.classList.add('hub-card-save');b.setAttribute('aria-label','Toggle '+shelf+' for '+it.title);b.setAttribute('aria-pressed',String(active));b.title='Save to '+shelf;
-    card.querySelector('.poster').appendChild(b);
+    if(!A||!it.id||it.media_kind==='audio')return;var key=titleKey(it),poster=card.querySelector('.poster');if(!poster)return;A.communityPoster(poster,key);
+    (it.media_kind==='rom'?['favourites']:['watchlist','favourites']).forEach(function(shelf){
+      var active=!!(data&&(data[shelf]||[]).some(function(row){return titleKey(row)===key;})),favourite=shelf==='favourites';
+      var b=button('',function(){if(!signed()){A.toast('Sign in to save your own titles.');return;}b.disabled=true;request('shelf',{key:key,shelf:shelf,enabled:!active}).then(function(j){active=j.enabled;paint();loaded=0;if(data){data[shelf]=(data[shelf]||[]).filter(function(row){return titleKey(row)!==j.key;});if(active)data[shelf].push(Object.assign({},it,{hub_key:j.key}));}A.toast(active?'Saved to '+shelf:'Removed from '+shelf);}).catch(error).then(function(){b.disabled=false;});});
+      function paint(){b.textContent=favourite?(active?'♥':'♡'):(active?'✓':'+');b.setAttribute('aria-pressed',String(active));b.setAttribute('aria-label',(active?'Remove from ':'Add to ')+shelf+': '+it.title);b.title=(active?'Remove from ':'Add to ')+shelf;}
+      b.classList.add('hub-card-save');if(favourite&&it.media_kind!=='rom')b.classList.add('hub-card-favourite');paint();poster.appendChild(b);
+    });
   }
   function createCinema(it,friend){
     if(!signed()){A.toast('Sign in to host a cinema.');return;}
@@ -155,6 +155,7 @@
   function featuredGame(game){
     if(!game)return empty('Every great collection starts with one adventure.');
     var card=game.card,poster=h('div',{className:'game-signature-poster'},[h('span',{'aria-hidden':'true',text:(card.title||'Game').slice(0,1)})]);
+    A.communityPoster(poster,'item:'+card.id);
     poster.appendChild(h('img',{src:(window.__STREAM_BASE__||'/')+'api/items/'+encodeURIComponent(card.id)+'/poster?fetch=0&variant=medium',alt:card.title+' poster',width:192,height:288,loading:'lazy',decoding:'async',onError:function(e){e.currentTarget.hidden=true;}}));
     var last=game.last_played?new Date(game.last_played*1000):null;
     return h('section',{className:'game-stats-champion'},[poster,h('div',{className:'game-signature-copy'},[h('span',{className:'eyebrow',text:'Your most-played world'}),h('h3',{text:card.title}),h('p',{className:'muted',text:[card.system,card.year].filter(Boolean).join(' · ')}),h('p',{className:'game-signature-synopsis',text:game.synopsis||'No synopsis is available for this game yet.'}),h('div',{className:'hub-stats game-signature-stats'},[stat(time(game.seconds),'Time played'),stat(game.sessions,'Sessions'),stat(time(game.average_session),'Average session'),stat(game.share+'%','Of your play time')]),last&&!isNaN(last.getTime())?h('p',{className:'muted game-signature-last',text:'Last played '+last.toLocaleDateString()}):null,button('Open game',function(){A.openGame(card);},'primary')])]);
@@ -254,6 +255,15 @@
     setTimeout(function(){refresh().then(paint).catch(function(e){if(body.isConnected)body.replaceChildren(empty(e.message),button('Try again',function(){refresh(true).then(paint).catch(error);}));});},0);
     return A.shell(root);
   }
+  function episodeRows(root,episodes){if(!episodes&&!root._hubEpisodeState){window.VaultcastHomeExtras.spoilers(root,{});return;}episodes=episodes||root._hubEpisodeState||{};root._hubEpisodeState=episodes;
+        root.querySelectorAll('[data-hub-episode]').forEach(function(row){
+          var id=row.getAttribute('data-hub-episode'),watched=!!(episodes[id] && episodes[id].watched);
+          if(!id||!signed()||row._hubWatchState===episodes)return;row._hubWatchState=episodes;
+          row.querySelectorAll('.hub-watch-toggle').forEach(function(el){el.remove();});
+          var b=button(watched?'✓ Watched':'Mark watched',function(){b.disabled=true;request('watched',{item_id:id,watched:!watched}).then(function(){watched=!watched;b.textContent=watched?'✓ Watched':'Mark watched';row.classList.toggle('hub-watched',watched);if(episodes[id])episodes[id].watched=watched;if(watched){row.classList.remove('episode-spoiler-hidden');var reveal=row.querySelector('.episode-spoiler-reveal');if(reveal)reveal.remove();row._spoilerReady=false;}else window.VaultcastHomeExtras.spoilers(root,episodes||{});loaded=0;refreshContinue();}).catch(error).then(function(){b.disabled=false;});});b.classList.add('hub-watch-toggle');row.classList.toggle('hub-watched',watched);row.appendChild(b);
+        });
+    window.VaultcastHomeExtras.spoilers(root,episodes);
+  }
   function details(it,root){
     var generation=(root._hubDetailGeneration||0)+1;root._hubDetailGeneration=generation;
     setTimeout(function(){
@@ -272,22 +282,17 @@
         // Seed the action state as well as the labels before the first click.
         if(!data)data={favourites:[],watchlist:[]};['favourites','watchlist'].forEach(function(s){var yes=s==='favourites'?j.favourite:j.watchlist;data[s]=(data[s]||[]).filter(function(c){return titleKey(c)!==j.card.hub_key;});if(yes)data[s].push(j.card);});
         actions.replaceChildren();var fresh=controls(j.card);while(fresh.firstChild)actions.appendChild(fresh.firstChild);
-        root.querySelectorAll('[data-hub-episode]').forEach(function(row){
-          var id=row.getAttribute('data-hub-episode'),watched=!!(j.episodes[id] && j.episodes[id].watched);
-          if(!id||!signed())return;
-          row.querySelectorAll('.hub-watch-toggle').forEach(function(el){el.remove();});
-          var b=button(watched?'✓ Watched':'Mark watched',function(){b.disabled=true;request('watched',{item_id:id,watched:!watched}).then(function(){watched=!watched;b.textContent=watched?'✓ Watched':'Mark watched';row.classList.toggle('hub-watched',watched);if(j.episodes[id])j.episodes[id].watched=watched;if(watched){row.classList.remove('episode-spoiler-hidden');var reveal=row.querySelector('.episode-spoiler-reveal');if(reveal)reveal.remove();row._spoilerReady=false;}else window.VaultcastHomeExtras.spoilers(root,j.episodes||{});loaded=0;refreshContinue();}).catch(error).then(function(){b.disabled=false;});});b.classList.add('hub-watch-toggle');row.classList.toggle('hub-watched',watched);row.appendChild(b);
-        });
+        episodeRows(root,j.episodes||{});
         var content=discussion.querySelector('.hub-panel-body');content.replaceChildren();
         if(j.episodes && Object.keys(j.episodes).length){var eps=Object.keys(j.episodes),seen=eps.filter(function(id){return j.episodes[id].watched;}).length;content.appendChild(h('p',{className:'hub-episode-progress',text:seen+' of '+eps.length+' available episodes watched'}));}
         if(signed() && it.media_kind==='video' && !it.show)content.appendChild(button('Mark watched',function(){request('watched',{item_id:it.id,watched:true}).then(function(){A.toast('Marked watched');loaded=0;refreshContinue();}).catch(error);}));
         if(signed()){
           var mine=j.own_review||j.reviews.find(function(r){return r.user.id===A.state.user.id;}),text=h('textarea',{maxlength:2000,rows:3,placeholder:'Your take. Keep it kind.','aria-label':'Your review',value:mine?mine.text:''}),ratingSelect=h('select',{'aria-label':'Your rating'},[h('option',{value:0,text:'No rating'})].concat(Array.from({length:10},function(_,i){return h('option',{value:i+1,text:'★ '+(i+1)+' / 10',selected:mine && mine.rating===i+1});})));
-          content.appendChild(h('div',{className:'hub-review-form'},[text,h('div',{className:'hub-hero-actions'},[ratingSelect,button(mine?'Update review':'Post review',function(e){var target=e.currentTarget;target.disabled=true;request('review',{key:j.card.hub_key,text:text.value,rating:Number(ratingSelect.value)}).then(function(){details(it,root);}).catch(function(err){target.disabled=false;error(err);});},'primary')])]));
+          content.appendChild(h('div',{className:'hub-review-form'},[text,h('div',{className:'hub-hero-actions'},[ratingSelect,button(mine?'Update review':'Post review',function(e){var target=e.currentTarget;target.disabled=true;request('review',{key:j.card.hub_key,text:text.value,rating:Number(ratingSelect.value)}).then(function(){A.refreshCommunityRating(j.card.hub_key);details(it,root);}).catch(function(err){target.disabled=false;error(err);});},'primary')])]));
         }else content.appendChild(empty('Sign in to rate and join the conversation.'));
         j.reviews.forEach(function(r){
           var comment=h('details',{className:'hub-review'},[h('summary',{},[avatar(r.user),h('strong',{text:r.user.name}),h('span',{text:r.rating?'★ '+r.rating+'/10':'Comment'}),h('small',{text:'Open review · may contain spoilers'})]),h('p',{text:r.text})]);
-          if(signed() && (r.user.id===A.state.user.id||A.state.user.role==='admin'))comment.appendChild(button('Delete',function(){request('review',{key:j.card.hub_key,user_id:r.user.id,delete:true}).then(function(){details(it,root);}).catch(error);}));content.appendChild(comment);
+          if(signed() && (r.user.id===A.state.user.id||A.state.user.role==='admin'))comment.appendChild(button('Delete',function(){request('review',{key:j.card.hub_key,user_id:r.user.id,delete:true}).then(function(){A.refreshCommunityRating(j.card.hub_key);details(it,root);}).catch(error);}));content.appendChild(comment);
         });
         window.VaultcastHomeExtras.spoilers(root,j.episodes||{});
         if(!j.reviews.length)content.appendChild(empty('Start the conversation. What made this one memorable?'));
@@ -371,6 +376,6 @@
     setTimeout(pollInbox,30000);if(!A || !signed() || document.hidden || !A.state.home)return;
     var uid=A.state.user.id;if(noticeOwner!==uid){noticeSeen={};noticeOwner=uid;}request('inbox').then(function(j){if(!signed()||A.state.user.id!==uid)return;if(data&&owner===uid)data.notifications=j.notifications;A.state.inviteOwner=uid;A.state.inviteCount=j.notifications.length;document.dispatchEvent(new Event('vaultcast-notices-changed'));j.notifications.forEach(function(n){if(noticeSeen[n.id])return;noticeSeen[n.id]=true;A.toast(n.from.name+' invited you to '+n.title+' · Open Home → Inbox',{ms:8000});});var today=new Date().toISOString().slice(0,10);(data && owner===uid && data.upcoming || []).filter(function(ep){return ep.date===today;}).forEach(function(ep){var id=ep.card.id+ep.date+ep.season+ep.episode;if(noticeSeen[id])return;noticeSeen[id]=true;A.toast(ep.card.title+' · S'+ep.season+' E'+ep.episode+' is scheduled to air today',{ms:8000});});}).catch(function(){});
   }
-  window.VaultcastHub={init:function(app){A=app;window.VaultcastChat.init(app);pollInbox();},view:view,details:details,controls:controls,cardAction:cardAction,gameStarted:gameStarted,go:go,
+  window.VaultcastHub={init:function(app){A=app;window.VaultcastChat.init(app);pollInbox();},view:view,details:details,episodeRows:episodeRows,controls:controls,cardAction:cardAction,gameStarted:gameStarted,go:go,
     modal:modal,picker:picker,invalidate:function(){loaded=0;},lobbyOpened:function(room){var friend=A.state._hubInviteFriend;A.state._hubInviteFriend=null;if(friend)request('invite',{kind:'game',room_id:room.id,user_id:friend.id}).then(function(){A.toast('Invitation sent to '+friend.name);}).catch(error);}};
 })();

@@ -181,6 +181,17 @@ final class HomeHub {
         \Vaultcast\Repository::cachePut($slot,['revision'=>$revision,'episodes'=>$episodes],86400);
         return $episodes;
     }
+    public static function ratings(array $keys,array $user): array {
+        if(count($keys)>80)throw new DomainException('Choose up to 80 titles.');
+        if(!AreaAccess::allowed($user,'library')&&!AreaAccess::allowed($user,'games'))throw new DomainException('Library access required.');
+        $canonical=[];$result=[];$itemIds=[];
+        foreach($keys as $key){if(!is_string($key)||!preg_match('/^(item|show):([a-f0-9]{8,64})$/D',$key,$match))throw new DomainException('Invalid title.');$canonical[$key]=$key;$result[$key]=['rating'=>null,'count'=>0];if($match[1]==='item')$itemIds[]=$match[2];}
+        if($itemIds){$q=\Vaultcast\Database::connection()->prepare('SELECT id,media_kind,section_id,show_title FROM vaultcast_items WHERE id IN ('.implode(',',array_fill(0,count($itemIds),'?')).')');$q->execute($itemIds);foreach($q as $item){$key='item:'.$item['id'];if(!AreaAccess::allowed($user,$item['media_kind']==='rom'?'games':'library'))unset($canonical[$key]);elseif(!empty($item['show_title']))$canonical[$key]='show:'.Catalogue::showKey($item['section_id'],$item['show_title']);}}
+        $names=array_values(array_unique(array_map(static function($key){return 'hub-reviews:'.$key;},array_values($canonical))));$ratings=[];
+        if($names){$q=\Vaultcast\Database::connection()->prepare('SELECT name,payload FROM vaultcast_documents WHERE name IN ('.implode(',',array_fill(0,count($names),'?')).')');$q->execute($names);foreach($q as $row){$values=[];foreach(json_decode($row['payload'],true) ?: [] as $review)if(is_numeric($review['rating'] ?? null)&&$review['rating']>0)$values[]=(float)$review['rating'];if($values)$ratings[substr($row['name'],strlen('hub-reviews:'))]=['rating'=>round(array_sum($values)/count($values),1),'count'=>count($values)];}}
+        foreach($canonical as $key=>$target)if(isset($ratings[$target]))$result[$key]=$ratings[$target];
+        return ['ok'=>true,'ratings'=>$result];
+    }
     public static function title(string $key,array $user): array {
         $card=self::entity($key,$user); $key=$card['hub_key'];
         $membership=\Vaultcast\Database::connection()->prepare("SELECT JSON_CONTAINS_PATH(payload,'one',?) AS favourite,JSON_CONTAINS_PATH(payload,'one',?) AS watchlist FROM vaultcast_documents WHERE name=?");
