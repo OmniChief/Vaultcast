@@ -93,9 +93,12 @@
     if (!media || relativeIndex == null || isNaN(relativeIndex)) return { ok:false, note:'No track index' };
     try {
       var tracks = media.audioTracks;
-      if (tracks && relativeIndex >= 0 && relativeIndex < tracks.length) {
-        for (var i=0;i<tracks.length;i++) tracks[i].enabled = (i === relativeIndex);
-        return { ok:!!tracks[relativeIndex].enabled, note:'Audio track selected' };
+      if (tracks && Number.isInteger(relativeIndex) && relativeIndex >= 0 && relativeIndex < tracks.length) {
+        // Enable the destination before disabling anything; failed selections keep the old audio.
+        if (!tracks[relativeIndex].enabled) tracks[relativeIndex].enabled = true;
+        if (!tracks[relativeIndex].enabled) return {ok:false,note:'The browser could not enable this audio track.'};
+        for (var i=0;i<tracks.length;i++) if(i!==relativeIndex&&tracks[i].enabled) tracks[i].enabled = false;
+        return { ok:true, note:'Audio track selected' };
       }
     } catch(e){}
     return { ok:false, note:'Browser DirectPlay cannot switch audio tracks for this file; container default is used.' };
@@ -114,7 +117,8 @@
     bar.appendChild(note);
     var tools=overlay.classList.contains('player-inline')?detailPlayerTools(overlay.closest('.detail-player')):null;
     (tools||overlay).appendChild(bar);
-    var audioPreference = getAudioPref(item.id), audioApplied = false, subtitlePreference = null, subtitlesApplied = false;
+    var audioPreference = getAudioPref(item.id), audioApplied = false, audioChanging=false, subtitlePreference = null, subtitlesApplied = false;
+    if(!Number.isInteger(audioPreference)||audioPreference<0)audioPreference=null;
     var subtitleKey = 'vaultcast-subtitles:' + item.id;
     try { subtitlePreference = localStorage.getItem(subtitleKey); } catch (e) {}
     var probeTracks = [], captionTracks = [], probeDuration = 0;
@@ -239,13 +243,17 @@
       captionTracks.forEach(function(track,index){ track.mode = subtitleId(track,index) === value ? 'showing' : 'disabled'; });
     }
     function refresh(){
-      if (!overlay.isConnected) return;
+      if (!overlay.isConnected||audioChanging) return;
       var nativeAudio = media.audioTracks;
       audio.innerHTML = '';
       if (nativeAudio && nativeAudio.length) {
         if (!audioApplied && audioPreference != null && audioPreference < nativeAudio.length) {
-          audioApplied = applyAudioTrack(media, audioPreference).ok;
+          audioApplied=true;audioChanging=true;
+          var restored=applyAudioTrack(media,audioPreference);audioChanging=false;
+          if(!restored.ok){audioPreference=null;setAudioPref(item.id,null);}
         }
+        var hasEnabled=false;for(var enabledIndex=0;enabledIndex<nativeAudio.length;enabledIndex++)if(nativeAudio[enabledIndex].enabled)hasEnabled=true;
+        if(!hasEnabled){audioChanging=true;applyAudioTrack(media,0);audioChanging=false;}
         for (var i=0;i<nativeAudio.length;i++) {
           var track = nativeAudio[i];
           audio.appendChild(h('option', {value:String(i),text:trackLabel(track,i,'Track'),selected:track.enabled}));
@@ -295,7 +303,7 @@
       var index = Number(audio.value);
       var nativeAudio = media.audioTracks;
       if (nativeAudio && nativeAudio.length > 1) {
-        var result = applyAudioTrack(media,index);
+        audioChanging=true;var result = applyAudioTrack(media,index);audioChanging=false;
         if (result.ok) { audioPreference=index; audioApplied=true; setAudioPref(item.id,index); }
         else toast(result.note,{kind:'bad'});
       } else if (play.remux_url) {
@@ -307,6 +315,15 @@
       } else toast('Audio switching is not available for this file.',{kind:'bad'});
       refresh();
     };
+    var restoreAudio=h('button',{className:'btn ghost sm',type:'button',text:'Restore audio',title:'Clear the saved audio choice, unmute and restore the default track',onClick:function(){
+      if(!overlay.isConnected)return;
+      audioPreference=null;audioApplied=true;setAudioPref(item.id,null);
+      var nativeAudio=media.audioTracks;
+      if(remux.active){var track=probeTracks.filter(function(t){return t.default;})[0]||probeTracks[0];if(track)switchViaRemux(track.relative!=null?track.relative:0);}
+      else if(nativeAudio&&nativeAudio.length){audioChanging=true;applyAudioTrack(media,0);audioChanging=false;}
+      media.muted=false;if(media.volume===0)media.volume=1;refresh();
+      if(media.paused){var playing=media.play();if(playing&&playing.catch)playing.catch(function(){toast('Press play to resume audio.');});}
+    }});bar.appendChild(restoreAudio);
     captions.onchange = function(){
       if (captions.value === '__opensubtitles' || captions.value === '__upload') {
         var opener = captions.value === '__upload' ? openSubtitleUpload : openSubtitleSearch;
@@ -360,6 +377,7 @@
       ['addtrack','removetrack','change'].forEach(function(event){list.addEventListener(event,refresh);});
     });
     api('/items/'+item.id+'/probe').then(function(probe){
+      if(!overlay.isConnected)return;
       probeTracks = probe && probe.ok ? (probe.audio_tracks || []) : [];
       probeDuration = probe && probe.duration ? Number(probe.duration) : 0;
       /* Saved choice that the browser cannot apply natively: start the remux at the current position. */
@@ -368,7 +386,7 @@
         var def = probeTracks.filter(function(t){return t.default;})[0] || probeTracks[0];
         audioApplied = true;
         if (audioPreference !== (def ? def.relative : 0) && play.remux_allowed) {
-          var go = function(){ switchViaRemux(audioPreference); };
+          var go = function(){ if(overlay.isConnected)switchViaRemux(audioPreference); };
           if (media.readyState >= 1) go(); else media.addEventListener('loadedmetadata', go, { once:true });
         }
       }
