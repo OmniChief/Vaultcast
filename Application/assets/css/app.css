@@ -2366,7 +2366,7 @@ body.reduce-motion .welcome .welcome-feature { transition:none; }
 }
 .az-rail .az-btn.active { color: #fff; background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
 body.has-az-rail main.view {
-  padding-left: calc(var(--az-gutter) + 6px);
+  padding-left: 0;
   width: 100%; min-width: 0; box-sizing: border-box;
 }
 body.has-az-rail #section-view,
@@ -2390,8 +2390,8 @@ body.has-az-rail .has-az-rail { min-width: 0; max-width: 100%; }
   z-index: 55;
   margin: 0;
   pointer-events: auto;
-  left: 4px !important;
-  width: 28px !important;
+  left: max(2px, calc((var(--gutter) - 28px) / 2)) !important;
+  width: clamp(18px, calc(var(--gutter) - 10px), 28px) !important;
   top: calc(var(--nav-h, 64px) + 16px) !important;
   bottom: 16px !important;
   padding: 6px 1px !important;
@@ -2410,7 +2410,7 @@ body.has-az-rail .has-az-rail { min-width: 0; max-width: 100%; }
   opacity: 1; background: rgba(14,16,23,.72) !important; border-color: var(--border) !important;
   -webkit-backdrop-filter: blur(12px) !important; backdrop-filter: blur(12px) !important;
 }
-.az-rail .az-btn { appearance: none; border: 0; background: transparent; color: var(--muted); padding: 0; margin: 0; border-radius: var(--radius-xs); font-weight: 700; line-height: 1; cursor: pointer; flex: 0 0 auto; width: 24px; min-height: 16px; font-size: .64rem; }
+.az-rail .az-btn { appearance: none; border: 0; background: transparent; color: var(--muted); padding: 0; margin: 0; border-radius: var(--radius-xs); font-weight: 700; line-height: 1; cursor: pointer; flex: 0 0 auto; width: 100%; max-width: 100%; min-height: 16px; font-size: .64rem; }
 .az-toggle { display: none; }
 @media (max-width: 720px), (pointer: coarse) and (max-width: 900px) {
   body.has-az-rail main.view { padding-left: 0; }

@@ -364,3 +364,10 @@ body[data-theme] .settings-choice.active,body[data-theme] .settings-live-subnav-
 .featured-synopsis[hidden]{display:none}
 .collections-hero-poster img{width:100%;height:100%;aspect-ratio:2/3;object-fit:cover}
 @media(max-width:540px){.featured-synopsis{-webkit-line-clamp:3;font-size:.85rem}.play-hero .row-actions .console-chip{font-size:.8rem;padding:9px 12px}}
+
+.hub-collections-toolbar{display:flex;align-items:flex-end;justify-content:space-between;flex-wrap:wrap;gap:16px;margin-bottom:22px;padding:18px 22px;border:1px solid var(--border-strong);border-radius:16px;background:var(--bg2)}
+.hub-collections-search{display:flex;flex:1 1 280px;flex-direction:column;gap:8px;min-width:0;max-width:640px}
+.hub-collections-search>span{font-size:.82rem;color:var(--muted);line-height:1.5}
+.hub-collections-search input{width:100%;min-width:0;max-width:100%;padding:11px 14px;border:1px solid var(--border);border-radius:10px;background:var(--bg);color:var(--text);font:inherit}
+.hub-collections-toolbar>.btn{flex:0 0 auto;min-height:44px}
+@media(max-width:540px){.hub-collections-toolbar{padding:16px}.hub-collections-search{flex-basis:100%;max-width:100%}}

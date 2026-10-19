@@ -18,8 +18,8 @@ final class SiteArtwork {
         if (@file_put_contents($temp,$bytes,LOCK_EX)!==strlen($bytes)||!@rename($temp,$path)) {@unlink($temp);throw new RuntimeException('Could not save the poster.');}
         return ['ok'=>true];
     }
-    public static function serve(): void {
-        $path=is_file(self::path())?self::path():STREAM_ROOT.'/assets/img/home-poster.jpg';
+    public static function serve(string $kind='home'): void {
+        $path=$kind==='collections'?STREAM_ROOT.'/assets/img/collections-poster.jpg':(is_file(self::path())?self::path():STREAM_ROOT.'/assets/img/home-poster.jpg');
         $info=@getimagesize($path);if (!$info) json_error('Poster unavailable',404);
         $etag='"'.hash_file('sha256',$path).'"';
         header('Content-Type: '.$info['mime']);header('X-Content-Type-Options: nosniff');

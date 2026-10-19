@@ -4372,6 +4372,7 @@ try {
     ]);
   }
   function homePosterEl(){return h('div',{className:'page-hero-poster home-hero-poster'},[h('img',{src:BASE+'api/site/home-poster',alt:'Home artwork',width:512,height:768,decoding:'async'})]);}
+  function collectionsPosterEl(){return h('div',{className:'page-hero-poster collections-hero-poster'},[h('img',{src:BASE+'api/site/collections-poster',alt:'A futuristic archive of collected treasures',width:512,height:768,decoding:'async'})]);}
   function standardBillboard(bb,meta){
     bb.classList.add('page-hero');bb.removeAttribute('data-backdrop-host');
     var backdrop=bb.querySelector('.billboard-bg');if(backdrop)backdrop.remove();
@@ -4407,10 +4408,7 @@ try {
   },30000);
   function heroArt(kind){return h('div',{className:'hero-art hero-art-'+kind,'aria-hidden':'true'},[h('span'),h('span'),h('span')]);}
   function shelfCapacity(liveCards){
-    var viewport=window.innerWidth,railPage=state.view==='section'||state.view==='collections'||(state.view==='play'&&(state.playTab||'games')==='games');
-    var compact=window.matchMedia('(max-width: 720px), (pointer: coarse) and (max-width: 900px)').matches;
-    var inset=railPage&&!compact?(parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--az-gutter'))||34)+6:0;
-    var width=Math.min(viewport-inset,1900),gutter=Math.max(16,Math.min(56,viewport*.036)),card=liveCards?Math.max(250,Math.min(340,viewport*.25)):Math.max(138,Math.min(210,viewport*.115));
+    var viewport=window.innerWidth,width=Math.min(viewport,1900),gutter=Math.max(16,Math.min(56,viewport*.036)),card=liveCards?Math.max(250,Math.min(340,viewport*.25)):Math.max(138,Math.min(210,viewport*.115));
     return Math.max(1,Math.floor((width-gutter*2-48+14)/(card+14)));
   }
 
@@ -5899,7 +5897,7 @@ try {
     try { document.body.classList.add('has-az-rail'); } catch (eAz2) {}
     /* Mount on body so position:fixed stays viewport-sticky while library grids scroll
        (ancestors with transform/filter/animation would otherwise trap fixed).
-       The main layout reserves the rail gutter before content is rendered, so it never covers posters. */
+       The rail fits inside the normal page gutter, without shifting the content or changing page width. */
     if (!rail.id) rail.id = 'az-rail';
     document.body.appendChild(rail);
     window.addEventListener('scroll', azOnScroll, { passive: true });
@@ -11508,7 +11506,7 @@ h('div', { className:'cv-find-bar' }, [
   function viewCollections(){
     var wrap = h('div', { id:'collections-view', className:'panel-collections' }, [
       h('section',{className:'collections-hero page-hero page-hero-layout'},[
-        h('div',{className:'page-hero-poster collections-hero-poster'},[h('img',{src:BASE+'index.php?asset=assets/img/collections-poster.jpg',alt:'A futuristic archive of collected treasures',width:512,height:768,decoding:'async'})]),h('div',{className:'hero-copy'},[h('div',{className:'eyebrow',text:'Library'}),h('h1',{text:'Collections'}),h('p',{className:'muted',text:'Film series and show groups, together in one place. Pick a poster to explore its titles.'}),h('div',{className:'row-actions'},[h('button',{className:'btn primary',text:'Browse collections',onClick:function(){var list=$('#pub_col_list');if(list)list.scrollIntoView({behavior:'smooth',block:'start'});}}),h('button',{className:'btn',text:'Surprise me',onClick:function(){var cards=$all('#pub_col_list .collection-card');if(!cards.length){toast('No collections available yet');return;}var card=cards[Math.floor(Math.random()*cards.length)];card.click();card.scrollIntoView({behavior:'smooth',block:'center'});}}),h('button',{className:'btn',text:'Explore Library',onClick:function(){navigate('library');}}),state.user&&state.user.role==='admin'?h('button',{className:'btn',text:'Manage collections',onClick:function(){openSettings('collections');}}):null])]),heroClock('Collections from your library'),heroArt('library')
+        collectionsPosterEl(),h('div',{className:'hero-copy'},[h('div',{className:'eyebrow',text:'Library'}),h('h1',{text:'Collections'}),h('p',{className:'muted',text:'Film series and show groups, together in one place. Pick a poster to explore its titles.'}),h('div',{className:'row-actions'},[h('button',{className:'btn primary',text:'Browse collections',onClick:function(){var list=$('#pub_col_list');if(list)list.scrollIntoView({behavior:'smooth',block:'start'});}}),h('button',{className:'btn',text:'Surprise me',onClick:function(){var cards=$all('#pub_col_list .collection-card');if(!cards.length){toast('No collections available yet');return;}var card=cards[Math.floor(Math.random()*cards.length)];card.click();card.scrollIntoView({behavior:'smooth',block:'center'});}}),h('button',{className:'btn',text:'Explore Library',onClick:function(){navigate('library');}}),state.user&&state.user.role==='admin'?h('button',{className:'btn',text:'Manage collections',onClick:function(){openSettings('collections');}}):null])]),heroClock('Collections from your library'),heroArt('library')
       ]),
       h('div', { id:'pub_col_list', className:'collections-grid' }, [ pendingContent({ className:'muted', }) ])
     ]);
@@ -14435,7 +14433,7 @@ function viewCollectionDetail(){
   /* helpers for assets/js/matching.js (Ingest inbox / Fix matching / Label reports) */
   window.NSApp = { h: h, api: api, toast: toast, confirmDialog: confirmDialog, render: render, state: state, can:can,
     openSettings: openSettings, openShow: openShow, openMovie: openMovie, openGame:openGame, navigate:navigate, refreshArtwork:refreshArtwork, fmtSize: fmtSize, version: APP_VERSION,
-    shell:shell,heroClock:heroClock,homePosterEl:homePosterEl,librarySummary:librarySummary,cardEl:cardEl,homeActivitySections:homeActivitySections,applyRoute:applyRoute,replaceNav:replaceNav,openPlayer:openPlayer,playItem:playItem,copyText:copyText,shareUrl:shareUrl,startLobbyHost:startLobbyHost,captureGameState:lobbyCaptureState,quitGame:function(){closePlayer();} };
+    shell:shell,heroClock:heroClock,homePosterEl:homePosterEl,collectionsPosterEl:collectionsPosterEl,librarySummary:librarySummary,cardEl:cardEl,homeActivitySections:homeActivitySections,applyRoute:applyRoute,replaceNav:replaceNav,openPlayer:openPlayer,playItem:playItem,copyText:copyText,shareUrl:shareUrl,startLobbyHost:startLobbyHost,captureGameState:lobbyCaptureState,quitGame:function(){closePlayer();} };
   window.VaultcastHub.init(window.NSApp);
   window.VaultcastHomeExtras.init(window.NSApp);
   // Load matching tools when Settings or a detail-page action needs them.
