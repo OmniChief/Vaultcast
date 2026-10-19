@@ -930,6 +930,7 @@ function confirmDialog(message, opts){
     return !areas || areas[area] === true;
   }
   function can(permission){return !!(state.user&&(state.user.role==='admin'||state.user.role!=='user'&&state.user.capabilities&&state.user.capabilities[permission]===true));}
+  function canSettings(section){if(state.user&&state.user.role==='admin')return true;var permission={'live-iptv':'iptv_manage','live-radio':'radio_manage','artwork-integrity':'artwork_manage'}[section];return !!permission&&can(permission);}
   function canSearchRss(){return can('rss_search')&&!!(state.home&&state.home.features&&state.home.features.downloads);}
   function canManageDownloads(){return can('downloads_request')&&!!(state.home&&state.home.features&&state.home.features.downloads);}
   function loadDownloadStatus(force){
@@ -1400,7 +1401,7 @@ function confirmDialog(message, opts){
   }
 
   function editEpisodeSegments(item){
-    if(!state.user||state.user.role!=='admin'||!window.VaultcastHub)return;
+    if(!can('timing_edit')||!window.VaultcastHub)return;
     window.VaultcastHub.modal(item.show?'Edit intro / credits':'Edit movie credits',function(body,close){
       body.classList.add('live-editor');var rows=h('div'),status=h('p',{className:'muted',text:'Loading saved episode timings…'}),entries=[],lookup=null,busy=false,loaded=false,searchSequence=0;
       function timingClock(value){var ms=Math.max(0,Math.round(Number(value)*1000)),whole=Math.floor(ms/1000),fraction=ms%1000;function pad(n){return n<10?'0'+n:String(n);}return pad(Math.floor(whole/3600))+':'+pad(Math.floor(whole/60)%60)+':'+pad(whole%60)+(fraction?'.'+('00'+fraction).slice(-3).replace(/0+$/,''):'');}
@@ -1451,7 +1452,7 @@ function confirmDialog(message, opts){
     preference('auto_skip_intro',intro);preference('auto_skip_outro',outro);
     function load(){if(requested||!current()||!isFinite(duration())||duration()<=0)return;requested=true;api('/items/'+encodeURIComponent(item.id)+'/segments?duration='+Math.round(duration())).then(function(j){if(!current()||!j.ok)return;segments=(j.segments||[]).filter(function(segment){return (segment.kind==='intro'||segment.kind==='outro')&&isFinite(segment.start)&&isFinite(segment.end)&&segment.start>=0&&segment.end>segment.start;});bar.hidden=!segments.length;update();}).catch(function(){});}
     media.addEventListener('playing',load);media.addEventListener('durationchange',function(){if(!media.paused)load();});['timeupdate','seeked','play','pause'].forEach(function(event){media.addEventListener(event,update);});
-    overlay._segmentItem=item.id;overlay._reloadSegments=function(){requested=false;segments=[];handled={};active=null;bar.hidden=true;skip.hidden=full.hidden=true;undo.hidden=true;clearTimeout(undoTimer);load();};if(state.user&&state.user.role==='admin')tools.appendChild(h('button',{className:'btn ghost',text:'Edit intro / credits',onClick:function(){editEpisodeSegments(item);}}));overlay._skipCleanup=function(){alive=false;clearTimeout(undoTimer);};if(!media.paused)load();
+    overlay._segmentItem=item.id;overlay._reloadSegments=function(){requested=false;segments=[];handled={};active=null;bar.hidden=true;skip.hidden=full.hidden=true;undo.hidden=true;clearTimeout(undoTimer);load();};if(can('timing_edit'))tools.appendChild(h('button',{className:'btn ghost',text:'Edit intro / credits',onClick:function(){editEpisodeSegments(item);}}));overlay._skipCleanup=function(){alive=false;clearTimeout(undoTimer);};if(!media.paused)load();
   }
 
   function openPlayer(item, play){
@@ -5227,21 +5228,21 @@ try {
     host.classList.add('radio-section');
     var mine=state.user&&state.user.id;
     host.replaceChildren(h('div',{className:'row-head'},[h('h2',{text:'Radio'}),compact?h('button',{className:'btn ghost',text:'All stations',onClick:function(){goLiveTab('radio');}}):null]),pendingContent());
-    loadRadio().then(function(stations){if(!host.isConnected||mine!==(state.user&&state.user.id))return;var heading=host.firstChild;host.replaceChildren(heading);if(!stations.length){host.appendChild(emptyState('Your next soundtrack starts here','Add favourite stations from the public Radio Browser directory or a direct audio stream.',state.user&&state.user.role==='admin'?[h('button',{className:'btn primary',text:'Find stations',onClick:radioDirectory})]:null));return;}
+    loadRadio().then(function(stations){if(!host.isConnected||mine!==(state.user&&state.user.id))return;var heading=host.firstChild;host.replaceChildren(heading);if(!stations.length){host.appendChild(emptyState('Your next soundtrack starts here','Add favourite stations from the public Radio Browser directory or a direct audio stream.',can('radio_manage')?[h('button',{className:'btn primary',text:'Find stations',onClick:radioDirectory})]:null));return;}
       var query=h('input',{type:'search',placeholder:'Filter your stations…','aria-label':'Filter radio stations'}),grid=h('div',{className:'radio-station-grid'}),shown=24;
       if(!compact){var count=document.querySelector('#live-top .live-count');if(count)count.textContent=stations.length+' stations';}
       function draw(){var q=query.value.toLowerCase(),rows=stations.filter(function(station){return [station.name,station.country,station.tags,station.language].join(' ').toLowerCase().indexOf(q)>=0;});grid.replaceChildren();(compact?rows.slice(0,Math.min(6,shelfCapacity(true))):rows.slice(0,shown)).forEach(function(station){grid.appendChild(radioCard(station));});if(!rows.length)grid.appendChild(emptyState('No stations match','Try a different name, country or genre.'));if(!compact&&rows.length>shown)grid.appendChild(h('button',{className:'btn',text:'More stations',onClick:function(){shown+=24;draw();}}));}
       if(!compact){query.oninput=function(){shown=24;draw();};host.appendChild(h('div',{className:'hub-calendar-filters'},[query]));}host.appendChild(grid);draw();updateRadio();
     }).catch(function(e){if(host.isConnected)host.replaceChildren(emptyState('Radio unavailable',e.message));});
   }
-  function paintRadioPage(root){root.replaceChildren(livePageHero('radio',radioState.stations?radioState.stations.length:0));var actions=h('div',{className:'row-actions radio-page-actions'},[h('button',{className:'btn',text:'Browse public directory',onClick:radioDirectory}),state.user&&state.user.role==='admin'?h('button',{className:'btn',text:'Add stream URL',onClick:function(){editRadio();}}):null]);root.appendChild(actions);var host=h('section',{className:'live-section'});root.appendChild(host);radioSection(host,false);}
+  function paintRadioPage(root){root.replaceChildren(livePageHero('radio',radioState.stations?radioState.stations.length:0));var actions=h('div',{className:'row-actions radio-page-actions'},[h('button',{className:'btn',text:'Browse public directory',onClick:radioDirectory}),can('radio_manage')?h('button',{className:'btn',text:'Add stream URL',onClick:function(){editRadio();}}):null]);root.appendChild(actions);var host=h('section',{className:'live-section'});root.appendChild(host);radioSection(host,false);}
   function paintRadioDetail(player,info,station){
     player.replaceChildren(h('div',{className:'radio-full-player'},[h('div',{className:'radio-full-art'},[chanLogoEl(station)]),h('span',{className:'eyebrow',text:'ON YOUR FREQUENCY'}),h('h1',{text:station.name}),h('p',{className:'muted',text:radioMeta(station)}),radioButton(station),h('p',{'data-radio-status':station.id,className:'muted',text:radioState.station&&radioState.station.id===station.id?radioState.status:'Listen live, then keep browsing while your station plays.'})]));
-    info.replaceChildren(h('div',{className:'live-channel-summary'},[h('div',{className:'live-channel-art'},[chanLogoEl(station)]),h('div',{className:'live-channel-copy'},[h('span',{className:'eyebrow',text:'Live radio'}),h('h2',{text:station.name}),h('p',{text:station.description||station.tags||'Live music, voices and stories from around the world.'}),h('p',{className:'muted',text:radioMeta(station)}),h('div',{className:'row-actions'},[shareButton(function(){return 'live/radio/'+encodeURIComponent(station.id);},'Copy station link'),station.homepage?h('a',{className:'btn',href:station.homepage,target:'_blank',rel:'noopener noreferrer',text:'Station website'}):null,state.user&&state.user.role==='admin'?h('button',{className:'btn',text:'Edit station',onClick:function(){editRadio(station);}}):null])])]));updateRadio();
+    info.replaceChildren(h('div',{className:'live-channel-summary'},[h('div',{className:'live-channel-art'},[chanLogoEl(station)]),h('div',{className:'live-channel-copy'},[h('span',{className:'eyebrow',text:'Live radio'}),h('h2',{text:station.name}),h('p',{text:station.description||station.tags||'Live music, voices and stories from around the world.'}),h('p',{className:'muted',text:radioMeta(station)}),h('div',{className:'row-actions'},[shareButton(function(){return 'live/radio/'+encodeURIComponent(station.id);},'Copy station link'),station.homepage?h('a',{className:'btn',href:station.homepage,target:'_blank',rel:'noopener noreferrer',text:'Station website'}):null,can('radio_manage')?h('button',{className:'btn',text:'Edit station',onClick:function(){editRadio(station);}}):null])])]));updateRadio();
   }
   function saveRadio(body){return liveApiPost('radio_save',body).then(function(r){if(!r.ok||!r.body.ok)throw new Error(r.body.error||'Could not save station');radioState.stations=r.body.stations;radioState.loaded=Date.now();try{localStorage.setItem('vaultcast-radio-rev',Date.now()+':'+Math.random());}catch(e){}if(state.view==='live'&&!state.liveChannel){var root=document.getElementById('live-view');if(root&&state.liveTab==='radio')paintRadioPage(root);else{var section=document.querySelector('.radio-on-now');if(section)radioSection(section,true);}}return r.body;});}
   function editRadio(station){
-    if(!state.user||state.user.role!=='admin')return;station=station||{};
+    if(!can('radio_manage'))return;station=station||{};
     window.VaultcastHub.modal(station.id?'Edit radio station':'Add radio station',function(body,close){body.classList.add('live-editor');var fields={};[['name','Station name'],['url','Direct audio stream URL'],['logo','Logo URL (optional)'],['description','Description (optional)'],['country','Country'],['language','Language'],['tags','Genres / tags'],['homepage','Station website']].forEach(function(field){var input=h('input',{value:station[field[0]]||'',type:['url','logo','homepage'].indexOf(field[0])>=0?'url':'text',maxlength:field[0]==='description'?2000:1000});fields[field[0]]=input;body.appendChild(h('label',{},[field[1],input]));});
       body.appendChild(h('p',{className:'muted',text:'Use a direct MP3, AAC, Ogg or HLS audio stream, rather than a station’s website or a playlist download. Playback depends on the station and browser codec support.'}));
       body.appendChild(h('button',{className:'btn primary',text:'Save station',onClick:function(e){var button=e.currentTarget;button.disabled=true;var value=Object.assign({},station);Object.keys(fields).forEach(function(key){value[key]=fields[key].value;});saveRadio(value).then(function(){close();toast('Radio station saved');if(state.view==='live')render();else if(state.view==='settings'&&state.settingsSection==='live-radio')fillLiveNativePanel('live-radio');}).catch(function(e){toast(e.message,{kind:'bad'});}).finally(function(){button.disabled=false;});}}));
@@ -5249,7 +5250,7 @@ try {
     });
   }
   function radioDirectory(){
-    window.VaultcastHub.modal('Find your frequency',function(body,close){body.classList.add('live-editor','radio-directory');var q=h('input',{type:'search',placeholder:'Station name…','aria-label':'Station name'}),country=h('input',{placeholder:'Country…','aria-label':'Country'}),tag=h('input',{placeholder:'Genre, e.g. jazz…','aria-label':'Genre'}),results=h('div'),offset=0,sequence=0,admin=state.user&&state.user.role==='admin';
+    window.VaultcastHub.modal('Find your frequency',function(body,close){body.classList.add('live-editor','radio-directory');var q=h('input',{type:'search',placeholder:'Station name…','aria-label':'Station name'}),country=h('input',{placeholder:'Country…','aria-label':'Country'}),tag=h('input',{placeholder:'Genre, e.g. jazz…','aria-label':'Genre'}),results=h('div'),offset=0,sequence=0,admin=can('radio_manage');
       body.appendChild(h('p',{className:'muted',text:'Search the public Radio Browser directory. '+(admin?'Add stations to your shared lineup.':'Ask an administrator to add your favourites to the shared lineup.')}));body.appendChild(h('a',{href:'https://www.radio-browser.info/',target:'_blank',rel:'noopener noreferrer',text:'Community directory · Radio Browser'}));
       var submit=h('button',{className:'btn primary',type:'submit',text:'Search stations'}),more=h('button',{className:'btn',text:'More stations',hidden:true,onClick:function(){offset+=30;search(true);}});
       function search(append){var mine=++sequence;submit.disabled=more.disabled=true;if(!append){offset=0;results.replaceChildren(pendingContent());}liveApi('radio_search','name='+encodeURIComponent(q.value)+'&country='+encodeURIComponent(country.value)+'&tag='+encodeURIComponent(tag.value)+'&offset='+offset).then(function(j){if(!results.isConnected||mine!==sequence)return;if(!j.ok)throw new Error(j.error||'Directory unavailable');if(!append)results.replaceChildren();j.stations.forEach(function(station){var add=h('button',{className:'btn',text:admin?'Add station':'Copy stream URL',onClick:function(){if(!admin){copyText(station.url).then(function(){toast('Stream URL copied');});return;}add.disabled=true;saveRadio(station).then(function(){add.textContent='Added';toast(station.name+' added');}).catch(function(e){add.disabled=false;toast(e.message,{kind:'bad'});});}});if(admin&&radioState.stations&&radioState.stations.some(function(s){return s.id===station.id;})){add.textContent='Added';add.disabled=true;}results.appendChild(h('article',{className:'radio-directory-row'},[h('div',{},[h('strong',{text:station.name}),h('p',{className:'muted',text:radioMeta(station)+(station.bitrate?' · '+station.bitrate+' kbps':'')}),h('small',{className:'muted',text:station.tags})]),add]));});if(!j.stations.length&&!append)results.appendChild(emptyState('No stations found','Try a broader name, country or genre.'));more.hidden=!j.has_more;}).catch(function(e){if(results.isConnected&&mine===sequence){if(append)offset=Math.max(0,offset-30);else results.replaceChildren();results.appendChild(h('p',{className:'muted',text:e.message}));}}).finally(function(){if(mine===sequence){submit.disabled=more.disabled=false;}});}
@@ -5269,7 +5270,7 @@ try {
   }
   function paintChannelInformation(ch){
     var host=document.getElementById('live-channel-information');if(!host)return;
-    var nn=progNowAndNext(ch),copy=h('div',{className:'live-channel-copy'},[h('span',{className:'eyebrow',text:ch.kind==='iptv'?'IPTV':'Relay'}),h('h1',{text:ch.name}),h('p',{className:'muted',text:ch.slogan||'Live television'}),h('h2',{text:nn.now?nn.now.title:'On air'}),nn.now&&nn.now.subtitle?h('p',{text:nn.now.subtitle}):null,h('div',{className:'row-actions'},[shareButton(function(){return 'live/'+encodeURIComponent(ch.id);},'Copy channel link'),state.user&&state.user.role==='admin'&&ch.kind==='iptv'?h('button',{className:'btn',text:'Match programme guide',onClick:function(){matchChannelEpg(ch.iptvId||ch.id.replace(/^iptv:/,''));}}):null])]);
+    var nn=progNowAndNext(ch),copy=h('div',{className:'live-channel-copy'},[h('span',{className:'eyebrow',text:ch.kind==='iptv'?'IPTV':'Relay'}),h('h1',{text:ch.name}),h('p',{className:'muted',text:ch.slogan||'Live television'}),h('h2',{text:nn.now?nn.now.title:'On air'}),nn.now&&nn.now.subtitle?h('p',{text:nn.now.subtitle}):null,h('div',{className:'row-actions'},[shareButton(function(){return 'live/'+encodeURIComponent(ch.id);},'Copy channel link'),can('iptv_manage')&&ch.kind==='iptv'?h('button',{className:'btn',text:'Match programme guide',onClick:function(){matchChannelEpg(ch.iptvId||ch.id.replace(/^iptv:/,''));}}):null])]);
     host.replaceChildren(h('div',{className:'live-channel-summary'},[h('div',{className:'live-channel-art'},[chanLogoEl(ch)]),copy]),h('section',{className:'live-channel-guide'},[h('h2',{text:'On this channel'}),guideEl([ch])]));
   }
   function matchChannelEpg(id){
@@ -6176,10 +6177,10 @@ try {
         else tools.openMovieFix(item);
       });
     }}));
-    if (can('metadata_edit')) buttons.push(h('button', {className:'btn ghost', type:'button', text:'Manual edit', onClick:function(){
-      withTools(function(tools){ if (can('metadata_edit')) tools.editDialog(item, showKey); });
+    if (can('metadata_edit')||can('library_remove')) buttons.push(h('button', {className:'btn ghost', type:'button', text:'Manual edit', onClick:function(){
+      withTools(function(tools){ if (can('metadata_edit')||can('library_remove')) tools.editDialog(item, showKey); });
     }}));
-    if(state.user&&state.user.role==='admin'&&!showKey&&!item.show&&item.media_kind==='video')buttons.push(h('button',{className:'btn ghost',text:'Edit credits',onClick:function(){editEpisodeSegments(item);}}));
+    if(can('timing_edit')&&!showKey&&!item.show&&item.media_kind==='video')buttons.push(h('button',{className:'btn ghost',text:'Edit credits',onClick:function(){editEpisodeSegments(item);}}));
     if (state.user && state.user.role === 'admin' && (item.type === 'roms' || item.media_kind === 'rom')) buttons.push(h('button', {className:'btn ghost', type:'button', text:'Refresh poster and synopsis', onClick:function(){ queueGameMetadata(item.id); }}));
     return buttons;
   }
@@ -7259,7 +7260,7 @@ try {
               }));
             }
           }
-          if(isAvail&&state.user&&state.user.role==='admin')actions.push(h('button',{className:'btn ghost',type:'button',text:'Edit intro / credits',onClick:function(e){e.stopPropagation();editEpisodeSegments(ep);}}));
+          if(isAvail&&can('timing_edit'))actions.push(h('button',{className:'btn ghost',type:'button',text:'Edit intro / credits',onClick:function(e){e.stopPropagation();editEpisodeSegments(ep);}}));
           var epPoster=h('button',{className:'episode-play-button',type:'button',disabled:!isAvail,'aria-label':isAvail?'Play '+(code||title):'Episode unavailable',title:isAvail?'Play '+(code||title):'Episode unavailable',text:'▶',onClick:function(e){e.stopPropagation();if(isAvail)playItem(ep);}});
           var epPath = showPath + '/season-' + ep.season + (ep.episode != null && ep.episode !== '' ? '/episode-' + ep.episode : (ep.id ? '/' + encodeURIComponent(ep.id) : ''));
           actions.push(shareButton(epPath, 'Copy link to ' + (code || 'this episode')));
@@ -7485,22 +7486,23 @@ try {
     var isAdmin = !!(u && u.role === 'admin');
     var groups = [
       {title:'Your preferences', items:[{id:'account',label:'Account & playback'},{id:'cloud-saves',label:'Cloud saves'}]},
-      {title:'Libraries',admin:true,items:[{id:'sections',label:'Folders & media types'},{id:'scan',label:'Scan libraries'},{id:'media',label:'Manage media'},{id:'collections',label:'Collections'},{id:'posters',label:'Artwork'},{id:'library',label:'Find & rename'},{id:'ingest',label:'Import inbox'},{id:'matching',label:'Correct metadata'},{id:'reports',label:'Label reports'}]},
+      {title:'Libraries',admin:true,items:[{id:'sections',label:'Folders & media types'},{id:'scan',label:'Scan libraries'},{id:'media',label:'Manage media'},{id:'collections',label:'Collections'},{id:'posters',label:'Artwork'},{id:'artwork-integrity',label:'Artwork integrity'},{id:'library',label:'Find & rename'},{id:'ingest',label:'Import inbox'},{id:'matching',label:'Correct metadata'},{id:'reports',label:'Label reports'}]},
       {title:'Users',admin:true,items:[{id:'users',label:'Accounts & access'}]},
       {title:'Playback',admin:true,items:[{id:'players',label:'Player files'},{id:'streaming',label:'Streaming'},{id:'video-optimise',label:'Video conversion'},{id:'poster-optimise',label:'Artwork optimisation'}]},
       {title:'Integrations',admin:true,items:[{id:'features',label:'Optional features'},{id:'acquisition',label:'Download sources'},{id:'queue',label:'Download queue'},{id:'live-studio',label:'TV Studio'},{id:'live-channels',label:'Live channels'},{id:'live-library',label:'Live media'},{id:'live-playlists',label:'Live playlists'},{id:'live-schedule',label:'Live schedule'},{id:'live-iptv',label:'IPTV feeds'},{id:'live-radio',label:'Radio stations'},{id:'live-station',label:'Station outputs'}]},
       {title:'Maintenance',admin:true,items:[{id:'updates',label:'Check for updates'},{id:'maintenance',label:'Background tasks'},{id:'general',label:'Application'},{id:'diagnostics',label:'Diagnostics'},{id:'optimise-system',label:'Storage & caches'},{id:'system',label:'server tools'},{id:'advanced',label:'Advanced configuration'}]}
     ];
     var features = (state.home && state.home.features) || {};
-    groups = groups.filter(function(g){ return !g.admin || isAdmin; }).map(function(g){
+    groups = groups.map(function(g){
       g.items = g.items.filter(function(it){
+        if(g.admin&&!canSettings(it.id))return false;
         if (it.id.indexOf('live-') === 0) return !!features.live;
         if (it.id === 'acquisition' || it.id === 'queue') return !!features.downloads;
         if (it.id === 'system') return !!features.server_tools;
         return true;
       });
       return g;
-    });
+    }).filter(function(g){return g.items.length;});
     var flat = [];
     groups.forEach(function(g){ g.items.forEach(function(it){ flat.push(it.id); }); });
     if (state.settingsSection === 'live') state.settingsSection = 'live-channels';
@@ -7510,7 +7512,7 @@ try {
 
     function goSec(id){
       var adminIds = { maintenance:1, players:1, features:1, diagnostics:1, sections:1, scan:1, posters:1, library:1, media:1, collections:1, streaming:1, convert:1, 'video-optimise':1, 'poster-optimise':1, 'optimise-system':1, queue:1, acquisition:1, system:1, general:1, users:1, advanced:1, ingest:1, matching:1, reports:1, live:1, 'live-channels':1, 'live-library':1, 'live-playlists':1, 'live-iptv':1, 'live-schedule':1, 'live-station':1, 'live-studio':1, 'live-radio':1 };
-      if (adminIds[id] && !isAdmin) {
+      if (adminIds[id] && !canSettings(id)) {
         state._wantAdmin = true;
         state._settingsAfterLogin = id;
         state.view = 'login';
@@ -7747,6 +7749,8 @@ try {
       bodyKids = window.NSMatch ? window.NSMatch.settingsKids(sec) : [ h('h2', { text: 'Matching' }), pendingContent({ className: 'muted', }) ];
     } else if (sec === 'live' || sec.indexOf('live-') === 0) {
       bodyKids = liveNativeSettingsKids(sec);
+    } else if(sec==='artwork-integrity'){
+      bodyKids=[h('h2',{text:'Artwork integrity'}),h('div',{id:'delegated-artwork-audit'})];setTimeout(function(){var host=document.getElementById('delegated-artwork-audit');if(host)renderArtworkAudit(host);},0);
     } else if (sec === 'poster-optimise') {
       bodyKids = [
         h('h2', { text: 'Poster optimisation' }),
@@ -9179,7 +9183,7 @@ try {
       var el = $('#user_list'); if(!el) return;
       el.innerHTML = '';
       if (!r.ok) { el.appendChild(h('p', { className:'bad', text:r.error || 'Could not load users' })); return; }
-      state.userRoles=r.roles||{};state.permissionChoices=r.permission_choices||{};renderRoles();
+      state.roleCounts=r.role_counts||{};state.userRoles=r.roles||{};state.permissionChoices=r.permission_choices||{};renderRoles();
       var roleSelect=$('#nu_role');if(roleSelect){var selectedRole=roleSelect.value;roleSelect.querySelectorAll('[data-custom-role]').forEach(function(o){o.remove();});Object.keys(state.userRoles).forEach(function(id){roleSelect.appendChild(h('option',{value:id,text:state.userRoles[id].name,'data-custom-role':true}));});roleSelect.value=selectedRole;if(!roleSelect.value)roleSelect.value='user';}
       var table = h('table', { className:'table ua-table' }, [ h('tr', {}, [h('th',{text:'User'}),h('th',{text:'Role'}),h('th',{text:'Access'}),h('th',{text:'Expires'}),h('th',{text:'Change access'}),h('th',{text:''})]) ]);
       (r.users||[]).forEach(function(u){
@@ -9227,16 +9231,19 @@ try {
   }
 
   function renderRoles(){
-    var host=$('#role_list');if(!host)return;host.innerHTML='';host.appendChild(h('h3',{text:'Roles & permissions'}));host.appendChild(h('p',{className:'muted',text:'Admin has full access. User keeps standard access. Custom roles grant only the permissions selected here; individual user overrides take precedence.'}));
-    Object.keys(state.userRoles||{}).forEach(function(id){host.appendChild(h('button',{className:'btn ghost',text:'Edit '+state.userRoles[id].name,onClick:function(){editRole(id);}}));});host.appendChild(h('button',{className:'btn primary',text:'Add role',onClick:function(){editRole(null);}}));
+    var host=$('#role_list');if(!host)return;host.replaceChildren(h('div',{className:'role-manager-heading'},[h('h3',{text:'Roles & permissions'}),h('button',{className:'btn primary',type:'button',text:'Create role',onClick:function(){editRole(null);}})]),h('p',{className:'muted',text:'Create as many specialised roles as needed (up to 30). Standard User keeps its existing permissions; Admin has full access. Library / Live / Games access is set separately per user.'}));
+    var list=h('div',{className:'role-manager-list'});host.appendChild(list);
+    Object.keys(state.userRoles||{}).forEach(function(id){var role=state.userRoles[id],count=Number((state.roleCounts||{})[id])||0,grants=Object.keys(state.permissionChoices||{}).filter(function(key){return role.permissions&&role.permissions[key]===true;}).map(function(key){return state.permissionChoices[key];});list.appendChild(h('div',{className:'role-manager-card'},[h('div',{},[h('strong',{text:role.name}),h('p',{className:'muted',text:count+' assigned user'+(count===1?'':'s')}),h('p',{className:'muted',text:grants.length?grants.join(' · '):'No additional permissions'})]),h('div',{className:'row-actions'},[h('button',{className:'btn',text:'Edit',onClick:function(){editRole(id);}}),h('button',{className:'btn ghost danger',text:'Delete',onClick:function(){deleteRole(id);}})])]));});
+    if(!Object.keys(state.userRoles||{}).length)list.appendChild(h('p',{className:'muted',text:'No custom roles yet. Create one to choose its permissions.'}));
   }
+  function deleteRole(id){var role=(state.userRoles||{})[id];if(!role)return;var replacement=h('select',{'aria-label':'Replacement role'},[h('option',{value:'user',text:'Standard User'})]);Object.keys(state.userRoles).forEach(function(key){if(key!==id)replacement.appendChild(h('option',{value:key,text:state.userRoles[key].name}));});var count=Number((state.roleCounts||{})[id])||0,status=h('p',{role:'status',className:'muted'}),body=h('div',{className:'stack'},[h('p',{text:'Delete '+role.name+'? Assigned users will move to the selected role. Their media access and expiry stay unchanged; individual permission overrides will be cleared.'}),h('p',{className:'muted',text:count+' currently assigned user'+(count===1?'':'s')}),h('label',{},['Replacement role',replacement]),status]),button=h('button',{className:'btn danger',text:'Delete role'});body.appendChild(button);var dialog=permissionDialog('Delete role',body);button.onclick=function(){button.disabled=true;api('/admin/roles',{method:'POST',body:{id:id,delete:true,replacement_role:replacement.value}}).then(function(r){if(!r.ok)throw new Error(r.error||'Could not delete role');dialog.close();loadUsers();toast('Role deleted');}).catch(function(error){status.textContent=error.message;button.disabled=false;});};}
   function permissionDialog(title,body){var overlay=h('div',{className:'confirm-overlay'}),previous=document.activeElement;function close(){overlay.remove();document.removeEventListener('keydown',key);if(previous&&previous.isConnected)previous.focus();}function key(e){if(e.key==='Escape')close();}var card=h('div',{className:'confirm-card',role:'dialog','aria-modal':'true','aria-label':title,style:'max-width:650px;width:94vw;max-height:90vh;overflow:auto;text-align:left'},[h('h3',{text:title}),body,h('button',{className:'btn ghost',text:'Close',onClick:close})]);overlay.appendChild(card);document.body.appendChild(overlay);document.addEventListener('keydown',key);overlay.onclick=function(e){if(e.target===overlay)close();};var focus=card.querySelector('input,select,button');if(focus)focus.focus();return {close:close};}
   function editRole(id){
-    var role=(state.userRoles||{})[id]||{name:'',permissions:{}},name=h('input',{value:role.name,maxlength:60,'aria-label':'Role name'}),choices={},status=h('p',{role:'status',className:'muted'}),body=h('div',{className:'stack'},[h('label',{},['Role name',name])]);
+    var role=(state.userRoles||{})[id]||{name:'',permissions:{}},name=h('input',{value:role.name,maxlength:60,'aria-label':'Role name'}),choices={},status=h('p',{role:'status',className:'muted'}),body=h('div',{className:'stack role-permission-editor'},[h('label',{},['Role name',name])]);
     Object.keys(state.permissionChoices).forEach(function(key){var input=h('input',{type:'checkbox',checked:role.permissions[key]===true});choices[key]=input;body.appendChild(h('label',{className:'check-label'},[input,state.permissionChoices[key]]));});
-    var save=h('button',{className:'btn primary',text:'Save role'});body.appendChild(status);body.appendChild(save);var dialog=permissionDialog(id?'Edit role':'Add role',body);
+    var save=h('button',{className:'btn primary',text:'Save role'});body.appendChild(status);body.appendChild(save);var dialog=permissionDialog(id?'Edit role':'Create role',body);
     function submit(remove){save.disabled=true;var permissions={};Object.keys(choices).forEach(function(key){permissions[key]=choices[key].checked;});api('/admin/roles',{method:'POST',body:{id:id||'',name:name.value,permissions:permissions,delete:!!remove}}).then(function(r){if(!r.ok)throw new Error(r.error||'Could not save role');dialog.close();loadUsers();toast('Role updated');}).catch(function(e){status.textContent=e.message;save.disabled=false;});}
-    save.onclick=function(){submit(false);};if(id)body.appendChild(h('button',{className:'btn danger',text:'Delete role',onClick:function(){confirmDialog('Delete '+role.name+'?',{danger:true}).then(function(ok){if(ok)submit(true);});}}));
+    save.onclick=function(){submit(false);};if(id)body.appendChild(h('button',{className:'btn danger',text:'Delete role',onClick:function(){dialog.close();deleteRole(id);}}));
   }
   function editUserAreas(user){
     var admin=user.role==='admin',areas=user.areas||{library:true,live:true,games:true},inputs={},overrides={},status=h('p',{className:'muted',role:'status',text:admin?'Admin has full access.':'Choose a role, media areas and optional per-user overrides. Account expiry still applies.'}),role=h('select',{'aria-label':'Role',disabled:admin},admin?[h('option',{value:'admin',text:'Admin'})]:[h('option',{value:'user',text:'User'})]);
@@ -12397,7 +12404,7 @@ function viewCollectionDetail(){
           h('button', { className: 'btn primary', type: 'button', 'data-live-save': '1', text: 'Save station', onClick: liveSaveStation })
         ]) : null
       ]),
-      h('div', { className: 'settings-live-subnav', role: 'tablist', 'aria-label': 'Live sections' }, related.map(function(pair){
+      h('div', { className: 'settings-live-subnav', role: 'tablist', 'aria-label': 'Live sections' }, related.filter(function(pair){return canSettings(pair[0]);}).map(function(pair){
         return h('button', {
           type: 'button',
           className: 'settings-live-subnav-btn' + (sec === pair[0] ? ' active' : ''),
@@ -14236,9 +14243,9 @@ function viewCollectionDetail(){
     if (adminIds[state.settingsSection]) state.adminTab = adminIds[state.settingsSection];
     var needsAdmin = !!adminIds[state.settingsSection] || state.settingsSection === 'live' || (state.settingsSection && state.settingsSection.indexOf('live-') === 0);
     if (needsAdmin) {
-      state._wantAdmin = true;
+      state._wantAdmin = !canSettings(state.settingsSection);
       state._settingsAfterLogin = state.settingsSection;
-      if (!(state.user && state.user.role === 'admin')) {
+      if (!canSettings(state.settingsSection)) {
         state.view = 'login';
         render();
         return;
@@ -14386,8 +14393,8 @@ function viewCollectionDetail(){
       state.user = j.user;document.dispatchEvent(new Event('vaultcast-account-ready'));
       if (button) button.textContent = 'Opening your library…';
       if (state._wantAdmin) {
-        if (state.user.role !== 'admin') {
-          $('#login-err').textContent = 'Admin account required';
+        if (!canSettings(state._settingsAfterLogin || state.settingsSection || 'general')) {
+          $('#login-err').textContent = 'This account does not have permission to open that settings page';
           return;
         }
         state._wantAdmin = false;
@@ -14502,7 +14509,7 @@ function viewCollectionDetail(){
     }
     if (state.view === 'settings') {
       var adminOnly = { maintenance:1, players:1, features:1, diagnostics:1, sections:1, libraries:1, scan:1, library:1, media:1, collections:1, streaming:1, convert:1, queue:1, acquisition:1, system:1, general:1, users:1, advanced:1, ingest:1, matching:1, reports:1, live:1, 'live-channels':1, 'live-library':1, 'live-playlists':1, 'live-iptv':1, 'live-schedule':1, 'live-station':1, 'live-studio':1, 'live-radio':1 };
-      if (adminOnly[state.settingsSection] && !(state.user && state.user.role === 'admin')) {
+      if (adminOnly[state.settingsSection] && !canSettings(state.settingsSection)) {
         state._wantAdmin = true;
         state._settingsAfterLogin = state.settingsSection;
         root.appendChild(viewLogin());

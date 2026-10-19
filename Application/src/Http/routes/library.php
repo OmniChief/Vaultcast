@@ -4,13 +4,13 @@ if(preg_match('#^/items/([a-f0-9]{8,64})/segments$#D',$path,$segmentItem)&&in_ar
     $item=Catalogue::item($segmentItem[1]);if(!$item)json_error('Episode unavailable',404);
     if(!AreaAccess::allowed(current_or_guest(),'library'))json_error('Library access required',403);
     if($method==='POST'){
-        if((current_or_guest()['role'] ?? '')!=='admin')json_error('Administrator access required',403);
+        Permissions::require('timing_edit');
         $body=body_json();
         if(($body['action'] ?? '')==='search')json_out(EpisodeSegments::search((string)($body['q'] ?? '')));
         if(($body['action'] ?? '')==='lookup')json_out(EpisodeSegments::preview($item,$body));
         json_out(EpisodeSegments::edit($item,$body));
     }
-    if(isset($_GET['edit'])){if((current_or_guest()['role'] ?? '')!=='admin')json_error('Administrator access required',403);json_out(EpisodeSegments::editor($item));}
+    if(isset($_GET['edit'])){Permissions::require('timing_edit');json_out(EpisodeSegments::editor($item));}
     json_out(EpisodeSegments::get($item,current_or_guest(),(float)($_GET['duration'] ?? 0)));
 }
 // Clean-URL resolver: /movies/<slug>, /tvshows/<slug>[/season-<n>[/episode-<m>|/<itemId>]]

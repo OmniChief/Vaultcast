@@ -3,7 +3,8 @@ declare(strict_types=1);
 
 final class ArtworkAudit
 {
-    private static function targets(): array
+    private static function targets(): array {return array_filter(self::allTargets(),static function(array $target):bool{return AreaAccess::allowed(AreaAccess::viewer(),AreaAccess::itemArea($target['item']));});}
+    private static function allTargets(): array
     {
         $revision = Store::revision('catalogue');
         $cached = \Vaultcast\Repository::cacheGet('artwork-audit-targets-v2');

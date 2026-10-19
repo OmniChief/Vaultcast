@@ -870,19 +870,20 @@
     movieFixForm(body, item.id, { title: item.title, year: item.year, type: isGame ? 'roms' : 'movies' }, function(){ m.close(); if (onSaved) {onSaved({id:item.id});return;} if (isGame) A.openGame(item); else A.openMovie(item.id); });
   };
   M.editDialog = function(item, showKey, onSaved){
-    if (!A.can('metadata_edit')) return;
+    if (!A.can('metadata_edit')&&!A.can('library_remove')) return;
     var title = input({value:item.title || ''}), year = input({type:'number', value:item.year || ''});
     var synopsis = h('textarea', {rows:'8', maxlength:'20000'}); synopsis.value = item.synopsis || '';
     var upload = input({type:'file', accept:'image/jpeg,image/png,image/webp'});
     var status = h('p', {className:'muted', role:'status'});
     var save = h('button', {className:'btn primary', type:'button', text:'Save changes'});
     var remove = h('button', {className:'btn danger', type:'button', text:'Remove from library'});
+    if(!A.can('metadata_edit'))[title,year,synopsis,upload].forEach(function(field){field.disabled=true;});
     var m = modal('Manual edit', [
       h('label', {className:'nsm-field'}, [h('span', {text:'Title'}), title]),
       h('label', {className:'nsm-field'}, [h('span', {text:'Year'}), year]),
       h('label', {className:'nsm-field'}, [h('span', {text:'Synopsis'}), synopsis]),
       h('label', {className:'nsm-field'}, [h('span', {text:'Upload poster (JPEG, PNG or WebP, up to 8 MB)'}), upload]),
-      status, h('div', {className:'row-actions'}, isAdmin()?[save,remove]:[save])
+      status, h('div', {className:'row-actions'}, [A.can('metadata_edit')?save:null,A.can('library_remove')?remove:null].filter(Boolean))
     ], {wide:true});
     function refresh(r){ A.refreshArtwork().then(function(){m.close(); if (onSaved) {onSaved(r);return;} if (showKey) A.openShow(r.show_key || showKey); else if (item.media_kind === 'rom' || item.type === 'roms') A.openGame(item); else A.openMovie(item.id);}); }
     function posterData(){

@@ -21,6 +21,7 @@ final class LibraryEditor
 
     public static function save(array $body): array
     {
+        Permissions::require(!empty($body['remove'])?'library_remove':'metadata_edit');
         $showKey = (string)($body['show_key'] ?? '');
         $id = (string)($body['id'] ?? '');
         $items = [];

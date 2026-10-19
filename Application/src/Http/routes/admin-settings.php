@@ -158,7 +158,7 @@ if ($path === '/admin/users' && $method === 'GET') {
         $u['is_self'] = (string)$u['id'] === (string)$me['id'];
     }
     unset($u);
-    json_out(['ok' => true, 'users' => $users, 'now' => time(), 'permission_choices'=>Permissions::CAPABILITIES,'roles'=>Permissions::roles()]);
+    json_out(['ok' => true, 'users' => $users, 'now' => time(), 'role_counts'=>array_count_values(array_column($users,'role')),'permission_choices'=>Permissions::CAPABILITIES,'roles'=>Permissions::roles()]);
 }
 
 if ($path==='/admin/roles' && $method==='POST') {

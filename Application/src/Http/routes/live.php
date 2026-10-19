@@ -53,6 +53,9 @@ function live_bridge_lineup_hosts(): array {
 function live_bridge_require_admin(): void {
     // Bootstrap Auth without running the rest of the catalogue router.
     require_once STREAM_ROOT . '/src/bootstrap.php';
+    $action=live_bridge_action();
+    if($action==='radio_save'){Permissions::require('radio_manage');return;}
+    if(in_array($action,['iptv_add','iptv_remove','iptv_toggle','iptv_probe','iptv_save','epg_channels','epg_map'],true)){Permissions::require('iptv_manage');return;}
     Auth::requireAdmin();
 }
 

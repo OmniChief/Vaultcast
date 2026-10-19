@@ -45,7 +45,7 @@ trait CompatibilityAdministration {
         }
         if($action==='user-access')return self::keepResult('users',CompatibilityApi::call('/admin/users/'.rawurlencode($id).'/access','POST',['period'=>(string)($body['period'] ?? 'pending'),'date'=>(string)($body['date'] ?? ''),'mode'=>(string)($body['mode'] ?? 'set')]));
         if($action==='user-delete'){if(($body['confirm'] ?? '')!=='DELETE')throw new RuntimeException('Type DELETE to confirm.');return self::keepResult('users',CompatibilityApi::call('/admin/users/'.rawurlencode($id),'DELETE'));}
-        if($action==='role-save'){$permissions=[];foreach(Permissions::CAPABILITIES as $key=>$label)$permissions[$key]=!empty($body['permissions'][$key]);return self::keepResult('roles',CompatibilityApi::call('/admin/roles','POST',['id'=>$id,'name'=>(string)($body['name'] ?? ''),'permissions'=>$permissions,'delete'=>!empty($body['delete'])]));}
+        if($action==='role-save'){$permissions=[];foreach(Permissions::CAPABILITIES as $key=>$label)$permissions[$key]=!empty($body['permissions'][$key]);return self::keepResult('roles',CompatibilityApi::call('/admin/roles','POST',['id'=>$id,'name'=>(string)($body['name'] ?? ''),'permissions'=>$permissions,'delete'=>!empty($body['delete']),'replacement_role'=>(string)($body['replacement_role'] ?? '')]));}
         if($action==='factory-reset'){CompatibilityApi::call('/admin/factory-reset','POST',['confirmation'=>(string)($body['confirmation'] ?? ''),'password'=>(string)($body['password'] ?? '')]);return ['view'=>'home','overview'=>'1'];}
         return null;
     }
@@ -89,6 +89,6 @@ trait CompatibilityAdministration {
         }
         if($view==='roles'){$html=self::heading('ADMINISTRATION','Roles').self::link('Create role',['view'=>'edit-role']);foreach(Permissions::roles() as $key=>$role)$html.=self::link($role['name'],['view'=>'edit-role','id'=>$key]);return $html;}
         $role=Permissions::roles()[$id] ?? ['name'=>'','permissions'=>[]];$html=self::heading('ADMINISTRATION',$id?'Edit role':'Create role').self::beginForm(['view'=>'edit-role','id'=>$id],'role-save').self::field('Name','name',$role['name']);foreach(Permissions::CAPABILITIES as $key=>$label)$html.='<label class="compat-check"><input type="checkbox" name="permissions['.$key.']" value="1"'.(!empty($role['permissions'][$key])?' checked="checked"':'').'> '.self::esc($label).'</label>';
-        $html.='<button type="submit">Save role</button></form>';if($id)$html.=self::form(['view'=>'edit-role','id'=>$id],'Delete unused role','role-save',['delete'=>'1']);return $html;
+        $html.='<button type="submit">Save role</button></form>';if($id){$replacements=['user'=>'Standard User'];foreach(Permissions::roles() as $key=>$candidate)if($key!==$id)$replacements[$key]=$candidate['name'];$html.=self::beginForm(['view'=>'edit-role','id'=>$id],'role-save',false,['delete'=>'1']).'<p>Deleting this role moves assigned users to the selected role and clears individual permission overrides. Media access and expiry stay unchanged.</p>'.self::select('Replacement role','replacement_role',$replacements,'user').'<button type="submit">Delete role and reassign users</button></form>';}return $html;
     }
 }
