@@ -1711,6 +1711,7 @@ function confirmDialog(message, opts){
       if (emu) {
         if (emu._cloudBeforeExit) emu._cloudBeforeExit();
         if (emu._screenControllerCleanup) emu._screenControllerCleanup();
+        if(emu.netplay&&emu.netplay._streamRestoreRequest){emu.netplay._streamRestoreRequest.reject(new Error('Game closed before multiplayer restore completed.'));emu.netplay._streamRestoreRequest=null;}
         emu._streamDisposed = true;
         if (emu._hubStatsCleanup) emu._hubStatsCleanup();
         emu.isNetplay = false;
@@ -2655,6 +2656,17 @@ function confirmDialog(message, opts){
     return read(heap.subarray(address,address+length));
   }
   function lobbyCaptureState(emu,maximum){return lobbyReadState(emu,maximum,function(bytes){return new Uint8Array(bytes);});}
+  function restoreMultiplayerState(emu,bytes){
+    return new Promise(function(resolve,reject){
+      var np=emu&&emu.netplay;
+      if(emu!==window.EJS_emulator||emu._streamDisposed||!emu.isNetplay||!np||!np.owner||!np.socket||!np.socket.connected){reject(new Error('Only the connected lobby host can load a multiplayer save.'));return;}
+      if(np._streamSyncing||np._streamLoadingState||np._streamAwaitingState||np._streamAwaitingGo||np._streamRestoreRequest){reject(new Error('Wait for multiplayer synchronisation to finish.'));return;}
+      if(!(bytes instanceof Uint8Array)||!bytes.length||bytes.length>LOBBY_STATE_MAX_BYTES){reject(new Error('Multiplayer saves must be no larger than 8 MiB.'));return;}
+      try{window.VaultcastNetplaySync.stateHash(bytes);}catch(error){reject(error);return;}
+      np._streamRestoreRequest={resolve:resolve,reject:reject};
+      try{np.sync(bytes);}catch(error){np._streamRestoreRequest=null;reject(error);}
+    });
+  }
   function lobbyStateHash(emu){return lobbyReadState(emu,LOBBY_STATE_MAX_BYTES,window.VaultcastNetplaySync.stateHash);}
   function lobbySyncConfiguration(emu){
     return JSON.stringify({ core: emu.getCore(), emulator: window.VaultcastDependencies.emulatorVersion,
@@ -2901,6 +2913,7 @@ function confirmDialog(message, opts){
       clearTimeout(np._streamRecoveryTimer);
       if (emu._streamDisposed) return;
       lobbyLog('sync_failed', { error: message });
+      if(np._streamRestoreRequest){var request=np._streamRestoreRequest;np._streamRestoreRequest=null;lobbyCancelStateLoad(emu);np._streamSyncing=false;np._streamRecoveryPaused=true;np.setLoading(false);emu.pause(true);np.sendMessage({recovery_paused:true,sync_id:np._streamSyncId});request.reject(new Error(message+'; the room remains connected and paused.'));return;}
       if (np.socket) np.socket.disconnect();
       toast('Netplay: ' + message + '. Please rejoin the lobby.', { kind:'bad', ms: 6000 });
     }
@@ -2915,9 +2928,10 @@ function confirmDialog(message, opts){
       np.setLoading(false);
       emu.play(true);
       lobbyNetplayTrace(emu, 'host_released');
+      if(np._streamRestoreRequest){var request=np._streamRestoreRequest;np._streamRestoreRequest=null;request.resolve();}
     }
     // Establish a fresh epoch after membership changes or a verified mismatch.
-    np.sync = function(){
+    np.sync = function(savedBytes){
       if (emu._streamDisposed || !emu.isNetplay || !np.owner || np._streamSyncing) return;
       if (Object.keys(np.players || {}).some(function(id){ return np.players[id].sync_revision !== 10; })) {
         syncFailed('All players need the latest branch update; refresh each player');
@@ -2928,6 +2942,7 @@ function confirmDialog(message, opts){
         return;
       }
       np._streamSyncing = true;np._streamRecoveryPaused=false;
+      if(savedBytes instanceof Uint8Array)np.sendMessage({restart:true});
       var syncId = (np._streamSyncId || 0) + 1;
       np._streamSyncId = syncId;
       np._streamReadyUsers = {};
@@ -2937,25 +2952,25 @@ function confirmDialog(message, opts){
       setTimeout(function(){
         if (emu._streamDisposed || !emu.isNetplay || np._streamSyncId !== syncId) return;
         try {
-          // Include queued changes and remove controls belonging to departed seats.
-          lobbyApplyFrameInputs(emu, np.inputsData[np.currentFrame || 0]);
+          var restoring=savedBytes instanceof Uint8Array;
+          if(!restoring)lobbyApplyFrameInputs(emu, np.inputsData[np.currentFrame || 0]);
           var activeSlots = Object.keys(np.players || {}).map(function(id){ return np.getUserIndex(id); });
-          var held = Object.keys(np._streamHeldInputs || {}).map(function(key){ return np._streamHeldInputs[key]; })
+          var held = restoring?[]:Object.keys(np._streamHeldInputs || {}).map(function(key){ return np._streamHeldInputs[key]; })
             .filter(function(input){ return activeSlots.indexOf(input[0]) !== -1 && input[2] !== 0; });
-          lobbyRestoreControllerState(emu, held);
-          var bytes = lobbyCaptureState(emu);
+          if(!restoring)lobbyRestoreControllerState(emu, held);
+          var bytes = restoring?savedBytes:lobbyCaptureState(emu);
           if (!(bytes instanceof Uint8Array) || !bytes.length) throw new Error('Could not save host state');
           if (bytes.length > LOBBY_STATE_MAX_BYTES) throw new Error('Host state exceeds the 8 MiB transfer limit');
           var hash = window.VaultcastNetplaySync.stateHash(bytes);
-          // Preserve binary encoding: JSON number arrays can exceed the relay's 20 MB limit.
-          np.sendMessage({ state: bytes, state_hash: hash, input_state: held, sync_id: syncId });
-          np._streamSyncWatchdog = setTimeout(function(){
-            if (np._streamSyncing && np._streamSyncId === syncId) syncFailed('State synchronisation timed out');
-          }, 15000);
-          lobbyResetNetplayFrames(emu,'host_snapshot');
-          np._streamReadyUsers[np.playerID] = true;
-          lobbyScheduleSyncTrace(emu);
-          releaseHost();
+          function publish(){
+            if(emu._streamDisposed||np._streamSyncId!==syncId)return;
+            np.sendMessage({ state: bytes, state_hash: hash, input_state: held, sync_id: syncId });
+            np._streamSyncWatchdog = setTimeout(function(){if(np._streamSyncing&&np._streamSyncId===syncId)syncFailed('State synchronisation timed out');},15000);
+            lobbyResetNetplayFrames(emu,restoring?'host_save_restored':'host_snapshot');
+            np._streamHostPaused=false;np._streamUserPaused=false;
+            np._streamReadyUsers[np.playerID] = true;lobbyScheduleSyncTrace(emu);releaseHost();
+          }
+          if(restoring)lobbyLoadSnapshot(emu,bytes,hash,held,syncId,publish);else publish();
         } catch (err) {
           syncFailed(err && err.message ? err.message : String(err));
         }
@@ -2968,7 +2983,7 @@ function confirmDialog(message, opts){
       // including releases received while this client was waiting for the host.
       var pending = Object.assign({}, np._streamLocalInputs || {}, np._streamPendingInputs || {});
       np._streamPendingInputs = {};
-      Object.keys(pending).forEach(function(index){ np.simulateInput(0, Number(index), pending[index]); });
+      Object.keys(pending).forEach(function(index){ np.simulateInput(0, Number(index), pending[index],true); });
     }
 
     np.dataMessage = function(data){
@@ -3010,7 +3025,7 @@ function confirmDialog(message, opts){
         }
         if (data.readyready && !np.owner) {
           if (data.sync_id !== np._streamSyncId || !np._streamAwaitingGo) return;
-          np._streamAwaitingGo = false;
+          np._streamAwaitingGo = false;np._streamHostPaused=false;np._streamUserPaused=false;
           flushPendingInputs();
           np.setLoading(false);
           // Remain paused until host bucket 0 is received and applied.
@@ -3067,7 +3082,7 @@ function confirmDialog(message, opts){
         }
         if (data.restart && !np.owner) {
           emu.pause(true);
-          np._streamAwaitingState = true;
+          np._streamAwaitingState = true;np.setLoading(true);
           np.sendMessage({ sync: true });
           return;
         }
@@ -3085,6 +3100,7 @@ function confirmDialog(message, opts){
       // Save/load, rewind and speed shortcuts must never enter a frame bucket.
       if (!Number.isInteger(index) || index < 0 || index > 23 || !Number.isFinite(value)) return;
       np._streamLocalInputs = np._streamLocalInputs || {};
+      if(!resp&&np._streamLocalInputs[index]===value)return;
       np._streamLocalInputs[index] = value;
       if (np._streamSyncing || np._streamAwaitingState || np._streamAwaitingGo) {
         np._streamPendingInputs = np._streamPendingInputs || {};
@@ -14635,7 +14651,7 @@ function viewCollectionDetail(){
   /* helpers for assets/js/matching.js (Ingest inbox / Fix matching / Label reports) */
   window.NSApp = { h: h, api: api, toast: toast, confirmDialog: confirmDialog, render: render, state: state, can:can,
     openSettings: openSettings, openShow: openShow, openMovie: openMovie, openGame:openGame, navigate:navigate, refreshArtwork:refreshArtwork, fmtSize: fmtSize, version: APP_VERSION,
-    shell:shell,communityPoster:communityPoster,refreshCommunityRating:refreshCommunityRating,heroClock:heroClock,homePosterEl:homePosterEl,homeSectionPosterEl:homeSectionPosterEl,collectionsPosterEl:collectionsPosterEl,librarySummary:librarySummary,cardEl:cardEl,homeActivitySections:homeActivitySections,applyRoute:applyRoute,replaceNav:replaceNav,openPlayer:openPlayer,playItem:playItem,copyText:copyText,shareUrl:shareUrl,startLobbyHost:startLobbyHost,captureGameState:lobbyCaptureState,quitGame:function(){closePlayer();} };
+    shell:shell,communityPoster:communityPoster,refreshCommunityRating:refreshCommunityRating,heroClock:heroClock,homePosterEl:homePosterEl,homeSectionPosterEl:homeSectionPosterEl,collectionsPosterEl:collectionsPosterEl,librarySummary:librarySummary,cardEl:cardEl,homeActivitySections:homeActivitySections,applyRoute:applyRoute,replaceNav:replaceNav,openPlayer:openPlayer,playItem:playItem,copyText:copyText,shareUrl:shareUrl,startLobbyHost:startLobbyHost,captureGameState:lobbyCaptureState,restoreMultiplayerState:restoreMultiplayerState,quitGame:function(){closePlayer();} };
   window.VaultcastHub.init(window.NSApp);
   window.VaultcastHomeExtras.init(window.NSApp);
   // Load matching tools when Settings or a detail-page action needs them.

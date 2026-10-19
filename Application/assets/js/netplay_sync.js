@@ -3,10 +3,10 @@
    once its bucket has arrived. */
 (function(root){
   'use strict';
-  // Leave room for the guest's jitter buffer, acknowledgement batching and short scheduler stalls.
-  var ACK_WINDOW = 20;
-  var BUFFER_FRAMES = 3;
-  var ACK_EVERY = 3;
+  // Bound host lead to avoid building a long input-to-display queue on guests.
+  var ACK_WINDOW = 8;
+  var BUFFER_FRAMES = 2;
+  var ACK_EVERY = 1;
   var CHECK_INTERVAL = 600;
 
   function hostMayRun(currentFrame, players, selfId, acks, windowFrames){
