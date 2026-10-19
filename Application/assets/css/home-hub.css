@@ -414,3 +414,9 @@ body[data-theme="retro-scifi"] .page-hero .hero-clock{font-family:ui-monospace,"
  body[data-theme="retro-scifi"] .hero-art span:nth-child(2),body[data-theme="retro-scifi"] .hub-orbit span:nth-child(2){animation:hero-neon-orbit 120s linear infinite reverse}
  body[data-theme="retro-scifi"] .hero-art::after,body[data-theme="retro-scifi"] .hub-orbit::after{animation:hero-radar-blips 9s ease-in-out infinite}
 }
+
+.site-artwork-gallery{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr));gap:18px}
+.site-artwork-card{display:grid;grid-template-columns:100px minmax(0,1fr);gap:18px;padding:18px;border:1px solid var(--border);border-radius:16px;background:var(--bg2);min-width:0;align-items:start}
+.site-artwork-preview{aspect-ratio:2/3;border:1px solid var(--neon-line);border-radius:12px;overflow:hidden;background:var(--bg3)}.site-artwork-preview img{display:block;width:100%;height:100%;object-fit:cover}
+.site-artwork-controls{min-width:0}.site-artwork-controls h4{margin:0 0 6px;font-size:1rem}.site-artwork-controls>p{font-size:.78rem;line-height:1.5;margin:0 0 12px}.site-artwork-controls input[type=file]{display:block;width:100%;min-width:0;max-width:100%;font-size:.75rem;margin-bottom:12px}.site-artwork-controls .row-actions{gap:8px;flex-wrap:wrap}.site-artwork-controls .btn{font-size:.72rem;padding:8px 10px;min-height:36px}.site-artwork-controls .site-artwork-status{margin:12px 0 0;overflow-wrap:anywhere;min-height:2.8em}
+@media(max-width:480px){.site-artwork-card{grid-template-columns:74px minmax(0,1fr);gap:12px;padding:12px}}

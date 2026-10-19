@@ -7911,15 +7911,23 @@ try {
   }
 
   function sitePosterSettings(){
-    var file=h('input',{type:'file',accept:'image/jpeg,image/png,image/webp','aria-label':'Upload Home poster'}),preview=h('img',{src:BASE+'api/site/home-poster',alt:'Current Home poster',width:96,height:144});
-    function save(reset,button){
-      var selected=file.files&&file.files[0];if(!reset&&!selected){toast('Choose a poster first');return;}
-      if(selected&&!reset&&selected.size>2097152){toast('Choose a poster up to 2 MB');return;}
-      button.disabled=true;
-      var read=reset?Promise.resolve({reset:true}):new Promise(function(resolve,reject){var reader=new FileReader();reader.onerror=function(){reject(new Error('Could not read poster'));};reader.onload=function(){resolve({poster_data:reader.result});};reader.readAsDataURL(selected);});
-      read.then(function(body){return api('/admin/site-artwork',{method:'POST',body:body});}).then(function(result){if(!result.ok)throw new Error(result.error||'Could not save poster');preview.src=BASE+'api/site/home-poster?v='+Date.now();file.value='';toast(reset?'Default Home poster restored':'Home poster updated');}).catch(function(e){toast(e.message,{kind:'bad'});}).finally(function(){button.disabled=false;});
+    var artworks=[['home','For you','Home’s welcome poster'],['collections','Collections','Library and My collections'],['cinema','Watch together','Your shared cinema'],['watchlist','Watchlist','Adventures waiting for you'],['favourites','Favourites','Your treasured picks'],['calendar','Release calendar','Upcoming episodes'],['arrivals','New episodes','Fresh arrivals'],['friends','Friends','Your community'],['history','History','Your viewing journey'],['stats','Game stats','Your gaming achievements']];
+    function card(entry){
+      var kind=entry[0],label=entry[1],url=BASE+'api/site/'+(kind==='home'||kind==='collections'?kind+'-poster':'home-section/'+kind),busy=false;
+      var preview=h('img',{src:url,alt:label+' artwork',width:192,height:288,loading:'lazy',decoding:'async'}),file=h('input',{type:'file',accept:'image/jpeg,image/png,image/webp','aria-label':'Choose '+label+' artwork'}),status=h('p',{className:'site-artwork-status muted',role:'status',text:'Choose a replacement or restore the original.'});
+      var upload=h('button',{className:'btn primary',type:'button',text:'Upload artwork',onClick:function(){save(false);}}),reset=h('button',{className:'btn',type:'button',text:'Restore default',onClick:function(){save(true);}});
+      function save(restore){
+        if(busy)return;
+        var selected=file.files&&file.files[0];
+        if(!restore&&!selected){status.textContent='Choose an image first.';return;}
+        if(!restore&&selected.size>2097152){status.textContent='Choose an image up to 2 MB.';return;}
+        busy=true;upload.disabled=reset.disabled=file.disabled=true;status.textContent=restore?'Restoring…':'Uploading…';
+        var read=restore?Promise.resolve({reset:true}):new Promise(function(resolve,reject){var reader=new FileReader();reader.onerror=function(){reject(new Error('Could not read image'));};reader.onload=function(){resolve({poster_data:reader.result});};reader.readAsDataURL(selected);});
+        read.then(function(body){body.kind=kind;return api('/admin/site-artwork',{method:'POST',body:body});}).then(function(result){if(!result.ok)throw new Error(result.error||'Could not save artwork');preview.src=url+'?v='+Date.now();file.value='';status.textContent=restore?'Bundled artwork restored.':'Artwork saved.';toast(label+' artwork '+(restore?'restored':'updated'));}).catch(function(e){status.textContent=e.message;}).finally(function(){busy=false;upload.disabled=reset.disabled=file.disabled=false;});
+      }
+      return h('article',{className:'site-artwork-card'},[h('div',{className:'site-artwork-preview'},[preview]),h('div',{className:'site-artwork-controls'},[h('h4',{text:label}),h('p',{className:'muted',text:entry[2]}),file,h('div',{className:'row-actions'},[upload,reset]),status])]);
     }
-    return h('section',{className:'settings-card stack site-poster-settings'},[h('h3',{text:'Home poster'}),h('p',{className:'muted',text:'A shared poster for the Home header. Upload JPEG, PNG or WebP up to 2 MB / 12 megapixels. Portrait 2:3 artwork works best. Your upload is kept through app updates.'}),preview,file,h('div',{className:'row-actions'},[h('button',{className:'btn primary',type:'button',text:'Upload poster',onClick:function(e){save(false,e.currentTarget);}}),h('button',{className:'btn',type:'button',text:'Restore bundled artwork',onClick:function(e){save(true,e.currentTarget);}})])]);
+    return h('section',{className:'settings-card stack site-artwork-settings'},[h('h3',{text:'Site artwork'}),h('p',{className:'muted',text:'Give each space its own look. Upload JPEG, PNG or WebP up to 2 MB / 12 megapixels. Portrait 2:3 images work best. Changes save individually and survive app updates; restoring a default only affects that poster.'}),h('div',{className:'site-artwork-gallery'},artworks.map(card))]);
   }
   function fillAdmin(){
     api('/admin/settings').then(function(j){

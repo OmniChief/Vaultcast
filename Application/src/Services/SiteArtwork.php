@@ -3,9 +3,12 @@ declare(strict_types=1);
 
 final class SiteArtwork {
     const SECTIONS=['cinema','watchlist','favourites','calendar','arrivals','friends','history','stats'];
-    private static function path(): string {return STREAM_DATA.'/site/home-poster.img';}
+    private static function path(string $kind='home'): string {
+        if (!in_array($kind,array_merge(['home','collections'],self::SECTIONS),true)) throw new InvalidArgumentException('Unknown artwork section.');
+        return STREAM_DATA.'/site/'.$kind.'-poster.img';
+    }
     public static function save(array $body): array {
-        $path=self::path();
+        $path=self::path((string)($body['kind'] ?? 'home'));
         if (!empty($body['reset'])) {
             if (is_file($path) && !@unlink($path)) throw new RuntimeException('Could not restore the default poster.');
             return ['ok'=>true];
@@ -20,7 +23,8 @@ final class SiteArtwork {
         return ['ok'=>true];
     }
     public static function serve(string $kind='home'): void {
-        $path=$kind==='collections'?STREAM_ROOT.'/assets/img/collections-poster.jpg':(in_array($kind,self::SECTIONS,true)?STREAM_ROOT.'/assets/img/home-'.$kind.'.jpg':(is_file(self::path())?self::path():STREAM_ROOT.'/assets/img/home-poster.jpg'));
+        $custom=self::path($kind);
+        $path=is_file($custom)?$custom:STREAM_ROOT.'/assets/img/'.(in_array($kind,self::SECTIONS,true)?'home-'.$kind:$kind.'-poster').'.jpg';
         $info=@getimagesize($path);if (!$info) json_error('Poster unavailable',404);
         $etag='"'.hash_file('sha256',$path).'"';
         header('Content-Type: '.$info['mime']);header('X-Content-Type-Options: nosniff');
