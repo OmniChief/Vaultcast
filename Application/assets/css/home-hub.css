@@ -399,3 +399,18 @@ body[data-theme="retro-scifi"] .hero-art::after,body[data-theme="retro-scifi"] .
 body[data-theme="retro-scifi"] .page-hero::after{content:'';position:absolute;inset:12px;z-index:-1;pointer-events:none;opacity:.45;background:linear-gradient(var(--accent),var(--accent)) left top/28px 1px no-repeat,linear-gradient(var(--accent),var(--accent)) left top/1px 18px no-repeat,linear-gradient(var(--accent),var(--accent)) right bottom/28px 1px no-repeat,linear-gradient(var(--accent),var(--accent)) right bottom/1px 18px no-repeat,linear-gradient(90deg,var(--accent) 6px,transparent 6px 11px,var(--accent) 11px 17px,transparent 17px 22px,var(--accent) 22px 28px) right top/28px 5px no-repeat}
 body[data-theme="retro-scifi"] .page-hero .eyebrow{font-family:ui-monospace,"Courier New",monospace;letter-spacing:.16em;text-shadow:0 0 12px var(--hero-glow)}
 body[data-theme="retro-scifi"] .page-hero .hero-clock{font-family:ui-monospace,"Courier New",monospace;text-shadow:0 0 16px var(--hero-glow)}
+
+@keyframes hero-neon-orbit{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+@keyframes hero-neon-breathe{from{opacity:.55;transform:scale(.96)}to{opacity:1;transform:scale(1.04)}}
+@keyframes hero-grid-breathe{from{opacity:.65}to{opacity:1}}
+@keyframes hero-radar-sweep{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+@keyframes hero-radar-blips{0%,100%{opacity:.4}50%{opacity:1}}
+@media(prefers-reduced-motion:no-preference){
+ body[data-theme="dark"] .page-hero::before{animation:hero-grid-breathe 14s ease-in-out infinite alternate}
+ body[data-theme="dark"] .hero-art span:first-child,body[data-theme="dark"] .hub-orbit span:first-child{animation:hero-neon-orbit 100s linear infinite}
+ body[data-theme="dark"] .hero-art span:nth-child(2),body[data-theme="dark"] .hub-orbit span:nth-child(2){animation:hero-neon-orbit 80s linear infinite reverse}
+ body[data-theme="dark"] .hero-art span:nth-child(3),body[data-theme="dark"] .hub-orbit span:nth-child(3){animation:hero-neon-breathe 12s ease-in-out infinite alternate}
+ body[data-theme="retro-scifi"] .hero-art::before,body[data-theme="retro-scifi"] .hub-orbit::before{content:'';position:absolute;inset:0;border-radius:50%;background:conic-gradient(from 0deg,transparent 0deg 295deg,color-mix(in srgb,var(--accent) 22%,transparent) 350deg,var(--accent) 359deg,transparent 360deg);opacity:.45;animation:hero-radar-sweep 24s linear infinite}
+ body[data-theme="retro-scifi"] .hero-art span:nth-child(2),body[data-theme="retro-scifi"] .hub-orbit span:nth-child(2){animation:hero-neon-orbit 120s linear infinite reverse}
+ body[data-theme="retro-scifi"] .hero-art::after,body[data-theme="retro-scifi"] .hub-orbit::after{animation:hero-radar-blips 9s ease-in-out infinite}
+}
