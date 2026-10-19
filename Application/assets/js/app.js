@@ -4216,7 +4216,7 @@ try {
 
   var accountDrawerClose = null;
   function accountHasUnread(){
-    var owner=state.user&&state.user.id;
+    var owner=state.user&&state.user.role!=='guest'&&state.user.id;
     return !!(owner && ((state.chatUnreadOwner===owner && state.chatUnread && (state.chatUnread.mail||state.chatUnread.dm)) || (state.inviteOwner===owner && state.inviteCount>0)));
   }
   function updateAccountIndicators(){
@@ -4239,7 +4239,7 @@ try {
       if(app)app.inert=oldInert;
       document.body.classList.remove('account-drawer-open');if(trigger)trigger.setAttribute('aria-expanded','false');
       overlay.classList.remove('is-open');
-      setTimeout(function(){overlay.remove();},220);
+      if(restore===false)overlay.remove();else {overlay.style.pointerEvents='none';setTimeout(function(){overlay.remove();},220);}
       if(restore!==false&&previous&&previous.isConnected)previous.focus();
     }
     function accountChanged(){if(owner!==(state.user&&state.user.id))close(false);}
@@ -4253,13 +4253,13 @@ try {
         else if(!e.shiftKey&&(document.activeElement===last||!drawer.contains(document.activeElement))){e.preventDefault();first.focus();}
       }
     }
-    function action(label,callback,notice){return h('button',{className:'account-drawer-link',type:'button',onClick:function(){close(false);callback();}},[h('span',{text:label}),notice?h('span',{className:'account-drawer-badge','data-account-notice':notice,hidden:true}):null,icon('chevR')]);}
+    function action(label,callback,notice){return h('button',{className:'account-drawer-link',type:'button',onClick:function(){close(false);try {var result=callback();if(result&&typeof result.catch==='function')result.catch(function(e){toast(e.message||'Could not open this section',{kind:'bad'});});}catch(e){toast(e.message||'Could not open this section',{kind:'bad'});}}},[h('span',{text:label}),notice?h('span',{className:'account-drawer-badge','data-account-notice':notice,hidden:true}):null,icon('chevR')]);}
     function hub(tab){window.VaultcastHub.go(tab);}
     function group(title,items){drawer.appendChild(h('section',{className:'account-drawer-group'},[h('h3',{text:title})].concat(items)));}
     drawer.appendChild(h('div',{className:'account-drawer-head'},[h('h2',{id:'account-drawer-title',text:'Your space'}),h('button',{className:'icon-btn',type:'button','aria-label':'Close account menu',text:'×',onClick:function(){close();}})]));
     drawer.appendChild(h('div',{className:'account-drawer-profile'},[user?profileAvatar(user):icon('user'),h('div',{},[h('strong',{text:user?(user.display_name||user.username):'Welcome to Vaultcast'}),h('small',{text:signed?(user.role==='admin'?'Administrator':'Your personal space'):'Sign in for your own lists and messages'})])]));
     if(signed){
-      group('Your collection',[action('My profile',function(){window.VaultcastChat.profile(owner);}),action('Favourites',function(){hub('favourites');}),action('Watchlist',function(){hub('watchlist');}),action('My collections',function(){hub('lists');}),action('History',function(){hub('history');}),action('Release calendar',function(){hub('calendar');}),action('New episodes',function(){hub('arrivals');})]);
+      group('Your collection',[action('My profile',function(){return window.VaultcastChat.profile(owner);}),action('Favourites',function(){hub('favourites');}),action('Watchlist',function(){hub('watchlist');}),action('My collections',function(){hub('lists');}),action('History',function(){hub('history');}),action('Release calendar',function(){hub('calendar');}),action('New episodes',function(){hub('arrivals');})]);
       group('Stay connected',[action('Private inbox',function(){hub('inbox');},'mail'),action('Chat & direct messages',function(){hub('chat');},'dm'),action('Invitations',function(){hub('inbox');},'invites'),action('Friends',function(){hub('friends');}),action('Watch together',function(){hub('cinema');})]);
       if(userAreaAllowed('games'))group('Your games',[action('Cloud saves',function(){openSettings('cloud-saves');}),action('Game statistics',function(){hub('stats');})]);
     }else group('Get started',[action('Sign in',function(){navigate('login');})]);
@@ -4636,7 +4636,7 @@ try {
       kids.push(h('div', { className:'row-actions' }, [
         h('button', { className:'btn primary', type:'button', onClick: surpriseGame }, [ icon('dice'), h('span', { text:'Surprise me' }) ]),
         h('button',{className:'btn glass',text:'Multiplayer lobby',onClick:function(){goPlayTab('lobby');}}),
-        h('button',{className:'btn glass',text:'Game favourites',onClick:function(){window.VaultcastHub.go('favourites');}}),
+        h('button',{className:'btn glass',text:'Favourites',onClick:function(){window.VaultcastHub.go('favourites');}}),
         h('button',{className:'btn glass',text:'Cloud saves',onClick:function(){openSettings('cloud-saves');}}),
         state.sectionQ || state.sectionSystem ? h('button', { className:'btn glass', type:'button', text: state.sectionSystem && !state.sectionQ ? 'Clear console' : 'Clear search', onClick: function(){ var rs = romsSection(); state.sectionSystem=''; if (rs) loadSection(rs.id, ''); var b = $('#q'); if (b) b.value = ''; } }) : null
       ]));

@@ -1738,6 +1738,12 @@ class Catalogue {
      */
     public static function randomPublic(string $sectionId, int $n = 16): array {
         $n = max(1, min(40, $n));
+        // Reuse the standard prepared row for small viewport responses.
+        if ($n < 16) {
+            $out = self::randomPublic($sectionId, 16);
+            $out['items'] = array_slice($out['items'] ?? [], 0, $n);
+            return $out;
+        }
         $salt = $sectionId . '|n=' . $n;
         $revision = Store::revision('catalogue') . '|' . Store::revision('browse_epoch') . '|' . Store::revision('settings').'|'.Store::revision('show-summary:'.$sectionId);
         $slot = 'showcase-random-current|' . $salt;
@@ -1816,6 +1822,12 @@ class Catalogue {
     /** Recent rows stay valid until catalogue, metadata or settings change. */
     public static function recentlyUpdatedPublic(string $sectionId, int $n = 16): array {
         $n = max(1, min(40, $n));
+        // Reuse the standard prepared row for small viewport responses.
+        if ($n < 16) {
+            $out = self::recentlyUpdatedPublic($sectionId, 16);
+            $out['items'] = array_slice($out['items'] ?? [], 0, $n);
+            return $out;
+        }
         $salt = $sectionId . '|n=' . $n;
         $hit = self::shmCacheGet('showcase_recent', $salt);
         if (is_array($hit) && isset($hit['items']) && is_array($hit['items'])) {
