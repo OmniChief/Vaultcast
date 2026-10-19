@@ -80,7 +80,7 @@ final class EpisodeSegments {
         $kind=$body['id_type'] ?? 'tvdb_id';$id=trim((string)($body['id'] ?? ''));
         if(!in_array($kind,['tvdb_id','tmdb_id','imdb_id'],true)||($kind==='imdb_id'?!preg_match('/^tt[0-9]{7,8}$/D',$id):!preg_match('/^[1-9][0-9]{0,7}$/D',$id)))json_error('Enter a valid TVDB, TMDB or IMDb show ID');
         $season=filter_var($body['season'] ?? null,FILTER_VALIDATE_INT);$episode=filter_var($body['episode'] ?? null,FILTER_VALIDATE_INT);$mapping=$body['mapping'] ?? 'official';$duration=$body['duration'] ?? 0;
-        if($season===false||$season<0||$season>1000||$episode===false||$episode<0||$episode>10000||!in_array($mapping,['official','default','dvd','alternate','absolute','regional'],true)||!is_numeric($duration)||!is_finite((float)$duration)||$duration<=0||$duration>21600)json_error('Enter valid episode numbers and the local episode length in seconds');
+        if($season===false||$season<0||$season>1000||$episode===false||$episode<0||$episode>10000||!in_array($mapping,['official','default','dvd','alternate','absolute','regional'],true)||!is_numeric($duration)||!is_finite((float)$duration)||$duration<=0||$duration>21600)json_error('Enter valid episode numbers and the local episode length');
         $query=[$kind=>$id,'season'=>$season,'episode'=>$episode,'mapping'=>$mapping,'duration_ms'=>(int)round($duration*1000),'details'=>'true','merge_unknown'=>'true'];
         return self::lookup($query,(float)$duration,true,$item);
     }
