@@ -56,7 +56,7 @@ function epg_channel_aliases($tvgId, $id) {
 function epg_wanted_ids($iptvState) {
     $wanted = array();
     foreach ($iptvState['channels'] as $ch) {
-        foreach (epg_channel_aliases(isset($ch['tvgId']) ? $ch['tvgId'] : '', $ch['id']) as $a) {
+        foreach (epg_channel_aliases(!empty($ch['epgId']) ? $ch['epgId'] : ($ch['tvgId'] ?? ''), $ch['id']) as $a) {
             $wanted[$a] = true;
         }
     }
@@ -91,83 +91,30 @@ function epg_fetch_xml($url, $maxAge = 21600) {
 }
 
 function epg_index_xmltv($path, $wanted, $fromMs, $toMs) {
-    $programs = array(); // channelId => list
-    if (!class_exists('XMLReader')) {
-        return $programs;
-    }
-    $reader = new XMLReader();
-    if (!$reader->open($path, null, LIBXML_NONET | LIBXML_COMPACT)) {
-        return $programs;
-    }
-    while ($reader->read()) {
-        if ($reader->nodeType !== XMLReader::ELEMENT || $reader->localName !== 'programme') {
-            continue;
-        }
-        $channel = $reader->getAttribute('channel');
-        if ($channel === null || $channel === '') continue;
-        $match = null;
-        if (isset($wanted[$channel])) {
-            $match = $channel;
-        } else {
-            $base = strpos($channel, '@') !== false ? explode('@', $channel, 2)[0] : $channel;
-            if (isset($wanted[$base])) $match = $base;
-            else {
-                // try matching wanted aliases against this channel
-                foreach ($wanted as $w => $_) {
-                    if ($w === $channel || (strpos($channel, $w . '@') === 0) || (strpos($w, $channel . '@') === 0)) {
-                        $match = $w;
-                        break;
-                    }
+    $programs=[];if(!class_exists('XMLReader'))return $programs;
+    $reader=new XMLReader();if(!@$reader->open($path,null,LIBXML_NONET|LIBXML_COMPACT))return $programs;
+    $bases=[];foreach($wanted as $id=>$_)$bases[explode('@',(string)$id,2)[0]]=true;
+    $available=$reader->read();
+    while($available){
+        if($reader->nodeType!==XMLReader::ELEMENT||$reader->localName!=='programme'){$available=$reader->read();continue;}
+        $channel=(string)$reader->getAttribute('channel');$base=explode('@',$channel,2)[0];
+        if(isset($wanted[$channel])||isset($wanted[$base])||isset($bases[$base])){
+            $start=epg_parse_xmltv_time($reader->getAttribute('start'));$stop=epg_parse_xmltv_time($reader->getAttribute('stop'));
+            if($start!==null){$stop=$stop ?? $start+3600000;
+                if($stop>=$fromMs&&$start<=$toMs){$title='Programme';$description='';$node=$reader->readOuterXML();
+                    if($node&&function_exists('simplexml_load_string')){$xml=@simplexml_load_string($node,'SimpleXMLElement',LIBXML_NONET);if($xml){$title=trim((string)($xml->title ?? '')) ?: 'Programme';$description=trim((string)($xml->desc ?? ''));}}
+                    $row=['startUnix'=>$start,'endUnix'=>$stop,'title'=>$title,'subtitle'=>$description,'kind'=>'epg'];$programs[$channel][]=$row;if($base!==$channel)$programs[$base][]=$row;
                 }
             }
         }
-        if ($match === null) {
-            // skip subtree quickly
-            $reader->next('programme');
-            continue;
-        }
-        $start = epg_parse_xmltv_time($reader->getAttribute('start'));
-        $stop = epg_parse_xmltv_time($reader->getAttribute('stop'));
-        if ($start === null) {
-            $reader->next('programme');
-            continue;
-        }
-        if ($stop === null) $stop = $start + 3600000;
-        if ($stop < $fromMs || $start > $toMs) {
-            $reader->next('programme');
-            continue;
-        }
-        $node = $reader->readOuterXML();
-        $title = '';
-        $desc = '';
-        if ($node && function_exists('simplexml_load_string')) {
-            $xml = @simplexml_load_string($node);
-            if ($xml) {
-                if (isset($xml->title)) $title = trim((string)$xml->title);
-                if (isset($xml->desc)) $desc = trim((string)$xml->desc);
-            }
-        }
-        if ($title === '') $title = 'Programme';
-        if (!isset($programs[$channel])) $programs[$channel] = array();
-        // also index under base id
-        $programs[$channel][] = array(
-            'startUnix' => $start,
-            'endUnix' => $stop,
-            'title' => $title,
-            'subtitle' => $desc,
-            'kind' => 'epg',
-        );
-        $base = strpos($channel, '@') !== false ? explode('@', $channel, 2)[0] : $channel;
-        if ($base !== $channel) {
-            if (!isset($programs[$base])) $programs[$base] = array();
-            $programs[$base][] = end($programs[$channel]);
-        }
+        // next() already positions on the following programme: do not read() past it.
+        $available=$reader->next('programme');
     }
-    $reader->close();
-    return $programs;
+    $reader->close();return $programs;
 }
 
 function epg_pick_for_channel($programsById, $ch) {
+    if (!empty($ch['epgId'])) return $programsById[$ch['epgId']] ?? [];
     $aliases = epg_channel_aliases(isset($ch['tvgId']) ? $ch['tvgId'] : '', $ch['id']);
     $best = array();
     foreach ($aliases as $a) {
@@ -218,6 +165,7 @@ function epg_live_placeholder($name, $from, $to) {
 }
 
 function epg_refresh($force = false) {
+    if (!class_exists('XMLReader')) throw new RuntimeException('PHP XMLReader is required to import XMLTV programme guides.');
     $iptv = iptv_load();
     $urls = $iptv['epgUrls'];
     $wanted = epg_wanted_ids($iptv);
@@ -259,13 +207,17 @@ function epg_refresh($force = false) {
         $slim[$ch['id']] = $deduped;
         if (!empty($ch['tvgId'])) $slim[$ch['tvgId']] = $deduped;
     }
+    epg_build_channel_catalogue();
     $indexPath = epg_cache_dir() . '/favourites.json';
-    file_put_contents($indexPath, json_encode(array(
+    $tempPath=$indexPath.'.'.bin2hex(random_bytes(4));
+    file_put_contents($tempPath, json_encode(array(
         'updatedAt' => gmdate('c'),
         'urls' => $urls,
         'programs' => $slim,
         'errors' => $errors,
-    ), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+    ), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),LOCK_EX);
+    rename($tempPath,$indexPath);
+    \Vaultcast\Repository::putDocument('live_epg_revision',['at'=>microtime(true)]);
     return array(
         'ok' => true,
         'fetched' => count($fetched),
@@ -394,4 +346,46 @@ function epg_unified_guide($station, $hours = 12, $slim = false, $viewerOverride
         'epgErrors' => isset($index['errors']) ? $index['errors'] : array(),
         'channels' => $channels,
     );
+}
+
+function epg_build_channel_catalogue() {
+    if (!class_exists('XMLReader')) throw new RuntimeException('PHP XMLReader is required to read XMLTV channels.');
+    $channels=[];
+    foreach (glob(epg_cache_dir().'/*.xml') ?: [] as $path) {
+        $reader=new XMLReader();if(!@$reader->open($path,null,LIBXML_NONET|LIBXML_COMPACT))continue;
+        while($reader->read()) {
+            if($reader->nodeType!==XMLReader::ELEMENT)continue;
+            if($reader->localName==='programme')break;
+            if($reader->localName!=='channel')continue;
+            $id=(string)$reader->getAttribute('id');if($id===''||isset($channels[$id]))continue;
+            $name=$id;$node=$reader->readOuterXML();
+            if(function_exists('simplexml_load_string')){$xml=@simplexml_load_string($node,'SimpleXMLElement',LIBXML_NONET);if($xml&&isset($xml->{'display-name'}))$name=(string)$xml->{'display-name'};}
+            $channels[$id]=['id'=>$id,'name'=>$name];if(count($channels)>=100000)break;
+        }
+        $reader->close();
+    }
+    $target=epg_cache_dir().'/channels.json';$tmp=$target.'.'.bin2hex(random_bytes(4));
+    file_put_contents($tmp,json_encode(array_values($channels),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES),LOCK_EX);rename($tmp,$target);
+    return array_values($channels);
+}
+function epg_search_channels($query) {
+    $path=epg_cache_dir().'/channels.json';
+    $channels=is_file($path)?json_decode(file_get_contents($path),true):epg_build_channel_catalogue();
+    $query=mb_strtolower(trim(mb_substr($query,0,120)));$matches=[];
+    foreach($channels ?: [] as $row)if($query===''||mb_strpos(mb_strtolower($row['id'].' '.$row['name']),$query)!==false){$matches[]=$row;if(count($matches)>=60)break;}
+    return ['ok'=>true,'channels'=>$matches,'total'=>count($channels ?: [])];
+}
+function epg_map_channel(array $body) {
+    $id=(string)($body['id'] ?? '');$epgId=trim((string)($body['epg_id'] ?? ''));if(strlen($epgId)>240)throw new InvalidArgumentException('Invalid XMLTV ID.');
+    $state=iptv_load();$found=false;$selected=null;
+    foreach($state['channels'] as &$channel)if($channel['id']===$id){$channel['epgId']=$epgId;$found=true;$selected=$channel;}
+    unset($channel);if(!$found)throw new InvalidArgumentException('Channel is no longer in your IPTV lineup.');
+    iptv_save($state);
+    $now=(int)round(microtime(true)*1000);$programs=[];$wanted=epg_wanted_ids(['channels'=>[$selected]]);
+    foreach(glob(epg_cache_dir().'/*.xml') ?: [] as $path){$chunk=epg_index_xmltv($path,$wanted,$now-3600000,$now+48*3600000);foreach($chunk as $key=>$rows)$programs[$key]=array_merge($programs[$key] ?? [],$rows);}
+    $rows=epg_pick_for_channel($programs,$selected);$unique=[];foreach($rows as $row)$unique[$row['startUnix'].':'.$row['title']]=$row;$rows=array_values($unique);usort($rows,function($a,$b){return $a['startUnix']<=>$b['startUnix'];});
+    $index=epg_load_iptv_index();$index['programs'][$id]=$rows;$index['updatedAt']=gmdate('c');
+    $path=epg_cache_dir().'/favourites.json';$tmp=$path.'.'.bin2hex(random_bytes(4));file_put_contents($tmp,json_encode($index),LOCK_EX);rename($tmp,$path);
+    \Vaultcast\Repository::putDocument('live_epg_revision',['at'=>microtime(true)]);
+    return ['ok'=>true,'programmes'=>count($rows),'epg_id'=>$epgId];
 }

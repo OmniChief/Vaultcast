@@ -34,7 +34,7 @@ final class AreaAccess
 
     public static function denied(?array $user, string $area): ?array
     {
-        return self::allowed($user, $area) ? null : [403, ['ok'=>false, 'code'=>'area_denied', 'area'=>$area, 'error'=>'Your account does not have access to ' . ['library'=>'Library','live'=>'Watch Live','games'=>'Games'][$area] . '.']];
+        return self::allowed($user, $area) ? null : [403, ['ok'=>false, 'code'=>'area_denied', 'area'=>$area, 'error'=>'Your account does not have access to ' . ['library'=>'Library','live'=>'Live','games'=>'Games'][$area] . '.']];
     }
 
     public static function gate(string $path): ?array

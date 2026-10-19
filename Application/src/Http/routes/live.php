@@ -65,7 +65,8 @@ function live_bridge_logo(): void {
     foreach (iptv_lineup_channels() as $c) {
         if ((string)($c['logo'] ?? '') === $u) { $ok = true; break; }
     }
-    if (!$ok) live_bridge_deny(403, 'Logo is not in the IPTV lineup');
+    if (!$ok) foreach (Radio::stations() as $station) if (($station['logo'] ?? '')===$u) {$ok=true;break;}
+    if (!$ok) live_bridge_deny(403, 'Logo is not in the saved lineup');
     if (live_bridge_host_blocked((string) parse_url($u, PHP_URL_HOST))) live_bridge_deny(403, 'Upstream not allowed');
     $dir = STREAM_DATA . '/live/iptv_cache/logos';
     if (!is_dir($dir)) @mkdir($dir, 0775, true);
@@ -172,8 +173,8 @@ function live_bridge_tv_export(string $kind): void {
 $__liveAction = live_bridge_action();
 if ($__liveAction !== null) {
     if (empty(Store::settings()['features']['live'])) live_bridge_deny(404, 'Live channels are disabled in Settings → Integrations.');
-    $readActions = ['guide', 'now', 'iptv', 'iptv_status', 'file', 'iptv_hls', 'logo', 'station', 'catalogue', 'iptv_browse', 'epg_refresh', 'm3u', 'tv_studio', 'tv_preview', 'tv_health', 'xmltv', 'playlist', 'channels'];
-    $writeActions = ['station', 'iptv_add', 'iptv_remove', 'iptv_toggle', 'iptv_probe', 'iptv_save', 'epg_refresh', 'tv_studio', 'tv_channels'];
+    $readActions = ['guide', 'now', 'iptv', 'iptv_status', 'file', 'iptv_hls', 'logo', 'station', 'catalogue', 'iptv_browse', 'epg_refresh', 'm3u', 'tv_studio', 'tv_preview', 'tv_health', 'xmltv', 'playlist', 'channels', 'radio', 'radio_search', 'epg_channels'];
+    $writeActions = ['station', 'iptv_add', 'iptv_remove', 'iptv_toggle', 'iptv_probe', 'iptv_save', 'epg_refresh', 'tv_studio', 'tv_channels', 'radio_save', 'epg_map'];
     $m = $_SERVER['REQUEST_METHOD'] ?? 'GET';
     $isWrite = ($m === 'POST' || $m === 'PUT' || $m === 'PATCH' || $m === 'DELETE');
 
@@ -195,6 +196,18 @@ if ($__liveAction !== null) {
         header('Cache-Control: no-store');
         json_out(['ok' => true, 'channels' => $slugs]);
     }
+    try {
+        if(in_array($__liveAction,['radio','radio_search','radio_save','epg_channels','epg_map'],true))header('Cache-Control: private, no-store');
+        if ($__liveAction==='radio') json_out(['ok'=>true,'stations'=>Radio::stations()]);
+        if ($__liveAction==='radio_search') json_out(Radio::search($_GET));
+        if ($__liveAction==='radio_save') json_out(Radio::save(body_json()));
+        if ($__liveAction==='epg_channels' || $__liveAction==='epg_map') {
+            live_bridge_require_admin();require_once STREAM_ROOT.'/src/Live/epg.php';
+            if ($__liveAction==='epg_channels') json_out(epg_search_channels((string)($_GET['q'] ?? '')));
+            json_out(epg_map_channel(body_json()));
+        }
+    } catch(InvalidArgumentException $error) {json_error($error->getMessage(),422);}
+      catch(RuntimeException $error) {json_error($error->getMessage(),502);}
     $_GET['action'] = $__liveAction;
 
     if ($__liveAction === 'iptv_hls') {

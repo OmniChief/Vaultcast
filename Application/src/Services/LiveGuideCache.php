@@ -8,7 +8,7 @@ final class LiveGuideCache
     {
         $hours = max(1, min(48, $hours));
         $revision = [];
-        foreach (['live_station','live_iptv','live_tvstudio','settings'] as $name) $revision[] = \Vaultcast\Repository::revision($name);
+        foreach (['live_station','live_iptv','live_tvstudio','settings','live_epg_revision'] as $name) $revision[] = \Vaultcast\Repository::revision($name);
         $identity = ($viewer['role'] ?? '') === 'admin' ? ['admin'] : [$viewer['id'] ?? $viewer['user_id'] ?? '',$viewer['username'] ?? '',$viewer['role'] ?? ''];
         $key = 'live-guide-v2|' . hash('sha256', json_encode([$hours,$slim,$identity,$revision]));
         $data = \Vaultcast\Repository::cacheGet($key);

@@ -23,6 +23,7 @@
     st.collectionsLetter = state.collectionsLetter || '';
     st.hubTab=state.hubTab || 'overview';st.cinemaId=state.cinemaId || null;
     st.roomId = state.gameLobby ? state.gameLobby.session.id : null;
+    st.liveTab=state.liveTab||'now';st.liveChannel=state.liveChannel||null;
     if (extra) Object.keys(extra).forEach(function(k){ st[k]=extra[k]; });
     return st;
   }
@@ -1790,6 +1791,7 @@ function confirmDialog(message, opts){
     state.sectionLetter = st.sectionLetter || '';
     state.collectionsLetter = st.collectionsLetter || '';
     state.hubTab=st.hubTab || 'overview';state.cinemaId=st.cinemaId || null;
+    state.liveTab=st.liveTab||'now';state.liveChannel=st.liveChannel||null;
     state.showSeason = st.showSeason != null ? st.showSeason : null; state.showEpisode = st.showEpisode != null ? st.showEpisode : null;
     if (st.settingsSection != null) state.settingsSection = st.settingsSection;
     if (st.playTab != null) state.playTab = st.playTab;
@@ -4080,7 +4082,7 @@ try {
   }
   function goMode(mode){
     state.searchQuery = '';
-    if (mode === 'live') navigate('live');
+    if (mode === 'live') goLiveTab('now');
     else if (mode === 'play') { state.sectionQ = ''; state.sectionSystem = ''; if (!state.playTab) state.playTab = 'games'; navigate('play'); }
     else if (mode === 'home') { state.hubTab=(state.user && state.user.prefs || {}).home_landing || 'overview';state.cinemaId=null;navigate('home'); }
     else navigate('library');
@@ -4094,7 +4096,7 @@ try {
     extra = extra || {};
     if (state.view === 'game' && state.gamePath && !extra.live) return R.build({ view:'play', gamePath: state.gamePath, roomId:state.gameLobby ? state.gameLobby.session.id : null });
     return R.build({ systemSlug: state.view === 'play' && state.sectionSystem ? (state.sectionSystemSlug || null) : null, view: state.view, movieSlug: state.movieSlug, movieId: state.movieId, showSlug: state.showSlug, showKey: state.showKey,
-      season: state.showSeason, episode: state.showEpisode, liveCh: extra.live || null, liveTab:state.liveTab, playTab: state.playTab, section: state.section,
+      season: state.showSeason, episode: state.showEpisode, liveCh: extra.live || state.liveChannel || null, liveTab:state.liveTab, playTab: state.playTab, section: state.section,
       collectionId: state.collectionId, searchQuery: state.searchQuery, settingsSection: state.settingsSection, adminTab: state.adminTab,
       sectionLetter:state.sectionLetter, collectionsLetter:state.collectionsLetter, hubTab:state.hubTab, cinemaId:state.cinemaId });
   }
@@ -4126,7 +4128,7 @@ try {
         else { state.view = 'show'; state.showKey = j.show_key; state.showSlug = r.slug; state.showSeason = j.season; state.showEpisode = j.episode; state._showEpisodeItem = j.item_id || null; }
       });
     }
-    if (r.view === 'live') { state.view = 'live'; state.liveTab=r.liveTab||'now'; state._openLiveCh=r.liveCh||null; return Promise.resolve(); }
+    if (r.view === 'live') { state.view = 'live'; state.liveTab=r.liveCh?(String(r.liveCh).indexOf('radio:')===0?'radio':String(r.liveCh).indexOf('iptv:')===0?'iptv':'relay'):(r.liveTab||'now'); state.liveChannel=r.liveCh||null; state._openLiveCh=null; return Promise.resolve(); }
     if (r.view === 'play' || r.view === 'game') {
       state.view = 'play'; state.playTab = r.playTab || 'games';
       var rs = romsSection();
@@ -4276,7 +4278,7 @@ try {
     if(signed)drawer.appendChild(action('Sign out',function(){
       api('/logout',{method:'POST'}).then(function(result){
         if(!result.ok)throw new Error(result.error||'Could not sign out');
-        closePlayer();state.user=null;state.home=null;state._guest=false;
+        closePlayer();stopRadio();state.user=null;state.home=null;state._guest=false;
         document.dispatchEvent(new Event('vaultcast-account-ready'));
         return api('/me').then(function(me){state._guestBrowsing=!!me.guest_browsing;state._guest=state._guestBrowsing;if(state._guest)return loadHome();showWelcome();});
       }).catch(function(e){toast(e.message||'Could not sign out',{kind:'bad'});});
@@ -4344,7 +4346,7 @@ try {
       });
       items.push({ label:'Collections', active: state.view === 'collections' || state.view === 'collection', go: function(){ navigate('collections'); } });
     } else if (mode === 'live') {
-      [['On now','now'],['Relay','relay'],['IPTV','iptv'],['Guide','guide']].forEach(function(page){
+      [['On now','now'],['Relay','relay'],['IPTV','iptv'],['Radio','radio']].forEach(function(page){
         items.push({label:page[0],active:(state.liveTab||'now')===page[1],go:function(){goLiveTab(page[1]);}});
       });
     } else if (mode === 'play') {
@@ -4459,7 +4461,7 @@ try {
     var modes = [
       ['home', 'Home', 'Your lists, friends and next great night'],
       ['vod', 'Library', 'Films, shows and music'],
-      ['live', 'Watch Live', 'Live Relay channels, IPTV & guide'],
+      ['live', 'Live', 'Relay, IPTV, radio & programme guides'],
       ['play', 'Play', 'Retro games in your browser']
     ];
     modes = modes.filter(function(m){
@@ -4761,7 +4763,7 @@ try {
   }
 
 
-  /* ------------------------------ Watch Live ------------------------------ */
+  /* ------------------------------ Live ------------------------------ */
   var live = { guide:null, iptv:null, loadedAt:0, rev:0, loadedRev:-1, busyRev:-1, filter:'', refreshTimer:null, tickTimer:null, busy:null, lastPaint:0 };
   var LIVE_BASE = BASE + 'live/';
   /* Live backend is reached through /media/api/live/<action> (api/live_bridge.php):
@@ -4800,16 +4802,16 @@ try {
   }
   /* Relay live edge - /now returns seekMs/serverNow/mediaOffsetMs; player joins mid-show,
      media without durations are backfilled (ffprobe) instead of becoming 1-second blocks */
-  /* Watch Live settings are one native editor: Relay channels (show/season/episode trees, full
+  /* Live settings are one native editor: Relay channels (show/season/episode trees, full
      searchable lists), Relay media library (server catalogue import, add/edit/remove), playlists, schedule, IPTV, station */
   /* Native Live/IPTV settings + 24h rolling schedule overlay */
   /* Settings accordion open-group in state (clicks no longer reverted by active-section re-derive) */
-  /* Watch Live structured show/episode/season + posters; Settings System + accordion; Collections full width */
+  /* Live structured show/episode/season + posters; Settings System + accordion; Collections full width */
   /* TV UI prefers episode_title (NFO/parsed) over file basename */
-  /* Watch Live / player zap / guide — channel number ascending */
+  /* Live / player zap / guide — channel number ascending */
   function liveChannels(){ return sortLiveChannels((live.guide && live.guide.channels) || []); }
   /* live-cache:start (tests/live_cache_test.js evaluates this block) */
-  /* Watch Live keeps the guide + IPTV lineup in memory for 90 s. Every Live/IPTV write (favourite
+  /* Live keeps the guide + IPTV lineup in memory for 90 s. Every Live/IPTV write (favourite
      added, removed, toggled, reordered, feeds or station saved) bumps live.rev so the next read
      refetches, and tells other open tabs through localStorage so they refresh too. */
   function ensureLiveData(force){
@@ -4844,7 +4846,7 @@ try {
       body: JSON.stringify(body || {})
     }).then(function(r){
       return r.json().then(function(j){
-        if (r.ok && j && j.ok !== false && action !== 'iptv_probe') invalidateLiveData(false);
+        if (r.ok && j && j.ok !== false && action !== 'iptv_probe' && action !== 'radio_save') invalidateLiveData(false);
         return { ok: r.ok, status: r.status, body: j };
       });
     });
@@ -5054,31 +5056,126 @@ try {
       if (!host.isConnected || host!==$('#live-teaser') || host._liveGeneration!==generation || !g || !g.channels) return;
       host.replaceChildren();if(!g.channels.length)return;
       if (!live.guide) live.guide = g; // slim data is enough for the first paint of cards
-      host.appendChild(rowEl('On Watch Live now', sortLiveChannels(g.channels).slice(0,shelfCapacity(true)).map(function(ch){ return liveCardEl(ch, { compact:true }); }), {
-        className:'row-live', fit:true, more: function(){ goLiveTab('guide'); }, moreText:'Open guide'
+      host.appendChild(rowEl('On Live now', sortLiveChannels(g.channels).slice(0,shelfCapacity(true)).map(function(ch){ return liveCardEl(ch, { compact:true }); }), {
+        className:'row-live', fit:true, more: function(){ showLiveGuide(); }, moreText:'Open guide'
       }));
     }).catch(function(){});
   }
 
+  function showLiveGuide(){
+    var guide=document.getElementById('live-guide');if(guide&&!state.liveChannel){guide.scrollIntoView({behavior:'smooth',block:'start'});return;}
+    goLiveTab('now');ensureLiveData(false).then(function(){var target=document.getElementById('live-guide');if(target)target.scrollIntoView({behavior:'smooth',block:'start'});});
+  }
   function goLiveTab(tab){
-    state.liveTab=['now','relay','iptv','guide'].indexOf(tab)>=0?tab:'now';
-    state._openLiveCh=null;navigate('live');
+    state.liveTab=['now','relay','iptv','radio'].indexOf(tab)>=0?tab:'now';
+    state._openLiveCh=null;state.liveChannel=null;navigate('live');
     try{window.scrollTo(0,0);}catch(e){}
   }
   function livePageHero(tab,total){
-    var info={relay:['Relay','Your library, on air. Continuous channels built from your collection.'],iptv:['IPTV','Your favourite live channels, together in one place.'],guide:['Programme guide','Plan your next watch across Relay and IPTV.']}[tab];
-    return h('section',{className:'live-hero',id:'live-top'},[
-      h('div',{className:'live-hero-copy'},[h('div',{className:'eyebrow',text:'Watch Live'}),h('h1',{text:info[0]}),h('p',{text:info[1]}),h('div',{className:'row-actions'},[
+    var info={relay:['Relay','Your library, on air. Continuous channels built from your collection.'],iptv:['IPTV','Your favourite live channels, together in one place.'],radio:['Radio','A world of sound. Your stations, ready whenever you are.']}[tab];
+    return h('section',{className:'live-hero page-hero',id:'live-top'},[
+      h('div',{className:'live-hero-copy'},[h('div',{className:'eyebrow',text:'Live'}),h('h1',{text:info[0]}),h('p',{text:info[1]}),h('div',{className:'row-actions'},[
         h('button',{className:'btn',text:'On now',onClick:function(){goLiveTab('now');}}),
-        tab!=='guide'?h('button',{className:'btn',text:'Open guide',onClick:function(){goLiveTab('guide');}}):null
+        h('button',{className:'btn',text:tab==='radio'?'Browse stations':'Programme guide',onClick:function(){if(tab==='radio')radioDirectory();else{var guide=document.getElementById('live-guide');if(guide)guide.scrollIntoView({behavior:'smooth',block:'start'});}}})
       ])]),
-      h('div',{className:'live-hero-side'},[heroArt('live'),h('div',{className:'live-clock',id:'live-clock',text:fmtClock(Date.now())}),h('div',{className:'live-count',text:total+' channels'})])
+      h('div',{className:'live-hero-side'},[heroArt('live'),h('div',{className:'live-clock',id:'live-clock',text:fmtClock(Date.now())}),h('div',{className:'live-count',text:total+(tab==='radio'?' stations':' channels')})])
     ]);
   }
+  var radioState={stations:null,loaded:0,pending:null,audio:null,station:null,hls:null,token:0,status:'',bar:null};
+  function loadRadio(force){
+    if(!force&&radioState.stations&&Date.now()-radioState.loaded<90000)return Promise.resolve(radioState.stations);
+    if(radioState.pending)return radioState.pending;
+    radioState.pending=liveApi('radio').then(function(j){if(!j.ok)throw new Error(j.error||'Radio unavailable');radioState.stations=j.stations||[];radioState.loaded=Date.now();return radioState.stations;}).finally(function(){radioState.pending=null;});return radioState.pending;
+  }
+  window.addEventListener('storage',function(e){if(e.key!=='vaultcast-radio-rev')return;radioState.loaded=0;if(state.view==='live'&&state.liveTab==='radio'&&!state.liveChannel){var root=document.getElementById('live-view');if(root)paintRadioPage(root);}});
+  function radioMeta(station){return [station.country,station.language,station.codec].filter(Boolean).join(' · ');}
+  function radioButton(station){return h('button',{className:'btn primary','data-radio-play':station.id,text:radioState.station&&radioState.station.id===station.id&&radioState.audio&&!radioState.audio.paused?'Pause':'Listen live',onClick:function(){playRadio(station);}});}
+  function updateRadio(){
+    var audio=radioState.audio,station=radioState.station;if(!audio||!station)return;
+    $all('[data-radio-play]').forEach(function(button){var active=button.getAttribute('data-radio-play')===station.id&&!audio.paused;button.textContent=active?'Pause':'Listen live';button.setAttribute('aria-pressed',String(active));});
+    $all('[data-radio-status]').forEach(function(el){el.textContent=el.getAttribute('data-radio-status')===station.id?radioState.status:'Listen live, then keep browsing while your station plays.';});
+    if(radioState.bar){var button=radioState.bar.querySelector('[data-radio-toggle]');if(button){button.textContent=audio.paused?'▶':'Ⅱ';button.setAttribute('aria-label',audio.paused?'Play radio':'Pause radio');}}
+    try{if(navigator.mediaSession)navigator.mediaSession.playbackState=audio.paused?'paused':'playing';}catch(e){}
+  }
+  function stopRadio(){radioState.token++;if(radioState.hls){radioState.hls.destroy();radioState.hls=null;}if(radioState.audio){radioState.audio.pause();radioState.audio.removeAttribute('src');radioState.audio.load();}if(radioState.bar)radioState.bar.remove();radioState.bar=null;radioState.station=null;document.body.classList.remove('radio-playing');$all('[data-radio-status]').forEach(function(el){el.textContent='Ready to listen';});$all('[data-radio-play]').forEach(function(b){b.textContent='Listen live';b.setAttribute('aria-pressed','false');});}
+  function resumeRadio(){var audio=radioState.audio;if(!audio)return;closePlayer();var play=audio.play();if(play&&play.catch)play.catch(function(){radioState.status='Press play to listen, or check whether this station is available in your region.';updateRadio();});}
+  function playRadio(station){
+    var audio=radioState.audio;
+    if(audio&&radioState.station&&radioState.station.id===station.id){if(audio.error||radioState.status==='Station stream is unavailable.'){stopRadio();playRadio(station);return;}if(audio.paused)resumeRadio();else audio.pause();return;}
+    closePlayer();stopRadio();
+    if(!audio){audio=h('audio',{preload:'none',id:'radio-audio'});radioState.audio=audio;document.body.appendChild(audio);['play','pause','playing','waiting','error'].forEach(function(event){audio.addEventListener(event,function(){radioState.status=event==='error'?'This station could not be played. Try another stream or edit its URL.':event==='waiting'?'Buffering…':audio.paused?'Paused':'Live radio';updateRadio();});});}
+    var token=++radioState.token;radioState.station=station;radioState.status='Connecting…';
+    var volume=h('input',{type:'range',min:0,max:1,step:.05,value:audio.volume,'aria-label':'Radio volume',onInput:function(e){audio.volume=Number(e.target.value);}});
+    radioState.bar=h('aside',{className:'radio-player-bar','aria-label':'Radio player'},[h('button',{className:'radio-bar-station',onClick:function(){openLiveChannel('radio:'+station.id);}},[chanLogoEl(station),h('span',{},[h('strong',{text:station.name}),h('small',{'data-radio-status':station.id,text:'Connecting…'})])]),h('div',{className:'radio-bar-actions'},[h('button',{className:'btn','data-radio-toggle':'','aria-label':'Pause radio',text:'Ⅱ',onClick:function(){if(audio.paused)resumeRadio();else audio.pause();}}),volume,h('button',{className:'btn',text:'Open station',onClick:function(){openLiveChannel('radio:'+station.id);}}),h('button',{className:'btn','aria-label':'Stop and close radio',text:'×',onClick:stopRadio})])]);document.body.appendChild(radioState.bar);document.body.classList.add('radio-playing');
+    if(/\.m3u8(?:\?|$)/i.test(station.url)&&!audio.canPlayType('application/vnd.apple.mpegurl'))loadHls().then(function(Hls){if(token!==radioState.token)return;if(!Hls.isSupported())throw new Error('HLS audio is unavailable in this browser.');var stream=new Hls({enableWorker:true});radioState.hls=stream;stream.on(Hls.Events.MANIFEST_PARSED,resumeRadio);stream.on(Hls.Events.ERROR,function(e,data){if(data.fatal&&token===radioState.token){radioState.status='Station stream is unavailable.';updateRadio();}});stream.loadSource(station.url);stream.attachMedia(audio);}).catch(function(e){if(token===radioState.token){radioState.status=e.message;updateRadio();}});
+    else{audio.src=station.url;resumeRadio();}
+    try{if(navigator.mediaSession&&window.MediaMetadata){navigator.mediaSession.metadata=new MediaMetadata({title:station.name,artist:radioMeta(station),album:'Live radio'});navigator.mediaSession.setActionHandler('play',resumeRadio);navigator.mediaSession.setActionHandler('pause',function(){audio.pause();});navigator.mediaSession.setActionHandler('stop',stopRadio);}}catch(e){}updateRadio();
+  }
+  document.addEventListener('play',function(event){if(radioState.audio&&event.target!==radioState.audio&&radioState.station&&!radioState.audio.paused)radioState.audio.pause();},true);
+  function radioCard(station){return h('article',{className:'radio-station-card'},[h('button',{className:'radio-card-art','aria-label':'Open '+station.name,onClick:function(){openLiveChannel('radio:'+station.id);}},[chanLogoEl(station)]),h('div',{},[h('h3',{},[h('button',{className:'linkish',text:station.name,onClick:function(){openLiveChannel('radio:'+station.id);}})]),h('p',{className:'muted',text:radioMeta(station)}),h('p',{className:'radio-tags muted',text:station.tags||'Live radio'}),radioButton(station)])]);}
+  function radioSection(host,compact){
+    var mine=state.user&&state.user.id;
+    host.replaceChildren(h('div',{className:'row-head'},[h('h2',{text:'Radio'}),compact?h('button',{className:'btn ghost',text:'All stations',onClick:function(){goLiveTab('radio');}}):null]),pendingContent());
+    loadRadio().then(function(stations){if(!host.isConnected||mine!==(state.user&&state.user.id))return;var heading=host.firstChild;host.replaceChildren(heading);if(!stations.length){host.appendChild(emptyState('Your next soundtrack starts here','Add favourite stations from the public Radio Browser directory or a direct audio stream.',state.user&&state.user.role==='admin'?[h('button',{className:'btn primary',text:'Find stations',onClick:radioDirectory})]:null));return;}
+      var query=h('input',{type:'search',placeholder:'Filter your stations…','aria-label':'Filter radio stations'}),grid=h('div',{className:'radio-station-grid'}),shown=24;
+      if(!compact){var count=document.querySelector('#live-top .live-count');if(count)count.textContent=stations.length+' stations';}
+      function draw(){var q=query.value.toLowerCase(),rows=stations.filter(function(station){return [station.name,station.country,station.tags,station.language].join(' ').toLowerCase().indexOf(q)>=0;});grid.replaceChildren();(compact?rows.slice(0,Math.min(6,shelfCapacity(true))):rows.slice(0,shown)).forEach(function(station){grid.appendChild(radioCard(station));});if(!rows.length)grid.appendChild(emptyState('No stations match','Try a different name, country or genre.'));if(!compact&&rows.length>shown)grid.appendChild(h('button',{className:'btn',text:'More stations',onClick:function(){shown+=24;draw();}}));}
+      if(!compact){query.oninput=function(){shown=24;draw();};host.appendChild(h('div',{className:'hub-calendar-filters'},[query]));}host.appendChild(grid);draw();updateRadio();
+    }).catch(function(e){if(host.isConnected)host.replaceChildren(emptyState('Radio unavailable',e.message));});
+  }
+  function paintRadioPage(root){root.replaceChildren(livePageHero('radio',radioState.stations?radioState.stations.length:0));var actions=h('div',{className:'row-actions radio-page-actions'},[h('button',{className:'btn',text:'Browse public directory',onClick:radioDirectory}),state.user&&state.user.role==='admin'?h('button',{className:'btn',text:'Add stream URL',onClick:function(){editRadio();}}):null]);root.appendChild(actions);var host=h('section',{className:'live-section'});root.appendChild(host);radioSection(host,false);}
+  function paintRadioDetail(player,info,station){
+    player.replaceChildren(h('div',{className:'radio-full-player'},[h('div',{className:'radio-full-art'},[chanLogoEl(station)]),h('span',{className:'eyebrow',text:'ON YOUR FREQUENCY'}),h('h1',{text:station.name}),h('p',{className:'muted',text:radioMeta(station)}),radioButton(station),h('p',{'data-radio-status':station.id,className:'muted',text:radioState.station&&radioState.station.id===station.id?radioState.status:'Listen live, then keep browsing while your station plays.'})]));
+    info.replaceChildren(h('div',{className:'live-channel-summary'},[h('div',{className:'live-channel-art'},[chanLogoEl(station)]),h('div',{className:'live-channel-copy'},[h('span',{className:'eyebrow',text:'Live radio'}),h('h2',{text:station.name}),h('p',{text:station.description||station.tags||'Live music, voices and stories from around the world.'}),h('p',{className:'muted',text:radioMeta(station)}),h('div',{className:'row-actions'},[shareButton(function(){return 'live/radio/'+encodeURIComponent(station.id);},'Copy station link'),station.homepage?h('a',{className:'btn',href:station.homepage,target:'_blank',rel:'noopener noreferrer',text:'Station website'}):null,state.user&&state.user.role==='admin'?h('button',{className:'btn',text:'Edit station',onClick:function(){editRadio(station);}}):null])])]));updateRadio();
+  }
+  function saveRadio(body){return liveApiPost('radio_save',body).then(function(r){if(!r.ok||!r.body.ok)throw new Error(r.body.error||'Could not save station');radioState.stations=r.body.stations;radioState.loaded=Date.now();try{localStorage.setItem('vaultcast-radio-rev',Date.now()+':'+Math.random());}catch(e){}if(state.view==='live'&&!state.liveChannel){var root=document.getElementById('live-view');if(root&&state.liveTab==='radio')paintRadioPage(root);else{var section=document.querySelector('.radio-on-now');if(section)radioSection(section,true);}}return r.body;});}
+  function editRadio(station){
+    if(!state.user||state.user.role!=='admin')return;station=station||{};
+    window.VaultcastHub.modal(station.id?'Edit radio station':'Add radio station',function(body,close){body.classList.add('live-editor');var fields={};[['name','Station name'],['url','Direct audio stream URL'],['logo','Logo URL (optional)'],['description','Description (optional)'],['country','Country'],['language','Language'],['tags','Genres / tags'],['homepage','Station website']].forEach(function(field){var input=h('input',{value:station[field[0]]||'',type:['url','logo','homepage'].indexOf(field[0])>=0?'url':'text',maxlength:field[0]==='description'?2000:1000});fields[field[0]]=input;body.appendChild(h('label',{},[field[1],input]));});
+      body.appendChild(h('p',{className:'muted',text:'Use a direct MP3, AAC, Ogg or HLS audio stream, rather than a station’s website or a playlist download. Playback depends on the station and browser codec support.'}));
+      body.appendChild(h('button',{className:'btn primary',text:'Save station',onClick:function(e){var button=e.currentTarget;button.disabled=true;var value=Object.assign({},station);Object.keys(fields).forEach(function(key){value[key]=fields[key].value;});saveRadio(value).then(function(){close();toast('Radio station saved');if(state.view==='live')render();else if(state.view==='settings'&&state.settingsSection==='live-radio')fillLiveNativePanel('live-radio');}).catch(function(e){toast(e.message,{kind:'bad'});}).finally(function(){button.disabled=false;});}}));
+      if(station.id)body.appendChild(h('button',{className:'btn danger',text:'Remove station',onClick:function(){confirmDialog('Remove '+station.name+' from your radio lineup?',{danger:true,okText:'Remove'}).then(function(ok){if(!ok)return;return saveRadio({id:station.id,delete:true}).then(function(){if(radioState.station&&radioState.station.id===station.id)stopRadio();close();goLiveTab('radio');});}).catch(function(e){toast(e.message,{kind:'bad'});});}}));
+    });
+  }
+  function radioDirectory(){
+    window.VaultcastHub.modal('Find your frequency',function(body,close){body.classList.add('live-editor','radio-directory');var q=h('input',{type:'search',placeholder:'Station name…','aria-label':'Station name'}),country=h('input',{placeholder:'Country…','aria-label':'Country'}),tag=h('input',{placeholder:'Genre, e.g. jazz…','aria-label':'Genre'}),results=h('div'),offset=0,sequence=0,admin=state.user&&state.user.role==='admin';
+      body.appendChild(h('p',{className:'muted',text:'Search the public Radio Browser directory. '+(admin?'Add stations to your shared lineup.':'Ask an administrator to add your favourites to the shared lineup.')}));body.appendChild(h('a',{href:'https://www.radio-browser.info/',target:'_blank',rel:'noopener noreferrer',text:'Community directory · Radio Browser'}));
+      var submit=h('button',{className:'btn primary',type:'submit',text:'Search stations'}),more=h('button',{className:'btn',text:'More stations',hidden:true,onClick:function(){offset+=30;search(true);}});
+      function search(append){var mine=++sequence;submit.disabled=more.disabled=true;if(!append){offset=0;results.replaceChildren(pendingContent());}liveApi('radio_search','name='+encodeURIComponent(q.value)+'&country='+encodeURIComponent(country.value)+'&tag='+encodeURIComponent(tag.value)+'&offset='+offset).then(function(j){if(!results.isConnected||mine!==sequence)return;if(!j.ok)throw new Error(j.error||'Directory unavailable');if(!append)results.replaceChildren();j.stations.forEach(function(station){var add=h('button',{className:'btn',text:admin?'Add station':'Copy stream URL',onClick:function(){if(!admin){copyText(station.url).then(function(){toast('Stream URL copied');});return;}add.disabled=true;saveRadio(station).then(function(){add.textContent='Added';toast(station.name+' added');}).catch(function(e){add.disabled=false;toast(e.message,{kind:'bad'});});}});if(admin&&radioState.stations&&radioState.stations.some(function(s){return s.id===station.id;})){add.textContent='Added';add.disabled=true;}results.appendChild(h('article',{className:'radio-directory-row'},[h('div',{},[h('strong',{text:station.name}),h('p',{className:'muted',text:radioMeta(station)+(station.bitrate?' · '+station.bitrate+' kbps':'')}),h('small',{className:'muted',text:station.tags})]),add]));});if(!j.stations.length&&!append)results.appendChild(emptyState('No stations found','Try a broader name, country or genre.'));more.hidden=!j.has_more;}).catch(function(e){if(results.isConnected&&mine===sequence){if(append)offset=Math.max(0,offset-30);else results.replaceChildren();results.appendChild(h('p',{className:'muted',text:e.message}));}}).finally(function(){if(mine===sequence){submit.disabled=more.disabled=false;}});}
+      body.appendChild(h('form',{className:'radio-directory-search',onSubmit:function(e){e.preventDefault();search(false);}},[q,country,tag,submit]));body.appendChild(results);body.appendChild(more);body.appendChild(h('button',{className:'btn',text:'Done',onClick:function(){close();if(state.view==='live'&&!state.liveChannel)render();else if(state.view==='settings'&&state.settingsSection==='live-radio')fillLiveNativePanel('live-radio');}}));
+      results.appendChild(h('p',{className:'muted',text:'Choose Search stations to explore the directory. No station audio is loaded until you press Listen live.'}));
+    });
+  }
+  function openLiveChannel(id){state.liveChannel=id;state.liveTab=String(id).indexOf('radio:')===0?'radio':String(id).indexOf('iptv:')===0?'iptv':'relay';state.view='live';pushNav();render();try{window.scrollTo(0,0);}catch(e){}}
+  function viewLiveChannel(id){
+    var wrap=h('div',{id:'live-channel-page',className:'live-channel-page'}),player=h('div',{id:'live-channel-player',className:'detail-player live-channel-player'}),info=h('section',{id:'live-channel-information',className:'live-channel-information'});
+    wrap.appendChild(h('div',{className:'row-actions live-channel-back'},[h('button',{className:'btn',text:'← Back to Live',onClick:function(){goLiveTab(String(id).indexOf('radio:')===0?'radio':'now');}})]));wrap.appendChild(player);wrap.appendChild(info);
+    setTimeout(function(){
+      if(!wrap.isConnected||state.liveChannel!==id)return;
+      if(String(id).indexOf('radio:')===0){loadRadio().then(function(stations){if(!wrap.isConnected||state.liveChannel!==id)return;var station=stations.find(function(s){return s.id===id.slice(6);});if(!station){info.appendChild(emptyState('Station unavailable','This station may have been removed.'));return;}paintRadioDetail(player,info,station);}).catch(function(e){info.textContent=e.message;});return;}
+      ensureLiveData(false).then(function(){if(!wrap.isConnected||state.liveChannel!==id)return;var channel=liveChannels().find(function(c){return c.id===id;});if(!channel){info.appendChild(emptyState('Channel unavailable','This channel may be disabled or removed.'));return;}startLivePlayer(id,player);paintChannelInformation(channel);}).catch(function(e){info.textContent=e.message;});
+    },0);return shell(wrap);
+  }
+  function paintChannelInformation(ch){
+    var host=document.getElementById('live-channel-information');if(!host)return;
+    var nn=progNowAndNext(ch),copy=h('div',{className:'live-channel-copy'},[h('span',{className:'eyebrow',text:ch.kind==='iptv'?'IPTV':'Relay'}),h('h1',{text:ch.name}),h('p',{className:'muted',text:ch.slogan||'Live television'}),h('h2',{text:nn.now?nn.now.title:'On air'}),nn.now&&nn.now.subtitle?h('p',{text:nn.now.subtitle}):null,h('div',{className:'row-actions'},[shareButton(function(){return 'live/'+encodeURIComponent(ch.id);},'Copy channel link'),state.user&&state.user.role==='admin'&&ch.kind==='iptv'?h('button',{className:'btn',text:'Match programme guide',onClick:function(){matchChannelEpg(ch.iptvId||ch.id.replace(/^iptv:/,''));}}):null])]);
+    host.replaceChildren(h('div',{className:'live-channel-summary'},[h('div',{className:'live-channel-art'},[chanLogoEl(ch)]),copy]),h('section',{className:'live-channel-guide'},[h('h2',{text:'On this channel'}),guideEl([ch])]));
+  }
+  function matchChannelEpg(id){
+    window.VaultcastHub.modal('Match programme guide',function(body,close){
+      body.classList.add('live-editor');var results=h('div'),query=h('input',{type:'search',placeholder:'Search channel name or XMLTV ID…','aria-label':'Find XMLTV channel'}),sequence=0,timer;
+      body.appendChild(h('p',{className:'muted',text:'Search channels from your imported XMLTV guides. If none appear, add an XMLTV URL and refresh EPG in Settings → IPTV first.'}));body.appendChild(query);body.appendChild(results);
+      function attach(epgId){return liveApiPost('epg_map',{id:id,epg_id:epgId}).then(function(r){if(!r.ok||!r.body.ok)throw new Error(r.body.error||'Could not match guide');close();toast('Guide matched · '+r.body.programmes+' programmes');if(state.view==='live'&&state.liveChannel)ensureLiveData(true).then(function(){var ch=liveChannels().find(function(c){return c.iptvId===id;});if(ch)paintChannelInformation(ch);});}).catch(function(e){toast(e.message,{kind:'bad'});});}
+      function search(){var mine=++sequence;liveApi('epg_channels','q='+encodeURIComponent(query.value)).then(function(j){if(!results.isConnected||mine!==sequence)return;if(!j.ok)throw new Error(j.error||'Guide search failed');results.replaceChildren(h('p',{className:'muted',text:j.total+' imported channels · showing '+j.channels.length}));j.channels.forEach(function(ch){results.appendChild(h('button',{className:'btn live-epg-result',text:ch.name+' · '+ch.id,onClick:function(){attach(ch.id);}}));});}).catch(function(e){if(results.isConnected)results.textContent=e.message;});}
+      query.oninput=function(){clearTimeout(timer);timer=setTimeout(search,300);};body.appendChild(h('button',{className:'btn',text:'Use playlist matching',onClick:function(){attach('');}}));search();
+    });
+  }
   function viewLive(){
+    if(state.liveChannel)return viewLiveChannel(state.liveChannel);
+    if(state.liveTab==='radio'){stopLiveTimers();var radioRoot=h('div',{id:'live-view',className:'live-view'});setTimeout(function(){if(radioRoot.isConnected)paintRadioPage(radioRoot);},0);return shell(radioRoot);}
     var wrap = h('div', { id:'live-view', className:'live-view' }, [
       h('section', { className:'live-hero skeleton', id:'live-top' }, [
-        h('div', { className:'live-hero-copy' }, [ h('div', { className:'eyebrow', text:'Watch Live' }), h('h1', { text:'Tuning in\u2026' }), pendingContent({ className:'muted', }) ])
+        h('div', { className:'live-hero-copy' }, [ h('div', { className:'eyebrow', text:'Live' }), h('h1', { text:'Tuning in\u2026' }), pendingContent({ className:'muted', }) ])
       ])
     ]);
     setTimeout(function(){ loadLive(false); }, 0);
@@ -5090,12 +5187,12 @@ try {
       var root = $('#live-view');
       if (!root) return;
       root.innerHTML = '';
-      root.appendChild(emptyState('Watch Live is unavailable', 'Could not reach the Live API (' + String(e && e.message || e) + ').', [
+      root.appendChild(emptyState('Live is unavailable', 'Could not reach the Live API (' + String(e && e.message || e) + ').', [
         h('button', { className:'btn', text:'Retry', onClick: function(){ loadLive(true); } })
       ]));
     });
     live.refreshTimer = setInterval(function(){
-      if (state.view !== 'live') { stopLiveTimers(); return; }
+      if (state.view !== 'live'||state.liveChannel) { stopLiveTimers(); return; }
       if (document.hidden) return;
       ensureLiveData(true).then(function(){ if (state.view === 'live') paintLive(); }).catch(function(){});
     }, 60000);
@@ -5140,6 +5237,8 @@ try {
     var iptv = chans.filter(function(c){ return c.kind === 'iptv'; });
     root.innerHTML = '';
     var tab=state.liveTab||'now';
+    if(state.liveChannel)return;
+    if(tab==='radio'){paintRadioPage(root);return;}
     root.appendChild(tab==='now'?liveHeroEl(relay.length?relay:chans,all.length):livePageHero(tab,tab==='relay'?relay.length:tab==='iptv'?iptv.length:chans.length));
     if (live.filter) {
       root.appendChild(h('p', { className:'live-filter-note muted' }, [
@@ -5159,12 +5258,13 @@ try {
             live.filter ? '' : 'Browse your playlist feeds and add favourites in Live settings \u2192 IPTV.',
             live.filter ? null : [ h('button', { className:'btn', type:'button', text:'Open Live settings', onClick: function(){ openSettings('live-channels'); } }) ])
     ]));
-    if(tab==='now'||tab==='guide')root.appendChild(h('section', { className:'live-section', id:'live-guide' }, [
+    if(tab==='now') {var radioHost=h('section',{className:'live-section radio-on-now'});root.appendChild(radioHost);radioSection(radioHost,true);}
+    if(tab==='now'||tab==='relay'||tab==='iptv')root.appendChild(h('section', { className:'live-section', id:'live-guide' }, [
       h('div', { className:'row-head' }, [
         h('h2', { text:'Guide' }),
         h('span', { className:'meta', text: 'Relay schedule + IPTV XMLTV' + (live.guide && live.guide.epgUpdatedAt ? ' \u00b7 EPG ' + String(live.guide.epgUpdatedAt).slice(0, 16).replace('T', ' ') : '') })
       ]),
-      guideEl(chans)
+      guideEl(tab==='relay'?relay:tab==='iptv'?iptv:chans)
     ]));
     root.appendChild(h('div', { className:'live-foot muted' }, [
       'Relay plays MP4 straight from the server. IPTV is HLS through the same-origin proxy. ',
@@ -5187,7 +5287,7 @@ try {
     ]);
     if (!feat) {
       return h('section', { className:'live-hero', id:'live-top' }, [
-        h('div', { className:'live-hero-copy' }, [ h('div', { className:'eyebrow', text:'Watch Live' }), h('h1', { text:'Nothing on air' }),
+        h('div', { className:'live-hero-copy' }, [ h('div', { className:'eyebrow', text:'Live' }), h('h1', { text:'Nothing on air' }),
           h('p', { className:'muted', text:'Set up Relay channels or add IPTV favourites in Live settings.' }) ]),
         right
       ]);
@@ -5218,7 +5318,7 @@ try {
         h('div', { className:'lc-bar hero-bar' }, [ h('span', { style:'width:' + pct + '%', 'data-s': p ? String(p.startUnix) : '', 'data-e': p ? String(p.endUnix) : '' }) ]),
         h('div', { className:'row-actions' }, [
           h('button', { className:'btn primary btn-lg', type:'button', onClick: function(){ openLivePlayer(feat.id); } }, [ icon('playFill'), h('span', { text:'Watch live' }) ]),
-          h('button', { className:'btn glass btn-lg', type:'button', onClick: function(){goLiveTab('guide');} }, [ icon('guide'), h('span', { text:'Guide' }) ])
+          h('button', { className:'btn glass btn-lg', type:'button', onClick: function(){showLiveGuide();} }, [ icon('guide'), h('span', { text:'Guide' }) ])
         ])
       ]),
       right
@@ -5327,8 +5427,7 @@ try {
     openLivePlayer(id);
   }
   function openLivePlayer(chId){
-    toast('Tuning\u2026', { ms: 1200 });
-    ensureLiveData(false).then(function(){ startLivePlayer(chId); }).catch(function(e){ toast('Live unavailable: ' + String(e && e.message || e), { kind:'bad' }); });
+    openLiveChannel(chId);
   }
   function addCentrePlay(container,media,start){
     var label=h('span',{className:'centre-play-label',text:'Play'});
@@ -5346,13 +5445,13 @@ try {
     container.appendChild(button);update();
   }
 
-  function startLivePlayer(chId){
+  function startLivePlayer(chId,inlineHost){
     closePlayer();
     var list = liveChannels();
     if (!list.length) { toast('No live channels'); return; }
     var idx = 0;
     for (var i = 0; i < list.length; i++) if (list[i].id === chId) { idx = i; break; }
-    pushNav({ player:true, live: list[idx].id });
+    if(!inlineHost)pushNav({ player:true, live: list[idx].id });
 
     var lp = { idx: idx, ch: null, block: null, hls: null, token: 0, errors: 0, idleT: null, tickT: null, guideOpen: false, epgOpen: false, keyH: null, mode: 'live', playAt: 0, historyMs: ((live.guide && live.guide.historyDays) || 7) * 86400000, skew: 0 };
     var video = h('video', { id:'player-media', autoplay:true, playsinline:true, preload:'auto' });
@@ -5380,7 +5479,7 @@ try {
       ]),
       epgBody
     ]);
-    var overlay = h('div', { className:'player-overlay live-player', id:'player-overlay' }, [
+    var overlay = h('div', { className:'player-overlay live-player'+(inlineHost?' player-inline live-player-inline':''), id:'player-overlay' }, [
       video,
       h('div', { className:'lp-tuning' }, [ h('div', { className:'spinner' }) ]),
       h('div', { className:'lp-chrome' }, [
@@ -5415,7 +5514,8 @@ try {
       epgFull
     ]);
     addCentrePlay(overlay,video,safePlay);
-    document.body.appendChild(overlay);
+    if(inlineHost)overlay.setAttribute('tabindex','0');
+    (inlineHost||document.body).appendChild(overlay);
 
     function msg(t){ elMsg.textContent = t || ''; }
     function setTuning(on){ overlay.classList.toggle('tuning', !!on); }
@@ -5713,7 +5813,8 @@ try {
       elEpg.innerHTML = '';
       if (lp.guideOpen) paintGuideList();
       if (lp.epgOpen) paintFullEpg();
-      try { history.replaceState(Object.assign({}, history.state || {}, { live: lp.ch.id }), '', navUrl({ live: lp.ch.id })); } catch (e) {}
+      if(inlineHost){state.liveChannel=lp.ch.id;state.liveTab=lp.ch.kind==='iptv'?'iptv':'relay';paintChannelInformation(lp.ch);document.querySelectorAll('.subnav .subnav-btn').forEach(function(button){button.classList.toggle('active',button.textContent===(lp.ch.kind==='iptv'?'IPTV':'Relay'));});}
+      try { history.replaceState(Object.assign({}, history.state || {}, { live: lp.ch.id,liveChannel:lp.ch.id,liveTab:lp.ch.kind==='iptv'?'iptv':'relay' }), '', navUrl({ live: lp.ch.id })); } catch (e) {}
       if (lp.ch.kind === 'iptv') tuneIptv(); else tuneRelay(0);
       wake();
     }
@@ -5777,6 +5878,7 @@ try {
     overlay.addEventListener('touchstart', wake, { passive:true });
     lp.keyH = function(e){
       if (!document.getElementById('player-overlay')) return;
+      if(inlineHost&&!overlay.contains(document.activeElement)&&document.fullscreenElement!==overlay)return;
       var tag = (e.target && e.target.tagName || '').toLowerCase();
       if (tag === 'input' && e.target.type !== 'range') return;
       var k = e.key;
@@ -5794,7 +5896,9 @@ try {
       wake();
     };
     document.addEventListener('keydown', lp.keyH);
+    lp.guideAt=Date.now();
     lp.tickT = setInterval(function(){
+      if(inlineHost&&!document.hidden&&!lp.guideRefreshing&&Date.now()-lp.guideAt>90000){lp.guideAt=Date.now();lp.guideRefreshing=true;ensureLiveData(false).then(function(){if(!overlay.isConnected)return;list=liveChannels();var current=list.find(function(ch){return ch.id===lp.ch.id;});if(current){lp.ch=current;lp.idx=list.indexOf(current);paintChannelInformation(current);paintChannelEpg();}}).catch(function(){}).finally(function(){lp.guideRefreshing=false;});}
       elClock.textContent = fmtClock(Date.now());
       var c = lp.ch;
       if (!c) return;
@@ -7322,7 +7426,7 @@ try {
       {title:'Libraries',admin:true,items:[{id:'sections',label:'Folders & media types'},{id:'scan',label:'Scan libraries'},{id:'media',label:'Manage media'},{id:'collections',label:'Collections'},{id:'posters',label:'Artwork'},{id:'library',label:'Find & rename'},{id:'ingest',label:'Import inbox'},{id:'matching',label:'Correct metadata'},{id:'reports',label:'Label reports'}]},
       {title:'Users',admin:true,items:[{id:'users',label:'Accounts & access'}]},
       {title:'Playback',admin:true,items:[{id:'players',label:'Player files'},{id:'streaming',label:'Streaming'},{id:'video-optimise',label:'Video conversion'},{id:'poster-optimise',label:'Artwork optimisation'}]},
-      {title:'Integrations',admin:true,items:[{id:'features',label:'Optional features'},{id:'acquisition',label:'Download sources'},{id:'queue',label:'Download queue'},{id:'live-studio',label:'TV Studio'},{id:'live-channels',label:'Live channels'},{id:'live-library',label:'Live media'},{id:'live-playlists',label:'Live playlists'},{id:'live-schedule',label:'Live schedule'},{id:'live-iptv',label:'IPTV feeds'},{id:'live-station',label:'Station outputs'}]},
+      {title:'Integrations',admin:true,items:[{id:'features',label:'Optional features'},{id:'acquisition',label:'Download sources'},{id:'queue',label:'Download queue'},{id:'live-studio',label:'TV Studio'},{id:'live-channels',label:'Live channels'},{id:'live-library',label:'Live media'},{id:'live-playlists',label:'Live playlists'},{id:'live-schedule',label:'Live schedule'},{id:'live-iptv',label:'IPTV feeds'},{id:'live-radio',label:'Radio stations'},{id:'live-station',label:'Station outputs'}]},
       {title:'Maintenance',admin:true,items:[{id:'updates',label:'Check for updates'},{id:'maintenance',label:'Background tasks'},{id:'general',label:'Application'},{id:'diagnostics',label:'Diagnostics'},{id:'optimise-system',label:'Storage & caches'},{id:'system',label:'server tools'},{id:'advanced',label:'Advanced configuration'}]}
     ];
     var features = (state.home && state.home.features) || {};
@@ -7343,7 +7447,7 @@ try {
     var sec = state.settingsSection;
 
     function goSec(id){
-      var adminIds = { maintenance:1, players:1, features:1, diagnostics:1, sections:1, scan:1, posters:1, library:1, media:1, collections:1, streaming:1, convert:1, 'video-optimise':1, 'poster-optimise':1, 'optimise-system':1, queue:1, acquisition:1, system:1, general:1, users:1, advanced:1, ingest:1, matching:1, reports:1, live:1, 'live-channels':1, 'live-library':1, 'live-playlists':1, 'live-iptv':1, 'live-schedule':1, 'live-station':1, 'live-studio':1 };
+      var adminIds = { maintenance:1, players:1, features:1, diagnostics:1, sections:1, scan:1, posters:1, library:1, media:1, collections:1, streaming:1, convert:1, 'video-optimise':1, 'poster-optimise':1, 'optimise-system':1, queue:1, acquisition:1, system:1, general:1, users:1, advanced:1, ingest:1, matching:1, reports:1, live:1, 'live-channels':1, 'live-library':1, 'live-playlists':1, 'live-iptv':1, 'live-schedule':1, 'live-station':1, 'live-studio':1, 'live-radio':1 };
       if (adminIds[id] && !isAdmin) {
         state._wantAdmin = true;
         state._settingsAfterLogin = id;
@@ -7455,7 +7559,7 @@ try {
             h('button', { className: 'btn primary', text: 'Save preferences', onClick: savePrefs }),
             h('button', {className: 'btn', text: 'Sign out', onClick: function(){ api('/logout', {method:'POST'}).then(function(result){
               if (!result.ok) return toast(result.error || 'Could not sign out', {kind:'bad'});
-              closePlayer(); state.user = null; state._guest = false; state.home = null;
+              closePlayer(); stopRadio(); state.user = null; state._guest = false; state.home = null;
               return api('/me').then(function(me){
                 state._guestBrowsing = !!me.guest_browsing; state._guest = state._guestBrowsing;
                 if (state._guest) return loadHome();
@@ -7612,7 +7716,7 @@ try {
     var panel = h('div', { className: 'panel settings-panel' }, [
       h('div', { className: 'settings-hero' }, [
         h('h1', { text: 'Settings' }),
-        h('p', { className: 'muted', text: 'One place for account, VoD libraries, Watch Live, Play, optimise, and downloads. Vaultcast ' + APP_VERSION })
+        h('p', { className: 'muted', text: 'One place for account, VoD libraries, Live, Play, optimise, and downloads. Vaultcast ' + APP_VERSION })
       ]),
       h('div', { className: 'settings-hub' }, [
         nav,
@@ -9069,7 +9173,7 @@ try {
     var admin=user.role==='admin',areas=user.areas||{library:true,live:true,games:true},inputs={},overrides={},status=h('p',{className:'muted',role:'status',text:admin?'Admin has full access.':'Choose a role, media areas and optional per-user overrides. Account expiry still applies.'}),role=h('select',{'aria-label':'Role',disabled:admin},admin?[h('option',{value:'admin',text:'Admin'})]:[h('option',{value:'user',text:'User'})]);
     if(!admin)Object.keys(state.userRoles||{}).forEach(function(id){role.appendChild(h('option',{value:id,text:state.userRoles[id].name}));});role.value=user.role;
     var body=h('div',{className:'stack'},[status,h('label',{},['Role',role]),h('h4',{text:'Media areas'})]);
-    [['library','Library'],['live','Watch Live'],['games','Games']].forEach(function(entry){var checkbox=h('input',{type:'checkbox',checked:admin||areas[entry[0]]===true,disabled:admin});inputs[entry[0]]=checkbox;body.appendChild(h('label',{className:'check-label'},[checkbox,entry[1]]));});
+    [['library','Library'],['live','Live'],['games','Games']].forEach(function(entry){var checkbox=h('input',{type:'checkbox',checked:admin||areas[entry[0]]===true,disabled:admin});inputs[entry[0]]=checkbox;body.appendChild(h('label',{className:'check-label'},[checkbox,entry[1]]));});
     body.appendChild(h('h4',{text:'Permission overrides'}));
     Object.keys(state.permissionChoices||{}).forEach(function(key){var select=h('select',{'aria-label':state.permissionChoices[key]},[h('option',{value:'inherit',text:'Use role default'}),h('option',{value:'allow',text:'Allow'}),h('option',{value:'deny',text:'Deny'})]);select.value=user.permissions&&typeof user.permissions[key]==='boolean'?(user.permissions[key]?'allow':'deny'):'inherit';overrides[key]=select;body.appendChild(h('label',{},[state.permissionChoices[key],select]));});
     function defaults(){Object.keys(overrides).forEach(function(key){var select=overrides[key];select.disabled=admin||role.value==='user';var inherited=admin||!!(state.userRoles[role.value]&&state.userRoles[role.value].permissions[key]);select.options[0].textContent='Use role default ('+(inherited?'allowed':'denied')+')';});}role.onchange=defaults;defaults();
@@ -12195,6 +12299,7 @@ function viewCollectionDetail(){
       'live-library': { title: 'Relay media library', blurb: 'Everything Relay can schedule. Add movies or whole shows from the server catalogue, add files by URL, edit titles / season / episode / duration, or remove items.' },
       'live-playlists': { title: 'Playlists & programming', blurb: 'Set programs air first, in order; under the fill window Relay fills at random from the channel library. Commercial breaks, bumpers and the random seed live here too.' },
       'live-schedule': { title: 'Rolling schedule', blurb: '24-hour wall-clock slots: rotate a movie nightly, or advance one TV episode per day. Deterministic from the calendar day.' },
+      'live-radio': { title:'Radio stations', blurb:'Your shared radio lineup. Find public stations or add a direct stream, then listen while browsing.' },
       'live-iptv': { title: 'IPTV feeds', blurb: 'M3U playlist feeds, browse and search channels, favourites lineup, on-demand stream Check, inactive filter, and XMLTV EPG.' },
       'live-station': { title: 'Station & outputs', blurb: 'Station identity, media base URL, timeshift history, guide lookahead, external-player stream URLs, and JSON backup / merge import.' }
     };
@@ -12211,9 +12316,10 @@ function viewCollectionDetail(){
       ['live-playlists', 'Playlists'],
       ['live-schedule', 'Schedule'],
       ['live-iptv', 'IPTV'],
+      ['live-radio','Radio'],
       ['live-station', 'Station']
     ];
-    var stationSection = sec !== 'live-iptv' && sec !== 'live-studio';
+    var stationSection = sec !== 'live-iptv' && sec !== 'live-studio' && sec !== 'live-radio';
     setTimeout(function(){ fillLiveNativePanel(sec); }, 0);
     return [
       h('div', { className: 'settings-live-head' }, [
@@ -12233,7 +12339,7 @@ function viewCollectionDetail(){
           h('button', { className: 'btn primary', type: 'button', 'data-live-save': '1', text: 'Save station', onClick: liveSaveStation })
         ]) : null
       ]),
-      h('div', { className: 'settings-live-subnav', role: 'tablist', 'aria-label': 'Watch Live sections' }, related.map(function(pair){
+      h('div', { className: 'settings-live-subnav', role: 'tablist', 'aria-label': 'Live sections' }, related.map(function(pair){
         return h('button', {
           type: 'button',
           className: 'settings-live-subnav-btn' + (sec === pair[0] ? ' active' : ''),
@@ -12256,6 +12362,7 @@ function viewCollectionDetail(){
     /* unsaved Relay edits survive moving between sections; otherwise always reload from the server */
     var p;
     if (sec === 'live-studio') { paintTvStudio(host); return; }
+    if (sec === 'live-radio') {host.replaceChildren(h('div',{className:'row-actions'},[h('button',{className:'btn primary',text:'Browse public directory',onClick:radioDirectory}),h('button',{className:'btn',text:'Add stream URL',onClick:function(){editRadio();}}),h('button',{className:'btn',text:'Open Radio',onClick:function(){goLiveTab('radio');}})]));loadRadio(true).then(function(stations){if(!host.isConnected)return;stations.forEach(function(station){host.appendChild(h('div',{className:'radio-directory-row'},[h('div',{},[h('strong',{text:station.name}),h('p',{className:'muted',text:radioMeta(station)})]),h('button',{className:'btn',text:'Edit station',onClick:function(){editRadio(station);}})]));});if(!stations.length)host.appendChild(emptyState('No stations yet','Search the public directory or add a stream URL.'));}).catch(function(e){if(host.isConnected)host.appendChild(h('p',{text:e.message}));});return;}
     if (sec === 'live-iptv') p = liveLoadIptv(true).then(function(){ paintLiveIptv(host); });
     else p = liveLoadStation(!liveSet.dirty).then(function(){
       liveSyncDirty();
@@ -13453,7 +13560,7 @@ function viewCollectionDetail(){
         h('h3', { text: '24-hour rolling schedule', style: 'margin:0' }),
         h('div', { className: 'row-actions' }, [ liveChannelSelect(function(){ paintLiveSchedule(host); }) ])
       ]),
-      h('p', { className: 'muted', text: 'Wall-clock slots overlay the PseudoTV loop in the Watch Live guide. Rotation is deterministic from the calendar day (optional start date) \u2014 no NFO rewrites, no daily cursor files.' }),
+      h('p', { className: 'muted', text: 'Wall-clock slots overlay the PseudoTV loop in the Live guide. Rotation is deterministic from the calendar day (optional start date) \u2014 no NFO rewrites, no daily cursor files.' }),
       h('label', { className: 'check-label' }, [
         h('input', { type: 'checkbox', checked: !!rs.enabled, onChange: function(e){ rs.enabled = e.target.checked; liveDirty(); paintLiveSchedule(host); } }),
         ' Enable rolling schedule on this channel'
@@ -13549,7 +13656,7 @@ function viewCollectionDetail(){
     var origin = (location.origin || '') + String(BASE || '/media/').replace(/\/?$/, '/') + 'api/live/';
     host.appendChild(h('div', { className: 'settings-card' }, [
       h('h3', { text: 'Player outputs' }),
-      h('p', { className: 'muted', text: 'Watch in an external player: Copy stream URL, then paste it into your player \u2014 ' + PLAYER_PASTE_HINT + '. Starts at the live edge and keeps playing the schedule. Works on any device or network; no plug-ins or custom protocols. To watch in the browser instead, use Watch Live.' }),
+      h('p', { className: 'muted', text: 'Watch in an external player: Copy stream URL, then paste it into your player \u2014 ' + PLAYER_PASTE_HINT + '. Starts at the live edge and keeps playing the schedule. Works on any device or network; no plug-ins or custom protocols. To watch in the browser instead, use Live.' }),
       liveOutputRows(origin, st.channels || [])
     ]));
 
@@ -13820,7 +13927,8 @@ function viewCollectionDetail(){
               h('td', { className: 'row-actions' }, [
                 h('button', { className: 'btn ghost sm', type: 'button', text: 'Up', title: 'Move up the lineup (renumbers)', disabled: favIndex(ch.id) <= 0, onClick: function(){ moveFav(ch.id, -1); } }),
                 h('button', { className: 'btn ghost sm', type: 'button', text: 'Down', title: 'Move down the lineup (renumbers)', disabled: favIndex(ch.id) < 0 || favIndex(ch.id) >= (iptv.channels || []).length - 1, onClick: function(){ moveFav(ch.id, 1); } }),
-                h('button', { className: 'btn ghost', type: 'button', text: 'Check', onClick: function(){
+                h('button', { className: 'btn ghost', type: 'button', text: 'Match EPG', onClick: function(){matchChannelEpg(ch.id);} }),
+                h('button', { className:'btn ghost',type:'button',text:'Check',onClick:function(){
                   probeIptvItems([{ id: ch.id, url: ch.url || '' }], function(){ paintLiveIptv(host); });
                 }}),
                 h('button', { className: 'btn ghost', type: 'button', text: 'Remove', onClick: function(){
@@ -13984,7 +14092,8 @@ function viewCollectionDetail(){
               h('td', { text: ch.sourceFeedName || ch.sourceFeedId || '' }),
               h('td', { text: ch.quality || '' }),
               h('td', { className: 'row-actions' }, [
-                h('button', { className: 'btn ghost', type: 'button', text: 'Check', onClick: function(){
+                ch.inLineup?h('button', { className: 'btn ghost', type: 'button', text: 'Match EPG', onClick: function(){matchChannelEpg(ch.id);} }):null,
+                h('button', { className:'btn ghost',type:'button',text:'Check',onClick:function(){
                   probeIptvItems([{ id: ch.id, url: ch.url }], function(){ paintIptvBrowseResults(); });
                 }}),
                 ch.inLineup ? h('span', { className: 'muted', text: 'Added' }) : h('button', { className: 'btn', type: 'button', text: 'Add', onClick: function(){
@@ -14101,6 +14210,7 @@ function viewCollectionDetail(){
     if (rel !== '' && rel !== 'welcome' && rel !== 'login') state._returnHash = BASE + rel + (location.search || '');
   }
   function showWelcome(){
+    if(radioState&&radioState.station)stopRadio();
     rememberReturnPath();
     state.view = 'welcome';
     _navSilent = true;
@@ -14333,7 +14443,7 @@ function viewCollectionDetail(){
       if (!state.settingsSection || state.settingsSection === 'account') state.settingsSection = state.adminTab || 'general';
     }
     if (state.view === 'settings') {
-      var adminOnly = { maintenance:1, players:1, features:1, diagnostics:1, sections:1, libraries:1, scan:1, library:1, media:1, collections:1, streaming:1, convert:1, queue:1, acquisition:1, system:1, general:1, users:1, advanced:1, ingest:1, matching:1, reports:1, live:1, 'live-channels':1, 'live-library':1, 'live-playlists':1, 'live-iptv':1, 'live-schedule':1, 'live-station':1, 'live-studio':1 };
+      var adminOnly = { maintenance:1, players:1, features:1, diagnostics:1, sections:1, libraries:1, scan:1, library:1, media:1, collections:1, streaming:1, convert:1, queue:1, acquisition:1, system:1, general:1, users:1, advanced:1, ingest:1, matching:1, reports:1, live:1, 'live-channels':1, 'live-library':1, 'live-playlists':1, 'live-iptv':1, 'live-schedule':1, 'live-station':1, 'live-studio':1, 'live-radio':1 };
       if (adminOnly[state.settingsSection] && !(state.user && state.user.role === 'admin')) {
         state._wantAdmin = true;
         state._settingsAfterLogin = state.settingsSection;

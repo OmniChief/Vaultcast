@@ -104,7 +104,7 @@ trait CompatibilityTools {
         if($view==='tools'){
             $html=self::heading('YOUR TOOLS','Tools and settings','Actions run only when selected.');
             foreach(self::toolDefinitions() as $key=>$definition){if($definition[3]==='admin'?(self::$viewer['role'] ?? '')!=='admin':!Permissions::allowed(self::$viewer,$definition[3]))continue;$html.=self::link($definition[0],['view'=>'tool','id'=>$key]);}
-            if((self::$viewer['role'] ?? '')==='admin')$html.=self::link('Application settings',['view'=>'configuration']).self::link('Watch Live settings',['view'=>'live-admin']).self::link('Create movie collection',['view'=>'manage-collection']).self::link('Users and roles',['view'=>'users']);return $html;
+            if((self::$viewer['role'] ?? '')==='admin')$html.=self::link('Application settings',['view'=>'configuration']).self::link('Live settings',['view'=>'live-admin']).self::link('Create movie collection',['view'=>'manage-collection']).self::link('Users and roles',['view'=>'users']);return $html;
         }
         if($view==='tool'){
             $definition=self::toolDefinitions()[$id] ?? null;if(!$definition)throw new RuntimeException('Unknown tool.');self::toolPermission($definition[3]);$html=self::heading('TOOLS',$definition[0]).self::beginForm(['view'=>'tool','id'=>$id],'run_tool');

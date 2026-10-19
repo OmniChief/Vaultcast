@@ -71,7 +71,7 @@ final class CompatibilityBrowser {
     }
     private static function home(array $home): string {
         $name=self::$signed?((self::$viewer['display_name'] ?? '') ?: self::$viewer['username']):'';
-        $html='<div class="compat-hero">'.self::heading('YOUR SPACE. YOUR STORIES.',$name!==''?'Welcome back, '.$name:'Make yourself at home.','Your favourites, your next episode and something new to discover.').'<div class="compat-actions">'.(AreaAccess::allowed(self::$viewer,'library')?self::link('Explore the library',['view'=>'library']):'').(!empty($home['features']['live'])?self::link('Watch Live',['view'=>'live']):'').'</div></div>';
+        $html='<div class="compat-hero">'.self::heading('YOUR SPACE. YOUR STORIES.',$name!==''?'Welcome back, '.$name:'Make yourself at home.','Your favourites, your next episode and something new to discover.').'<div class="compat-actions">'.(AreaAccess::allowed(self::$viewer,'library')?self::link('Explore the library',['view'=>'library']):'').(!empty($home['features']['live'])?self::link('Live',['view'=>'live']):'').'</div></div>';
         $panels=[];$continue=array_slice($home['continue_watching'] ?? [],0,6);if(!$continue)$continue=self::recentProgress();
         if($continue)$panels['recent']='<section class="compat-shelf"><h2>Continue watching</h2>'.self::cards($continue).'</section>';
         $personal=self::personal();$favourites=[];
@@ -196,10 +196,17 @@ final class CompatibilityBrowser {
         throw new RuntimeException('Page not found.');
     }
     private static function live(string $id,int $page,string $query): string {
-        self::allow('live');if(empty(Store::settings()['features']['live']))throw new RuntimeException('Watch Live is disabled.');
+        self::allow('live');if(empty(Store::settings()['features']['live']))throw new RuntimeException('Live is disabled.');
+        if(($_GET['tab'] ?? '')==='radio'){
+            $stations=Radio::stations();$html='<h2>Radio</h2>'.self::link('Live television',['view'=>'live']);
+            if($id!==''){foreach($stations as $radio)if($radio['id']===$id){$html.='<section class="compat-panel"><h3>'.self::esc($radio['name']).'</h3><audio controls="controls" preload="none" src="'.self::esc($radio['url']).'">Your browser needs support for this audio format.</audio><p>'.self::esc($radio['description'] ?: ($radio['tags'] ?? '')).'</p></section>';break;}}
+            $html.=self::searchForm(['view'=>'live','tab'=>'radio'],$query);$stations=array_values(array_filter($stations,static function($radio)use($query){return $query===''||mb_stripos($radio['name'].' '.($radio['country'] ?? '').' '.($radio['tags'] ?? ''),$query)!==false;}));
+            $html.='<ul class="compat-list">';foreach(array_slice($stations,($page-1)*16,16) as $radio)$html.='<li>'.self::link($radio['name'],['view'=>'live','tab'=>'radio','id'=>$radio['id']]).'<p class="compat-note">'.self::esc(($radio['country'] ?? '').' · '.($radio['tags'] ?? '')).'</p></li>';
+            return $html.'</ul>'.self::pages(['view'=>'live','tab'=>'radio','q'=>$query],$page,$page*16<count($stations));
+        }
         require_once STREAM_ROOT.'/src/Live/store.php';require_once STREAM_ROOT.'/src/Live/epg.php';require_once STREAM_ROOT.'/src/Live/schedule.php';
         $schedule=mb_substr((string)($_GET['schedule'] ?? ''),0,100);$station=relay_load_station();$guide=LiveGuideCache::read(2,$schedule==='',self::$viewer,static function($hours,$slim)use($station){return epg_unified_guide($station,$hours,$slim,self::$viewer);});
-        $html='<h2>Watch Live</h2>';if($id!==''){
+        $html='<h2>Live</h2>'.self::link('Radio',['view'=>'live','tab'=>'radio']);if($id!==''){
             $channel=null;foreach($guide['channels'] ?? [] as $ch)if((string)$ch['id']===$id)$channel=$ch;
             if(!$channel)throw new RuntimeException('Channel unavailable.');$html.='<h3>'.self::esc($channel['name']).'</h3>';
             if(($channel['kind'] ?? '')==='iptv'){
@@ -263,7 +270,7 @@ final class CompatibilityBrowser {
             }else{try{$body=self::content($home);}catch(Throwable $e){http_response_code(400);$body='<div class="compat-panel"><h2>Unable to open this page</h2><p>'.self::esc($e instanceof RuntimeException || $e instanceof DomainException?$e->getMessage():'Please try again.').'</p>'.self::link('Home').'</div>';error_log('Vaultcast compatibility browser: '.$e->getMessage());}}
         }
         $nav='<div class="compat-header"><a class="compat-brand" href="'.self::esc(self::url()).'"><span class="compat-logo">&#9654;</span> '.self::esc($site).'</a><div class="compat-major-nav">';
-        $tabs=['home'=>'Home'];if($home && AreaAccess::allowed(self::$viewer,'library'))$tabs['library']='Library';if(!empty($home['features']['live']))$tabs['live']='Watch Live';$tabs['account']=self::$signed?'Account':'Sign in';
+        $tabs=['home'=>'Home'];if($home && AreaAccess::allowed(self::$viewer,'library'))$tabs['library']='Library';if(!empty($home['features']['live']))$tabs['live']='Live';$tabs['account']=self::$signed?'Account':'Sign in';
         foreach($tabs as $key=>$label){$target=$key==='account'&&!self::$signed?'login':$key;$selected=$view===$target || ($key==='library'&&in_array($view,['section','show','item','search','collections','collection'],true));$nav.='<a'.($selected?' class="active" aria-current="page"':'').' href="'.self::esc(self::url(['view'=>$target])).'">'.self::esc($label).'</a>';}
         $nav.='</div></div>';
         if($home){

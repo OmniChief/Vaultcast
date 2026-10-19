@@ -659,6 +659,7 @@ function iptv_normalize_channel($incoming) {
     return array(
         'id' => $id,
         'tvgId' => $tvgId,
+        'epgId' => mb_substr(trim((string)($incoming['epgId'] ?? '')),0,240),
         'feed' => isset($incoming['feed']) ? $incoming['feed'] : '',
         'sourceFeedId' => isset($incoming['sourceFeedId']) ? $incoming['sourceFeedId'] : '',
         'name' => $name,
@@ -681,12 +682,14 @@ function iptv_add_channel($incoming) {
     foreach ($state['channels'] as $i => $existing) {
         if ($existing['id'] === $ch['id'] && (string)(isset($existing['tvgId']) ? $existing['tvgId'] : '') === (string)$ch['tvgId']) {
             $ch['addedAt'] = isset($existing['addedAt']) ? $existing['addedAt'] : $ch['addedAt'];
+            if(!array_key_exists('epgId',$incoming))$ch['epgId']=$existing['epgId'] ?? '';
             $state['channels'][$i] = $ch;
             $found = true;
             break;
         }
         if ($existing['id'] === $ch['id'] && $ch['tvgId'] === '') {
             $ch['addedAt'] = isset($existing['addedAt']) ? $existing['addedAt'] : $ch['addedAt'];
+            if(!array_key_exists('epgId',$incoming))$ch['epgId']=$existing['epgId'] ?? '';
             $state['channels'][$i] = $ch;
             $found = true;
             break;
@@ -775,6 +778,7 @@ function iptv_lineup_channels($state = null) {
         $out[] = array(
             'id' => $ch['id'],
             'tvgId' => isset($ch['tvgId']) ? $ch['tvgId'] : '',
+            'epgId' => $ch['epgId'] ?? '',
             'number' => $start + $n,
             'name' => $ch['name'],
             'logo' => isset($ch['logo']) ? $ch['logo'] : '',
