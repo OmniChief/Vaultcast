@@ -2640,7 +2640,7 @@ function confirmDialog(message, opts){
     np._streamAckUsers = {};
     np._streamCheckpoints = {};
     np._streamExpectedChecks = {};
-    np._streamLastVerifiedFrame = 0;
+    np._streamLastVerifiedFrame = 0;np._streamConsecutiveMismatches=0;np._streamVerifiedUsers={};np._streamConfirmationFrame=null;
     np._streamNextCheckFrame=window.VaultcastNetplaySync.CHECK_INTERVAL;
     np._streamFrameWait=null;
     np._streamBuffering=true;np._streamLastAckFrame=0;np._streamRecoveryPaused=false;
@@ -2747,19 +2747,20 @@ function confirmDialog(message, opts){
     else if(!expected)return null;
     var started=performance.now(),hash=lobbyStateHash(emu),elapsed=performance.now()-started;
     if(np.owner){
-      // Slow cores verify less frequently, without changing the agreed frame boundary.
-      var interval=elapsed>8?1800:window.VaultcastNetplaySync.CHECK_INTERVAL;
-      np._streamNextCheckFrame=frame+interval;
-      lobbyLog('state_checkpoint',{frame:frame,ms:Math.round(elapsed),next_frame:np._streamNextCheckFrame});
-      return {frame:frame,hash:hash,next_frame:np._streamNextCheckFrame};
+      var confirmation=np._streamConfirmationFrame===frame;np._streamConfirmationFrame=null;
+      var interval=elapsed>8?1800:window.VaultcastNetplaySync.CHECK_INTERVAL;np._streamNextCheckFrame=frame+interval;
+      lobbyLog('state_checkpoint',{frame:frame,ms:Math.round(elapsed),next_frame:np._streamNextCheckFrame,confirmation:confirmation});
+      return {frame:frame,hash:hash,next_frame:np._streamNextCheckFrame,confirmation:confirmation};
     }
     delete np._streamExpectedChecks[frame];
     if(expected!==hash){
-      np._streamAwaitingState=true;np._streamLastVerifiedFrame=0;np.setLoading(true);
-      lobbyLog('state_mismatch',{frame:frame,expected:expected,actual:hash,sync_id:np._streamSyncId});
-      np.sendMessage({sync:true});clearTimeout(np._streamRecoveryTimer);
+      np._streamConsecutiveMismatches=(np._streamConsecutiveMismatches||0)+1;np._streamLastVerifiedFrame=0;
+      lobbyLog('state_mismatch',{frame:frame,expected:expected,actual:hash,sync_id:np._streamSyncId,consecutive:np._streamConsecutiveMismatches});
+      if(np._streamConsecutiveMismatches<2){np.sendMessage({verify_state:true,frame:frame,sync_id:np._streamSyncId});return null;}
+      np._streamAwaitingState=true;np.setLoading(true);
+      np.sendMessage({sync:true,sync_id:np._streamSyncId,reason:'state_mismatch',frame:frame});clearTimeout(np._streamRecoveryTimer);
       np._streamRecoveryTimer=setTimeout(function(){if(!emu._streamDisposed&&np._streamAwaitingState&&!np._streamRecoveryPaused)np._streamSyncFailure('Host did not respond to a synchronisation request');},15000);
-    }else np._streamLastVerifiedFrame=frame;
+    }else{np._streamLastVerifiedFrame=frame;np._streamConsecutiveMismatches=0;}
     return null;
   }
   // A bucket labelled F contains inputs used BEFORE host frame F+1 ran.
@@ -2792,7 +2793,7 @@ function confirmDialog(message, opts){
     // Flush a partial ACK batch when buffering: otherwise the host can wait
     // for progress that the guest has made but has not yet acknowledged.
     if (!np.owner && np.currentFrame > (np._streamLastAckFrame || 0)) {
-      np.sendMessage({frame_ack:np.currentFrame,sync_id:np._streamSyncId});
+      np.sendMessage({frame_ack:np.currentFrame,verified_frame:np._streamLastVerifiedFrame||0,sync_id:np._streamSyncId});
       np._streamLastAckFrame = np.currentFrame;
     }
     if (now - wait.since >= 1000 && now - wait.logged >= 5000) {
@@ -2872,7 +2873,7 @@ function confirmDialog(message, opts){
           if (last < 0) lobbyNetplayTrace(emu, 'host_sent_frame_zero');
         }
       } else {
-        if(np.currentFrame-(np._streamLastAckFrame||0)>=window.VaultcastNetplaySync.ACK_EVERY){np.sendMessage({frame_ack:np.currentFrame,sync_id:np._streamSyncId});np._streamLastAckFrame=np.currentFrame;}
+        if(np.currentFrame-(np._streamLastAckFrame||0)>=window.VaultcastNetplaySync.ACK_EVERY){np.sendMessage({frame_ack:np.currentFrame,verified_frame:np._streamLastVerifiedFrame||0,sync_id:np._streamSyncId});np._streamLastAckFrame=np.currentFrame;}
         lobbyAdvanceGuest(emu);
       }
       var keepFrom = window.VaultcastNetplaySync.pruneBefore(!!np.owner, np.currentFrame, np._streamLastHostFrame);
@@ -2956,7 +2957,7 @@ function confirmDialog(message, opts){
     // Establish a fresh epoch after membership changes or a verified mismatch.
     np.sync = function(savedBytes){
       if (emu._streamDisposed || !emu.isNetplay || !np.owner || np._streamSyncing) return;
-      if (Object.keys(np.players || {}).some(function(id){ return np.players[id].sync_revision !== 10; })) {
+      if (Object.keys(np.players || {}).some(function(id){ return np.players[id].sync_revision !== 11; })) {
         syncFailed('All players need the latest branch update; refresh each player');
         return;
       }
@@ -2993,7 +2994,7 @@ function confirmDialog(message, opts){
             np._streamHostPaused=false;np._streamUserPaused=false;
             np._streamReadyUsers[np.playerID] = true;lobbyScheduleSyncTrace(emu);releaseHost();
           }
-          if(restoring)lobbyLoadSnapshot(emu,bytes,hash,held,syncId,publish);else publish();
+          lobbyLoadSnapshot(emu,bytes,hash,held,syncId,publish);
         } catch (err) {
           syncFailed(err && err.message ? err.message : String(err));
         }
@@ -3059,11 +3060,18 @@ function confirmDialog(message, opts){
         if (data.frame_ack != null && np.owner) {
           if (data.sync_id === np._streamSyncId && np.players[data.userid] && Number.isInteger(data.frame_ack) && data.frame_ack >= 0 && data.frame_ack <= np.currentFrame) {
             np._streamAckUsers[data.userid] = Math.max(np._streamAckUsers[data.userid] || 0, data.frame_ack);
+            if(Number.isInteger(data.verified_frame)&&data.verified_frame>=0&&data.verified_frame<=data.frame_ack){np._streamVerifiedUsers[data.userid]=data.verified_frame;if(data.verified_frame>0&&Object.keys(np.players||{}).every(function(id){return id===np.playerID||(np._streamVerifiedUsers[id]||0)>0;}))np._streamRecoveries=[];}
           }
           return;
         }
+        if(data.verify_state&&np.owner){
+          if(data.sync_id!==np._streamSyncId||np._streamSyncing||!np.players[data.userid]||!Number.isInteger(data.frame)||data.frame<0||data.frame>np.currentFrame)return;
+          np._streamVerifiedUsers[data.userid]=0;
+          var next=Math.min(np._streamNextCheckFrame||Infinity,np.currentFrame+30);np._streamNextCheckFrame=next;np._streamConfirmationFrame=next;return;
+        }
         if (data.sync === true && np.owner) {
-          if (np._streamSyncing) return;
+          if(np._streamSyncing||!np.players[data.userid]||data.sync_id!==np._streamSyncId)return;
+          if(data.reason!=='state_mismatch'){np.sync();return;}
           var now = Date.now();
           np._streamRecoveries = (np._streamRecoveries || []).filter(function(time){ return now - time < 60000; });
           if (np._streamRecoveries.length >= 3) {
@@ -3089,7 +3097,7 @@ function confirmDialog(message, opts){
           } else {
             if (data.checkpoint) {
               var check = data.checkpoint;
-              if (!Number.isInteger(check.frame) || check.frame <= frame || check.frame!==np._streamNextCheckFrame || !Number.isInteger(check.next_frame) || check.next_frame<check.frame+window.VaultcastNetplaySync.CHECK_INTERVAL || check.next_frame>check.frame+1800 || typeof check.hash !== 'string') {
+              if (!Number.isInteger(check.frame) || check.frame <= frame || (check.frame!==np._streamNextCheckFrame&&!(check.confirmation===true&&check.frame<np._streamNextCheckFrame)) || !Number.isInteger(check.next_frame) || check.next_frame<check.frame+window.VaultcastNetplaySync.CHECK_INTERVAL || check.next_frame>check.frame+1800 || typeof check.hash !== 'string') {
                 throw new Error('Invalid host frame checkpoint');
               }
               np._streamExpectedChecks[check.frame] = check.hash;np._streamNextCheckFrame=check.next_frame;
@@ -3106,7 +3114,7 @@ function confirmDialog(message, opts){
         if (data.restart && !np.owner) {
           emu.pause(true);
           np._streamAwaitingState = true;np.setLoading(true);
-          np.sendMessage({ sync: true });
+          np.sendMessage({sync:true,sync_id:np._streamSyncId});
           return;
         }
         if (data.play && !np.owner) { np._streamHostPaused = false; lobbyAdvanceGuest(emu); return; }
@@ -3224,7 +3232,7 @@ function confirmDialog(message, opts){
         userid: np.playerID,
         sessionid: sid,
         player_slot: 1,
-        sync_revision: 10,
+        sync_revision: 11,
         sync_config: lobbySyncConfiguration(emu),
         netplay_protocol: 'vaultcast-lockstep-4'
       };
@@ -3285,7 +3293,7 @@ function confirmDialog(message, opts){
         userid: np.playerID,
         sessionid: sid,
         player_slot: lobbyOpts.player_slot,
-        sync_revision: 10,
+        sync_revision: 11,
         sync_config: lobbySyncConfiguration(emu),
         netplay_protocol: 'vaultcast-lockstep-4'
       };
@@ -3322,7 +3330,7 @@ function confirmDialog(message, opts){
             return;
           }
           np.players = users || np.players;
-          if (Object.keys(np.players || {}).some(function(id){ return np.players[id].sync_revision !== 10; })) {
+          if (Object.keys(np.players || {}).some(function(id){ return np.players[id].sync_revision !== 11; })) {
             fail('All players need the latest branch update; refresh each player');
             return;
           }

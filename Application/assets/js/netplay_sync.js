@@ -4,7 +4,7 @@
 (function(root){
   'use strict';
   // Bound host lead to avoid building a long input-to-display queue on guests.
-  var ACK_WINDOW = 8;
+  var ACK_WINDOW = 10;
   var BUFFER_FRAMES = 2;
   var ACK_EVERY = 1;
   var CHECK_INTERVAL = 600;
