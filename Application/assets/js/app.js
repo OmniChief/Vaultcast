@@ -1711,6 +1711,7 @@ function confirmDialog(message, opts){
       if (emu) {
         if (emu._cloudBeforeExit) emu._cloudBeforeExit();
         if (emu._screenControllerCleanup) emu._screenControllerCleanup();
+        if(emu._cloudStateLoad)emu._cloudStateLoad.done(new Error('Game closed before the save loaded.'));
         if(emu.netplay&&emu.netplay._streamRestoreRequest){emu.netplay._streamRestoreRequest.reject(new Error('Game closed before multiplayer restore completed.'));emu.netplay._streamRestoreRequest=null;}
         emu._streamDisposed = true;
         if (emu._hubStatsCleanup) emu._hubStatsCleanup();
@@ -2577,6 +2578,7 @@ function confirmDialog(message, opts){
       // inside EJS_Runtime(), before its Promise resolves. Assigning the Module
       // property after game start does not register a callback with those cores.
       window.EJS_Runtime = function(options){
+        ['print','printErr'].forEach(function(key){var previousLog=options[key];options[key]=function(message){observeGameStateLog(emu,String(message));if(typeof previousLog==='function')previousLog.apply(this,arguments);};});
         var previousPre = options.preMainLoop;
         options.preMainLoop = function(){
           emu._streamPreTicks = (emu._streamPreTicks || 0) + 1;
@@ -2588,13 +2590,18 @@ function confirmDialog(message, opts){
           if (emu._streamDisposed) return;
           emu._streamFrameBridgeTicks = (emu._streamFrameBridgeTicks || 0) + 1;
           if (typeof previous === 'function') previous();
+          if(emu._cloudStateLoad)finishCloudStateLoad(emu);
           var callback = emu.Module && emu.Module.postMainLoop;
           if (typeof callback === 'function' && callback !== bridge) callback();
         };
         options.postMainLoop = bridge;
         emu._streamFrameBridgeInstalled = true;
         lobbyLog('frame_bridge_installed', { diagnostic_build: 'frame-gate-4' });
-        return runtime.apply(this, arguments);
+        var result=runtime.apply(this,arguments);
+        function observeModule(module){if(!module)return module;var callMain=module.callMain;if(typeof callMain==='function')module.callMain=function(args){var values=(args||[]).slice();if(values.indexOf('-v')<0&&values.indexOf('--verbose')<0)values.unshift('-v');return callMain.call(this,values);};return module;}
+        // Native load acknowledgement is logged only with verbosity enabled.
+        // Existing print handlers keep it quiet unless emulator debug is enabled.
+        return result&&typeof result.then==='function'?result.then(observeModule):observeModule(result);
       };
       try {
         return initModule.apply(this, arguments);
@@ -2673,6 +2680,26 @@ function confirmDialog(message, opts){
       webgl2: !!(emu.supportsWebgl2 && emu.webgl2Enabled), threads: !!emu.config.threads,
       defaults: emu.defaultCoreOpts || {}, options: emu.gameManager.getCoreOptions() || '' });
   }
+  function observeGameStateLog(emu,message){
+    var load=emu._cloudStateLoad||(emu.netplay&&emu.netplay._streamLoadingState);if(!load||message.indexOf(load.path)<0)return;
+    if(/failed|error|not supported|invalid/i.test(message))load.nativeError='The emulator rejected this save state. Check the game, core and version.';
+    else if(/\[State\].*Loading state.*[0-9]+.*bytes/i.test(message))load.nativeApplied=true;
+  }
+  function finishCloudStateLoad(emu){
+    var load=emu._cloudStateLoad;if(!load)return;if(load.nativeError){load.done(new Error(load.nativeError));return;}if(!load.closed)return;
+    if(load.nativeApplied){load.done();return;}if((load.verifyAttempts||0)>=3)return;load.verifyAttempts=(load.verifyAttempts||0)+1;
+    var exact=false;try{exact=lobbyReadState(emu,32*1024*1024,window.VaultcastNetplaySync.stateHash)===load.hash;}catch(error){if(!load.nativeApplied){load.done(error);return;}}
+    if(load.nativeApplied||exact)load.done();
+  }
+  function loadGameState(emu,bytes){
+    return new Promise(function(resolve,reject){
+      if(emu!==window.EJS_emulator||emu._streamDisposed||!emu.started||emu.isNetplay||emu._cloudStateLoad){reject(new Error('Game is not ready to load a save state.'));return;}
+      var fs=emu.gameManager.FS,load={path:'/vaultcast-cloud.state',previousClose:fs.close,closed:false,hash:window.VaultcastNetplaySync.stateHash(bytes)};
+      load.done=function(error){if(emu._cloudStateLoad!==load)return;clearTimeout(load.timer);if(fs.close===load.close)fs.close=load.previousClose;try{fs.unlink(load.path);}catch(ignore){}emu._cloudStateLoad=null;if(error){reject(error);return;}if(typeof emu.play==='function')emu.play(true);emu.gameManager.functions.toggleMainLoop(1);resolve();};
+      load.close=function(stream){var path=stream&&stream.path,result=load.previousClose.apply(this,arguments);if(path===load.path||path===load.path.slice(1))load.closed=true;return result;};
+      try{fs.writeFile(load.path,bytes);emu._cloudStateLoad=load;fs.close=load.close;emu.gameManager.clearEJSResetTimer();emu.gameManager.functions.loadState(load.path,0);emu.gameManager.functions.toggleMainLoop(1);load.timer=setTimeout(function(){load.done(new Error('The emulator did not acknowledge this save state. Check its game, core and version.'));},12000);}catch(error){if(!emu._cloudStateLoad)emu._cloudStateLoad=load;load.done(error);}
+    });
+  }
   function lobbyCancelStateLoad(emu){
     var np = emu.netplay, load = np && np._streamLoadingState;
     if (!load) return;
@@ -2684,26 +2711,22 @@ function confirmDialog(message, opts){
   function lobbyLoadSnapshot(emu, bytes, hash, held, syncId, ready){
     var np=emu.netplay, fs=emu.gameManager.FS;
     var load={fs:fs,path:'/vaultcast-netplay-'+syncId+'.state',hash:hash,held:held,syncId:syncId,previousClose:fs.close,closed:false,ready:ready};
-    load.close=function(stream){var path=stream && stream.path;var result=load.previousClose.apply(this,arguments);if(path===load.path)load.closed=true;return result;};
+    load.close=function(stream){var path=stream && stream.path;var result=load.previousClose.apply(this,arguments);if(path===load.path||path===load.path.slice(1))load.closed=true;return result;};
     np._streamLoadingState=load;fs.close=load.close;
     fs.writeFile(load.path,bytes);load.closed=false;
     emu.gameManager.clearEJSResetTimer();emu.gameManager.functions.loadState(load.path,0);emu.gameManager.functions.toggleMainLoop(1);
-    load.timer=setTimeout(function(){if(!emu._streamDisposed && np._streamLoadingState===load)np._streamSyncFailure('The emulator did not restore the host state exactly');},12000);
+    load.timer=setTimeout(function(){if(!emu._streamDisposed && np._streamLoadingState===load)np._streamSyncFailure('The emulator did not acknowledge the host save state; check the core/version and refresh all players');},12000);
   }
   function lobbyFinishStateLoad(emu){
     var np = emu.netplay, load = np._streamLoadingState;
     if (!load || !load.closed) return;
-    // load_state queues a native file task. Only after its file has closed AND
-    // the resulting core state matches may we acknowledge the new epoch.
-    var actual = lobbyStateHash(emu);
-    if (actual !== load.hash) {
-      load.verifyAttempts = (load.verifyAttempts || 0) + 1;
-      if (load.verifyAttempts >= 3) {
-        lobbyLog('snapshot_mismatch', { expected: load.hash, actual: actual, sync_id: load.syncId });
-        throw new Error('The core did not restore the host snapshot exactly');
-      }
-      return;
-    }
+    // File close precedes the native deserialize callback. Observe that callback's
+    // log/error result; exact re-serialization is a fallback, not a load contract.
+    if(load.nativeError)throw new Error(load.nativeError);
+    if(!load.nativeApplied&&(load.verifyAttempts||0)>=3)return;if(!load.nativeApplied)load.verifyAttempts=(load.verifyAttempts||0)+1;
+    var actual=lobbyStateHash(emu);
+    if(actual!==load.hash&&!load.nativeApplied)return;
+    if(actual!==load.hash)lobbyLog('snapshot_reserialized',{expected:load.hash,actual:actual,sync_id:load.syncId});
     var held = load.held, syncId = load.syncId, ready = load.ready;
     lobbyCancelStateLoad(emu);
     lobbyRestoreControllerState(emu, held);
@@ -14651,7 +14674,7 @@ function viewCollectionDetail(){
   /* helpers for assets/js/matching.js (Ingest inbox / Fix matching / Label reports) */
   window.NSApp = { h: h, api: api, toast: toast, confirmDialog: confirmDialog, render: render, state: state, can:can,
     openSettings: openSettings, openShow: openShow, openMovie: openMovie, openGame:openGame, navigate:navigate, refreshArtwork:refreshArtwork, fmtSize: fmtSize, version: APP_VERSION,
-    shell:shell,communityPoster:communityPoster,refreshCommunityRating:refreshCommunityRating,heroClock:heroClock,homePosterEl:homePosterEl,homeSectionPosterEl:homeSectionPosterEl,collectionsPosterEl:collectionsPosterEl,librarySummary:librarySummary,cardEl:cardEl,homeActivitySections:homeActivitySections,applyRoute:applyRoute,replaceNav:replaceNav,openPlayer:openPlayer,playItem:playItem,copyText:copyText,shareUrl:shareUrl,startLobbyHost:startLobbyHost,captureGameState:lobbyCaptureState,restoreMultiplayerState:restoreMultiplayerState,quitGame:function(){closePlayer();} };
+    shell:shell,communityPoster:communityPoster,refreshCommunityRating:refreshCommunityRating,heroClock:heroClock,homePosterEl:homePosterEl,homeSectionPosterEl:homeSectionPosterEl,collectionsPosterEl:collectionsPosterEl,librarySummary:librarySummary,cardEl:cardEl,homeActivitySections:homeActivitySections,applyRoute:applyRoute,replaceNav:replaceNav,openPlayer:openPlayer,playItem:playItem,copyText:copyText,shareUrl:shareUrl,startLobbyHost:startLobbyHost,captureGameState:lobbyCaptureState,loadGameState:loadGameState,restoreMultiplayerState:restoreMultiplayerState,quitGame:function(){closePlayer();} };
   window.VaultcastHub.init(window.NSApp);
   window.VaultcastHomeExtras.init(window.NSApp);
   // Load matching tools when Settings or a detail-page action needs them.

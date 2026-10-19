@@ -47,6 +47,7 @@ final class GameSaves {
         $bytes=(int)($body['bytes'] ?? 0);$core=(string)($body['core'] ?? '');$engine=(string)($body['engine'] ?? '');
         if ($bytes<1 || $bytes>self::MAX_BYTES || !preg_match('/^[a-zA-Z0-9_.-]{1,80}$/D',$core) || strlen($engine)>80) throw new DomainException('Unsupported save state (maximum 32 MiB).');
         if ((string)($body['signature'] ?? '')!==MediaFacts::sig($item)) throw new DomainException('The game file changed. Reopen this game before creating another save.');
+        $crc32=strtolower((string)($body['crc32'] ?? ''));if($crc32!==''&&!preg_match('/^[a-f0-9]{8}$/D',$crc32))throw new DomainException('Invalid save checksum.');
         self::collect($user);
         $dir=self::directory($user).'/_uploads';if (!is_dir($dir)) @mkdir($dir,0775,true);
         $pending=0;
@@ -59,7 +60,7 @@ final class GameSaves {
         if (!@mkdir($path,0775)) throw new DomainException('Cannot start save upload.');
         $current=\Vaultcast\Repository::document(self::key($user),[]);
         $previousHash=$current['games'][$id]['slots'][$slot]['hash'] ?? '';
-        $meta=['previous_hash'=>$previousHash,'item_id'=>$id,'slot'=>$slot,'bytes'=>$bytes,'core'=>$core,'engine'=>$engine,'name'=>mb_substr(trim((string)($body['name'] ?? '')),0,80),
+        $meta=['crc32'=>$crc32,'previous_hash'=>$previousHash,'item_id'=>$id,'slot'=>$slot,'bytes'=>$bytes,'core'=>$core,'engine'=>$engine,'name'=>mb_substr(trim((string)($body['name'] ?? '')),0,80),
             'variant'=>($body['variant'] ?? '')==='legacy'?'legacy':'modern','threaded'=>!empty($body['threaded']),
             'signature'=>MediaFacts::sig($item),'title'=>Catalogue::fixText($item['title']),'system'=>$item['system'] ?? '', 'created_at'=>time()];
         if (@file_put_contents($path.'/meta.json',json_encode($meta),LOCK_EX)===false) throw new DomainException('Cannot write save upload.');
@@ -102,12 +103,13 @@ final class GameSaves {
                 $in=fopen($file,'rb');try {if (stream_copy_to_stream($in,$out)!==$expected) throw new DomainException('Cannot assemble save state.');}finally {fclose($in);}
             }
         }finally {fclose($out);}
+        $crc32=hash_file('crc32b',$tmp);if(!empty($meta['crc32'])&&!hash_equals($meta['crc32'],$crc32))throw new DomainException('Save upload checksum mismatch. Retry with the original state file.');
         $hash=hash_file('sha256',$tmp);$dest=self::directory($user).'/'.$hash.'.state';
         $current=\Vaultcast\Repository::document(self::key($user),[]);$currentHash=$current['games'][$meta['item_id']]['slots'][$meta['slot']]['hash'] ?? '';
         if (array_key_exists('previous_hash',$meta) && $currentHash!==$meta['previous_hash'] && $currentHash!==$hash) throw new DomainException('This save slot changed during upload. The local save is retained; review the server slot before retrying.');
         if (is_file($dest) && hash_file('sha256',$dest)===$hash) @unlink($tmp);
         elseif (!@rename($tmp,$dest)) throw new DomainException('Cannot install save state.');
-        $save=['hash'=>$hash,'bytes'=>$meta['bytes'],'core'=>$meta['core'],'engine'=>$meta['engine'],'signature'=>$meta['signature'],
+        $save=['crc32'=>$crc32,'hash'=>$hash,'bytes'=>$meta['bytes'],'core'=>$meta['core'],'engine'=>$meta['engine'],'signature'=>$meta['signature'],
             'variant'=>$meta['variant'],'threaded'=>$meta['threaded'],
             'name'=>$meta['slot']==='auto'?'Exit autosave':($meta['name'] ?: 'Save '.$meta['slot']),'updated_at'=>time()];
         try {self::install($user,$meta['item_id'],$meta['slot'],$save,$meta['title'],$meta['system']);}
@@ -199,8 +201,17 @@ final class GameSaves {
         if ($share!=='') {$shared=self::shared($user,$share);$owner=['id'=>$shared['owner']];$save=$shared['save'];}
         else {$save=self::own($user,$id,$slot);if (!empty($_GET['hash']) && $_GET['hash']!==$save['hash']) throw new DomainException('This save slot changed. Refresh the save list before loading.');}
         $path=self::directory($owner).'/'.$save['hash'].'.state';$stream=@fopen($path,'rb');if (!$stream) throw new DomainException('Save file missing.');
-        header('Content-Type: application/octet-stream');header('Content-Disposition: attachment; filename="vaultcast-'.$save['hash'].'.state"');
-        header('Cache-Control: private, no-store');header('Content-Length: '.fstat($stream)['size']);header('X-Content-Type-Options: nosniff');
+        $size=(int)fstat($stream)['size'];
+        if($size!==(int)$save['bytes']||!hash_equals($save['hash'],hash_file('sha256',$path))){fclose($stream);throw new DomainException('Stored save integrity check failed. Restore another slot or upload a backup.');}
+        $crc32=hash_file('crc32b',$path);$prefix='';$extension='state';
+        if(($_GET['format'] ?? '')==='portable'){
+            $metadata=$save+['format'=>'vaultcast-save-1'];$metadata['format']='vaultcast-save-1';$metadata['item_id']=$share!==''?$shared['item_id']:$id;$metadata['crc32']=$crc32;
+            $json=json_encode($metadata,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR);
+            $prefix="VAULTCAST-SAVE-1\n".pack('N',strlen($json)).$json;$extension='vcsave';
+        }
+        header('Content-Type: application/octet-stream');header('Content-Disposition: attachment; filename="vaultcast-'.$save['hash'].'.'.$extension.'"');
+        header('Cache-Control: private, no-store');header('Content-Length: '.(strlen($prefix)+$size));header('X-Content-Type-Options: nosniff');header('X-Vaultcast-Save-CRC32: '.$crc32);
+        if($prefix!=='')echo $prefix;
         fpassthru($stream);fclose($stream);exit;
     }
 }
