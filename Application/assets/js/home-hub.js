@@ -108,9 +108,13 @@
     return h('div',{className:'hub-two'},[panel('Your people',data.friends.length?data.friends.map(friendCard):[empty('Make the next film night a shared one. Add a friend to get started.')]),panel('Find your friends',[input,results,h('p',{className:'muted',text:'Requests require acceptance. Only friends can view your play totals or send you invitations.'})])]);
   }
   function notices(items){return (items||(data&&data.notifications)||[]).slice().reverse().map(function(n){return h('div',{className:'hub-notice'},[avatar(n.from),h('div',{},[h('strong',{text:n.from.name+' invited you'}),h('p',{text:n.title})]),button('Join',function(){openPath(n.path);},'primary'),button('Dismiss',function(e){var row=e.currentTarget.closest('.hub-notice');request('dismiss',{id:n.id}).then(function(){row.remove();loaded=0;if(data)data.notifications=(data.notifications||[]).filter(function(item){return item.id!==n.id;});if(A.state.inviteOwner===(A.state.user&&A.state.user.id)){A.state.inviteCount=Math.max(0,(A.state.inviteCount||0)-1);document.dispatchEvent(new Event('vaultcast-notices-changed'));}}).catch(error);})]);});}
+  function recentCards(){
+    var row=cards(data.recent,6);row.classList.add('hub-recent-cards');
+    return h('div',{className:'hub-recent-width'},[row]);
+  }
   function overview(){
     return h('div',{className:'hub-two'},[
-      panel('Recently watched',data.recent.length?cards(data.recent,6):[empty('Start a film or episode and your next visit starts right here.')],button('History',function(){go('history');})),
+      panel('Recently watched',data.recent.length?recentCards():[empty('Start a film or episode and your next visit starts right here.')],button('History',function(){go('history');})),
       panel('Back in the game',data.games.length?data.games.slice(0,4).map(function(g){return h('div',{className:'hub-game-row'},[h('div',{},[h('strong',{text:g.card.title}),h('small',{text:time(g.seconds)+' played · '+g.sessions+' sessions'})]),button('Continue playing',function(){window.VaultcastHomeExtras.resume(g.card);},'primary')]);}):[empty('Your recently played games will appear here. Play time counts while the emulator is active.')]),
       panel('Your next watch',cards(data.watchlist,6),button('Watchlist',function(){go('watchlist');})),
       panel('Your circle',data.friends.length?data.friends.slice(0,4).map(friendCard):[empty('Find friends, share a room, make it a film night.')],button('Friends',function(){go('friends');})),

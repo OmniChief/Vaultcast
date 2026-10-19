@@ -288,3 +288,12 @@ body[data-theme] .hub-modal-card{background:var(--bg2);color:var(--text);border-
 .topnav.xnav .mode-tab{flex:0 0 auto;white-space:nowrap}
 @media(max-width:860px){.topnav.xnav>.mode-switch{flex:0 1 auto;width:max-content;margin-left:auto;margin-right:auto}.topnav.xnav .mode-tab{flex:0 0 auto}}
 @media(max-width:720px){.topnav.xnav .mode-label{display:none}.topnav.xnav .mode-tab{width:44px;min-width:44px;min-height:44px;padding:10px;justify-content:center;gap:0}.topnav.xnav .mode-tab .ico{width:22px;height:22px}.topnav.xnav>.mode-switch{gap:4px;padding:4px}}
+
+.hub-recent-width{container-type:inline-size;container-name:recent-watches;min-width:0}
+.hub-recent-cards{grid-template-columns:repeat(auto-fit,minmax(min(100%,118px),1fr));gap:12px}
+.hub-recent-cards>.card{display:none}.hub-recent-cards>.card:first-child{display:block}
+@container recent-watches (min-width:248px){.hub-recent-cards>.card:nth-child(-n+2){display:block}}
+@container recent-watches (min-width:378px){.hub-recent-cards>.card:nth-child(-n+3){display:block}}
+@container recent-watches (min-width:508px){.hub-recent-cards>.card:nth-child(-n+4){display:block}}
+@container recent-watches (min-width:638px){.hub-recent-cards>.card:nth-child(-n+5){display:block}}
+@container recent-watches (min-width:768px){.hub-recent-cards>.card:nth-child(-n+6){display:block}}
