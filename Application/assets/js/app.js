@@ -4085,7 +4085,7 @@ try {
     extra = extra || {};
     if (state.view === 'game' && state.gamePath && !extra.live) return R.build({ view:'play', gamePath: state.gamePath, roomId:state.gameLobby ? state.gameLobby.session.id : null });
     return R.build({ systemSlug: state.view === 'play' && state.sectionSystem ? (state.sectionSystemSlug || null) : null, view: state.view, movieSlug: state.movieSlug, movieId: state.movieId, showSlug: state.showSlug, showKey: state.showKey,
-      season: state.showSeason, episode: state.showEpisode, liveCh: extra.live || null, playTab: state.playTab, section: state.section,
+      season: state.showSeason, episode: state.showEpisode, liveCh: extra.live || null, liveTab:state.liveTab, playTab: state.playTab, section: state.section,
       collectionId: state.collectionId, searchQuery: state.searchQuery, settingsSection: state.settingsSection, adminTab: state.adminTab,
       sectionLetter:state.sectionLetter, collectionsLetter:state.collectionsLetter, hubTab:state.hubTab, cinemaId:state.cinemaId });
   }
@@ -4117,7 +4117,7 @@ try {
         else { state.view = 'show'; state.showKey = j.show_key; state.showSlug = r.slug; state.showSeason = j.season; state.showEpisode = j.episode; state._showEpisodeItem = j.item_id || null; }
       });
     }
-    if (r.view === 'live') { state.view = 'live'; if (r.liveCh) state._openLiveCh = r.liveCh; return Promise.resolve(); }
+    if (r.view === 'live') { state.view = 'live'; state.liveTab=r.liveTab||'now'; state._openLiveCh=r.liveCh||null; return Promise.resolve(); }
     if (r.view === 'play' || r.view === 'game') {
       state.view = 'play'; state.playTab = r.playTab || 'games';
       var rs = romsSection();
@@ -4334,11 +4334,8 @@ try {
       });
       items.push({ label:'Collections', active: state.view === 'collections' || state.view === 'collection', go: function(){ navigate('collections'); } });
     } else if (mode === 'live') {
-      [['On now', 'live-top'], ['Relay', 'live-relay'], ['IPTV', 'live-iptv'], ['Guide', 'live-guide']].forEach(function(p, i){
-        items.push({ label: p[0], active: i === 0, go: function(){
-          var t = document.getElementById(p[1]);
-          if (t) { try { t.scrollIntoView({ behavior:'smooth', block:'start' }); } catch (e) { t.scrollIntoView(); } }
-        } });
+      [['On now','now'],['Relay','relay'],['IPTV','iptv'],['Guide','guide']].forEach(function(page){
+        items.push({label:page[0],active:(state.liveTab||'now')===page[1],go:function(){goLiveTab(page[1]);}});
       });
     } else if (mode === 'play') {
       var rs = romsSection();
@@ -4991,11 +4988,26 @@ try {
       host.replaceChildren();if(!g.channels.length)return;
       if (!live.guide) live.guide = g; // slim data is enough for the first paint of cards
       host.appendChild(rowEl('On Watch Live now', sortLiveChannels(g.channels).slice(0,shelfCapacity(true)).map(function(ch){ return liveCardEl(ch, { compact:true }); }), {
-        className:'row-live', fit:true, more: function(){ goMode('live'); }, moreText:'Open guide'
+        className:'row-live', fit:true, more: function(){ goLiveTab('guide'); }, moreText:'Open guide'
       }));
     }).catch(function(){});
   }
 
+  function goLiveTab(tab){
+    state.liveTab=['now','relay','iptv','guide'].indexOf(tab)>=0?tab:'now';
+    state._openLiveCh=null;navigate('live');
+    try{window.scrollTo(0,0);}catch(e){}
+  }
+  function livePageHero(tab,total){
+    var info={relay:['Relay','Your library, on air. Continuous channels built from your collection.'],iptv:['IPTV','Your favourite live channels, together in one place.'],guide:['Programme guide','Plan your next watch across Relay and IPTV.']}[tab];
+    return h('section',{className:'live-hero',id:'live-top'},[
+      h('div',{className:'live-hero-copy'},[h('div',{className:'eyebrow',text:'Watch Live'}),h('h1',{text:info[0]}),h('p',{text:info[1]}),h('div',{className:'row-actions'},[
+        h('button',{className:'btn',text:'On now',onClick:function(){goLiveTab('now');}}),
+        tab!=='guide'?h('button',{className:'btn',text:'Open guide',onClick:function(){goLiveTab('guide');}}):null
+      ])]),
+      h('div',{className:'live-hero-side'},[heroArt('live'),h('div',{className:'live-clock',id:'live-clock',text:fmtClock(Date.now())}),h('div',{className:'live-count',text:total+' channels'})])
+    ]);
+  }
   function viewLive(){
     var wrap = h('div', { id:'live-view', className:'live-view' }, [
       h('section', { className:'live-hero skeleton', id:'live-top' }, [
@@ -5060,26 +5072,27 @@ try {
     var relay = chans.filter(function(c){ return c.kind !== 'iptv'; });
     var iptv = chans.filter(function(c){ return c.kind === 'iptv'; });
     root.innerHTML = '';
-    root.appendChild(liveHeroEl(relay.length ? relay : chans, all.length));
+    var tab=state.liveTab||'now';
+    root.appendChild(tab==='now'?liveHeroEl(relay.length?relay:chans,all.length):livePageHero(tab,tab==='relay'?relay.length:tab==='iptv'?iptv.length:chans.length));
     if (live.filter) {
       root.appendChild(h('p', { className:'live-filter-note muted' }, [
         (chans.length + ' of ' + all.length + ' channels match \u201c' + live.filter + '\u201d. '),
         h('button', { className:'linkish', type:'button', text:'Clear filter', onClick: function(){ live.filter = ''; var b = $('#q'); if (b) b.value = ''; paintLive(); } })
       ]));
     }
-    root.appendChild(h('section', { className:'live-section', id:'live-relay' }, [
-      h('div', { className:'row-head' }, [ h('h2', { text:'Relay' }), h('span', { className:'meta', text:'PseudoTV from your library \u00b7 ' + relay.length + ' channel' + (relay.length === 1 ? '' : 's') }) ]),
-      relay.length ? h('div', { className:'live-grid' }, relay.map(function(c){ return liveCardEl(c); }))
+    if(tab==='now'||tab==='relay')root.appendChild(h('section', { className:'live-section', id:'live-relay' }, [
+      h('div', { className:'row-head' }, [ h('h2', { text:'Relay' }), h('span', { className:'meta', text:'PseudoTV from your library \u00b7 ' + relay.length + ' channel' + (relay.length === 1 ? '' : 's') }),tab==='now'?h('button',{className:'btn ghost row-more',text:'All Relay channels',onClick:function(){goLiveTab('relay');}}):null ]),
+      relay.length ? h('div', { className:'live-grid' }, (tab==='now'?relay.slice(0,shelfCapacity(true)):relay).map(function(c){ return liveCardEl(c); }))
         : emptyState(live.filter ? 'No Relay channels match' : 'No Relay channels', live.filter ? '' : 'Create channels in Live settings.')
     ]));
-    root.appendChild(h('section', { className:'live-section', id:'live-iptv' }, [
-      h('div', { className:'row-head' }, [ h('h2', { text:'IPTV' }), h('span', { className:'meta', text:'Favourites from your M3U feeds \u00b7 ' + iptv.length }) ]),
-      iptv.length ? h('div', { className:'live-grid' }, iptv.map(function(c){ return liveCardEl(c); }))
+    if(tab==='now'||tab==='iptv')root.appendChild(h('section', { className:'live-section', id:'live-iptv' }, [
+      h('div', { className:'row-head' }, [ h('h2', { text:'IPTV' }), h('span', { className:'meta', text:'Favourites from your M3U feeds \u00b7 ' + iptv.length }),tab==='now'?h('button',{className:'btn ghost row-more',text:'All IPTV channels',onClick:function(){goLiveTab('iptv');}}):null ]),
+      iptv.length ? h('div', { className:'live-grid' }, (tab==='now'?iptv.slice(0,shelfCapacity(true)):iptv).map(function(c){ return liveCardEl(c); }))
         : emptyState(live.filter ? 'No IPTV channels match' : 'No IPTV favourites yet',
             live.filter ? '' : 'Browse your playlist feeds and add favourites in Live settings \u2192 IPTV.',
             live.filter ? null : [ h('button', { className:'btn', type:'button', text:'Open Live settings', onClick: function(){ openSettings('live-channels'); } }) ])
     ]));
-    root.appendChild(h('section', { className:'live-section', id:'live-guide' }, [
+    if(tab==='guide')root.appendChild(h('section', { className:'live-section', id:'live-guide' }, [
       h('div', { className:'row-head' }, [
         h('h2', { text:'Guide' }),
         h('span', { className:'meta', text: 'Relay schedule + IPTV XMLTV' + (live.guide && live.guide.epgUpdatedAt ? ' \u00b7 EPG ' + String(live.guide.epgUpdatedAt).slice(0, 16).replace('T', ' ') : '') })
@@ -5138,7 +5151,7 @@ try {
         h('div', { className:'lc-bar hero-bar' }, [ h('span', { style:'width:' + pct + '%', 'data-s': p ? String(p.startUnix) : '', 'data-e': p ? String(p.endUnix) : '' }) ]),
         h('div', { className:'row-actions' }, [
           h('button', { className:'btn primary btn-lg', type:'button', onClick: function(){ openLivePlayer(feat.id); } }, [ icon('playFill'), h('span', { text:'Watch live' }) ]),
-          h('button', { className:'btn glass btn-lg', type:'button', onClick: function(){ var g = $('#live-guide'); if (g) g.scrollIntoView({ behavior:'smooth', block:'start' }); } }, [ icon('guide'), h('span', { text:'Guide' }) ])
+          h('button', { className:'btn glass btn-lg', type:'button', onClick: function(){goLiveTab('guide');} }, [ icon('guide'), h('span', { text:'Guide' }) ])
         ])
       ]),
       right

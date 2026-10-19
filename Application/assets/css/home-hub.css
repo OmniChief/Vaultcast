@@ -275,3 +275,10 @@ body[data-theme] .hub-modal-card{background:var(--bg2);color:var(--text);border-
 .section-hero .console-chip:hover{border-color:var(--neon-line);background:var(--surface-3)}
 .section-hero .console-chip.active{background:var(--hero-glow);border-color:var(--accent);color:var(--accent);box-shadow:inset 0 0 0 1px var(--neon-line)}
 @media(max-width:540px){.section-hero>.console-filter{margin-top:20px;padding-top:16px}.section-hero .console-chip{padding:8px 12px;font-size:.78rem}}
+
+.live-hero.has-poster{grid-template-columns:clamp(140px,14vw,210px) minmax(0,1fr) auto;align-items:center;gap:clamp(18px,2.5vw,36px)}
+.live-hero .live-hero-poster{width:100%;height:auto;min-height:0;aspect-ratio:2/3;align-self:center;background-size:cover;background-position:center;overflow:hidden}
+.live-hero-copy,.live-hero-side{min-width:0}.live-hero-copy h1{overflow-wrap:anywhere}
+.live-section .row-head{flex-wrap:wrap}
+@media(max-width:1100px){.live-hero.has-poster{grid-template-columns:clamp(120px,18vw,180px) minmax(0,1fr)}.live-hero.has-poster .live-hero-poster{grid-column:1;grid-row:1 / span 2}.live-hero.has-poster .live-hero-copy{grid-column:2}.live-hero.has-poster .live-hero-side{grid-column:2;text-align:left}}
+@media(max-width:540px){.live-hero.has-poster{grid-template-columns:clamp(80px,24vw,110px) minmax(0,1fr);gap:18px}.live-hero.has-poster .live-hero-poster{grid-row:1}.live-hero.has-poster .live-hero-side{grid-column:1 / -1}.live-hero.has-poster h1{font-size:clamp(1.45rem,6vw,2rem)}.live-hero.has-poster .row-actions .btn{padding:9px 12px;font-size:.8rem}}
