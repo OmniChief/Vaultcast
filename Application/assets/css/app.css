@@ -2365,8 +2365,12 @@ body.reduce-motion .welcome .welcome-feature { transition:none; }
   color: var(--text);
 }
 .az-rail .az-btn.active { color: #fff; background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+body.has-az-rail main.view {
+  padding-left: calc(var(--az-gutter) + 6px);
+  width: 100%; min-width: 0; box-sizing: border-box;
+}
 body.has-az-rail #section-view,
-body.has-az-rail .has-az-rail { padding-left: calc(var(--az-gutter) + 6px); }
+body.has-az-rail .has-az-rail { min-width: 0; max-width: 100%; }
 .az-rail {
   display: flex;
   flex-direction: column;
@@ -2409,7 +2413,7 @@ body.has-az-rail .has-az-rail { padding-left: calc(var(--az-gutter) + 6px); }
 .az-rail .az-btn { appearance: none; border: 0; background: transparent; color: var(--muted); padding: 0; margin: 0; border-radius: var(--radius-xs); font-weight: 700; line-height: 1; cursor: pointer; flex: 0 0 auto; width: 24px; min-height: 16px; font-size: .64rem; }
 .az-toggle { display: none; }
 @media (max-width: 720px), (pointer: coarse) and (max-width: 900px) {
-  body.has-az-rail #section-view, body.has-az-rail .has-az-rail { padding-left: 0; }
+  body.has-az-rail main.view { padding-left: 0; }
   .az-rail {
     display: none !important; opacity: 1;
     left: auto !important; right: 12px !important; top: auto !important; bottom: 72px !important;

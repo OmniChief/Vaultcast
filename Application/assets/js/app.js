@@ -4379,7 +4379,10 @@ try {
   },30000);
   function heroArt(kind){return h('div',{className:'hero-art hero-art-'+kind,'aria-hidden':'true'},[h('span'),h('span'),h('span')]);}
   function shelfCapacity(liveCards){
-    var width=Math.min(window.innerWidth,1900),gutter=Math.max(16,Math.min(56,width*.036)),card=liveCards?Math.max(250,Math.min(340,width*.25)):Math.max(138,Math.min(210,width*.115));
+    var viewport=window.innerWidth,railPage=state.view==='section'||state.view==='collections'||(state.view==='play'&&(state.playTab||'games')==='games');
+    var compact=window.matchMedia('(max-width: 720px), (pointer: coarse) and (max-width: 900px)').matches;
+    var inset=railPage&&!compact?(parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--az-gutter'))||34)+6:0;
+    var width=Math.min(viewport-inset,1900),gutter=Math.max(16,Math.min(56,viewport*.036)),card=liveCards?Math.max(250,Math.min(340,viewport*.25)):Math.max(138,Math.min(210,viewport*.115));
     return Math.max(1,Math.floor((width-gutter*2-48+14)/(card+14)));
   }
 
@@ -4410,6 +4413,7 @@ try {
   function shell(content){
     var mode = currentMode();
     applyTheme();
+    document.body.classList.toggle('has-az-rail',state.view==='section'||state.view==='collections'||(state.view==='play'&&(state.playTab||'games')==='games'));
     try { document.body.setAttribute('data-mode', mode || 'none'); } catch (e) {}
     var modes = [
       ['home', 'Home', 'Your lists, friends and next great night'],
@@ -5831,7 +5835,7 @@ try {
     try { document.body.classList.add('has-az-rail'); } catch (eAz2) {}
     /* Mount on body so position:fixed stays viewport-sticky while library grids scroll
        (ancestors with transform/filter/animation would otherwise trap fixed).
-       The rail sits in a reserved left gutter: .has-az-rail pads the content, so it never covers posters. */
+       The main layout reserves the rail gutter before content is rendered, so it never covers posters. */
     if (!rail.id) rail.id = 'az-rail';
     document.body.appendChild(rail);
     window.addEventListener('scroll', azOnScroll, { passive: true });
