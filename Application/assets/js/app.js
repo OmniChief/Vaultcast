@@ -6451,6 +6451,7 @@ try {
       });
     }
     if (!entries.length && !(state.sectionSystem)) return;
+    if(state.sectionSystem&&!entries.some(function(entry){return entry.name===state.sectionSystem;}))entries.push({name:state.sectionSystem,count:0});
     entries.sort(function(a, b){ return a.name.localeCompare(b.name); });
     var active = state.sectionSystem || '';
     var totalAll = entries.reduce(function(s, e){ return s + e.count; }, 0);
@@ -6458,6 +6459,7 @@ try {
       h('button', {
         type:'button',
         className: 'console-chip' + (!active ? ' active' : ''),
+        'aria-pressed':String(!active),
         text: 'All' + (totalAll ? (' · ' + totalAll) : ''),
         onClick: function(){ selectConsoleSystem(id, ''); }
       })
@@ -6466,27 +6468,18 @@ try {
       chips.push(h('button', {
         type:'button',
         className: 'console-chip' + (active === e.name ? ' active' : ''),
+        'aria-pressed':String(active===e.name),
         title: e.name + ' (' + e.count + ')',
         text: e.name + ' · ' + e.count,
         onClick: function(){ selectConsoleSystem(id, active === e.name ? '' : e.name); }
       }));
     });
-    var bar = h('div', { id:'play-console-filter', className:'console-filter glass-panel', role:'toolbar', 'aria-label':'Filter by console' }, [
+    var bar = h('div', { id:'play-console-filter', className:'console-filter', role:'group', 'aria-label':'Filter by console' }, [
       h('div', { className:'console-filter-label muted', text:'Console' }),
       h('div', { className:'console-chip-row' }, chips)
     ]);
-    // Insert under showcase if present, else under hero, else at top
-    var showcase = root.querySelector('#section-showcase');
-    var hero = root.querySelector('.section-hero, .play-hero');
-    if (showcase && showcase.parentNode === root) {
-      if (showcase.nextSibling) root.insertBefore(bar, showcase.nextSibling);
-      else root.appendChild(bar);
-    } else if (hero && hero.parentNode === root) {
-      if (hero.nextSibling) root.insertBefore(bar, hero.nextSibling);
-      else root.appendChild(bar);
-    } else {
-      root.insertBefore(bar, root.firstChild);
-    }
+    var hero = root.querySelector('.play-hero, .section-hero');
+    if (hero) hero.appendChild(bar);
   }
   function selectConsoleSystem(id, system){
     state.sectionSystem = system || '';
