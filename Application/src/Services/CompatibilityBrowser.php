@@ -281,6 +281,14 @@ final class CompatibilityBrowser {
             elseif(in_array($view,['chat','inbox'],true)&&!empty($_GET['id'])){$back=['view'=>$view];$label='Back to conversations';}
             $body='<div class="compat-back">'.str_replace('<a class=', '<a data-compat-back="1" class=', self::link($label,$back)).'</div>'.$body;
         }
+        if ((self::$viewer['role'] ?? '')==='admin') {
+            $required=MaintenanceRequirements::status()['required'];
+            if ($required) {
+                $notice='<div class="compat-panel"><h2>Maintenance needs your attention</h2><p>Updates do not start these tasks automatically.</p><ul>';
+                foreach ($required as $item) $notice.='<li><strong>'.self::esc($item['label']).'</strong>: '.self::esc($item['reason']).'</li>';
+                $body=$notice.'</ul>'.self::link('Open maintenance tools',['view'=>'tools']).'</div>'.$body;
+            }
+        }
         $css=(string)file_get_contents(STREAM_ROOT.'/assets/css/compatibility.css');$scriptVersion=substr(hash_file('sha256',STREAM_ROOT.'/assets/js/compatibility.js'),0,16);release_request_locks();
         header('Content-Type: text/html; charset=utf-8');
         echo '<!DOCTYPE html><html lang="en"><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'.self::esc($site).'</title><style>'.$css.'</style></head><body class="'.(self::preference('theme','dark')==='light'?'compat-light ':'').(self::preference('home_compact',false)?'compat-compact':'').'"><a class="compat-skip" href="#compat-content">Skip to content</a>'.$nav.'<div id="compat-shell"><div id="compat-content" role="main">'.$body.'</div><div class="compat-footer"><span>Compatibility mode · '.self::esc(STREAM_VERSION).'</span><a href="'.self::esc($base.'?compat=auto').'">Automatic detection</a><a href="'.self::esc($base.'?compat=off').'">Full interface</a></div></div><script>window.__VC_COMPAT_BASE__='.json_encode($base,JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT).';</script><script src="'.self::esc($base.'index.php?asset=assets/js/compatibility.js&v='.$scriptVersion).'"></script></body></html>';

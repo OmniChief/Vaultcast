@@ -122,21 +122,9 @@ final class BrowseIndex
         if($changed)Catalogue::homeLibrary();
     }
     public static function schedule(): void {
-        if (self::$scheduled || PHP_SAPI==='cli') return;self::$scheduled=true;
-        register_shutdown_function(static function(): void {
-            if (function_exists('fastcgi_finish_request')) fastcgi_finish_request();
-            $dir=STREAM_DATA.'/runtime';if (!is_dir($dir)&&!@mkdir($dir,0775,true)) return;
-            $lock=@fopen($dir.'/browse-queue.lock','c');if (!$lock) return;
-            try {
-                if (!flock($lock,LOCK_EX|LOCK_NB)) return;
-                $stamp=$dir.'/browse-queue.json';$last=json_decode((string)@file_get_contents($stamp),true) ?: [];
-                if (time()-(int)($last['at'] ?? 0)<60) return;
-                // Reuse an already queued/running worker rather than spawning another waiting process.
-                $active=self::query("SELECT name FROM vaultcast_documents WHERE name LIKE 'maintenance-job:%' AND JSON_UNQUOTE(JSON_EXTRACT(payload,'$.task')) IN ('browse','views','search') AND JSON_UNQUOTE(JSON_EXTRACT(payload,'$.status')) IN ('queued','running') LIMIT 1")->fetchColumn();
-                if ($active) return;
-                try {Maintenance::start('browse','Prepare search and show summaries');@file_put_contents($stamp,json_encode(['at'=>time()]),LOCK_EX);}catch(Throwable $e){error_log('Vaultcast browse preparation: '.$e->getMessage());}
-            } finally {flock($lock,LOCK_UN);fclose($lock);}
-        });
+        if (self::$scheduled || PHP_SAPI==='cli') return;
+        self::$scheduled=true;
+        MaintenanceRequirements::needed('browse', 'Search and show summaries need preparation after library or metadata changes.');
     }
     /** Cold fallback groups narrow SQL fields; it never fetches whole episode payloads. */
     private static function source(): string {

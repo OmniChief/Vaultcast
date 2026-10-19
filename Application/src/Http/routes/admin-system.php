@@ -1,5 +1,6 @@
 <?php
 declare(strict_types=1);
+if ($path === '/admin/maintenance/requirements' && $method === 'GET') json_out(MaintenanceRequirements::status());
 if ($path === '/admin/maintenance' && $method === 'GET') json_out(Maintenance::status());
 if ($path === '/admin/maintenance' && $method === 'POST') {
     $body = body_json(); $admin = Auth::requireAdmin();

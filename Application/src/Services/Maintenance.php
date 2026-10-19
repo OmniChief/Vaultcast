@@ -20,7 +20,7 @@ final class Maintenance
     public static function status(): array
     {
         $jobs = \Vaultcast\Repository::rows("SELECT payload FROM vaultcast_documents WHERE name LIKE 'maintenance-job:%' ORDER BY name DESC LIMIT 50");
-        return ['ok' => true, 'tasks' => self::TASKS, 'jobs' => $jobs];
+        return ['ok' => true, 'tasks' => self::TASKS, 'jobs' => $jobs, 'requirements'=>MaintenanceRequirements::status()['required']];
     }
 
     public static function start(string $task, string $actor, ?string $target = null, ?array $payload = null): array
@@ -177,6 +177,7 @@ final class Maintenance
                 throw new RuntimeException($job['result']['error'] ?? $job['result']['reason'] ?? 'The task could not finish.');
             }
             $job['status'] = 'complete';
+            MaintenanceRequirements::completed($job);
         } catch (Throwable $error) {
             $job['status'] = \Vaultcast\Repository::document('maintenance-cancel:' . $id, false) ? 'cancelled' : 'failed';
             $job['error'] = $error->getMessage();

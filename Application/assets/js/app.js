@@ -4383,6 +4383,30 @@ try {
     return Math.max(1,Math.floor((width-gutter*2-48+14)/(card+14)));
   }
 
+  var maintenanceNoticeCache=null,maintenanceNoticeAt=0,maintenanceNoticePending=null;
+  function maintenanceNoticeEl(){
+    if(!state.user||state.user.role!=='admin')return null;
+    var owner=state.user.id,host=h('div',{className:'maintenance-advisory-host'});
+    function paint(result){
+      if(!host.isConnected||!state.user||state.user.id!==owner||state.user.role!=='admin')return;
+      host.replaceChildren();
+      var needed=result.required||[];
+      if(!needed.length)return;
+      host.appendChild(h('div',{className:'maintenance-advisory',role:'status'},[
+        h('div',{},[h('strong',{text:'Maintenance needs your attention'}),h('p',{text:needed.map(function(item){return item.label;}).join(' · ')+'. Updates do not start these tasks automatically.'})]),
+        h('button',{className:'btn',type:'button',text:'Review required tasks',onClick:function(){openSettings('maintenance');}})
+      ]));
+    }
+    host._paintMaintenance=paint;
+    setTimeout(function(){
+      if(!host.isConnected)return;
+      if(maintenanceNoticeCache&&maintenanceNoticeCache.owner===owner&&Date.now()-maintenanceNoticeAt<30000){paint(maintenanceNoticeCache.result);return;}
+      if(!maintenanceNoticePending)maintenanceNoticePending=api('/admin/maintenance/requirements').finally(function(){maintenanceNoticePending=null;});
+      maintenanceNoticePending.then(function(result){if(result.ok&&state.user&&state.user.id===owner){maintenanceNoticeCache={owner:owner,result:result};maintenanceNoticeAt=Date.now();paint(result);}}).catch(function(){});
+    },0);
+    return host;
+  }
+
   function shell(content){
     var mode = currentMode();
     applyTheme();
@@ -4416,6 +4440,7 @@ try {
     return h('div', { className:'app-shell xshell' }, [
       header,
       subnavEl(mode),
+      maintenanceNoticeEl(),
       h('main', { className:'view view-enter', id:'main' }, [ content ])
     ]);
   }
@@ -7383,6 +7408,10 @@ try {
         api('/admin/maintenance').then(function(result){
           jobsHost.textContent = '';
           if (!result.ok) { jobsHost.textContent = result.error || 'Could not load tasks'; return; }
+          maintenanceNoticeCache=null;maintenanceNoticeAt=0;
+          var required=result.requirements||[];
+          $all('.maintenance-advisory-host').forEach(function(host){if(host._paintMaintenance)host._paintMaintenance({required:required});});
+          if(required.length)jobsHost.appendChild(h('div',{className:'settings-card stack'},[h('h3',{text:'Required preparation — run when ready'}),h('p',{className:'muted',text:'Your features remain available. These tasks prepare missing or outdated data for faster responses.'})].concat(required.map(function(item){return h('div',{},[h('strong',{text:item.label}),h('p',{className:'muted',text:item.reason}),h('button',{className:'btn primary',type:'button',text:'Run '+item.label,onClick:function(event){var button=event.currentTarget;button.disabled=true;api('/admin/maintenance',{method:'POST',body:{task:item.task}}).then(function(r){if(!r.ok)throw new Error(r.error||'Could not start task');refreshJobs();}).catch(function(e){toast(e.message,{kind:'bad'});if(button.isConnected)button.disabled=false;});}})]);}))));
           Object.keys(result.tasks).forEach(function(task){
             jobsHost.appendChild(h('div',{className:'settings-card row-actions'},[
               h('strong',{text:result.tasks[task]}),
@@ -7401,7 +7430,7 @@ try {
           if (result.jobs.some(function(job){return job.status==='queued'||job.status==='running';})) jobsHost._poll=setTimeout(function(){if(jobsHost.isConnected && state.view==='settings' && state.settingsSection==='maintenance')refreshJobs();},2000);
         });
       }
-      bodyKids=[h('h2',{text:'Background tasks'}),h('p',{className:'muted',text:'Scans and updates may queue preparation automatically. One task runs at a time. Artwork preparation continues automatically in bounded passes. Cancellation stops at the next file or transaction boundary. Progress refreshes automatically while this page is open.'}),
+      bodyKids=[h('h2',{text:'Background tasks'}),h('p',{className:'muted',text:'Updates and page visits do not start scans or preparation. Run the named tasks when ready. One task runs at a time. Tasks you start may continue in bounded passes. Cancellation stops at the next file or transaction boundary. Progress refreshes automatically while this page is open.'}),
         h('button',{className:'btn',text:'Refresh status',onClick:refreshJobs}), jobsHost,
         h('p',{className:'muted',text:'Video conversion and artwork batches are started by administrators in their settings pages. Download transfers are controlled in Download queue. External OS schedules must be managed in Task Scheduler or cron.'}),
         h('button',{className:'btn',text:'Video conversion jobs',onClick:function(){openSettings('convert');}}),h('button',{className:'btn',text:'Artwork jobs',onClick:function(){openSettings('poster-optimise');}})];
@@ -9630,7 +9659,7 @@ h('div', { className:'cv-find-bar' }, [
     if (!check) {
       host.replaceChildren(h('div',{className:'settings-card stack'},[
         h('p',{text:'Installed version: '+(window.__STREAM_VERSION__ || 'Unknown')}),
-        h('p',{className:'muted',text:'Check GitHub for available updates and branches when you are ready.'}),
+        h('p',{className:'muted',text:'Check GitHub for available updates and branches when you are ready. Updates do not start scans or preparation; required actions are shown in the admin maintenance notice.'}),
         h('button',{className:'btn primary',type:'button',text:'Check for updates',onClick:function(){renderUpdatesPanel(host,branch,true);}})
       ]));
       return;

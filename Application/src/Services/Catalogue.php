@@ -97,18 +97,7 @@ class Catalogue {
     }
 
     public static function queueBrowseWarmup(): void {
-        $dir = STREAM_DATA . '/runtime';
-        if (!is_dir($dir)) @mkdir($dir, 0775, true);
-        $lock = @fopen($dir . '/browse-warmup.lock', 'c');
-        if (!$lock) return;
-        try {
-            if (!flock($lock, LOCK_EX | LOCK_NB)) return;
-            $state = \Vaultcast\Repository::cacheGet('browse-warmup-job');
-            if ($state) return;
-            $job = Maintenance::start('views', 'Prepare missing browse caches');
-            if (!empty($job['ok'])) \Vaultcast\Repository::cachePut('browse-warmup-job', ['id'=>$job['job']['id'] ?? null], 300);
-        } catch (Throwable $e) { error_log('Browse warmup: ' . $e->getMessage()); }
-        finally { flock($lock, LOCK_UN); fclose($lock); }
+        if (PHP_SAPI !== 'cli') MaintenanceRequirements::needed('views', 'Prepared browsing pages or library filters are missing or out of date.');
     }
 
     /**
