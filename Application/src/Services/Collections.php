@@ -24,11 +24,11 @@ class Collections {
      */
     public static function publicList(): array {
         $revision = \Vaultcast\Repository::revision('collections') . '|' . \Vaultcast\Repository::revision('catalogue');
-        $hit = \Vaultcast\Repository::cacheGet('public-collections-v1');
+        $hit = \Vaultcast\Repository::cacheGet('public-collections-v2');
         if (($hit['revision'] ?? '') === $revision) return $hit['data'];
         $data = self::buildPublicList();
         $after = \Vaultcast\Repository::revision('collections') . '|' . \Vaultcast\Repository::revision('catalogue');
-        if ($revision === $after) \Vaultcast\Repository::cachePut('public-collections-v1', ['revision'=>$revision,'data'=>$data], 0);
+        if ($revision === $after) \Vaultcast\Repository::cachePut('public-collections-v2', ['revision'=>$revision,'data'=>$data], 0);
         return $data;
     }
     private static function buildPublicList(): array {
@@ -38,13 +38,14 @@ class Collections {
         foreach ($all as $c) {
             $parts = is_array($c['parts'] ?? null) ? $c['parts'] : [];
             $present = 0;
-            $cover = null;
+            $cover = null;$covers=[];
             foreach ($parts as $p) {
                 if (!is_array($p)) continue;
                 $p = self::withOwned($p, $owned);
                 if (empty($p['present'])) continue;
                 $present++;
                 if ($cover === null && !empty($p['item'])) $cover = $p['item'];
+                if(count($covers)<3&&!empty($p['item']))$covers[]=$p['item'];
             }
             $out[] = [
                 'id' => $c['id'],
@@ -58,6 +59,7 @@ class Collections {
                 'available_count' => $present,
                 'missing_count' => count($parts) - $present,
                 'cover_item' => $cover,
+                'cover_items' => $covers,
                 'refreshed' => !empty($c['refreshed_at']),
             ];
         }

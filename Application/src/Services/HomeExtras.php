@@ -24,7 +24,12 @@ final class HomeExtras {
             }
         }
         usort($out,static function($a,$b){return ($b['mine']<=>$a['mine']) ?: ($b['created_at']<=>$a['created_at']) ?: strcmp($a['id'],$b['id']);});$page=max(1,$page);
-        return ['ok'=>true,'lists'=>array_slice($out,($page-1)*12,12),'has_more'=>$page*12<count($out),'total'=>count($out)];
+        $pageLists=array_slice($out,($page-1)*12,12);$documents=[];
+        foreach($pageLists as $list)$documents[]='personal-list:'.$list['owner'].':'.$list['id'];
+        $previews=[];
+        if($documents){$stmt=\Vaultcast\Database::connection()->prepare('SELECT name,payload FROM vaultcast_documents WHERE name IN ('.implode(',',array_fill(0,count($documents),'?')).')');$stmt->execute($documents);foreach($stmt as $row)$previews[$row['name']]=json_decode($row['payload'],true);}
+        foreach($pageLists as &$list){$entries=$previews['personal-list:'.$list['owner'].':'.$list['id']]['items'] ?? [];$visible=[];foreach($entries as $entry)if(!empty($entry['card'])&&AreaAccess::allowed($user,AreaAccess::itemArea($entry['card'])))$visible[]=$entry['card'];$list['preview_items']=array_slice($visible,0,6);$list['item_count']=count($visible);}unset($list);
+        return ['ok'=>true,'lists'=>$pageLists,'has_more'=>$page*12<count($out),'total'=>count($out)];
     }
     public static function collection(array $user,string $owner,string $id): array {
         if (!preg_match('/^[a-f0-9]{16,64}$/D',$owner) || !preg_match('/^[a-f0-9]{16}$/D',$id)) throw new DomainException('Invalid collection.');

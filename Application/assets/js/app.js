@@ -100,6 +100,10 @@
     } catch(e){}
     return { ok:false, note:'Browser DirectPlay cannot switch audio tracks for this file; container default is used.' };
   }
+  function detailPlayerTools(host){
+    if(!host)return null;var tools=host.nextElementSibling;
+    if(!tools||!tools.classList.contains('detail-player-tools')){tools=h('div',{className:'detail-player-tools'});host.insertAdjacentElement('afterend',tools);}return tools;
+  }
   function playerTrackControls(overlay, media, item, play){
     var bar = h('div', {className:'player-tracks', role:'group', 'aria-label':'Audio and subtitles'});
     var audio = h('select', {id:'player-audio-track', 'aria-label':'Audio track'});
@@ -108,7 +112,8 @@
     bar.appendChild(h('label', {'for':'player-audio-track'}, [h('span',{text:'Audio'}), audio]));
     if (media.tagName === 'VIDEO') bar.appendChild(h('label', {'for':'player-subtitle-track'}, [h('span',{text:'Subtitles'}), captions]));
     bar.appendChild(note);
-    overlay.appendChild(bar);
+    var tools=overlay.classList.contains('player-inline')?detailPlayerTools(overlay.closest('.detail-player')):null;
+    (tools||overlay).appendChild(bar);
     var audioPreference = getAudioPref(item.id), audioApplied = false, subtitlePreference = null, subtitlesApplied = false;
     var subtitleKey = 'vaultcast-subtitles:' + item.id;
     try { subtitlePreference = localStorage.getItem(subtitleKey); } catch (e) {}
@@ -1369,7 +1374,6 @@ function confirmDialog(message, opts){
     if (play && play.media_kind === 'rom' && item && item.game_path) state.gamePath = item.game_path;
     if (!inlineHost) pushNav({ player:true, itemId: item.id });
     var overlay = h('div', { className:'player-overlay player-simple' + (inlineHost ? ' player-inline' : ''), id:'player-overlay' });
-    if (state.gamePath) overlay.appendChild(shareButton(function(){ return routePath(); }, 'Copy link to this game'));
     if (!inlineHost) overlay.appendChild(h('button', {
       className:'player-close', id:'player-back', text:'\u00d7', title:'Back',
       onClick: function(){ try { history.back(); } catch (e) { closePlayer(); } }
@@ -1748,6 +1752,7 @@ function confirmDialog(message, opts){
       }
     } catch (eM) {}
     destroyEmulator();
+    document.querySelectorAll('.detail-player-tools').forEach(function(tools){tools.remove();});
     if (o) {
       try { silenceMediaTree(o); } catch (eSil2) {}
       try { o.innerHTML = ''; } catch (eI) {}
@@ -3641,11 +3646,13 @@ function confirmDialog(message, opts){
   function mountScreenController(emu){
     if (!emu || emu._screenControllerCleanup || !emu.elements || !emu.elements.parent) return;
     var parent = emu.elements.parent, listeners = [], held = {}, active = {}, releases = {}, downSince = {}, disposed = false;
+    var detail=parent.closest('.detail-player'),tools=detailPlayerTools(detail);
     var pref = {};
     try { pref = JSON.parse(localStorage.getItem('vaultcast.screenController') || '{}') || {}; } catch (ePref) {}
     var visible = typeof pref.visible === 'boolean' ? pref.visible : !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
     var size = Math.max(32, Math.min(64, Number(pref.size) || 44));
     var opacity = Math.max(30, Math.min(100, Number(pref.opacity) || 80));
+    var placement=pref.placement==='overlay'?'overlay':pref.placement==='below'?'below':(window.matchMedia&&window.matchMedia('(pointer: coarse)').matches?'below':'overlay');
     var scheme = typeof emu.getControlScheme === 'function' ? emu.getControlScheme() : emu.getCore(true);
     var analog = ['psx','psp','n64'].indexOf(scheme) !== -1;
     var shell = h('div', {className:'screen-controller', 'aria-label':'On-screen controller'});
@@ -3743,8 +3750,13 @@ function confirmDialog(message, opts){
     panel.appendChild(left);
     panel.appendChild(h('div',{className:'screen-controller-center'},[button(scheme==='arcade' || scheme==='mame' ? 'Coin' : 'Select',2),button('Start',3)]));
     panel.appendChild(right);
-    function persist(){try{localStorage.setItem('vaultcast.screenController',JSON.stringify({visible:visible,size:size,opacity:opacity}));}catch(eStore){}}
+    function persist(){try{localStorage.setItem('vaultcast.screenController',JSON.stringify({visible:visible,size:size,opacity:opacity,placement:placement}));}catch(eStore){}}
     function paint(){
+      var full=document.fullscreenElement||document.webkitFullscreenElement,docked=!!tools&&placement==='below'&&!full;
+      shell.classList.toggle('controller-below',docked);
+      var destination=docked?tools:parent;if(shell.parentNode!==destination)destination.appendChild(shell);
+      var toolbarHost=tools&&!full?tools:shell;if(toolbar.parentNode!==toolbarHost)toolbarHost.insertBefore(toolbar,toolbarHost.firstChild);
+      shell.hidden=docked&&!visible;
       panel.hidden = !visible;
       settings.hidden = !visible;
       toggle.setAttribute('aria-expanded',String(visible));
@@ -3762,11 +3774,15 @@ function confirmDialog(message, opts){
     listen(shell,'keydown',function(e){e.stopPropagation();});
     listen(shell,'keyup',function(e){e.stopPropagation();});
     listen(shell,'click',function(e){e.stopPropagation();});
+    ['keydown','keyup','click'].forEach(function(event){listen(toolbar,event,function(e){e.stopPropagation();});});
     listen(window,'blur',releaseAll);
     listen(document,'visibilitychange',releaseAll);
-    listen(document,'fullscreenchange',releaseAll);
+    listen(document,'fullscreenchange',function(){releaseAll();paint();});
+    listen(document,'webkitfullscreenchange',function(){releaseAll();paint();});
     if (!window.PointerEvent) listen(window,'mouseup',function(){release('mouse');});
-    toolbar.appendChild(toggle);toolbar.appendChild(settings);
+    var placementSelect=h('select',{'aria-label':'Controller position'},[h('option',{value:'overlay',text:'Controller over game',selected:placement==='overlay'}),h('option',{value:'below',text:'Controller below game',selected:placement==='below'})]);
+    listen(placementSelect,'change',function(){releaseAll();placement=placementSelect.value;paint();persist();});
+    toolbar.appendChild(toggle);toolbar.appendChild(placementSelect);toolbar.appendChild(settings);
     shell.appendChild(toolbar);shell.appendChild(panel);parent.appendChild(shell);
     parent.classList.add('has-screen-controller');
     paint();
@@ -3774,7 +3790,7 @@ function confirmDialog(message, opts){
       releaseAll();disposed=true;
       listeners.forEach(function(remove){remove();});
       parent.classList.remove('has-screen-controller');
-      shell.remove();
+      shell.remove();toolbar.remove();
       emu._screenControllerCleanup=null;
     };
   }
@@ -3866,7 +3882,7 @@ function confirmDialog(message, opts){
         lobbyEnableNetplayGlobals(gid);
         /* start socket.io fetch during ROM boot so open/join are not racing a cold load */
         try { lobbyEnsureSocketIo(function(){ installNetplayIoShim(); }); } catch (eIoEarly) {}
-        window.EJS_Buttons = { loadState:false, saveState:false, screenshot:true, quickSave:false, quickLoad:false, fullscreen:true, playPause:true, volume:true, mute:true, settings:false, saveSavFiles:true, loadSavFiles:false, exitEmulation:false, netplay:true };
+        window.EJS_Buttons = { contextMenuButton:false, loadState:false, saveState:false, screenshot:true, quickSave:false, quickLoad:false, fullscreen:true, playPause:true, volume:true, mute:true, settings:false, saveSavFiles:true, loadSavFiles:false, exitEmulation:false, netplay:true };
         window.EJS_ready = function(){
           if (session !== _emuSessionId) return;
           var emu = window.EJS_emulator;
@@ -3897,7 +3913,7 @@ try {
         try { delete window.EJS_DEBUG_XX; } catch (eD) { window.EJS_DEBUG_XX = undefined; }
         try { delete window.EJS_EXPERIMENTAL_NETPLAY; } catch (eE) { window.EJS_EXPERIMENTAL_NETPLAY = undefined; }
         try { delete window.EJS_netplayServer; } catch (eN) { window.EJS_netplayServer = undefined; }
-        window.EJS_Buttons = { loadState:true, saveState:true, screenshot:true, quickSave:true, quickLoad:true, fullscreen:true, playPause:true, volume:true, mute:true, settings:true, saveSavFiles:true, loadSavFiles:true, exitEmulation:false };
+        window.EJS_Buttons = { contextMenuButton:false, loadState:true, saveState:true, screenshot:true, quickSave:true, quickLoad:true, fullscreen:true, playPause:true, volume:true, mute:true, settings:true, saveSavFiles:true, loadSavFiles:true, exitEmulation:false };
         window.EJS_ready = function(){
           if(session!==_emuSessionId)return;
           var emu=window.EJS_emulator;if(!emu || emu._streamDisposed || emu._streamSoloBootStarted)return;
@@ -5081,7 +5097,7 @@ try {
       h('div',{className:'live-hero-side'},[heroArt('live'),h('div',{className:'live-clock',id:'live-clock',text:fmtClock(Date.now())}),h('div',{className:'live-count',text:total+(tab==='radio'?' stations':' channels')})])
     ]);
   }
-  var radioState={stations:null,loaded:0,pending:null,audio:null,station:null,hls:null,token:0,status:'',bar:null};
+  var radioState={resizeObserver:null,stations:null,loaded:0,pending:null,audio:null,station:null,hls:null,token:0,status:'',bar:null};
   function loadRadio(force){
     if(!force&&radioState.stations&&Date.now()-radioState.loaded<90000)return Promise.resolve(radioState.stations);
     if(radioState.pending)return radioState.pending;
@@ -5097,7 +5113,7 @@ try {
     if(radioState.bar){var button=radioState.bar.querySelector('[data-radio-toggle]');if(button){button.textContent=audio.paused?'▶':'Ⅱ';button.setAttribute('aria-label',audio.paused?'Play radio':'Pause radio');}}
     try{if(navigator.mediaSession)navigator.mediaSession.playbackState=audio.paused?'paused':'playing';}catch(e){}
   }
-  function stopRadio(){radioState.token++;if(radioState.hls){radioState.hls.destroy();radioState.hls=null;}if(radioState.audio){radioState.audio.pause();radioState.audio.removeAttribute('src');radioState.audio.load();}if(radioState.bar)radioState.bar.remove();radioState.bar=null;radioState.station=null;document.body.classList.remove('radio-playing');$all('[data-radio-status]').forEach(function(el){el.textContent='Ready to listen';});$all('[data-radio-play]').forEach(function(b){b.textContent='Listen live';b.setAttribute('aria-pressed','false');});}
+  function stopRadio(){radioState.token++;if(radioState.resizeObserver){radioState.resizeObserver.disconnect();radioState.resizeObserver=null;}document.documentElement.style.removeProperty('--radio-bar-height');if(radioState.hls){radioState.hls.destroy();radioState.hls=null;}if(radioState.audio){radioState.audio.pause();radioState.audio.removeAttribute('src');radioState.audio.load();}if(radioState.bar)radioState.bar.remove();radioState.bar=null;radioState.station=null;document.body.classList.remove('radio-playing');$all('[data-radio-status]').forEach(function(el){el.textContent='Ready to listen';});$all('[data-radio-play]').forEach(function(b){b.textContent='Listen live';b.setAttribute('aria-pressed','false');});}
   function resumeRadio(){var audio=radioState.audio;if(!audio)return;closePlayer();var play=audio.play();if(play&&play.catch)play.catch(function(){radioState.status='Press play to listen, or check whether this station is available in your region.';updateRadio();});}
   function playRadio(station){
     var audio=radioState.audio;
@@ -5107,6 +5123,7 @@ try {
     var token=++radioState.token;radioState.station=station;radioState.status='Connecting…';
     var volume=h('input',{type:'range',min:0,max:1,step:.05,value:audio.volume,'aria-label':'Radio volume',onInput:function(e){audio.volume=Number(e.target.value);}});
     radioState.bar=h('aside',{className:'radio-player-bar','aria-label':'Radio player'},[h('button',{className:'radio-bar-station',onClick:function(){openLiveChannel('radio:'+station.id);}},[chanLogoEl(station),h('span',{},[h('strong',{text:station.name}),h('small',{'data-radio-status':station.id,text:'Connecting…'})])]),h('div',{className:'radio-bar-actions'},[h('button',{className:'btn','data-radio-toggle':'','aria-label':'Pause radio',text:'Ⅱ',onClick:function(){if(audio.paused)resumeRadio();else audio.pause();}}),volume,h('button',{className:'btn',text:'Open station',onClick:function(){openLiveChannel('radio:'+station.id);}}),h('button',{className:'btn','aria-label':'Stop and close radio',text:'×',onClick:stopRadio})])]);document.body.appendChild(radioState.bar);document.body.classList.add('radio-playing');
+    function measure(){if(radioState.bar)document.documentElement.style.setProperty('--radio-bar-height',Math.ceil(radioState.bar.getBoundingClientRect().height)+'px');}measure();if(window.ResizeObserver){radioState.resizeObserver=new ResizeObserver(measure);radioState.resizeObserver.observe(radioState.bar);}
     if(/\.m3u8(?:\?|$)/i.test(station.url)&&!audio.canPlayType('application/vnd.apple.mpegurl'))loadHls().then(function(Hls){if(token!==radioState.token)return;if(!Hls.isSupported())throw new Error('HLS audio is unavailable in this browser.');var stream=new Hls({enableWorker:true});radioState.hls=stream;stream.on(Hls.Events.MANIFEST_PARSED,resumeRadio);stream.on(Hls.Events.ERROR,function(e,data){if(data.fatal&&token===radioState.token){radioState.status='Station stream is unavailable.';updateRadio();}});stream.loadSource(station.url);stream.attachMedia(audio);}).catch(function(e){if(token===radioState.token){radioState.status=e.message;updateRadio();}});
     else{audio.src=station.url;resumeRadio();}
     try{if(navigator.mediaSession&&window.MediaMetadata){navigator.mediaSession.metadata=new MediaMetadata({title:station.name,artist:radioMeta(station),album:'Live radio'});navigator.mediaSession.setActionHandler('play',resumeRadio);navigator.mediaSession.setActionHandler('pause',function(){audio.pause();});navigator.mediaSession.setActionHandler('stop',stopRadio);}}catch(e){}updateRadio();
@@ -11750,21 +11767,10 @@ h('div', { className:'cv-find-bar' }, [
           list.appendChild(emptyState('No collections for ' + letter, 'Pick another letter or tap All on the A–Z rail.'));
         } else {
           cols.forEach(function(c){
-            var cover = c.cover_item || null;
-            var poster = h('div', { className:'poster poster-pending collection-poster' }, [
-              h('div', { className:'ph', text: c.name || 'Collection' })
-            ]);
-            if (cover) {
-              var pKind = posterKindFor(cover);
-              var pid = posterIdFor(cover);
-              if (pid && (cover.has_poster || posterNeedsRemote(cover))) {
-                if (posterNeedsRemote(cover)) poster.setAttribute('data-poster-fetch', '1');
-                observePoster(poster, pid, pKind);
-              }
-            } else {
-              poster.classList.remove('poster-pending');
-              poster.classList.add('poster-failed');
-            }
+            var covers=(c.cover_items||[c.cover_item]).filter(Boolean).slice(0,3);
+            var poster=h('div',{className:'library-collection-stack',style:'--collection-posters:'+Math.max(1,covers.length)});
+            if(!covers.length)poster.appendChild(h('div',{className:'poster collection-poster poster-failed'},[h('div',{className:'ph',text:c.name||'Collection'})]));
+            covers.forEach(function(cover,index){var image=h('div',{className:'poster poster-pending collection-poster',style:'--collection-index:'+index+';z-index:'+(3-index)},[h('div',{className:'ph',text:cover.title||c.name||'Collection'})]);poster.appendChild(image);var pid=posterIdFor(cover);if(pid)observePoster(image,pid,posterKindFor(cover));});
             var badge = h('div', { className:'collection-badge' }, [
               h('span', { text: String(c.available_count || 0) + '/' + String(c.part_count || 0) })
             ]);
