@@ -4384,13 +4384,13 @@ try {
     if(foot)foot.remove();
   }
   function lastGamePoster(){
-    var holder=h('figure',{className:'page-hero-poster last-game-art'},[homePosterEl(),h('figcaption',{text:'Ready to play'})]);
+    var holder=h('figure',{className:'page-hero-poster last-game-art'},[homePosterEl(),h('figcaption',{className:'card-showcase-badge',text:'Ready to play'})]);
     var owner=state.user&&state.user.id;
     if(!owner||state.user.role==='guest')return holder;
     function paint(item){
       if(!holder.isConnected||owner!==(state.user&&state.user.id)||!item)return;
       var poster=h('div',{className:'poster poster-pending last-game-poster'},[h('div',{className:'ph',text:item.title||'Game'})]);
-      holder.replaceChildren(poster,h('figcaption',{text:'Last played'}));
+      holder.replaceChildren(poster,h('figcaption',{className:'card-showcase-badge',text:'Last played'}));
       observePoster(poster,posterIdFor(item),posterKindFor(item));
     }
     setTimeout(function(){

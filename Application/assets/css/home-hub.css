@@ -371,3 +371,7 @@ body[data-theme] .settings-choice.active,body[data-theme] .settings-live-subnav-
 .hub-collections-search input{width:100%;min-width:0;max-width:100%;padding:11px 14px;border:1px solid var(--border);border-radius:10px;background:var(--bg);color:var(--text);font:inherit}
 .hub-collections-toolbar>.btn{flex:0 0 auto;min-height:44px}
 @media(max-width:540px){.hub-collections-toolbar{padding:16px}.hub-collections-search{flex-basis:100%;max-width:100%}}
+
+.page-hero .last-game-art{position:relative}
+.last-game-art figcaption.card-showcase-badge{position:absolute;top:10px;bottom:auto;left:50%;transform:translateX(-50%);width:max-content;max-width:calc(100% - 16px);margin:0;padding:5px 10px;text-align:center;font-size:.66rem;font-weight:780;letter-spacing:.06em;line-height:1.4;text-transform:uppercase;color:var(--text);background:color-mix(in srgb,var(--accent) 25%,var(--bg2));border:1px solid var(--neon-line);pointer-events:none;backdrop-filter:none;-webkit-backdrop-filter:none}
+.play-hero .console-action-group{display:flex;flex:1 0 100%;flex-wrap:wrap;align-items:center;gap:10px;min-width:0;margin-top:2px}
