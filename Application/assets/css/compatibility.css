@@ -32,3 +32,16 @@ a{color:#70e9fa;text-decoration:none}a:hover{text-decoration:underline}h1,h2,h3,
 @media(max-width:600px){.compat-header-search{float:none;width:100%;margin:0 0 12px;text-align:left}}
 
 .compat-skip-segments{padding:12px 0;margin:8px 0}.compat-skip-segments button{margin-right:10px}
+
+/* Solid-colour instrument-panel fallback for legacy browsers. */
+body.compat-steampunk{background:#15110e;color:#f7e9cf}
+.compat-steampunk a{color:#e2bb72}.compat-steampunk .compat-header,.compat-steampunk .compat-subnav{background:#241b14;border-color:#a4804a}
+.compat-steampunk .compat-hero,.compat-steampunk .compat-panel,.compat-steampunk .compat-fields,.compat-steampunk .compat-message{background:#251d17;color:#f7e9cf;border:3px double #a4804a}
+.compat-steampunk h1,.compat-steampunk h2,.compat-steampunk h3{font-family:Georgia,"Times New Roman",serif;color:#efd09a}
+.compat-steampunk button,.compat-steampunk a.compat-button{background:#443020;color:#f6dfb6;border-color:#bd9457;border-radius:8px}
+.compat-steampunk input,.compat-steampunk select,.compat-steampunk textarea{background:#1a140f;color:#f7e9cf;border-color:#9d7948}
+.compat-steampunk .compat-card{background:#251d17;color:#f7e9cf;border-color:#a4804a}.compat-steampunk .compat-note,.compat-steampunk .compat-footer,.compat-steampunk small{color:#c9b695}
+.compat-steampunk button:focus,.compat-steampunk a:focus,.compat-steampunk input:focus,.compat-steampunk select:focus,.compat-steampunk textarea:focus{outline-color:#f1ce8a;background:#503a24;color:#fff0d4}
+.compat-steampunk .compat-centre-play{background:#2d2016;color:#f4d69c;border-color:#caa366}
+.compat-steampunk .compat-logo,.compat-steampunk .compat-nav a.active,.compat-steampunk .compat-subnav a.active,.compat-steampunk .compat-alphabet a.active{background:#5b3e23;color:#f8db9e;border-color:#bf9659}
+.compat-steampunk .compat-card strong,.compat-steampunk .compat-card small{background:#251d17;color:#eed5aa}.compat-steampunk .compat-message.mine{background:#3c2b1d;border-left-color:#d6ad68}.compat-steampunk .compat-header a:focus,.compat-steampunk .compat-subnav a:focus,.compat-steampunk .compat-card:focus,.compat-steampunk .compat-alphabet a:focus{box-shadow:0 0 0 6px #382719;background:#503a24}

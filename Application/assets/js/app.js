@@ -4555,7 +4555,7 @@ try {
 
   function applyTheme(){
     var theme = state.user && state.user.prefs && state.user.prefs.theme || state.settings && state.settings.theme || 'dark';
-    document.body.setAttribute('data-theme', ['dark','light','retro-scifi'].indexOf(theme)>=0 ? theme : 'dark');
+    document.body.setAttribute('data-theme', ['dark','light','retro-scifi','steampunk'].indexOf(theme)>=0 ? theme : 'dark');
   }
   function librarySummary(home){home=home||state.home||{};return (home.item_count||0)+' titles available';}
   function heroClock(meta){
@@ -7707,6 +7707,7 @@ try {
           h('label', {}, ['Theme', h('select', { id: 'theme' }, [
             h('option', { value: 'dark', text: 'Dark Neon (default)', selected: !prefs.theme || prefs.theme === 'dark' }),
             h('option', { value: 'retro-scifi', text: 'Retro Sci-Fi', selected: prefs.theme === 'retro-scifi' }),
+            h('option', { value: 'steampunk', text: 'Steampunk', selected: prefs.theme === 'steampunk' }),
             h('option', { value: 'light', text: 'Light', selected: prefs.theme === 'light' })
           ])]),
           h('label', {}, ['New password (optional)', h('input', { id: 'pw', type: 'password', placeholder: 'Leave blank to keep' })]),

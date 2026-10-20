@@ -6,7 +6,7 @@ trait CompatibilityPersonal {
     private static function personalPost(string $view,array $body): ?array {
         $action=(string)($body['compat_action'] ?? '');$id=(string)($_GET['id'] ?? '');
         if($action==='account_options'){
-            CompatibilityApi::call('/me/prefs','POST',['theme'=>(($body['theme'] ?? '')==='light'?'light':'dark'),'password'=>(string)($body['password'] ?? ''),'hide_spoilers'=>!empty($body['hide_spoilers']),'language'=>mb_substr((string)($body['language'] ?? ''),0,20)]);
+            CompatibilityApi::call('/me/prefs','POST',['theme'=>(in_array($body['theme']??'',['dark','light','retro-scifi','steampunk'],true)?$body['theme']:'dark'),'password'=>(string)($body['password'] ?? ''),'hide_spoilers'=>!empty($body['hide_spoilers']),'language'=>mb_substr((string)($body['language'] ?? ''),0,20)]);
             return ['view'=>'account'];
         }
         if($action==='home_options'){
@@ -38,7 +38,7 @@ trait CompatibilityPersonal {
         return [$match[1]==='show'?'show_key':'item_id'=>$match[2]];
     }
     private static function accountOptions(): string {
-        return self::beginForm(['view'=>'account'],'account_options').'<h3>Appearance and security</h3>'.self::select('Theme','theme',['dark'=>'Neon dark','light'=>'Light'],(string)self::preference('theme','dark')).self::field('Preferred language','language',(string)self::preference('language','en'),'text',20).'<label class="compat-check"><input type="checkbox" name="hide_spoilers" value="1"'.(self::preference('hide_spoilers',false)?' checked="checked"':'').'> Hide unwatched episode spoilers</label>'.self::field('New password · leave blank to keep current password','password','','password',72).'<button type="submit">Save appearance / password</button></form>'.self::link('Customise Home',['view'=>'home-options']);
+        return self::beginForm(['view'=>'account'],'account_options').'<h3>Appearance and security</h3>'.self::select('Theme','theme',['dark'=>'Dark Neon','retro-scifi'=>'Retro Sci-Fi','steampunk'=>'Steampunk','light'=>'Light'],(string)self::preference('theme','dark')).self::field('Preferred language','language',(string)self::preference('language','en'),'text',20).'<label class="compat-check"><input type="checkbox" name="hide_spoilers" value="1"'.(self::preference('hide_spoilers',false)?' checked="checked"':'').'> Hide unwatched episode spoilers</label>'.self::field('New password · leave blank to keep current password','password','','password',72).'<button type="submit">Save appearance / password</button></form>'.self::link('Customise Home',['view'=>'home-options']);
     }
     private static function homeOptions(): string {
         $labels=['recent'=>'Continue watching','watchlist'=>'Watchlist','friends'=>'Friends','calendar'=>'Release calendar'];$order=(array)self::preference('home_panels',array_keys($labels));
