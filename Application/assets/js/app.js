@@ -14069,6 +14069,8 @@ function viewCollectionDetail(){
   function openInVlc(url){ return copyStreamUrl(url); }
   /* ---------------- IPTV ---------------- */
   function paintLiveIptv(host){
+    if(!host||!host.isConnected)return;
+    var previousScroll=host.childElementCount?window.scrollY:null;
     var iptv = liveSet.iptv || { channels: [], feeds: [], epgUrls: [], numberStart: 100, activeFeedId: 'all' };
     var feeds = iptv.feeds || [];
     var favs = liveSet.favView || (iptv.channels || []).map(function(ch, i){
@@ -14150,7 +14152,7 @@ function viewCollectionDetail(){
             liveApiPost('iptv_save', { activeFeedId: aid }).then(function(res){
               if (!res.ok || !res.body || !res.body.ok) { liveSetMsg((res.body && res.body.error) || 'Save failed', true); return; }
               liveSet.iptv = res.body.iptv;
-              liveSet.browse.feed = aid;
+              liveSet.browse.feed = aid;liveSet.browse.loaded=false;
               liveSetMsg('Active feed set to ' + aid);
               paintLiveIptv(host);
             });
@@ -14247,7 +14249,12 @@ function viewCollectionDetail(){
     ]));
 
     // Browse
-    var br = liveSet.browse;
+    var br = liveSet.browse,owner=state.user&&state.user.id;
+    if(br.owner!==owner){br.owner=owner;br.channels=[];br.loaded=false;br.selection=new Set();}
+    br.generation=(br.generation||0)+1;br.loading=false;br.loadAll=false;
+    if(!br.selection)br.selection=new Set();
+    var feedsKey=JSON.stringify((iptv.feeds||[]).map(function(feed){return [feed.id,feed.url,feed.enabled];}));
+    if(br.feedsKey!==feedsKey){br.feedsKey=feedsKey;br.loaded=false;br.channels=[];br.offset=0;}
     var browseCard = h('div', { className: 'settings-card' }, [
       h('h3', { text: 'Browse channels' }),
       h('div', { className: 'row-actions', style: 'flex-wrap:wrap;margin-bottom:10px' }, [
@@ -14278,6 +14285,7 @@ function viewCollectionDetail(){
       h('div', { id: 'iptvResults', className: 'live-table-wrap' }, [pendingContent({ className: 'muted', })]),
       h('div', { className: 'row-actions', style: 'margin-top:8px' }, [
         h('button', { className: 'btn ghost', type: 'button', id: 'iptvMore', text: 'Load more', disabled: true, onClick: function(){ runIptvBrowse(true, false); }}),
+        h('button',{className:'btn ghost',type:'button',id:'iptvAll',text:'Load all',disabled:true,onClick:function(){if(br.loadAll){br.loadAll=false;br.loading=false;br.generation++;paintIptvBrowseResults();}else runIptvBrowse(true,false,true);}}),
         h('span', { className: 'muted', id: 'iptvCount', text: '' })
       ])
     ]);
@@ -14342,21 +14350,9 @@ function viewCollectionDetail(){
       }).catch(function(e){ liveSetMsg(String(e.message||e), true); });
     }
 
-    function paintIptvBrowseResults(){
-      var box = document.getElementById('iptvResults');
-      var more = document.getElementById('iptvMore');
-      var count = document.getElementById('iptvCount');
-      if (!box) return;
-      box.innerHTML = '';
-      if (br.loading) { box.appendChild(pendingContent({ className: 'muted', })); return; }
-      if (!(br.channels || []).length) {
-        box.appendChild(h('p', { className: 'muted', text: 'No channels in this feed (or all filtered).' }));
-      } else {
-        box.appendChild(h('table', { className: 'live-table' }, [
-          h('thead', {}, [h('tr', {}, ['', 'Status', 'Channel', 'Group', 'Feed', 'Q', ''].map(function(t){ return h('th', { text: t }); }))]),
-          h('tbody', {}, br.channels.map(function(ch, idx){
+    function browseRow(ch,idx){
             return h('tr', {}, [
-              h('td', {}, [h('input', { type: 'checkbox', className: 'iptv-br-sel', 'data-idx': String(idx) })]),
+              h('td', {}, [h('input', { type: 'checkbox', className: 'iptv-br-sel', 'data-idx': String(idx),checked:br.selection.has(ch.url),'data-url':ch.url,onChange:function(e){if(e.target.checked)br.selection.add(ch.url);else br.selection.delete(ch.url);} })]),
               h('td', {className:'iptv-preview-cell'}, [h('span',{className:'iptv-status-preview'},[liveIptvDot(ch.streamStatus||'unknown'),h('button',{type:'button',className:'iptv-preview-eye',title:'Preview '+(ch.name||'stream')+' without adding','aria-label':'Preview '+(ch.name||'stream')+' without adding',onClick:function(e){previewIptvChannel(ch,e.currentTarget);}},[h('span',{className:'ico',html:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>'})])])]),
               h('td', {}, [h('strong', { text: ch.name || '' }), h('div', { className: 'muted file', text: ch.tvgId || ch.id || '' })]),
               h('td', { text: ch.group || '' }),
@@ -14378,13 +14374,33 @@ function viewCollectionDetail(){
                 }})
               ])
             ]);
-          }))
+    }
+
+    function paintIptvBrowseResults(){
+      var box = document.getElementById('iptvResults');
+      var more = document.getElementById('iptvMore'),all=document.getElementById('iptvAll');
+      var saved=liveSet.iptv&&liveSet.iptv.channels||[],ids=new Set(saved.map(function(ch){return ch.id;})),urls=new Set(saved.map(function(ch){return ch.url;}));
+      (br.channels||[]).forEach(function(ch){ch.inLineup=ids.has(ch.id)||urls.has(ch.url);});
+      var count = document.getElementById('iptvCount');
+      if (!box) return;box.inert=!!br.loading;
+      if(br.loading){if(!box.querySelector('table')&&!br.channels.length){box.replaceChildren(pendingContent({className:'muted'}));}if(more)more.disabled=true;if(all){all.disabled=!br.loadAll;all.textContent=br.loadAll?'Stop loading':'Load all';}if(count)count.textContent='Loading '+(br.loadAll?'all matches':'channels')+' · '+br.channels.length+' loaded';return;}
+      box._renderToken=(box._renderToken||0)+1;box.innerHTML='';
+      if (!(br.channels || []).length) {
+        box.appendChild(h('p', { className: 'muted', text: 'No channels in this feed (or all filtered).' }));
+      } else {
+        box.appendChild(h('table', { className: 'live-table' }, [
+          h('thead', {}, [h('tr', {}, ['', 'Status', 'Channel', 'Group', 'Feed', 'Q', ''].map(function(t){ return h('th', { text: t }); }))]),
+          h('tbody')
         ]));
+        var tbody=box.querySelector('tbody'),rows=br.channels.slice(),cursor=0,token=(box._renderToken||0)+1;box._renderToken=token;
+        function drawRows(){if(!box.isConnected||box._renderToken!==token)return;var fragment=document.createDocumentFragment(),stop=Math.min(cursor+150,rows.length);for(;cursor<stop;cursor++)fragment.appendChild(browseRow(rows[cursor],cursor));tbody.appendChild(fragment);if(previousScroll!==null&&(document.documentElement.scrollHeight-window.innerHeight>=previousScroll||cursor>=rows.length)){window.scrollTo(0,previousScroll);previousScroll=null;}if(cursor<rows.length)requestAnimationFrame(drawRows);}
+        drawRows();
       }
       var srcShort = br.source || '';
       if (srcShort.indexOf('https://') === 0 && srcShort.length > 60) srcShort = srcShort.slice(0, 57) + '…';
       if (count) count.textContent = (br.total || 0) + ' in list · showing ' + (br.channels || []).length + (srcShort ? ' · ' + srcShort : '');
       if (more) more.disabled = !br.channels || br.channels.length >= (br.total || 0);
+      if(all){all.textContent='Load all';all.disabled=!br.channels||br.channels.length>=(br.total||0);}
     }
 
     function iptvFacetOptions(kind, current, allLabel){
@@ -14406,7 +14422,10 @@ function viewCollectionDetail(){
         sel.innerHTML = ''; iptvFacetOptions(x[1], x[2], x[3]).forEach(function(o){ sel.appendChild(o); });
       });
     }
-    function runIptvBrowse(append, forceRefresh){
+    function runIptvBrowse(append, forceRefresh, loadAll){
+      if(br.loading&&append&&!loadAll)return;
+      var generation=++br.generation;br.loadAll=!!loadAll;
+      var oldFilter=JSON.stringify([br.feed,br.q,br.country||'',br.category||'',!!br.activeOnly]);
       br.feed = (($('#iptvBrowseFeed')||{}).value) || 'all';
       br.q = (($('#iptvQ')||{}).value || '').trim();
       br.group = '';
@@ -14414,16 +14433,18 @@ function viewCollectionDetail(){
       if (cSel) br.country = cSel.value || '';
       if (gSel) br.category = gSel.value || '';
       br.activeOnly = !!(document.getElementById('iptvActiveOnly') && document.getElementById('iptvActiveOnly').checked);
-      if (!append) { br.offset = 0; br.channels = []; }
+      if(append&&oldFilter!==JSON.stringify([br.feed,br.q,br.country||'',br.category||'',!!br.activeOnly]))append=false;
+      if (!append) { br.offset = 0; br.total=0;br.channels = [];br.loaded=false;br.selection.clear(); }
       br.loading = true;
       paintIptvBrowseResults();
-      var q = 'feed=' + encodeURIComponent(br.feed) + '&q=' + encodeURIComponent(br.q) + '&group=' + encodeURIComponent(br.group) + '&country=' + encodeURIComponent(br.country || '') + '&category=' + encodeURIComponent(br.category || '') + '&limit=' + br.pageSize + '&offset=' + br.offset;
+      var q = 'feed=' + encodeURIComponent(br.feed) + '&q=' + encodeURIComponent(br.q) + '&group=' + encodeURIComponent(br.group) + '&country=' + encodeURIComponent(br.country || '') + '&category=' + encodeURIComponent(br.category || '') + '&limit=' + (loadAll?200:br.pageSize) + '&offset=' + br.offset;
       if (br.activeOnly) q += '&activeOnly=1';
       if (forceRefresh) q += '&refresh=1';
       liveApi('iptv_browse', q).then(function(body){
+        if(generation!==br.generation||!host.isConnected||owner!==(state.user&&state.user.id))return;
         br.loading = false;
-        if (!body || !body.ok) { liveSetMsg((body && body.error) || 'Browse failed', true); paintIptvBrowseResults(); return; }
-        br.total = body.total || 0;
+        if (!body || !body.ok) {br.loadAll=false; liveSetMsg((body && body.error) || 'Browse failed', true); paintIptvBrowseResults(); return; }
+        br.loaded=true;br.total = body.total || 0;
         br.source = body.source || '';
         br.channels = append ? br.channels.concat(body.channels || []) : (body.channels || []);
         if (!append && body.facets) { br.facets = body.facets; iptvRefillFacets(); }
@@ -14437,11 +14458,16 @@ function viewCollectionDetail(){
           }
         }
         if (forceRefresh) liveSetMsg('Playlist redownloaded · ' + (br.total || 0) + ' channels');
-        paintIptvBrowseResults();
-      }).catch(function(e){ br.loading = false; liveSetMsg(String(e.message||e), true); paintIptvBrowseResults(); });
+        if(br.loadAll&&br.channels.length<br.total&&(body.channels||[]).length){
+          var counter=document.getElementById('iptvCount');if(counter)counter.textContent='Loading all · '+br.channels.length+' / '+br.total;
+          setTimeout(function(){if(generation===br.generation&&host.isConnected&&br.loadAll)runIptvBrowse(true,false,true);},0);return;
+        }
+        br.loadAll=false;paintIptvBrowseResults();
+      }).catch(function(e){if(generation!==br.generation||!host.isConnected)return;br.loadAll=false; br.loading = false; liveSetMsg(String(e.message||e), true); paintIptvBrowseResults(); });
     }
 
-    runIptvBrowse(false, false);
+    if(br.loaded){paintIptvBrowseResults();}else runIptvBrowse(false,false);
+    if(previousScroll!==null&&br.channels.length<=150)requestAnimationFrame(function(){if(host.isConnected&&previousScroll!==null)window.scrollTo(0,previousScroll);});
   }
   function openSettings(section){
     if(state.view==='settings'&&settingsDraftChanged()&&!confirm('Leave this page and discard unsaved form changes?'))return;
