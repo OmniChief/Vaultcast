@@ -1854,15 +1854,28 @@ function confirmDialog(message, opts){
       function revoke(){api('/live/iptv_preview',{method:'POST',body:{action:'stop',jar:result.jar}}).catch(function(){});}
       if(sequence!==iptvPreviewSequence||owner!==(state.user&&state.user.id)||!button.isConnected){revoke();return;}
       closePlayer();stopRadio();
-      var overlay=h('div',{id:'player-overlay',className:'player-overlay player-simple player-inline'}),video=h('video',{id:'player-media',controls:true,autoplay:true,playsinline:true,preload:'metadata'}),status=h('p',{className:'iptv-preview-status',role:'status',text:'Connecting to preview…'}),stream=null,alive=true;
+      var overlay=h('div',{id:'player-overlay',className:'player-overlay player-simple player-inline'}),video=h('video',{id:'player-media',controls:true,autoplay:true,playsinline:true,preload:'metadata'}),status=h('p',{className:'iptv-preview-status',role:'status',text:'Connecting to preview…'}),stream=null,alive=true,fatalError=false,playAttempt=0,volumeButton=null,phase='connecting';
+      video.muted=true;video.defaultMuted=true;video._previewPlay=function(){play(true);};
       overlay._miniKey='iptv-preview:'+channel.url;overlay._miniTitle='Preview · '+(channel.name||'IPTV stream');overlay._miniReturn=function(){openSettings('live-iptv');};
-      overlay.appendChild(video);document.body.appendChild(overlay);addCentrePlay(overlay,video,function(){var promise=video.play();if(promise&&promise.catch)promise.catch(function(){status.textContent='Press play to start the preview.';});});
-      minimizeVideo(true);if(miniVideo&&miniVideo.overlay===overlay){miniVideo.shell.appendChild(status);var returnButton=miniVideo.shell.querySelector('.video-mini-return');returnButton.title='Back to IPTV browser';}
+      overlay.appendChild(video);document.body.appendChild(overlay);addCentrePlay(overlay,video,function(){play(true);});
+      minimizeVideo(true);if(miniVideo&&miniVideo.overlay===overlay){miniVideo.shell.appendChild(status);var returnButton=miniVideo.shell.querySelector('.video-mini-return');returnButton.title='Back to IPTV browser';volumeButton=h('button',{type:'button',className:'iptv-preview-volume',onClick:function(){video.muted=!video.muted;if(video.paused)play(true);}});var heading=miniVideo.shell.querySelector('.video-mini-heading');heading.insertBefore(volumeButton,heading.querySelector('.video-mini-close'));updateVolume();}
       _liveCleanup=function(){alive=false;if(stream){stream.destroy();stream=null;}revoke();};
-      function play(){if(!alive)return;var promise=video.play();if(promise&&promise.catch)promise.catch(function(){if(alive)status.textContent='Press play to start the preview.';});}
-      video.addEventListener('playing',function(){if(alive)status.textContent=(channel.inLineup?'Live preview · already in lineup':'Live preview · not added to lineup');});
-      video.addEventListener('waiting',function(){if(alive)status.textContent='Buffering preview…';});
-      video.addEventListener('error',function(){if(alive)status.textContent='Stream unavailable or unsupported by this browser. It may be offline or region restricted.';});
+      function liveMessage(){return 'Live preview · '+(video.muted?'muted · ':'')+(channel.inLineup?'already in lineup':'not added to lineup');}
+      function updateVolume(){if(volumeButton){volumeButton.textContent=video.muted?'🔇':'🔊';volumeButton.title=video.muted?'Unmute preview':'Mute preview';volumeButton.setAttribute('aria-label',volumeButton.title);volumeButton.setAttribute('aria-pressed',String(!video.muted));}if(phase==='playing')status.textContent=liveMessage();}
+      function playbackError(error,attempt){
+        if(!alive||fatalError||attempt!==playAttempt||!video.paused)return;
+        if(error&&error.name==='AbortError')return;
+        if(error&&error.name==='NotAllowedError'){
+          if(!video.muted){video.muted=true;updateVolume();play();return;}
+          phase='blocked';status.textContent='Your browser blocked autoplay. Use the play button to start this preview.';return;
+        }
+        phase='failed';status.textContent='Preview could not play: '+(error&&error.message||error&&error.name||'unsupported or unavailable stream');
+      }
+      function play(){if(!alive)return;var attempt=++playAttempt;try{var promise=video.play();if(promise&&promise.catch)promise.catch(function(error){playbackError(error,attempt);});}catch(error){playbackError(error,attempt);}}
+      video.addEventListener('volumechange',updateVolume);
+      video.addEventListener('playing',function(){if(alive){fatalError=false;phase='playing';status.textContent=liveMessage();}});
+      video.addEventListener('waiting',function(){if(alive&&!fatalError){phase='buffering';status.textContent='Buffering preview…';}});
+      video.addEventListener('error',function(){if(alive){fatalError=true;phase='failed';var error=video.error;status.textContent=error&&error.code===3?'The browser could not decode this stream’s audio or video.':error&&error.code===4?'This stream format is unsupported or the source could not be loaded.':'Stream unavailable. It may be offline or region restricted.';}});
       var url=LIVE_API+'iptv_hls?u='+encodeURIComponent(channel.url)+'&jar='+encodeURIComponent(result.jar);
       if(channel.userAgent)url+='&ua='+encodeURIComponent(channel.userAgent);if(channel.referrer)url+='&ref='+encodeURIComponent(channel.referrer);
       if(video.canPlayType('application/vnd.apple.mpegurl')||/\.(mp4|webm|m4v|ogv)(?:[?#]|$)/i.test(channel.url)){video.src=url;play();return;}
@@ -1872,9 +1885,9 @@ function confirmDialog(message, opts){
         stream.on(Hls.Events.MANIFEST_PARSED,play);
         stream.on(Hls.Events.ERROR,function(event,data){if(!alive||!data||!data.fatal)return;if(data.type===Hls.ErrorTypes.MEDIA_ERROR&&!recovered){recovered=true;try{stream.recoverMediaError();return;}catch(ignore){}}
           if(data.details===Hls.ErrorDetails.MANIFEST_PARSING_ERROR){stream.destroy();stream=null;video.src=url;play();return;}
-          status.textContent='Preview failed: '+(data.details||data.type||'stream unavailable')+'. The channel may be offline or region restricted.';
+          fatalError=true;phase='failed';status.textContent='Preview failed: '+(data.details||data.type||'stream unavailable')+'. The channel may be offline or region restricted.';
         });stream.loadSource(url);stream.attachMedia(video);
-      }).catch(function(error){if(alive)status.textContent=error.message||'Could not load the preview player.';});
+      }).catch(function(error){if(alive){fatalError=true;phase='failed';status.textContent=error.message||'Could not load the preview player.';}});
     }).catch(function(error){if(button.isConnected)toast(error.message||'Could not open preview',{kind:'bad'});}).then(function(){if(button.isConnected)button.disabled=false;});
   }
   function restoreMiniVideo(key,host){
@@ -1899,7 +1912,7 @@ function confirmDialog(message, opts){
     var playing=!media.paused&&!media.ended;
     var shell=h('aside',{className:'video-mini-player','aria-label':'Mini video player'}),heading=h('div',{className:'video-mini-heading'});
     heading.appendChild(h('button',{type:'button',className:'video-mini-return',text:overlay._miniTitle||'Now playing',title:'Return to the full player',onClick:function(){if(overlay._miniReturn)overlay._miniReturn();}}));
-    var toggle=h('button',{type:'button',className:'video-mini-toggle','aria-label':media.paused?'Play video':'Pause video',text:media.paused?'▶':'Ⅱ',onClick:function(){if(media.paused){var promise=media.play();if(promise&&promise.catch)promise.catch(function(){toast('Press play on the video to resume.');});}else media.pause();}});
+    var toggle=h('button',{type:'button',className:'video-mini-toggle','aria-label':media.paused?'Play video':'Pause video',text:media.paused?'▶':'Ⅱ',onClick:function(){if(media.paused){if(media._previewPlay){media._previewPlay();return;}var promise=media.play();if(promise&&promise.catch)promise.catch(function(){toast('Press play on the video to resume.');});}else media.pause();}});
     function updateMiniControls(){toggle.textContent=media.paused?'▶':'Ⅱ';toggle.setAttribute('aria-label',media.paused?'Play video':'Pause video');}
     media.addEventListener('play',updateMiniControls);media.addEventListener('pause',updateMiniControls);
     heading.appendChild(toggle);
