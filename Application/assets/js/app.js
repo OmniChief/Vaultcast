@@ -1849,12 +1849,12 @@ function confirmDialog(message, opts){
   var iptvPreviewSequence=0;
   function previewIptvChannel(channel,button){
     var sequence=++iptvPreviewSequence,owner=state.user&&state.user.id;button.disabled=true;
-    api('/live/iptv_preview',{method:'POST',body:{url:channel.url}}).then(function(result){
+    api('/live/iptv_preview',{method:'POST',body:{url:channel.url,userAgent:channel.userAgent||'',referrer:channel.referrer||''}}).then(function(result){
       if(!result.ok)throw new Error(result.error||'Could not open stream preview');
       function revoke(){api('/live/iptv_preview',{method:'POST',body:{action:'stop',jar:result.jar}}).catch(function(){});}
       if(sequence!==iptvPreviewSequence||owner!==(state.user&&state.user.id)||!button.isConnected){revoke();return;}
       closePlayer();stopRadio();
-      var overlay=h('div',{id:'player-overlay',className:'player-overlay player-simple player-inline'}),video=h('video',{id:'player-media',controls:true,autoplay:true,playsinline:true,preload:'metadata'}),status=h('p',{className:'iptv-preview-status',role:'status',text:'Connecting to preview…'}),stream=null,alive=true,fatalError=false,playAttempt=0,volumeButton=null,phase='connecting';
+      var overlay=h('div',{id:'player-overlay',className:'player-overlay player-simple player-inline'}),video=h('video',{id:'player-media',controls:true,autoplay:true,playsinline:true,preload:'auto'}),status=h('p',{className:'iptv-preview-status',role:'status',text:'Connecting to preview…'}),stream=null,alive=true,fatalError=false,playAttempt=0,volumeButton=null,phase='connecting';
       video.muted=true;video.defaultMuted=true;video._previewPlay=function(){play(true);};
       overlay._miniKey='iptv-preview:'+channel.url;overlay._miniTitle='Preview · '+(channel.name||'IPTV stream');overlay._miniReturn=function(){openSettings('live-iptv');};
       overlay.appendChild(video);document.body.appendChild(overlay);addCentrePlay(overlay,video,function(){play(true);});
@@ -1876,18 +1876,7 @@ function confirmDialog(message, opts){
       video.addEventListener('playing',function(){if(alive){fatalError=false;phase='playing';status.textContent=liveMessage();}});
       video.addEventListener('waiting',function(){if(alive&&!fatalError){phase='buffering';status.textContent='Buffering preview…';}});
       video.addEventListener('error',function(){if(alive){fatalError=true;phase='failed';var error=video.error;status.textContent=error&&error.code===3?'The browser could not decode this stream’s audio or video.':error&&error.code===4?'This stream format is unsupported or the source could not be loaded.':'Stream unavailable. It may be offline or region restricted.';}});
-      var url=LIVE_API+'iptv_hls?u='+encodeURIComponent(channel.url)+'&jar='+encodeURIComponent(result.jar);
-      if(channel.userAgent)url+='&ua='+encodeURIComponent(channel.userAgent);if(channel.referrer)url+='&ref='+encodeURIComponent(channel.referrer);
-      if(video.canPlayType('application/vnd.apple.mpegurl')||/\.(mp4|webm|m4v|ogv)(?:[?#]|$)/i.test(channel.url)){video.src=url;play();return;}
-      return loadHls().then(function(Hls){
-        if(!alive)return;if(!Hls||!Hls.isSupported())throw new Error('This browser cannot play this preview.');
-        stream=new Hls({enableWorker:true,lowLatencyMode:false});var recovered=false;
-        stream.on(Hls.Events.MANIFEST_PARSED,play);
-        stream.on(Hls.Events.ERROR,function(event,data){if(!alive||!data||!data.fatal)return;if(data.type===Hls.ErrorTypes.MEDIA_ERROR&&!recovered){recovered=true;try{stream.recoverMediaError();return;}catch(ignore){}}
-          if(data.details===Hls.ErrorDetails.MANIFEST_PARSING_ERROR){stream.destroy();stream=null;video.src=url;play();return;}
-          fatalError=true;phase='failed';status.textContent='Preview failed: '+(data.details||data.type||'stream unavailable')+'. The channel may be offline or region restricted.';
-        });stream.loadSource(url);stream.attachMedia(video);
-      }).catch(function(error){if(alive){fatalError=true;phase='failed';status.textContent=error.message||'Could not load the preview player.';}});
+      return attachIptvStream(video,result.source||channel,{jar:result.jar,current:function(){return alive;},play:play,stream:function(hls){stream=hls;},error:function(message){if(alive){fatalError=true;phase='failed';status.textContent=message;}}});
     }).catch(function(error){if(button.isConnected)toast(error.message||'Could not open preview',{kind:'bad'});}).then(function(){if(button.isConnected)button.disabled=false;});
   }
   function restoreMiniVideo(key,host){
@@ -5780,6 +5769,27 @@ try {
     });
     return _hlsLoading;
   }
+  function attachIptvStream(video,source,options){
+    var current=options.current||function(){return true;},url=source.url;
+    // Keep normal viewing and browse previews on exactly the same playback path.
+    if(!/\.m3u8(?:[?#]|$)/i.test(url)){video.src=url;options.play();if(options.note)options.note('Non-HLS stream: browser DirectPlay attempted.');return Promise.resolve();}
+    var proxy=LIVE_API+'iptv_hls?u='+encodeURIComponent(url)+'&jar='+encodeURIComponent(options.jar||hlsJar());
+    if(source.userAgent)proxy+='&ua='+encodeURIComponent(source.userAgent);
+    if(source.referrer)proxy+='&ref='+encodeURIComponent(source.referrer);
+    function nativeFallback(message){if(!current())return;if(video.canPlayType('application/vnd.apple.mpegurl')){video.src=proxy;options.play();}else options.error(message);}
+    return loadHls().then(function(Hls){
+      if(!current())return;
+      if(Hls&&Hls.isSupported()){
+        var stream=new Hls({enableWorker:true,lowLatencyMode:false}),recovered=false;options.stream(stream);
+        stream.on(Hls.Events.MANIFEST_PARSED,function(){if(current())options.play();});
+        stream.on(Hls.Events.ERROR,function(event,data){
+          if(!current()||!data||!data.fatal)return;
+          if(data.type===Hls.ErrorTypes.MEDIA_ERROR&&!recovered){recovered=true;try{stream.recoverMediaError();return;}catch(ignore){}}
+          options.error('Stream error ('+(data.type||'?')+(data.details?' / '+data.details:'')+'). It may be offline, region restricted, or its CDN may be blocked.');
+        });stream.loadSource(proxy);stream.attachMedia(video);
+      }else nativeFallback('This browser cannot play HLS. Try another device or VLC.');
+    }).catch(function(){nativeFallback('HLS player failed to load.');});
+  }
   function hlsJar(){
     try {
       var k = 'iptv_hls_jar', j = sessionStorage.getItem(k);
@@ -6140,37 +6150,7 @@ try {
       paintNow(null);
       if (!src || !src.url) { msg('Channel is not in the IPTV lineup any more.'); return; }
       setTuning(true);
-      var url = src.url;
-      var isHls = /\.m3u8(\?|$)/i.test(url);
-      if (!isHls) { video.src = url; safePlay(); msg('Non-HLS stream: browser DirectPlay attempted.'); return; }
-      var purl = LIVE_API + 'iptv_hls?u=' + encodeURIComponent(url) + '&jar=' + encodeURIComponent(hlsJar());
-      if (src.userAgent) purl += '&ua=' + encodeURIComponent(src.userAgent);
-      if (src.referrer) purl += '&ref=' + encodeURIComponent(src.referrer);
-      loadHls().then(function(Hls){
-        if (tok !== lp.token) return;
-        if (Hls && Hls.isSupported()) {
-          var hls = new Hls({ enableWorker: true, lowLatencyMode: false });
-          lp.hls = hls;
-          var recovered = false;
-          hls.on(Hls.Events.MANIFEST_PARSED, function(){ safePlay(); });
-          hls.on(Hls.Events.ERROR, function(_e, data){
-            if (!data || !data.fatal || tok !== lp.token) return;
-            if (data.type === Hls.ErrorTypes.MEDIA_ERROR && !recovered) { recovered = true; try { hls.recoverMediaError(); return; } catch (e) {} }
-            setTuning(false);
-            msg('Stream error (' + (data.type || '?') + (data.details ? ' / ' + data.details : '') + '). It may be offline, geo-blocked, or its CDN is blocked on this connection.');
-          });
-          hls.loadSource(purl);
-          hls.attachMedia(video);
-        } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-          video.src = purl; safePlay();
-        } else {
-          setTuning(false); msg('This browser cannot play HLS. Try another device or VLC.');
-        }
-      }).catch(function(){
-        if (tok !== lp.token) return;
-        if (video.canPlayType('application/vnd.apple.mpegurl')) { video.src = purl; safePlay(); }
-        else { setTuning(false); msg('HLS player failed to load.'); }
-      });
+      attachIptvStream(video,src,{jar:hlsJar(),current:function(){return tok===lp.token;},play:safePlay,stream:function(hls){lp.hls=hls;},note:msg,error:function(message){setTuning(false);msg(message);}});
     }
     function tune(i){
       var n = list.length;

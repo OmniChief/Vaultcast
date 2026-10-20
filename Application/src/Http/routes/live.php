@@ -230,7 +230,13 @@ if ($__liveAction !== null) {
         if(!is_dir(dirname($file))&&!@mkdir(dirname($file),0700,true))live_bridge_deny(500,'Could not create preview storage.');
         if(@file_put_contents($file,$host."\n",LOCK_EX)===false)live_bridge_deny(500,'Could not authorise this preview.');
         @chmod($file,0600);
-        json_out(['ok'=>true,'jar'=>$jar]);
+        require_once STREAM_ROOT.'/src/Live/iptv.php';
+        $source=['url'=>$url,'userAgent'=>(string)($body['userAgent']??''),'referrer'=>(string)($body['referrer']??'')];
+        // Saved channel overrides must match normal playback, including provider headers.
+        foreach(iptv_lineup_channels() as $channel)if(($channel['url']??'')===$url){
+            $source=['url'=>$url,'userAgent'=>$channel['userAgent']??null,'referrer'=>$channel['referrer']??null];break;
+        }
+        json_out(['ok'=>true,'jar'=>$jar,'source'=>$source]);
     }
     if ($__liveAction === 'iptv_hls') {
         $u = (string)($_GET['u'] ?? ($_GET['url'] ?? ''));
