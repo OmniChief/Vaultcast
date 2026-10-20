@@ -4625,7 +4625,7 @@ try {
     });
   }
   function librarySummary(home){home=home||state.home||{};return (home.item_count||0)+' titles available';}
-  function clockFace(children){return [h('div',{className:'hero-clock-face'},children),h('span',{className:'tv-clock-tuner','aria-hidden':'true'})];}
+  function clockFace(children){return [h('div',{className:'hero-clock-art','aria-hidden':'true'},[heroArt('clock')]),h('div',{className:'hero-clock-face'},children),h('span',{className:'tv-clock-tuner','aria-hidden':'true'})];}
   function heroClock(meta){
     var now=new Date();
     return h('div',{className:'live-hero-side hero-clock-panel'},clockFace([
