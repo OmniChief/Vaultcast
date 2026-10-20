@@ -1218,7 +1218,7 @@ function confirmDialog(message, opts){
   var communityRatings=new Map(),communityQueue=[],communityTimer=null;
   function paintCommunityBadge(poster,key,value){
     if(poster.getAttribute('data-community-key')!==key)return;var old=poster.querySelector('.community-poster-rating');if(old)old.remove();
-    if(value&&value.rating!=null&&value.count>0)poster.appendChild(h('span',{className:'community-poster-rating',text:String(value.rating)+'⭐',title:'Community rating: '+value.rating+' / 10 · '+value.count+' ratings','aria-label':'Community rating '+value.rating+' out of 10'}));
+    if(value&&value.rating!=null&&value.count>0)poster.appendChild(h('span',{className:'community-poster-rating',text:String(value.rating)+'🪕',title:'Community rating: '+value.rating+' / 10 · '+value.count+' ratings','aria-label':'Community rating '+value.rating+' out of 10'}));
   }
   function communityPoster(poster,key){
     if(!poster||!key||!/^(item|show):[a-f0-9]{8,64}$/.test(key))return;
