@@ -4402,7 +4402,7 @@ try {
     if (r.view === 'settings') {
       state.view = 'settings';
       state.settingsSection = r.settingsSection || 'account';
-      var adminIds = { maintenance:'maintenance', players:'players', features:'features', libraries:'sections', sections:'sections', scan:'scan', library:'library', media:'media', collections:'collections', streaming:'streaming', convert:'convert', queue:'queue', acquisition:'acquisition', system:'system', general:'general', users:'users', advanced:'advanced', ingest:'ingest', matching:'matching', reports:'reports' };
+      var adminIds = { 'site-artwork':'site-artwork',maintenance:'maintenance', players:'players', features:'features', libraries:'sections', sections:'sections', scan:'scan', library:'library', media:'media', collections:'collections', streaming:'streaming', convert:'convert', queue:'queue', acquisition:'acquisition', system:'system', general:'general', users:'users', advanced:'advanced', ingest:'ingest', matching:'matching', reports:'reports' };
       if (adminIds[state.settingsSection]) state.adminTab = adminIds[state.settingsSection];
       return Promise.resolve();
     }
@@ -4537,7 +4537,7 @@ try {
           var kind=img.getAttribute('data-site-artwork');
           if(!siteArtworkCustom(kind))img.src=siteArtworkUrl(kind);
         });
-        var settingsTheme=document.getElementById('theme');if(settingsTheme)settingsTheme.value=selected;
+        var settingsTheme=document.getElementById('theme');if(settingsTheme){settingsTheme.value=selected;if(settingsDraft&&settingsDraft.fields.has(settingsTheme))settingsDraft.fields.set(settingsTheme,selected);var draftStatus=document.querySelector('.settings-draft-status');if(draftStatus)draftStatus.hidden=!settingsDraftChanged();}
         document.querySelectorAll('.ninja-training-open').forEach(function(button){button.remove();});
         if(selected==='ninja-extreme'){
           var clock=document.querySelector('#app .hero-clock-face');
@@ -4547,7 +4547,7 @@ try {
         if(owner===(state.user&&state.user.id)){themeSelect.value=state.user.prefs&&state.user.prefs.theme||'dark';toast(error.message||'Could not save theme',{kind:'bad'});}
       }).then(function(){themeSelect.disabled=false;});
     }},themeOptions(user.prefs&&user.prefs.theme)):null;
-    group('Preferences',[themeSelect?h('label',{className:'account-drawer-theme'},[h('span',{text:'Theme'}),themeSelect]):null,action('For you',function(){hub('overview');}),action('Account & playback',function(){openSettings('account');}),signed&&user.role==='admin'?action('Check for updates',function(){openSettings('updates');}):null,action('Settings',function(){openSettings(signed&&user.role==='admin'?'general':'account');})]);
+    group('Preferences',[themeSelect?h('label',{className:'account-drawer-theme'},[h('span',{text:'Theme'}),themeSelect]):null,action('For you',function(){hub('overview');}),action('Profile & security',function(){openSettings('account');}),action('Playback preferences',function(){openSettings('playback');}),signed&&user.role==='admin'?action('Check for updates',function(){openSettings('updates');}):null,action('Settings',function(){openSettings('settings-home');})]);
     if(signed)drawer.appendChild(action('Sign out',function(){
       api('/logout',{method:'POST'}).then(function(result){
         if(!result.ok)throw new Error(result.error||'Could not sign out');
@@ -7721,17 +7721,65 @@ try {
     return shell(h('div', { id:'search-view' }, kids));
   }
 
+  var settingsDraft=null;
+  function settingsFieldValue(el){return el.type==='checkbox'||el.type==='radio'?String(el.checked):el.type==='file'?Array.from(el.files||[]).map(function(file){return file.name+':'+file.size;}).join('|'):el.value;}
+  function settingsDraftChanged(){if(!settingsDraft||!settingsDraft.root.isConnected)return false;var dirty=false;settingsDraft.fields.forEach(function(value,el){if(el.isConnected&&settingsFieldValue(el)!==value)dirty=true;});return dirty;}
+  function captureSettingsDraft(scope){var snapshot=new Map();if(settingsDraft)settingsDraft.fields.forEach(function(value,el){if(el.isConnected&&(!scope||scope.contains(el)))snapshot.set(el,settingsFieldValue(el));});return snapshot;}
+  function acknowledgeSettingsDraft(snapshot){if(!settingsDraft)return;snapshot.forEach(function(value,el){if(el.isConnected)settingsDraft.fields.set(el,value);});var status=document.querySelector('.settings-draft-status');if(status)status.hidden=!settingsDraftChanged();}
+  function clearSettingsDraft(){if(settingsDraft)settingsDraft.fields.clear();var status=document.querySelector('.settings-draft-status');if(status)status.hidden=true;}
+  function installSettingsDraftGuard(root){
+    settingsDraft={root:root,fields:new Map()};var status=h('span',{className:'settings-draft-status',role:'status',text:'Unsaved changes',hidden:true});root.querySelector('.settings-hero').appendChild(status);
+    function eligible(el){return el&&/^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName)&&el.type!=='search'&&!el.disabled&&el.closest('.settings-main')&&!el.closest('.tvs-root,.convert-admin,.po-admin,.task-centre,.settings-overview-grid,.site-artwork-card');}
+    function remember(e){if(eligible(e.target)&&!settingsDraft.fields.has(e.target))settingsDraft.fields.set(e.target,settingsFieldValue(e.target));}
+    root.addEventListener('focusin',remember);root.addEventListener('pointerdown',remember,true);
+    function changed(){status.hidden=!settingsDraftChanged();}
+    root.addEventListener('input',changed);root.addEventListener('change',changed);
+  }
+  window.addEventListener('beforeunload',function(e){if(state.view==='settings'&&(settingsDraftChanged()||(state.settingsSection==='live-studio'&&tvs.dirty))){e.preventDefault();e.returnValue='';}});
+  function renderTaskCentre(host){
+    var info={browse:['Browsing','Build the search index and show summaries together. Useful after importing a large library.'],search:['Browsing','Rebuild fast search suggestions without rescanning folders.'],views:['Browsing','Prepare cached library rows, collections and the live guide.'],scan:['Library','Discover files in configured folders. Does not download artwork.'],metadata:['Library','Fetch missing artwork and descriptions, then preserve sidecars. Network requests may take time.'],'game-metadata':['Library','Refresh game posters and descriptions using the current game matching rules.'],facts:['Library','Probe file codecs and durations and store show guides. Reads media files.'],collections:['Library','Match media to public collections.'],segments:['Playback','Match episode intro/credit timings and available movie credits.'],epg:['Live','Refresh the programme guide from configured sources.'],durations:['Live','Read missing Live media durations.'],downloads:['Downloads','Import completed downloads using the configured rules.'],'site-artwork':['Artwork','Create WebP copies of bundled theme posters and custom site uploads. Originals remain unchanged.']};
+    var filter='All',busy=false,timer=null,sequence=0,lastData=null;
+    function requestAction(url,body,button){button.disabled=true;return api(url,{method:'POST',body:body}).then(function(j){if(!j.ok)throw new Error(j.error||'Task request failed');if(host.isConnected)refresh();}).catch(function(e){toast(e.message,{kind:'bad'});if(button.isConnected)button.disabled=false;});}
+    function refresh(useCache){
+      clearTimeout(timer);if(!host.isConnected||busy)return;busy=true;var mine=++sequence;
+      (useCache===true&&lastData?Promise.resolve(lastData):api('/admin/maintenance')).then(function(j){if(!host.isConnected||mine!==sequence)return;if(!j.ok)throw new Error(j.error||'Could not load tasks');
+        var openResults=new Set(Array.from(host.querySelectorAll('details[data-job-id][open]')).map(function(details){return details.getAttribute('data-job-id');}));lastData=j;host.replaceChildren();var running=j.jobs.filter(function(job){return job.status==='queued'||job.status==='running';});
+        host.appendChild(h('div',{className:'task-centre-toolbar'},[h('p',{className:'muted',text:running.length?running.length+' active / queued tasks':'No maintenance tasks running'}),h('button',{className:'btn',text:'Refresh status',onClick:refresh})]));
+        if((j.requirements||[]).length)host.appendChild(h('section',{className:'settings-callout'},[h('h3',{text:'Recommended after your update'}),h('p',{text:'Features keep working with slower fallbacks until you choose to prepare this data.'})].concat(j.requirements.map(function(req){return h('p',{},[h('strong',{text:req.label+' · '}),req.reason]);}))));
+        var filters=h('div',{className:'settings-filter-tabs',role:'group','aria-label':'Task category'});['All','Browsing','Library','Artwork','Playback','Live','Downloads'].forEach(function(name){filters.appendChild(h('button',{type:'button',className:'btn'+(filter===name?' active':''),'aria-pressed':String(filter===name),text:name,onClick:function(){filter=name;refresh(true);}}));});host.appendChild(filters);
+        var cards=h('div',{className:'task-catalogue'});Object.keys(j.tasks).forEach(function(task){var meta=info[task]||['Other','Run this server preparation task.'];if(filter!=='All'&&meta[0]!==filter)return;var features=state.home&&state.home.features||{};if((meta[0]==='Live'&&!features.live)||(meta[0]==='Downloads'&&!features.downloads))return;var active=running.some(function(job){return job.task===task;});cards.appendChild(h('article',{className:'settings-task-card'},[h('small',{text:meta[0]}),h('h3',{text:j.tasks[task]}),h('p',{text:meta[1]}),h('button',{className:'btn',type:'button',disabled:active,text:active?'Queued / running':'Run task',onClick:function(e){requestAction('/admin/maintenance',{task:task},e.currentTarget);}})]));});host.appendChild(cards);
+        host.appendChild(h('h3',{text:'Activity & results'}));if(!j.jobs.length)host.appendChild(h('p',{className:'muted',text:'Tasks you run will appear here with their progress and results.'}));
+        j.jobs.forEach(function(job){var active=job.status==='queued'||job.status==='running',progress=job.progress||{},row=h('article',{className:'settings-job'},[h('div',{className:'settings-job-head'},[h('strong',{text:j.tasks[job.task]||job.task}),h('span',{className:'settings-job-state '+job.status,text:job.status})]),h('small',{className:'muted',text:(job.created_at?new Date(job.created_at).toLocaleString():'')+(job.requested_by?' · '+job.requested_by:'')})]);
+          if(progress.total>0)row.appendChild(h('progress',{value:progress.done||0,max:progress.total,'aria-label':'Task progress'}));
+          if(progress.phase||progress.file)row.appendChild(h('p',{className:'muted',text:[progress.phase,progress.total>0?(progress.done||0)+' / '+progress.total:'',progress.file].filter(Boolean).join(' · ')}));
+          if(job.result&&job.result.warning)row.appendChild(h('p',{className:'bad',text:String(job.result.warning)}));
+          if(job.result&&job.task==='site-artwork')row.appendChild(h('p',{text:(job.result.optimised||0)+' images optimised · '+(job.result.already_ready||0)+' already prepared · '+(job.result.failed||0)+' failed · '+fmtBytes(job.result.bytes_saved||0)+' saved'}));
+          if(job.error)row.appendChild(h('p',{className:'bad',text:job.error}));
+          if(job.result)row.appendChild(h('details',{className:'settings-job-result','data-job-id':job.id,open:openResults.has(job.id)},[h('summary',{text:job.result.continuation?'Pass complete · continuing in another job':'View result details'}),h('pre',{text:JSON.stringify(job.result,null,2)})]));
+          if(active)row.appendChild(h('button',{className:'btn',text:'Cancel task',onClick:function(e){requestAction('/admin/maintenance/cancel',{id:job.id},e.currentTarget);}}));
+          else if(job.status==='failed'&&j.tasks[job.task])row.appendChild(h('button',{className:'btn',text:'Run again',onClick:function(e){requestAction('/admin/maintenance',{task:job.task},e.currentTarget);}}));host.appendChild(row);
+        });if(running.length)timer=setTimeout(function(){if(host.isConnected)refresh();},3000);
+      }).catch(function(error){if(host.isConnected){host.replaceChildren(h('p',{className:'bad',role:'alert',text:error.message}),h('button',{className:'btn',text:'Retry',onClick:refresh}));}}).then(function(){busy=false;});
+    }
+    refresh();
+  }
+  function siteArtworkOptimisationPanel(){
+    var status=h('p',{className:'muted',role:'status',text:'Creates WebP copies for all themes and custom uploads. Older browsers continue receiving originals.'});
+    return h('section',{className:'settings-card stack'},[h('h3',{text:'Optimise system artwork'}),status,h('div',{className:'row-actions'},[h('button',{className:'btn primary',text:'Create WebP copies',onClick:function(e){var button=e.currentTarget;button.disabled=true;api('/admin/maintenance',{method:'POST',body:{task:'site-artwork'}}).then(function(j){if(!j.ok)throw new Error(j.error||'Could not start optimisation');status.textContent='Queued. Follow progress and results in Task centre.';}).catch(function(error){status.textContent=error.message;button.disabled=false;});}}),h('button',{className:'btn',text:'Open task centre',onClick:function(){openSettings('maintenance');}})])]);
+  }
   function viewSettings(){
     var u = state.user || {};
     var prefs = u.prefs || {};
     var isAdmin = !!(u && u.role === 'admin');
     var groups = [
-      {title:'Your preferences', items:[{id:'account',label:'Account & playback'},{id:'cloud-saves',label:'Cloud saves'}]},
-      {title:'Libraries',admin:true,items:[{id:'sections',label:'Folders & media types'},{id:'scan',label:'Scan libraries'},{id:'media',label:'Manage media'},{id:'collections',label:'Collections'},{id:'posters',label:'Artwork'},{id:'artwork-integrity',label:'Artwork integrity'},{id:'library',label:'Find & rename'},{id:'ingest',label:'Import inbox'},{id:'matching',label:'Correct metadata'},{id:'reports',label:'Label reports'}]},
-      {title:'Users',admin:true,items:[{id:'users',label:'Accounts & access'}]},
-      {title:'Playback',admin:true,items:[{id:'players',label:'Player files'},{id:'streaming',label:'Streaming'},{id:'video-optimise',label:'Video conversion'},{id:'poster-optimise',label:'Artwork optimisation'}]},
-      {title:'Integrations',admin:true,items:[{id:'features',label:'Optional features'},{id:'acquisition',label:'Download sources'},{id:'queue',label:'Download queue'},{id:'live-studio',label:'TV Studio'},{id:'live-channels',label:'Live channels'},{id:'live-library',label:'Live media'},{id:'live-playlists',label:'Live playlists'},{id:'live-schedule',label:'Live schedule'},{id:'live-iptv',label:'IPTV feeds'},{id:'live-radio',label:'Radio stations'},{id:'live-station',label:'Station outputs'}]},
-      {title:'Maintenance',admin:true,items:[{id:'updates',label:'Check for updates'},{id:'maintenance',label:'Background tasks'},{id:'general',label:'Application'},{id:'diagnostics',label:'Diagnostics'},{id:'optimise-system',label:'Storage & caches'},{id:'system',label:'server tools'},{id:'advanced',label:'Advanced configuration'}]}
+      {title:'Your account',description:'Your identity, personal preferences and saved games.',items:[{id:'settings-home',label:'Settings overview',hint:'Find a setting or choose a task'},{id:'account',label:'Profile & security',hint:'Display name, avatar, password and sign out'},{id:'appearance',label:'Appearance & motion',hint:'Themes, animation and reduced motion'},{id:'playback',label:'Playback & skipping',hint:'Autoplay, mini player, intros and credits'},{id:'home-preferences',label:'Home & spoilers',hint:'Start page, compact layout and unwatched episode details'},{id:'cloud-saves',label:'Cloud saves',hint:'Save slots, backups, uploads and sharing'}]},
+      {title:'Library & metadata',description:'Connect folders, organise titles and correct missing information.',admin:true,items:[{id:'sections',label:'Libraries & folders',section:'Sources',hint:'Media types, paths and enabled libraries'},{id:'scan',label:'Scan for media',section:'Sources',hint:'Discover new or removed files'},{id:'ingest',label:'Import inbox',section:'Sources',hint:'Review incoming downloads before importing'},{id:'media',label:'Media manager',section:'Organise',hint:'Search and edit library records'},{id:'collections',label:'Collections',section:'Organise',hint:'Film sets and series groups'},{id:'library',label:'Find & rename',section:'Organise',hint:'Match names and organise files'},{id:'matching',label:'Metadata matching',section:'Metadata',hint:'Fix titles, posters and descriptions'},{id:'reports',label:'User reports',section:'Metadata',hint:'Review incorrect labels reported by users'}]},
+      {title:'Artwork & design',description:'Site branding, bundled posters and library artwork.',admin:true,items:[{id:'site-artwork',label:'Site & theme posters',hint:'Replace default artwork and create smaller WebP images'},{id:'posters',label:'Library artwork',hint:'Fetch missing movie, show, season and game images'},{id:'artwork-integrity',label:'Repair missing images',hint:'Find broken records and missing files'},{id:'poster-optimise',label:'Optimise library images',hint:'Generate full, grid and search WebP variants'}]},
+      {title:'Live broadcasting',description:'Build channels, schedule programmes and manage public streams.',admin:true,items:[{id:'live-studio',label:'PseudoTV Studio',section:'Relay',hint:'Schedule programmes, filler and advertising'},{id:'live-channels',label:'Relay channels',section:'Relay',hint:'Create channels and manage rotations'},{id:'live-library',label:'Live media library',section:'Relay',hint:'Import programmes and prepare durations'},{id:'live-playlists',label:'Rotation playlists',section:'Relay',hint:'Reusable channel programme rotations'},{id:'live-schedule',label:'Rotation rules',section:'Relay',hint:'Legacy rotation scheduling; Studio manages weekly slots'},{id:'live-iptv',label:'IPTV & guide matching',section:'Sources',hint:'Feeds, channel mapping and EPG'},{id:'live-radio',label:'Radio stations',section:'Sources',hint:'Add stations or browse the public directory'},{id:'live-station',label:'Station & outputs',section:'Outputs',hint:'Streams, guide exports and station configuration'}]},
+      {title:'People & permissions',description:'Control who can access content and administrative tools.',admin:true,items:[{id:'users',label:'Accounts, roles & permissions',hint:'Create users and roles; assign individual access'}]},
+      {title:'Playback & delivery',description:'Server delivery options and player dependencies.',admin:true,items:[{id:'streaming',label:'Streaming & codecs',hint:'Direct play, remuxing and transcoding policy'},{id:'players',label:'Player assets',hint:'Local or CDN player files and emulator cores'},{id:'video-optimise',label:'Video conversion',hint:'Convert files, review requests and manage encoding jobs'}]},
+      {title:'Downloads',description:'Configure providers and review download activity.',admin:true,items:[{id:'acquisition',label:'Providers & integrations',hint:'RSS search, download clients and API connections'},{id:'queue',label:'Download queue',hint:'Active downloads, imports and errors'}]},
+      {title:'Application & server',description:'Site defaults, updates, performance and troubleshooting.',admin:true,items:[{id:'general',label:'Site defaults & access',hint:'Branding, guest access, public URL and installable app'},{id:'features',label:'Enabled features',hint:'Turn optional services on or off'},{id:'updates',label:'Updates & branches',hint:'Manually check, install or switch update channels'},{id:'maintenance',label:'Task centre',hint:'Preparation jobs, progress, cancellation and history'},{id:'optimise-system',label:'Storage & caches',hint:'Generated files and safe cache tools'},{id:'diagnostics',label:'Diagnostics',hint:'Run selected checks and inspect failures'},{id:'system',label:'Server tools',hint:'Resource usage and service controls'},{id:'advanced',label:'Advanced & reset',hint:'PHP CLI, ffmpeg, ffprobe, tool paths, raw configuration and database reset'}]}
     ];
     var features = (state.home && state.home.features) || {};
     groups = groups.map(function(g){
@@ -7748,102 +7796,37 @@ try {
     groups.forEach(function(g){ g.items.forEach(function(it){ flat.push(it.id); }); });
     if (state.settingsSection === 'live') state.settingsSection = 'live-channels';
     if (state.settingsSection === 'convert') state.settingsSection = 'video-optimise';
-    if (flat.indexOf(state.settingsSection) < 0) state.settingsSection = 'account';
+    if (flat.indexOf(state.settingsSection) < 0) state.settingsSection = 'settings-home';
     var sec = state.settingsSection;
 
     function goSec(id){
-      var adminIds = { maintenance:1, players:1, features:1, diagnostics:1, sections:1, scan:1, posters:1, library:1, media:1, collections:1, streaming:1, convert:1, 'video-optimise':1, 'poster-optimise':1, 'optimise-system':1, queue:1, acquisition:1, system:1, general:1, users:1, advanced:1, ingest:1, matching:1, reports:1, live:1, 'live-channels':1, 'live-library':1, 'live-playlists':1, 'live-iptv':1, 'live-schedule':1, 'live-station':1, 'live-studio':1, 'live-radio':1 };
-      if (adminIds[id] && !canSettings(id)) {
-        state._wantAdmin = true;
-        state._settingsAfterLogin = id;
-        state.view = 'login';
-        render();
-        return;
-      }
-      state.settingsSection = id;
-      if (adminIds[id] && id !== 'live') state.adminTab = id;
-      var ownG = ownerGroup(id);
-      if (ownG) {
-        state.settingsNavGroup = ownG;
-        try { localStorage.setItem('vaultcast-settings-group', ownG); } catch (eP) {}
-      }
-      pushNav();
-      render();
+      if(id===sec)return;
+      if(tvs.dirty&&sec==='live-studio'&&!confirm('Leave Studio with unsaved changes? Your draft stays here until you save or discard it.'))return;
+      if(settingsDraftChanged()&&!confirm('Leave this page and discard unsaved form changes?'))return;
+      state.settingsSection=id;pushNav();render();
     }
-
-    /* accordion open-group lives in state; only derived from the active section
-       on first paint (or when goSec changes section) so clicks are not undone by render(). */
-    function ownerGroup(id){
-      for (var gi = 0; gi < groups.length; gi++) {
-        if (groups[gi].items.some(function(it){ return it.id === id; })) return groups[gi].title;
-      }
-      return '';
-    }
-    var openGroup;
-    /* Section changed outside goSec (deep link, back/forward, post-login redirect): re-open its group once */
-    if (state._settingsNavSec !== sec) {
-      if (state._settingsNavSec !== undefined || typeof state.settingsNavGroup !== 'string') {
-        var ownNow = ownerGroup(sec);
-        if (ownNow) state.settingsNavGroup = ownNow;
-      }
-      state._settingsNavSec = sec;
-    }
-    if (typeof state.settingsNavGroup === 'string') {
-      openGroup = state.settingsNavGroup;
-    } else {
-      openGroup = ownerGroup(sec);
-      if (!openGroup) {
-        try { openGroup = localStorage.getItem('vaultcast-settings-group') || ''; } catch (eG) { openGroup = ''; }
-      }
-      state.settingsNavGroup = openGroup;
-    }
-    function setOpenGroup(title){
-      openGroup = title || '';
-      state.settingsNavGroup = openGroup;
-      try { localStorage.setItem('vaultcast-settings-group', openGroup); } catch (eS) {}
-      render();
-    }
-    var nav = h('nav', { className: 'settings-nav', 'aria-label': 'Settings' }, groups.map(function(g){
-      var isOpen = openGroup === g.title;
-      if (g.admin && !isAdmin) {
-        return h('div', { className: 'settings-nav-group locked' + (isOpen ? ' open' : '') }, [
-          h('button', { className: 'settings-nav-title accordion', type:'button', 'aria-expanded':'false', text: g.title }),
-          h('p', { className: 'muted settings-nav-note', text: 'Sign in as admin' })
-        ]);
-      }
-      return h('div', { className: 'settings-nav-group' + (isOpen ? ' open' : '') }, [
-        h('button', {
-          className: 'settings-nav-title accordion', type:'button',
-          'aria-expanded': isOpen ? 'true' : 'false',
-          onClick: function(ev){ if (ev && ev.preventDefault) ev.preventDefault(); setOpenGroup(isOpen ? '' : g.title); }
-        }, [
-          h('span', { text: g.title }),
-          h('span', { className:'settings-nav-chevron', text: isOpen ? '▾' : '▸' })
-        ]),
-        isOpen ? h('div', { className: 'settings-nav-items' }, g.items.map(function(it){
-          var kids = [ h('span', { text: it.label }) ];
-          if ((it.id === 'ingest' || it.id === 'reports') && window.NSMatch) {
-            var nsmN = window.NSMatch.counts[it.id] || 0;
-            kids.push(h('span', { className: 'nav-badge nsm-badge-' + it.id, hidden: !(nsmN > 0), text: nsmN > 0 ? String(nsmN) : '' }));
-          }
-          if (it.id === 'convert') {
-            kids.push(h('span', {
-              className: 'cv-pending-badge nav-badge',
-              hidden: !(state.convertPendingCount > 0),
-              text: state.convertPendingCount > 0 ? String(state.convertPendingCount) : ''
-            }));
-          }
-          return h('button', {
-            className: 'settings-nav-btn' + (sec === it.id ? ' active' : ''),
-            type: 'button',
-            onClick: function(){ goSec(it.id); }
-          }, kids);
-        })) : null
-      ]);
-    }));
+    var activeGroup=groups.find(function(g){return g.items.some(function(it){return it.id===sec;});});
+    var activeItem=activeGroup&&activeGroup.items.find(function(it){return it.id===sec;});
+    var search=h('input',{type:'search',placeholder:'Find a setting…','aria-label':'Search settings',autocomplete:'off'}),noMatches=h('p',{className:'settings-search-empty muted',text:'No matching settings.',hidden:true});
+    var nav=h('nav',{className:'settings-nav settings-navigation','aria-label':'Settings'},[h('label',{className:'settings-search'},[h('span',{text:'Jump to a setting'}),search])]);
+    groups.forEach(function(g){
+      var details=h('details',{className:'settings-nav-group',open:g===activeGroup}),items=h('div',{className:'settings-nav-items'}),lastSection='';
+      details.appendChild(h('summary',{className:'settings-nav-title',text:g.title}));
+      g.items.forEach(function(it){
+        if(it.section&&it.section!==lastSection){items.appendChild(h('div',{className:'settings-nav-subtitle',text:it.section}));lastSection=it.section;}
+        var button=h('button',{className:'settings-nav-btn'+(it.id===sec?' active':''),type:'button','aria-current':it.id===sec?'page':null,title:it.hint,onClick:function(){goSec(it.id);}},[h('span',{text:it.label})]);
+        button._setting=it;items.appendChild(button);
+      });details.appendChild(items);nav.appendChild(details);
+    });nav.appendChild(noMatches);
+    search.addEventListener('input',function(){
+      var words=search.value.toLowerCase().trim().split(/\s+/).filter(Boolean),count=0;
+      nav.querySelectorAll('.settings-nav-group').forEach(function(group){var visible=0;group.querySelectorAll('.settings-nav-btn').forEach(function(button){var it=button._setting,hay=(group.querySelector('summary').textContent+' '+(it.section||'')+' '+it.label+' '+it.hint).toLowerCase();button.hidden=!words.every(function(word){return hay.indexOf(word)>=0;});if(!button.hidden)visible++;});group.hidden=!visible;if(words.length)group.open=true;group.querySelectorAll('.settings-nav-subtitle').forEach(function(label){label.hidden=words.length>0;});count+=visible;});noMatches.hidden=!!count;
+    });
 
     var bodyKids = [];
-    if (sec === 'account') {
+    if(sec==='settings-home'||sec==='site-artwork'){
+      bodyKids=[];
+    } else if (['account','appearance','playback','home-preferences'].indexOf(sec)>=0) {
       bodyKids = [
         h('h2', { text: 'Account' }),
         h('p', { className: 'muted', text: u.username ? ('Signed in as ' + (u.display_name || u.username)) : 'Browsing as guest — sign in to sync preferences.' }),
@@ -7852,7 +7835,7 @@ try {
           h('div', {className:'profile-avatar-editor'}, [profileAvatar(u), h('label', {}, ['Avatar (JPEG, PNG or WebP, up to 1 MB)', h('input', {id:'profile_avatar', type:'file', accept:'image/jpeg,image/png,image/webp'})])]),
           h('label', {className:'check-label'}, [h('input', {id:'remove_avatar', type:'checkbox'}), 'Remove avatar (use initials)']),
           h('label', {}, ['Theme', h('select', { id: 'theme' }, themeOptions(prefs.theme))]),
-          h('label', {}, ['New password (optional)', h('input', { id: 'pw', type: 'password', placeholder: 'Leave blank to keep' })]),
+          h('label', {}, ['New password (optional)', h('input', { id: 'pw', type: 'password', minlength:12, maxlength:72, autocomplete:'new-password', placeholder: '12–72 characters; leave blank to keep' })]),
           h('label',{},['Theme motion',h('select',{id:'motion_mode','aria-describedby':'motion-state',onChange:applyMotion},[
             h('option',{value:'system',text:'Follow device',selected:motionPreference(prefs)==='system'}),h('option',{value:'full',text:'Full animation',selected:motionPreference(prefs)==='full'}),h('option',{value:'reduced',text:'Reduced motion',selected:motionPreference(prefs)==='reduced'})])]),
           h('p',{id:'motion-state',className:'muted',role:'status',text:motionDescription(motionPreference(prefs))}),
@@ -7862,7 +7845,10 @@ try {
           h('label',{className:'check-label'},[h('input',{id:'skip_segments',type:'checkbox',checked:prefs.skip_segments!==false}),' Offer TV / anime intro and credits skipping, and movie credits (TheIntroDB)']),
           h('label',{className:'check-label'},[h('input',{id:'auto_skip_intro',type:'checkbox',checked:!!prefs.auto_skip_intro}),' Automatically skip TV / anime intros']),
           h('label',{className:'check-label'},[h('input',{id:'auto_skip_outro',type:'checkbox',checked:!!prefs.auto_skip_outro}),' Automatically skip TV / anime and movie credits']),
-          h('div', { className: 'row-actions' }, [
+          h('label',{},['Home start page',h('select',{id:'home_landing'},[['overview','For you'],['watchlist','Watchlist'],['favourites','Favourites'],['arrivals','New episodes'],['calendar','Release calendar'],['friends','Friends'],['history','History'],['stats','Game statistics'],['lists','My collections'],['cinema','Watch together'],['inbox','Inbox']].map(function(pair){return h('option',{value:pair[0],text:pair[1],selected:(prefs.home_landing||'overview')===pair[0]});}))]),
+          h('label',{className:'check-label'},[h('input',{id:'home_compact',type:'checkbox',checked:!!prefs.home_compact}),' Use a compact Home layout']),
+          h('label',{className:'check-label'},[h('input',{id:'hide_spoilers',type:'checkbox',checked:!!prefs.hide_spoilers}),' Hide details for unwatched episodes']),
+          h('div', { className: 'row-actions settings-savebar' }, [
             h('button', { className: 'btn primary', text: 'Save preferences', onClick: savePrefs }),
             h('button', {className: 'btn', text: 'Sign out', onClick: function(){ api('/logout', {method:'POST'}).then(function(result){
               if (!result.ok) return toast(result.error || 'Could not sign out', {kind:'bad'});
@@ -7885,45 +7871,12 @@ try {
       var updHost = h('div', { className:'stack updates-panel' });
       bodyKids = [
         h('h2', { text:'Check for updates' }),
-        h('p', { className:'muted', text:'Updates come from the signed-off GitHub releases of Vaultcast. Each download is verified against the SHA-256 checksums published with the release. Only the application files are replaced: your settings, database, media, caches and data folder are never touched, and the replaced files are backed up first.' }),
+        h('p', { className:'muted', text:'Choose your update branch, check for changes when ready, then review and install. Application files are backed up before replacement. Media and personal data stay in place; any required preparation is listed for you to run manually.' }),
         updHost
       ];
       setTimeout(function(){ renderUpdatesPanel(updHost); }, 0);
     } else if (sec === 'maintenance' && isAdmin) {
-      var jobsHost = h('div', {className:'stack'});
-      function refreshJobs(){
-        clearTimeout(jobsHost._poll);
-        api('/admin/maintenance').then(function(result){
-          jobsHost.textContent = '';
-          if (!result.ok) { jobsHost.textContent = result.error || 'Could not load tasks'; return; }
-          maintenanceNoticeCache=null;maintenanceNoticeAt=0;
-          var required=result.requirements||[];
-          $all('.maintenance-advisory-host').forEach(function(host){if(host._paintMaintenance)host._paintMaintenance({required:required});});
-          if(required.length)jobsHost.appendChild(h('div',{className:'settings-card stack'},[h('h3',{text:'Required preparation — run when ready'}),h('p',{className:'muted',text:'Your features remain available. These tasks prepare missing or outdated data for faster responses.'})].concat(required.map(function(item){return h('div',{},[h('strong',{text:item.label}),h('p',{className:'muted',text:item.reason}),h('button',{className:'btn primary',type:'button',text:'Run '+item.label,onClick:function(event){var button=event.currentTarget;button.disabled=true;api('/admin/maintenance',{method:'POST',body:{task:item.task}}).then(function(r){if(!r.ok)throw new Error(r.error||'Could not start task');refreshJobs();}).catch(function(e){toast(e.message,{kind:'bad'});if(button.isConnected)button.disabled=false;});}})]);}))));
-          Object.keys(result.tasks).forEach(function(task){
-            jobsHost.appendChild(h('div',{className:'settings-card row-actions'},[
-              h('strong',{text:result.tasks[task]}),
-              h('button',{className:'btn',text:'Run now',onClick:function(event){ event.currentTarget.disabled=true; api('/admin/maintenance',{method:'POST',body:{task:task}}).then(function(r){if(!r.ok)toast(r.error); refreshJobs();}); }})
-            ]));
-          });
-          result.jobs.forEach(function(job){
-            var row=h('div',{className:'settings-card'},[h('strong',{text:result.tasks[job.task] || job.task}),h('p',{text:(job.result && job.result.continuation ? 'Pass complete · continuing' : job.status)+' · '+job.created_at+' · '+job.requested_by}),h('p',{className:'muted',text:job.error || ''})]);
-            if (job.progress) row.appendChild(h('p',{className:'muted',text:(job.progress.phase || 'Progress') + ': ' + job.progress.done + '/' + job.progress.total + ' · ' + (job.progress.file || '')}));
-            if (job.result && job.task === 'metadata') row.appendChild(h('p',{className:'muted',text:(job.result.stage ? 'Stage: ' + job.result.stage + ' · this pass checked ' : 'Checked ') + job.result.processed + ' artwork entries · ' + job.result.artwork_prepared + ' optimised · ' + (job.result.failed + job.result.artwork_failed) + ' failed' + (job.result.continuation ? ' · remaining work continues automatically in the next task' : '')}));
-            if(job.result&&job.task==='segments')row.appendChild(h('p',{className:'muted',text:job.result.processed+' checked · '+job.result.matched+' matched · '+job.result.preserved+' admin corrections preserved · '+job.result.unresolved+' unresolved · '+job.result.missing_duration+' missing runtime · '+job.result.failed+' failed'}));
-            if (job.result && job.result.warning) row.appendChild(h('p',{className:'bad',text:job.result.warning}));
-            if (job.result && job.result.sidecars) row.appendChild(h('p',{className:'muted',text:'Beside media: ' + job.result.sidecars.written + ' files backed up · ' + job.result.sidecars.unchanged + ' unchanged · ' + job.result.sidecars.preserved + ' existing files preserved · ' + job.result.sidecars.failed + ' failed · ' + job.result.sidecars.skipped + ' unavailable/outside library'}));
-            if (job.status==='queued'||job.status==='running') row.appendChild(h('button',{className:'btn',text:'Cancel',onClick:function(){api('/admin/maintenance/cancel',{method:'POST',body:{id:job.id}}).then(function(r){toast(r.message || r.error); refreshJobs();});}}));
-            jobsHost.appendChild(row);
-          });
-          if (result.jobs.some(function(job){return job.status==='queued'||job.status==='running';})) jobsHost._poll=setTimeout(function(){if(jobsHost.isConnected && state.view==='settings' && state.settingsSection==='maintenance')refreshJobs();},2000);
-        });
-      }
-      bodyKids=[h('h2',{text:'Background tasks'}),h('p',{className:'muted',text:'Updates and page visits do not start scans or preparation. Run the named tasks when ready. One task runs at a time. Tasks you start may continue in bounded passes. Cancellation stops at the next file or transaction boundary. Progress refreshes automatically while this page is open.'}),
-        h('button',{className:'btn',text:'Refresh status',onClick:refreshJobs}), jobsHost,
-        h('p',{className:'muted',text:'Video conversion and artwork batches are started by administrators in their settings pages. Download transfers are controlled in Download queue. External OS schedules must be managed in Task Scheduler or cron.'}),
-        h('button',{className:'btn',text:'Video conversion jobs',onClick:function(){openSettings('convert');}}),h('button',{className:'btn',text:'Artwork jobs',onClick:function(){openSettings('poster-optimise');}})];
-      refreshJobs();
+      var jobsHost=h('div',{className:'task-centre'});bodyKids=[h('h2',{text:'Task centre'}),h('p',{className:'muted',text:'Run preparation when it suits you. Nothing here starts automatically on an update or page visit. The worker runs one maintenance task at a time, at lower CPU priority.'}),jobsHost];setTimeout(function(){renderTaskCentre(jobsHost);},0);
     } else if (sec === 'features' && isAdmin) {
       var featureOptions = [
         ['live','Live channels & IPTV','TV Studio schedules, IPTV sources (iptv-org is preinstalled) and the programme guide.'],
@@ -8023,35 +7976,42 @@ try {
       setTimeout(fillAdmin, 0);
     }
 
+    if(['account','appearance','playback','home-preferences'].indexOf(sec)>=0&&u.username){
+      var personalCard=bodyKids[2],ids=sec==='account'?['dn','profile_avatar','remove_avatar','pw']:sec==='appearance'?['theme','motion_mode','motion-state']:sec==='home-preferences'?['home_landing','home_compact','hide_spoilers']:['autoplay','autoplay_next','mini_player','skip_segments','auto_skip_intro','auto_skip_outro'];
+      Array.from(personalCard.children).forEach(function(child){
+        if(child.classList.contains('row-actions')){if(sec!=='account')Array.from(child.children).slice(1).forEach(function(button){button.remove();});return;}
+        if(!ids.some(function(id){return child.id===id||child.querySelector('#'+id);}))child.remove();
+      });bodyKids[0].textContent=activeItem.label;
+    }
+    if(sec==='settings-home'){
+      bodyKids=[h('div',{className:'settings-overview-intro'},[h('span',{className:'eyebrow',text:isAdmin?'CONTROL ROOM':'MAKE IT YOURS'}),h('h2',{text:isAdmin?'Your server. In order.':'Your Vaultcast, your way.'}),h('p',{className:'muted',text:'Choose a task below or search settings. Opening a page never starts a scan, update check or optimisation job.'})]),h('div',{className:'settings-overview-grid'},groups.map(function(g){return h('section',{className:'settings-overview-card'},[h('h3',{text:g.title}),h('p',{text:g.description}),h('div',{className:'settings-overview-links'},g.items.filter(function(it){return it.id!=='settings-home';}).map(function(it){return h('button',{type:'button',onClick:function(){goSec(it.id);}},[h('strong',{text:it.label}),h('small',{text:it.hint})]);}))]);}))];
+    }
+    if(sec==='site-artwork')bodyKids=[h('h2',{text:'Site & theme artwork'}),h('p',{className:'muted',text:'Custom uploads stay the same across themes. Default posters follow each user’s theme. Optimisation creates smaller copies; your originals stay intact.'}),sitePosterSettings(),siteArtworkOptimisationPanel()];
+
+    if(activeItem&&sec!=='settings-home'){
+      var pageHeading=bodyKids.find(function(child){return child&&child.tagName==='H2';});if(pageHeading)pageHeading.textContent=activeItem.label;
+      if(pageHeading&&!bodyKids.some(function(child){return child&&child.tagName==='P';}))bodyKids.splice(bodyKids.indexOf(pageHeading)+1,0,h('p',{className:'muted',text:activeItem.hint}));
+    }
     var panel = h('div', { className: 'panel settings-panel' }, [
       h('div', { className: 'settings-hero' }, [
-        h('h1', { text: 'Settings' }),
-        h('p', { className: 'muted', text: 'One place for account, VoD libraries, Live, Play, optimise, and downloads. Vaultcast ' + APP_VERSION })
+        h('div',{},[h('span',{className:'eyebrow',text:'VAULTCAST · '+APP_VERSION}),h('h1',{text:'Settings'})]),h('p',{className:'muted',text:activeGroup?activeGroup.title+' / '+activeItem.label:'Your control room'})
       ]),
       h('div', { className: 'settings-hub' }, [
         nav,
         h('div', { className: 'settings-main', id: 'settings-main' }, bodyKids)
       ])
     ]);
+    installSettingsDraftGuard(panel);
     return shell(panel);
   }
 
   function savePrefs(){
-    var body = {
-      display_name: $('#dn').value,
-      theme: $('#theme').value,
-      password: $('#pw').value || undefined,
-      motion_mode: $('#motion_mode').value,
-      reduce_motion: $('#motion_mode').value==='reduced',
-      autoplay: $('#autoplay').checked,
-      autoplay_on_open: $('#autoplay').checked,
-      autoplay_next: $('#autoplay_next').checked,
-      mini_player: $('#mini_player').checked,
-      skip_segments:$('#skip_segments').checked,
-      auto_skip_intro:$('#auto_skip_intro').checked,
-      auto_skip_outro:$('#auto_skip_outro').checked,
-      remove_avatar:!!($('#remove_avatar') && $('#remove_avatar').checked)
-    };
+    if(savePrefs._busy)return;savePrefs._busy=true;var owner=state.user&&state.user.id,saveRoot=document.querySelector('.settings-main'),savedFields=captureSettingsDraft(),saveButton=document.querySelector('.settings-savebar .btn.primary');if(saveButton)saveButton.disabled=true;
+    var body={};
+    [['dn','display_name'],['theme','theme'],['pw','password'],['motion_mode','motion_mode'],['home_landing','home_landing']].forEach(function(pair){var el=$('#'+pair[0]);if(el)body[pair[1]]=el.value||undefined;});
+    ['home_compact','hide_spoilers','autoplay_next','mini_player','skip_segments','auto_skip_intro','auto_skip_outro','remove_avatar'].forEach(function(id){var el=$('#'+id);if(el)body[id]=el.checked;});
+    if($('#autoplay'))body.autoplay=body.autoplay_on_open=$('#autoplay').checked;
+    if(body.motion_mode)body.reduce_motion=body.motion_mode==='reduced';
     var file = $('#profile_avatar') && $('#profile_avatar').files[0];
     var avatar = Promise.resolve(null);
     if (file && !body.remove_avatar) avatar = new Promise(function(resolve, reject){
@@ -8071,10 +8031,12 @@ try {
         };image.src = reader.result;
       };reader.readAsDataURL(file);
     });
-    avatar.then(function(data){body.avatar_data = data;return api('/me/prefs', {method:'POST', body:body});}).then(function(j){
+    avatar.then(function(data){if(file||body.remove_avatar)body.avatar_data=data;return api('/me/prefs', {method:'POST', body:body});}).then(function(j){
+      if(owner!==(state.user&&state.user.id))return;
       if (!j.ok) return toast(j.error||'Save failed');
-      state.user = j.user; toast('Saved'); applyPrefs(); render();
-    }).catch(function(error){toast(error.message || 'Could not save preferences', {kind:'bad'});});
+      var newer=false;savedFields.forEach(function(value,el){if(el.isConnected&&settingsFieldValue(el)!==value)newer=true;});
+      acknowledgeSettingsDraft(savedFields);state.user=j.user;applyPrefs();toast(newer?'Saved. Your newer edits still need saving.':'Saved');if(saveRoot&&saveRoot.isConnected&&!newer)render();
+    }).catch(function(error){toast(error.message || 'Could not save preferences', {kind:'bad'});}).then(function(){savePrefs._busy=false;if(saveButton&&saveButton.isConnected)saveButton.disabled=false;});
   }
 
   function fmtBytes(n){
@@ -8318,35 +8280,6 @@ try {
     });
   }
 
-  function viewAdmin(){
-    var groups = [
-      { title:'Library', tabs: [['sections','Libraries'],['scan','Scan'],['posters','Posters'],['library','Find / Rename'],['media','Media Manager'],['collections','Collections']] },
-      { title:'Playback', tabs: [['streaming','Streaming']] },
-      { title:'Optimise', tabs: [['convert','Video optimisation'],['poster-optimise','Poster optimisation'],['optimise-system','System']] },
-      { title:'Downloads', tabs: [['queue','Download queue'],['acquisition','Acquisition']] },
-      { title:'System', tabs: [['general','General'],['users','Users'],['advanced','Advanced']] }
-    ];
-    var flat = [];
-    groups.forEach(function(g){ g.tabs.forEach(function(t){ flat.push(t); }); });
-    if (!flat.some(function(t){ return t[0]===state.adminTab; })) state.adminTab = 'general';
-    var panel = h('div', { className:'panel admin-panel' }, [
-      h('h1', { text:'Settings' }),
-      h('p', { className:'muted admin-lead', text:'Settings are grouped by task. Changes save immediately to the server.' }),
-      h('div', { className:'admin-nav' }, groups.map(function(g){
-        return h('div', { className:'admin-nav-group' }, [
-          h('div', { className:'admin-nav-title', text: g.title }),
-          h('div', { className:'tabs admin-tabs' }, g.tabs.map(function(t){
-            return h('button', { className: state.adminTab===t[0]?'active':'', text:t[1], onClick: function(){ state.adminTab=t[0]; render(); } });
-          }))
-        ]);
-      })),
-      h('div', { id:'admin-body', className:'tab-panel active' }, [ pendingContent({ className:'muted', }) ])
-    ]);
-    // async fill
-    setTimeout(fillAdmin, 0);
-    return shell(panel);
-  }
-
   function sitePosterSettings(){
     var artworks=[['home','For you','Home’s welcome poster'],['collections','Collections','Library and My collections'],['cinema','Watch together','Your shared cinema'],['watchlist','Watchlist','Adventures waiting for you'],['favourites','Favourites','Your treasured picks'],['calendar','Release calendar','Upcoming episodes'],['arrivals','New episodes','Fresh arrivals'],['friends','Friends','Your community'],['history','History','Your viewing journey'],['stats','Game stats','Your gaming achievements']];
     function card(entry){
@@ -8367,13 +8300,19 @@ try {
     }
     return h('section',{className:'settings-card stack site-artwork-settings'},[h('h3',{text:'Site artwork'}),h('p',{className:'muted',text:'Give each space its own look. Upload JPEG, PNG or WebP up to 2 MB / 12 megapixels. Portrait 2:3 images work best. Custom uploads stay the same across themes and survive app updates. Bundled defaults follow your selected theme; restoring a default only affects that poster.'}),h('div',{className:'site-artwork-gallery'},artworks.map(card))]);
   }
+  function organiseSettingsSections(root){
+    root.querySelectorAll('.admin-stack').forEach(function(stack){var current=null;Array.from(stack.children).forEach(function(child){if(child.tagName==='H3'){current=h('fieldset',{className:'settings-fieldset'},[h('legend',{text:child.textContent})]);stack.insertBefore(current,child);child.remove();}else if(current){current.appendChild(child);}});});
+  }
   function fillAdmin(){
+    var expectedHost=$('#admin-body'),expectedTab=state.adminTab;if(!expectedHost||state.view!=='settings')return;
     api('/admin/settings').then(function(j){
+      if(!expectedHost.isConnected||expectedTab!==state.adminTab||$('#admin-body')!==expectedHost)return;
       if (!j.ok) return toast(j.error||'Admin denied');
       state.settings = j.settings;
       var body = $('#admin-body'); if (!body) return;
       body.innerHTML = '';
       var s = j.settings;
+      setTimeout(function(){if(body.isConnected)organiseSettingsSections(body);},0);
       var tab = state.adminTab;
       if (tab === 'general') {
         var auth = s.auth || {};
@@ -8383,8 +8322,8 @@ try {
           h('h3', { className:'admin-section-title', text:'Appearance' }),
           fieldEl('app_name','App display name', s.app_name),
           fieldEl('app_tagline','Subtitle / tagline', s.app_tagline||''),
-          fieldEl('theme','Theme (dark or light)', s.theme||'dark'),
-          sitePosterSettings(),
+          h('label',{},['Default theme for guests',h('select',{id:'site_default_theme'},themeOptions(s.theme||'dark'))]),
+          h('button',{className:'btn',text:'Manage site & theme posters',onClick:function(){openSettings('site-artwork');}}),
           h('h3', { className:'admin-section-title', text:'Links' }),
           fieldEl('public_base_url','Public base URL for shared links (optional, e.g. https://media.example.com/)', s.public_base_url||'', 'url'),
           h('p', { className:'muted', text:'Leave empty to share links using the address you are browsing on (its protocol, host and port).' }),
@@ -8409,7 +8348,7 @@ try {
                 app_name: $('#app_name').value,
                 app_tagline: $('#app_tagline').value,
                 public_base_url: $('#public_base_url').value.trim(),
-                theme: $('#theme').value,
+                theme: $('#site_default_theme').value,
                 home: { random_per_section:+$('#home_random').value, continue_watching_limit:+$('#home_cw').value },
                 auth: { require_login:true, lan_guest_access:$('#auth_lan').checked, trusted_proxies:$('#auth_proxies').value.split(',').map(function(value){return value.trim();}).filter(Boolean), session_ttl_seconds:+$('#auth_ttl').value },
                 pwa: { enabled: $('#pwa_en').checked, theme_color:$('#pwa_theme').value, background_color:$('#pwa_bg').value }
@@ -11369,6 +11308,7 @@ h('div', { className:'cv-find-bar' }, [
     ]));
   }
   function saveSettings(patch){
+    var focus=document.activeElement,scope=state.adminTab==='general'?null:focus&&focus.closest('.settings-fieldset'),savedFields=captureSettingsDraft(scope);
     var applySeed = !!(patch && patch._apply_transmission_seeding);
     if (patch && patch._apply_transmission_seeding != null) {
       patch = Object.assign({}, patch);
@@ -11377,6 +11317,7 @@ h('div', { className:'cv-find-bar' }, [
     api('/admin/settings', { method:'POST', body: patch }).then(function(j){
       if (!j.ok) return toast(j.error||'Failed', { kind:'bad' });
       if (j.settings) state.settings = j.settings;
+      acknowledgeSettingsDraft(savedFields);
       if (j.warning) toast(j.warning, { kind:'warn', ms:6000 });
       if (applySeed) {
         return api('/admin/transmission/seeding', { method:'POST', body:{} }).then(function(r){
@@ -12487,8 +12428,9 @@ function viewCollectionDetail(){
     });
     return h('span', { className: 'live-tri-wrap' }, [cb, cnt]);
   }
-  /* Filterable flat checkbox list (movies / commercials / bumpers / rotation picks); every item is listed. */
+  /* Paginated checkbox lists retain selections across pages; bulk actions apply to every match. */
   function liveFlatChecks(items, isOn, setOn, qKey, onChange, emptyText){
+    var page=0,pageSize=60,pager=h('div',{className:'tvs-picker-pager live-media-pager'});
     var grid = h('div', { className: 'live-lib-grid' });
     var count = h('span', { className: 'muted' });
     function shown(){
@@ -12500,22 +12442,24 @@ function viewCollectionDetail(){
       var list = shown();
       if (!items.length) grid.appendChild(h('p', { className: 'muted', text: emptyText || 'None in the Relay media library yet.' }));
       else if (!list.length) grid.appendChild(h('p', { className: 'muted', text: 'No matches.' }));
-      list.forEach(function(m){
+      page=Math.min(page,Math.max(0,Math.ceil(list.length/pageSize)-1));
+      list.slice(page*pageSize,(page+1)*pageSize).forEach(function(m){
         grid.appendChild(h('label', { className: 'check-label live-lib-item' }, [
           h('input', { type: 'checkbox', checked: isOn(m.id), onChange: function(ev){ setOn([m.id], ev.target.checked); if (onChange) onChange(); } }),
           h('span', { text: liveGuideTitle(m) + (m.durationMs ? ' \u00b7 ' + liveFmtDur(m.durationMs) : '') })
         ]));
       });
+      pager.replaceChildren();if(list.length>pageSize)pager.appendChild(h('div',{className:'row-actions'},[h('button',{className:'btn ghost sm',text:'Previous',disabled:page===0,onClick:function(){page--;paint();}}),h('span',{className:'muted',text:'Page '+(page+1)+' / '+Math.ceil(list.length/pageSize)}),h('button',{className:'btn ghost sm',text:'Next',disabled:(page+1)*pageSize>=list.length,onClick:function(){page++;paint();}})]));
       count.textContent = (list.length === items.length) ? livePlural(items.length, 'item') : (list.length + ' of ' + items.length + ' match');
     }
     var bar = h('div', { className: 'live-filter-bar' }, [
-      liveSearchInput(qKey, 'Filter by title\u2026', paint),
-      h('button', { className: 'btn ghost sm', type: 'button', text: 'Tick all listed', onClick: function(){ setOn(liveIds(shown()), true); paint(); if (onChange) onChange(); } }),
-      h('button', { className: 'btn ghost sm', type: 'button', text: 'Untick all listed', onClick: function(){ setOn(liveIds(shown()), false); paint(); if (onChange) onChange(); } }),
+      liveSearchInput(qKey, 'Filter by title\u2026', function(){page=0;paint();}),
+      h('button', { className: 'btn ghost sm', type: 'button', text: 'Select all matches', onClick: function(){ setOn(liveIds(shown()), true); paint(); if (onChange) onChange(); } }),
+      h('button', { className: 'btn ghost sm', type: 'button', text: 'Deselect all matches', onClick: function(){ setOn(liveIds(shown()), false); paint(); if (onChange) onChange(); } }),
       count
     ]);
     paint();
-    return h('div', { className: 'live-flat' }, [bar, grid]);
+    return h('div', { className: 'live-flat' }, [bar, grid, pager]);
   }
   /* Debounced search box: repaints only its target, so typing keeps focus. */
   function liveSearchInput(qKey, label, onRun){
@@ -12568,7 +12512,7 @@ function viewCollectionDetail(){
       if (!Array.isArray(liveSet.station.media)) liveSet.station.media = [];
       liveSet.station.channels.forEach(liveEnsureChannel);
       liveMediaChanged();
-      liveSet.dirty = false;
+      liveSet.dirty = false;clearSettingsDraft();if(!tvs.dirty)tvs.data=null;
       liveSetMsg('Saved. Lineups rebuilt.');
       fillLiveNativePanel(state.settingsSection);
     }).catch(function(e){ liveSetMsg(String(e.message || e), true); })
@@ -12602,7 +12546,7 @@ function viewCollectionDetail(){
 
   function liveSectionMeta(sec){
     var map = {
-      'live-studio': { title: 'TV Studio', blurb: 'Weekly calendar per channel, filler that plays between slots, ad breaks, numbering, logos and access, XMLTV / M3U outputs, recordings and stream status.' },
+      'live-studio': { title: 'PseudoTV Studio', blurb: 'Weekly calendar per channel, filler that plays between slots, ad breaks, numbering, logos and access, XMLTV / M3U outputs, recordings and stream status.' },
       'live-channels': { title: 'Relay channels', blurb: 'Number, name and slogan each Relay channel, put it on or off air, and tick the movies, TV shows (whole show, season or single episodes), commercials and bumpers it may air.' },
       'live-library': { title: 'Relay media library', blurb: 'Everything Relay can schedule. Add movies or whole shows from the server catalogue, add files by URL, edit titles / season / episode / duration, or remove items.' },
       'live-playlists': { title: 'Playlists & programming', blurb: 'Set programs air first, in order; under the fill window Relay fills at random from the channel library. Commercial breaks, bumpers and the random seed live here too.' },
@@ -12617,16 +12561,6 @@ function viewCollectionDetail(){
   function liveNativeSettingsKids(sec){
     if (sec === 'live') sec = 'live-channels';
     var meta = liveSectionMeta(sec);
-    var related = [
-      ['live-studio', 'TV Studio'],
-      ['live-channels', 'Relay'],
-      ['live-library', 'Media library'],
-      ['live-playlists', 'Playlists'],
-      ['live-schedule', 'Schedule'],
-      ['live-iptv', 'IPTV'],
-      ['live-radio','Radio'],
-      ['live-station', 'Station']
-    ];
     var stationSection = sec !== 'live-iptv' && sec !== 'live-studio' && sec !== 'live-radio';
     setTimeout(function(){ fillLiveNativePanel(sec); }, 0);
     return [
@@ -12647,13 +12581,6 @@ function viewCollectionDetail(){
           h('button', { className: 'btn primary', type: 'button', 'data-live-save': '1', text: 'Save station', onClick: liveSaveStation })
         ]) : null
       ]),
-      h('div', { className: 'settings-live-subnav', role: 'tablist', 'aria-label': 'Live sections' }, related.filter(function(pair){return canSettings(pair[0]);}).map(function(pair){
-        return h('button', {
-          type: 'button',
-          className: 'settings-live-subnav-btn' + (sec === pair[0] ? ' active' : ''),
-          onClick: function(){ openSettings(pair[0]); }
-        }, [ document.createTextNode(pair[1]) ]);
-      })),
       h('p', { id: 'live-native-status', className: 'muted live-native-status' + (liveSet.statusBad ? ' bad' : ''), text: liveSet.status || '' }),
       h('div', { id: 'live-native-panel', className: 'live-native-panel' }, [
         pendingContent({ className: 'muted', })
@@ -12663,7 +12590,7 @@ function viewCollectionDetail(){
 
   function fillLiveNativePanel(sec){
     var host = document.getElementById('live-native-panel');
-    if (!host) return;
+    if (!host || state.view!=='settings' || (state.settingsSection!==sec&&state.settingsSection!=='live')) return;
     if (sec === 'live') sec = 'live-channels';
     host.innerHTML = '';
     host.appendChild(pendingContent({ className: 'muted', }));
@@ -12671,8 +12598,9 @@ function viewCollectionDetail(){
     var p;
     if (sec === 'live-studio') { paintTvStudio(host); return; }
     if (sec === 'live-radio') {host.replaceChildren(h('div',{className:'row-actions'},[h('button',{className:'btn primary',text:'Browse public directory',onClick:radioDirectory}),h('button',{className:'btn',text:'Add stream URL',onClick:function(){editRadio();}}),h('button',{className:'btn',text:'Open Radio',onClick:function(){goLiveTab('radio');}})]));loadRadio(true).then(function(stations){if(!host.isConnected)return;stations.forEach(function(station){host.appendChild(h('div',{className:'radio-directory-row'},[h('div',{},[h('strong',{text:station.name}),h('p',{className:'muted',text:radioMeta(station)})]),h('button',{className:'btn',text:'Edit station',onClick:function(){editRadio(station);}})]));});if(!stations.length)host.appendChild(emptyState('No stations yet','Search the public directory or add a stream URL.'));}).catch(function(e){if(host.isConnected)host.appendChild(h('p',{text:e.message}));});return;}
-    if (sec === 'live-iptv') p = liveLoadIptv(true).then(function(){ paintLiveIptv(host); });
+    if (sec === 'live-iptv') p = liveLoadIptv(true).then(function(){if(host.isConnected&&state.settingsSection===sec)paintLiveIptv(host);});
     else p = liveLoadStation(!liveSet.dirty).then(function(){
+      if(!host.isConnected||state.settingsSection!==sec)return;
       liveSyncDirty();
       if (sec === 'live-schedule') paintLiveSchedule(host);
       else if (sec === 'live-playlists') paintLivePlaylists(host);
@@ -12698,7 +12626,10 @@ function viewCollectionDetail(){
     });
   }
   function tvsLoad(){
+    var owner=state.user&&state.user.id;
     return tvsApi('tv_studio').then(function(j){
+      if(owner!==(state.user&&state.user.id))return;
+      tvs.owner=owner;
       if (!j || !j.ok) throw new Error((j && j.error) || 'Could not load TV Studio');
       tvs.data = j; tvs.studio = JSON.parse(JSON.stringify(j.studio)); tvs.dirty = false;
       if (!tvs.channelId || !j.channels.some(function(c){ return c.id === tvs.channelId; })) tvs.channelId = j.channels.length ? j.channels[0].id : '';
@@ -12713,40 +12644,49 @@ function viewCollectionDetail(){
     }
     return tvs.studio.channels[id];
   }
-  function tvsMedia(id){ var m = (tvs.data.media || []); for (var i = 0; i < m.length; i++) if (m[i].id === id) return m[i]; return null; }
+  function tvsMedia(id){
+    var media=tvs.data&&tvs.data.media||[];
+    if(tvs._mediaSource!==media){tvs._mediaSource=media;tvs._mediaIndex=new Map();media.forEach(function(item){tvs._mediaIndex.set(String(item.id),item);});}
+    return tvs._mediaIndex.get(String(id))||null;
+  }
   function tvsFmtMin(m){ m = ((m % 1440) + 1440) % 1440; return ('0' + Math.floor(m / 60)).slice(-2) + ':' + ('0' + (m % 60)).slice(-2); }
   function tvsFmtDur(ms){ var m = Math.round(ms / 60000); return m >= 60 ? (Math.floor(m / 60) + 'h ' + (m % 60) + 'm') : (m + 'm'); }
   function tvsMark(){ tvs.dirty = true; var d = $('#tvs-dirty'); if (d) d.hidden = false; var b = $('#tvs-save'); if (b) b.disabled = false; }
   function tvsSave(){
     var btn = $('#tvs-save'); if (btn) btn.disabled = true;
-    return tvsApi('tv_studio', { method:'POST', body:{ studio: tvs.studio } }).then(function(j){
+    var snapshot=JSON.stringify(tvs.studio),owner=state.user&&state.user.id;
+    return tvsApi('tv_studio', { method:'POST', body:{ studio: JSON.parse(snapshot) } }).then(function(j){
       if (!j || !j.ok) throw new Error((j && j.error) || 'Save failed');
-      tvs.data = j; tvs.studio = JSON.parse(JSON.stringify(j.studio)); tvs.dirty = false;
-      toast('TV Studio saved', { kind:'ok' }); tvsPaint();
+      if(owner!==(state.user&&state.user.id))return;
+      var newer=JSON.stringify(tvs.studio)!==snapshot;tvs.data=j;if(!newer)tvs.studio=JSON.parse(JSON.stringify(j.studio));tvs.dirty=newer;
+      toast(newer?'Saved the submitted version. Your newer edits still need saving.':'PseudoTV Studio saved',{kind:'ok'});tvsPaint();
     }).catch(function(e){ toast(String(e.message || e), { kind:'bad' }); if (btn) btn.disabled = false; });
   }
   function paintTvStudio(host){
+    if(!host)return;
+    if(tvs.owner!==(state.user&&state.user.id)){tvs.data=null;tvs.studio=null;tvs.dirty=false;}
     host.innerHTML = '';
     host.appendChild(pendingContent({ className:'muted', }));
-    (tvs.data && tvs.dirty ? Promise.resolve() : tvsLoad()).then(function(){ tvsPaint(); }).catch(function(e){
+    (tvs.data ? Promise.resolve() : tvsLoad()).then(function(){ tvsPaint(); }).catch(function(e){
       host.innerHTML = ''; host.appendChild(h('p', { className:'bad', text:String(e.message || e) }));
     });
   }
   function tvsPaint(){
     var host = document.getElementById('live-native-panel');
-    if (!host || !tvs.data) return;
+    if (!host || !tvs.data || state.view!=='settings' || state.settingsSection!=='live-studio') return;
     host.innerHTML = '';
     // Scope root for TV Studio styles (.tvs-root ...), so they never reach the header or other panels.
     host = host.appendChild(h('div', { className:'tvs-root' }));
-    var tabs = [['schedule','Schedule'],['filler','Filler'],['adverts','Adverts'],['channels','Channels'],['epg','EPG & outputs'],['dvr','Recordings'],['health','Status']];
+    var tabs = [['schedule','Weekly schedule'],['filler','Filler'],['adverts','Adverts'],['channels','Channels'],['epg','EPG & outputs'],['dvr','Recordings'],['health','Status']];
     var chans = tvs.data.channels.slice().sort(function(a, b){ return a.number - b.number; });
     host.appendChild(h('div', { className:'tvs-bar' }, [
       h('div', { className:'tvs-tabs', role:'tablist' }, tabs.map(function(t){
         return h('button', { type:'button', role:'tab', className:'tvs-tab' + (tvs.tab === t[0] ? ' active' : ''), 'aria-selected': tvs.tab === t[0] ? 'true' : 'false', text:t[1], onClick:function(){ tvs.tab = t[0]; tvsPaint(); } });
       })),
       h('div', { className:'row-actions' }, [
+        h('button',{className:'btn ghost',type:'button',text:'Reload saved studio',onClick:function(){if(tvs.dirty&&!confirm('Discard your Studio draft and reload saved settings?'))return;tvs.data=null;tvs.dirty=false;paintTvStudio(document.getElementById('live-native-panel'));}}),
         h('span', { id:'tvs-dirty', className:'live-dirty', hidden:!tvs.dirty, text:'Unsaved changes' }),
-        h('button', { className:'btn ghost', type:'button', text:'Discard', onClick:function(){ tvs.data = null; paintTvStudio(host); } }),
+        h('button', { className:'btn ghost', type:'button', text:'Discard', onClick:function(){if(tvs.dirty&&!confirm('Discard all unsaved Studio changes?'))return;tvs.data=null;tvs.studio=null;tvs.dirty=false;paintTvStudio(document.getElementById('live-native-panel'));} }),
         h('button', { id:'tvs-save', className:'btn primary', type:'button', text:'Save studio', disabled:!tvs.dirty, onClick:tvsSave })
       ])
     ]));
@@ -12772,9 +12712,21 @@ function viewCollectionDetail(){
   }
 
   /* ---- weekly calendar ---- */
+  function tvsAddSlot(){
+    var now=new Date(),start=Math.min(1380,Math.ceil((now.getHours()*60+now.getMinutes())/5)*5),day=(now.getDay()+6)%7;
+    var slot={id:tvsUid('slot'),title:'',days:[day],startMin:start,durationMin:60,contentType:'list',mediaIds:[],series:'',fillerListId:'',order:'sequential',ads:true,color:'',validFrom:'',validTo:''};
+    tvsChan().slots.push(slot);tvs.sel=slot.id;tvsMark();tvsPaint();var editor=document.querySelector('.tvs-editor');if(editor){editor.scrollIntoView({block:'nearest',behavior:'smooth'});var input=editor.querySelector('input');if(input)input.focus({preventScroll:true});}
+  }
+  function tvsSlotConflicts(slot,slots){
+    return slots.filter(function(other){if(other.id===slot.id)return false;if(slot.validTo&&other.validFrom&&slot.validTo<other.validFrom)return false;if(other.validTo&&slot.validFrom&&other.validTo<slot.validFrom)return false;return slot.days.some(function(day){var start=day*1440+slot.startMin,end=start+slot.durationMin;return other.days.some(function(od){var os=od*1440+other.startMin;return [-10080,0,10080].some(function(shift){return start<os+shift+other.durationMin&&os+shift<end;});});});}).length;
+  }
+  function tvsCopySchedule(){
+    var source=tvsChan(),choices=tvs.data.channels.filter(function(ch){return ch.id!==tvs.channelId;});if(!choices.length){toast('Create another Relay channel first.');return;}
+    window.VaultcastHub.modal('Copy weekly schedule',function(body,close){var target=h('select',{'aria-label':'Destination channel'},choices.map(function(ch){return h('option',{value:ch.id,text:ch.number+' · '+ch.name});})),replace=h('input',{type:'checkbox'});body.appendChild(h('p',{text:'Copy this channel’s slots to another channel. Changes remain a draft until you save Studio.'}));body.appendChild(target);body.appendChild(h('label',{className:'check-label'},[replace,' Replace destination slots (otherwise append)']));body.appendChild(h('button',{className:'btn primary',text:'Copy slots',onClick:function(){var destination=tvsChan(target.value);if(replace.checked&&destination.slots.length&&!confirm('Replace all time slots on the destination channel?'))return;var copies=source.slots.map(function(slot){var copy=JSON.parse(JSON.stringify(slot));copy.id=tvsUid('slot');return copy;});destination.slots=replace.checked?copies:destination.slots.concat(copies);tvsMark();close();toast(copies.length+' slots copied. Save Studio to apply.');}}));});
+  }
   function tvsPaintSchedule(body, picker){
     var ch = tvsChan();
-    var top = h('div', { className:'tvs-row' }, [ picker(),
+    var top = h('div', { className:'tvs-row' }, [picker(),h('button',{className:'btn primary',text:'Add time slot',onClick:tvsAddSlot}),h('button',{className:'btn',text:tvs.scheduleView==='calendar'?'Show agenda':'Show weekly calendar',onClick:function(){tvs.scheduleView=tvs.scheduleView==='calendar'?'agenda':'calendar';tvsPaint();}}),h('button',{className:'btn',text:'Copy schedule to channel',onClick:tvsCopySchedule}),
       h('label', { className:'tvs-chan-pick' }, [ h('span', { className:'muted', text:'Outside slots' }),
         h('select', { onChange:function(e){ ch.mode = e.target.value; tvsMark(); tvsPaint(); } }, [
           h('option', { value:'overlay', selected:ch.mode === 'overlay', text:'Keep the Relay rotation' }),
@@ -12783,6 +12735,12 @@ function viewCollectionDetail(){
       h('p', { className:'muted tvs-hint', text:'Drag on an empty area to add a slot. Drag a slot to move it, drag its bottom edge to resize. Times snap to ' + TVS_SNAP + ' minutes.' })
     ]);
     body.appendChild(top);
+    if(tvs.scheduleView!=='calendar'){
+      var agenda=h('div',{className:'tvs-agenda'}),ordered=ch.slots.slice().sort(function(a,b){return Math.min.apply(null,a.days)-Math.min.apply(null,b.days)||a.startMin-b.startMin;});
+      if(!ordered.length)agenda.appendChild(h('div',{className:'settings-callout'},[h('h3',{text:'Build your first broadcast day'}),h('p',{text:'Add a time slot, choose weekdays and select a series, programmes or a filler list. Save the studio when ready.'}),h('button',{className:'btn primary',text:'Create a slot',onClick:tvsAddSlot})]));
+      ordered.forEach(function(slot){var conflicts=tvsSlotConflicts(slot,ch.slots);agenda.appendChild(h('button',{type:'button',className:'tvs-agenda-slot'+(tvs.sel===slot.id?' selected':''),onClick:function(){tvs.sel=slot.id;tvsPaint();}},[h('span',{className:'tvs-agenda-time',text:tvsFmtMin(slot.startMin)+' – '+tvsFmtMin(slot.startMin+slot.durationMin)+(slot.startMin+slot.durationMin>=1440?' +1 day':'')}),h('strong',{text:tvsSlotLabel(slot)}),h('small',{text:slot.days.map(function(d){return TVS_DAYS[d];}).join(', ')+' · '+slot.durationMin+' minutes'+(conflicts?' · '+conflicts+' overlapping slot(s)':'')})]));});
+      body.appendChild(h('div',{className:'tvs-sched'},[agenda,tvsSlotEditor()]));tvsPreview(body);return;
+    }
     var wrap = h('div', { className:'tvs-cal-wrap' });
     var cal = h('div', { className:'tvs-cal' });
     var hours = h('div', { className:'tvs-hours' }, [ h('div', { className:'tvs-dayhead' }) ]);
@@ -12883,30 +12841,31 @@ function viewCollectionDetail(){
         return h('option', { value:l.id, selected:l.id === val, text:l.name + ' (' + l.mediaIds.length + ')' });
       }))) ]);
   }
-  function tvsMediaPicker(selected, onChange, kinds){
-    var q = '';
-    var box = h('div', { className:'tvs-picker' });
-    var chosen = h('ol', { className:'tvs-chosen' });
-    var results = h('div', { className:'tvs-results' });
+  function tvsMediaPicker(selected,onChange,kinds){
+    var box=h('div',{className:'tvs-picker tvs-bulk-picker'}),pending=new Set(),page=0,chosenPage=0,pageSize=40,timer;
+    var source=(tvs.data.media||[]).filter(function(m){return !kinds||kinds.indexOf(m.kind)>=0;}),query=h('input',{type:'search',placeholder:'Search title or series…','aria-label':'Search media'}),kind=h('select',{'aria-label':'Media type'},[h('option',{value:'',text:'All media types'})]),series=h('select',{'aria-label':'Series'},[h('option',{value:'',text:'All series'})]),season=h('input',{type:'number',min:0,placeholder:'Season','aria-label':'Season number'}),ready=h('select',{'aria-label':'Duration availability'},[h('option',{value:'',text:'Any duration'}),h('option',{value:'ready',text:'Ready to schedule'}),h('option',{value:'missing',text:'Missing duration'})]);
+    Array.from(new Set(source.map(function(m){return m.kind;}))).sort().forEach(function(name){kind.appendChild(h('option',{value:name,text:name}));});
+    Array.from(new Set(source.map(function(m){return m.series;}).filter(Boolean))).sort().forEach(function(name){series.appendChild(h('option',{value:name,text:name}));});
+    var results=h('div',{className:'tvs-results'}),chosen=h('ol',{className:'tvs-chosen'}),resultPager=h('div',{className:'tvs-picker-pager'}),chosenPager=h('div',{className:'tvs-picker-pager'}),summary=h('p',{className:'muted',role:'status'}),selectionSummary=h('strong',{text:'Selection'});
+    var matches=[];
+    function commit(){onChange(selected);paint();}
+    function add(ids){var used=new Set(selected);ids.forEach(function(id){if(!used.has(id)){selected.push(id);used.add(id);}pending.delete(id);});commit();}
+    function pager(host,current,total,set){host.replaceChildren();if(total<=pageSize)return;host.appendChild(h('button',{className:'btn ghost',type:'button',text:'Previous',disabled:current===0,onClick:function(){set(current-1);paint();}}));host.appendChild(h('span',{className:'muted',text:(current+1)+' / '+Math.ceil(total/pageSize)}));host.appendChild(h('button',{className:'btn ghost',type:'button',text:'Next',disabled:(current+1)*pageSize>=total,onClick:function(){set(current+1);paint();}}));}
+    var addSelected=h('button',{className:'btn primary',text:'Add selected',disabled:true,onClick:function(){add(Array.from(pending));}}),addAll=h('button',{className:'btn',text:'Add all filtered',onClick:function(){if(matches.length>500&&!confirm('Add '+matches.length+' matching programmes to this list?'))return;add(matches.map(function(m){return m.id;}));}}),selectPage=h('button',{className:'btn ghost',text:'Select this page',onClick:function(){matches.slice(page*pageSize,(page+1)*pageSize).forEach(function(m){pending.add(m.id);});paint();}});
     function paint(){
-      chosen.innerHTML = '';
-      selected.forEach(function(id, i){
-        var m = tvsMedia(id);
-        chosen.appendChild(h('li', {}, [ h('span', { text:(m ? m.title : id) + (m ? ' \u00b7 ' + tvsFmtDur(m.durationMs) : '') }),
-          h('button', { className:'icon-btn', type:'button', title:'Move up', text:'\u2191', disabled:i === 0, onClick:function(){ selected.splice(i - 1, 0, selected.splice(i, 1)[0]); onChange(selected); paint(); } }),
-          h('button', { className:'icon-btn', type:'button', title:'Remove', text:'\u00d7', onClick:function(){ selected.splice(i, 1); onChange(selected); paint(); } }) ]));
-      });
-      if (!selected.length) chosen.appendChild(h('li', { className:'muted', text:'Nothing chosen yet' }));
-      results.innerHTML = '';
-      var ql = q.toLowerCase();
-      (tvs.data.media || []).filter(function(m){ return (!kinds || kinds.indexOf(m.kind) >= 0) && selected.indexOf(m.id) < 0 && (!ql || (m.title + ' ' + m.series).toLowerCase().indexOf(ql) >= 0); }).slice(0, 40).forEach(function(m){
-        results.appendChild(h('button', { type:'button', className:'tvs-result' + (m.durationMs ? '' : ' no-dur'), title:m.durationMs ? '' : 'Unknown duration \u2014 run the duration task in Live media', onClick:function(){ selected.push(m.id); onChange(selected); paint(); } }, [
-          h('span', { className:'lc-pill', text:m.kind }), document.createTextNode(' ' + m.title), h('span', { className:'muted', text:m.durationMs ? ' ' + tvsFmtDur(m.durationMs) : ' ?' }) ]));
-      });
+      if(!box.isConnected&&box._mounted)return;box._mounted=box.isConnected;
+      var used=new Set(selected),words=query.value.toLowerCase().trim().split(/\s+/).filter(Boolean);
+      matches=source.filter(function(m){return !used.has(m.id)&&(!kind.value||m.kind===kind.value)&&(!series.value||m.series===series.value)&&(season.value===''||(m.season!=null&&Number(m.season)===Number(season.value)))&&(!ready.value||(ready.value==='ready'?m.durationMs>0:!m.durationMs))&&words.every(function(word){return (m.title+' '+(m.series||'')).toLowerCase().indexOf(word)>=0;});});
+      page=Math.min(page,Math.max(0,Math.ceil(matches.length/pageSize)-1));chosenPage=Math.min(chosenPage,Math.max(0,Math.ceil(selected.length/pageSize)-1));
+      summary.textContent=matches.length+' matching · '+pending.size+' selected to add';addSelected.disabled=!pending.size;addAll.disabled=!matches.length;selectPage.disabled=!matches.length;
+      results.replaceChildren();matches.slice(page*pageSize,(page+1)*pageSize).forEach(function(m){var input=h('input',{type:'checkbox',checked:pending.has(m.id),'aria-label':'Select '+m.title,onChange:function(){if(input.checked)pending.add(m.id);else pending.delete(m.id);summary.textContent=matches.length+' matching · '+pending.size+' selected to add';addSelected.disabled=!pending.size;}});results.appendChild(h('label',{className:'tvs-media-choice'},[input,h('span',{},[h('strong',{text:m.title}),h('small',{text:[m.kind,m.series,m.season!=null?'Season '+m.season:'',m.durationMs?tvsFmtDur(m.durationMs):'Missing duration'].filter(Boolean).join(' · ')})])]));});if(!matches.length)results.appendChild(h('p',{className:'muted',text:'No matches. Adjust the filters, or import media in Live media library.'}));
+      var duration=0,missing=0;selected.forEach(function(id){var m=tvsMedia(id);duration+=m?Number(m.durationMs)||0:0;if(!m||!m.durationMs)missing++;});selectionSummary.textContent=selected.length+' in this list · '+tvsFmtDur(duration)+(missing?' · '+missing+' missing duration / unavailable':'');
+      chosen.replaceChildren();chosen.start=chosenPage*pageSize+1;selected.slice(chosenPage*pageSize,(chosenPage+1)*pageSize).forEach(function(id,offset){var i=chosenPage*pageSize+offset,m=tvsMedia(id);chosen.appendChild(h('li',{},[h('span',{text:m?m.title:'Unavailable media · '+id}),h('button',{className:'icon-btn',type:'button','aria-label':'Move programme up',text:'↑',disabled:i===0,onClick:function(){selected.splice(i-1,0,selected.splice(i,1)[0]);commit();}}),h('button',{className:'icon-btn',type:'button','aria-label':'Move programme down',text:'↓',disabled:i===selected.length-1,onClick:function(){selected.splice(i+1,0,selected.splice(i,1)[0]);commit();}}),h('button',{className:'icon-btn',type:'button','aria-label':'Remove programme',text:'×',onClick:function(){selected.splice(i,1);commit();}})]));});
+      if(!selected.length)chosen.appendChild(h('li',{className:'muted',text:'Add programmes from the media browser above.'}));pager(resultPager,page,matches.length,function(n){page=n;});pager(chosenPager,chosenPage,selected.length,function(n){chosenPage=n;});
     }
-    box.appendChild(h('input', { type:'search', placeholder:'Search Live media\u2026', onInput:function(e){ q = e.target.value; paint(); } }));
-    box.appendChild(results); box.appendChild(chosen); paint();
-    return box;
+    [kind,series,season,ready].forEach(function(input){input.addEventListener('change',function(){page=0;paint();});});query.addEventListener('input',function(){clearTimeout(timer);timer=setTimeout(function(){page=0;paint();},150);});
+    box.appendChild(h('div',{className:'tvs-media-filters'},[query,kind,series,season,ready]));box.appendChild(summary);box.appendChild(h('div',{className:'row-actions'},[selectPage,addSelected,addAll,h('button',{className:'btn ghost',text:'Clear selection',onClick:function(){pending.clear();paint();}})]));box.appendChild(results);box.appendChild(resultPager);
+    box.appendChild(h('div',{className:'tvs-selection-heading'},[selectionSummary,h('div',{className:'row-actions'},[h('button',{className:'btn ghost',text:'Sort by title / episode',onClick:function(){selected.sort(function(a,b){var x=tvsMedia(a)||{},y=tvsMedia(b)||{};return String(x.series||x.title||a).localeCompare(String(y.series||y.title||b),undefined,{numeric:true})||(Number(x.season)||0)-(Number(y.season)||0)||(Number(x.episode)||0)-(Number(y.episode)||0);});commit();}}),h('button',{className:'btn ghost',text:'Reverse order',onClick:function(){selected.reverse();commit();}}),h('button',{className:'btn ghost',text:'Remove all',onClick:function(){if(selected.length&&confirm('Remove all programmes from this list? Media files are untouched.')){selected.splice(0);commit();}}})])]));box.appendChild(chosen);box.appendChild(chosenPager);paint();return box;
   }
   function tvsSlotEditor(){
     var ch = tvsChan();
@@ -12914,14 +12873,16 @@ function viewCollectionDetail(){
     var pane = h('aside', { className:'tvs-editor settings-card' });
     if (!s) {
       pane.appendChild(h('h3', { text:'Slots' }));
-      pane.appendChild(h('p', { className:'muted', text:ch.slots.length ? 'Select a slot to edit it.' : 'No slots yet. Drag across the calendar to create one.' }));
+      pane.appendChild(h('p', { className:'muted', text:ch.slots.length ? 'Select a slot to edit it.' : 'No slots yet. Use Add time slot to begin.' }));
       ch.slots.forEach(function(x){ pane.appendChild(h('button', { type:'button', className:'tvs-slot-row', onClick:function(){ tvs.sel = x.id; tvsPaint(); } }, [
         h('strong', { text:tvsSlotLabel(x) }), h('span', { className:'muted', text:' ' + x.days.map(function(d){ return TVS_DAYS[d]; }).join(', ') + ' ' + tvsFmtMin(x.startMin) }) ])); });
       return pane;
     }
     function set(k, v, repaint){ s[k] = v; tvsMark(); if (repaint) tvsPaint(); }
+    var conflicts=tvsSlotConflicts(s,ch.slots);if(conflicts)pane.appendChild(h('p',{className:'settings-callout',text:'This slot overlaps '+conflicts+' other slot(s). Review timing or days before saving.'}));
     pane.appendChild(h('div', { className:'tvs-row' }, [ h('h3', { text:'Edit slot' }), h('button', { className:'btn ghost', type:'button', text:'Close', onClick:function(){ tvs.sel = null; tvsPaint(); } }) ]));
     pane.appendChild(h('label', {}, [ 'Title', h('input', { type:'text', value:s.title, placeholder:'Shown in the guide (optional)', onChange:function(e){ set('title', e.target.value, true); } }) ]));
+    pane.appendChild(h('div',{className:'row-actions'},[['Every day',[0,1,2,3,4,5,6]],['Weekdays',[0,1,2,3,4]],['Weekends',[5,6]]].map(function(pair){return h('button',{className:'btn ghost',text:pair[0],onClick:function(){set('days',pair[1].slice(),true);}}); })));
     pane.appendChild(h('div', { className:'tvs-days' }, TVS_DAYS.map(function(dn, d){
       return h('button', { type:'button', className:'tvs-daybtn' + (s.days.indexOf(d) >= 0 ? ' on' : ''), text:dn, onClick:function(){
         var i = s.days.indexOf(d); if (i >= 0) { if (s.days.length > 1) s.days.splice(i, 1); } else s.days.push(d); s.days.sort(); set('days', s.days, true);
@@ -12929,7 +12890,7 @@ function viewCollectionDetail(){
     }).concat([ h('button', { type:'button', className:'linkish', text:'Every day', onClick:function(){ set('days', [0,1,2,3,4,5,6], true); } }),
       h('button', { type:'button', className:'linkish', text:'Weekdays', onClick:function(){ set('days', [0,1,2,3,4], true); } }) ])));
     pane.appendChild(h('div', { className:'tvs-row' }, [
-      h('label', {}, [ 'Start', h('input', { type:'time', step:'300', value:tvsFmtMin(s.startMin), onChange:function(e){ var p = e.target.value.split(':'); set('startMin', Number(p[0]) * 60 + Number(p[1]), true); } }) ]),
+      h('label', {}, [ 'Start', h('input', { type:'time', step:'300', value:tvsFmtMin(s.startMin), onChange:function(e){if(!e.target.value)return; var p = e.target.value.split(':'); set('startMin', Number(p[0]) * 60 + Number(p[1]), true); } }) ]),
       h('label', {}, [ 'Length (min)', h('input', { type:'number', min:'5', max:'1440', step:'5', value:String(s.durationMin), onChange:function(e){ set('durationMin', Math.max(5, Math.min(1440, Number(e.target.value) || 60)), true); } }) ])
     ]));
     pane.appendChild(h('label', {}, [ 'Content', h('select', { onChange:function(e){ set('contentType', e.target.value, true); } }, [
@@ -12958,39 +12919,17 @@ function viewCollectionDetail(){
     return pane;
   }
   function tvsPreview(body){
-    var card = h('div', { className:'settings-card tvs-preview' }, [ h('h3', { text:'Next 12 hours (saved schedule)' }), pendingContent({ className:'muted', }) ]);
-    body.appendChild(card);
-    tvsApi('tv_preview', { query:'?channel=' + encodeURIComponent(tvs.channelId) + '&hours=12' }).then(function(j){
-      card.lastChild.remove();
-      var list = h('ol', { className:'tvs-timeline' });
-      (j.blocks || []).slice(0, 80).forEach(function(b){
-        list.appendChild(h('li', { className:(b.advert ? 'ad' : (b.filler ? 'filler' : (b.slotId ? 'slot' : 'cycle'))) }, [
-          h('time', { text:new Date(b.startUnix).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }) }),
-          h('span', { text:b.title + (b.mediaOffsetMs ? ' (cont.)' : '') }),
-          h('em', { className:'muted', text:b.advert ? 'advert' : (b.filler ? 'filler' : (b.slotTitle || (b.slotId ? 'slot' : 'rotation'))) }) ]));
-      });
-      if (!list.children.length) list.appendChild(h('li', { className:'muted', text:'Off air \u2014 nothing scheduled and no filler.' }));
-      card.appendChild(list);
-      if (tvs.dirty) card.appendChild(h('p', { className:'muted', text:'Save to update this preview.' }));
-    }).catch(function(e){ card.lastChild.textContent = String(e.message || e); });
+    var output=h('div'),button=h('button',{className:'btn',type:'button',text:'Preview next 12 hours',onClick:function(){var channel=tvs.channelId;button.disabled=true;output.replaceChildren(h('p',{className:'muted',text:'Building saved schedule preview…'}));tvsApi('tv_preview',{query:'?channel='+encodeURIComponent(channel)+'&hours=12'}).then(function(j){if(!output.isConnected||channel!==tvs.channelId)return;if(!j.ok)throw new Error(j.error||'Could not build preview');output.replaceChildren();var blocks=j.blocks||j.preview||[];if(!Array.isArray(blocks))blocks=blocks.blocks||[];if(!blocks.length)output.appendChild(h('p',{className:'muted',text:'No scheduled programmes in this window. Check Relay media, durations and filler.'}));blocks.slice(0,100).forEach(function(block){output.appendChild(h('div',{className:'tvs-preview-row'},[h('strong',{text:block.title||block.name||'Programme'}),h('small',{text:block.startUnix?new Date(block.startUnix).toLocaleString():block.start||''})]));});}).catch(function(error){if(output.isConnected)output.replaceChildren(h('p',{className:'bad',text:error.message}));}).then(function(){button.disabled=false;});}});
+    body.appendChild(h('section',{className:'settings-card tvs-preview'},[h('h3',{text:'Preview the saved broadcast schedule'}),h('p',{className:'muted',text:tvs.dirty?'Save Studio before previewing your changes. Preview shows the last saved schedule.':'Generate a preview when needed. Editing does not request previews.'}),button,output]));
   }
-
-  /* ---- filler & adverts ---- */
-  function tvsPaintLists(body, key, title, blurb, kinds){
-    var lists = tvs.studio[key];
-    body.appendChild(h('div', { className:'tvs-row' }, [ h('p', { className:'muted', text:blurb }),
-      h('button', { className:'btn', type:'button', text:'New ' + title.toLowerCase(), onClick:function(){ lists.push({ id:tvsUid(key === 'adPools' ? 'ads' : 'fill'), name:title + ' ' + (lists.length + 1), mediaIds:[], order:'shuffle' }); tvsMark(); tvsPaint(); } }) ]));
-    if (!lists.length) body.appendChild(h('div', { className:'settings-card' }, [ h('p', { className:'muted', text:'No ' + title.toLowerCase() + 's yet.' }) ]));
-    lists.forEach(function(l, i){
-      var total = l.mediaIds.reduce(function(a, id){ var m = tvsMedia(id); return a + (m ? m.durationMs : 0); }, 0);
-      body.appendChild(h('div', { className:'settings-card tvs-list' }, [
-        h('div', { className:'tvs-row' }, [
-          h('input', { type:'text', value:l.name, 'aria-label':'Name', onChange:function(e){ l.name = e.target.value; tvsMark(); } }),
-          h('select', { onChange:function(e){ l.order = e.target.value; tvsMark(); } }, [ h('option', { value:'shuffle', selected:l.order === 'shuffle', text:'Shuffle' }), h('option', { value:'sequential', selected:l.order === 'sequential', text:'In order' }) ]),
-          h('span', { className:'muted', text:l.mediaIds.length + ' items \u00b7 ' + tvsFmtDur(total) }),
-          h('button', { className:'btn danger', type:'button', text:'Delete', onClick:function(){ if (!confirm('Delete ' + l.name + '?')) return; lists.splice(i, 1); tvsMark(); tvsPaint(); } }) ]),
-        tvsMediaPicker(l.mediaIds, function(ids){ l.mediaIds = ids; tvsMark(); }, kinds)
-      ]));
+  function tvsPaintLists(body,key,title,blurb,kinds){
+    var lists=tvs.studio[key];
+    body.appendChild(h('div',{className:'tvs-row'},[h('p',{className:'muted',text:blurb}),h('button',{className:'btn primary',type:'button',text:'New '+title.toLowerCase(),onClick:function(){var list={id:tvsUid(key==='adPools'?'ads':'fill'),name:title+' '+(lists.length+1),mediaIds:[],order:'shuffle'};lists.push(list);tvs.openList=list.id;tvsMark();tvsPaint();}})]));
+    if(!lists.length)body.appendChild(h('div',{className:'settings-callout'},[h('h3',{text:'Build a reusable programme list'}),h('p',{text:'Create a list, filter your media, then add whole batches. Use it as filler or in a weekly slot.'})]));
+    lists.forEach(function(list){
+      var total=list.mediaIds.reduce(function(sum,id){var media=tvsMedia(id);return sum+(media?Number(media.durationMs)||0:0);},0),summary=h('summary',{},[h('strong',{text:list.name}),h('small',{text:list.mediaIds.length+' programmes · '+tvsFmtDur(total)})]),details=h('details',{className:'settings-card tvs-list',open:tvs.openList===list.id},[summary]),built=false;
+      function build(){if(built)return;built=true;details.appendChild(h('div',{className:'tvs-list-editor'},[h('div',{className:'tvs-row'},[h('label',{},['List name',h('input',{type:'text',value:list.name,onChange:function(e){list.name=e.target.value;summary.querySelector('strong').textContent=list.name;tvsMark();}})]),h('label',{},['Playback order',h('select',{onChange:function(e){list.order=e.target.value;tvsMark();}},[h('option',{value:'shuffle',selected:list.order==='shuffle',text:'Shuffle'}),h('option',{value:'sequential',selected:list.order==='sequential',text:'In order'})])]),h('button',{className:'btn',text:'Duplicate list',onClick:function(){var copy=JSON.parse(JSON.stringify(list));copy.id=tvsUid('list');copy.name+=' (copy)';lists.push(copy);tvs.openList=copy.id;tvsMark();tvsPaint();}}),h('button',{className:'btn danger',text:'Delete list',onClick:function(){if(!confirm('Delete '+list.name+'? Slots using it will need a different list.'))return;var index=lists.indexOf(list);if(index>=0)lists.splice(index,1);tvsMark();tvsPaint();}})]),tvsMediaPicker(list.mediaIds,function(ids){list.mediaIds=ids;summary.querySelector('small').textContent=ids.length+' programmes';tvsMark();},kinds)]));}
+      details.addEventListener('toggle',function(){if(details.open){tvs.openList=list.id;build();}});body.appendChild(details);if(details.open)build();
     });
   }
   function tvsPaintFiller(body){ tvsPaintLists(body, 'fillerLists', 'Filler list', 'Filler plays whenever no slot is on air (channels set to "Play the filler list"), or inside a slot that uses one.', null); }
@@ -14481,7 +14420,8 @@ function viewCollectionDetail(){
     runIptvBrowse(false, false);
   }
   function openSettings(section){
-    state.settingsSection = section || 'account';
+    if(state.view==='settings'&&settingsDraftChanged()&&!confirm('Leave this page and discard unsaved form changes?'))return;
+    state.settingsSection = section || 'settings-home';
     var adminIds = { maintenance:'maintenance', players:'players', features:'features', libraries:'sections', sections:'sections', scan:'scan', library:'library', media:'media', collections:'collections', streaming:'streaming', convert:'convert', queue:'queue', acquisition:'acquisition', system:'system', general:'general', users:'users', advanced:'advanced', ingest:'ingest', matching:'matching', reports:'reports' };
     if (adminIds[state.settingsSection]) state.adminTab = adminIds[state.settingsSection];
     var needsAdmin = !!adminIds[state.settingsSection] || state.settingsSection === 'live' || (state.settingsSection && state.settingsSection.indexOf('live-') === 0);
@@ -14661,6 +14601,7 @@ function viewCollectionDetail(){
   }
 
   function navigate(view, sectionId){
+    if(state.view==='settings'&&settingsDraftChanged()&&!confirm('Leave settings and discard unsaved form changes?'))return;
     /* Closing Play / leaving the page while a game is open must stop audio. */
     if (document.getElementById('player-overlay')) {
       try { leavePlayerForNavigation(); } catch (eNavClose) {}
@@ -14751,7 +14692,7 @@ function viewCollectionDetail(){
       if (!state.settingsSection || state.settingsSection === 'account') state.settingsSection = state.adminTab || 'general';
     }
     if (state.view === 'settings') {
-      var adminOnly = { maintenance:1, players:1, features:1, diagnostics:1, sections:1, libraries:1, scan:1, library:1, media:1, collections:1, streaming:1, convert:1, queue:1, acquisition:1, system:1, general:1, users:1, advanced:1, ingest:1, matching:1, reports:1, live:1, 'live-channels':1, 'live-library':1, 'live-playlists':1, 'live-iptv':1, 'live-schedule':1, 'live-station':1, 'live-studio':1, 'live-radio':1 };
+      var adminOnly = { 'site-artwork':1,maintenance:1, players:1, features:1, diagnostics:1, sections:1, libraries:1, scan:1, library:1, media:1, collections:1, streaming:1, convert:1, queue:1, acquisition:1, system:1, general:1, users:1, advanced:1, ingest:1, matching:1, reports:1, live:1, 'live-channels':1, 'live-library':1, 'live-playlists':1, 'live-iptv':1, 'live-schedule':1, 'live-station':1, 'live-studio':1, 'live-radio':1 };
       if (adminOnly[state.settingsSection] && !canSettings(state.settingsSection)) {
         state._wantAdmin = true;
         state._settingsAfterLogin = state.settingsSection;

@@ -73,7 +73,7 @@
     if (head === 'library' && parts[1]) return { view:'section', section:parts[1], sectionLetter:letter(params.letter) };
     if (head === 'collections') return parts[1] ? { view:'collection', collectionId:parts[1] } : { view:'collections', collectionsLetter:letter(params.letter) };
     if (head === 'search') return { view:'search', searchQuery: params.q || '' };
-    if (head === 'settings') return { view:'settings', settingsSection: parts[1] || 'account' };
+    if (head === 'settings') return { view:'settings', settingsSection: parts[1] || 'settings-home' };
     if (head === 'welcome') return { view:'welcome' };
     if (head === 'login') return { view:'login' };
     return { view:'notfound', path: path };

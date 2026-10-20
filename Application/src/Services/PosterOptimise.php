@@ -376,6 +376,11 @@ class PosterOptimise {
         return null;
     }
 
+    /** Used by the explicit system-artwork maintenance job; never called while serving images. */
+    public static function encodeSystemArtwork(string $source, string $destination): array {
+        return self::runFfmpegWebp($source, $destination, 768, 82, 4);
+    }
+
     private static function runFfmpegWebp(string $src, string $dest, ?int $maxW, int $quality, int $compression = 4): array {
         $bad = self::sourceProblem($src);
         if ($bad !== null) return ['ok' => false, 'error' => $bad];

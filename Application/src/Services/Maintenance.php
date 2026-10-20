@@ -7,7 +7,7 @@ final class Maintenance
     private static $checked = 0.0;
     /** Background-only tasks started by the app itself (not listed in the maintenance UI). */
     const INTERNAL = ['ingest' => 'Import reviewed download'];
-    const TASKS = ['segments'=>'Match TV / anime intros and credits, and movie credits','browse'=>'Prepare search and show summaries','search' => 'Prepare live search index', 'views' => 'Prepare browsing pages', 'epg' => 'Refresh programme guide', 'metadata' => 'Prepare artwork and synopses', 'game-metadata' => 'Refresh game posters and synopses', 'scan' => 'Scan library folders', 'collections' => 'Match collections', 'downloads' => 'Import completed downloads', 'durations' => 'Fill Live media durations', 'facts' => 'Probe new media codecs and store show guides'];
+    const TASKS = ['site-artwork'=>'Optimise site and theme posters (WebP)','segments'=>'Match TV / anime intros and credits, and movie credits','browse'=>'Prepare search and show summaries','search' => 'Prepare live search index', 'views' => 'Prepare browsing pages', 'epg' => 'Refresh programme guide', 'metadata' => 'Prepare artwork and synopses', 'game-metadata' => 'Refresh game posters and synopses', 'scan' => 'Scan library folders', 'collections' => 'Match collections', 'downloads' => 'Import completed downloads', 'durations' => 'Fill Live media durations', 'facts' => 'Probe new media codecs and store show guides'];
 
     public static function runCommand(string $task, ?string $target = null): array
     {
@@ -141,6 +141,14 @@ final class Maintenance
                         $next = self::start('metadata', 'Continuation of ' . $id, 'resume');
                         $job['result']['continuation'] = $next['job']['id'];
                     }
+                    break;
+                case 'site-artwork':
+                    $lastProgress=0.0;
+                    $job['result']=SiteArtwork::optimise(function($done,$total,$file)use(&$job,$id,&$lastProgress){
+                        if($done!==$total&&microtime(true)-$lastProgress<1)return;$lastProgress=microtime(true);
+                        $job['progress']=['phase'=>'Site and theme artwork','done'=>$done,'total'=>$total,'file'=>$file,'at'=>date('c')];
+                        \Vaultcast\Repository::putDocument('maintenance-job:'.$id,$job);
+                    });
                     break;
                 case 'segments':
                     $lastProgress=0.0;

@@ -50,10 +50,10 @@ function tvs_id($prefix, $seed = '') {
 function tvs_str($v, $max = 200) { $v = trim((string)$v); return function_exists("mb_substr") ? mb_substr($v, 0, $max) : substr($v, 0, $max); }
 
 function tvs_ids($list) {
-    $out = array();
+    $out = array();$seen=array();
     foreach ((is_array($list) ? $list : array()) as $id) {
         $id = tvs_str($id, 120);
-        if ($id !== '' && !in_array($id, $out, true)) $out[] = $id;
+        if ($id !== '' && !isset($seen[$id])) {$out[] = $id;$seen[$id]=true;}
     }
     return $out;
 }
