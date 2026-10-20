@@ -4555,7 +4555,22 @@ try {
 
   function applyTheme(){
     var theme = state.user && state.user.prefs && state.user.prefs.theme || state.settings && state.settings.theme || 'dark';
-    document.body.setAttribute('data-theme', ['dark','light','retro-scifi','steampunk','vintage-tv','after-hours'].indexOf(theme)>=0 ? theme : 'dark');
+    document.body.setAttribute('data-theme', ['dark','light','retro-scifi','steampunk','vintage-tv','after-hours','ninja-extreme'].indexOf(theme)>=0 ? theme : 'dark');
+    try{document.body.classList.toggle('ninja-calm',localStorage.getItem('vaultcast.ninjaCalm')==='1');}catch(ignore){}
+  }
+  function ninjaCalm(enabled){
+    document.body.classList.toggle('ninja-calm',!!enabled);
+    try{localStorage.setItem('vaultcast.ninjaCalm',enabled?'1':'0');}catch(ignore){}
+  }
+  function ninjaTraining(){
+    window.VaultcastHub.modal('Ninja training',function(body){
+      var count=0,positions=[[1,1],[0,2],[2,0],[0,0],[2,2]],status=h('p',{role:'status','aria-live':'polite',text:'Collect five stars. Take your time—there is no timer.'}),arena=h('div',{className:'ninja-training-arena'}),target=h('button',{type:'button',className:'ninja-training-target',text:'★',title:'Collect a ninja star'}),restart=h('button',{type:'button',className:'btn ninja-training-restart',text:'Try again',hidden:true}),calm=h('input',{type:'checkbox',checked:document.body.classList.contains('ninja-calm')});
+      function place(){var pos=positions[count];target.style.gridRow=String(pos[0]+1);target.style.gridColumn=String(pos[1]+1);target.setAttribute('aria-label','Collect star '+(count+1)+' of 5');}
+      target.onclick=function(){if(count>=5)return;count++;if(count===5){target.hidden=true;restart.hidden=false;status.textContent='Mission complete! Five stars collected. Nice work, ninja.';restart.focus();return;}status.textContent=count+' of 5 stars collected.';place();};
+      restart.onclick=function(){count=0;target.hidden=false;restart.hidden=true;status.textContent='A new mission: collect five stars at your own pace.';place();target.focus();};
+      calm.onchange=function(){ninjaCalm(calm.checked);};place();arena.appendChild(target);
+      body.appendChild(status);body.appendChild(arena);body.appendChild(restart);body.appendChild(h('label',{className:'ninja-calm-control'},[calm,' Calm mode · pause theme animations']));
+    });
   }
   function librarySummary(home){home=home||state.home||{};return (home.item_count||0)+' titles available';}
   function clockFace(children){return [h('div',{className:'hero-clock-face'},children),h('span',{className:'tv-clock-tuner','aria-hidden':'true'})];}
@@ -4643,6 +4658,10 @@ try {
   function shell(content){
     var mode = currentMode();
     applyTheme();
+    if(document.body.getAttribute('data-theme')==='ninja-extreme'){
+      var ninjaClock=content.querySelector('.hero-clock-face');
+      if(ninjaClock&&!ninjaClock.querySelector('.ninja-training-open'))ninjaClock.appendChild(h('button',{type:'button',className:'btn ghost ninja-training-open',text:'★ Ninja training',title:'A short, untimed star-collecting activity and calm-mode controls',onClick:ninjaTraining}));
+    }
     document.body.classList.toggle('has-az-rail',state.view==='section'||state.view==='collections'||(state.view==='play'&&(state.playTab||'games')==='games'));
     try { document.body.setAttribute('data-mode', mode || 'none'); } catch (e) {}
     var modes = [
@@ -7711,6 +7730,7 @@ try {
             h('option', { value: 'steampunk', text: 'Steampunk', selected: prefs.theme === 'steampunk' }),
             h('option', { value: 'vintage-tv', text: 'Vintage TV Retro', selected: prefs.theme === 'vintage-tv' }),
             h('option', { value: 'after-hours', text: 'Each day we stray further from god... (adult)', selected: prefs.theme === 'after-hours' }),
+            h('option', { value: 'ninja-extreme', text: 'Ninja Extreme', selected: prefs.theme === 'ninja-extreme' }),
             h('option', { value: 'light', text: 'Light', selected: prefs.theme === 'light' })
           ])]),
           h('label', {}, ['New password (optional)', h('input', { id: 'pw', type: 'password', placeholder: 'Leave blank to keep' })]),
