@@ -5350,6 +5350,24 @@ try {
     for (var i = 0; i < favs.length; i++) if (favs[i].id === ch.iptvId) return favs[i].streamStatus || '';
     return '';
   }
+  var channelLogoTones=new Map(),channelLogoCanvas=null;
+  function channelLogoBackdrop(img,key){
+    var tone=channelLogoTones.get(key);
+    if(!tone){
+      try{
+        if(!img.naturalWidth||!img.naturalHeight)return;
+        if(!channelLogoCanvas){channelLogoCanvas=document.createElement('canvas');channelLogoCanvas.width=channelLogoCanvas.height=24;}
+        var context=channelLogoCanvas.getContext('2d',{willReadFrequently:true});if(!context)return;
+        context.clearRect(0,0,24,24);context.drawImage(img,0,0,24,24);
+        var pixels=context.getImageData(0,0,24,24).data,total=0,lightness=0;
+        for(var i=0;i<pixels.length;i+=4){var alpha=pixels[i+3]/255;if(alpha<.12)continue;total+=alpha;lightness+=(pixels[i]*.2126+pixels[i+1]*.7152+pixels[i+2]*.0722)*alpha;}
+        if(!total)return;tone=lightness/total>=145?'light':'dark';
+        if(channelLogoTones.size>=256)channelLogoTones.delete(channelLogoTones.keys().next().value);
+        channelLogoTones.set(key,tone);
+      }catch(ignore){channelLogoCanvas=null;return;}
+    }
+    img.setAttribute('data-logo-ink',tone);
+  }
   function chanLogoEl(ch, cls){
     var name = ch.name || ('Channel ' + ch.number);
     var mono = h('span', { className:'chan-mono' + (cls ? ' ' + cls : ''), text: String(name).replace(/[^A-Za-z0-9]/g, '').slice(0, 2).toUpperCase() || String(ch.number) });
@@ -5357,6 +5375,8 @@ try {
     var lsrc = String(ch.logo);
     if (/^https?:\/\//i.test(lsrc) && lsrc.indexOf(location.origin + '/') !== 0) lsrc = LIVE_API + 'logo?u=' + encodeURIComponent(lsrc);
     var img = h('img', { className:'chan-logo' + (cls ? ' ' + cls : ''), src: lsrc, alt:'', loading:'lazy', referrerpolicy:'no-referrer' });
+    img.addEventListener('load',function(){channelLogoBackdrop(img,lsrc);});
+    if(img.complete&&img.naturalWidth)channelLogoBackdrop(img,lsrc);
     img.addEventListener('error', function(){ if (img.parentNode) img.parentNode.replaceChild(mono, img); });
     return img;
   }
