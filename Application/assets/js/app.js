@@ -756,7 +756,7 @@ function confirmDialog(message, opts){
     var method = String(opts.method || 'GET').toUpperCase();
     if (method !== 'GET') {
       if (/^\/hub\/(?:game|rooms|shelf|review|friend|invite|dismiss|saves|lists|chat)(?:\/|$)/.test(path)) return apiRequest(path,opts);
-      if (/^\/items\/[a-f0-9]+\/play$/.test(path) || path === '/admin/posters/audit') return apiRequest(path, opts);
+      if (/^\/items\/[a-f0-9]+\/play$/.test(path) || path === '/admin/posters/audit' || path === '/live/iptv_preview') return apiRequest(path, opts);
       navigationCache.clear();
       return apiRequest(path, opts).then(function(j){ navigationCache.clear(); return j; }, function(error){ navigationCache.clear(); throw error; });
     }
@@ -1846,6 +1846,37 @@ function confirmDialog(message, opts){
   var miniVideo=null;
   function moveVideoContainer(parent,node){if(typeof parent.moveBefore==='function'&&parent.isConnected&&node.isConnected){try{parent.moveBefore(node,null);return;}catch(ignore){}}parent.appendChild(node);}
   function resumeMovedVideo(media,playing){if(playing&&media.paused){var promise=media.play();if(promise&&promise.catch)promise.catch(function(){});}}
+  var iptvPreviewSequence=0;
+  function previewIptvChannel(channel,button){
+    var sequence=++iptvPreviewSequence,owner=state.user&&state.user.id;button.disabled=true;
+    api('/live/iptv_preview',{method:'POST',body:{url:channel.url}}).then(function(result){
+      if(!result.ok)throw new Error(result.error||'Could not open stream preview');
+      function revoke(){api('/live/iptv_preview',{method:'POST',body:{action:'stop',jar:result.jar}}).catch(function(){});}
+      if(sequence!==iptvPreviewSequence||owner!==(state.user&&state.user.id)||!button.isConnected){revoke();return;}
+      closePlayer();stopRadio();
+      var overlay=h('div',{id:'player-overlay',className:'player-overlay player-simple player-inline'}),video=h('video',{id:'player-media',controls:true,autoplay:true,playsinline:true,preload:'metadata'}),status=h('p',{className:'iptv-preview-status',role:'status',text:'Connecting to preview…'}),stream=null,alive=true;
+      overlay._miniKey='iptv-preview:'+channel.url;overlay._miniTitle='Preview · '+(channel.name||'IPTV stream');overlay._miniReturn=function(){openSettings('live-iptv');};
+      overlay.appendChild(video);document.body.appendChild(overlay);addCentrePlay(overlay,video,function(){var promise=video.play();if(promise&&promise.catch)promise.catch(function(){status.textContent='Press play to start the preview.';});});
+      minimizeVideo(true);if(miniVideo&&miniVideo.overlay===overlay){miniVideo.shell.appendChild(status);var returnButton=miniVideo.shell.querySelector('.video-mini-return');returnButton.title='Back to IPTV browser';}
+      _liveCleanup=function(){alive=false;if(stream){stream.destroy();stream=null;}revoke();};
+      function play(){if(!alive)return;var promise=video.play();if(promise&&promise.catch)promise.catch(function(){if(alive)status.textContent='Press play to start the preview.';});}
+      video.addEventListener('playing',function(){if(alive)status.textContent=(channel.inLineup?'Live preview · already in lineup':'Live preview · not added to lineup');});
+      video.addEventListener('waiting',function(){if(alive)status.textContent='Buffering preview…';});
+      video.addEventListener('error',function(){if(alive)status.textContent='Stream unavailable or unsupported by this browser. It may be offline or region restricted.';});
+      var url=LIVE_API+'iptv_hls?u='+encodeURIComponent(channel.url)+'&jar='+encodeURIComponent(result.jar);
+      if(channel.userAgent)url+='&ua='+encodeURIComponent(channel.userAgent);if(channel.referrer)url+='&ref='+encodeURIComponent(channel.referrer);
+      if(video.canPlayType('application/vnd.apple.mpegurl')||/\.(mp4|webm|m4v|ogv)(?:[?#]|$)/i.test(channel.url)){video.src=url;play();return;}
+      return loadHls().then(function(Hls){
+        if(!alive)return;if(!Hls||!Hls.isSupported())throw new Error('This browser cannot play this preview.');
+        stream=new Hls({enableWorker:true,lowLatencyMode:false});var recovered=false;
+        stream.on(Hls.Events.MANIFEST_PARSED,play);
+        stream.on(Hls.Events.ERROR,function(event,data){if(!alive||!data||!data.fatal)return;if(data.type===Hls.ErrorTypes.MEDIA_ERROR&&!recovered){recovered=true;try{stream.recoverMediaError();return;}catch(ignore){}}
+          if(data.details===Hls.ErrorDetails.MANIFEST_PARSING_ERROR){stream.destroy();stream=null;video.src=url;play();return;}
+          status.textContent='Preview failed: '+(data.details||data.type||'stream unavailable')+'. The channel may be offline or region restricted.';
+        });stream.loadSource(url);stream.attachMedia(video);
+      }).catch(function(error){if(alive)status.textContent=error.message||'Could not load the preview player.';});
+    }).catch(function(error){if(button.isConnected)toast(error.message||'Could not open preview',{kind:'bad'});}).then(function(){if(button.isConnected)button.disabled=false;});
+  }
   function restoreMiniVideo(key,host){
     var active=miniVideo;
     if(!active||!host||active.overlay._miniKey!==key||active.owner!==(state.user&&state.user.id))return false;
@@ -1858,9 +1889,9 @@ function confirmDialog(message, opts){
     active.cleanup();active.shell.remove();miniVideo=null;document.body.classList.remove('video-mini-playing');
     resumeMovedVideo(active.media,playing);return true;
   }
-  function minimizeVideo(){
+  function minimizeVideo(force){
     var overlay=document.getElementById('player-overlay'),media=overlay&&overlay.querySelector('video');
-    if(!overlay||!overlay._miniKey||!media||!overlay.classList.contains('player-inline')||(state.user&&state.user.prefs||{}).mini_player===false||media.ended)return false;
+    if(!overlay||!overlay._miniKey||!media||!overlay.classList.contains('player-inline')||(!force&&(state.user&&state.user.prefs||{}).mini_player===false)||media.ended)return false;
     var host=overlay.closest('.detail-player'),tools=host&&host.nextElementSibling;
     if(!tools||!tools.classList.contains('detail-player-tools'))tools=null;
     var embedded=Array.from(overlay.children).filter(function(node){return node.classList.contains('player-tracks')||node.classList.contains('player-auto-next')||node.classList.contains('player-segment-controls')||node.hasAttribute('data-player-tool');});
@@ -14333,7 +14364,7 @@ function viewCollectionDetail(){
           h('tbody', {}, br.channels.map(function(ch, idx){
             return h('tr', {}, [
               h('td', {}, [h('input', { type: 'checkbox', className: 'iptv-br-sel', 'data-idx': String(idx) })]),
-              h('td', {}, [liveIptvDot(ch.streamStatus || 'unknown')]),
+              h('td', {className:'iptv-preview-cell'}, [h('span',{className:'iptv-status-preview'},[liveIptvDot(ch.streamStatus||'unknown'),h('button',{type:'button',className:'iptv-preview-eye',title:'Preview '+(ch.name||'stream')+' without adding','aria-label':'Preview '+(ch.name||'stream')+' without adding',onClick:function(e){previewIptvChannel(ch,e.currentTarget);}},[h('span',{className:'ico',html:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>'})])])]),
               h('td', {}, [h('strong', { text: ch.name || '' }), h('div', { className: 'muted file', text: ch.tvgId || ch.id || '' })]),
               h('td', { text: ch.group || '' }),
               h('td', { text: ch.sourceFeedName || ch.sourceFeedId || '' }),

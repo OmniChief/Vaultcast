@@ -55,7 +55,7 @@ function live_bridge_require_admin(): void {
     require_once STREAM_ROOT . '/src/bootstrap.php';
     $action=live_bridge_action();
     if($action==='radio_save'){Permissions::require('radio_manage');return;}
-    if(in_array($action,['iptv_add','iptv_remove','iptv_toggle','iptv_probe','iptv_save','epg_channels','epg_map'],true)){Permissions::require('iptv_manage');return;}
+    if(in_array($action,['iptv_preview','iptv_add','iptv_remove','iptv_toggle','iptv_probe','iptv_save','epg_channels','epg_map'],true)){Permissions::require('iptv_manage');return;}
     Auth::requireAdmin();
 }
 
@@ -177,7 +177,7 @@ $__liveAction = live_bridge_action();
 if ($__liveAction !== null) {
     if (empty(Store::settings()['features']['live'])) live_bridge_deny(404, 'Live channels are disabled in Settings → Integrations.');
     $readActions = ['guide', 'now', 'iptv', 'iptv_status', 'file', 'iptv_hls', 'logo', 'station', 'catalogue', 'iptv_browse', 'epg_refresh', 'm3u', 'tv_studio', 'tv_preview', 'tv_health', 'xmltv', 'playlist', 'channels', 'radio', 'radio_search', 'epg_channels'];
-    $writeActions = ['station', 'iptv_add', 'iptv_remove', 'iptv_toggle', 'iptv_probe', 'iptv_save', 'epg_refresh', 'tv_studio', 'tv_channels', 'radio_save', 'epg_map'];
+    $writeActions = ['iptv_preview','station', 'iptv_add', 'iptv_remove', 'iptv_toggle', 'iptv_probe', 'iptv_save', 'epg_refresh', 'tv_studio', 'tv_channels', 'radio_save', 'epg_map'];
     $m = $_SERVER['REQUEST_METHOD'] ?? 'GET';
     $isWrite = ($m === 'POST' || $m === 'PUT' || $m === 'PATCH' || $m === 'DELETE');
 
@@ -213,13 +213,32 @@ if ($__liveAction !== null) {
       catch(RuntimeException $error) {json_error($error->getMessage(),502);}
     $_GET['action'] = $__liveAction;
 
+    if ($__liveAction === 'iptv_preview') {
+        $body=body_json();
+        if(($body['action']??'')==='stop'){
+            $jar=(string)($body['jar']??'');
+            if(preg_match('/^pv[a-f0-9]{32}$/D',$jar)){
+                $file=live_bridge_allow_file($jar);@unlink($file);@unlink(substr($file,0,-6).'.jar');
+            }
+            json_out(['ok'=>true]);
+        }
+        $url=trim((string)($body['url']??''));
+        if(strlen($url)>8000||!preg_match('#^https?://#i',$url)||!filter_var($url,FILTER_VALIDATE_URL))live_bridge_deny(422,'Invalid preview stream URL.');
+        $host=strtolower((string)parse_url($url,PHP_URL_HOST));
+        if(live_bridge_host_blocked($host))live_bridge_deny(403,'Upstream not allowed.');
+        $jar='pv'.bin2hex(random_bytes(16));$file=live_bridge_allow_file($jar);
+        if(!is_dir(dirname($file))&&!@mkdir(dirname($file),0700,true))live_bridge_deny(500,'Could not create preview storage.');
+        if(@file_put_contents($file,$host."\n",LOCK_EX)===false)live_bridge_deny(500,'Could not authorise this preview.');
+        @chmod($file,0600);
+        json_out(['ok'=>true,'jar'=>$jar]);
+    }
     if ($__liveAction === 'iptv_hls') {
         $u = (string)($_GET['u'] ?? ($_GET['url'] ?? ''));
         $host = strtolower((string) parse_url($u, PHP_URL_HOST));
         if ($host === '' || live_bridge_host_blocked($host)) live_bridge_deny(403, 'Upstream not allowed');
         $allowFile = live_bridge_allow_file((string)($_GET['jar'] ?? ''));
         $allowed = live_bridge_lineup_hosts();
-        if (is_file($allowFile)) {
+        if (is_file($allowFile) && (strpos((string)($_GET['jar']??''),'pv')!==0 || filemtime($allowFile)>time()-1800)) {
             foreach ((array) @file($allowFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $h) $allowed[trim((string)$h)] = true;
         }
         if (empty($allowed[$host])) live_bridge_deny(403, 'Host is not in the IPTV lineup');

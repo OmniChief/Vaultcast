@@ -942,3 +942,9 @@ body.radio-playing .video-mini-player{bottom:calc(var(--radio-bar-height,100px) 
 @media(max-width:540px){.settings-panel{margin:10px 8px;padding:16px 12px;border-radius:16px}.settings-panel .settings-navigation{grid-template-columns:minmax(0,1fr)}.settings-overview-card{padding:18px}.settings-fieldset{padding:16px}.settings-savebar{bottom:8px}.tvs-root .tvs-bar{position:static}.tvs-root .tvs-list>summary{flex-wrap:wrap}.tvs-root .tvs-list>summary small{margin-left:0}.tvs-media-filters{grid-template-columns:minmax(0,1fr)}.tvs-root .tvs-chosen .icon-btn{width:26px;min-width:26px}.settings-hero>p{flex-basis:100%}}
 
 .settings-panel [hidden]{display:none!important}
+
+.iptv-status-preview{display:inline-flex;align-items:center;gap:8px;white-space:nowrap}
+.iptv-preview-eye{display:inline-flex;align-items:center;justify-content:center;flex:none;width:32px;height:32px;padding:5px;border:1px solid transparent;border-radius:8px;background:none;color:var(--muted);cursor:pointer}
+.iptv-preview-eye:hover{color:var(--accent);border-color:var(--neon-line);background:var(--hero-glow)}
+.iptv-preview-eye:focus-visible{outline:2px solid var(--accent);outline-offset:2px}.iptv-preview-eye:disabled{opacity:.5;cursor:wait}.iptv-preview-eye .ico{display:block;width:20px;height:20px}.iptv-preview-eye svg{display:block;width:100%;height:100%}
+.iptv-preview-status{padding:10px 12px;margin:0;font-size:.72rem;line-height:1.5;color:var(--muted);border-top:1px solid var(--border);overflow-wrap:anywhere}
