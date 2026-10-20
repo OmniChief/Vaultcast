@@ -3103,11 +3103,15 @@ function confirmDialog(message, opts){
           if (data.sync_id !== np._streamSyncId || np._streamAwaitingState || np._streamAwaitingGo || np._streamSyncing) return;
           var frame = np.currentFrame || 0;
           if (np.owner) {
-            var slot=np.getUserIndex(data.userid);
-            if(slot<0||!Array.isArray(data['sync-control']))return;
+            var slot=data.userid!=null?np.getUserIndex(data.userid):null;
+            if((slot!==null&&slot<0)||!Array.isArray(data['sync-control']))return;
             data['sync-control'].forEach(function(value){
               var input=value&&value.connected_input;
-              if(!Array.isArray(input)||input.length!==3||input[0]!==slot||!Number.isInteger(input[1])||input[1]<0||input[1]>23||!Number.isFinite(input[2]))return;
+              if(!Array.isArray(input)||input.length!==3||!Number.isInteger(input[0])||!Number.isInteger(input[1])||input[1]<0||input[1]>23||!Number.isFinite(input[2]))return;
+              // Older relays omit userid but already replace the input slot with the
+              // authenticated sender's slot. Accept only a current non-host member.
+              var validSlot=slot!==null?input[0]===slot:Object.keys(np.players||{}).some(function(id){return id!==np.playerID&&np.getUserIndex(id)===input[0];});
+              if(!validSlot)return;
               lobbyQueueInput(np,input);
             });
           } else {

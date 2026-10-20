@@ -320,9 +320,11 @@ io.on('connection', (socket) => {
     } else if (data.ready === true) {
       io.to(room.owner).emit('data-message', { ready: true, sync_id: data.sync_id, userid: socket.playerId });
     } else if (Number.isInteger(data.frame_ack) && data.frame_ack >= 0) {
-      io.to(room.owner).emit('data-message', { frame_ack: data.frame_ack, sync_id: data.sync_id, userid: socket.playerId });
+      io.to(room.owner).emit('data-message', { frame_ack: data.frame_ack, verified_frame: Number.isInteger(data.verified_frame) && data.verified_frame >= 0 && data.verified_frame <= data.frame_ack ? data.verified_frame : 0, sync_id: data.sync_id, userid: socket.playerId });
+    } else if (data.verify_state === true && Number.isInteger(data.frame) && data.frame >= 0) {
+      io.to(room.owner).emit('data-message', { verify_state: true, frame: data.frame, sync_id: data.sync_id, userid: socket.playerId });
     } else if (data.sync === true) {
-      io.to(room.owner).emit('data-message', { sync: true });
+      io.to(room.owner).emit('data-message', { sync: true, sync_id: data.sync_id, reason: data.reason === 'state_mismatch' ? 'state_mismatch' : undefined, frame: Number.isInteger(data.frame) ? data.frame : undefined, userid: socket.playerId });
     } else if (Array.isArray(data['sync-control'])) {
       const inputs = data['sync-control'].slice(0, 64).filter(value =>
         value && Array.isArray(value.connected_input) && value.connected_input.length === 3 &&
@@ -332,7 +334,7 @@ io.on('connection', (socket) => {
         connected_input: [player.player_slot - 1, value.connected_input[1], value.connected_input[2]],
       }));
       // Only the host applies guest input. Other guests wait for its frame packet.
-      io.to(room.owner).emit('data-message', { 'sync-control': inputs, sync_id: data.sync_id });
+      io.to(room.owner).emit('data-message', { 'sync-control': inputs, sync_id: data.sync_id, userid: socket.playerId });
     }
   });
   socket.on('snapshot', (data) => {
