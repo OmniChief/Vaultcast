@@ -6222,6 +6222,22 @@ try {
     return shell(wrap);
   }
 
+  function vlcLinkButton(item,showKey){
+    var button=h('button',{className:'btn ghost',type:'button',text:'Copy VLC link',title:'Copy the original stream for VLC → Media → Open Network Stream',onClick:function(e){
+      e.stopPropagation();if(button.disabled)return;
+      function copy(chosen){
+        button.disabled=true;
+        api('/items/'+encodeURIComponent(chosen.id)+'/play',{method:'POST',body:{external:true}}).then(function(j){
+          if(!j.ok||!j.url)throw new Error(j.error||'Could not create VLC link');
+          var url=new URL(j.url,window.location.href).href;
+          return copyText(url).then(function(){toast('VLC link copied. Open Media → Open Network Stream (Ctrl+N), paste and play. Links expire when unused; copy a fresh one if needed.',{ms:8000});},function(){
+            window.VaultcastHub.modal('VLC stream link',function(body){body.appendChild(h('p',{text:'Copy this link into VLC → Media → Open Network Stream. It grants access to this media until it expires.'}));var input=h('input',{type:'text',readOnly:true,value:url,'aria-label':'VLC stream URL'});body.appendChild(input);input.focus();input.select();});
+          });
+        }).catch(function(error){toast(error.message||'Could not copy VLC link',{kind:'bad'});}).then(function(){button.disabled=false;});
+      }
+      if(showKey)window.VaultcastHub.chooseVideo({kind:'show',id:showKey,show_key:showKey},copy);else copy(item);
+    }});return button;
+  }
   function detailMatchButtons(item, showKey){
     function withTools(callback){
       window.__nsEnsureMatching(function(){ if (window.NSMatch) callback(window.NSMatch); });
@@ -6231,6 +6247,7 @@ try {
         ? {kind:'show', show_key:showKey, label:item.title || ''}
         : {kind:'movie', item_id:item.id, label:(item.title || '') + (item.year ? ' (' + item.year + ')' : '')}); });
     }})];
+    if(showKey||item.media_kind==='video'||item.media_kind==='audio')buttons.push(vlcLinkButton(item,showKey));
     if (can('fix_match')) buttons.push(h('button', { className:'btn ghost', type:'button', text:'Fix match', onClick:function(){
       if (!can('fix_match')) return;
       withTools(function(tools){
@@ -7326,6 +7343,7 @@ try {
           var epPoster=h('button',{className:'episode-play-button',type:'button',disabled:!isAvail,'aria-label':isAvail?'Play '+(code||title):'Episode unavailable',title:isAvail?'Play '+(code||title):'Episode unavailable',text:'▶',onClick:function(e){e.stopPropagation();if(isAvail)playItem(ep);}});
           var epPath = showPath + '/season-' + ep.season + (ep.episode != null && ep.episode !== '' ? '/episode-' + ep.episode : (ep.id ? '/' + encodeURIComponent(ep.id) : ''));
           actions.push(shareButton(epPath, 'Copy link to ' + (code || 'this episode')));
+          if(isAvail)actions.push(vlcLinkButton(ep));
           var isTarget = (state.showEpisode != null && +ep.episode === +state.showEpisode && +ep.season === +cur.season) || (wantEpItem && ep.id === wantEpItem);
           return h('div', {
             className: 'panel episode-row' + (((state.user||{}).prefs||{}).hide_spoilers?' episode-spoiler-hidden':'') + (isAvail ? '' : ' episode-missing') + (isTarget ? ' episode-target' : ''),

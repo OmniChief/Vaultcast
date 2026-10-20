@@ -23,6 +23,24 @@ trait CompatibilityViewing {
         return null;
     }
     private static function viewingPage(string $view,string $id): ?string {
+        if($view==='vlc-link'){
+            self::allow('library');
+            if(strpos($id,'show:')===0){
+                $key=substr($id,5);$detail=Catalogue::show($key);if(!$detail)throw new RuntimeException('Show not found.');
+                $html=self::heading('EXTERNAL PLAYER','Choose an episode for VLC').self::link('Back to show',['view'=>'show','id'=>$key]);
+                foreach($detail['seasons']??[] as $season){$html.='<div class="compat-panel"><h3>'.self::esc($season['label']??('Season '.$season['season'])).'</h3>';
+                    foreach($season['episodes']??[] as $ep)if(!empty($ep['id'])&&($ep['available']??true)!==false&&($ep['status']??'')!=='missing')$html.=self::link('S'.($ep['season']??0).' E'.($ep['episode']??0).' · Copy VLC link',['view'=>'vlc-link','id'=>'item:'.$ep['id']]);
+                    $html.='</div>';
+                }return $html;
+            }
+            $itemId=strpos($id,'item:')===0?substr($id,5):$id;
+            $play=Stream::issueToken(self::$viewer,$itemId,['external'=>true]);
+            $html=self::heading('EXTERNAL PLAYER','Copy VLC link','In VLC, open Media → Open Network Stream (Ctrl+N), paste the link and play.').self::link('Back to title',['view'=>'item','id'=>$itemId,'paused'=>'1']);
+            $html.='<div class="compat-panel"><label>VLC stream URL<input id="compat-vlc-url" type="text" readonly="readonly" value="'.self::esc($play['url']).'"></label><button id="compat-vlc-copy" type="button">Copy VLC link</button><p id="compat-vlc-status" role="status">If copying is unavailable, select and copy the URL manually. This temporary link grants access to this media; copy a fresh link if it expires.</p></div>';
+            $html.='<script>(function(){var input=document.getElementById("compat-vlc-url"),button=document.getElementById("compat-vlc-copy"),status=document.getElementById("compat-vlc-status"),anchor=document.createElement("a");anchor.href=input.value;input.value=anchor.href;input.onclick=function(){input.select();};button.onclick=function(){input.focus();input.select();var ok=false;try{ok=document.execCommand("copy");}catch(e){}status.innerHTML=ok?"Copied. Paste into VLC Open Network Stream.":"Select the URL and copy it manually.";};}());</script>';
+            return $html;
+        }
+
         if($view==='subtitles'){
             if(!self::$signed)throw new RuntimeException('Sign in to manage subtitles.');self::allow('library');$item=Catalogue::item($id);if(!$item||($item['media_kind'] ?? '')!=='video')throw new RuntimeException('Choose a video.');$html=self::heading('PLAYBACK','Subtitles · '.(string)$item['title']).self::link('Back to video',['view'=>'item','id'=>$id,'paused'=>'1']);if(!empty($_GET['saved']))$html.='<p class="compat-success">Subtitles saved. Reopen the player to use them.</p>';
             if(Subtitles::uploadAllowed(self::$viewer))$html.=self::beginForm(['view'=>'subtitles','id'=>$id],'subtitle-upload',true).'<label>Subtitle file · SRT, VTT, ASS or SSA up to 2 MiB<input type="file" name="subtitle" accept=".srt,.vtt,.ass,.ssa"></label>'.self::field('Language code','language','en','text',12).'<button type="submit">Upload subtitles</button></form>';

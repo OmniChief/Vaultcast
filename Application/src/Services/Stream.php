@@ -38,6 +38,13 @@ class Stream {
         $path = $item['path'] ?? '';
         if (!is_file($path)) json_error('File missing', 404);
 
+        if(!empty($opts['external'])){
+            $kind=(string)($item['media_kind']??'video');
+            if(!in_array($kind,['video','audio'],true))json_error('Choose a video or audio file.',422);
+            $token=self::createToken((string)$user['id'],$itemId,$path,$kind);
+            return ['ok'=>true,'url'=>rtrim(\Vaultcast\Database::basePath(),'/').'/api/stream/play?t='.$token.'&direct=1'];
+        }
+
         // EmulatorJS only needs .bin for PS1 — ignore .cue; remount sibling .bin for play.
         if (($item['media_kind'] ?? '') === 'rom') {
             $ext0 = strtolower((string)pathinfo($path, PATHINFO_EXTENSION));

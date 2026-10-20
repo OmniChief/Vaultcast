@@ -27,6 +27,7 @@ trait CompatibilityLibraryFeatures {
             if(self::$signed && (Subtitles::uploadAllowed(self::$viewer) || (OpenSubtitles::configured()&&OpenSubtitles::allowed(self::$viewer))))$html.=self::link('Find / upload subtitles',['view'=>'subtitles','id'=>$card['id']]);
             $html.=self::link('Request compatible copy',['view'=>'convert-request','id'=>$card['id']]);
         }
+        if(self::isShow($card)||in_array($card['media_kind']??'',['video','audio'],true))$html.=self::link('Copy VLC link',['view'=>'vlc-link','id'=>$key]);
         if(self::$signed)$html.=self::link('Add to a custom list',['view'=>'choose-list','id'=>$key]);
         if(Permissions::allowed(self::$viewer,'fix_match'))$html.=self::link('Fix match',['view'=>'match','id'=>$key]);
         if(Permissions::allowed(self::$viewer,'metadata_edit'))$html.=self::link('Edit details / poster',['view'=>'metadata','id'=>$key]);
