@@ -787,46 +787,60 @@ body[data-motion="full"] .vintage-clock-tv>.hero-art{opacity:.28}
 .account-drawer-theme select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .account-drawer-theme select:disabled{opacity:.65;cursor:wait}
 
-/* The decorative artwork and its clock form one instrument, rather than competing layers. */
-body[data-theme] .page-hero .hero-art:not(.hero-art-clock),
-body[data-theme] .page-hero .hub-orbit{display:none}
-body[data-theme]:not([data-theme="vintage-tv"]) :is(.hero-clock-panel,.vintage-clock-tv){position:relative;isolation:isolate;box-sizing:border-box;width:250px;max-width:100%;min-width:0;padding:190px 16px 16px;margin:0;border:1px solid var(--neon-line);border-radius:24px;background:linear-gradient(180deg,transparent,var(--bg2) 75%);text-align:center;box-shadow:inset 0 0 0 4px var(--bg2),0 8px 24px #0002}
-body[data-theme]:not([data-theme="vintage-tv"]) :is(.hero-clock-panel,.vintage-clock-tv)::before{display:none}
+/* Clocks live in the illustration itself; there is no enclosing card or readout tile. */
+body[data-theme] .page-hero .hero-art:not(.hero-art-clock),body[data-theme] .page-hero .hub-orbit{display:none}
 .hero-clock-art{display:none;pointer-events:none}
-body[data-theme]:not([data-theme="vintage-tv"]) .hero-clock-art{display:block;position:absolute;inset:0 0 auto;height:190px;overflow:hidden;border-radius:inherit;z-index:-1}
-body[data-theme] .hero-clock-art>.hero-art-clock{display:block;position:absolute;left:50%;right:auto;top:0;width:350px;height:350px;transform:translateX(-50%) scale(.54);transform-origin:50% 0;opacity:.95;z-index:0}
-body[data-theme]:not([data-theme="vintage-tv"]) .hero-clock-face{position:relative;min-width:0;padding:14px 8px;border:1px solid var(--neon-line);border-radius:14px;background:var(--bg2);box-shadow:inset 0 1px 0 var(--hero-glow)}
-body[data-theme]:not([data-theme="vintage-tv"]) .hero-clock-face .live-clock{display:block;font-size:clamp(1.9rem,3vw,2.7rem);line-height:1.15;white-space:nowrap;font-variant-numeric:tabular-nums}
-body[data-theme]:not([data-theme="vintage-tv"]) .hero-clock-face :is(.hero-date,.live-count,.hero-clock-meta){font-size:.75rem;line-height:1.5;margin-top:8px;overflow-wrap:anywhere}
-body[data-theme="steampunk"] :is(.hero-clock-panel,.vintage-clock-tv){border:4px double #b38b50;border-radius:48% 48% 18px 18px;background:radial-gradient(ellipse at 50% 15%,#78512c55,transparent 70%),#1a140f}
-body[data-theme="steampunk"] .hero-clock-face{border:3px double #b38b50;border-radius:12px;background:#1a140f}
-body[data-theme="steampunk"] .hero-clock-face::before{content:'CHRONOMETER';display:block;font:9px Georgia,serif;letter-spacing:.18em;color:#d2ac68;margin-bottom:8px}
-body[data-theme="after-hours"] :is(.hero-clock-panel,.vintage-clock-tv){border-color:#cf91a78c;border-radius:48% 48% 22px 22px;background:radial-gradient(ellipse at 50% 0,#b6638133,transparent 70%),#281528}
-body[data-theme="after-hours"] .hero-clock-face{border:3px double #cf91a78c;background:#281528}
-body[data-theme="after-hours"] .hero-clock-face::before{content:'AFTER HOURS';display:block;font:9px Georgia,serif;letter-spacing:.2em;color:var(--accent);margin-bottom:8px}
-body[data-theme="ninja-extreme"] :is(.hero-clock-panel,.vintage-clock-tv){border:3px solid var(--accent);border-radius:28px 28px 14px 14px;box-shadow:5px 5px 0 var(--bg);background:radial-gradient(ellipse at 50% 20%,var(--hero-glow),transparent 70%),var(--bg2)}
-body[data-theme="ninja-extreme"] .hero-clock-face{border:2px solid var(--accent);transform:rotate(-2deg)}
-body[data-theme="anime"] :is(.hero-clock-panel,.vintage-clock-tv){border-radius:48% 48% 24px 24px;background:radial-gradient(ellipse at 50% 15%,#ba9cdb33,transparent 70%),#22283f}
-body[data-theme="anime"] .hero-clock-face::before{content:'UNDER THE SAME SKY';display:block;font-size:8px;letter-spacing:.14em;color:var(--accent);margin-bottom:8px}
-body[data-theme="manly-man"] :is(.hero-clock-panel,.vintage-clock-tv){border:3px solid #9a9f85;border-bottom:7px solid #bb8955;border-radius:6px;background:radial-gradient(ellipse at 50% 10%,#e79c5326,transparent 70%),#16252a}
-body[data-theme="manly-man"] .hero-clock-face{border:2px solid #9a9f85;border-radius:3px;background:#16252a}
-body[data-theme="manly-man"] .hero-clock-face::before{content:'PRIME TIME';display:block;font:10px "Courier New",monospace;letter-spacing:.18em;color:#d4b68d;margin-bottom:8px}
-/* Orbital themes carry the readout inside the instrument's central aperture. */
-body:is([data-theme="dark"],[data-theme="light"],[data-theme="retro-scifi"]) :is(.hero-clock-panel,.vintage-clock-tv){padding:55px 18px;min-height:250px;border-radius:50%;background:radial-gradient(circle,var(--bg2) 45%,var(--hero-glow) 70%,var(--bg2));display:flex;align-items:center;justify-content:center}
-body:is([data-theme="dark"],[data-theme="light"],[data-theme="retro-scifi"]) .hero-clock-art{height:100%;overflow:hidden;border-radius:50%}
-body:is([data-theme="dark"],[data-theme="light"],[data-theme="retro-scifi"]) .hero-clock-art>.hero-art-clock{top:50%;width:350px;height:350px;transform:translate(-50%,-50%) scale(.68);transform-origin:center;opacity:.75}
-body:is([data-theme="dark"],[data-theme="light"],[data-theme="retro-scifi"]) .hero-clock-face{width:100%;border:0;background:var(--bg2);border-radius:20px;padding:16px 6px;box-shadow:0 0 24px var(--hero-glow)}
-body[data-theme="retro-scifi"] .hero-clock-face{border:1px solid var(--accent);border-radius:6px;font-family:"Courier New",monospace}
-body[data-theme="retro-scifi"] .hero-clock-face::before{content:'LOCAL TIME // ONLINE';display:block;font-size:8px;letter-spacing:.1em;color:var(--accent);margin-bottom:9px}
+body[data-theme]:not([data-theme="vintage-tv"]) :is(.hero-clock-panel,.vintage-clock-tv){position:relative;isolation:isolate;display:grid;align-items:center;justify-items:center;box-sizing:border-box;width:280px;max-width:100%;min-width:0;min-height:280px;padding:35px 20px;margin:0;border:0;border-radius:0;background:none;box-shadow:none;text-align:center}
+body[data-theme]:not([data-theme="vintage-tv"]) :is(.hero-clock-panel,.vintage-clock-tv)::before{display:none}
+body[data-theme]:not([data-theme="vintage-tv"]) .hero-clock-art{display:block;position:absolute;inset:0;overflow:visible;z-index:-1}
+body[data-theme] .hero-clock-art>.hero-art-clock{display:block;position:absolute;left:50%;right:auto;top:50%;width:350px;height:350px;transform:translate(-50%,-50%) scale(.76);transform-origin:center;opacity:.85;z-index:0}
+body[data-theme]:not([data-theme="vintage-tv"]) .hero-clock-face{position:relative;box-sizing:border-box;width:100%;min-width:0;padding:0;border:0;border-radius:0;background:none;box-shadow:none;transform:none}
+body[data-theme]:not([data-theme="vintage-tv"]) .hero-clock-face .live-clock{display:block;font-size:clamp(2rem,3vw,2.8rem);line-height:1.15;white-space:nowrap;font-variant-numeric:tabular-nums;text-shadow:0 2px 12px var(--bg)}
+body[data-theme]:not([data-theme="vintage-tv"]) .hero-clock-face :is(.hero-date,.live-count,.hero-clock-meta){font-size:.72rem;line-height:1.5;margin-top:8px;overflow-wrap:anywhere;text-shadow:0 1px 6px var(--bg)}
+/* A floating hologram: open rings, with an unobstructed central readout. */
+body:is([data-theme="dark"],[data-theme="light"],[data-theme="retro-scifi"]) .hero-art-clock{border-radius:50%;border:1px solid var(--accent);background:none;box-shadow:0 0 35px var(--hero-glow),inset 0 0 35px var(--hero-glow)}
+body:is([data-theme="dark"],[data-theme="light"]) .hero-art-clock span{inset:12px;border-radius:50%;background:none;box-shadow:none;border:3px solid transparent;border-top-color:var(--accent);border-bottom-color:var(--accent-2)}
+body:is([data-theme="dark"],[data-theme="light"]) .hero-art-clock span:nth-child(2){inset:24px;border-width:1px;border-style:dashed;border-color:var(--neon-line);background:none}
+body:is([data-theme="dark"],[data-theme="light"]) .hero-art-clock span:nth-child(3){inset:36px;border-width:2px;border-color:transparent;border-left-color:var(--accent-2);background:none}
+body[data-theme="retro-scifi"] .hero-art-clock{mask-image:radial-gradient(circle,transparent 0 112px,#000 125px);-webkit-mask-image:radial-gradient(circle,transparent 0 112px,#000 125px)}
+body[data-theme="retro-scifi"] .hero-clock-face{font-family:"Courier New",monospace}
+body[data-theme="retro-scifi"] .hero-clock-face::before{content:'[ SYSTEM TIME ]';display:block;font-size:9px;letter-spacing:.14em;color:var(--accent);margin-bottom:10px}
+/* A pocket watch: the movement surrounds the dial, rather than sitting above a card. */
+body[data-theme="steampunk"] .hero-art-clock{border:7px double #caa365;border-radius:50%;background:radial-gradient(circle,#211a15 0 55%,#8a6036 56% 58%,#211a15 59%);box-shadow:0 0 0 3px #6b492a,inset 0 0 25px #0008}
+body[data-theme="steampunk"] .hero-art-clock::before{content:'';position:absolute;width:40px;height:24px;top:-33px;left:calc(50% - 20px);border:5px solid #bc965d;border-radius:50%}
+body[data-theme="steampunk"] .hero-art-clock::after{content:'';position:absolute;inset:17px;border-radius:50%;background:repeating-conic-gradient(#d4b57d 0deg 1deg,transparent 1deg 30deg);mask-image:radial-gradient(circle,transparent 0 135px,#000 136px);-webkit-mask-image:radial-gradient(circle,transparent 0 135px,#000 136px)}
+body[data-theme="steampunk"] .hero-art-clock span:first-child{left:-18px;top:215px;width:95px;height:95px}
+body[data-theme="steampunk"] .hero-art-clock span:nth-child(2){left:275px;top:25px;width:65px;height:65px}
+body[data-theme="steampunk"] .hero-art-clock span:nth-child(3){left:145px;top:275px;width:40px;height:40px}
+body[data-theme="steampunk"] .hero-clock-face::before{content:'CHRONOMETER';display:block;font:9px Georgia,serif;letter-spacing:.2em;color:#d4b57d;margin-bottom:10px}
+/* The moon is the clock face; drifting petals stay around its rim. */
+body[data-theme="anime"] .hero-art-clock span:first-child{left:10px;top:10px;width:330px;height:330px;background:radial-gradient(circle at 30% 20%,#ffeacb55,#bbaaaf18 65%,#ba9cdb30);box-shadow:0 0 35px #c6b7ed33,inset -14px -8px 24px #8581a544}
+body[data-theme="anime"] .hero-art-clock span:nth-child(2){left:-10px;top:60px;width:65px;height:65px}
+body[data-theme="anime"] .hero-art-clock span:nth-child(3){left:290px;top:240px;width:55px;height:55px}
+body[data-theme="anime"] .hero-clock-face::before{content:'UNDER THE SAME SKY';display:block;font-size:8px;letter-spacing:.15em;color:var(--accent);margin-bottom:10px}
+/* A ninja holds an unfurled time scroll. */
+body[data-theme="ninja-extreme"] :is(.hero-clock-panel,.vintage-clock-tv){padding:140px 12px 32px;min-height:300px}
+body[data-theme="ninja-extreme"] .hero-art-clock span:first-child{left:75px;top:-8px;width:200px;height:210px}
+body[data-theme="ninja-extreme"] .hero-art-clock::after{left:18px;right:18px;bottom:30px;height:125px;border-radius:0;background:linear-gradient(90deg,#ae793a,#ffe4a7 7%,#f3cf8a 93%,#ae793a);border-top:7px solid #8b562e;border-bottom:7px solid #8b562e;box-shadow:0 4px 0 #07162b55;transform:rotate(-3deg)}
+body[data-theme="ninja-extreme"] .hero-clock-face{color:#31261b;transform:rotate(-3deg)}
+body[data-theme="ninja-extreme"] .hero-clock-face :is(.live-clock,.hero-date,.live-count,.hero-clock-meta){color:#31261b;text-shadow:none}
+/* A neon time sign shares the pole and stage with the performer. */
+body[data-theme="after-hours"] :is(.hero-clock-panel,.vintage-clock-tv){padding:85px 95px 55px 0;min-height:290px}
+body[data-theme="after-hours"] .hero-art-clock span:first-child{left:272px;top:5px;height:315px}
+body[data-theme="after-hours"] .hero-art-clock span:nth-child(2){left:205px;top:10px;width:155px;height:310px}
+body[data-theme="after-hours"] .hero-art-clock span:nth-child(3){left:0;top:70px;width:220px;height:170px}
+body[data-theme="after-hours"] .hero-art-clock::after{left:-10px;right:-10px;bottom:5px;height:20px}
+body[data-theme="after-hours"] .hero-clock-face::before{content:'AFTER HOURS';display:block;font:italic 15px Georgia,serif;letter-spacing:.1em;color:var(--accent);text-shadow:0 0 12px #dc87ac88;margin-bottom:14px}
+body[data-theme="after-hours"] .hero-clock-face .live-clock{font-size:2.1rem;color:#f6cbd2;text-shadow:0 0 16px #dc87ac88}
+/* The strongman lifts a barbell whose centre is the readout. */
+body[data-theme="manly-man"] :is(.hero-clock-panel,.vintage-clock-tv){padding:155px 26px 22px;min-height:310px}
+body[data-theme="manly-man"] .hero-art-clock span:first-child{left:65px;top:-25px;width:220px;height:250px}
+body[data-theme="manly-man"] .hero-art-clock span:nth-child(2){left:0;top:225px;width:350px;height:12px;border:0;border-radius:4px;background:linear-gradient(#d6d1b4,#627776);box-shadow:0 3px 0 #0006;animation:none}
+body[data-theme="manly-man"] .hero-art-clock span:nth-child(2)::before,body[data-theme="manly-man"] .hero-art-clock span:nth-child(2)::after{content:'';position:absolute;inset:auto;top:-43px;width:25px;height:100px;border:4px solid #b6b398;border-radius:7px;background:repeating-linear-gradient(90deg,#263a3e 0 5px,#889787 6px 8px)}
+body[data-theme="manly-man"] .hero-art-clock span:nth-child(2)::before{left:5px}body[data-theme="manly-man"] .hero-art-clock span:nth-child(2)::after{right:5px}
+body[data-theme="manly-man"] .hero-clock-face{background:radial-gradient(ellipse,var(--bg2) 50%,transparent 72%)}
+body[data-theme="manly-man"] .hero-clock-face::before{content:'PRIME TIME';display:block;font:9px "Courier New",monospace;letter-spacing:.18em;color:#d4b68d;margin-bottom:8px}
 body[data-theme="vintage-tv"] .hero-clock-art{display:none}
-@media(max-width:1100px){body[data-theme]:not([data-theme="vintage-tv"]) .page-hero-layout>.hero-clock-panel{max-width:100%;justify-self:start}}
-@media(max-width:540px){body[data-theme]:not([data-theme="vintage-tv"]) :is(.hero-clock-panel,.vintage-clock-tv){width:230px;justify-self:center}body[data-theme] .page-hero-layout>.hero-clock-panel{justify-self:center}body[data-theme]:not([data-theme="vintage-tv"]) .live-hero-side{justify-self:center}}
+@media(max-width:540px){body[data-theme]:not([data-theme="vintage-tv"]) :is(.hero-clock-panel,.vintage-clock-tv){width:260px;justify-self:center}body[data-theme] .page-hero-layout>.hero-clock-panel{justify-self:center}body[data-theme]:not([data-theme="vintage-tv"]) .live-hero-side{justify-self:center}}
 
-body[data-theme="after-hours"] .hero-clock-art>.hero-art-clock{width:280px;height:330px}
-body[data-theme="ninja-extreme"] .hero-clock-art>.hero-art-clock{width:320px;height:320px}
-body:is([data-theme="steampunk"],[data-theme="anime"]) :is(.hero-clock-panel,.vintage-clock-tv){padding:65px 16px;min-height:270px;display:flex;align-items:center;justify-content:center}
-body:is([data-theme="steampunk"],[data-theme="anime"]) .hero-clock-art{height:100%;border-radius:inherit}
-body:is([data-theme="steampunk"],[data-theme="anime"]) .hero-clock-art>.hero-art-clock{top:50%;transform:translate(-50%,-50%) scale(.7);transform-origin:center}
-body:is([data-theme="steampunk"],[data-theme="anime"]) .hero-clock-art .hero-art-clock span:first-child{width:320px;height:320px;left:15px;top:15px}
-body:is([data-theme="steampunk"],[data-theme="anime"]) .hero-clock-face{width:100%;box-sizing:border-box}
-body[data-theme="anime"] .hero-clock-face{background:#22283feb;border-color:#f6ddb299;border-radius:24px}
+body[data-motion="full"][data-theme="manly-man"]:not(.reduce-motion) .hero-clock-art .hero-art-clock span:nth-child(2){animation:none}
