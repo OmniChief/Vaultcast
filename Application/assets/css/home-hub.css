@@ -960,6 +960,5 @@ body.radio-playing .video-mini-player{bottom:calc(var(--radio-bar-height,100px) 
 
 .live-station-rail:focus-within .rail-arrow{opacity:1}.live-station-rail .rail-arrow:focus-visible{outline:2px solid var(--accent);outline-offset:-3px}
 
-/* Preserve logo transparency and choose a contrasting backing from its visible pixels. */
-img.chan-logo[data-logo-ink="light"]{background:#18202e}
-img.chan-logo[data-logo-ink="dark"]{background:#f1f3f6}
+/* Keep channel and station logo images transparent in every placement. */
+img.chan-logo{background:transparent}

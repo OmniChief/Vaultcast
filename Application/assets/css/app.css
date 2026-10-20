@@ -709,7 +709,7 @@ input[type=checkbox], input[type=radio], input[type=range] { accent-color: var(-
 .live-card.compact { width: clamp(250px, 21vw, 320px); flex: 0 0 auto; min-height: 160px; scroll-snap-align: start; }
 .lc-top { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
 .lc-num { font-size: 1.7rem; font-weight: 820; letter-spacing: -.05em; font-variant-numeric: tabular-nums; line-height: 1; }
-.chan-logo { height: 30px; max-width: 70px; object-fit: contain; border-radius: var(--radius-xs); background: #70747c; padding: 2px 4px; }
+.chan-logo { height: 36px; max-width: 84px; object-fit: contain; border-radius: var(--radius-xs); background: transparent; padding: 0; }
 .chan-mono {
   height: 30px; min-width: 30px; padding: 0 6px; display: inline-flex; align-items: center; justify-content: center;
   border-radius: var(--radius-sm); font-size: .72rem; font-weight: 800; letter-spacing: .04em; color: #fff;
