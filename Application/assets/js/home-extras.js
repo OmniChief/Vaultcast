@@ -164,7 +164,6 @@
     if(!signed()){host.replaceChildren(empty('Sign in to manage your server saves.'),button('Sign in',function(){A.navigate('login');},'primary'));return;}
     host.setAttribute('data-cloud-saves','1');var mine=0,owner=uid();
     function refresh(){var sequence=++mine;return request('saves'+(item?'?item_id='+encodeURIComponent(item.id):'')).then(function(j){if(!host.isConnected||sequence!==mine||uid()!==owner)return;host.replaceChildren();
-      if(item)host.appendChild(button('Quit & save',function(){A.quitGame();A.toast('Game closed. Autosave uploads in the background.');}));
       if(!item)host.appendChild(h('p',{className:'muted',text:'Your server saves · '+size(j.bytes)+' / '+size(j.quota)+'. Two personal slots and one exit autosave per game. Pending uploads retry when this account is signed in on this device.'}));
       var games=item?[Object.assign({id:item.id,title:item.title,slots:{}},j.games[item.id]||{})]:Object.keys(j.games).map(function(id){return Object.assign({id:id},j.games[id]);});
       if(!games.length)host.appendChild(empty('Start a game in solo or multiplayer and save to either personal slot. Leaving a synchronised game also captures its exit autosave.'));

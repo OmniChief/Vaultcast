@@ -844,3 +844,29 @@ body[data-theme="vintage-tv"] .hero-clock-art{display:none}
 @media(max-width:540px){body[data-theme]:not([data-theme="vintage-tv"]) :is(.hero-clock-panel,.vintage-clock-tv){width:260px;justify-self:center}body[data-theme] .page-hero-layout>.hero-clock-panel{justify-self:center}body[data-theme]:not([data-theme="vintage-tv"]) .live-hero-side{justify-self:center}}
 
 body[data-motion="full"][data-theme="manly-man"]:not(.reduce-motion) .hero-clock-art .hero-art-clock span:nth-child(2){animation:none}
+
+/* Review controls use the active palette and the same spacing as other detail-page forms. */
+.hub-community{min-width:0}
+.hub-review-form{gap:14px;padding-bottom:22px}
+.hub-review-form textarea{box-sizing:border-box;max-width:100%;min-height:110px;padding:14px 16px;border:1px solid var(--border-strong);border-radius:12px;background:var(--bg);color:var(--text);font:inherit;font-size:.9rem;line-height:1.6}
+.hub-review-form textarea::placeholder{color:var(--muted);opacity:1}
+.hub-review-form .hub-hero-actions{align-items:flex-end;gap:12px;flex-wrap:wrap}
+.hub-review-rating{display:grid;gap:6px;min-width:150px;color:var(--muted);font-size:.75rem}
+.hub-review-rating select{box-sizing:border-box;width:100%;min-height:44px;padding:10px 14px;border:1px solid var(--border-strong);border-radius:10px;background:var(--bg);color:var(--text);font:inherit;font-size:.9rem;cursor:pointer;color-scheme:inherit}
+.hub-review-rating select option{background:var(--bg2);color:var(--text)}
+.hub-review-form :is(textarea,select):focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.hub-review-form .btn{min-height:44px}
+.hub-review{border-color:var(--border);padding:18px 0;color:var(--text)}
+.hub-review summary{list-style:none;gap:10px;border-radius:8px;padding:4px 0}
+.hub-review summary::-webkit-details-marker{display:none}
+.hub-review summary::after{content:'+';flex:none;font-size:1.2rem;color:var(--accent)}
+.hub-review[open] summary::after{content:'−'}
+.hub-review summary:focus-visible{outline:2px solid var(--accent);outline-offset:4px}
+.hub-review summary strong{min-width:0;overflow-wrap:anywhere;font-size:.9rem}
+.hub-review summary .hub-avatar{flex:none}
+.hub-review summary>span.hub-review-score{color:var(--accent);font-size:.8rem;white-space:nowrap}
+.hub-review summary small{line-height:1.5}
+.hub-review p{color:var(--text);font-size:.9rem;padding:6px 0 0 42px;margin:10px 0;line-height:1.7}
+.hub-review>.btn{margin:8px 0 0 42px}
+.detail-player-tools .screen-controller-toolbar .game-quit-save{margin-left:auto;border-color:var(--border-strong);color:var(--text)}
+@media(max-width:540px){.hub-review summary small{flex-basis:100%;margin-left:42px;order:1}.hub-review summary::after{margin-left:auto}.hub-review p{padding-left:0}.hub-review>.btn{margin-left:0}.hub-review-rating{flex:1 1 150px}.detail-player-tools .screen-controller-toolbar .game-quit-save{margin-left:0}}

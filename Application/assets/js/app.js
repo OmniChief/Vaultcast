@@ -3953,6 +3953,9 @@ function confirmDialog(message, opts){
       });quickButtons.push(button);toolbar.appendChild(button);
     });
     toolbar.appendChild(placementSelect);toolbar.appendChild(settings);
+    var quit=h('button',{type:'button',className:'game-quit-save',text:state.user&&state.user.role!=='guest'?'Quit & save':'Quit game',title:'Close the emulator; exit autosave uses your existing cloud-save settings'});
+    listen(quit,'click',function(e){e.preventDefault();e.stopPropagation();if(disposed)return;releaseAll();closePlayer();});
+    toolbar.appendChild(quit);
     shell.appendChild(toolbar);shell.appendChild(panel);parent.appendChild(shell);
     parent.classList.add('has-screen-controller');
     paint();
