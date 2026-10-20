@@ -4555,7 +4555,7 @@ try {
 
   function applyTheme(){
     var theme = state.user && state.user.prefs && state.user.prefs.theme || state.settings && state.settings.theme || 'dark';
-    document.body.setAttribute('data-theme', ['dark','light','retro-scifi','steampunk','vintage-tv','after-hours','ninja-extreme'].indexOf(theme)>=0 ? theme : 'dark');
+    document.body.setAttribute('data-theme', ['dark','light','retro-scifi','steampunk','vintage-tv','after-hours','ninja-extreme','anime'].indexOf(theme)>=0 ? theme : 'dark');
     try{document.body.classList.toggle('ninja-calm',localStorage.getItem('vaultcast.ninjaCalm')==='1');}catch(ignore){}
   }
   function ninjaCalm(enabled){
@@ -4582,9 +4582,15 @@ try {
       meta?h('div',{className:'hero-clock-meta',text:meta}):null
     ]));
   }
-  function homePosterEl(){return h('div',{className:'page-hero-poster home-hero-poster'},[h('img',{src:BASE+'api/site/home-poster',alt:'Home artwork',width:512,height:768,decoding:'async'})]);}
-  function homeSectionPosterEl(tab){if(['cinema','watchlist','favourites','calendar','arrivals','friends','history','stats'].indexOf(tab)<0)return homePosterEl();return h('div',{className:'page-hero-poster home-hero-poster'},[h('img',{src:BASE+'api/site/home-section/'+tab,alt:'Artwork for '+({cinema:'Watch together',calendar:'Release calendar',arrivals:'New episodes',stats:'Game stats'}[tab]||tab),width:512,height:768,decoding:'async'})]);}
-  function collectionsPosterEl(){return h('div',{className:'page-hero-poster collections-hero-poster'},[h('img',{src:BASE+'api/site/collections-poster',alt:'A futuristic archive of collected treasures',width:512,height:768,decoding:'async'})]);}
+  function siteArtworkCustom(kind){return !!(state.home&&Array.isArray(state.home.site_artwork_custom)&&state.home.site_artwork_custom.indexOf(kind)>=0);}
+  function siteArtworkUrl(kind){
+    var theme=state.user&&state.user.prefs&&state.user.prefs.theme||state.settings&&state.settings.theme||'dark';
+    return BASE+'api/site/'+(kind==='home'||kind==='collections'?kind+'-poster':'home-section/'+kind)+'?theme='+encodeURIComponent(siteArtworkCustom(kind)?'custom':theme);
+  }
+  function siteArtworkImage(kind,alt,extra){return h('img',Object.assign({src:siteArtworkUrl(kind),alt:alt,width:512,height:768,decoding:'async','data-site-artwork':kind,'data-bundled-artwork':String(!siteArtworkCustom(kind))},extra||{}));}
+  function homePosterEl(){return h('div',{className:'page-hero-poster home-hero-poster'},[siteArtworkImage('home','Home artwork')]);}
+  function homeSectionPosterEl(tab){if(['cinema','watchlist','favourites','calendar','arrivals','friends','history','stats'].indexOf(tab)<0)return homePosterEl();return h('div',{className:'page-hero-poster home-hero-poster'},[siteArtworkImage(tab,'Artwork for '+({cinema:'Watch together',calendar:'Release calendar',arrivals:'New episodes',stats:'Game stats'}[tab]||tab))]);}
+  function collectionsPosterEl(){return h('div',{className:'page-hero-poster collections-hero-poster'},[siteArtworkImage('collections','An illustrated archive of collected treasures')]);}
   function standardBillboard(bb,meta){
     bb.classList.add('page-hero');bb.removeAttribute('data-backdrop-host');
     var backdrop=bb.querySelector('.billboard-bg');if(backdrop)backdrop.remove();
@@ -7731,6 +7737,7 @@ try {
             h('option', { value: 'vintage-tv', text: 'Vintage TV Retro', selected: prefs.theme === 'vintage-tv' }),
             h('option', { value: 'after-hours', text: 'Each day we stray further from god... (adult)', selected: prefs.theme === 'after-hours' }),
             h('option', { value: 'ninja-extreme', text: 'Ninja Extreme', selected: prefs.theme === 'ninja-extreme' }),
+            h('option', { value: 'anime', text: 'Anime Dreamscape', selected: prefs.theme === 'anime' }),
             h('option', { value: 'light', text: 'Light', selected: prefs.theme === 'light' })
           ])]),
           h('label', {}, ['New password (optional)', h('input', { id: 'pw', type: 'password', placeholder: 'Leave blank to keep' })]),
@@ -8226,8 +8233,8 @@ try {
   function sitePosterSettings(){
     var artworks=[['home','For you','Home’s welcome poster'],['collections','Collections','Library and My collections'],['cinema','Watch together','Your shared cinema'],['watchlist','Watchlist','Adventures waiting for you'],['favourites','Favourites','Your treasured picks'],['calendar','Release calendar','Upcoming episodes'],['arrivals','New episodes','Fresh arrivals'],['friends','Friends','Your community'],['history','History','Your viewing journey'],['stats','Game stats','Your gaming achievements']];
     function card(entry){
-      var kind=entry[0],label=entry[1],url=BASE+'api/site/'+(kind==='home'||kind==='collections'?kind+'-poster':'home-section/'+kind),busy=false;
-      var preview=h('img',{src:url,alt:label+' artwork',width:192,height:288,loading:'lazy',decoding:'async'}),file=h('input',{type:'file',accept:'image/jpeg,image/png,image/webp','aria-label':'Choose '+label+' artwork'}),status=h('p',{className:'site-artwork-status muted',role:'status',text:'Choose a replacement or restore the original.'});
+      var kind=entry[0],label=entry[1],busy=false;
+      var preview=siteArtworkImage(kind,label+' artwork',{width:192,height:288,loading:'lazy'}),file=h('input',{type:'file',accept:'image/jpeg,image/png,image/webp','aria-label':'Choose '+label+' artwork'}),status=h('p',{className:'site-artwork-status muted',role:'status',text:siteArtworkCustom(kind)?'Custom upload · stays the same across themes.':'Theme default · follows your selected theme.'});
       var upload=h('button',{className:'btn primary',type:'button',text:'Upload artwork',onClick:function(){save(false);}}),reset=h('button',{className:'btn',type:'button',text:'Restore default',onClick:function(){save(true);}});
       function save(restore){
         if(busy)return;
@@ -8236,11 +8243,12 @@ try {
         if(!restore&&selected.size>2097152){status.textContent='Choose an image up to 2 MB.';return;}
         busy=true;upload.disabled=reset.disabled=file.disabled=true;status.textContent=restore?'Restoring…':'Uploading…';
         var read=restore?Promise.resolve({reset:true}):new Promise(function(resolve,reject){var reader=new FileReader();reader.onerror=function(){reject(new Error('Could not read image'));};reader.onload=function(){resolve({poster_data:reader.result});};reader.readAsDataURL(selected);});
-        read.then(function(body){body.kind=kind;return api('/admin/site-artwork',{method:'POST',body:body});}).then(function(result){if(!result.ok)throw new Error(result.error||'Could not save artwork');preview.src=url+'?v='+Date.now();file.value='';status.textContent=restore?'Bundled artwork restored.':'Artwork saved.';toast(label+' artwork '+(restore?'restored':'updated'));}).catch(function(e){status.textContent=e.message;}).finally(function(){busy=false;upload.disabled=reset.disabled=file.disabled=false;});
+        read.then(function(body){body.kind=kind;return api('/admin/site-artwork',{method:'POST',body:body});}).then(function(result){if(!result.ok)throw new Error(result.error||'Could not save artwork');if(state.home){var custom=(state.home.site_artwork_custom||[]).filter(function(k){return k!==kind;});if(!restore)custom.push(kind);state.home.site_artwork_custom=custom;}
+          document.querySelectorAll('img[data-site-artwork="'+kind+'"]').forEach(function(img){img.setAttribute('data-bundled-artwork',String(restore));img.src=siteArtworkUrl(kind)+'&v='+Date.now();});file.value='';status.textContent=restore?'Theme default restored · follows your selected theme.':'Custom artwork saved · kept across all themes.';toast(label+' artwork '+(restore?'restored':'updated'));}).catch(function(e){status.textContent=e.message;}).finally(function(){busy=false;upload.disabled=reset.disabled=file.disabled=false;});
       }
       return h('article',{className:'site-artwork-card'},[h('div',{className:'site-artwork-preview'},[preview]),h('div',{className:'site-artwork-controls'},[h('h4',{text:label}),h('p',{className:'muted',text:entry[2]}),file,h('div',{className:'row-actions'},[upload,reset]),status])]);
     }
-    return h('section',{className:'settings-card stack site-artwork-settings'},[h('h3',{text:'Site artwork'}),h('p',{className:'muted',text:'Give each space its own look. Upload JPEG, PNG or WebP up to 2 MB / 12 megapixels. Portrait 2:3 images work best. Changes save individually and survive app updates; restoring a default only affects that poster.'}),h('div',{className:'site-artwork-gallery'},artworks.map(card))]);
+    return h('section',{className:'settings-card stack site-artwork-settings'},[h('h3',{text:'Site artwork'}),h('p',{className:'muted',text:'Give each space its own look. Upload JPEG, PNG or WebP up to 2 MB / 12 megapixels. Portrait 2:3 images work best. Custom uploads stay the same across themes and survive app updates. Bundled defaults follow your selected theme; restoring a default only affects that poster.'}),h('div',{className:'site-artwork-gallery'},artworks.map(card))]);
   }
   function fillAdmin(){
     api('/admin/settings').then(function(j){

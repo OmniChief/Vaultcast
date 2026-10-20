@@ -37,7 +37,9 @@ if ($path === '/resolve' && $method === 'GET') {
 }
 if ($path === '/home' && $method === 'GET') {
     $viewer = current_or_guest();
-    json_out(AreaAccess::home(Catalogue::home($viewer), $viewer));
+    $home=AreaAccess::home(Catalogue::home($viewer), $viewer);
+    $home['site_artwork_custom']=SiteArtwork::customKinds();
+    json_out($home);
 }
 
 if ($path==='/featured/synopsis' && $method==='GET') {

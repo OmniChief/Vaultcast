@@ -505,7 +505,7 @@ body[data-theme="steampunk"] .hero-clock-panel{padding:12px 16px;border:3px doub
 body[data-theme="steampunk"] .hero-clock-panel::before{content:'CHRONOMETER';display:block;font-family:Georgia,"Times New Roman",serif;font-size:9px;letter-spacing:.22em;color:#bda273;margin-bottom:7px}
 body[data-theme="steampunk"] .hero-clock{font-family:Georgia,"Times New Roman",serif;color:#f3d69e;text-shadow:0 1px 0 #000;letter-spacing:.02em}
 body[data-theme="steampunk"] .page-hero-poster{border-color:#bd9354;box-shadow:0 0 0 3px #19110c,0 0 0 4px #b38a4b88,0 12px 22px #0005}
-body[data-theme="steampunk"] .home-hero-poster img,body[data-theme="steampunk"] .collections-hero-poster img{filter:sepia(.8) saturate(.7)}
+body[data-theme="steampunk"] img[data-site-artwork][data-bundled-artwork="true"]{filter:sepia(.8) saturate(.7)}
 body[data-theme="steampunk"] .card,body[data-theme="steampunk"] .hub-panel,body[data-theme="steampunk"] .settings-card,body[data-theme="steampunk"] .show-season-accordion{border-color:var(--border-strong);box-shadow:inset 0 1px 0 #ffe9b60b,0 5px 14px #0002}
 body[data-theme="steampunk"] .card .poster{border-bottom-color:#bc94504d}
 body[data-theme="steampunk"] .btn:not(.danger),body[data-theme="steampunk"] .screen-controller-toolbar button{border:1px solid #aa824b;border-radius:8px;box-shadow:inset 0 1px 0 #ffe4aa1c,inset 0 -2px 0 #0003;text-shadow:0 1px 0 #0005}
@@ -550,7 +550,7 @@ body[data-theme="vintage-tv"] .hero-clock-panel::before{content:'LOCAL BROADCAST
 body[data-theme="vintage-tv"] .hero-clock{font-family:"Courier New",monospace;font-weight:bold;letter-spacing:.02em;color:#d1de9f;text-shadow:0 0 8px #b8d48035}
 body[data-theme="vintage-tv"] .hero-date{font-family:"Courier New",monospace;color:#b0ba92}
 body[data-theme="vintage-tv"] .page-hero-poster{border:4px solid #635238;border-radius:15px;box-shadow:0 0 0 1px #b49a6c,inset 0 0 8px #0008,0 10px 20px #0004}
-body[data-theme="vintage-tv"] .home-hero-poster img,body[data-theme="vintage-tv"] .collections-hero-poster img{filter:sepia(.55) saturate(.65)}
+body[data-theme="vintage-tv"] img[data-site-artwork][data-bundled-artwork="true"]{filter:sepia(.55) saturate(.65)}
 body[data-theme="vintage-tv"] .card,body[data-theme="vintage-tv"] .live-card,body[data-theme="vintage-tv"] .hub-panel,body[data-theme="vintage-tv"] .settings-card,body[data-theme="vintage-tv"] .show-season-accordion{border-color:#a79d6470;box-shadow:inset 0 1px 0 #fff5c112,0 5px 12px #0002}
 body[data-theme="vintage-tv"] .btn:not(.danger),body[data-theme="vintage-tv"] .screen-controller-toolbar button{border-radius:7px;border:1px solid #b2a276;border-bottom-width:3px;box-shadow:inset 0 1px 0 #fff3ce1a,0 2px 0 #13170e;text-shadow:none}
 body[data-theme="vintage-tv"] .btn.primary,body[data-theme="vintage-tv"] .hub-hero .btn.primary{background:linear-gradient(#eed5a0,#c3a16b);color:#282214;border-color:#f4e1b3 #b19564 #79603a;box-shadow:inset 0 1px 0 #ffedc8,0 2px 0 #18150e}
@@ -613,7 +613,7 @@ body[data-theme="after-hours"] .hero-clock-panel{padding:13px 17px;border:1px so
 body[data-theme="after-hours"] .hero-clock-panel::before{content:'AFTER HOURS';display:block;font-family:Georgia,"Times New Roman",serif;font-size:9px;letter-spacing:.23em;color:#dfadba;margin-bottom:7px}
 body[data-theme="after-hours"] .hero-clock{font-family:Georgia,"Times New Roman",serif;color:#f6cbd2;text-shadow:0 0 14px #c77e9e20}
 body[data-theme="after-hours"] .page-hero-poster{border:2px solid #c58d9c;border-radius:20px;box-shadow:0 0 0 3px #422137,0 10px 24px #0005}
-body[data-theme="after-hours"] .home-hero-poster img,body[data-theme="after-hours"] .collections-hero-poster img{filter:sepia(.4) hue-rotate(290deg) saturate(.8)}
+body[data-theme="after-hours"] img[data-site-artwork][data-bundled-artwork="true"]{filter:sepia(.4) hue-rotate(290deg) saturate(.8)}
 body[data-theme="after-hours"] .btn:not(.danger){border-color:#d18ca578;border-radius:var(--radius-pill);box-shadow:inset 0 1px 0 #ffe2e915}
 body[data-theme="after-hours"] .btn.primary,body[data-theme="after-hours"] .hub-hero .btn.primary{background:linear-gradient(120deg,#f2c6c6,#d692ac);color:#32152a;border-color:#f5c9d5;box-shadow:0 4px 14px #a24c7720;text-shadow:none}
 body[data-theme="after-hours"] .mode-switch{background:#281626;border:1px solid #bd7b9780;box-shadow:inset 0 1px 0 #efb9ca12}
@@ -680,3 +680,47 @@ body[data-theme="ninja-extreme"] .hub-card-save,body[data-theme="ninja-extreme"]
 }
 @media(max-width:900px){body[data-theme="ninja-extreme"] .hero-art,body[data-theme="ninja-extreme"] .hub-orbit{right:-115px;opacity:.3}}
 @media(max-width:540px){body[data-theme="ninja-extreme"] .hero-clock-panel{padding:12px 14px}body[data-theme="ninja-extreme"] .page-hero .eyebrow{letter-spacing:.05em}.ninja-training-target{width:56px;height:56px}.ninja-training-arena{height:230px}}
+
+body[data-theme="retro-scifi"] img[data-site-artwork][data-bundled-artwork="true"]{filter:sepia(.45) hue-rotate(65deg) saturate(.75)}
+body[data-theme="ninja-extreme"] img[data-site-artwork][data-bundled-artwork="true"]{filter:saturate(1.35) brightness(1.08)}
+body[data-theme="light"] img[data-site-artwork][data-bundled-artwork="true"]{filter:saturate(.85) brightness(1.12)}
+/* Anime Dreamscape: sakura skies, mint moonlight and coordinated illustrated posters. */
+body[data-theme="anime"]{--bg:#181a33;--bg2:#242744;--bg3:#363b5c;--card:#292c4a;--glass:#232640f5;--text:#fff0f5;--muted:#cbc8e4;--faint:#aca9cf;--border:#b4b5ed3b;--border-strong:#c6b7ed80;--vod-a:#f4b6d1;--vod-b:#92e3d8;--accent2:#ffe0a3;--surface-1:#e3d4ff09;--surface-2:#e3d4ff12;--surface-3:#e3d4ff1e;--ok:#afddba;--warn:#ffe0a3;--danger:#ffb6b8;--danger-strong:#fda4af;--neon-line:#c3b9ec80;--hero-grid:#dad0ff13;--hero-glow:#e9a4d624;--sakura-art:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20100%20100%22%3E%3Cg%20fill%3D%22%23f7b8d3%22%20stroke%3D%22%23ffe7ed%22%20stroke-width%3D%221.5%22%3E%3Cpath%20d%3D%22M50%2049Q20%2024%2043%205L50%2014L57%205Q80%2024%2050%2049Z%22%2F%3E%3Cpath%20d%3D%22M50%2049Q68%2015%2094%2031L87%2040L98%2043Q93%2072%2050%2049Z%22%2F%3E%3Cpath%20d%3D%22M50%2049Q88%2060%2079%2091L67%2087L68%2099Q36%2095%2050%2049Z%22%2F%3E%3Cpath%20d%3D%22M50%2049Q51%2091%2019%2091L20%2080L8%2081Q6%2048%2050%2049Z%22%2F%3E%3Cpath%20d%3D%22M50%2049Q10%2059%202%2029L14%2028L10%2017Q42%207%2050%2049Z%22%2F%3E%3C%2Fg%3E%3Ccircle%20cx%3D%2250%22%20cy%3D%2249%22%20r%3D%229%22%20fill%3D%22%23ffe3a1%22%2F%3E%3C%2Fsvg%3E");color-scheme:dark;background:radial-gradient(ellipse at 0 0,#b77acd22,transparent 65%),radial-gradient(ellipse at 100% 0,#62b8b424,transparent 65%),#181a33}
+body[data-theme="anime"] .page-hero,body[data-theme="anime"] .hub-hero,body[data-theme="anime"] .live-hero,body[data-theme="anime"] .play-hero,body[data-theme="anime"] .library-hero{border:1px solid #d0bbea99;border-radius:28px;background:radial-gradient(ellipse at 85% 0,#bd97d538,transparent 65%),linear-gradient(120deg,#393453,#2b354d 70%,#213d45);box-shadow:inset 0 1px 0 #ffe9ff25,0 15px 35px #0b112640}
+body[data-theme="anime"] .page-hero::before{content:'';position:absolute;inset:0;z-index:-1;pointer-events:none;opacity:1;transform:none;animation:none;background:radial-gradient(circle,#ffefda70 0 1px,transparent 2px) 24px 18px/101px 79px,radial-gradient(circle,#d5f8ee40 0 1px,transparent 2px) 70px 40px/173px 131px,linear-gradient(150deg,#f1afd610,transparent 50%);-webkit-mask-image:none;mask-image:none}
+body[data-theme="anime"] .page-hero::after{content:'';position:absolute;left:20px;right:20px;bottom:0;height:3px;border-radius:50%;z-index:-1;background:linear-gradient(90deg,transparent,#f0b9d8,#a5e9d7,#ffe0b3,transparent);pointer-events:none}
+body[data-theme="anime"] .page-hero h1,body[data-theme="anime"] .hub-hero h1{font-family:"Trebuchet MS",Verdana,sans-serif;font-weight:800;letter-spacing:-.04em;color:#fff1e9;text-shadow:0 2px 12px #a87bb120}
+body[data-theme="anime"] .page-hero .eyebrow,body[data-theme="anime"] .hub-panel-head h2,body[data-theme="anime"] .row-head h2{font-family:"Trebuchet MS",Verdana,sans-serif;color:#efc1df;letter-spacing:.07em}
+body[data-theme="anime"] .hero-art,body[data-theme="anime"] .hub-orbit{display:block;position:absolute;right:-35px;top:50%;width:320px;height:320px;transform:translateY(-50%);border:0;border-radius:0;background:radial-gradient(ellipse at 50% 60%,#a8dcd916,transparent 65%);box-shadow:none;opacity:.5;pointer-events:none;z-index:-1}
+body[data-theme="anime"] .hero-art::before,body[data-theme="anime"] .hub-orbit::before{content:'';position:absolute;left:40px;top:205px;width:100px;height:26px;border-radius:50%;background:#dbd4f325;box-shadow:85px 30px 0 8px #dbd4f319,50px -3px 0 3px #dbd4f31f}
+body[data-theme="anime"] .hero-art::after,body[data-theme="anime"] .hub-orbit::after{content:'';position:absolute;right:40px;top:35px;width:75px;height:2px;border-radius:50%;background:linear-gradient(90deg,transparent,#ffe9c9);transform:rotate(-35deg);opacity:.7}
+body[data-theme="anime"] .hero-art span,body[data-theme="anime"] .hub-orbit span{position:absolute;inset:auto;border:0;border-radius:0;box-shadow:none;transform:none;background:none}
+body[data-theme="anime"] .hero-art span:first-child,body[data-theme="anime"] .hub-orbit span:first-child{left:85px;top:38px;width:150px;height:150px;border:1px solid #f6ddb299;border-radius:50%;background:radial-gradient(circle at 35% 25%,#ffeacd,#bbaaaf);box-shadow:0 0 40px #e9cb9c17,inset -20px -10px 25px #8581a566}
+body[data-theme="anime"] .hero-art span:nth-child(2),body[data-theme="anime"] .hub-orbit span:nth-child(2){left:25px;top:90px;width:75px;height:75px;background:var(--sakura-art) center/contain no-repeat}
+body[data-theme="anime"] .hero-art span:nth-child(3),body[data-theme="anime"] .hub-orbit span:nth-child(3){left:225px;top:210px;width:44px;height:44px;background:var(--sakura-art) center/contain no-repeat}
+body[data-theme="anime"] .hero-clock-panel{padding:14px 17px;border:1px solid #c6b7ed88;border-radius:22px;background:radial-gradient(ellipse at 50% 0,#ba9cdb20,transparent 75%),#22283f;box-shadow:inset 0 1px 0 #e7e7ff18,0 6px 20px #10152833;box-sizing:border-box;max-width:100%}
+body[data-theme="anime"] .hero-clock-panel::before{content:'UNDER THE SAME SKY';display:block;font-family:"Trebuchet MS",Verdana,sans-serif;font-size:8px;letter-spacing:.16em;color:#a5e5dc;margin-bottom:7px}
+body[data-theme="anime"] .hero-clock{font-family:"Trebuchet MS",Verdana,sans-serif;color:#f3c7df;font-weight:600;text-shadow:0 0 15px #dda2d022}
+body[data-theme="anime"] .page-hero-poster{border:2px solid #e2bede;border-radius:21px;box-shadow:0 0 0 3px #5a4c7233,0 12px 22px #0e17364d}
+body[data-theme="anime"] .btn:not(.danger){border-color:#beb7e9;border-radius:var(--radius-pill);box-shadow:inset 0 1px 0 #f4e3ff15}
+body[data-theme="anime"] .btn.primary,body[data-theme="anime"] .hub-hero .btn.primary{background:linear-gradient(120deg,#f6c6dc,#e4b3de 55%,#aedfd7);color:#342a49;border-color:#ffe0ed;box-shadow:0 3px 14px #bd8ac222;text-shadow:none}
+body[data-theme="anime"] .mode-switch{background:#232a43;border:1px solid #c4b6e6;border-radius:20px;box-shadow:inset 0 1px 0 #e6d9ff13}
+body[data-theme="anime"] .mode-tab.active{background:linear-gradient(120deg,#d9b4dc,#a7dcd4);color:#2d3150;border-color:#eee0f6;border-radius:15px;box-shadow:0 0 16px #b3a3e322;font-weight:700}
+body[data-theme="anime"] .subnav-btn.active{color:#f3c8e0;box-shadow:inset 0 -2px 0 #9fe1d7}
+body[data-theme="anime"] .xnav .brand .mark{background:linear-gradient(135deg,#f1bdd9,#9ee4d7);border:2px solid #f4dbeb;color:#35304e;box-shadow:0 0 18px #c59bdd22;border-radius:16px}
+body[data-theme="anime"] .card,body[data-theme="anime"] .hub-panel,body[data-theme="anime"] .settings-card,body[data-theme="anime"] .show-season-accordion{border-color:#b4b5ed66;box-shadow:inset 0 1px 0 #eee1ff0d,0 5px 15px #0c122433}
+body[data-theme="anime"] .account-drawer{background:radial-gradient(ellipse at 100% 0,#bd97d522,transparent 55%),#242744;border-left:1px solid #c3b9ec}
+body[data-theme="anime"] .hub-avatar,body[data-theme="anime"] .account-avatar{border:2px solid #a6e4d8;box-shadow:0 0 0 3px #7d6b9c40}
+body[data-theme="anime"] .chat-message.mine,body[data-theme="anime"] .hub-message.mine{background:#3a405e;border-color:#b5cbe2}
+body[data-theme="anime"] .hub-card-save,body[data-theme="anime"] .community-poster-rating{background:#242744f2;color:#f6d6e7;border-color:#c7c0ed99}
+@keyframes anime-sakura-float{0%,100%{transform:translate(0,-5px) rotate(-12deg)}50%{transform:translate(14px,15px) rotate(20deg)}}
+@keyframes anime-cloud-float{0%,100%{transform:translateX(-8px)}50%{transform:translateX(14px)}}
+@keyframes anime-comet-drift{0%,100%{transform:translate(0,0) rotate(-35deg);opacity:.4}50%{transform:translate(-35px,25px) rotate(-35deg);opacity:.85}}
+@media(prefers-reduced-motion:no-preference){
+ body[data-theme="anime"]:not(.reduce-motion) .hero-art span:nth-child(2),body[data-theme="anime"]:not(.reduce-motion) .hub-orbit span:nth-child(2){animation:anime-sakura-float 15s ease-in-out infinite}
+ body[data-theme="anime"]:not(.reduce-motion) .hero-art span:nth-child(3),body[data-theme="anime"]:not(.reduce-motion) .hub-orbit span:nth-child(3){animation:anime-sakura-float 20s ease-in-out infinite reverse}
+ body[data-theme="anime"]:not(.reduce-motion) .hero-art::before,body[data-theme="anime"]:not(.reduce-motion) .hub-orbit::before{animation:anime-cloud-float 23s ease-in-out infinite}
+ body[data-theme="anime"]:not(.reduce-motion) .hero-art::after,body[data-theme="anime"]:not(.reduce-motion) .hub-orbit::after{animation:anime-comet-drift 18s ease-in-out infinite}
+}
+@media(max-width:900px){body[data-theme="anime"] .hero-art,body[data-theme="anime"] .hub-orbit{right:-140px;opacity:.3}}
+@media(max-width:540px){body[data-theme="anime"] .hero-clock-panel{padding:12px 14px}body[data-theme="anime"] .page-hero .eyebrow{letter-spacing:.05em}}

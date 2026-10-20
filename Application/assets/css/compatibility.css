@@ -81,3 +81,15 @@ body.compat-ninja-extreme{background:#131b36;color:#f4f7ff}.compat-ninja-extreme
 .compat-ninja-extreme .compat-note,.compat-ninja-extreme .compat-footer,.compat-ninja-extreme small{color:#becde7}.compat-ninja-extreme .compat-message.mine{background:#304d68;border-left-color:#64e2de}
 .compat-ninja-extreme button:focus,.compat-ninja-extreme a:focus,.compat-ninja-extreme input:focus,.compat-ninja-extreme select:focus,.compat-ninja-extreme textarea:focus{outline-color:#ffe280;background:#365e7a;color:#fff;box-shadow:0 0 0 5px #1a2948}
 .compat-ninja-extreme .compat-centre-play{background:#30466b;border-color:#ffe280;color:#fff0bc}
+
+body.compat-anime{background:#181a33;color:#fff0f5}.compat-anime a{color:#f4b6d1}
+.compat-anime .compat-header,.compat-anime .compat-subnav{background:#242744;border-color:#b4b5ed}
+.compat-anime .compat-hero,.compat-anime .compat-panel,.compat-anime .compat-fields,.compat-anime .compat-message{background:#292c4a;color:#fff0f5;border-color:#b4b5ed;border-radius:22px}
+.compat-anime h1,.compat-anime h2,.compat-anime h3{font-family:"Trebuchet MS",Verdana,sans-serif;color:#f4d6e9}
+.compat-anime button,.compat-anime a.compat-button{background:#3b405e;color:#fff0f5;border-color:#c6b7ed;border-radius:20px}
+.compat-anime input,.compat-anime select,.compat-anime textarea{background:#20243c;color:#fff0f5;border-color:#aaa8d6}
+.compat-anime .compat-card,.compat-anime .compat-card strong,.compat-anime .compat-card small{background:#292c4a;color:#fff0f5;border-color:#b4b5ed}
+.compat-anime .compat-logo,.compat-anime .compat-nav a.active,.compat-anime .compat-subnav a.active,.compat-anime .compat-alphabet a.active{background:#dfbedf;color:#33304e;border-color:#f3ddef}
+.compat-anime .compat-note,.compat-anime .compat-footer,.compat-anime small{color:#cbc8e4}.compat-anime .compat-message.mine{background:#3a405e;border-left-color:#92e3d8}
+.compat-anime button:focus,.compat-anime a:focus,.compat-anime input:focus,.compat-anime select:focus,.compat-anime textarea:focus{outline-color:#92e3d8;background:#46466a;color:#fff;box-shadow:0 0 0 5px #2c304d}
+.compat-anime .compat-centre-play{background:#3b405e;border-color:#f4b6d1;color:#fff0f5}
