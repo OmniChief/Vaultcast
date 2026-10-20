@@ -145,7 +145,7 @@ img { max-width:100%; display:block; }
   .topnav { gap:8px; }
 }
 
-body.reduce-motion * { transition:none !important; animation:none !important; }
+body.reduce-motion,body.reduce-motion::before,body.reduce-motion::after,body.reduce-motion *,body.reduce-motion *::before,body.reduce-motion *::after { transition:none !important; animation:none !important; scroll-behavior:auto !important; }
 /* Episode availability */
 .badge { display: inline-block; font-size: .72rem; padding: 2px 8px; border-radius: var(--radius-pill); vertical-align: middle; }
 .badge-available { border: 1px solid color-mix(in srgb,var(--accent) 35%,transparent); }
@@ -987,7 +987,7 @@ input[type=checkbox], input[type=radio], input[type=range] { accent-color: var(-
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes pulse { 50% { transform: scale(.94); opacity: .8; } }
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+  html:not([data-motion="full"]),html:not([data-motion="full"])::before,html:not([data-motion="full"])::after,body:not([data-motion="full"]),body:not([data-motion="full"])::before,body:not([data-motion="full"])::after,body:not([data-motion="full"]) *,body:not([data-motion="full"]) *::before,body:not([data-motion="full"]) *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
 /* settings side-menu accordion */
 .settings-nav-title.accordion {
@@ -2200,7 +2200,7 @@ input, select, textarea { max-width: 100%; font-size: 16px; }
   .settings-main { padding: 8px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+  html:not([data-motion="full"]),html:not([data-motion="full"])::before,html:not([data-motion="full"])::after,body:not([data-motion="full"]),body:not([data-motion="full"])::before,body:not([data-motion="full"])::after,body:not([data-motion="full"]) *,body:not([data-motion="full"]) *::before,body:not([data-motion="full"]) *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }
 /* Shared spacing, legibility and input treatment across screen sizes. */
 .hero h1 {font-weight:750;letter-spacing:-.045em;line-height:1.1;text-wrap:balance}
@@ -2237,7 +2237,7 @@ input, select, textarea { max-width: 100%; font-size: 16px; }
   .card .meta .title {font-size:.86rem}
 }
 @media(prefers-reduced-motion:reduce) {
-  *,*::before,*::after {scroll-behavior:auto!important;animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
+  html:not([data-motion="full"]),html:not([data-motion="full"])::before,html:not([data-motion="full"])::after,body:not([data-motion="full"]),body:not([data-motion="full"])::before,body:not([data-motion="full"])::after,body:not([data-motion="full"]) *,body:not([data-motion="full"]) *::before,body:not([data-motion="full"]) *::after {scroll-behavior:auto!important;animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
 }
 
 /* TV Studio (rules scoped under .tvs-root). */
@@ -2435,7 +2435,7 @@ body.has-az-rail .has-az-rail { min-width: 0; max-width: 100%; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .az-rail { transition: none; }
+  body:not([data-motion="full"]) .az-rail { transition: none; }
 }
 
 /* Optional features: toggle rows */
@@ -2587,3 +2587,5 @@ input[type=checkbox],input[type=radio],input[type=range] { accent-color:var(--ac
 @media (forced-colors:active) {
   .mode-tab.active,.subnav-btn.active,.settings-nav-btn.active,.btn.primary { outline:2px solid Highlight; }
 }
+
+html[data-motion="reduced"]{scroll-behavior:auto!important}

@@ -115,14 +115,17 @@ if ($path === '/me/prefs' && $method === 'POST') {
     require_once STREAM_ROOT . '/src/Live/formats.php';
     $user = Auth::requireUser();
     $b = body_json();
+    if(array_key_exists('motion_mode',$b)&&!in_array($b['motion_mode'],['system','full','reduced'],true))json_error('Choose a valid motion setting.',422);
     if (!empty($b['password']) && (strlen($b['password']) < 12 || strlen($b['password']) > 72)) json_error('Use a password between 12 and 72 bytes.');
     try { $avatar = Profiles::saveAvatar($user, $b); } catch (InvalidArgumentException $error) { json_error($error->getMessage(), 422); }
     $saved = \Vaultcast\Repository::updateUser($user['id'], function (array $u) use ($b, $avatar): array {
             $u['avatar_version'] = $avatar;
             $prefs = $u['prefs'] ?? [];
-            foreach (['theme','autoplay','default_quality','reduce_motion','language'] as $k) {
+            foreach (['theme','autoplay','default_quality','language'] as $k) {
                 if (array_key_exists($k, $b)) $prefs[$k] = $b[$k];
             }
+            if(array_key_exists('motion_mode',$b)){$prefs['motion_mode']=$b['motion_mode'];$prefs['reduce_motion']=$b['motion_mode']==='reduced';}
+            elseif(array_key_exists('reduce_motion',$b)){$prefs['reduce_motion']=in_array($b['reduce_motion'],[true,1,'1','true'],true);$prefs['motion_mode']=$prefs['reduce_motion']?'reduced':'full';}
             foreach (['autoplay_on_open','autoplay_next','skip_segments','auto_skip_intro','auto_skip_outro'] as $key) if(array_key_exists($key,$b)) $prefs[$key]=!empty($b[$key]);
             if (array_key_exists('hide_spoilers',$b)) $prefs['hide_spoilers']=!empty($b['hide_spoilers']);
             if (array_key_exists('home_compact',$b)) $prefs['home_compact']=!empty($b['home_compact']);

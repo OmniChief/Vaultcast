@@ -249,7 +249,7 @@ body[data-theme="light"] .btn.primary,body[data-theme="light"] .hub-hero .btn.pr
 .account-drawer-badge{border:1px solid var(--neon-line);border-radius:99px;padding:3px 7px;font-size:.65rem;font-weight:700;color:var(--accent);background:var(--surface-2)}
 .avatar{position:relative}.account-avatar-dot{position:absolute;right:0;top:0;width:11px;height:11px;border:2px solid var(--bg2);border-radius:50%;background:var(--accent);box-shadow:0 0 12px var(--hero-glow)}
 .account-avatar-dot[hidden],.account-drawer-badge[hidden]{display:none}
-@media(prefers-reduced-motion:reduce){.account-drawer-overlay,.account-drawer{transition:none}}
+@media(prefers-reduced-motion:reduce){body:not([data-motion="full"]) .account-drawer-overlay,body:not([data-motion="full"]) .account-drawer{transition:none}}
 .reduce-motion .account-drawer-overlay,.reduce-motion .account-drawer{transition:none}
 @media(max-width:540px){.account-drawer{width:min(360px,100%);padding:18px 18px max(24px,env(safe-area-inset-bottom))}.account-drawer-head{padding-bottom:16px}}
 
@@ -405,15 +405,15 @@ body[data-theme="retro-scifi"] .page-hero .hero-clock{font-family:ui-monospace,"
 @keyframes hero-grid-breathe{from{opacity:.65}to{opacity:1}}
 @keyframes hero-radar-sweep{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
 @keyframes hero-radar-blips{0%,100%{opacity:.4}50%{opacity:1}}
-@media(prefers-reduced-motion:no-preference){
- body[data-theme="dark"] .page-hero::before{animation:hero-grid-breathe 14s ease-in-out infinite alternate}
- body[data-theme="dark"] .hero-art span:first-child,body[data-theme="dark"] .hub-orbit span:first-child{animation:hero-neon-orbit 100s linear infinite}
- body[data-theme="dark"] .hero-art span:nth-child(2),body[data-theme="dark"] .hub-orbit span:nth-child(2){animation:hero-neon-orbit 80s linear infinite reverse}
- body[data-theme="dark"] .hero-art span:nth-child(3),body[data-theme="dark"] .hub-orbit span:nth-child(3){animation:hero-neon-breathe 12s ease-in-out infinite alternate}
- body[data-theme="retro-scifi"] .hero-art::before,body[data-theme="retro-scifi"] .hub-orbit::before{content:'';position:absolute;inset:0;border-radius:50%;background:conic-gradient(from 0deg,transparent 0deg 295deg,color-mix(in srgb,var(--accent) 22%,transparent) 350deg,var(--accent) 359deg,transparent 360deg);opacity:.45;animation:hero-radar-sweep 24s linear infinite}
- body[data-theme="retro-scifi"] .hero-art span:nth-child(2),body[data-theme="retro-scifi"] .hub-orbit span:nth-child(2){animation:hero-neon-orbit 120s linear infinite reverse}
- body[data-theme="retro-scifi"] .hero-art::after,body[data-theme="retro-scifi"] .hub-orbit::after{animation:hero-radar-blips 9s ease-in-out infinite}
-}
+
+ body[data-motion="full"][data-theme="dark"] .page-hero::before{animation:hero-grid-breathe 10s ease-in-out infinite alternate}
+ body[data-motion="full"][data-theme="dark"] .hero-art span:first-child,body[data-motion="full"][data-theme="dark"] .hub-orbit span:first-child{animation:hero-neon-orbit 32s linear infinite}
+ body[data-motion="full"][data-theme="dark"] .hero-art span:nth-child(2),body[data-motion="full"][data-theme="dark"] .hub-orbit span:nth-child(2){animation:hero-neon-orbit 24s linear infinite reverse}
+ body[data-motion="full"][data-theme="dark"] .hero-art span:nth-child(3),body[data-motion="full"][data-theme="dark"] .hub-orbit span:nth-child(3){animation:hero-neon-breathe 7s ease-in-out infinite alternate}
+ body[data-motion="full"][data-theme="retro-scifi"] .hero-art::before,body[data-motion="full"][data-theme="retro-scifi"] .hub-orbit::before{content:'';position:absolute;inset:0;border-radius:50%;background:conic-gradient(from 0deg,transparent 0deg 295deg,color-mix(in srgb,var(--accent) 22%,transparent) 350deg,var(--accent) 359deg,transparent 360deg);opacity:.45;animation:hero-radar-sweep 12s linear infinite}
+ body[data-motion="full"][data-theme="retro-scifi"] .hero-art span:nth-child(2),body[data-motion="full"][data-theme="retro-scifi"] .hub-orbit span:nth-child(2){animation:hero-neon-orbit 40s linear infinite reverse}
+ body[data-motion="full"][data-theme="retro-scifi"] .hero-art::after,body[data-motion="full"][data-theme="retro-scifi"] .hub-orbit::after{animation:hero-radar-blips 9s ease-in-out infinite}
+
 
 .site-artwork-gallery{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr));gap:18px}
 .site-artwork-card{display:grid;grid-template-columns:100px minmax(0,1fr);gap:18px;padding:18px;border:1px solid var(--border);border-radius:16px;background:var(--bg2);min-width:0;align-items:start}
@@ -505,7 +505,6 @@ body[data-theme="steampunk"] .hero-clock-panel{padding:12px 16px;border:3px doub
 body[data-theme="steampunk"] .hero-clock-panel::before{content:'CHRONOMETER';display:block;font-family:Georgia,"Times New Roman",serif;font-size:9px;letter-spacing:.22em;color:#bda273;margin-bottom:7px}
 body[data-theme="steampunk"] .hero-clock{font-family:Georgia,"Times New Roman",serif;color:#f3d69e;text-shadow:0 1px 0 #000;letter-spacing:.02em}
 body[data-theme="steampunk"] .page-hero-poster{border-color:#bd9354;box-shadow:0 0 0 3px #19110c,0 0 0 4px #b38a4b88,0 12px 22px #0005}
-body[data-theme="steampunk"] img[data-site-artwork][data-bundled-artwork="true"]{filter:sepia(.8) saturate(.7)}
 body[data-theme="steampunk"] .card,body[data-theme="steampunk"] .hub-panel,body[data-theme="steampunk"] .settings-card,body[data-theme="steampunk"] .show-season-accordion{border-color:var(--border-strong);box-shadow:inset 0 1px 0 #ffe9b60b,0 5px 14px #0002}
 body[data-theme="steampunk"] .card .poster{border-bottom-color:#bc94504d}
 body[data-theme="steampunk"] .btn:not(.danger),body[data-theme="steampunk"] .screen-controller-toolbar button{border:1px solid #aa824b;border-radius:8px;box-shadow:inset 0 1px 0 #ffe4aa1c,inset 0 -2px 0 #0003;text-shadow:0 1px 0 #0005}
@@ -521,11 +520,11 @@ body[data-theme="steampunk"] .chat-message.mine,body[data-theme="steampunk"] .hu
 body[data-theme="steampunk"] .hub-card-save,body[data-theme="steampunk"] .community-poster-rating{background:#21160ff2;color:#f4d9a6;border-color:#bf9659}
 @keyframes steam-gear-turn{to{transform:rotate(360deg)}}
 @keyframes steam-pressure{0%,100%{transform:rotate(30deg)}50%{transform:rotate(55deg)}}
-@media(prefers-reduced-motion:no-preference){
- body[data-theme="steampunk"]:not(.reduce-motion) .hero-art span:first-child,body[data-theme="steampunk"]:not(.reduce-motion) .hub-orbit span:first-child{animation:steam-gear-turn 96s linear infinite}
- body[data-theme="steampunk"]:not(.reduce-motion) .hero-art span:nth-child(2),body[data-theme="steampunk"]:not(.reduce-motion) .hub-orbit span:nth-child(2){animation:steam-gear-turn 60s linear infinite reverse}
- body[data-theme="steampunk"]:not(.reduce-motion) .hero-art span:nth-child(3)::after,body[data-theme="steampunk"]:not(.reduce-motion) .hub-orbit span:nth-child(3)::after{animation:steam-pressure 14s ease-in-out infinite}
-}
+
+ body[data-motion="full"][data-theme="steampunk"]:not(.reduce-motion) .hero-art span:first-child,body[data-motion="full"][data-theme="steampunk"]:not(.reduce-motion) .hub-orbit span:first-child{animation:steam-gear-turn 24s linear infinite}
+ body[data-motion="full"][data-theme="steampunk"]:not(.reduce-motion) .hero-art span:nth-child(2),body[data-motion="full"][data-theme="steampunk"]:not(.reduce-motion) .hub-orbit span:nth-child(2){animation:steam-gear-turn 15s linear infinite reverse}
+ body[data-motion="full"][data-theme="steampunk"]:not(.reduce-motion) .hero-art span:nth-child(3)::after,body[data-motion="full"][data-theme="steampunk"]:not(.reduce-motion) .hub-orbit span:nth-child(3)::after{animation:steam-pressure 8s ease-in-out infinite}
+
 @media(max-width:900px){body[data-theme="steampunk"] .hero-art,body[data-theme="steampunk"] .hub-orbit{right:-160px;opacity:.2}}
 @media(max-width:540px){body[data-theme="steampunk"] .hero-clock-panel{padding:10px 13px}body[data-theme="steampunk"] .page-hero .eyebrow{letter-spacing:.06em}}
 
@@ -550,7 +549,6 @@ body[data-theme="vintage-tv"] .hero-clock-panel::before{content:'LOCAL BROADCAST
 body[data-theme="vintage-tv"] .hero-clock{font-family:"Courier New",monospace;font-weight:bold;letter-spacing:.02em;color:#d1de9f;text-shadow:0 0 8px #b8d48035}
 body[data-theme="vintage-tv"] .hero-date{font-family:"Courier New",monospace;color:#b0ba92}
 body[data-theme="vintage-tv"] .page-hero-poster{border:4px solid #635238;border-radius:15px;box-shadow:0 0 0 1px #b49a6c,inset 0 0 8px #0008,0 10px 20px #0004}
-body[data-theme="vintage-tv"] img[data-site-artwork][data-bundled-artwork="true"]{filter:sepia(.55) saturate(.65)}
 body[data-theme="vintage-tv"] .card,body[data-theme="vintage-tv"] .live-card,body[data-theme="vintage-tv"] .hub-panel,body[data-theme="vintage-tv"] .settings-card,body[data-theme="vintage-tv"] .show-season-accordion{border-color:#a79d6470;box-shadow:inset 0 1px 0 #fff5c112,0 5px 12px #0002}
 body[data-theme="vintage-tv"] .btn:not(.danger),body[data-theme="vintage-tv"] .screen-controller-toolbar button{border-radius:7px;border:1px solid #b2a276;border-bottom-width:3px;box-shadow:inset 0 1px 0 #fff3ce1a,0 2px 0 #13170e;text-shadow:none}
 body[data-theme="vintage-tv"] .btn.primary,body[data-theme="vintage-tv"] .hub-hero .btn.primary{background:linear-gradient(#eed5a0,#c3a16b);color:#282214;border-color:#f4e1b3 #b19564 #79603a;box-shadow:inset 0 1px 0 #ffedc8,0 2px 0 #18150e}
@@ -567,11 +565,11 @@ body[data-theme="vintage-tv"] .hub-card-save,body[data-theme="vintage-tv"] .comm
 @keyframes vintage-scan-drift{from{transform:translateY(-8px)}to{transform:translateY(8px)}}
 @keyframes vintage-glass-roll{0%,25%{transform:translateY(-110%)}85%,100%{transform:translateY(110%)}}
 @keyframes vintage-tuning{0%,35%,100%{transform:rotate(-35deg)}45%,75%{transform:rotate(35deg)}}
-@media(prefers-reduced-motion:no-preference){
- body[data-theme="vintage-tv"]:not(.reduce-motion) .hero-art span:first-child::before,body[data-theme="vintage-tv"]:not(.reduce-motion) .hub-orbit span:first-child::before{animation:vintage-scan-drift 6s linear infinite alternate}
- body[data-theme="vintage-tv"]:not(.reduce-motion) .hero-art span:first-child::after,body[data-theme="vintage-tv"]:not(.reduce-motion) .hub-orbit span:first-child::after{animation:vintage-glass-roll 16s linear infinite}
- body[data-theme="vintage-tv"]:not(.reduce-motion) .hero-art span:nth-child(2)::after,body[data-theme="vintage-tv"]:not(.reduce-motion) .hub-orbit span:nth-child(2)::after{animation:vintage-tuning 24s steps(8,end) infinite}
-}
+
+ body[data-motion="full"][data-theme="vintage-tv"]:not(.reduce-motion) .hero-art span:first-child::before,body[data-motion="full"][data-theme="vintage-tv"]:not(.reduce-motion) .hub-orbit span:first-child::before{animation:vintage-scan-drift 6s linear infinite alternate}
+ body[data-motion="full"][data-theme="vintage-tv"]:not(.reduce-motion) .hero-art span:first-child::after,body[data-motion="full"][data-theme="vintage-tv"]:not(.reduce-motion) .hub-orbit span:first-child::after{animation:vintage-glass-roll 9s linear infinite}
+ body[data-motion="full"][data-theme="vintage-tv"]:not(.reduce-motion) .hero-art span:nth-child(2)::after,body[data-motion="full"][data-theme="vintage-tv"]:not(.reduce-motion) .hub-orbit span:nth-child(2)::after{animation:vintage-tuning 14s steps(8,end) infinite}
+
 @media(max-width:900px){body[data-theme="vintage-tv"] .hero-art,body[data-theme="vintage-tv"] .hub-orbit{right:-150px;opacity:.2}}
 @media(max-width:540px){body[data-theme="vintage-tv"] .page-hero,body[data-theme="vintage-tv"] .hub-hero{border-width:4px;border-radius:20px}body[data-theme="vintage-tv"] .hero-clock-panel{padding:10px 13px}body[data-theme="vintage-tv"] .page-hero .eyebrow{letter-spacing:.07em}}
 
@@ -589,10 +587,10 @@ body[data-theme="vintage-tv"] .hero-clock-face .hero-date,body[data-theme="vinta
 body[data-theme="vintage-tv"] .hero-clock-face .hero-clock-meta{position:relative;z-index:2;font-family:"Courier New",monospace;font-size:.66rem;margin-top:8px;font-weight:400;color:#d3d4a4}
 body[data-theme="vintage-tv"] .tv-clock-tuner{display:block;position:absolute;right:9px;top:20px;width:26px;height:26px;border:3px solid #d6bd8e;border-radius:50%;background:radial-gradient(circle,#705938 0 35%,#baa171 36% 65%,#55432c 66%);box-shadow:0 0 0 2px #24190f,0 3px 0 #1c140d;pointer-events:none}
 body[data-theme="vintage-tv"] .tv-clock-tuner::after{content:'';position:absolute;left:11px;top:1px;width:3px;height:10px;border-radius:2px;background:#fff0c8;transform-origin:50% 12px;transform:rotate(-35deg)}
-@media(prefers-reduced-motion:no-preference){
- body[data-theme="vintage-tv"]:not(.reduce-motion) .hero-clock-face::after{animation:vintage-glass-roll 16s linear infinite}
- body[data-theme="vintage-tv"]:not(.reduce-motion) .tv-clock-tuner::after{animation:vintage-tuning 24s steps(8,end) infinite}
-}
+
+ body[data-motion="full"][data-theme="vintage-tv"]:not(.reduce-motion) .hero-clock-face::after{animation:vintage-glass-roll 9s linear infinite}
+ body[data-motion="full"][data-theme="vintage-tv"]:not(.reduce-motion) .tv-clock-tuner::after{animation:vintage-tuning 14s steps(8,end) infinite}
+
 @media(max-width:540px){body[data-theme="vintage-tv"] .hero-clock-panel,body[data-theme="vintage-tv"] .vintage-clock-tv{padding:9px 48px 11px 9px;border-width:7px;margin-top:18px}body[data-theme="vintage-tv"] .hero-clock-face{padding:14px 8px}body[data-theme="vintage-tv"] .hero-clock-face .live-clock{font-size:1.65rem}}
 
 /* After Hours: velvet, rose gold and a stylised, clothed adult cabaret silhouette. */
@@ -613,7 +611,6 @@ body[data-theme="after-hours"] .hero-clock-panel{padding:13px 17px;border:1px so
 body[data-theme="after-hours"] .hero-clock-panel::before{content:'AFTER HOURS';display:block;font-family:Georgia,"Times New Roman",serif;font-size:9px;letter-spacing:.23em;color:#dfadba;margin-bottom:7px}
 body[data-theme="after-hours"] .hero-clock{font-family:Georgia,"Times New Roman",serif;color:#f6cbd2;text-shadow:0 0 14px #c77e9e20}
 body[data-theme="after-hours"] .page-hero-poster{border:2px solid #c58d9c;border-radius:20px;box-shadow:0 0 0 3px #422137,0 10px 24px #0005}
-body[data-theme="after-hours"] img[data-site-artwork][data-bundled-artwork="true"]{filter:sepia(.4) hue-rotate(290deg) saturate(.8)}
 body[data-theme="after-hours"] .btn:not(.danger){border-color:#d18ca578;border-radius:var(--radius-pill);box-shadow:inset 0 1px 0 #ffe2e915}
 body[data-theme="after-hours"] .btn.primary,body[data-theme="after-hours"] .hub-hero .btn.primary{background:linear-gradient(120deg,#f2c6c6,#d692ac);color:#32152a;border-color:#f5c9d5;box-shadow:0 4px 14px #a24c7720;text-shadow:none}
 body[data-theme="after-hours"] .mode-switch{background:#281626;border:1px solid #bd7b9780;box-shadow:inset 0 1px 0 #efb9ca12}
@@ -628,11 +625,11 @@ body[data-theme="after-hours"] .hub-card-save,body[data-theme="after-hours"] .co
 @keyframes cabaret-sway{0%,100%{transform:rotate(-5deg)}45%{transform:rotate(8deg)}75%{transform:rotate(2deg)}}
 @keyframes cabaret-spotlight{0%,100%{transform:rotate(-10deg);opacity:.6}50%{transform:rotate(12deg);opacity:1}}
 @keyframes cabaret-haze{0%,100%{transform:translateX(-10px) scale(.95);opacity:.6}50%{transform:translateX(12px) scale(1.05);opacity:1}}
-@media(prefers-reduced-motion:no-preference){
- body[data-theme="after-hours"]:not(.reduce-motion) .hero-art span:nth-child(2),body[data-theme="after-hours"]:not(.reduce-motion) .hub-orbit span:nth-child(2){animation:cabaret-sway 10s ease-in-out infinite}
- body[data-theme="after-hours"]:not(.reduce-motion) .hero-art::before,body[data-theme="after-hours"]:not(.reduce-motion) .hub-orbit::before{animation:cabaret-spotlight 18s ease-in-out infinite}
- body[data-theme="after-hours"]:not(.reduce-motion) .hero-art span:nth-child(3),body[data-theme="after-hours"]:not(.reduce-motion) .hub-orbit span:nth-child(3){animation:cabaret-haze 14s ease-in-out infinite}
-}
+
+ body[data-motion="full"][data-theme="after-hours"]:not(.reduce-motion) .hero-art span:nth-child(2),body[data-motion="full"][data-theme="after-hours"]:not(.reduce-motion) .hub-orbit span:nth-child(2){animation:cabaret-sway 6s ease-in-out infinite}
+ body[data-motion="full"][data-theme="after-hours"]:not(.reduce-motion) .hero-art::before,body[data-motion="full"][data-theme="after-hours"]:not(.reduce-motion) .hub-orbit::before{animation:cabaret-spotlight 11s ease-in-out infinite}
+ body[data-motion="full"][data-theme="after-hours"]:not(.reduce-motion) .hero-art span:nth-child(3),body[data-motion="full"][data-theme="after-hours"]:not(.reduce-motion) .hub-orbit span:nth-child(3){animation:cabaret-haze 9s ease-in-out infinite}
+
 @media(max-width:900px){body[data-theme="after-hours"] .hero-art,body[data-theme="after-hours"] .hub-orbit{right:-105px;opacity:.25}}
 @media(max-width:540px){body[data-theme="after-hours"] .hero-clock-panel{padding:11px 14px}body[data-theme="after-hours"] .page-hero .eyebrow{letter-spacing:.07em}}
 
@@ -669,21 +666,18 @@ body[data-theme="ninja-extreme"] .hub-card-save,body[data-theme="ninja-extreme"]
 .ninja-training-arena{height:260px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));grid-template-rows:repeat(3,minmax(0,1fr));gap:10px;align-items:center;justify-items:center;border:2px solid var(--border-strong);border-radius:22px;background:radial-gradient(circle,var(--hero-grid) 1px,transparent 2px) 0 0/18px 18px,var(--bg);padding:12px;margin:16px 0;overflow:hidden}
 .ninja-training-target{width:64px;height:64px;min-width:48px;display:grid;place-items:center;padding:0;border:3px solid #fff0bc;border-radius:20px;background:#ffe280;color:#25365b;font-size:2.2rem;cursor:pointer;box-shadow:3px 4px 0 #10213b}
 .ninja-training-target[hidden],.ninja-training-restart[hidden]{display:none}.ninja-calm-control{display:flex;align-items:center;gap:9px;margin-top:20px;font-size:.85rem;color:var(--muted)}.ninja-calm-control input{accent-color:var(--accent);width:18px;height:18px;flex:none}
-@keyframes ninja-ready-bounce{0%,100%{transform:translateY(0) rotate(-3deg)}50%{transform:translateY(-13px) rotate(3deg)}}
+@keyframes ninja-ready-bounce{0%,100%{transform:translateY(0) rotate(-3deg)}50%{transform:translateY(-22px) rotate(5deg)}}
 @keyframes ninja-star-turn{to{transform:rotate(360deg)}}
 @keyframes ninja-cloud-drift{0%,100%{transform:translateX(-9px)}50%{transform:translateX(15px)}}
-@media(prefers-reduced-motion:no-preference){
- body[data-theme="ninja-extreme"]:not(.reduce-motion):not(.ninja-calm) .hero-art span:first-child,body[data-theme="ninja-extreme"]:not(.reduce-motion):not(.ninja-calm) .hub-orbit span:first-child{animation:ninja-ready-bounce 5s ease-in-out infinite}
- body[data-theme="ninja-extreme"]:not(.reduce-motion):not(.ninja-calm) .hero-art span:nth-child(2),body[data-theme="ninja-extreme"]:not(.reduce-motion):not(.ninja-calm) .hub-orbit span:nth-child(2){animation:ninja-star-turn 14s linear infinite}
- body[data-theme="ninja-extreme"]:not(.reduce-motion):not(.ninja-calm) .hero-art span:nth-child(3),body[data-theme="ninja-extreme"]:not(.reduce-motion):not(.ninja-calm) .hub-orbit span:nth-child(3){animation:ninja-star-turn 20s linear infinite reverse}
- body[data-theme="ninja-extreme"]:not(.reduce-motion):not(.ninja-calm) .hero-art::before,body[data-theme="ninja-extreme"]:not(.reduce-motion):not(.ninja-calm) .hub-orbit::before{animation:ninja-cloud-drift 17s ease-in-out infinite}
-}
+
+ body[data-motion="full"][data-theme="ninja-extreme"]:not(.reduce-motion):not(.ninja-calm) .hero-art span:first-child,body[data-motion="full"][data-theme="ninja-extreme"]:not(.reduce-motion):not(.ninja-calm) .hub-orbit span:first-child{animation:ninja-ready-bounce 3.6s ease-in-out infinite}
+ body[data-motion="full"][data-theme="ninja-extreme"]:not(.reduce-motion):not(.ninja-calm) .hero-art span:nth-child(2),body[data-motion="full"][data-theme="ninja-extreme"]:not(.reduce-motion):not(.ninja-calm) .hub-orbit span:nth-child(2){animation:ninja-star-turn 8s linear infinite}
+ body[data-motion="full"][data-theme="ninja-extreme"]:not(.reduce-motion):not(.ninja-calm) .hero-art span:nth-child(3),body[data-motion="full"][data-theme="ninja-extreme"]:not(.reduce-motion):not(.ninja-calm) .hub-orbit span:nth-child(3){animation:ninja-star-turn 12s linear infinite reverse}
+ body[data-motion="full"][data-theme="ninja-extreme"]:not(.reduce-motion):not(.ninja-calm) .hero-art::before,body[data-motion="full"][data-theme="ninja-extreme"]:not(.reduce-motion):not(.ninja-calm) .hub-orbit::before{animation:ninja-cloud-drift 10s ease-in-out infinite}
+
 @media(max-width:900px){body[data-theme="ninja-extreme"] .hero-art,body[data-theme="ninja-extreme"] .hub-orbit{right:-115px;opacity:.3}}
 @media(max-width:540px){body[data-theme="ninja-extreme"] .hero-clock-panel{padding:12px 14px}body[data-theme="ninja-extreme"] .page-hero .eyebrow{letter-spacing:.05em}.ninja-training-target{width:56px;height:56px}.ninja-training-arena{height:230px}}
 
-body[data-theme="retro-scifi"] img[data-site-artwork][data-bundled-artwork="true"]{filter:sepia(.45) hue-rotate(65deg) saturate(.75)}
-body[data-theme="ninja-extreme"] img[data-site-artwork][data-bundled-artwork="true"]{filter:saturate(1.35) brightness(1.08)}
-body[data-theme="light"] img[data-site-artwork][data-bundled-artwork="true"]{filter:saturate(.85) brightness(1.12)}
 /* Anime Dreamscape: sakura skies, mint moonlight and coordinated illustrated posters. */
 body[data-theme="anime"]{--bg:#181a33;--bg2:#242744;--bg3:#363b5c;--card:#292c4a;--glass:#232640f5;--text:#fff0f5;--muted:#cbc8e4;--faint:#aca9cf;--border:#b4b5ed3b;--border-strong:#c6b7ed80;--vod-a:#f4b6d1;--vod-b:#92e3d8;--accent2:#ffe0a3;--surface-1:#e3d4ff09;--surface-2:#e3d4ff12;--surface-3:#e3d4ff1e;--ok:#afddba;--warn:#ffe0a3;--danger:#ffb6b8;--danger-strong:#fda4af;--neon-line:#c3b9ec80;--hero-grid:#dad0ff13;--hero-glow:#e9a4d624;--sakura-art:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20100%20100%22%3E%3Cg%20fill%3D%22%23f7b8d3%22%20stroke%3D%22%23ffe7ed%22%20stroke-width%3D%221.5%22%3E%3Cpath%20d%3D%22M50%2049Q20%2024%2043%205L50%2014L57%205Q80%2024%2050%2049Z%22%2F%3E%3Cpath%20d%3D%22M50%2049Q68%2015%2094%2031L87%2040L98%2043Q93%2072%2050%2049Z%22%2F%3E%3Cpath%20d%3D%22M50%2049Q88%2060%2079%2091L67%2087L68%2099Q36%2095%2050%2049Z%22%2F%3E%3Cpath%20d%3D%22M50%2049Q51%2091%2019%2091L20%2080L8%2081Q6%2048%2050%2049Z%22%2F%3E%3Cpath%20d%3D%22M50%2049Q10%2059%202%2029L14%2028L10%2017Q42%207%2050%2049Z%22%2F%3E%3C%2Fg%3E%3Ccircle%20cx%3D%2250%22%20cy%3D%2249%22%20r%3D%229%22%20fill%3D%22%23ffe3a1%22%2F%3E%3C%2Fsvg%3E");color-scheme:dark;background:radial-gradient(ellipse at 0 0,#b77acd22,transparent 65%),radial-gradient(ellipse at 100% 0,#62b8b424,transparent 65%),#181a33}
 body[data-theme="anime"] .page-hero,body[data-theme="anime"] .hub-hero,body[data-theme="anime"] .live-hero,body[data-theme="anime"] .play-hero,body[data-theme="anime"] .library-hero{border:1px solid #d0bbea99;border-radius:28px;background:radial-gradient(ellipse at 85% 0,#bd97d538,transparent 65%),linear-gradient(120deg,#393453,#2b354d 70%,#213d45);box-shadow:inset 0 1px 0 #ffe9ff25,0 15px 35px #0b112640}
@@ -713,15 +707,15 @@ body[data-theme="anime"] .account-drawer{background:radial-gradient(ellipse at 1
 body[data-theme="anime"] .hub-avatar,body[data-theme="anime"] .account-avatar{border:2px solid #a6e4d8;box-shadow:0 0 0 3px #7d6b9c40}
 body[data-theme="anime"] .chat-message.mine,body[data-theme="anime"] .hub-message.mine{background:#3a405e;border-color:#b5cbe2}
 body[data-theme="anime"] .hub-card-save,body[data-theme="anime"] .community-poster-rating{background:#242744f2;color:#f6d6e7;border-color:#c7c0ed99}
-@keyframes anime-sakura-float{0%,100%{transform:translate(0,-5px) rotate(-12deg)}50%{transform:translate(14px,15px) rotate(20deg)}}
+@keyframes anime-sakura-float{0%,100%{transform:translate(0,-5px) rotate(-12deg)}50%{transform:translate(24px,28px) rotate(30deg)}}
 @keyframes anime-cloud-float{0%,100%{transform:translateX(-8px)}50%{transform:translateX(14px)}}
 @keyframes anime-comet-drift{0%,100%{transform:translate(0,0) rotate(-35deg);opacity:.4}50%{transform:translate(-35px,25px) rotate(-35deg);opacity:.85}}
-@media(prefers-reduced-motion:no-preference){
- body[data-theme="anime"]:not(.reduce-motion) .hero-art span:nth-child(2),body[data-theme="anime"]:not(.reduce-motion) .hub-orbit span:nth-child(2){animation:anime-sakura-float 15s ease-in-out infinite}
- body[data-theme="anime"]:not(.reduce-motion) .hero-art span:nth-child(3),body[data-theme="anime"]:not(.reduce-motion) .hub-orbit span:nth-child(3){animation:anime-sakura-float 20s ease-in-out infinite reverse}
- body[data-theme="anime"]:not(.reduce-motion) .hero-art::before,body[data-theme="anime"]:not(.reduce-motion) .hub-orbit::before{animation:anime-cloud-float 23s ease-in-out infinite}
- body[data-theme="anime"]:not(.reduce-motion) .hero-art::after,body[data-theme="anime"]:not(.reduce-motion) .hub-orbit::after{animation:anime-comet-drift 18s ease-in-out infinite}
-}
+
+ body[data-motion="full"][data-theme="anime"]:not(.reduce-motion) .hero-art span:nth-child(2),body[data-motion="full"][data-theme="anime"]:not(.reduce-motion) .hub-orbit span:nth-child(2){animation:anime-sakura-float 9s ease-in-out infinite}
+ body[data-motion="full"][data-theme="anime"]:not(.reduce-motion) .hero-art span:nth-child(3),body[data-motion="full"][data-theme="anime"]:not(.reduce-motion) .hub-orbit span:nth-child(3){animation:anime-sakura-float 12s ease-in-out infinite reverse}
+ body[data-motion="full"][data-theme="anime"]:not(.reduce-motion) .hero-art::before,body[data-motion="full"][data-theme="anime"]:not(.reduce-motion) .hub-orbit::before{animation:anime-cloud-float 14s ease-in-out infinite}
+ body[data-motion="full"][data-theme="anime"]:not(.reduce-motion) .hero-art::after,body[data-motion="full"][data-theme="anime"]:not(.reduce-motion) .hub-orbit::after{animation:anime-comet-drift 10s ease-in-out infinite}
+
 @media(max-width:900px){body[data-theme="anime"] .hero-art,body[data-theme="anime"] .hub-orbit{right:-140px;opacity:.3}}
 @media(max-width:540px){body[data-theme="anime"] .hero-clock-panel{padding:12px 14px}body[data-theme="anime"] .page-hero .eyebrow{letter-spacing:.05em}}
 
@@ -761,15 +755,29 @@ body[data-theme="manly-man"] .account-drawer{background:radial-gradient(ellipse 
 body[data-theme="manly-man"] .hub-avatar,body[data-theme="manly-man"] .account-avatar{border:3px solid #bc9d71;box-shadow:0 0 0 3px #243e43}
 body[data-theme="manly-man"] .chat-message.mine,body[data-theme="manly-man"] .hub-message.mine{background:#314a50;border-color:#bda278}
 body[data-theme="manly-man"] .hub-card-save,body[data-theme="manly-man"] .community-poster-rating{background:#16282df2;color:#ffd296;border-color:#bb9a6e;border-radius:4px}
-@keyframes manly-hero-flex{0%,100%{transform:scale(1) rotate(-1deg)}50%{transform:scale(1.035) rotate(1deg)}}
+@keyframes manly-hero-flex{0%,100%{transform:scale(1) rotate(-1deg)}50%{transform:scale(1.055) rotate(2deg)}}
 @keyframes manly-plate-turn{to{transform:rotate(360deg)}}
 @keyframes manly-embers-rise{0%{transform:translateY(15px) translateX(-4px);opacity:.3}50%{opacity:.85}100%{transform:translateY(-55px) translateX(12px);opacity:.2}}
 @keyframes manly-godrays{0%,100%{transform:rotate(-9deg);opacity:.5}50%{transform:rotate(9deg);opacity:.9}}
-@media(prefers-reduced-motion:no-preference){
- body[data-theme="manly-man"]:not(.reduce-motion) .hero-art span:first-child,body[data-theme="manly-man"]:not(.reduce-motion) .hub-orbit span:first-child{animation:manly-hero-flex 6s ease-in-out infinite}
- body[data-theme="manly-man"]:not(.reduce-motion) .hero-art span:nth-child(2),body[data-theme="manly-man"]:not(.reduce-motion) .hub-orbit span:nth-child(2){animation:manly-plate-turn 28s linear infinite}
- body[data-theme="manly-man"]:not(.reduce-motion) .hero-art span:nth-child(3),body[data-theme="manly-man"]:not(.reduce-motion) .hub-orbit span:nth-child(3){animation:manly-embers-rise 9s ease-in-out infinite}
- body[data-theme="manly-man"]:not(.reduce-motion) .hero-art::before,body[data-theme="manly-man"]:not(.reduce-motion) .hub-orbit::before{animation:manly-godrays 17s ease-in-out infinite}
-}
+
+ body[data-motion="full"][data-theme="manly-man"]:not(.reduce-motion) .hero-art span:first-child,body[data-motion="full"][data-theme="manly-man"]:not(.reduce-motion) .hub-orbit span:first-child{animation:manly-hero-flex 4.5s ease-in-out infinite}
+ body[data-motion="full"][data-theme="manly-man"]:not(.reduce-motion) .hero-art span:nth-child(2),body[data-motion="full"][data-theme="manly-man"]:not(.reduce-motion) .hub-orbit span:nth-child(2){animation:manly-plate-turn 14s linear infinite}
+ body[data-motion="full"][data-theme="manly-man"]:not(.reduce-motion) .hero-art span:nth-child(3),body[data-motion="full"][data-theme="manly-man"]:not(.reduce-motion) .hub-orbit span:nth-child(3){animation:manly-embers-rise 6s ease-in-out infinite}
+ body[data-motion="full"][data-theme="manly-man"]:not(.reduce-motion) .hero-art::before,body[data-motion="full"][data-theme="manly-man"]:not(.reduce-motion) .hub-orbit::before{animation:manly-godrays 10s ease-in-out infinite}
+
 @media(max-width:900px){body[data-theme="manly-man"] .hero-art,body[data-theme="manly-man"] .hub-orbit{right:-135px;opacity:.28}}
 @media(max-width:540px){body[data-theme="manly-man"] :is(.hero-clock-panel,.vintage-clock-tv){padding:12px 15px}body[data-theme="manly-man"] .page-hero .eyebrow{letter-spacing:.08em}}
+
+body[data-motion="full"][data-theme="light"] .hero-art span:first-child,body[data-motion="full"][data-theme="light"] .hub-orbit span:first-child{animation:hero-neon-orbit 35s linear infinite}
+body[data-motion="full"][data-theme="light"] .hero-art span:nth-child(2),body[data-motion="full"][data-theme="light"] .hub-orbit span:nth-child(2){animation:hero-neon-orbit 28s linear infinite reverse}
+body[data-motion="full"][data-theme="light"] .hero-art span:nth-child(3),body[data-motion="full"][data-theme="light"] .hub-orbit span:nth-child(3){animation:hero-neon-breathe 8s ease-in-out infinite alternate}
+
+/* Keep the moving header art visible while preserving room for copy on small screens. */
+body[data-motion="full"] .hero-art,body[data-motion="full"] .hub-orbit{opacity:.58}
+@media(max-width:900px){body[data-motion="full"] .hero-art,body[data-motion="full"] .hub-orbit{opacity:.32}}
+
+@keyframes theme-poster-drift{0%,100%{transform:scale(1.025) translateY(0)}50%{transform:scale(1.065) translateY(-3px)}}
+body[data-motion="full"] .page-hero-poster img[data-site-artwork][data-bundled-artwork="true"]{animation:theme-poster-drift 18s ease-in-out infinite;transform-origin:50% 50%}
+body[data-theme="ninja-extreme"].ninja-calm .page-hero-poster img[data-site-artwork]{animation:none}
+
+body[data-motion="full"] .vintage-clock-tv>.hero-art{opacity:.28}

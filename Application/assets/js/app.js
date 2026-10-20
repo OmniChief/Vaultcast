@@ -4553,14 +4553,42 @@ try {
     ]);
   }
 
+  var deviceMotionQuery=window.matchMedia?window.matchMedia('(prefers-reduced-motion: reduce)'):null,ninjaCalmMemory={};
+  function motionPreference(prefs){
+    prefs=prefs||((state.user&&state.user.prefs)||{});
+    if(['system','full','reduced'].indexOf(prefs.motion_mode)>=0)return prefs.motion_mode;
+    return [true,1,'1','true'].indexOf(prefs.reduce_motion)>=0?'reduced':'system';
+  }
+  function motionDescription(mode){
+    var reduced=mode==='reduced'||(mode==='system'&&deviceMotionQuery&&deviceMotionQuery.matches);
+    var text=mode==='system'?'Following your device: '+(reduced?'reduced motion.':'full animation.'):mode==='full'?'Full animation selected, overriding the device preference.':'Reduced motion selected: theme animations are paused.';
+    if(document.body.getAttribute('data-theme')==='ninja-extreme'&&document.body.classList.contains('ninja-calm'))text+=' Ninja Calm mode also pauses this theme; change it in Ninja training.';
+    return text;
+  }
+  function applyMotion(){
+    var mode=motionPreference(),reduced=mode==='reduced'||(mode==='system'&&deviceMotionQuery&&deviceMotionQuery.matches);
+    var effective=reduced?'reduced':'full';
+    if(document.documentElement.getAttribute('data-motion')!==effective)document.documentElement.setAttribute('data-motion',effective);
+    if(document.body.getAttribute('data-motion')!==effective)document.body.setAttribute('data-motion',effective);
+    if(document.body.getAttribute('data-motion-preference')!==mode)document.body.setAttribute('data-motion-preference',mode);
+    document.body.classList.toggle('reduce-motion',!!reduced);
+    var status=document.getElementById('motion-state'),select=document.getElementById('motion_mode');if(status){var description=motionDescription(mode);if(select&&select.value!==mode)description+=' Pending choice: '+select.options[select.selectedIndex].text+'. Save account settings to apply.';if(status.textContent!==description)status.textContent=description;}
+  }
+  if(deviceMotionQuery){if(deviceMotionQuery.addEventListener)deviceMotionQuery.addEventListener('change',applyMotion);else if(deviceMotionQuery.addListener)deviceMotionQuery.addListener(applyMotion);}
+  function ninjaCalmKey(){return 'vaultcast.ninjaCalm:'+(state.user&&state.user.id||'guest');}
   function applyTheme(){
     var theme = state.user && state.user.prefs && state.user.prefs.theme || state.settings && state.settings.theme || 'dark';
     document.body.setAttribute('data-theme', ['dark','light','retro-scifi','steampunk','vintage-tv','after-hours','ninja-extreme','anime','manly-man'].indexOf(theme)>=0 ? theme : 'dark');
-    try{document.body.classList.toggle('ninja-calm',localStorage.getItem('vaultcast.ninjaCalm')==='1');}catch(ignore){}
+    var calmKey=ninjaCalmKey(),calm=!!ninjaCalmMemory[calmKey];
+    try{var savedCalm=localStorage.getItem(calmKey);if(savedCalm!==null){calm=savedCalm==='1';ninjaCalmMemory[calmKey]=calm;}}catch(ignore){}
+    document.body.classList.toggle('ninja-calm',calm);
+    applyMotion();
   }
   function ninjaCalm(enabled){
+    ninjaCalmMemory[ninjaCalmKey()]=!!enabled;
     document.body.classList.toggle('ninja-calm',!!enabled);
-    try{localStorage.setItem('vaultcast.ninjaCalm',enabled?'1':'0');}catch(ignore){}
+    try{localStorage.setItem(ninjaCalmKey(),enabled?'1':'0');}catch(ignore){}
+    applyMotion();document.querySelectorAll('.ninja-training-open').forEach(function(button){button.textContent=enabled?'★ Ninja training · Calm':'★ Ninja training';});
   }
   function ninjaTraining(){
     window.VaultcastHub.modal('Ninja training',function(body){
@@ -4666,7 +4694,7 @@ try {
     applyTheme();
     if(document.body.getAttribute('data-theme')==='ninja-extreme'){
       var ninjaClock=content.querySelector('.hero-clock-face');
-      if(ninjaClock&&!ninjaClock.querySelector('.ninja-training-open'))ninjaClock.appendChild(h('button',{type:'button',className:'btn ghost ninja-training-open',text:'★ Ninja training',title:'A short, untimed star-collecting activity and calm-mode controls',onClick:ninjaTraining}));
+      if(ninjaClock&&!ninjaClock.querySelector('.ninja-training-open'))ninjaClock.appendChild(h('button',{type:'button',className:'btn ghost ninja-training-open',text:document.body.classList.contains('ninja-calm')?'★ Ninja training · Calm':'★ Ninja training',title:'A short, untimed star-collecting activity and calm-mode controls',onClick:ninjaTraining}));
     }
     document.body.classList.toggle('has-az-rail',state.view==='section'||state.view==='collections'||(state.view==='play'&&(state.playTab||'games')==='games'));
     try { document.body.setAttribute('data-mode', mode || 'none'); } catch (e) {}
@@ -7742,7 +7770,9 @@ try {
             h('option', { value: 'light', text: 'Light', selected: prefs.theme === 'light' })
           ])]),
           h('label', {}, ['New password (optional)', h('input', { id: 'pw', type: 'password', placeholder: 'Leave blank to keep' })]),
-          h('label', { className: 'check-label' }, [ h('input', { id: 'reduce', type: 'checkbox', checked: !!prefs.reduce_motion }), ' Reduce motion' ]),
+          h('label',{},['Theme motion',h('select',{id:'motion_mode','aria-describedby':'motion-state',onChange:applyMotion},[
+            h('option',{value:'system',text:'Follow device',selected:motionPreference(prefs)==='system'}),h('option',{value:'full',text:'Full animation',selected:motionPreference(prefs)==='full'}),h('option',{value:'reduced',text:'Reduced motion',selected:motionPreference(prefs)==='reduced'})])]),
+          h('p',{id:'motion-state',className:'muted',role:'status',text:motionDescription(motionPreference(prefs))}),
           h('label', { className: 'check-label' }, [ h('input', { id: 'autoplay', type: 'checkbox', checked: prefs.autoplay_on_open !== false }), ' Automatically start videos when opened' ]),
           h('label', { className:'check-label' }, [ h('input', { id:'autoplay_next', type:'checkbox', checked:prefs.autoplay_next !== false }), ' Automatically play the next episode / collection film' ]),
           h('label',{className:'check-label'},[h('input',{id:'skip_segments',type:'checkbox',checked:prefs.skip_segments!==false}),' Offer TV / anime intro and credits skipping, and movie credits (TheIntroDB)']),
@@ -7927,7 +7957,8 @@ try {
       display_name: $('#dn').value,
       theme: $('#theme').value,
       password: $('#pw').value || undefined,
-      reduce_motion: $('#reduce').checked,
+      motion_mode: $('#motion_mode').value,
+      reduce_motion: $('#motion_mode').value==='reduced',
       autoplay: $('#autoplay').checked,
       autoplay_on_open: $('#autoplay').checked,
       autoplay_next: $('#autoplay_next').checked,
@@ -14577,7 +14608,6 @@ function viewCollectionDetail(){
   function applyPrefs(){
     var p = (state.user && state.user.prefs) || {};
     applyTheme();
-    document.body.classList.toggle('reduce-motion', !!p.reduce_motion);
     if(state.user && state._homePrefUser!==state.user.id){state._homePrefUser=state.user.id;if(state.view==='home' && R.relative(location.pathname,BASE)==='' && p.home_landing)state.hubTab=p.home_landing;}
   }
 

@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 final class SiteArtwork {
+    const THEMES=['dark','light','retro-scifi','steampunk','vintage-tv','after-hours','ninja-extreme','anime','manly-man'];
     const SECTIONS=['cinema','watchlist','favourites','calendar','arrivals','friends','history','stats'];
     private static function path(string $kind='home'): string {
         if (!in_array($kind,array_merge(['home','collections'],self::SECTIONS),true)) throw new InvalidArgumentException('Unknown artwork section.');
@@ -30,9 +31,10 @@ final class SiteArtwork {
         $custom=self::path($kind);
         $name=(in_array($kind,self::SECTIONS,true)?'home-'.$kind:$kind.'-poster').'.jpg';
         $theme=is_string($_GET['theme']??null)?$_GET['theme']:'dark';
-        $themed=in_array($theme,['anime','manly-man'],true)?STREAM_ROOT.'/assets/img/themes/'.$theme.'/'.$name:'';
+        $theme=in_array($theme,self::THEMES,true)?$theme:'dark';
+        $themed=STREAM_ROOT.'/assets/img/themes/'.$theme.'/'.$name;
         // A site upload always wins, independently of the viewing user's theme.
-        $path=is_file($custom)?$custom:($themed!==''&&is_file($themed)?$themed:STREAM_ROOT.'/assets/img/'.$name);
+        $path=is_file($custom)?$custom:(is_file($themed)?$themed:STREAM_ROOT.'/assets/img/themes/dark/'.$name);
         $info=@getimagesize($path);if (!$info) json_error('Poster unavailable',404);
         $etag='"'.hash_file('sha256',$path).'"';
         header('Content-Type: '.$info['mime']);header('X-Content-Type-Options: nosniff');
