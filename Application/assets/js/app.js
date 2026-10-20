@@ -2632,6 +2632,7 @@ function confirmDialog(message, opts){
     np.currentFrame = 0;
     np.current_frame = 0;
     np.inputsData = {};
+    np._streamInputEdges = {};
     np.inputs = np.inputs || {};
     np.syncing = false;
     np.wait = false;
@@ -2765,6 +2766,19 @@ function confirmDialog(message, opts){
   }
   // A bucket labelled F contains inputs used BEFORE host frame F+1 ran.
   // The guest must apply bucket 0 too, before running its first frame.
+  // Preserve quick taps: a control may change at most once per emulated frame.
+  // Different controls still share a frame so chords do not acquire extra delay.
+  function lobbyQueueInput(np, input){
+    var frame=np.currentFrame||0,key=input[0]+':'+input[1];
+    var edges=np._streamInputEdges||(np._streamInputEdges={}),previous=edges[key];
+    if(previous&&previous.value===input[2])return;
+    // Analog axes retain the latest position without queuing every intermediate value.
+    if(previous&&input[1]<16)frame=Math.max(frame,previous.frame+1);
+    if(np._streamFramePermit&&frame<=np._streamFramePermit.frame)frame=np._streamFramePermit.frame+1;
+    edges[key]={frame:frame,value:input[2]};
+    if(!np.inputsData[frame])np.inputsData[frame]=[];
+    np.inputsData[frame].push({frame:frame,connected_input:input.slice()});
+  }
   function lobbyApplyFrameInputs(emu, bucket){
     var np = emu.netplay;
     np._streamHeldInputs = np._streamHeldInputs || {};
@@ -3089,10 +3103,12 @@ function confirmDialog(message, opts){
           if (data.sync_id !== np._streamSyncId || np._streamAwaitingState || np._streamAwaitingGo || np._streamSyncing) return;
           var frame = np.currentFrame || 0;
           if (np.owner) {
+            var slot=np.getUserIndex(data.userid);
+            if(slot<0||!Array.isArray(data['sync-control']))return;
             data['sync-control'].forEach(function(value){
-              if (!value || !value.connected_input) return;
-              if (!np.inputsData[frame]) np.inputsData[frame] = [];
-              np.inputsData[frame].push({ frame: frame, connected_input: value.connected_input.slice() });
+              var input=value&&value.connected_input;
+              if(!Array.isArray(input)||input.length!==3||input[0]!==slot||!Number.isInteger(input[1])||input[1]<0||input[1]>23||!Number.isFinite(input[2]))return;
+              lobbyQueueInput(np,input);
             });
           } else {
             if (data.checkpoint) {
@@ -3143,8 +3159,7 @@ function confirmDialog(message, opts){
       if (pidx < 0) return;
       var frame = np.currentFrame || 0;
       if (np.owner) {
-        if (!np.inputsData[frame]) np.inputsData[frame] = [];
-        np.inputsData[frame].push({ frame: frame, connected_input: [pidx, index, value] });
+        lobbyQueueInput(np,[pidx,index,value]);
       } else {
         try {
           np.sendMessage({

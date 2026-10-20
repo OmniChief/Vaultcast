@@ -5,7 +5,7 @@
   'use strict';
   // Bound host lead to avoid building a long input-to-display queue on guests.
   var ACK_WINDOW = 10;
-  var BUFFER_FRAMES = 2;
+  var BUFFER_FRAMES = 1;
   var ACK_EVERY = 1;
   var CHECK_INTERVAL = 600;
 
