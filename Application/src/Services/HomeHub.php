@@ -335,7 +335,7 @@ final class HomeHub {
         if (($data['friends'][$id] ?? '')!=='friend') throw new DomainException('Only friends can view this profile.');
         $other=\Vaultcast\Repository::user($id,true); if (!$other) throw new DomainException('Account no longer exists.');
         $their=self::personal($id); $games=array_values($their['games'] ?? []);
-        return ['ok'=>true,'profile'=>self::profile($other),'stats'=>['games'=>count($games),'seconds'=>array_sum(array_column($games,'seconds'))]];
+        return ['ok'=>true,'profile'=>self::profile($other),'stats'=>['games'=>count($games),'seconds'=>array_sum(array_column($games,'seconds'))],'highlights'=>array_merge(FriendHighlights::build($user,$other,$their),FriendHighlights::favourites($user,$their))];
     }
     public static function invite(array $user,array $body): array {
         $id=(string)($body['user_id'] ?? ''); $data=self::personal($user['id']);

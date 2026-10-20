@@ -15,7 +15,7 @@ final class Chat
         $other=Auth::findById($id);if (!$other) throw new DomainException('Account no longer exists.');
         $d=\Vaultcast\Repository::document('home-hub:'.$user['id'],[]);$relation=$id===$user['id']?'self':($d['friends'][$id] ?? 'none');
         $out=['ok'=>true,'profile'=>self::identity($other),'relationship'=>$relation,'full'=>$relation==='friend'||$relation==='self'];
-        if ($out['full']) {$their=\Vaultcast\Repository::document('home-hub:'.$id,[]);$games=array_values($their['games'] ?? []);$out['stats']=['games'=>count($games),'seconds'=>array_sum(array_column($games,'seconds'))];}
+        if ($out['full']) {$their=\Vaultcast\Repository::document('home-hub:'.$id,[]);$games=array_values($their['games'] ?? []);$out['stats']=['games'=>count($games),'seconds'=>array_sum(array_column($games,'seconds'))];$out['highlights']=array_merge(FriendHighlights::build($user,$other,$their),FriendHighlights::favourites($user,$their));}
         return $out;
     }
     private static function general(): void {

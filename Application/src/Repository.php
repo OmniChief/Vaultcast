@@ -296,7 +296,19 @@ final class Repository
      */
     public static function saveProgress(string $userId, string $itemId, array $progress): void
     {
-        $s = Database::connection()->prepare('INSERT INTO vaultcast_progress (user_id,item_id,updated_at,payload) VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE updated_at=VALUES(updated_at),payload=VALUES(payload)');
+        // Count completion edges atomically in the existing write: no extra query per tick.
+        // A fresh viewing must return to the first tenth before it can complete again.
+        $duration=max(0.0,(float)($progress['duration'] ?? 0));
+        $position=max(0.0,(float)($progress['position'] ?? 0));
+        $playback=!array_key_exists('watched',$progress)&&!array_key_exists('viewings',$progress);
+        $finished=$playback && $duration>0 && $position/$duration>0.92;
+        $start=$playback && $duration>0 && $position/$duration<0.1;
+        $progress['viewings']=max(0,(int)($progress['viewings']??($finished?1:0)));
+        $progress['viewing_armed']=max(0,min(1,(int)($progress['viewing_armed']??($start?1:0))));
+        $previous="GREATEST(COALESCE(JSON_EXTRACT(payload,'$.viewings'),0),CASE WHEN COALESCE(JSON_EXTRACT(payload,'$.watched'),0)=1 OR (COALESCE(JSON_EXTRACT(payload,'$.duration'),0)>0 AND COALESCE(JSON_EXTRACT(payload,'$.position'),0)/NULLIF(JSON_EXTRACT(payload,'$.duration'),0)>0.92) THEN 1 ELSE 0 END)";
+        $increment=$finished?"CASE WHEN COALESCE(JSON_EXTRACT(payload,'$.viewing_armed'),0)=1 OR ($previous)=0 THEN 1 ELSE 0 END":'0';
+        $armed=$finished?'0':($start?'1':"COALESCE(JSON_EXTRACT(payload,'$.viewing_armed'),0)");
+        $s = Database::connection()->prepare("INSERT INTO vaultcast_progress (user_id,item_id,updated_at,payload) VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE updated_at=VALUES(updated_at),payload=JSON_SET(VALUES(payload),'$.viewings',GREATEST(($previous)+($increment),COALESCE(JSON_EXTRACT(VALUES(payload),'$.viewings'),0)),'$.viewing_armed',$armed)");
         $s->execute([$userId, $itemId, (int)($progress['updated_at'] ?? time()), self::encode($progress)]);
         $stamp = (defined('STREAM_SHM') ? STREAM_SHM : dirname(__DIR__) . '/data/cache') . '/progress-rev.stamp';
         $now = time();

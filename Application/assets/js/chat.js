@@ -12,7 +12,7 @@
   function modal(title,build){return window.VaultcastHub.modal(title,function(body,close){body.classList.add('chat-modal-body');build(body,close);});}
   function expiry(value){return h('select',{'aria-label':'Message expiry'},[[3600,'1 hour'],[21600,'6 hours'],[86400,'24 hours'],[604800,'7 days'],[2592000,'30 days'],[0,'Keep until deleted']].map(function(v){return h('option',{value:v[0],text:v[1],selected:Number(value)===v[0]});}));}
   function profile(id){return api('/profile?id='+encodeURIComponent(id)).then(function(j){modal(j.profile.name,function(body,close){body.appendChild(h('div',{className:'hub-profile'},[avatar(j.profile),h('div',{},[h('h3',{text:j.profile.name}),h('p',{className:'muted',text:'@'+j.profile.username})])]));
-      if(j.full)body.appendChild(h('p',{text:j.stats.games+' games played · '+Math.floor(j.stats.seconds/60)+' minutes played'}));
+      if(j.full)body.appendChild(window.VaultcastHub.profileHighlights(j,close));
       else body.appendChild(h('p',{className:'muted',text:'Full profile is visible to accepted friends only.'}));
       if(j.relationship==='friend'){body.appendChild(button('Send private message',function(){close();compose(j.profile);}));body.appendChild(button('Open direct chat',function(){close();direct(j.profile);}));}
       else if(j.relationship==='none'||j.relationship==='incoming')body.appendChild(button(j.relationship==='incoming'?'Accept friend request':'Add friend',function(){return A.api('/hub/friend',{method:'POST',body:{user_id:id,action:j.relationship==='incoming'?'accept':'request'}}).then(function(r){if(!r.ok)throw new Error(r.error);close();window.VaultcastHub.invalidate();A.toast('Friend request updated');if(active)active.refreshList();});},'primary'));
