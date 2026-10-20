@@ -4555,7 +4555,7 @@ try {
 
   function applyTheme(){
     var theme = state.user && state.user.prefs && state.user.prefs.theme || state.settings && state.settings.theme || 'dark';
-    document.body.setAttribute('data-theme', ['dark','light','retro-scifi','steampunk','vintage-tv','after-hours','ninja-extreme','anime'].indexOf(theme)>=0 ? theme : 'dark');
+    document.body.setAttribute('data-theme', ['dark','light','retro-scifi','steampunk','vintage-tv','after-hours','ninja-extreme','anime','manly-man'].indexOf(theme)>=0 ? theme : 'dark');
     try{document.body.classList.toggle('ninja-calm',localStorage.getItem('vaultcast.ninjaCalm')==='1');}catch(ignore){}
   }
   function ninjaCalm(enabled){
@@ -7738,6 +7738,7 @@ try {
             h('option', { value: 'after-hours', text: 'Each day we stray further from god... (adult)', selected: prefs.theme === 'after-hours' }),
             h('option', { value: 'ninja-extreme', text: 'Ninja Extreme', selected: prefs.theme === 'ninja-extreme' }),
             h('option', { value: 'anime', text: 'Anime Dreamscape', selected: prefs.theme === 'anime' }),
+            h('option', { value: 'manly-man', text: 'MANLY MAN THEME', selected: prefs.theme === 'manly-man' }),
             h('option', { value: 'light', text: 'Light', selected: prefs.theme === 'light' })
           ])]),
           h('label', {}, ['New password (optional)', h('input', { id: 'pw', type: 'password', placeholder: 'Leave blank to keep' })]),

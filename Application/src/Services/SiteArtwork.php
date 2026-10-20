@@ -30,7 +30,7 @@ final class SiteArtwork {
         $custom=self::path($kind);
         $name=(in_array($kind,self::SECTIONS,true)?'home-'.$kind:$kind.'-poster').'.jpg';
         $theme=is_string($_GET['theme']??null)?$_GET['theme']:'dark';
-        $themed=in_array($theme,['anime'],true)?STREAM_ROOT.'/assets/img/themes/'.$theme.'/'.$name:'';
+        $themed=in_array($theme,['anime','manly-man'],true)?STREAM_ROOT.'/assets/img/themes/'.$theme.'/'.$name:'';
         // A site upload always wins, independently of the viewing user's theme.
         $path=is_file($custom)?$custom:($themed!==''&&is_file($themed)?$themed:STREAM_ROOT.'/assets/img/'.$name);
         $info=@getimagesize($path);if (!$info) json_error('Poster unavailable',404);

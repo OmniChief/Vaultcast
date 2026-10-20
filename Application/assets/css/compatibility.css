@@ -93,3 +93,15 @@ body.compat-anime{background:#181a33;color:#fff0f5}.compat-anime a{color:#f4b6d1
 .compat-anime .compat-note,.compat-anime .compat-footer,.compat-anime small{color:#cbc8e4}.compat-anime .compat-message.mine{background:#3a405e;border-left-color:#92e3d8}
 .compat-anime button:focus,.compat-anime a:focus,.compat-anime input:focus,.compat-anime select:focus,.compat-anime textarea:focus{outline-color:#92e3d8;background:#46466a;color:#fff;box-shadow:0 0 0 5px #2c304d}
 .compat-anime .compat-centre-play{background:#3b405e;border-color:#f4b6d1;color:#fff0f5}
+
+body.compat-manly-man{background:#10191c;color:#f5ecdc}.compat-manly-man a{color:#ffc073}
+.compat-manly-man .compat-header,.compat-manly-man .compat-subnav{background:#17282d;border-color:#b9854e}
+.compat-manly-man .compat-hero,.compat-manly-man .compat-panel,.compat-manly-man .compat-fields,.compat-manly-man .compat-message{background:#1e3036;color:#f5ecdc;border:3px solid #73877c;border-bottom:5px solid #b9854e;border-radius:5px}
+.compat-manly-man h1,.compat-manly-man h2,.compat-manly-man h3{font-family:Impact,"Arial Narrow",sans-serif;text-transform:uppercase;letter-spacing:.025em;color:#ffdfaa}
+.compat-manly-man button,.compat-manly-man a.compat-button{background:#344a4f;color:#f5ecdc;border:2px solid #9a9f85;border-bottom:4px solid #bb8955;border-radius:4px;font-weight:bold;text-transform:uppercase}
+.compat-manly-man input,.compat-manly-man select,.compat-manly-man textarea{background:#14252b;color:#f5ecdc;border-color:#879b8e;border-radius:4px}
+.compat-manly-man .compat-card,.compat-manly-man .compat-card strong,.compat-manly-man .compat-card small{background:#1e3036;color:#f5ecdc;border-color:#879b8e;border-radius:4px}
+.compat-manly-man .compat-logo,.compat-manly-man .compat-nav a.active,.compat-manly-man .compat-subnav a.active,.compat-manly-man .compat-alphabet a.active{background:#e9b77d;color:#19292e;border-color:#ffe0ad}
+.compat-manly-man .compat-note,.compat-manly-man .compat-footer,.compat-manly-man small{color:#c3c8bf}.compat-manly-man .compat-message.mine{background:#314a50;border-left-color:#d5ad7b}
+.compat-manly-man button:focus,.compat-manly-man a:focus,.compat-manly-man input:focus,.compat-manly-man select:focus,.compat-manly-man textarea:focus{outline-color:#ffd69a;background:#425d60;color:#fff6e3;box-shadow:0 0 0 5px #23373c}
+.compat-manly-man .compat-centre-play{background:#344a4f;border-color:#ffd69a;color:#ffe0ad}
