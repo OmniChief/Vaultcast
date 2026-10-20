@@ -276,7 +276,7 @@
       window.VaultcastHomeExtras.details(it,root);
       request('title?key='+encodeURIComponent(key)).then(function(j){
         if(!root.isConnected || root._hubDetailGeneration!==generation)return;
-        var rating=h('div',{className:'hub-rating',text:j.rating===null?'Be the first to rate this title':'🪕 '+j.rating+' / 10 · '+j.rating_count+' community ratings'}),synopsis=root.querySelector('.synopsis');
+        var rating=h('div',{className:'hub-rating',text:j.rating===null?'Be the first to rate this title':'★ '+j.rating+' / 10 · '+j.rating_count+' community ratings'}),synopsis=root.querySelector('.synopsis');
         if(synopsis)synopsis.parentNode.insertBefore(rating,synopsis);else if(hero)hero.appendChild(rating);
         var bs=actions.querySelectorAll('button');if(bs[0]){bs[0].textContent=j.favourite?'♥ Favourited':'♡ Favourite';bs[0].classList.toggle('selected',j.favourite);}if(bs[1]){bs[1].textContent=j.watchlist?'✓ On watchlist':'+ Watchlist';bs[1].classList.toggle('selected',j.watchlist);}
         // Seed the action state as well as the labels before the first click.
@@ -287,11 +287,11 @@
         if(j.episodes && Object.keys(j.episodes).length){var eps=Object.keys(j.episodes),seen=eps.filter(function(id){return j.episodes[id].watched;}).length;content.appendChild(h('p',{className:'hub-episode-progress',text:seen+' of '+eps.length+' available episodes watched'}));}
         if(signed() && it.media_kind==='video' && !it.show)content.appendChild(button('Mark watched',function(){request('watched',{item_id:it.id,watched:true}).then(function(){A.toast('Marked watched');loaded=0;refreshContinue();}).catch(error);}));
         if(signed()){
-          var mine=j.own_review||j.reviews.find(function(r){return r.user.id===A.state.user.id;}),text=h('textarea',{maxlength:2000,rows:3,placeholder:'Your take. Keep it kind.','aria-label':'Your review',value:mine?mine.text:''}),ratingSelect=h('select',{'aria-label':'Your rating'},[h('option',{value:0,text:'No rating'})].concat(Array.from({length:10},function(_,i){return h('option',{value:i+1,text:'🪕 '+(i+1)+' / 10',selected:mine && mine.rating===i+1});})));
+          var mine=j.own_review||j.reviews.find(function(r){return r.user.id===A.state.user.id;}),text=h('textarea',{maxlength:2000,rows:3,placeholder:'Your take. Keep it kind.','aria-label':'Your review',value:mine?mine.text:''}),ratingSelect=h('select',{'aria-label':'Your rating'},[h('option',{value:0,text:'No rating'})].concat(Array.from({length:10},function(_,i){return h('option',{value:i+1,text:'★ '+(i+1)+' / 10',selected:mine && mine.rating===i+1});})));
           content.appendChild(h('div',{className:'hub-review-form'},[text,h('div',{className:'hub-hero-actions'},[ratingSelect,button(mine?'Update review':'Post review',function(e){var target=e.currentTarget;target.disabled=true;request('review',{key:j.card.hub_key,text:text.value,rating:Number(ratingSelect.value)}).then(function(){A.refreshCommunityRating(j.card.hub_key);details(it,root);}).catch(function(err){target.disabled=false;error(err);});},'primary')])]));
         }else content.appendChild(empty('Sign in to rate and join the conversation.'));
         j.reviews.forEach(function(r){
-          var comment=h('details',{className:'hub-review'},[h('summary',{},[avatar(r.user),h('strong',{text:r.user.name}),h('span',{text:r.rating?'🪕 '+r.rating+'/10':'Comment'}),h('small',{text:'Open review · may contain spoilers'})]),h('p',{text:r.text})]);
+          var comment=h('details',{className:'hub-review'},[h('summary',{},[avatar(r.user),h('strong',{text:r.user.name}),h('span',{text:r.rating?'★ '+r.rating+'/10':'Comment'}),h('small',{text:'Open review · may contain spoilers'})]),h('p',{text:r.text})]);
           if(signed() && (r.user.id===A.state.user.id||A.state.user.role==='admin'))comment.appendChild(button('Delete',function(){request('review',{key:j.card.hub_key,user_id:r.user.id,delete:true}).then(function(){A.refreshCommunityRating(j.card.hub_key);details(it,root);}).catch(error);}));content.appendChild(comment);
         });
         window.VaultcastHomeExtras.spoilers(root,j.episodes||{});
