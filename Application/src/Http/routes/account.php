@@ -126,7 +126,7 @@ if ($path === '/me/prefs' && $method === 'POST') {
             }
             if(array_key_exists('motion_mode',$b)){$prefs['motion_mode']=$b['motion_mode'];$prefs['reduce_motion']=$b['motion_mode']==='reduced';}
             elseif(array_key_exists('reduce_motion',$b)){$prefs['reduce_motion']=in_array($b['reduce_motion'],[true,1,'1','true'],true);$prefs['motion_mode']=$prefs['reduce_motion']?'reduced':'full';}
-            foreach (['autoplay_on_open','autoplay_next','skip_segments','auto_skip_intro','auto_skip_outro'] as $key) if(array_key_exists($key,$b)) $prefs[$key]=!empty($b[$key]);
+            foreach (['autoplay_on_open','autoplay_next','mini_player','skip_segments','auto_skip_intro','auto_skip_outro'] as $key) if(array_key_exists($key,$b)) $prefs[$key]=!empty($b[$key]);
             if (array_key_exists('hide_spoilers',$b)) $prefs['hide_spoilers']=!empty($b['hide_spoilers']);
             if (array_key_exists('home_compact',$b)) $prefs['home_compact']=!empty($b['home_compact']);
             if (array_key_exists('home_panels',$b) && is_array($b['home_panels'])) $prefs['home_panels']=array_values(array_unique(array_intersect($b['home_panels'],['recent','games','watchlist','friends','calendar','stats'])));

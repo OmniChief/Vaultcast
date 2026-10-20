@@ -1327,6 +1327,7 @@ function confirmDialog(message, opts){
 
   function playItem(item, opts){
     opts = opts || {};
+    if(!opts.fromStart&&!item._sequenceFromStart&&restoreMiniVideo('item:'+item.id,document.getElementById('detail-player')))return;
     if (!opts.inline && !opts.lobby) {
       if (item.media_kind === 'rom' || item.type === 'roms') { openGame(item); return; }
       if (item.show_key && (state.view !== 'show' || String(state.showKey) !== String(item.show_key))) { state._pendingEpisode = item; openShow(item.show_key, item.season, item.episode); return; }
@@ -1458,6 +1459,7 @@ function confirmDialog(message, opts){
   function openPlayer(item, play){
     /* Keep the active lobby when opening its game. */
     closePlayer({ preserveLobby: !!(openPlayer._lobbyOpts) });
+    stopRadio();
     openPlayer._deskPlayStarted = false;
     openPlayer._deskRecoverTries = 0;
     openPlayer._deskRecovering = false;
@@ -1576,6 +1578,10 @@ function confirmDialog(message, opts){
     });
 
     overlay.appendChild(media);
+    if(media.tagName==='VIDEO'&&typeof play.hub_cinema_guest==='undefined'){
+      overlay._miniKey='item:'+item.id;overlay._miniTitle=item.show?(item.show+' · '+item.title):item.title;
+      overlay._miniReturn=function(){if(item.show_key){state._pendingEpisode=item;openShow(item.show_key,item.season,item.episode);}else openMovie(item.id);};
+    }
     if (media.tagName==='VIDEO' && !play.hub_cinema_guest) {
       addCentrePlay(overlay,media,function(){
         var request=media.play();
@@ -1591,13 +1597,13 @@ function confirmDialog(message, opts){
       });
       var nextControl=h('label',{className:'player-auto-next'},[autoNext,play.sequence_collection?' Play collection in order':' Play next episode']);
       // Mount below the audio controls once the player tools exist.
-      var nextBusy=false,sequenceRequest=_playRequestId;
+      var nextBusy=false;
       media.addEventListener('ended',function(){
         if(!autoNext.checked || nextBusy || !overlay.isConnected)return;
         nextBusy=true;
         postProgress(item.id,openPlayer._absDuration?openPlayer._absDuration():(media.duration||0),openPlayer._absDuration?openPlayer._absDuration():(media.duration||0));
         api('/items/'+encodeURIComponent(item.id)+'/next'+(play.sequence_collection?'?collection='+encodeURIComponent(play.sequence_collection):'')).then(function(result){
-          if(!overlay.isConnected || sequenceRequest!==_playRequestId || !autoNext.checked || !media.ended)return;
+          if(!overlay.isConnected || !autoNext.checked || !media.ended)return;
           if(!result.ok)throw new Error(result.error || 'Could not open the next title');
           if(!result.item){toast('You have reached the end.');return;}
           var next=result.item;next._sequenceFromStart=true;
@@ -1825,8 +1831,45 @@ function confirmDialog(message, opts){
     } catch (eR) {}
   }
 
+  var miniVideo=null;
+  function moveVideoContainer(parent,node){if(typeof parent.moveBefore==='function'&&parent.isConnected&&node.isConnected){try{parent.moveBefore(node,null);return;}catch(ignore){}}parent.appendChild(node);}
+  function resumeMovedVideo(media,playing){if(playing&&media.paused){var promise=media.play();if(promise&&promise.catch)promise.catch(function(){});}}
+  function restoreMiniVideo(key,host){
+    var active=miniVideo;
+    if(!active||!host||active.overlay._miniKey!==key||active.owner!==(state.user&&state.user.id))return false;
+    var playing=!active.media.paused&&!active.media.ended;
+    active.overlay.classList.remove('player-mini');active.overlay.classList.add('player-inline');
+    active.media.controls=active.controls;moveVideoContainer(host,active.overlay);
+    if(active.tools)host.insertAdjacentElement('afterend',active.tools);
+    active.cleanup();active.shell.remove();miniVideo=null;document.body.classList.remove('video-mini-playing');
+    resumeMovedVideo(active.media,playing);return true;
+  }
+  function minimizeVideo(){
+    var overlay=document.getElementById('player-overlay'),media=overlay&&overlay.querySelector('video');
+    if(!overlay||!overlay._miniKey||!media||!overlay.classList.contains('player-inline')||(state.user&&state.user.prefs||{}).mini_player===false||media.ended)return false;
+    var host=overlay.closest('.detail-player'),tools=host&&host.nextElementSibling;
+    if(!tools||!tools.classList.contains('detail-player-tools'))tools=null;
+    var playing=!media.paused&&!media.ended,controls=media.controls;
+    var shell=h('aside',{className:'video-mini-player','aria-label':'Mini video player'}),heading=h('div',{className:'video-mini-heading'});
+    heading.appendChild(h('button',{type:'button',className:'video-mini-return',text:overlay._miniTitle||'Now playing',title:'Return to the full player',onClick:function(){if(overlay._miniReturn)overlay._miniReturn();}}));
+    var toggle=h('button',{type:'button',className:'video-mini-toggle','aria-label':media.paused?'Play video':'Pause video',text:media.paused?'▶':'Ⅱ',onClick:function(){if(media.paused){var promise=media.play();if(promise&&promise.catch)promise.catch(function(){toast('Press play on the video to resume.');});}else media.pause();}});
+    function updateMiniControls(){toggle.textContent=media.paused?'▶':'Ⅱ';toggle.setAttribute('aria-label',media.paused?'Play video':'Pause video');}
+    media.addEventListener('play',updateMiniControls);media.addEventListener('pause',updateMiniControls);
+    heading.appendChild(toggle);
+    heading.appendChild(h('button',{type:'button',className:'video-mini-close',text:'×','aria-label':'Stop and close video',onClick:function(){closePlayer();}}));
+    shell.appendChild(heading);document.body.appendChild(shell);
+    overlay.classList.remove('player-inline');overlay.classList.add('player-mini');moveVideoContainer(shell,overlay);
+    if(tools)shell.appendChild(tools);
+    miniVideo={shell:shell,overlay:overlay,media:media,tools:tools,controls:controls,owner:state.user&&state.user.id,cleanup:function(){media.removeEventListener('play',updateMiniControls);media.removeEventListener('pause',updateMiniControls);}};
+    document.body.classList.add('video-mini-playing');resumeMovedVideo(media,playing);return true;
+  }
+  function leavePlayerForNavigation(){
+    if(miniVideo){if((state.user&&state.user.prefs||{}).mini_player===false||miniVideo.owner!==(state.user&&state.user.id))closePlayer();return;}
+    if(!minimizeVideo())closePlayer({preserveLobby:!!state._openingLobby});
+  }
   function closePlayer(opts){
     opts = opts || {};
+    var miniShell=miniVideo&&miniVideo.shell;if(miniVideo)miniVideo.cleanup();miniVideo=null;document.body.classList.remove('video-mini-playing');
     if (state.view !== 'game') state.gamePath = null;
     openPlayer._absTime = null; openPlayer._absDuration = null; openPlayer._seekAbsolute = null;
     if (!opts.preserveLobby) {
@@ -1854,6 +1897,7 @@ function confirmDialog(message, opts){
       try { o.innerHTML = ''; } catch (eI) {}
       try { o.remove(); } catch (eR) { if (o.parentNode) o.parentNode.removeChild(o); }
     }
+    if(miniShell)miniShell.remove();
     /* Drop any stray emulator canvases/iframes left outside the overlay. */
     try {
       var stray = document.querySelectorAll('canvas.ejs--canvas, iframe.ejs--iframe, #emu-root');
@@ -1870,7 +1914,7 @@ function confirmDialog(message, opts){
       applyRoute().then(function(){render();replaceNav();}).catch(function(){state.view='play';state.playTab='lobby';render();}).then(function(){_navSilent=false;});
       return;
     }
-    if (document.getElementById('player-overlay') && !document.querySelector('.player-inline')) {
+    if (document.getElementById('player-overlay') && !document.querySelector('.player-inline,.player-mini')) {
       closePlayer();
       return;
     }
@@ -4362,7 +4406,7 @@ try {
     if (!upgradeLegacyHash()) return;
     if (state.view === 'welcome' || state.view === 'login') { rememberReturnPath(); return; }
     if (!state.home) return;
-    applyRoute().then(function(){ closePlayer(); _navSilent = true; render(); _navSilent = false; });
+    applyRoute().then(function(){ leavePlayerForNavigation(); _navSilent = true; render(); _navSilent = false; });
   });
   /* Share: copies the absolute link of the current page (or a given path). */
   function copyText(text){
@@ -5715,7 +5759,8 @@ try {
   }
 
   function startLivePlayer(chId,inlineHost){
-    closePlayer();
+    if(restoreMiniVideo('live:'+chId,inlineHost))return;
+    closePlayer();stopRadio();
     var list = liveChannels();
     if (!list.length) { toast('No live channels'); return; }
     var idx = 0;
@@ -5782,6 +5827,7 @@ try {
       guide,
       epgFull
     ]);
+    overlay._miniKey='live:'+chId;overlay._miniTitle=(list[idx]&&list[idx].name)||'Live television';overlay._miniReturn=function(){openLiveChannel(lp.ch?lp.ch.id:chId);};
     addCentrePlay(overlay,video,safePlay);
     if(inlineHost)overlay.setAttribute('tabindex','0');
     (inlineHost||document.body).appendChild(overlay);
@@ -6070,6 +6116,7 @@ try {
       var n = list.length;
       lp.idx = ((i % n) + n) % n;
       lp.ch = list[lp.idx];
+      overlay._miniKey='live:'+lp.ch.id;overlay._miniTitle=lp.ch.name;
       lp.errors = 0;
       lp.block = null;
       lp.mode = 'live';
@@ -6131,6 +6178,7 @@ try {
     btnMute.addEventListener('click', function(){ video.muted = !video.muted; btnMute.innerHTML = video.muted ? ICONS.mute : ICONS.vol; });
     vol.addEventListener('input', function(){ video.volume = +vol.value; video.muted = +vol.value === 0; btnMute.innerHTML = video.muted ? ICONS.mute : ICONS.vol; });
     overlay.addEventListener('click', function(e){
+      if(overlay.classList.contains('player-mini'))return;
       if (e.target === video || e.target.classList.contains('lp-chrome')) {
         if (overlay.classList.contains('needs-tap') || video.paused) safePlay();
         if (lp.guideOpen) toggleGuide(false);
@@ -6147,6 +6195,7 @@ try {
     overlay.addEventListener('touchstart', wake, { passive:true });
     lp.keyH = function(e){
       if (!document.getElementById('player-overlay')) return;
+      if(overlay.classList.contains('player-mini'))return;
       if(inlineHost&&!overlay.contains(document.activeElement)&&document.fullscreenElement!==overlay)return;
       var tag = (e.target && e.target.tagName || '').toLowerCase();
       if (tag === 'input' && e.target.type !== 'range') return;
@@ -7791,6 +7840,7 @@ try {
             h('option',{value:'system',text:'Follow device',selected:motionPreference(prefs)==='system'}),h('option',{value:'full',text:'Full animation',selected:motionPreference(prefs)==='full'}),h('option',{value:'reduced',text:'Reduced motion',selected:motionPreference(prefs)==='reduced'})])]),
           h('p',{id:'motion-state',className:'muted',role:'status',text:motionDescription(motionPreference(prefs))}),
           h('label', { className: 'check-label' }, [ h('input', { id: 'autoplay', type: 'checkbox', checked: prefs.autoplay_on_open !== false }), ' Automatically start videos when opened' ]),
+          h('label', {className:'check-label mini-player-setting'}, [h('input',{id:'mini_player',type:'checkbox',role:'switch',checked:prefs.mini_player!==false}), ' Keep video playing in a mini player when leaving the page']),
           h('label', { className:'check-label' }, [ h('input', { id:'autoplay_next', type:'checkbox', checked:prefs.autoplay_next !== false }), ' Automatically play the next episode / collection film' ]),
           h('label',{className:'check-label'},[h('input',{id:'skip_segments',type:'checkbox',checked:prefs.skip_segments!==false}),' Offer TV / anime intro and credits skipping, and movie credits (TheIntroDB)']),
           h('label',{className:'check-label'},[h('input',{id:'auto_skip_intro',type:'checkbox',checked:!!prefs.auto_skip_intro}),' Automatically skip TV / anime intros']),
@@ -7979,6 +8029,7 @@ try {
       autoplay: $('#autoplay').checked,
       autoplay_on_open: $('#autoplay').checked,
       autoplay_next: $('#autoplay_next').checked,
+      mini_player: $('#mini_player').checked,
       skip_segments:$('#skip_segments').checked,
       auto_skip_intro:$('#auto_skip_intro').checked,
       auto_skip_outro:$('#auto_skip_outro').checked,
@@ -14451,6 +14502,7 @@ function viewCollectionDetail(){
   }
   function showWelcome(){
     if(radioState&&radioState.station)stopRadio();
+    closePlayer();
     rememberReturnPath();
     state.view = 'welcome';
     _navSilent = true;
@@ -14594,7 +14646,7 @@ function viewCollectionDetail(){
   function navigate(view, sectionId){
     /* Closing Play / leaving the page while a game is open must stop audio. */
     if (document.getElementById('player-overlay')) {
-      try { closePlayer(); } catch (eNavClose) {}
+      try { leavePlayerForNavigation(); } catch (eNavClose) {}
     }
     if (view === 'play') { var rsP = romsSection(); if (rsP) sectionId = rsP.id; }
     if (view === 'section' && sectionId) {
@@ -14645,7 +14697,7 @@ function viewCollectionDetail(){
       }
     }
     _playRequestId++;
-    if (document.querySelector('.player-inline')) closePlayer({preserveLobby:!!state._openingLobby});
+    if (document.querySelector('.player-inline')||miniVideo) leavePlayerForNavigation();
     if (state.view !== 'game') state.gameLobby = null;
     if (state.view !== 'game') state.gamePath = null;
     if ((state.view === 'section' || state.view === 'show') && root.firstChild) {
