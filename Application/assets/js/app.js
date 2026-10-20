@@ -4558,13 +4558,14 @@ try {
     document.body.setAttribute('data-theme', ['dark','light','retro-scifi','steampunk','vintage-tv'].indexOf(theme)>=0 ? theme : 'dark');
   }
   function librarySummary(home){home=home||state.home||{};return (home.item_count||0)+' titles available';}
+  function clockFace(children){return [h('div',{className:'hero-clock-face'},children),h('span',{className:'tv-clock-tuner','aria-hidden':'true'})];}
   function heroClock(meta){
     var now=new Date();
-    return h('div',{className:'live-hero-side hero-clock-panel'},[
+    return h('div',{className:'live-hero-side hero-clock-panel'},clockFace([
       h('time',{className:'live-clock hero-clock',text:fmtClock(now.getTime())}),
       h('div',{className:'muted hero-date',text:now.toLocaleDateString([], {weekday:'long',day:'numeric',month:'long'})}),
       meta?h('div',{className:'hero-clock-meta',text:meta}):null
-    ]);
+    ]));
   }
   function homePosterEl(){return h('div',{className:'page-hero-poster home-hero-poster'},[h('img',{src:BASE+'api/site/home-poster',alt:'Home artwork',width:512,height:768,decoding:'async'})]);}
   function homeSectionPosterEl(tab){if(['cinema','watchlist','favourites','calendar','arrivals','friends','history','stats'].indexOf(tab)<0)return homePosterEl();return h('div',{className:'page-hero-poster home-hero-poster'},[h('img',{src:BASE+'api/site/home-section/'+tab,alt:'Artwork for '+({cinema:'Watch together',calendar:'Release calendar',arrivals:'New episodes',stats:'Game stats'}[tab]||tab),width:512,height:768,decoding:'async'})]);}
@@ -5264,7 +5265,7 @@ try {
         h('button',{className:'btn',text:'On now',onClick:function(){goLiveTab('now');}}),
         h('button',{className:'btn',text:tab==='radio'?'Browse stations':'Programme guide',onClick:function(){if(tab==='radio')radioDirectory();else{var guide=document.getElementById('live-guide');if(guide)guide.scrollIntoView({behavior:'smooth',block:'start'});}}})
       ])]),
-      h('div',{className:'live-hero-side'},[heroArt('live'),h('div',{className:'live-clock',id:'live-clock',text:fmtClock(Date.now())}),h('div',{className:'live-count',text:total+(tab==='radio'?' stations':' channels')})])
+      h('div',{className:'live-hero-side vintage-clock-tv'},clockFace([h('div',{className:'live-clock',id:'live-clock',text:fmtClock(Date.now())}),h('div',{className:'live-count',text:total+(tab==='radio'?' stations':' channels')})]).concat([heroArt('live')]))
     ]);
   }
   var radioState={resizeObserver:null,stations:null,loaded:0,pending:null,audio:null,station:null,hls:null,token:0,status:'',bar:null};
@@ -5468,11 +5469,11 @@ try {
     }
     if (!feat) feat = pool[0] || null;
     var now = Date.now();
-    var right = h('div', { className:'live-hero-side' }, [heroArt('live'),
+    var right = h('div', { className:'live-hero-side vintage-clock-tv' }, clockFace([
       h('div', { className:'live-clock', id:'live-clock', text: fmtClock(now) }),
       h('div', { className:'muted', text: new Date(now).toLocaleDateString([], { weekday:'long', day:'numeric', month:'long' }) }),
       h('div', { className:'live-count', text: total + ' channel' + (total === 1 ? '' : 's') + ' live' })
-    ]);
+    ]).concat([heroArt('live')]));
     if (!feat) {
       return h('section', { className:'live-hero', id:'live-top' }, [
         h('div', { className:'live-hero-copy' }, [ h('div', { className:'eyebrow', text:'Live' }), h('h1', { text:'Nothing on air' }),

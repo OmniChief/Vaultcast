@@ -574,3 +574,23 @@ body[data-theme="vintage-tv"] .hub-card-save,body[data-theme="vintage-tv"] .comm
 }
 @media(max-width:900px){body[data-theme="vintage-tv"] .hero-art,body[data-theme="vintage-tv"] .hub-orbit{right:-150px;opacity:.2}}
 @media(max-width:540px){body[data-theme="vintage-tv"] .page-hero,body[data-theme="vintage-tv"] .hub-hero{border-width:4px;border-radius:20px}body[data-theme="vintage-tv"] .hero-clock-panel{padding:10px 13px}body[data-theme="vintage-tv"] .page-hero .eyebrow{letter-spacing:.07em}}
+
+/* The Vintage TV is the working clock, rather than a separate background prop. */
+.tv-clock-tuner{display:none}
+body[data-theme="vintage-tv"] .hero-art,body[data-theme="vintage-tv"] .hub-orbit{display:none}
+body[data-theme="vintage-tv"] .hero-clock-panel,body[data-theme="vintage-tv"] .vintage-clock-tv{position:relative;isolation:isolate;box-sizing:border-box;width:300px;max-width:100%;padding:10px 54px 13px 10px;border:9px solid #795335;border-radius:22px;background:repeating-linear-gradient(3deg,#b48b5f16 0 2px,transparent 2px 7px),#483220;box-shadow:0 0 0 1px #b89665,inset 0 0 0 2px #251a10,0 6px 0 #10170f;text-align:center}
+body[data-theme="vintage-tv"] .hero-clock-panel::before,body[data-theme="vintage-tv"] .vintage-clock-tv::before{content:'';display:block;position:absolute;right:27px;top:-33px;width:90px;height:28px;margin:0;pointer-events:none;background:linear-gradient(38deg,transparent 48%,#c5b995 49% 51%,transparent 52%) left top/50% 100% no-repeat,linear-gradient(-38deg,transparent 48%,#c5b995 49% 51%,transparent 52%) right top/50% 100% no-repeat}
+body[data-theme="vintage-tv"] .hero-clock-panel::after,body[data-theme="vintage-tv"] .vintage-clock-tv::after{content:'';position:absolute;right:8px;top:72px;bottom:18px;width:31px;min-height:25px;border:1px solid #b28b58;border-radius:5px;background:repeating-linear-gradient(0deg,#1d2117 0 3px,#806342 3px 5px);pointer-events:none}
+body[data-theme="vintage-tv"] .hero-clock-face{position:relative;isolation:isolate;overflow:hidden;min-width:0;padding:17px 9px 14px;border:4px solid #151d16;border-radius:22px / 29px;background:repeating-linear-gradient(0deg,transparent 0 3px,#b9d0a20a 3px 4px),radial-gradient(ellipse at 45% 25%,#354833,#15281d 80%);box-shadow:0 0 0 2px #aa9876,inset 0 0 18px #0008;text-align:center}
+body[data-theme="vintage-tv"] .hero-clock-face::before{content:'LOCAL BROADCAST';position:relative;z-index:2;display:block;font-family:"Courier New",monospace;font-size:8px;letter-spacing:.12em;color:#b3c38f;margin-bottom:10px}
+body[data-theme="vintage-tv"] .hero-clock-face::after{content:'';position:absolute;inset:0;pointer-events:none;z-index:1;background:linear-gradient(0deg,transparent 30%,#d9ebbf13 48%,transparent 65%)}
+body[data-theme="vintage-tv"] .hero-clock-face .live-clock{position:relative;z-index:2;display:block;font-family:"Courier New",monospace;font-size:clamp(1.8rem,3vw,2.65rem);font-weight:bold;line-height:1.15;letter-spacing:0;color:#d8e7b0;text-shadow:0 0 9px #c1d99835;white-space:nowrap}
+body[data-theme="vintage-tv"] .hero-clock-face .hero-date,body[data-theme="vintage-tv"] .hero-clock-face .muted,body[data-theme="vintage-tv"] .hero-clock-face .live-count{position:relative;z-index:2;font-family:"Courier New",monospace;font-size:.66rem;line-height:1.5;margin-top:8px;color:#b8c5a0;overflow-wrap:anywhere}
+body[data-theme="vintage-tv"] .hero-clock-face .hero-clock-meta{position:relative;z-index:2;font-family:"Courier New",monospace;font-size:.66rem;margin-top:8px;font-weight:400;color:#d3d4a4}
+body[data-theme="vintage-tv"] .tv-clock-tuner{display:block;position:absolute;right:9px;top:20px;width:26px;height:26px;border:3px solid #d6bd8e;border-radius:50%;background:radial-gradient(circle,#705938 0 35%,#baa171 36% 65%,#55432c 66%);box-shadow:0 0 0 2px #24190f,0 3px 0 #1c140d;pointer-events:none}
+body[data-theme="vintage-tv"] .tv-clock-tuner::after{content:'';position:absolute;left:11px;top:1px;width:3px;height:10px;border-radius:2px;background:#fff0c8;transform-origin:50% 12px;transform:rotate(-35deg)}
+@media(prefers-reduced-motion:no-preference){
+ body[data-theme="vintage-tv"]:not(.reduce-motion) .hero-clock-face::after{animation:vintage-glass-roll 16s linear infinite}
+ body[data-theme="vintage-tv"]:not(.reduce-motion) .tv-clock-tuner::after{animation:vintage-tuning 24s steps(8,end) infinite}
+}
+@media(max-width:540px){body[data-theme="vintage-tv"] .hero-clock-panel,body[data-theme="vintage-tv"] .vintage-clock-tv{padding:9px 48px 11px 9px;border-width:7px;margin-top:18px}body[data-theme="vintage-tv"] .hero-clock-face{padding:14px 8px}body[data-theme="vintage-tv"] .hero-clock-face .live-clock{font-size:1.65rem}}
