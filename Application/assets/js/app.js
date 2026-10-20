@@ -4425,6 +4425,9 @@ try {
     });
   }
   document.addEventListener('vaultcast-notices-changed',updateAccountIndicators);
+  function themeOptions(selected){
+    return [['dark','Dark Neon (default)'],['retro-scifi','Retro Sci-Fi'],['steampunk','Steampunk'],['vintage-tv','Vintage TV Retro'],['after-hours','After Hours'],['ninja-extreme','Ninja Extreme'],['anime','Anime Dreamscape'],['manly-man','MANLY MAN THEME'],['light','Light']].map(function(theme){return h('option',{value:theme[0],text:theme[1],selected:theme[0]===(selected||'dark')});});
+  }
   function openAccountDrawer(trigger){
     if(accountDrawerClose){accountDrawerClose();return;}
     var user=state.user,owner=user&&user.id,signed=!!(user&&user.role!=='guest'),previous=document.activeElement,app=$('#app'),oldInert=app&&app.inert;
@@ -4443,7 +4446,7 @@ try {
     function keys(e){
       if(e.key==='Escape'){e.preventDefault();e.stopImmediatePropagation();close();}
       if(e.key==='Tab'){
-        var nodes=Array.from(drawer.querySelectorAll('button:not([disabled]),a[href],input,[tabindex="0"]')).filter(function(el){return !el.hidden&&el.getClientRects().length;});
+        var nodes=Array.from(drawer.querySelectorAll('button:not([disabled]),a[href],input,select:not([disabled]),[tabindex="0"]')).filter(function(el){return !el.hidden&&el.getClientRects().length;});
         var first=nodes[0],last=nodes[nodes.length-1];
         if(!first){e.preventDefault();drawer.focus();}
         else if(e.shiftKey&&(document.activeElement===first||!drawer.contains(document.activeElement))){e.preventDefault();last.focus();}
@@ -4460,7 +4463,28 @@ try {
       group('Stay connected',[action('Private inbox',function(){hub('inbox');},'mail'),action('Chat & direct messages',function(){hub('chat');},'dm'),action('Invitations',function(){hub('inbox');},'invites'),action('Friends',function(){hub('friends');}),action('Watch together',function(){hub('cinema');})]);
       if(userAreaAllowed('games'))group('Your games',[action('Cloud saves',function(){openSettings('cloud-saves');}),action('Game statistics',function(){hub('stats');})]);
     }else group('Get started',[action('Sign in',function(){navigate('login');})]);
-    group('Preferences',[action('For you',function(){hub('overview');}),action('Account & playback',function(){openSettings('account');}),signed&&user.role==='admin'?action('Check for updates',function(){openSettings('updates');}):null,action('Settings',function(){openSettings(signed&&user.role==='admin'?'general':'account');})]);
+    var themeSelect=signed?h('select',{id:'account-quick-theme','aria-label':'Theme',onChange:function(){
+      var selected=themeSelect.value;themeSelect.disabled=true;
+      api('/me/prefs',{method:'POST',body:{theme:selected}}).then(function(j){
+        if(owner!==(state.user&&state.user.id))return;
+        if(!j.ok)throw new Error(j.error||'Could not save theme');
+        state.user.prefs=Object.assign({},state.user.prefs,{theme:selected});
+        applyTheme();
+        document.querySelectorAll('img[data-site-artwork]').forEach(function(img){
+          var kind=img.getAttribute('data-site-artwork');
+          if(!siteArtworkCustom(kind))img.src=siteArtworkUrl(kind);
+        });
+        var settingsTheme=document.getElementById('theme');if(settingsTheme)settingsTheme.value=selected;
+        document.querySelectorAll('.ninja-training-open').forEach(function(button){button.remove();});
+        if(selected==='ninja-extreme'){
+          var clock=document.querySelector('#app .hero-clock-face');
+          if(clock)clock.appendChild(h('button',{type:'button',className:'btn ghost ninja-training-open',text:document.body.classList.contains('ninja-calm')?'★ Ninja training · Calm':'★ Ninja training',title:'Ninja training and calm-mode controls',onClick:ninjaTraining}));
+        }
+      }).catch(function(error){
+        if(owner===(state.user&&state.user.id)){themeSelect.value=state.user.prefs&&state.user.prefs.theme||'dark';toast(error.message||'Could not save theme',{kind:'bad'});}
+      }).then(function(){themeSelect.disabled=false;});
+    }},themeOptions(user.prefs&&user.prefs.theme)):null;
+    group('Preferences',[themeSelect?h('label',{className:'account-drawer-theme'},[h('span',{text:'Theme'}),themeSelect]):null,action('For you',function(){hub('overview');}),action('Account & playback',function(){openSettings('account');}),signed&&user.role==='admin'?action('Check for updates',function(){openSettings('updates');}):null,action('Settings',function(){openSettings(signed&&user.role==='admin'?'general':'account');})]);
     if(signed)drawer.appendChild(action('Sign out',function(){
       api('/logout',{method:'POST'}).then(function(result){
         if(!result.ok)throw new Error(result.error||'Could not sign out');
@@ -7758,17 +7782,7 @@ try {
           h('label', {}, ['Display name', h('input', { id: 'dn', value: u.display_name || '' })]),
           h('div', {className:'profile-avatar-editor'}, [profileAvatar(u), h('label', {}, ['Avatar (JPEG, PNG or WebP, up to 1 MB)', h('input', {id:'profile_avatar', type:'file', accept:'image/jpeg,image/png,image/webp'})])]),
           h('label', {className:'check-label'}, [h('input', {id:'remove_avatar', type:'checkbox'}), 'Remove avatar (use initials)']),
-          h('label', {}, ['Theme', h('select', { id: 'theme' }, [
-            h('option', { value: 'dark', text: 'Dark Neon (default)', selected: !prefs.theme || prefs.theme === 'dark' }),
-            h('option', { value: 'retro-scifi', text: 'Retro Sci-Fi', selected: prefs.theme === 'retro-scifi' }),
-            h('option', { value: 'steampunk', text: 'Steampunk', selected: prefs.theme === 'steampunk' }),
-            h('option', { value: 'vintage-tv', text: 'Vintage TV Retro', selected: prefs.theme === 'vintage-tv' }),
-            h('option', { value: 'after-hours', text: 'Each day we stray further from god... (adult)', selected: prefs.theme === 'after-hours' }),
-            h('option', { value: 'ninja-extreme', text: 'Ninja Extreme', selected: prefs.theme === 'ninja-extreme' }),
-            h('option', { value: 'anime', text: 'Anime Dreamscape', selected: prefs.theme === 'anime' }),
-            h('option', { value: 'manly-man', text: 'MANLY MAN THEME', selected: prefs.theme === 'manly-man' }),
-            h('option', { value: 'light', text: 'Light', selected: prefs.theme === 'light' })
-          ])]),
+          h('label', {}, ['Theme', h('select', { id: 'theme' }, themeOptions(prefs.theme))]),
           h('label', {}, ['New password (optional)', h('input', { id: 'pw', type: 'password', placeholder: 'Leave blank to keep' })]),
           h('label',{},['Theme motion',h('select',{id:'motion_mode','aria-describedby':'motion-state',onChange:applyMotion},[
             h('option',{value:'system',text:'Follow device',selected:motionPreference(prefs)==='system'}),h('option',{value:'full',text:'Full animation',selected:motionPreference(prefs)==='full'}),h('option',{value:'reduced',text:'Reduced motion',selected:motionPreference(prefs)==='reduced'})])]),
