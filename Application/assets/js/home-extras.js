@@ -65,6 +65,26 @@
     return {id:uid()+':'+item.id+':'+slot,owner:uid(),item:{id:item.id,title:item.title,media_kind:'rom'},slot:slot,name:name||'',signature:Number(item.mtime||0)+'|'+Number(item.size||0),variant:window.EJS_forceLegacyCores?'legacy':'modern',threaded:!!window.EJS_threads,core:emu.getCore(),engine:String(window.VaultcastDependencies.emulatorVersion),bytes:A.captureGameState(emu,32*1024*1024).buffer,captured_at:Date.now(),stamp:Date.now()+':'+Math.random()};
   }
   function queueSnapshot(item,emu,slot,name){var row=snapshot(item,emu,slot,name);return storeRow('pending',row).then(function(){return flush();}).catch(function(err){if(!navigator.onLine)throw err;return upload(row).then(notifySaves);});}
+  function quickSlotAction(emu,load){
+    return Promise.resolve().then(function(){
+      if(!signed())throw new Error('Sign in to use cloud saves.');
+      if(!emu||emu!==window.EJS_emulator||emu._streamDisposed||!emu.started||!emu._cloudItem)throw new Error('Start the game first.');
+      if(emu._cloudQuickBusy||emu._cloudRestoring)throw new Error('A save or load is already in progress.');
+      if(load&&emu.isNetplay&&(!emu.netplay||!emu.netplay.owner))throw new Error('Only the lobby host can load a save for everyone.');
+      emu._cloudQuickBusy=true;var owner=uid(),item=emu._cloudItem;
+      function current(){if(uid()!==owner||emu!==window.EJS_emulator||emu._streamDisposed)throw new Error('The account or running game changed.');}
+      return request('saves?item_id='+encodeURIComponent(item.id)).then(function(j){
+        current();var save=j.games[item.id]&&j.games[item.id].slots['1'];
+        if(load){
+          if(!save)throw new Error('Personal slot 1 is empty. Use Quick save first.');
+          return pendingInfo().then(function(rows){current();if(rows.some(function(row){return row.id===owner+':'+item.id+':1';}))throw new Error('Slot 1 has an upload pending. Retry it in cloud saves before loading.');return restore(item,'1',save);});
+        }
+        return (save?A.confirmDialog('Replace '+save.name+' in personal slot 1 with your current game?',{okText:'Quick save'}):Promise.resolve(true)).then(function(ok){
+          if(!ok)return;current();return queueSnapshot(item,emu,'1',save?save.name:'Quick save').then(function(){if(uid()===owner)A.toast('Quick save captured in personal slot 1. Upload status is shown in cloud saves.');});
+        });
+      }).finally(function(){emu._cloudQuickBusy=false;});
+    });
+  }
   function gameStarted(item){
     var emu=window.EJS_emulator;if(!signed()||!emu||emu._cloudStarted)return;emu._cloudStarted=true;emu._cloudItem=item;
     activeGame={item:item,emu:emu,owner:uid()};
@@ -207,5 +227,5 @@
     q.oninput=filter.onchange=sort.onchange=function(){limit=24;paint();};loadExtras().then(function(j){order=(j.priorities||[]).filter(function(k){return items.some(function(it){return key(it)===k;});});items.forEach(function(it){var text=it.watch_status||'';var match=text.match(/^(\d+) episodes watched/);var total=it.available_count||it.episode_count||0,seen=Number(it.watched_episodes||0);status[key(it)]=it.watched||(total>0&&seen>=total)?2:it.progress&&it.progress.position>0?1:seen>0?1:0;});if(host.isConnected)paint();}).catch(fail);
   }
   function view(tab){if(tab==='arrivals')return arrivals();if(tab==='lists')return collections();return null;}
-  window.VaultcastHomeExtras={init:function(app){A=app;window.addEventListener('online',flush);document.addEventListener('vaultcast-account-ready',recoverPending);},captureShare:function(){var token=new URLSearchParams(location.search).get('share');if(token)initialShare=token;},corePreference:function(item){return pendingLoad&&pendingLoad.owner===uid()&&String(pendingLoad.item.id)===String(item.id)?pendingLoad.save:null;},gameStarted:gameStarted,details:details,savesPanel:savesPanel,collectionButton:collectionButton,view:view,tonight:tonight,customize:customize,layout:layout,spoilers:spoilers,protectCard:protectCard,watchlist:watchlist,flush:flush,resume:function(it){request('saves?item_id='+encodeURIComponent(it.id)).then(function(j){var game=j.games[it.id],slots=game&&game.slots||{},saved=Object.keys(slots).map(function(slot){return {slot:slot,save:slots[slot]};}).sort(function(a,b){return b.save.updated_at-a.save.updated_at;})[0];if(saved)pendingLoad={item:it,slot:saved.slot,save:saved.save,owner:uid()};A.openGame(it);}).catch(fail);}};
+  window.VaultcastHomeExtras={init:function(app){A=app;window.addEventListener('online',flush);document.addEventListener('vaultcast-account-ready',recoverPending);},captureShare:function(){var token=new URLSearchParams(location.search).get('share');if(token)initialShare=token;},corePreference:function(item){return pendingLoad&&pendingLoad.owner===uid()&&String(pendingLoad.item.id)===String(item.id)?pendingLoad.save:null;},gameStarted:gameStarted,quickSlotAction:quickSlotAction,details:details,savesPanel:savesPanel,collectionButton:collectionButton,view:view,tonight:tonight,customize:customize,layout:layout,spoilers:spoilers,protectCard:protectCard,watchlist:watchlist,flush:flush,resume:function(it){request('saves?item_id='+encodeURIComponent(it.id)).then(function(j){var game=j.games[it.id],slots=game&&game.slots||{},saved=Object.keys(slots).map(function(slot){return {slot:slot,save:slots[slot]};}).sort(function(a,b){return b.save.updated_at-a.save.updated_at;})[0];if(saved)pendingLoad={item:it,slot:saved.slot,save:saved.save,owner:uid()};A.openGame(it);}).catch(fail);}};
 })();

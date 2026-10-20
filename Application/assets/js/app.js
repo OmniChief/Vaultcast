@@ -3938,7 +3938,17 @@ function confirmDialog(message, opts){
     if (!window.PointerEvent) listen(window,'mouseup',function(){release('mouse');});
     var placementSelect=h('select',{'aria-label':'Controller position'},[h('option',{value:'overlay',text:'Controller over game',selected:placement==='overlay'}),h('option',{value:'below',text:'Controller below game',selected:placement==='below'})]);
     listen(placementSelect,'change',function(){releaseAll();placement=placementSelect.value;paint();persist();});
-    toolbar.appendChild(toggle);toolbar.appendChild(placementSelect);toolbar.appendChild(settings);
+    toolbar.appendChild(toggle);
+    var quickButtons=[];
+    [{load:false,icon:'💾',label:'Quick save · personal slot 1'},{load:true,icon:'📂',label:'Quick load · personal slot 1'}].forEach(function(action){
+      var button=h('button',{type:'button',className:'game-quick-slot',text:action.icon,title:action.label,'aria-label':action.label});
+      listen(button,'click',function(e){
+        e.preventDefault();e.stopPropagation();if(disposed||button.disabled)return;
+        quickButtons.forEach(function(b){b.disabled=true;b.setAttribute('aria-busy','true');});
+        Promise.resolve().then(function(){return window.VaultcastHomeExtras.quickSlotAction(emu,action.load);}).catch(function(err){toast(err.message||'Could not complete save action',{kind:'bad'});}).finally(function(){quickButtons.forEach(function(b){b.disabled=false;b.removeAttribute('aria-busy');});});
+      });quickButtons.push(button);toolbar.appendChild(button);
+    });
+    toolbar.appendChild(placementSelect);toolbar.appendChild(settings);
     shell.appendChild(toolbar);shell.appendChild(panel);parent.appendChild(shell);
     parent.classList.add('has-screen-controller');
     paint();

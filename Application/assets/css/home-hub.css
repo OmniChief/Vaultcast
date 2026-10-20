@@ -485,3 +485,5 @@ body.radio-playing{padding-bottom:calc(var(--radio-bar-height,140px) + 16px)}bod
 .friend-highlight-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.friend-highlight-tile{min-width:0}.friend-highlight-tile>.card{width:100%;margin:0}.friend-highlight-caption{font-size:.8rem;line-height:1.45;margin:8px 0 0;color:var(--muted)}
 .friend-highlights .hub-panel-head h2{font-size:1rem}.friend-profile-note{font-size:.75rem;line-height:1.5}.friend-highlights .hub-panel{min-width:0;margin:0}
 @media(max-width:440px){.friend-highlight-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.friend-signature{padding:14px}.friend-signature .hub-stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+.screen-controller-toolbar button.game-quick-slot{display:inline-flex;align-items:center;justify-content:center;min-width:36px;font-size:18px;line-height:1}.screen-controller-toolbar button.game-quick-slot:disabled{opacity:.5;cursor:wait}
