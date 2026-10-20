@@ -5474,6 +5474,13 @@ try {
   }
   document.addEventListener('play',function(event){if(radioState.audio&&event.target!==radioState.audio&&radioState.station&&!radioState.audio.paused)radioState.audio.pause();},true);
   function radioCard(station){return h('article',{className:'radio-station-card',role:'button',tabindex:'0','aria-label':'Open '+station.name,onClick:function(){openLiveChannel('radio:'+station.id);},onKeydown:function(e){if(e.key==='Enter'||e.key===' '){e.preventDefault();openLiveChannel('radio:'+station.id);}}},[h('div',{className:'radio-card-art'},[chanLogoEl(station)]),h('div',{className:'radio-card-copy'},[h('h3',{text:station.name}),h('p',{className:'muted',text:radioMeta(station)}),h('p',{className:'radio-tags muted',text:station.tags||'Live radio'})])]);}
+  function liveStationRail(content,label){
+    var scroll=Array.isArray(content)?h('div',{className:'live-station-scroll'},content):content;
+    scroll.classList.add('live-station-scroll');scroll.setAttribute('tabindex','0');scroll.setAttribute('role','region');scroll.setAttribute('aria-label',label);
+    function page(direction){var reduced=document.body.getAttribute('data-motion')==='reduced',distance=direction*Math.max(240,scroll.clientWidth*.85);try{scroll.scrollBy({left:distance,behavior:reduced?'auto':'smooth'});}catch(ignore){scroll.scrollLeft+=distance;}}
+    scroll.addEventListener('keydown',function(e){if(e.target!==scroll)return;if(e.key==='ArrowLeft'||e.key==='ArrowRight'){e.preventDefault();page(e.key==='ArrowLeft'?-1:1);}});
+    return h('div',{className:'rail live-station-rail'},[h('button',{className:'rail-arrow prev',type:'button','aria-label':'Scroll '+label+' left',onClick:function(){page(-1);}},[icon('chevL')]),scroll,h('button',{className:'rail-arrow next',type:'button','aria-label':'Scroll '+label+' right',onClick:function(){page(1);}},[icon('chevR')])]);
+  }
   function radioSection(host,compact){
     host.classList.add('radio-section');
     var mine=state.user&&state.user.id;
@@ -5481,8 +5488,8 @@ try {
     loadRadio().then(function(stations){if(!host.isConnected||mine!==(state.user&&state.user.id))return;var heading=host.firstChild;host.replaceChildren(heading);if(!stations.length){host.appendChild(emptyState('Your next soundtrack starts here','Add favourite stations from the public Radio Browser directory or a direct audio stream.',can('radio_manage')?[h('button',{className:'btn primary',text:'Find stations',onClick:radioDirectory})]:null));return;}
       var query=h('input',{type:'search',placeholder:'Filter your stations…','aria-label':'Filter radio stations'}),grid=h('div',{className:'radio-station-grid'}),shown=24;
       if(!compact){var count=document.querySelector('#live-top .live-count');if(count)count.textContent=stations.length+' stations';}
-      function draw(){var q=query.value.toLowerCase(),rows=stations.filter(function(station){return [station.name,station.country,station.tags,station.language].join(' ').toLowerCase().indexOf(q)>=0;});grid.replaceChildren();(compact?rows.slice(0,Math.min(6,shelfCapacity(true))):rows.slice(0,shown)).forEach(function(station){grid.appendChild(radioCard(station));});if(!rows.length)grid.appendChild(emptyState('No stations match','Try a different name, country or genre.'));if(!compact&&rows.length>shown)grid.appendChild(h('button',{className:'btn',text:'More stations',onClick:function(){shown+=24;draw();}}));}
-      if(!compact){query.oninput=function(){shown=24;draw();};host.appendChild(h('div',{className:'hub-calendar-filters'},[query]));}host.appendChild(grid);draw();updateRadio();
+      function draw(){var q=query.value.toLowerCase(),rows=stations.filter(function(station){return [station.name,station.country,station.tags,station.language].join(' ').toLowerCase().indexOf(q)>=0;});grid.replaceChildren();(compact?rows:rows.slice(0,shown)).forEach(function(station){grid.appendChild(radioCard(station));});if(!rows.length)grid.appendChild(emptyState('No stations match','Try a different name, country or genre.'));if(!compact&&rows.length>shown)grid.appendChild(h('button',{className:'btn',text:'More stations',onClick:function(){shown+=24;draw();}}));}
+      if(!compact){query.oninput=function(){shown=24;draw();};host.appendChild(h('div',{className:'hub-calendar-filters'},[query]));}host.appendChild(compact?liveStationRail(grid,'Radio stations'):grid);draw();updateRadio();
     }).catch(function(e){if(host.isConnected)host.replaceChildren(emptyState('Radio unavailable',e.message));});
   }
   function paintRadioPage(root){root.replaceChildren(livePageHero('radio',radioState.stations?radioState.stations.length:0));var actions=h('div',{className:'row-actions radio-page-actions'},[h('button',{className:'btn',text:'Browse public directory',onClick:radioDirectory}),can('radio_manage')?h('button',{className:'btn',text:'Add stream URL',onClick:function(){editRadio();}}):null]);root.appendChild(actions);var host=h('section',{className:'live-section'});root.appendChild(host);radioSection(host,false);}
@@ -5610,12 +5617,12 @@ try {
     }
     if(tab==='now'||tab==='relay')root.appendChild(h('section', { className:'live-section', id:'live-relay' }, [
       h('div', { className:'row-head' }, [ h('h2', { text:'Relay' }), h('span', { className:'meta', text:'PseudoTV from your library \u00b7 ' + relay.length + ' channel' + (relay.length === 1 ? '' : 's') }),tab==='now'?h('button',{className:'btn ghost row-more',text:'All Relay channels',onClick:function(){goLiveTab('relay');}}):null ]),
-      relay.length ? h('div', { className:'live-grid' }, (tab==='now'?relay.slice(0,shelfCapacity(true)):relay).map(function(c){ return liveCardEl(c); }))
+      relay.length ? (tab==='now'?liveStationRail(relay.map(function(c){return liveCardEl(c,{compact:true});}),'Relay channels'):h('div',{className:'live-grid'},relay.map(function(c){return liveCardEl(c);})))
         : emptyState(live.filter ? 'No Relay channels match' : 'No Relay channels', live.filter ? '' : 'Create channels in Live settings.')
     ]));
     if(tab==='now'||tab==='iptv')root.appendChild(h('section', { className:'live-section', id:'live-iptv' }, [
       h('div', { className:'row-head' }, [ h('h2', { text:'IPTV' }), h('span', { className:'meta', text:'Favourites from your M3U feeds \u00b7 ' + iptv.length }),tab==='now'?h('button',{className:'btn ghost row-more',text:'All IPTV channels',onClick:function(){goLiveTab('iptv');}}):null ]),
-      iptv.length ? h('div', { className:'live-grid' }, (tab==='now'?iptv.slice(0,shelfCapacity(true)):iptv).map(function(c){ return liveCardEl(c); }))
+      iptv.length ? (tab==='now'?liveStationRail(iptv.map(function(c){return liveCardEl(c,{compact:true});}),'IPTV channels'):h('div',{className:'live-grid'},iptv.map(function(c){return liveCardEl(c);})))
         : emptyState(live.filter ? 'No IPTV channels match' : 'No IPTV favourites yet',
             live.filter ? '' : 'Browse your playlist feeds and add favourites in Live settings \u2192 IPTV.',
             live.filter ? null : [ h('button', { className:'btn', type:'button', text:'Open Live settings', onClick: function(){ openSettings('live-channels'); } }) ])
