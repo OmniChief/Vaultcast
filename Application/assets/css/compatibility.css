@@ -45,3 +45,15 @@ body.compat-steampunk{background:#15110e;color:#f7e9cf}
 .compat-steampunk .compat-centre-play{background:#2d2016;color:#f4d69c;border-color:#caa366}
 .compat-steampunk .compat-logo,.compat-steampunk .compat-nav a.active,.compat-steampunk .compat-subnav a.active,.compat-steampunk .compat-alphabet a.active{background:#5b3e23;color:#f8db9e;border-color:#bf9659}
 .compat-steampunk .compat-card strong,.compat-steampunk .compat-card small{background:#251d17;color:#eed5aa}.compat-steampunk .compat-message.mine{background:#3c2b1d;border-left-color:#d6ad68}.compat-steampunk .compat-header a:focus,.compat-steampunk .compat-subnav a:focus,.compat-steampunk .compat-card:focus,.compat-steampunk .compat-alphabet a:focus{box-shadow:0 0 0 6px #382719;background:#503a24}
+
+body.compat-vintage-tv{background:#181914;color:#f6efd4}.compat-vintage-tv a{color:#e7be68}
+.compat-vintage-tv .compat-header,.compat-vintage-tv .compat-subnav{background:#302b20;border-color:#8b7049}
+.compat-vintage-tv .compat-hero,.compat-vintage-tv .compat-panel,.compat-vintage-tv .compat-fields,.compat-vintage-tv .compat-message{background:#292c21;color:#f6efd4;border:4px solid #79613e;border-radius:18px}
+.compat-vintage-tv h1,.compat-vintage-tv h2,.compat-vintage-tv h3{font-family:"Trebuchet MS",Verdana,sans-serif;color:#f5e5ba}
+.compat-vintage-tv button,.compat-vintage-tv a.compat-button{background:#454734;color:#f6e8c3;border-color:#b4a072;border-bottom-width:3px;border-radius:7px}
+.compat-vintage-tv input,.compat-vintage-tv select,.compat-vintage-tv textarea{background:#1e251a;color:#f6efd4;border-color:#8c9366}
+.compat-vintage-tv .compat-card,.compat-vintage-tv .compat-card strong,.compat-vintage-tv .compat-card small{background:#292c21;color:#f6e8c3;border-color:#978a5f}
+.compat-vintage-tv .compat-logo,.compat-vintage-tv .compat-nav a.active,.compat-vintage-tv .compat-subnav a.active,.compat-vintage-tv .compat-alphabet a.active{background:#d1bb8c;color:#242316;border-color:#f1dfb7}
+.compat-vintage-tv .compat-note,.compat-vintage-tv .compat-footer,.compat-vintage-tv small{color:#c4c2a5}.compat-vintage-tv .compat-message.mine{background:#424632;border-left-color:#c6bd82}
+.compat-vintage-tv button:focus,.compat-vintage-tv a:focus,.compat-vintage-tv input:focus,.compat-vintage-tv select:focus,.compat-vintage-tv textarea:focus{outline-color:#edcd88;background:#51553b;color:#fff2d1;box-shadow:0 0 0 5px #24261a}
+.compat-vintage-tv .compat-centre-play{background:#333c28;border-color:#d3c48c;color:#f4e5b6}
