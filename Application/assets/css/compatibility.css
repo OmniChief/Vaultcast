@@ -57,3 +57,15 @@ body.compat-vintage-tv{background:#181914;color:#f6efd4}.compat-vintage-tv a{col
 .compat-vintage-tv .compat-note,.compat-vintage-tv .compat-footer,.compat-vintage-tv small{color:#c4c2a5}.compat-vintage-tv .compat-message.mine{background:#424632;border-left-color:#c6bd82}
 .compat-vintage-tv button:focus,.compat-vintage-tv a:focus,.compat-vintage-tv input:focus,.compat-vintage-tv select:focus,.compat-vintage-tv textarea:focus{outline-color:#edcd88;background:#51553b;color:#fff2d1;box-shadow:0 0 0 5px #24261a}
 .compat-vintage-tv .compat-centre-play{background:#333c28;border-color:#d3c48c;color:#f4e5b6}
+
+body.compat-after-hours{background:#160e18;color:#f9e8ef}.compat-after-hours a{color:#eeb5bc}
+.compat-after-hours .compat-header,.compat-after-hours .compat-subnav{background:#281626;border-color:#b7809b}
+.compat-after-hours .compat-hero,.compat-after-hours .compat-panel,.compat-after-hours .compat-fields,.compat-after-hours .compat-message{background:#2b192c;color:#f9e8ef;border-color:#ad7894;border-radius:20px}
+.compat-after-hours h1,.compat-after-hours h2,.compat-after-hours h3{font-family:Georgia,"Times New Roman",serif;color:#f9dce5}
+.compat-after-hours button,.compat-after-hours a.compat-button{background:#46263f;color:#f9e0e8;border-color:#c68aa6;border-radius:20px}
+.compat-after-hours input,.compat-after-hours select,.compat-after-hours textarea{background:#211222;color:#f9e8ef;border-color:#ac7995}
+.compat-after-hours .compat-card,.compat-after-hours .compat-card strong,.compat-after-hours .compat-card small{background:#2b192c;color:#f9e0e8;border-color:#ad7894}
+.compat-after-hours .compat-logo,.compat-after-hours .compat-nav a.active,.compat-after-hours .compat-subnav a.active,.compat-after-hours .compat-alphabet a.active{background:#e6b0c2;color:#32152a;border-color:#f8c8d8}
+.compat-after-hours .compat-note,.compat-after-hours .compat-footer,.compat-after-hours small{color:#d1afc2}.compat-after-hours .compat-message.mine{background:#4a2744;border-left-color:#db9fb9}
+.compat-after-hours button:focus,.compat-after-hours a:focus,.compat-after-hours input:focus,.compat-after-hours select:focus,.compat-after-hours textarea:focus{outline-color:#efbed0;background:#643654;color:#ffebf4;box-shadow:0 0 0 5px #341c31}
+.compat-after-hours .compat-centre-play{background:#3d2038;border-color:#e7adca;color:#f9dce5}

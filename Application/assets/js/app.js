@@ -4555,7 +4555,7 @@ try {
 
   function applyTheme(){
     var theme = state.user && state.user.prefs && state.user.prefs.theme || state.settings && state.settings.theme || 'dark';
-    document.body.setAttribute('data-theme', ['dark','light','retro-scifi','steampunk','vintage-tv'].indexOf(theme)>=0 ? theme : 'dark');
+    document.body.setAttribute('data-theme', ['dark','light','retro-scifi','steampunk','vintage-tv','after-hours'].indexOf(theme)>=0 ? theme : 'dark');
   }
   function librarySummary(home){home=home||state.home||{};return (home.item_count||0)+' titles available';}
   function clockFace(children){return [h('div',{className:'hero-clock-face'},children),h('span',{className:'tv-clock-tuner','aria-hidden':'true'})];}
@@ -7710,6 +7710,7 @@ try {
             h('option', { value: 'retro-scifi', text: 'Retro Sci-Fi', selected: prefs.theme === 'retro-scifi' }),
             h('option', { value: 'steampunk', text: 'Steampunk', selected: prefs.theme === 'steampunk' }),
             h('option', { value: 'vintage-tv', text: 'Vintage TV Retro', selected: prefs.theme === 'vintage-tv' }),
+            h('option', { value: 'after-hours', text: 'Each day we stray further from god... (adult)', selected: prefs.theme === 'after-hours' }),
             h('option', { value: 'light', text: 'Light', selected: prefs.theme === 'light' })
           ])]),
           h('label', {}, ['New password (optional)', h('input', { id: 'pw', type: 'password', placeholder: 'Leave blank to keep' })]),
