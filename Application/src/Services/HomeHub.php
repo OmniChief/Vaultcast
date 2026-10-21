@@ -203,7 +203,7 @@ final class HomeHub {
         $episodes=[];
         if (($card['kind'] ?? '')==='show') {
             // Read only this show's local ids and progress; no second guide/detail build.
-            $q=\Vaultcast\Database::connection()->prepare("SELECT i.id,i.show_title,CASE WHEN i.show_title='' THEN i.payload ELSE NULL END AS orphan,p.payload FROM vaultcast_items i LEFT JOIN vaultcast_progress p ON p.item_id=i.id AND p.user_id=? WHERE i.section_id=? AND (i.show_title=? OR i.show_title='')");
+            $q=\Vaultcast\Database::connection()->prepare("SELECT i.id,i.show_title,CASE WHEN i.show_title='' THEN i.payload ELSE NULL END AS orphan,CASE WHEN LENGTH(p.payload)<=".\Vaultcast\Repository::PROGRESS_MAX_BYTES." THEN p.payload END AS payload FROM vaultcast_items i LEFT JOIN vaultcast_progress p ON p.item_id=i.id AND p.user_id=? WHERE i.section_id=? AND (i.show_title=? OR i.show_title='')");
             $q->execute([(string)($user['id'] ?? ''),$card['section'],$card['title']]);
             foreach ($q as $row) {
                 if ($row['show_title']==='') {

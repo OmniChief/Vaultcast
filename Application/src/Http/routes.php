@@ -6,6 +6,8 @@ $path = request_path();
 $path = '/' . trim($path, '/');
 if ($path === '/') $path = '/status';
 $features = Store::settings()['features'] ?? [];
+// One-time repair of progress rows bloated by the old viewing_armed write (no-op once done).
+\Vaultcast\Repository::healProgressOnce();
 // Access gate: expired / not-yet-approved users and deleted accounts are refused on every API
 // and stream request, whatever the UI shows. Admins always pass.
 $__denied = Access::gate($path, Auth::currentSession(), function (string $id) { $user = $id === '' ? null : Auth::findById($id); AreaAccess::remember($user); return $user; },

@@ -547,8 +547,13 @@ class Convert {
                     $profile['source_size']=$job['source_stat']['size'];$profile['source_mtime']=$job['source_stat']['mtime'];
                 }
                 $profiles[str_replace('\\','/',$dest)]=$profile;Store::set('directplay_profiles',$profiles);
-                $new = Catalogue::ingestFile($dest, $section);
+                // The copy is a variant of the original item, never a library entry of its own,
+                // even when the job finishes after a timeout or an app update.
+                $itemId=(string)($job['item_id'] ?? '');$destReal=\Vaultcast\Paths::real($dest);
+                $new=$itemId!=='' && $destReal ? Catalogue::attachDirectPlay($itemId,$destReal,!empty($profile['ready'])) : null;
                 if ($new) $job['dest_item_id'] = $new['id'];
+                elseif ($itemId==='') { $new = Catalogue::ingestFile($dest, $section); if ($new) $job['dest_item_id'] = $new['id']; }
+                else $job['message'] .= ' (original is not in the library; the copy was not added as a separate title)';
             }
         } catch (\Throwable $e) {
             $job['message'] .= ' (catalogue ingest failed: ' . $e->getMessage() . ')';
@@ -1014,17 +1019,18 @@ class Convert {
             $deletedPath = $destReal;
         }
         // Also clear stale catalogue links when the copy was already deleted on disk.
+        // Targeted updates only: the original item's link and a stray copy entry, never a full catalogue save.
         if($dest!=='') {
-            $removedIds=Catalogue::removePath($destReal!==false?$destReal:$dest);
             $profiles=Store::get('directplay_profiles',[]);
             unset($profiles[str_replace('\\','/',$dest)]);
             if($destReal!==false)unset($profiles[str_replace('\\','/',$destReal)]);
             Store::set('directplay_profiles',$profiles);
+            Catalogue::detachDirectPlay((string)($job['item_id'] ?? ''),[$dest,$destReal!==false?$destReal:'',$deletedPath ?? '']);
         }
 
         $destItemId = (string)($job['dest_item_id'] ?? '');
         if ($destItemId !== '' && $destItemId !== (string)($job['item_id'] ?? '') && !in_array($destItemId, $removedIds, true)) {
-            $removedIds = array_merge($removedIds, Catalogue::removeIds([$destItemId]));
+            foreach([$dest,$destReal!==false?$destReal:'',$deletedPath ?? ''] as $p)if($p!==''&&\Vaultcast\Repository::deleteItemForPath($destItemId,$p)){$removedIds[]=$destItemId;break;}
         }
         $removedIds = array_values(array_unique(array_filter($removedIds)));
 
