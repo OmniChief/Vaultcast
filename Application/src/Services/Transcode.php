@@ -106,7 +106,7 @@ final class Transcode {
                 'save'=>$save,'offset'=>$offset,'audio'=>$audio,'config'=>$config,'status'=>'queued','created_at'=>time(),'updated_at'=>time(),
                 'source_stat'=>['size'=>(int)filesize($src),'mtime'=>(int)filemtime($src)],'error'=>null];
             self::write($job);@touch(self::dir($id).'/access');
-            try {Process::startPhpWorker('transcode',$id);} catch(Throwable $e){$job['status']='failed';$job['error']='Could not start the PHP playback worker. Check the CLI path in Advanced settings.';self::write($job);throw new RuntimeException($job['error']);}
+            try {Process::startPhpWorker('transcode',$id);} catch(Throwable $e){error_log('Vaultcast playback worker: '.$e->getMessage());$job['status']='failed';$job['error']=$e instanceof RuntimeException?$e->getMessage():'Could not start the PHP playback worker. Check the server PHP error log for details.';self::write($job);throw new RuntimeException($job['error']);}
             return self::publicJob($job);
         } finally {flock($lock,LOCK_UN);fclose($lock);}
     }
