@@ -20,7 +20,8 @@ final class AssetDelivery {
         if (strlen($body) < 1024 || !self::acceptsGzip($accept)) return ['body'=>$body, 'gzip'=>false];
         $cache = $cacheDir !== null ? $cacheDir . '/' . hash('sha256', $body) . '.gz' : null;
         $encoded = $cache && is_file($cache) ? @file_get_contents($cache) : false;
-        if (is_string($encoded) && @gzdecode($encoded) !== $body) $encoded = false;
+        // The gzip trailer holds the CRC-32 and length of the original; checking it is far cheaper than inflating the whole file again.
+        if (is_string($encoded) && (strlen($encoded) < 18 || bin2hex(strrev(substr($encoded, -8, 4))) !== hash('crc32b', $body) || bin2hex(strrev(substr($encoded, -4))) !== sprintf('%08x', strlen($body)))) $encoded = false;
         if ($encoded === false) {
             $encoded = gzencode($body, 5);
             if (!is_string($encoded) || strlen($encoded) >= strlen($body)) return ['body'=>$body, 'gzip'=>false];
