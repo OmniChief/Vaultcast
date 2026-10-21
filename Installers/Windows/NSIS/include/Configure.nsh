@@ -330,6 +330,9 @@ Function WriteNginxConf
   FileWrite $9 '    location ~ "^/_vaultcast_media/([A-Za-z]):/(.*)$$" {$\r$\n'
   FileWrite $9 "        internal;$\r$\n        alias $$1:/$$2;$\r$\n        sendfile on;$\r$\n"
   FileWrite $9 "    }$\r$\n"
+  FileWrite $9 '    location ~ "^/_vaultcast_unc/([^/]+)/([^/]+)/(.*)$$" {$\r$\n'
+  FileWrite $9 "        internal;$\r$\n        alias //$$1/$$2/$$3;$\r$\n        sendfile on;$\r$\n"
+  FileWrite $9 "    }$\r$\n"
   FileWrite $9 "    location ~ /\. { deny all; }$\r$\n"
   FileWrite $9 "    location ~* ^/(src|data|deploy|docs|netplay)(/|$$) { deny all; }$\r$\n"
   FileWrite $9 "    location ~* \.(sql|md|log|sh|ps1|cmd|yaml|yml|lock|bak|exe)$$ { deny all; }$\r$\n$\r$\n"
@@ -357,7 +360,7 @@ Function WriteSetupJson
   StrCpy $1 $INSTDIR
   ${WordReplace} $1 "\" "\\" "+" $1
   FileOpen $9 "$Runtime\setup.json" w
-  FileWrite $9 '{$\r$\n  "webPort": $WebPort,$\r$\n  "phpPort": $PhpPort,$\r$\n  "phpWorkers": $PhpWorkers,$\r$\n  "mediaAccel": true,$\r$\n  "netplayPort": $RelayPort,$\r$\n'
+  FileWrite $9 '{$\r$\n  "webPort": $WebPort,$\r$\n  "phpPort": $PhpPort,$\r$\n  "phpWorkers": $PhpWorkers,$\r$\n  "mediaAccel": true,$\r$\n  "mediaUncAccel": true,$\r$\n  "netplayPort": $RelayPort,$\r$\n'
   FileWrite $9 '  "listenAddress": "$ListenAddress",$\r$\n  "installRoot": "$1"$\r$\n}$\r$\n'
   FileClose $9
 FunctionEnd

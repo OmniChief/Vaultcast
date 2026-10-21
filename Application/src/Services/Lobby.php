@@ -122,23 +122,22 @@ class Lobby {
     }
 
     public static function listOpen(string $viewer=''): array {
-        return self::withLock(function (array $all) use ($viewer) {
-            $before=count($all);self::purgeExpired($all);
-            if (count($all)!==$before) self::writeAll($all);
-            $out = [];
-            foreach ($all as $s) {
-                if (!is_array($s)) continue;
-                if (($s['visibility'] ?? 'public')==='private' && ($viewer==='' || $viewer!==($s['host_user_id'] ?? ''))) continue;
-                $pub = self::publicSession($s);
-                unset($pub['runtime']); // Full boot options arrive with the join response.
-                // keep full sessions visible so host presence is not mistaken for "ended"
-                $out[] = $pub;
-            }
-            usort($out, function ($a, $b) {
-                return ($b['updated_at'] ?? 0) <=> ($a['updated_at'] ?? 0);
-            });
-            return $out;
+        // Polls only filter their snapshot. Mutating operations prune under the lock.
+        $all = self::readAll();
+        self::purgeExpired($all);
+        $out = [];
+        foreach ($all as $s) {
+            if (!is_array($s)) continue;
+            if (($s['visibility'] ?? 'public')==='private' && ($viewer==='' || $viewer!==($s['host_user_id'] ?? ''))) continue;
+            $pub = self::publicSession($s);
+            unset($pub['runtime']); // Full boot options arrive with the join response.
+            // Keep full sessions visible so host presence is not mistaken for "ended".
+            $out[] = $pub;
+        }
+        usort($out, function ($a, $b) {
+            return ($b['updated_at'] ?? 0) <=> ($a['updated_at'] ?? 0);
         });
+        return $out;
     }
 
     private static function runtimeConfig(array $runtime): ?array {

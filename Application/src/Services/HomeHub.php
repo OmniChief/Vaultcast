@@ -241,7 +241,6 @@ final class HomeHub {
         $old=\Vaultcast\Repository::progressItem($user['id'],$item['id']) ?? [];
         $yes=!empty($body['watched']);
         \Vaultcast\Repository::saveProgress($user['id'],$item['id'],['watched'=>$yes,'position'=>$yes?($old['duration'] ?? 1):0,'duration'=>$old['duration'] ?? 0,'updated_at'=>time()]);
-        \Vaultcast\Repository::putDocument('progress',[]);
         return ['ok'=>true];
     }
     public static function game(array $user,array $body): array {

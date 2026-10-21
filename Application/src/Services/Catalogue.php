@@ -1717,8 +1717,7 @@ class Catalogue {
             shuffle($shows);
             return array_slice($shows, 0, max(1, $n));
         }
-        // Sample narrow IDs first; do not sort every LONGTEXT payload in the section.
-        return \Vaultcast\Repository::rows('SELECT i.payload FROM vaultcast_items i JOIN (SELECT id FROM vaultcast_items WHERE section_id=? ORDER BY RAND() LIMIT ' . max(1, min(100, $n)) . ') picks ON picks.id=i.id', [$sectionId]);
+        return \Vaultcast\Repository::randomItems($sectionId, $n);
     }
 
     /**
@@ -1946,8 +1945,9 @@ class Catalogue {
     }
 
     private static function homeCacheKey(array $user): string {
-        return 'home-v2|' . md5((string)($user['id'] ?? 'guest') . '|' . Store::revision('catalogue')
-            . '|' . Store::revision('progress') . '|' . Store::revision('settings'))
+        return 'home-v3|' . md5((string)($user['id'] ?? 'guest') . '|' . Store::revision('catalogue')
+            . '|' . Store::revision('progress') . '|' . Store::revision(\Vaultcast\Repository::progressRevisionName((string)($user['id'] ?? 'guest')))
+            . '|' . Store::revision('settings'))
             . '|' . Store::revision('browse_epoch').'|'.Store::revision('show-summaries');
     }
 
@@ -2014,7 +2014,7 @@ class Catalogue {
         if (class_exists('RequestTiming', false)) RequestTiming::add('home_library', $started);
         $started = microtime(true);
         $settings = Store::settings();
-        $out['continue_watching'] = self::continueWatching(\Vaultcast\Repository::progress($uid),
+        $out['continue_watching'] = self::continueWatchingForUser($uid,
             max(0, min(100, (int)($settings['home']['continue_watching_limit'] ?? 20))));
         if (class_exists('RequestTiming', false)) RequestTiming::add('continue_watching', $started);
         \Vaultcast\Repository::cachePut('home-current|' . $uid, ['revision'=>$cacheKey, 'home'=>$out], 0);
@@ -2068,18 +2068,16 @@ class Catalogue {
             if (($it['media_kind'] ?? 'video') !== 'video') continue;
             if (self::cwShowGroupKey($it) === $group) $idx[$group][] = $it;
         }
-        foreach ($idx as &$list) {
-            usort($list, function ($a, $b) {
-                $sa = ($a['season'] ?? null) === null ? 0 : (int)$a['season'];
-                $sb = ($b['season'] ?? null) === null ? 0 : (int)$b['season'];
-                if ($sa !== $sb) return $sa <=> $sb;
-                $ea = ($a['episode'] ?? null) === null ? PHP_INT_MAX : (int)$a['episode'];
-                $eb = ($b['episode'] ?? null) === null ? PHP_INT_MAX : (int)$b['episode'];
-                if ($ea !== $eb) return $ea <=> $eb;
-                return strnatcasecmp((string)($a['rel'] ?? ''), (string)($b['rel'] ?? ''));
-            });
-        }
-        unset($list);
+        MediaFacts::preload($idx[$group]);
+        usort($idx[$group], function ($a, $b) {
+            $sa = ($a['season'] ?? null) === null ? 0 : (int)$a['season'];
+            $sb = ($b['season'] ?? null) === null ? 0 : (int)$b['season'];
+            if ($sa !== $sb) return $sa <=> $sb;
+            $ea = ($a['episode'] ?? null) === null ? PHP_INT_MAX : (int)$a['episode'];
+            $eb = ($b['episode'] ?? null) === null ? PHP_INT_MAX : (int)$b['episode'];
+            if ($ea !== $eb) return $ea <=> $eb;
+            return strnatcasecmp((string)($a['rel'] ?? ''), (string)($b['rel'] ?? ''));
+        });
         self::$cwEpisodeIndex = $idx;
         return $idx;
     }
@@ -2124,12 +2122,39 @@ class Catalogue {
         uasort($userProg, function ($a, $b) {
             return ($b['updated_at'] ?? 0) <=> ($a['updated_at'] ?? 0);
         });
+        $rows = (static function () use ($userProg) {
+            foreach ($userProg as $id => $p) yield ['id' => $id, 'item' => self::item((string)$id), 'progress' => $p];
+        })();
+        return self::continueWatchingRows($rows, $cwLimit, static function (array $it) use ($userProg) {
+            return $userProg[$it['id']] ?? null;
+        });
+    }
+
+    public static function continueWatchingForUser(string $userId, int $limit): array {
+        $progress = [];
+        $loaded = [];
+        return self::continueWatchingRows(\Vaultcast\Repository::progressRows($userId), $limit,
+            static function (array $it) use ($userId, &$progress, &$loaded): ?array {
+                $group = self::cwShowGroupKey($it);
+                if (!isset($loaded[$group])) {
+                    $index = self::cwEpisodeIndex($it);
+                    $ids = array_column($index[$group] ?? [], 'id');
+                    $progress += \Vaultcast\Repository::progressItems($userId, $ids);
+                    $loaded[$group] = true;
+                }
+                return $progress[$it['id']] ?? null;
+            });
+    }
+
+    private static function continueWatchingRows(iterable $rows, int $cwLimit, callable $progress): array {
+        if ($cwLimit <= 0) return [];
         $continue = [];
         $seenShows = [];
-        foreach ($userProg as $itemId => $p) {
+        foreach ($rows as $row) {
             if (count($continue) >= $cwLimit) break;
+            $p = $row['progress'];
             if (!is_array($p)) continue;
-            $it = self::item((string)$itemId);
+            $it = $row['item'];
             if (!$it) continue;
             $isEp = self::cwIsEpisode($it);
             $finished = self::progressFinished($p, $isEp);
@@ -2159,7 +2184,7 @@ class Catalogue {
             for ($guard = 0; $guard < 50; $guard++) {
                 $next = self::cwNextEpisode($next);
                 if (!$next) break;
-                $np = $userProg[$next['id']] ?? null;
+                $np = $progress($next);
                 if (is_array($np) && self::progressFinished($np, true)) continue; // already seen, keep walking
                 $nextProg = (is_array($np) && ($np['position'] ?? 0) >= 5) ? $np : null;
                 break;

@@ -62,15 +62,25 @@ function relay_episode_name_only($item) {
     if (!empty($item['title'])) $candidates[] = (string)$item['title'];
     if (!empty($item['subtitle'])) $candidates[] = (string)$item['subtitle'];
 
-    // Catalogue / NFO when linked
+    // Reuse stored titles until library metadata changes. Older stations resolve
+    // each linked ID once, without loading the library or reading NFO sidecars.
     if (!empty($item['catalogueId']) && relay_try_boot_catalogue()) {
-        $cat = Catalogue::get();
-        foreach (($cat['items'] ?? array()) as $it) {
-            if (!is_array($it)) continue;
-            if ((string)($it['id'] ?? '') !== (string)$item['catalogueId']) continue;
-            $resolved = Catalogue::resolveEpisodeTitle($it);
-            if ($resolved !== '') array_unshift($candidates, $resolved);
-            break;
+        static $titles = array();
+        $id = (string)$item['catalogueId'];
+        $revision = Store::revision('catalogue') . '|' . Store::revision('browse_epoch');
+        if (empty($item['episode_title']) || ($item['episode_title_revision'] ?? '') !== $revision) {
+            $key = $revision . '|' . $id;
+            if (!array_key_exists($key, $titles)) {
+                $cached = \Vaultcast\Repository::cacheGet('live-episode-title|' . $id);
+                if ($cached !== null && ($cached['revision'] ?? '') === $revision) {
+                    $titles[$key] = (string)($cached['title'] ?? '');
+                } else {
+                    $linked = Catalogue::item($id);
+                    $titles[$key] = $linked ? Catalogue::resolveEpisodeTitle($linked, false) : '';
+                    \Vaultcast\Repository::cachePut('live-episode-title|' . $id, ['revision'=>$revision, 'title'=>$titles[$key]], 0);
+                }
+            }
+            if ($titles[$key] !== '') array_unshift($candidates, $titles[$key]);
         }
     }
 
@@ -201,6 +211,9 @@ function relay_enrich_station_episodes($station) {
         if ($name === '') continue;
         $item['episode_title'] = $name;
         $item['title'] = $name;
+        if (!empty($item['catalogueId']) && relay_try_boot_catalogue()) {
+            $item['episode_title_revision'] = Store::revision('catalogue') . '|' . Store::revision('browse_epoch');
+        }
     }
     unset($item);
     return $station;

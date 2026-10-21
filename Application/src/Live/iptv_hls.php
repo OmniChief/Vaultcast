@@ -128,56 +128,134 @@ function iptv_hls_proxy_request() {
         $headers[] = 'Range: ' . $_SERVER['HTTP_RANGE'];
     }
 
+    if (function_exists('release_request_locks')) release_request_locks();
+    \Vaultcast\Database::releaseForStreaming();
+    @ignore_user_abort(true);
+    @set_time_limit(0);
+    $head = ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'HEAD';
+    $status = 0;
+    $responseHeaders = array();
+    $mode = null;
+    $body = '';
+    $sent = false;
+    $tooLarge = false;
+    $started = microtime(true);
+    $emitMedia = function ($chunk) use (&$sent, &$status, &$responseHeaders, $head) {
+        if (!$sent) {
+            http_response_code($status >= 200 && $status < 300 ? $status : 200);
+            header('Content-Type: ' . ($responseHeaders['content-type'] ?? 'application/octet-stream'));
+            header('Cache-Control: private, no-store');
+            header('Access-Control-Allow-Origin: *');
+            header('Access-Control-Expose-Headers: Content-Length, Content-Range, Accept-Ranges');
+            foreach (array('content-range', 'content-length', 'accept-ranges') as $name) {
+                if ($name === 'content-length' && !empty($responseHeaders['content-encoding']) && strtolower($responseHeaders['content-encoding']) !== 'identity') continue;
+                if (isset($responseHeaders[$name])) header($name . ': ' . $responseHeaders[$name]);
+            }
+            header('X-Accel-Buffering: no');
+            while (ob_get_level() > 0) { if (!@ob_end_flush()) break; }
+            $sent = true;
+        }
+        if (!$head && $chunk !== '') echo $chunk;
+        @flush();
+    };
+
     $ch = curl_init($url);
     curl_setopt_array($ch, array(
-        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_RETURNTRANSFER => false,
         CURLOPT_FOLLOWLOCATION => true,
         CURLOPT_MAXREDIRS => 8,
         CURLOPT_CONNECTTIMEOUT => 8,
-        CURLOPT_TIMEOUT => 45,
+        // Continuous media can outlive a request timeout; stalled connections cannot.
+        CURLOPT_TIMEOUT => 0,
+        CURLOPT_LOW_SPEED_LIMIT => 1,
+        CURLOPT_LOW_SPEED_TIME => 45,
+        CURLOPT_NOBODY => $head,
+        CURLOPT_ENCODING => '',
         CURLOPT_USERAGENT => $ua,
         CURLOPT_SSL_VERIFYPEER => true,
         CURLOPT_HTTPHEADER => $headers,
         CURLOPT_COOKIEJAR => $jarPath,
         CURLOPT_COOKIEFILE => $jarPath,
         CURLOPT_HEADER => false,
+        CURLOPT_NOPROGRESS => false,
+        CURLOPT_PROGRESSFUNCTION => function () use (&$mode, $started) {
+            return connection_aborted() || ($mode !== 'media' && microtime(true) - $started > 45) ? 1 : 0;
+        },
+        CURLOPT_HEADERFUNCTION => function ($handle, $line) use (&$status, &$responseHeaders, &$mode, &$body) {
+            if (preg_match('#^HTTP/\S+\s+(\d+)#i', $line, $match)) {
+                $status = (int)$match[1];
+                $responseHeaders = array();
+                $mode = null;
+                $body = '';
+            } elseif (strpos($line, ':') !== false) {
+                list($name, $value) = explode(':', $line, 2);
+                $name = strtolower(trim($name));
+                if (in_array($name, array('content-type', 'content-range', 'content-length', 'accept-ranges', 'content-encoding'), true)) {
+                    $responseHeaders[$name] = trim($value);
+                }
+            }
+            return strlen($line);
+        },
+        CURLOPT_WRITEFUNCTION => function ($handle, $chunk) use (&$status, &$responseHeaders, &$mode, &$body, &$tooLarge, $emitMedia) {
+            $length = strlen($chunk);
+            if (connection_aborted()) return 0;
+            // cURL follows redirects; their bodies must not reach the player.
+            if ($status >= 300 && $status < 400) return $length;
+            if ($status >= 400) {
+                $body .= substr($chunk, 0, max(0, 65536 - strlen($body)));
+                return strlen($body) >= 65536 ? 0 : $length;
+            }
+            if ($mode === 'media') { $emitMedia($chunk); return connection_aborted() ? 0 : $length; }
+            $body .= $chunk;
+            if ($mode === null) {
+                $final = (string)curl_getinfo($handle, CURLINFO_EFFECTIVE_URL);
+                $prefix = ltrim(substr($body, 0, 4096));
+                if (preg_match('/\.m3u8(\?|$)/i', $final)
+                    || preg_match('/mpegurl|m3u8/i', $responseHeaders['content-type'] ?? '')
+                    || strpos($prefix, '#EXTM3U') === 0) {
+                    $mode = 'playlist';
+                } elseif (strlen($body) >= 4096 || ($prefix !== '' && strpos('#EXTM3U', $prefix) !== 0)) {
+                    $mode = 'media';
+                    $emitMedia($body);
+                    $body = '';
+                    return connection_aborted() ? 0 : $length;
+                }
+            }
+            if (strlen($body) > 5000000) { $tooLarge = true; return 0; }
+            return $length;
+        },
     ));
-    $body = curl_exec($ch);
+    $ok = curl_exec($ch);
     $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
     $ctype = (string) curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
     $final = (string) curl_getinfo($ch, CURLINFO_EFFECTIVE_URL);
     $cerr = curl_error($ch);
     curl_close($ch);
 
-    if ($body === false) {
+    if ($sent) exit;
+    if ($code >= 400) {
+        http_response_code($code);
+        header('Content-Type: text/plain; charset=utf-8');
+        header('Cache-Control: no-store');
+        if (!$head) echo $body !== '' ? $body : ('Upstream HTTP ' . $code);
+        exit;
+    }
+    if ($ok === false || $tooLarge) {
         http_response_code(502);
         header('Content-Type: text/plain; charset=utf-8');
-        echo 'Upstream fetch failed: ' . $cerr;
+        if (!$head) echo $tooLarge ? 'Playlist too large' : ('Upstream fetch failed: ' . $cerr);
         exit;
     }
     if ($code <= 0) $code = 502;
-    if ($code >= 400) {
-        http_response_code($code >= 100 ? $code : 502);
-        header('Content-Type: text/plain; charset=utf-8');
-        header('Cache-Control: no-store');
-        echo $body !== '' ? $body : ('Upstream HTTP ' . $code);
-        exit;
-    }
 
     $isPlaylist = preg_match('/\.m3u8(\?|$)/i', $final)
         || preg_match('/mpegurl|m3u8|application\/vnd\.apple\.mpegurl|application\/x-mpegURL/i', $ctype)
-        || (is_string($body) && strlen($body) < 2000000 && strpos(ltrim($body), '#EXTM3U') === 0);
+        || strpos(ltrim($body), '#EXTM3U') === 0;
 
     header('Cache-Control: no-store');
     header('Access-Control-Allow-Origin: *');
 
     if ($isPlaylist) {
-        if (strlen($body) > 5000000) {
-            http_response_code(502);
-            header('Content-Type: text/plain; charset=utf-8');
-            echo 'Playlist too large';
-            exit;
-        }
         $rewritten = iptv_hls_rewrite_playlist(
             $body,
             $final !== '' ? $final : $url,
@@ -185,15 +263,13 @@ function iptv_hls_proxy_request() {
             $ua,
             $refHeader ? $refHeader : $ref
         );
+        if (function_exists('live_bridge_record_playlist_hosts')) live_bridge_record_playlist_hosts($rewritten);
         header('Content-Type: application/vnd.apple.mpegurl; charset=utf-8');
         http_response_code(200);
-        echo $rewritten;
+        if (!$head) echo $rewritten;
         exit;
     }
 
-    if ($ctype !== '') header('Content-Type: ' . $ctype);
-    else header('Content-Type: application/octet-stream');
-    http_response_code($code >= 200 && $code < 300 ? $code : 200);
-    echo $body;
+    $emitMedia($body);
     exit;
 }

@@ -24,18 +24,21 @@ final class Remux {
         $args = [MediaProbe::ffprobeBin(), '-v', 'error', '-select_streams', 'v:0', '-skip_frame', 'nokey',
             '-read_intervals', sprintf('%.3F%%%.3F', max(0.0, $from), $to), '-show_entries', 'frame=pts_time,best_effort_timestamp_time',
             '-of', 'csv=p=0', $path];
-        $null = PHP_OS_FAMILY === 'Windows' ? 'NUL' : '/dev/null';
-        $proc = @proc_open($args, [0 => ['file', $null, 'r'], 1 => ['pipe', 'w'], 2 => ['file', $null, 'w']], $pipes, null, null, ['bypass_shell' => true]);
-        if (!is_resource($proc)) return [];
-        $out = (string)stream_get_contents($pipes[1], 262144);
-        fclose($pipes[1]);
-        proc_close($proc);
+        $stat = @stat($path);
+        $key = 'keyframes|' . hash('sha256', $path . '|' . ($stat['mtime'] ?? 0) . '|' . ($stat['size'] ?? 0)
+            . '|' . sprintf('%.3F|%.3F', max(0.0, $from), $to));
+        $cached = \Vaultcast\Repository::cacheGet($key);
+        if ($cached !== null) return $cached['times'] ?? [];
+        $out = Process::capture($args, 5);
+        if ($out === null) return [];
         $times = [];
         foreach (preg_split('/\R/', $out) as $line) {
             foreach (explode(',', $line) as $v) { if (is_numeric($v)) { $times[] = (float)$v; break; } }
         }
         sort($times);
-        return array_values(array_unique($times, SORT_REGULAR));
+        $times = array_values(array_unique($times, SORT_REGULAR));
+        \Vaultcast\Repository::cachePut($key, ['times' => $times], 86400);
+        return $times;
     }
 
     /**
@@ -189,6 +192,7 @@ final class Remux {
 
         if (function_exists('release_request_locks')) release_request_locks();
         $claim = self::claim($token); // ends the previous remux of this player (seek / track change)
+        \Vaultcast\Database::releaseForStreaming();
         @ignore_user_abort(false);
         @set_time_limit(0);
         $null = PHP_OS_FAMILY === 'Windows' ? 'NUL' : '/dev/null';

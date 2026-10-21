@@ -48,6 +48,7 @@ class Store {
         if (is_array($setup) && !empty($setup['mediaAccel'])) {
             $settings['streaming'] = is_array($settings['streaming'] ?? null) ? $settings['streaming'] : [];
             $settings['streaming']['nginx_accel'] = true;
+            $settings['streaming']['nginx_unc_accel'] = !empty($setup['mediaUncAccel']);
         }
         return $settings;
     }

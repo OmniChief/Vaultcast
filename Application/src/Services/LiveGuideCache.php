@@ -46,19 +46,26 @@ final class LiveGuideCache
         });
     }
 
-    public static function queueEpg(): void
+    public static function queueEpg(bool $force = false): array
     {
         $dir=STREAM_DATA . '/runtime'; if(!is_dir($dir)) @mkdir($dir,0775,true);
-        $lock=@fopen($dir . '/epg-queue.lock','c'); if(!$lock)return;
+        $lock=@fopen($dir . '/epg-queue.lock','c');
+        if (!$lock) return ['ok'=>false,'error'=>'Could not open the guide queue lock.'];
         try {
-            if(!flock($lock,LOCK_EX|LOCK_NB))return;
+            if(!flock($lock,LOCK_EX|LOCK_NB)) return ['ok'=>true,'queued'=>true,'busy'=>true];
             $last=\Vaultcast\Repository::document('epg-refresh-job',[]);
-            if(time()-(int)($last['at']??0)<300)return;
             $job=!empty($last['id'])?\Vaultcast\Repository::document('maintenance-job:' . $last['id'],[]):[];
-            if(in_array($job['status']??'',['queued','running'],true))return;
-            $result=Maintenance::start('epg','Stale cached EPG');
+            if(in_array($job['status']??'',['queued','running'],true)) return ['ok'=>true,'queued'=>true,'job'=>$job];
+            if (!$force && time()-(int)($last['at']??0)<300) return ['ok'=>true,'queued'=>false,'retry_after'=>300];
+            // Also back off when starting the worker fails, rather than retrying on every view.
+            \Vaultcast\Repository::putDocument('epg-refresh-job',['at'=>time()]);
+            $result=Maintenance::start('epg',$force ? 'Requested EPG refresh' : 'Stale cached EPG',$force ? 'force' : null);
             \Vaultcast\Repository::putDocument('epg-refresh-job',['id'=>$result['job']['id'],'at'=>time()]);
-        } catch(Throwable $e) { error_log('Vaultcast EPG queue: ' . $e->getMessage()); }
+            return ['ok'=>true,'queued'=>true,'job'=>$result['job']];
+        } catch(Throwable $e) {
+            error_log('Vaultcast EPG queue: ' . $e->getMessage());
+            return ['ok'=>false,'error'=>'Could not start the guide refresh. Check the server log.'];
+        }
         finally {flock($lock,LOCK_UN);fclose($lock);}
     }
 }

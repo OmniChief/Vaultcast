@@ -85,7 +85,11 @@ function epg_fetch_xml($url, $maxAge = 21600) {
         $decoded = @gzdecode($body);
         if ($decoded !== false) $body = $decoded;
     }
-    file_put_contents($path, $body);
+    $tmp = $path . '.' . bin2hex(random_bytes(6)) . '.tmp';
+    if (file_put_contents($tmp, $body, LOCK_EX) === false || !@rename($tmp, $path)) {
+        @unlink($tmp);
+        throw new RuntimeException('Could not save the downloaded guide.');
+    }
     file_put_contents($metaPath, json_encode(array('url' => $url, 'fetchedAt' => gmdate('c'), 'bytes' => strlen($body))));
     return array('path' => $path, 'cached' => false, 'url' => $url);
 }
@@ -165,6 +169,15 @@ function epg_live_placeholder($name, $from, $to) {
 }
 
 function epg_refresh($force = false) {
+    $lock = @fopen(epg_cache_dir() . '/refresh.lock', 'c');
+    if (!$lock) throw new RuntimeException('Could not open the guide refresh lock.');
+    try {
+        if (!flock($lock, LOCK_EX | LOCK_NB)) return ['ok'=>true,'busy'=>true];
+        return epg_refresh_locked($force);
+    } finally { flock($lock, LOCK_UN); fclose($lock); }
+}
+
+function epg_refresh_locked($force) {
     if (!class_exists('XMLReader')) throw new RuntimeException('PHP XMLReader is required to import XMLTV programme guides.');
     $iptv = iptv_load();
     $urls = $iptv['epgUrls'];
@@ -179,6 +192,8 @@ function epg_refresh($force = false) {
             $errors[] = array('url' => $url, 'error' => $e->getMessage());
         }
     }
+    // A provider outage must not replace a usable previous guide with an empty one.
+    if ($urls && !$fetched) return ['ok'=>false,'error'=>'No programme guide source could be downloaded.','errors'=>$errors];
     // Persist a slim index for favourites
     $now = (int) round(microtime(true) * 1000);
     $from = $now - 3600000;
@@ -210,13 +225,16 @@ function epg_refresh($force = false) {
     epg_build_channel_catalogue();
     $indexPath = epg_cache_dir() . '/favourites.json';
     $tempPath=$indexPath.'.'.bin2hex(random_bytes(4));
-    file_put_contents($tempPath, json_encode(array(
+    $encoded = json_encode(array(
         'updatedAt' => gmdate('c'),
         'urls' => $urls,
         'programs' => $slim,
         'errors' => $errors,
-    ), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),LOCK_EX);
-    rename($tempPath,$indexPath);
+    ), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    if ($encoded === false || file_put_contents($tempPath, $encoded, LOCK_EX) === false || !@rename($tempPath, $indexPath)) {
+        @unlink($tempPath);
+        throw new RuntimeException('Could not save the refreshed guide.');
+    }
     \Vaultcast\Repository::putDocument('live_epg_revision',['at'=>microtime(true)]);
     return array(
         'ok' => true,

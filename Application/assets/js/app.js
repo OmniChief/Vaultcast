@@ -13064,7 +13064,7 @@ function viewCollectionDetail(){
       h('p', { className:'muted', text:(tvs.data.feeds || []).length + ' M3U source(s) and ' + (tvs.data.epgUrls || []).length + ' XMLTV import URL(s) are configured. Sources, stream lists and EPG URLs are managed in IPTV feeds.' }),
       h('ul', { className:'tvs-sources' }, (tvs.data.feeds || []).map(function(f){ return h('li', {}, [ h('strong', { text:f.name || f.id }), h('span', { className:'muted', text:' ' + (f.enabled === false ? 'disabled' : 'enabled') }) ]); })),
       h('div', { className:'row-actions' }, [ h('button', { className:'btn', type:'button', text:'Open IPTV feeds', onClick:function(){ openSettings('live-iptv'); } }),
-        h('button', { className:'btn ghost', type:'button', text:'Refresh EPG now', onClick:function(){ api('/live/epg_refresh', { method:'POST' }).then(function(j){ toast(j && j.ok !== false ? 'EPG refreshed' : (j.error || 'EPG refresh failed')); }); } }) ])
+        h('button', { className:'btn ghost', type:'button', text:'Refresh EPG now', onClick:function(){ api('/live/epg_refresh', { method:'POST' }).then(function(j){ toast(j && j.ok !== false ? 'EPG refresh queued. Progress is available in Maintenance.' : ((j && j.error) || 'EPG refresh failed')); }).catch(function(e){ toast(String(e.message || e)); }); } }) ])
     ]));
   }
 
@@ -14280,7 +14280,7 @@ function viewCollectionDetail(){
           liveSetMsg('Fetching EPG…');
           liveApi('epg_refresh', '&force=1').then(function(body){
             if (!body || !body.ok) { liveSetMsg((body && body.error) || 'EPG refresh failed', true); return; }
-            liveSetMsg('EPG refreshed · ' + (body.channelsWithEpg || 0) + ' favourites matched · ' + ((body.errors || []).length) + ' URL errors');
+            liveSetMsg(body.queued ? 'EPG refresh queued. Progress is available in Maintenance.' : 'EPG refresh will retry shortly.');
           }).catch(function(e){ liveSetMsg(String(e.message||e), true); });
         }})
       ])

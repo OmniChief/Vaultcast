@@ -632,6 +632,7 @@ $rootForNginx=$installRoot.Replace('\','/')
 $config=Get-Content -LiteralPath 'deploy/nginx.conf.example' -Raw
 $config=$config.Replace('listen 80;',"listen $($listenAddress):$webPort;").Replace('server_name vaultcast.local;','server_name _;').Replace('root /srv/vaultcast;',"root ""$rootForNginx"";").Replace('unix:/run/php/php7.4-fpm.sock','vaultcast_php').Replace('127.0.0.1:3100',"127.0.0.1:$netplayPort")
 $mediaLocation = '    location ~ "^/_vaultcast_media/([A-Za-z]):/(.*)$" {' + "`n" + '        internal; alias $1:/$2; sendfile on;' + "`n    }"
+$mediaLocation += "`n" + '    location ~ "^/_vaultcast_unc/([^/]+)/([^/]+)/(.*)$" {' + "`n" + '        internal; alias //$1/$2/$3; sendfile on;' + "`n    }"
 $config=[regex]::Replace($config,'(?s)    location \^~ /_vaultcast_media/ \{.*?\n    \}','')
 $config=$config.Replace('    location ~ /\. { deny all; }',$mediaLocation+"`n"+'    location ~ /\. { deny all; }')
 $upstream = "upstream vaultcast_php {`n    least_conn;`n" + (($phpPorts | ForEach-Object { "    server 127.0.0.1:$_;" }) -join "`n") + "`n}`n"
@@ -657,7 +658,7 @@ for ($worker=0; $worker -lt $phpPorts.Count; $worker++) {
 Install-AppService 'VaultcastNetplay' 'Vaultcast Multiplayer' $nodeExe ('"'+(Join-Path $installRoot 'netplay/server.js')+'"') $installRoot @{PATH=$servicePath;PORT="$netplayPort";HOST='127.0.0.1';NETPLAY_LOG=(Join-Path $installRoot 'data/netplay.log')}
 $nginxArguments='-p "'+$nginxDir.Replace('\','/')+'/" -c conf/vaultcast.conf'
 Install-AppService 'VaultcastWeb' 'Vaultcast Web' $nginxExe $nginxArguments $nginxDir @{} ($phpServiceIds + @('VaultcastNetplay')) ($nginxArguments+' -s quit')
-Save-Text $savedPath ([pscustomobject]@{webPort=$webPort;phpPort=$phpPort;phpWorkers=$phpWorkers;mediaAccel=$true;netplayPort=$netplayPort;listenAddress=$listenAddress;installRoot=$installRoot} | ConvertTo-Json)
+Save-Text $savedPath ([pscustomobject]@{webPort=$webPort;phpPort=$phpPort;phpWorkers=$phpWorkers;mediaAccel=$true;mediaUncAccel=$true;netplayPort=$netplayPort;listenAddress=$listenAddress;installRoot=$installRoot} | ConvertTo-Json)
 Show-SetupStage 8 'Configuring network access and waiting for startup'
 Get-NetFirewallRule -Name VaultcastWeb -ErrorAction SilentlyContinue | Remove-NetFirewallRule
 if ($listenAddress -ne '127.0.0.1') { New-NetFirewallRule -Name VaultcastWeb -DisplayName 'Vaultcast library' -Direction Inbound -Action Allow -Protocol TCP -LocalPort $webPort -Program $nginxExe -Profile Private,Domain -RemoteAddress LocalSubnet | Out-Null }

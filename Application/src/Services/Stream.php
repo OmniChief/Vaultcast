@@ -433,8 +433,10 @@ class Stream {
         if (empty(Store::settings()['streaming']['nginx_accel'])) return null;
         $realPath = str_replace('\\', '/', $realPath);
         $direct = !empty($_GET['direct']);
-        // Windows nginx maps drive-letter paths only (C:/...); UNC shares stay on PHP sendFile.
-        if (DIRECTORY_SEPARATOR === '\\' && !preg_match('#^[A-Za-z]:/#', $realPath)) return null;
+        $unc = DIRECTORY_SEPARATOR === '\\' && strpos($realPath, '//') === 0;
+        // Older nginx installations only have the drive-letter location.
+        if ($unc && empty(Store::settings()['streaming']['nginx_unc_accel'])) return null;
+        if (DIRECTORY_SEPARATOR === '\\' && !$unc && !preg_match('#^[A-Za-z]:/#', $realPath)) return null;
         foreach (self::accelMap() as $id => $root) {
             $root = rtrim(str_replace('\\', '/', (string)$root), '/');
             $win = DIRECTORY_SEPARATOR === '\\';
@@ -447,7 +449,7 @@ class Stream {
                 if (!MediaAccel::rootUsable($root)) return null;
                 // Keep drive letters (C:/...) so Windows nginx can alias them.
                 $rel = ltrim($realPath, '/');
-                return '/_vaultcast_media/' . implode('/', array_map('rawurlencode', explode('/', $rel)));
+                return ($unc ? '/_vaultcast_unc/' : '/_vaultcast_media/') . implode('/', array_map('rawurlencode', explode('/', $rel)));
             }
         }
         return null;
@@ -506,12 +508,18 @@ class Stream {
         $fp = fopen($path, 'rb');
         if (!$fp) { http_response_code(404); exit; }
         fseek($fp, $start);
+        \Vaultcast\Database::releaseForStreaming();
+        // Avoid accumulating a movie in PHP's output buffers and stop abandoned transfers.
+        header('X-Accel-Buffering: no');
+        while (ob_get_level() > 0) { if (!@ob_end_flush()) break; }
         $remaining = $end - $start + 1;
         while ($remaining > 0 && !feof($fp)) {
-            $chunk = fread($fp, min(8192, $remaining));
-            if ($chunk === false) break;
+            if (connection_aborted()) break;
+            $chunk = fread($fp, min(262144, $remaining));
+            if ($chunk === false || $chunk === '') break;
             echo $chunk;
             $remaining -= strlen($chunk);
+            @flush();
             if (connection_aborted()) break;
         }
         fclose($fp);

@@ -86,6 +86,18 @@ final class Database
         }
     }
 
+    /** Streaming has finished its SQL work; do not retain a connection or reset lock. */
+    public static function releaseForStreaming(): void
+    {
+        if (self::$pdo && self::$pdo->inTransaction()) return;
+        self::$pdo = null;
+        if (is_resource(self::$operationLock)) {
+            flock(self::$operationLock, LOCK_UN);
+            fclose(self::$operationLock);
+        }
+        self::$operationLock = null;
+    }
+
     public static function basePath(): string
     {
         return self::config()['base_path'] ?? '/';

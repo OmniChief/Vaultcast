@@ -169,7 +169,7 @@ final class Maintenance
                 case 'epg':
                     if (empty(Store::settings()['features']['live'])) throw new RuntimeException('Live channels are disabled.');
                     require_once STREAM_ROOT . '/src/Live/epg.php';
-                    $job['result'] = epg_refresh(false); break;
+                    $job['result'] = epg_refresh(($job['target'] ?? '') === 'force'); break;
                 case 'collections': $job['result'] = Collections::refresh($job['target'] ?? null); break;
                 case 'downloads':
                     if (empty(Store::settings()['features']['downloads'])) throw new RuntimeException('Downloads are disabled.');

@@ -186,6 +186,40 @@ final class Repository
         return self::rows('SELECT payload FROM vaultcast_items WHERE id = ?', [$id])[0] ?? null;
     }
 
+    /** Fetch a bounded selection without one query per item; retain caller order. */
+    public static function items(array $ids): array
+    {
+        $found = [];
+        foreach (array_chunk(array_values(array_unique($ids)), 200) as $batch) {
+            foreach (self::rows('SELECT payload FROM vaultcast_items WHERE id IN (' . implode(',', array_fill(0, count($batch), '?')) . ')', $batch) as $item) {
+                $found[$item['id']] = $item;
+            }
+        }
+        $out = [];
+        foreach ($ids as $id) if (isset($found[$id])) $out[] = $found[$id];
+        return $out;
+    }
+
+    /** Uniform sampling from revision-managed IDs, without database random sorting. */
+    public static function randomItems(string $section, int $limit): array
+    {
+        $key = 'section-sample-v1|' . $section;
+        $revision = \Store::revision('catalogue');
+        $entry = self::cacheGet($key);
+        if ($entry === null || ($entry['revision'] ?? -1) !== $revision) {
+            $s = Database::connection()->prepare('SELECT id FROM vaultcast_items WHERE section_id=? ORDER BY id');
+            $s->execute([$section]);
+            $entry = ['revision' => $revision, 'ids' => $s->fetchAll(\PDO::FETCH_COLUMN)];
+            self::cachePut($key, $entry, 0);
+        }
+        $ids = $entry['ids'];
+        if (!$ids) return [];
+        $chosen = [];
+        foreach ((array)array_rand($ids, min(count($ids), max(1, min(100, $limit)))) as $index) $chosen[] = $ids[$index];
+        shuffle($chosen);
+        return self::items($chosen);
+    }
+
     public static function section(string $id): array
     {
         return self::rows('SELECT payload FROM vaultcast_items WHERE section_id = ? ORDER BY title, id', [$id]);
@@ -278,6 +312,63 @@ final class Repository
         return $items;
     }
 
+    /** Keyset batches keep Continue Watching memory and item queries bounded. */
+    public static function progressRows(string $userId): \Generator
+    {
+        $cursor = null;
+        do {
+            $where = 'p.user_id=?';
+            $args = [$userId];
+            if ($cursor !== null) {
+                $where .= ' AND (p.updated_at<? OR (p.updated_at=? AND p.item_id<?))';
+                array_push($args, $cursor['at'], $cursor['at'], $cursor['id']);
+            }
+            $s = Database::connection()->prepare('SELECT p.item_id,p.updated_at,p.payload AS progress,i.payload AS item FROM vaultcast_progress p JOIN vaultcast_items i ON i.id=p.item_id WHERE '
+                . $where . ' ORDER BY p.updated_at DESC,p.item_id DESC LIMIT 100');
+            $s->execute($args);
+            $batch = $s->fetchAll();
+            foreach ($batch as $row) {
+                $cursor = ['at' => (int)$row['updated_at'], 'id' => $row['item_id']];
+                yield ['id' => $row['item_id'], 'item' => json_decode($row['item'], true, 512, JSON_THROW_ON_ERROR),
+                    'progress' => json_decode($row['progress'], true, 512, JSON_THROW_ON_ERROR)];
+            }
+        } while (count($batch) === 100);
+    }
+
+    public static function progressItems(string $userId, array $ids): array
+    {
+        $out = [];
+        foreach (array_chunk(array_values(array_unique($ids)), 200) as $batch) {
+            $s = Database::connection()->prepare('SELECT item_id,payload FROM vaultcast_progress WHERE user_id=? AND item_id IN (' . implode(',', array_fill(0, count($batch), '?')) . ')');
+            $s->execute(array_merge([$userId], $batch));
+            foreach ($s as $row) $out[$row['item_id']] = json_decode($row['payload'], true, 512, JSON_THROW_ON_ERROR);
+        }
+        return $out;
+    }
+
+    public static function progressRevisionName(string $userId): string
+    {
+        return 'progress-user:' . hash('sha256', $userId);
+    }
+
+    /** Only this viewer's home changes; a lock coalesces concurrent playback ticks. */
+    public static function invalidateProgress(string $userId, bool $immediate = false): void
+    {
+        $dir = (defined('STREAM_SHM') ? STREAM_SHM : dirname(__DIR__) . '/data/cache') . '/progress';
+        if (!is_dir($dir)) @mkdir($dir, 0775, true);
+        $lock = @fopen($dir . '/' . hash('sha256', $userId) . '.stamp', 'c+');
+        if (!$lock) { self::putDocument(self::progressRevisionName($userId), []); return; }
+        try {
+            if (!flock($lock, LOCK_EX | ($immediate ? 0 : LOCK_NB))) return;
+            $last = (int)stream_get_contents($lock);
+            if (!$immediate && time() - $last < 20) return;
+            self::putDocument(self::progressRevisionName($userId), []);
+            rewind($lock);
+            ftruncate($lock, 0);
+            fwrite($lock, (string)time());
+        } finally { flock($lock, LOCK_UN); fclose($lock); }
+    }
+
     /** One item's progress — used by play-token issue (avoid loading the whole map). */
     public static function progressItem(string $userId, string $itemId): ?array
     {
@@ -310,14 +401,7 @@ final class Repository
         $armed=$finished?'0':($start?'1':"COALESCE(JSON_EXTRACT(payload,'$.viewing_armed'),0)");
         $s = Database::connection()->prepare("INSERT INTO vaultcast_progress (user_id,item_id,updated_at,payload) VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE updated_at=VALUES(updated_at),payload=JSON_SET(VALUES(payload),'$.viewings',GREATEST(($previous)+($increment),COALESCE(JSON_EXTRACT(VALUES(payload),'$.viewings'),0)),'$.viewing_armed',$armed)");
         $s->execute([$userId, $itemId, (int)($progress['updated_at'] ?? time()), self::encode($progress)]);
-        $stamp = (defined('STREAM_SHM') ? STREAM_SHM : dirname(__DIR__) . '/data/cache') . '/progress-rev.stamp';
-        $now = time();
-        $mtime = is_file($stamp) ? (int)@filemtime($stamp) : 0;
-        if ($mtime === 0 || ($now - $mtime) >= 20) {
-            if (!is_dir(dirname($stamp))) @mkdir(dirname($stamp), 0775, true);
-            @touch($stamp);
-            self::putDocument('progress', []);
-        }
+        self::invalidateProgress($userId, array_key_exists('watched', $progress));
     }
 
     public static function migrateProgress(array $oldIds, string $newId): int

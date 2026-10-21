@@ -40,6 +40,24 @@ function live_bridge_allow_file(string $jar): string {
     return sys_get_temp_dir() . '/iptv_hls_cj/' . substr($jar, 0, 40) . '.hosts';
 }
 
+/** Record rewritten child hosts before emitting a playlist; media needs no output buffer. */
+function live_bridge_record_playlist_hosts(string $body): void {
+    $file = live_bridge_allow_file((string)($_GET['jar'] ?? ''));
+    if (is_file($file) && filesize($file) >= 65536) return;
+    $known = is_file($file) ? array_fill_keys((array)@file($file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES), true) : [];
+    $new = [];
+    if (preg_match_all('#iptv_hls\?u=([^&"\s]+)#', $body, $matches)) {
+        foreach ($matches[1] as $encoded) {
+            $host = strtolower((string)parse_url(rawurldecode($encoded), PHP_URL_HOST));
+            if ($host !== '' && !preg_match('/[\r\n\x00]/', $host) && !isset($known[$host])) $new[$host] = true;
+        }
+    }
+    if ($new) {
+        @mkdir(dirname($file), 0700, true);
+        @file_put_contents($file, implode("\n", array_keys($new)) . "\n", FILE_APPEND | LOCK_EX);
+    }
+}
+
 function live_bridge_lineup_hosts(): array {
     require_once STREAM_ROOT . '/src/Live/iptv.php';
     $hosts = [];
@@ -249,25 +267,6 @@ if ($__liveAction !== null) {
             foreach ((array) @file($allowFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $h) $allowed[trim((string)$h)] = true;
         }
         if (empty($allowed[$host])) live_bridge_deny(403, 'Host is not in the IPTV lineup');
-        ob_start(function ($buf) use ($allowFile, $allowed) {
-            $isPlaylist = false;
-            foreach (headers_list() as $hd) {
-                if (stripos($hd, 'content-type:') === 0 && stripos($hd, 'mpegurl') !== false) { $isPlaylist = true; break; }
-            }
-            if (!$isPlaylist || !is_string($buf) || $buf === '') return $buf;
-            if (preg_match_all('#iptv_hls\?u=([^&"\s]+)#', $buf, $mm)) {
-                $new = [];
-                foreach ($mm[1] as $enc) {
-                    $h = strtolower((string) parse_url(rawurldecode($enc), PHP_URL_HOST));
-                    if ($h !== '' && empty($allowed[$h])) $new[$h] = true;
-                }
-                if ($new && (!is_file($allowFile) || filesize($allowFile) < 65536)) {
-                    @mkdir(dirname($allowFile), 0700, true);
-                    @file_put_contents($allowFile, implode("\n", array_keys($new)) . "\n", FILE_APPEND | LOCK_EX);
-                }
-            }
-            return $buf;
-        });
     }
 
 header('Cache-Control: no-store');
@@ -497,9 +496,8 @@ try {
         exit;
     }
     if ($action === 'epg_refresh' && ($_SERVER['REQUEST_METHOD'] === 'POST' || $_SERVER['REQUEST_METHOD'] === 'GET')) {
-        require_once STREAM_ROOT . '/src/Live/epg.php';
         $force = isset($_GET['force']) ? $_GET['force'] === '1' : true;
-        echo json_encode(epg_refresh($force), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        echo json_encode(LiveGuideCache::queueEpg($force), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
         exit;
     }
 
