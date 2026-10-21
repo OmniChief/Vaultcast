@@ -202,7 +202,8 @@ final class CompatibilityBrowser {
     }
     private static function live(string $id,int $page,string $query): string {
         self::allow('live');if(empty(Store::settings()['features']['live']))throw new RuntimeException('Live is disabled.');
-        if(($_GET['tab'] ?? '')==='radio'){
+        $tab=in_array($_GET['tab'] ?? '',['now','relay','iptv','radio'],true)?$_GET['tab']:'now';
+        if($tab==='radio'){
             $stations=Radio::stations();$html='<h2>Radio</h2>'.self::link('Live television',['view'=>'live']);
             if($id!==''){foreach($stations as $radio)if($radio['id']===$id){$html.='<section class="compat-panel"><h3>'.self::esc($radio['name']).'</h3><audio controls="controls" preload="none" src="'.self::esc($radio['url']).'">Your browser needs support for this audio format.</audio><p>'.self::esc($radio['description'] ?: ($radio['tags'] ?? '')).'</p></section>';break;}}
             $html.=self::searchForm(['view'=>'live','tab'=>'radio'],$query);$stations=array_values(array_filter($stations,static function($radio)use($query){return $query===''||mb_stripos($radio['name'].' '.($radio['country'] ?? '').' '.($radio['tags'] ?? ''),$query)!==false;}));
@@ -224,36 +225,44 @@ final class CompatibilityBrowser {
                 if(!empty($block['url'])){$url=$block['url'];if(preg_match('#(?:^|/)api[.]php[?]action=([a-z_]+)&?(.*)$#',$url,$m))$url=self::$base.'api/live/'.$m[1].(!empty($m[2])?'?'.$m[2]:'');if(!preg_match('#^(?:https?://|/)#i',$url))$url=self::$base.'live/'.$url;
                     $offset=max(0,((int)($block['mediaOffsetMs'] ?? 0)+$now-(int)$block['startUnix'])/1000);$html.=self::player($url.'#t='.(int)$offset,false,[],['relay'=>['id'=>$id,'seek'=>$offset,'end'=>(int)($block['endUnix'] ?? 0)]]);
                 }else $html.='<p>This channel is currently off air.</p>';
-                $html.=self::link('Retune to live',['view'=>'live','id'=>$id]).'<p><a class="compat-button" href="'.self::esc(self::$base.'api/live/m3u?channel='.rawurlencode($id)).'">Open channel playlist</a></p><p class="compat-note">If automatic retuning is unavailable, use the channel playlist or retune when this programme ends.</p>';
+                $html.=self::link('Retune to live',['view'=>'live','tab'=>$tab,'id'=>$id]).'<p><a class="compat-button" href="'.self::esc(self::$base.'api/live/m3u?channel='.rawurlencode($id)).'">Open channel playlist</a></p><p class="compat-note">If automatic retuning is unavailable, use the channel playlist or retune when this programme ends.</p>';
             }
         }
         if($schedule!==''){
             $selected=null;foreach($guide['channels'] ?? [] as $channel)if((string)$channel['id']===$schedule)$selected=$channel;
             if(!$selected)throw new RuntimeException('Channel unavailable.');
-            $html.='<section class="compat-panel"><h3>'.self::esc($selected['name']).' · Programme guide</h3>'.self::link('Watch channel',['view'=>'live','id'=>$schedule]).'<p class="compat-note">Times shown in UTC. Schedule covers the next two hours.</p>';
+            $html.='<section class="compat-panel"><h3>'.self::esc($selected['name']).' · Programme guide</h3>'.self::link('Watch channel',['view'=>'live','tab'=>$tab,'id'=>$schedule]).'<p class="compat-note">Times shown in UTC. Schedule covers the next two hours.</p>';
             $programs=array_values(array_filter($selected['programs'] ?? [],static function($program){return (int)($program['endUnix'] ?? 0)>(int)(microtime(true)*1000);}));
             $schedulePage=max(1,min(1000,(int)($_GET['schedule_page'] ?? 1)));
             foreach(array_slice($programs,($schedulePage-1)*16,16) as $program)$html.=self::programme($program);
             if(!$programs)$html.='<p>No programme details available.</p>';
-            if($schedulePage>1)$html.=self::link('Earlier programmes',['view'=>'live','schedule'=>$schedule,'schedule_page'=>$schedulePage-1]);
-            if($schedulePage*16<count($programs))$html.=self::link('Later programmes',['view'=>'live','schedule'=>$schedule,'schedule_page'=>$schedulePage+1]);
+            if($schedulePage>1)$html.=self::link('Earlier programmes',['view'=>'live','tab'=>$tab,'schedule'=>$schedule,'schedule_page'=>$schedulePage-1]);
+            if($schedulePage*16<count($programs))$html.=self::link('Later programmes',['view'=>'live','tab'=>$tab,'schedule'=>$schedule,'schedule_page'=>$schedulePage+1]);
             $html.='</section>';
         }
-        $html.=self::searchForm(['view'=>'live'],$query);$channels=array_values(array_filter($guide['channels'] ?? [],static function($ch)use($query){return $query===''||mb_stripos($ch['name'] ?? '',$query)!==false;}));
+        $html.=self::searchForm(['view'=>'live','tab'=>$tab],$query);$channels=array_values(array_filter($guide['channels'] ?? [],static function($ch)use($query,$tab){return ($tab==='now'||($tab==='iptv'?($ch['kind'] ?? '')==='iptv':($ch['kind'] ?? '')!=='iptv'))&&($query===''||mb_stripos($ch['name'] ?? '',$query)!==false);}));
         usort($channels,static function($a,$b){return (int)($a['number'] ?? 0)<=>(int)($b['number'] ?? 0);});$html.='<ul class="compat-list">';
         foreach(array_slice($channels,($page-1)*16,16) as $ch){
-            $html.='<li>'.self::link(($ch['number'] ?? '').' - '.($ch['name'] ?? 'Channel'),['view'=>'live','id'=>$ch['id']]).self::link('Programme guide',['view'=>'live','schedule'=>$ch['id']]);
+            $html.='<li>'.self::link(($ch['number'] ?? '').' - '.($ch['name'] ?? 'Channel'),['view'=>'live','tab'=>$tab,'id'=>$ch['id']]).self::link('Programme guide',['view'=>'live','tab'=>$tab,'schedule'=>$ch['id']]);
             if(!empty($ch['now']))$html.=self::programme($ch['now'],'Now · ');
             if(!empty($ch['next']))$html.=self::programme($ch['next'],'Next · ');
             $html.='</li>';
         }
-        return $html.'</ul>'.self::pages(['view'=>'live','q'=>$query],$page,$page*16<count($channels));
+        return $html.'</ul>'.self::pages(['view'=>'live','tab'=>$tab,'q'=>$query],$page,$page*16<count($channels));
     }
     public static function render(array $startup,string $base,string $site,string $error=''): void {
         self::$base=$base;self::$signed=!empty($startup['me']['user']);self::$personal=null;
         self::$viewer=$startup['me']['user'] ?? guest_user();AreaAccess::remember(self::$viewer);
         $theme=(string)self::preference('theme',Store::settings()['theme'] ?? 'dark');
         self::$theme=in_array($theme,SiteArtwork::THEMES,true)?$theme:'dark';
+        if(!isset($_GET['view'])){
+            $path=(string)parse_url($_SERVER['REQUEST_URI'] ?? $base,PHP_URL_PATH);
+            if(strpos($path,$base)===0)$path=substr($path,strlen($base));
+            $parts=array_map('rawurldecode',explode('/',trim($path,'/')));$route=$parts[0] ?? '';
+            if($route==='library'){$_GET['view']=empty($parts[1])?'library':'section';if(!empty($parts[1]))$_GET['id']=$parts[1];}
+            elseif($route==='collections'){$_GET['view']=empty($parts[1])?'collections':'collection';if(!empty($parts[1]))$_GET['id']=$parts[1];}
+            elseif($route==='live'){$_GET['view']='live';if(in_array($parts[1] ?? '',['now','relay','iptv','radio'],true)){$_GET['tab']=$parts[1];if($parts[1]==='radio'&&!empty($parts[2]))$_GET['id']=$parts[2];}elseif(!empty($parts[1]))$_GET['id']=$parts[1];}
+        }
         $home=$startup['home'] ?? null;$body='';$view=(string)($_GET['view'] ?? 'home');
         if(($_SERVER['REQUEST_METHOD'] ?? '')==='POST' && isset($_POST['compat_action'])){
             if(!hash_equals(self::token(),(string)($_POST['compat_token'] ?? ''))){http_response_code(403);$body='<p class="compat-error">This form expired. Reload the page and try again.</p>';}
@@ -285,7 +294,12 @@ final class CompatibilityBrowser {
         if($home){
             $nav.='<div class="compat-subnav">';
             if(in_array($view,['library','section','show','item','search','collections','collection'],true)){
-                $nav.=self::link('Discover',['view'=>'library']);foreach($home['sections'] ?? [] as $section)if(($section['type'] ?? '')!=='roms')$nav.=self::link($section['label'] ?? $section['type'],['view'=>'section','id'=>$section['id']]);$nav.=self::link('Collections',['view'=>'collections']);
+                $libraryTabs=[['label'=>'Discover','params'=>['view'=>'library'],'active'=>$view==='library']];
+                foreach($home['sections'] ?? [] as $section)if(($section['type'] ?? '')!=='roms')$libraryTabs[]=['label'=>$section['label'] ?? $section['type'],'params'=>['view'=>'section','id'=>$section['id']],'active'=>$view==='section'&&($_GET['id'] ?? '')===$section['id']];
+                $libraryTabs[]=['label'=>'Collections','params'=>['view'=>'collections'],'active'=>in_array($view,['collections','collection'],true)];
+                foreach($libraryTabs as $tab)$nav.='<a'.($tab['active']?' class="active" aria-current="page"':'').' href="'.self::esc(self::url($tab['params'])).'">'.self::esc($tab['label']).'</a>';
+            }elseif($view==='live'){
+                foreach(['now'=>'On now','relay'=>'Relay','iptv'=>'IPTV','radio'=>'Radio'] as $tab=>$label){$selected=($_GET['tab'] ?? 'now')===$tab;$nav.='<a'.($selected?' class="active" aria-current="page"':'').' href="'.self::esc(self::url(['view'=>'live','tab'=>$tab])).'">'.self::esc($label).'</a>';}
             }else{foreach(['home'=>'Overview','favourites'=>'Favourites','watchlist'=>'Watchlist','calendar'=>'Release calendar','history'=>'History','arrivals'=>'New arrivals','tonight'=>'Find a watch','cinema'=>'Watch together','invitations'=>'Invitations','home-options'=>'Customise Home','lists'=>'Custom lists','friends'=>'Friends','inbox'=>'Inbox','chat'=>'Chat'] as $key=>$label){if($key!=='home'&&!self::$signed)continue;$nav.='<a'.($view===$key?' class="active" aria-current="page"':'').' href="'.self::esc(self::url($key==='home'?['view'=>'home','overview'=>'1']:['view'=>$key])).'">'.self::esc($label).'</a>';}}
             $nav.='</div>';
         }
