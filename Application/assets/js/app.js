@@ -747,11 +747,21 @@
     attrs.role = 'status';
     return h('p', attrs);
   }
+  /* Turn raw errors into something a person can act on: no "TypeError:" prefixes, "[object Object]" or "null". */
+  function friendlyMessage(msg){
+    if (msg && typeof msg === 'object') msg = msg.error || msg.message || '';
+    msg = String(msg == null ? '' : msg).replace(/^(?:Uncaught\s+)?(?:[A-Z][A-Za-z]*Error|Error):\s*/, '').trim();
+    if (!msg || msg === 'null' || msg === 'undefined' || msg === '[object Object]') return 'Something went wrong. Please try again.';
+    if (/^(?:Failed to fetch|NetworkError when attempting to fetch resource\.?|Load failed|Network request failed)$/i.test(msg)) return 'Can\u2019t reach the server right now. Check your connection and try again.';
+    if (/^(?:Unexpected token|Unexpected end of JSON|JSON\.parse|The string did not match the expected pattern)/i.test(msg)) return 'The server sent an unexpected reply. Please try again in a moment.';
+    return msg;
+  }
   function toast(msg, opts){
     opts = opts || {};
     var t = $('#toast');
     if (!t) return;
-    t.hidden = false; t.textContent = msg;
+    t.setAttribute('role', opts.kind === 'bad' ? 'alert' : 'status');
+    t.hidden = false; t.textContent = friendlyMessage(msg);
     t.className = 'toast' + (opts.kind ? (' toast-' + opts.kind) : '');
     clearTimeout(toast._t); toast._t = setTimeout(function(){ t.hidden = true; }, opts.ms || 2800);
   }

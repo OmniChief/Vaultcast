@@ -856,6 +856,7 @@ input[type=checkbox], input[type=radio], input[type=range] { accent-color: var(-
 .lp-guide-list { flex: 1; overflow-y: auto; padding: 0 10px 18px; }
 .lp-guide-item { width: 100%; display: flex; align-items: center; gap: 12px; padding: 11px 12px; border: 0; border-radius: var(--radius); background: transparent; color: var(--text); text-align: left; cursor: pointer; font: inherit; }
 .lp-guide-item:hover, .lp-guide-item:focus-visible { background: rgba(255,255,255,.07); outline: none; }
+.lp-guide-item:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
 .lp-guide-item.active { background: rgba(255,77,106,.16); box-shadow: inset 0 0 0 1px color-mix(in srgb,var(--accent) 45%,transparent); }
 .lp-gi-text { display: flex; flex-direction: column; min-width: 0; }
 .lp-gi-text strong, .lp-gi-text span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
