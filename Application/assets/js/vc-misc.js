@@ -903,8 +903,15 @@
       var t = 0; function wake(){ document.body.classList.remove('vc-cursor-hidden'); exit.classList.add('show'); clearTimeout(t); t = setTimeout(function(){ document.body.classList.add('vc-cursor-hidden'); exit.classList.remove('show'); }, 3000); }
       function key(e){ if (e.key === 'Escape' && !document.fullscreenElement) exitKiosk(); }
       function fs(){ if (!document.fullscreenElement && kiosk && kiosk.wasFull) exitKiosk(); }
-      document.addEventListener('pointermove', wake); document.addEventListener('pointerdown', wake); document.addEventListener('keydown', key); document.addEventListener('fullscreenchange', fs);
-      kiosk = { exit:exit, off:function(){ clearTimeout(t); document.removeEventListener('pointermove', wake); document.removeEventListener('pointerdown', wake); document.removeEventListener('keydown', key); document.removeEventListener('fullscreenchange', fs); } };
+      // Track the real visible height (TV and mobile browsers differ on 100vh); the board's minimum height follows it.
+      var root = document.documentElement, vv = window.visualViewport, fitT = 0;
+      function fit(){ cancelAnimationFrame(fitT); fitT = requestAnimationFrame(function(){ var hgt = Math.round((vv && vv.height) || window.innerHeight || root.clientHeight); if (hgt > 0) { root.style.setProperty('--vc-kiosk-h', hgt + 'px'); document.body.classList.add('vc-kiosk-h'); } }); }
+      root.classList.add('vc-kiosk-root'); fit();
+      window.addEventListener('resize', fit); window.addEventListener('orientationchange', fit); if (vv) vv.addEventListener('resize', fit);
+      document.addEventListener('pointermove', wake); document.addEventListener('pointerdown', wake); document.addEventListener('keydown', key); document.addEventListener('fullscreenchange', fs); document.addEventListener('fullscreenchange', fit);
+      kiosk = { exit:exit, off:function(){ clearTimeout(t); cancelAnimationFrame(fitT); window.removeEventListener('resize', fit); window.removeEventListener('orientationchange', fit); if (vv) vv.removeEventListener('resize', fit);
+        document.removeEventListener('pointermove', wake); document.removeEventListener('pointerdown', wake); document.removeEventListener('keydown', key); document.removeEventListener('fullscreenchange', fs); document.removeEventListener('fullscreenchange', fit);
+        root.classList.remove('vc-kiosk-root'); root.style.removeProperty('--vc-kiosk-h'); document.body.classList.remove('vc-kiosk-h'); } };
       if (document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().then(function(){ if (kiosk) kiosk.wasFull = true; }).catch(function(){});
       wake();
     }

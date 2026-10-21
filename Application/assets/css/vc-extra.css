@@ -531,9 +531,17 @@ button.vc-choice:active:not(:disabled) { transform: scale(.98); }
 
 /* Kiosk */
 body.vc-kiosk .topnav, body.vc-kiosk .subnav, body.vc-kiosk .maintenance-advisory-host, body.vc-kiosk .maintenance-advisory, body.vc-kiosk .radio-player-bar { display: none !important; }
-body.vc-kiosk .vc-misc { padding: 12px; }
+/* Kiosk: the page is exactly the viewport unless the widgets reach further down. No app-shell bottom padding,
+   no animation transform and no fixed extra height, so there is nothing to scroll into. */
+html.vc-kiosk-root, body.vc-kiosk { overflow-x: hidden; overflow-y: auto; }
+body.vc-kiosk .mode-switch { display: none !important; }
+body.vc-kiosk .app-shell, body.vc-kiosk .app-shell.xshell { min-height: 0; padding: 0 !important; }
+body.vc-kiosk main.view { animation: none; margin: 0; padding: 0; }
+body.vc-kiosk .vc-misc { padding: 12px; gap: 0; }
 body.vc-kiosk .vc-board-head { display: none; }
-body.vc-kiosk .vc-board { min-height: calc(100vh - 24px); }
+body.vc-kiosk .vc-board { min-height: calc(100vh - 24px); min-height: calc(100dvh - 24px); margin: 0; }
+body.vc-kiosk.vc-kiosk-h .vc-board { min-height: calc(var(--vc-kiosk-h) - 24px); }
+body.vc-kiosk .vc-board-grid { min-height: 0; }
 body.vc-kiosk .vc-w-quickset { display: none; }
 body.vc-cursor-hidden, body.vc-cursor-hidden * { cursor: none !important; }
 .vc-kiosk-exit { position: fixed; top: 14px; right: 14px; z-index: 9000; padding: 10px 16px; border-radius: 999px; border: 1px solid var(--border-strong); background: var(--glass); color: var(--text); font: inherit; font-weight: 700; cursor: pointer; opacity: 0; pointer-events: none; transition: opacity .3s; }
