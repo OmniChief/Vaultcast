@@ -5024,6 +5024,8 @@ try {
       }).then(function(){themeSelect.disabled=false;});
     }},themeOptions(user.prefs&&user.prefs.theme)):null;
     group('Preferences',[themeSelect?h('label',{className:'account-drawer-theme'},[h('span',{text:'Theme'}),themeSelect]):null,action('For you',function(){hub('overview');}),action('Profile & security',function(){openSettings('account');}),action('Playback preferences',function(){openSettings('playback');}),signed&&user.role==='admin'?action('Check for updates',function(){openSettings('updates');}):null,action('Settings',function(){openSettings('settings-home');})]);
+    var parentalStatus=signed&&user.parental;
+    if(parentalStatus&&(parentalStatus.kid||(parentalStatus.settings&&parentalStatus.settings.enabled)))drawer.appendChild(action(kidLocked()?'Grown-up mode (PIN)':(parentalStatus.unlocked_for>0?(parentalStatus.kid?'Back to kid mode':'Lock parental controls'):'Parental controls'),function(){close();loadModule('vc-parental.js','VaultcastParental').then(function(mod){if(kidLocked())mod.unlockPrompt(null);else if(parentalStatus.unlocked_for>0)mod.lock();else openSettings('parental');});}));
     if(signed)drawer.appendChild(action('Sign out',function(){
       api('/logout',{method:'POST'}).then(function(result){
         if(!result.ok)throw new Error(result.error||'Could not sign out');
@@ -7014,6 +7016,9 @@ try {
     if (can('metadata_edit')||can('library_remove')) buttons.push(h('button', {className:'btn ghost', type:'button', text:'Manual edit', onClick:function(){
       withTools(function(tools){ if (can('metadata_edit')||can('library_remove')) tools.editDialog(item, showKey); });
     }}));
+    if(can('age_ratings')&&(showKey||(item.media_kind==='video'&&!item.show_key)))buttons.push(h('button',{className:'btn ghost',type:'button',text:'Age rating',onClick:function(){
+      loadModule('vc-parental.js','VaultcastParental').then(function(mod){permissionDialog('Age rating · '+(item.show||item.title||'Title'),h('div',{className:'stack'},[h('p',{className:'muted',text:'Kids profiles hide titles above their age limit. Choose Automatic to use the rating found in NFO files, OMDb or TMDB.'}),mod.ratingControl(showKey?'show:'+showKey:'item:'+item.id)]));}).catch(function(){toast('Could not open age ratings',{kind:'bad'});});
+    }}));
     if(can('timing_edit')&&!showKey&&!item.show&&item.media_kind==='video')buttons.push(h('button',{className:'btn ghost',text:'Edit credits',onClick:function(){editEpisodeSegments(item);}}));
     if (state.user && state.user.role === 'admin' && (item.type === 'roms' || item.media_kind === 'rom')) buttons.push(h('button', {className:'btn ghost', type:'button', text:'Refresh poster and synopsis', onClick:function(){ queueGameMetadata(item.id); }}));
     return buttons;
@@ -8360,7 +8365,7 @@ try {
     var prefs = u.prefs || {};
     var isAdmin = !!(u && u.role === 'admin');
     var groups = [
-      {title:'Your account',description:'Your identity, personal preferences and saved games.',items:[{id:'settings-home',label:'Settings overview',hint:'Find a setting or choose a task'},{id:'account',label:'Profile & security',hint:'Display name, avatar, password and sign out'},{id:'appearance',label:'Appearance & motion',hint:'Themes, animation and reduced motion'},{id:'playback',label:'Playback & skipping',hint:'Autoplay, mini player, intros and credits'},{id:'home-preferences',label:'Home & spoilers',hint:'Start page, compact layout and unwatched episode details'},{id:'cloud-saves',label:'Cloud saves',hint:'Save slots, backups, uploads and sharing'}]},
+      {title:'Your account',description:'Your identity, personal preferences and saved games.',items:[{id:'settings-home',label:'Settings overview',hint:'Find a setting or choose a task'},{id:'account',label:'Profile & security',hint:'Display name, avatar, password and sign out'},{id:'parental',label:'Parental controls',hint:'Kids profile, age limits and PIN'},{id:'appearance',label:'Appearance & motion',hint:'Themes, animation and reduced motion'},{id:'playback',label:'Playback & skipping',hint:'Autoplay, mini player, intros and credits'},{id:'home-preferences',label:'Home & spoilers',hint:'Start page, compact layout and unwatched episode details'},{id:'cloud-saves',label:'Cloud saves',hint:'Save slots, backups, uploads and sharing'}]},
       {title:'Library & metadata',description:'Connect folders, organise titles and correct missing information.',admin:true,items:[{id:'sections',label:'Libraries & folders',section:'Sources',hint:'Media types, paths and enabled libraries'},{id:'scan',label:'Scan for media',section:'Sources',hint:'Discover new or removed files'},{id:'ingest',label:'Import inbox',section:'Sources',hint:'Review incoming downloads before importing'},{id:'media',label:'Media manager',section:'Organise',hint:'Search and edit library records'},{id:'collections',label:'Collections',section:'Organise',hint:'Film sets and series groups'},{id:'library',label:'Find & rename',section:'Organise',hint:'Match names and organise files'},{id:'matching',label:'Metadata matching',section:'Metadata',hint:'Fix titles, posters and descriptions'},{id:'reports',label:'User reports',section:'Metadata',hint:'Review incorrect labels reported by users'}]},
       {title:'Artwork & design',description:'Site branding, bundled posters and library artwork.',admin:true,items:[{id:'site-artwork',label:'Site & theme posters',hint:'Replace default artwork and create smaller WebP images'},{id:'posters',label:'Library artwork',hint:'Fetch missing movie, show, season and game images'},{id:'artwork-integrity',label:'Repair missing images',hint:'Find broken records and missing files'},{id:'poster-optimise',label:'Optimise library images',hint:'Generate full, grid and search WebP variants'}]},
       {title:'Live broadcasting',description:'Build channels, schedule programmes and manage public streams.',admin:true,items:[{id:'live-studio',label:'PseudoTV Studio',section:'Relay',hint:'Schedule programmes, filler and advertising'},{id:'live-channels',label:'Relay channels',section:'Relay',hint:'Create channels and manage rotations'},{id:'live-library',label:'Live media library',section:'Relay',hint:'Import programmes and prepare durations'},{id:'live-playlists',label:'Rotation playlists',section:'Relay',hint:'Reusable channel programme rotations'},{id:'live-schedule',label:'Rotation rules',section:'Relay',hint:'Legacy rotation scheduling; Studio manages weekly slots'},{id:'live-iptv',label:'IPTV & guide matching',section:'Sources',hint:'Feeds, channel mapping and EPG'},{id:'live-radio',label:'Radio stations',section:'Sources',hint:'Add stations or browse the public directory'},{id:'live-station',label:'Station & outputs',section:'Outputs',hint:'Streams, guide exports and station configuration'}]},
@@ -8373,6 +8378,7 @@ try {
     groups = groups.map(function(g){
       g.items = g.items.filter(function(it){
         if(g.admin&&!canSettings(it.id))return false;
+        if (it.id === 'parental') return !isAdmin && !!u.username;
         if (it.id.indexOf('live-') === 0) return !!features.live;
         if (it.id === 'acquisition' || it.id === 'queue') return !!features.downloads;
         if (it.id === 'system') return !!features.server_tools;
@@ -8578,6 +8584,11 @@ try {
         if(child.classList.contains('row-actions')){if(sec!=='account')Array.from(child.children).slice(1).forEach(function(button){button.remove();});return;}
         if(!ids.some(function(id){return child.id===id||child.querySelector('#'+id);}))child.remove();
       });bodyKids[0].textContent=activeItem.label;
+    }
+    if(sec==='parental'){
+      var parentalHost=h('div',{className:'parental-host'},[h('p',{className:'muted',text:'Loading…'})]);
+      bodyKids=[h('h2',{text:'Parental controls'}),h('p',{className:'muted',text:'Age limits, a kids profile and which areas this account can use. A PIN protects changes.'}),parentalHost];
+      loadModule('vc-parental.js','VaultcastParental').then(function(mod){mod.selfPanel(parentalHost);}).catch(function(){parentalHost.replaceChildren(h('p',{className:'muted',text:'Parental controls could not be loaded.'}));});
     }
     if(sec==='settings-home'){
       bodyKids=[h('div',{className:'settings-overview-intro'},[h('span',{className:'eyebrow',text:isAdmin?'CONTROL ROOM':'MAKE IT YOURS'}),h('h2',{text:isAdmin?'Your server. In order.':'Your Vaultcast, your way.'}),h('p',{className:'muted',text:'Choose a task below or search settings. Opening a page never starts a scan, update check or optimisation job.'})]),h('div',{className:'settings-overview-grid'},groups.map(function(g){return h('section',{className:'settings-overview-card'},[h('h3',{text:g.title}),h('p',{text:g.description}),h('div',{className:'settings-overview-links'},g.items.filter(function(it){return it.id!=='settings-home';}).map(function(it){return h('button',{type:'button',onClick:function(){goSec(it.id);}},[h('strong',{text:it.label}),h('small',{text:it.hint})]);}))]);}))];
@@ -10029,6 +10040,8 @@ try {
     if(!admin)Object.keys(state.userRoles||{}).forEach(function(id){role.appendChild(h('option',{value:id,text:state.userRoles[id].name}));});role.value=user.role;
     var body=h('div',{className:'stack'},[status,h('label',{},['Role',role]),h('h4',{text:'Media areas'})]);
     [['library','Library'],['live','Live'],['games','Games']].forEach(function(entry){var checkbox=h('input',{type:'checkbox',checked:admin||areas[entry[0]]===true,disabled:admin});inputs[entry[0]]=checkbox;body.appendChild(h('label',{className:'check-label'},[checkbox,entry[1]]));});
+    if(!admin)body.appendChild(h('div',{className:'parental-admin-entry'},[h('h4',{text:'Parental controls'}),h('p',{className:'muted',text:user.parental?'':'Off'},[]),h('button',{className:'btn',type:'button',text:'Kids profile & age limits…',onClick:function(){loadModule('vc-parental.js','VaultcastParental').then(function(mod){mod.adminEditor(user,function(p){user.parental=p;loadUsers();});}).catch(function(){toast('Could not open parental controls',{kind:'bad'});});}})]));
+    if(!admin&&user.parental)loadModule('vc-parental.js','VaultcastParental').then(function(mod){var p=body.querySelector('.parental-admin-entry p');if(p)p.textContent=mod.summary(user.parental);}).catch(function(){});
     body.appendChild(h('h4',{text:'Permission overrides'}));
     Object.keys(state.permissionChoices||{}).forEach(function(key){var select=h('select',{'aria-label':state.permissionChoices[key]},[h('option',{value:'inherit',text:'Use role default'}),h('option',{value:'allow',text:'Allow'}),h('option',{value:'deny',text:'Deny'})]);select.value=user.permissions&&typeof user.permissions[key]==='boolean'?(user.permissions[key]?'allow':'deny'):'inherit';overrides[key]=select;body.appendChild(h('label',{},[state.permissionChoices[key],select]));});
     function defaults(){Object.keys(overrides).forEach(function(key){var select=overrides[key];var userCap=(state.userRoleCapabilities||[]).indexOf(key)>=0;select.disabled=admin||(role.value==='user'&&!userCap);var grants=role.value==='user'?(state.userRoleDefaults||{}):(state.userRoles[role.value]&&state.userRoles[role.value].permissions||{});var inherited=admin||!!grants[key]||(key==='ingest_view'&&grants.ingest_import===true);select.options[0].textContent='Use role default ('+(inherited?'allowed':'denied')+')';});}role.onchange=defaults;defaults();
@@ -15138,7 +15151,9 @@ function viewCollectionDetail(){
     if(br.loaded){paintIptvBrowseResults();}else runIptvBrowse(false,false);
     if(previousScroll!==null&&br.channels.length<=150)requestAnimationFrame(function(){if(host.isConnected&&previousScroll!==null)window.scrollTo(0,previousScroll);});
   }
+  function kidLocked(){var p=state.user&&state.user.parental;return !!(p&&p.kid&&!(p.unlocked_for>0));}
   function openSettings(section){
+    if(kidLocked()){loadModule('vc-parental.js','VaultcastParental').then(function(mod){mod.unlockPrompt(function(){openSettings(section);});}).catch(function(){toast('Settings are locked on this profile.',{kind:'bad'});});return;}
     if(state.view==='settings'&&settingsDraftChanged()&&!confirm('Leave this page and discard unsaved form changes?'))return;
     state.settingsSection = section || 'settings-home';
     var adminIds = { maintenance:'maintenance', players:'players', features:'features', libraries:'sections', sections:'sections', scan:'scan', library:'library', media:'media', collections:'collections', streaming:'streaming', directplay:'directplay', convert:'convert', queue:'queue', acquisition:'acquisition', system:'system', general:'general', users:'users', advanced:'advanced', ingest:'ingest', matching:'matching', reports:'reports' };
@@ -15548,10 +15563,18 @@ function viewCollectionDetail(){
   });
 
   /* helpers for assets/js/matching.js (Ingest inbox / Fix matching / Label reports) */
-  window.NSApp = { h: h, swap: swapChildren, api: api, toast: toast, confirmDialog: confirmDialog, render: render, state: state, can:can,
+  window.NSApp = { h: h, swap: swapChildren, api: api, toast: toast, dialog: permissionDialog, confirmDialog: confirmDialog, render: render, state: state, can:can,
     openSettings: openSettings, openShow: openShow, openMovie: openMovie, openGame:openGame, navigate:navigate, refreshArtwork:refreshArtwork, fmtSize: fmtSize, version: APP_VERSION,
     shell:shell,communityPoster:communityPoster,refreshCommunityRating:refreshCommunityRating,heroClock:heroClock,homePosterEl:homePosterEl,homeSectionPosterEl:homeSectionPosterEl,collectionsPosterEl:collectionsPosterEl,librarySummary:librarySummary,cardEl:cardEl,homeActivitySections:homeActivitySections,applyRoute:applyRoute,replaceNav:replaceNav,openPlayer:openPlayer,playItem:playItem,copyText:copyText,shareUrl:shareUrl,startLobbyHost:startLobbyHost,captureGameState:lobbyCaptureState,loadGameState:loadGameState,restoreMultiplayerState:restoreMultiplayerState,quitGame:function(){closePlayer();} };
   var moduleLoads = {};
+  /* Parental controls: kid mode styling and the grown-up switch follow the signed-in profile. */
+  function applyParental(){
+    var p=state.user&&state.user.parental;
+    if(!p||!(p.kid||(p.settings&&p.settings.enabled))){document.body.classList.remove('kid-mode','parental-unlocked');var pill=document.getElementById('parental-switch');if(pill)pill.remove();return;}
+    if(p.kid&&!(p.unlocked_for>0))document.body.classList.add('kid-mode');
+    loadModule('vc-parental.js','VaultcastParental').then(function(mod){mod.apply();}).catch(function(){});
+  }
+  document.addEventListener('vaultcast-account-ready',applyParental);
   /** The feature modules' stylesheet is fetched with the first module, so pages that never open them skip it. */
   var extraCss = null;
   function loadExtraCss(){

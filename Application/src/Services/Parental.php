@@ -260,7 +260,17 @@ final class Parental
         $settings = self::settingsFor(AreaAccess::viewer());
         if (isset($data['ok']) && $data['ok'] === false) return $data;
         $out = self::walk($data, $settings);
-        if (is_array($out) && isset($out['home']) && is_array($out['home'])) $out['home']['parental'] = self::publicSettings($settings);
+        if (!is_array($out)) return $out;
+        if (isset($out['home']) && is_array($out['home'])) $out['home']['parental'] = self::publicSettings($settings);
+        // Home/first-page feature flags: hide switched-off areas so the UI never offers them.
+        $flags = function (array $node) use ($settings): array {
+            if (!isset($node['features']) || !is_array($node['features'])) return $node;
+            if (empty($settings['live'])) $node['features']['live'] = false;
+            if (empty($settings['social'])) $node['features']['social'] = false;
+            return $node;
+        };
+        $out = $flags($out);
+        if (isset($out['home']) && is_array($out['home'])) $out['home'] = $flags($out['home']);
         return $out;
     }
 
