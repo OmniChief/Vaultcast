@@ -4571,6 +4571,7 @@ try {
           if(!siteArtworkCustom(kind))img.src=siteArtworkUrl(kind);
         });
         var settingsTheme=document.getElementById('theme');if(settingsTheme){settingsTheme.value=selected;if(settingsDraft&&settingsDraft.fields.has(settingsTheme))settingsDraft.fields.set(settingsTheme,selected);var draftStatus=document.querySelector('.settings-draft-status');if(draftStatus)draftStatus.hidden=!settingsDraftChanged();}
+        if(window.VaultcastThemePlay)window.VaultcastThemePlay.enhance(document.querySelector('#app'));
         document.querySelectorAll('.ninja-training-open').forEach(function(button){button.remove();});
         if(selected==='ninja-extreme'){
           var clock=document.querySelector('#app .hero-clock-face');
@@ -4816,6 +4817,7 @@ try {
       var ninjaClock=content.querySelector('.hero-clock-face');
       if(ninjaClock&&!ninjaClock.querySelector('.ninja-training-open'))ninjaClock.appendChild(h('button',{type:'button',className:'btn ghost ninja-training-open',text:document.body.classList.contains('ninja-calm')?'★ Ninja training · Calm':'★ Ninja training',title:'A short, untimed star-collecting activity and calm-mode controls',onClick:ninjaTraining}));
     }
+    if(window.VaultcastThemePlay)window.VaultcastThemePlay.enhance(content);
     document.body.classList.toggle('has-az-rail',state.view==='section'||state.view==='collections'||(state.view==='play'&&(state.playTab||'games')==='games'));
     try { document.body.setAttribute('data-mode', mode || 'none'); } catch (e) {}
     var modes = [
