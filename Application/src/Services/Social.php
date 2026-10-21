@@ -190,7 +190,8 @@ final class Social {
         else {
             if (!isset(Arcade::GAMES[$kind])) throw new DomainException('Unknown leaderboard.');
             $params[] = $kind;
-            $sql = 'SELECT user_id, MAX(score) value, COUNT(*) plays FROM vaultcast_play_scores WHERE created_at>=?' . $filter . ' AND game=? GROUP BY user_id HAVING value>0 ORDER BY value DESC LIMIT 50';
+            // Chess rows are one per win, so the board counts wins; every other game ranks the best score.
+            $sql = 'SELECT user_id, ' . ($kind === 'chess' ? 'SUM(score)' : 'MAX(score)') . ' value, COUNT(*) plays FROM vaultcast_play_scores WHERE created_at>=?' . $filter . ' AND game=? GROUP BY user_id HAVING value>0 ORDER BY value DESC LIMIT 50';
         }
         $rows = Arcade::query($sql, $params)->fetchAll(PDO::FETCH_ASSOC);
         $people = Arcade::people(array_column($rows, 'user_id')); $out = [];
