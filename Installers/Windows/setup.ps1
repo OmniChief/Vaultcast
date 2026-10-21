@@ -116,13 +116,13 @@ function Install-AppService([string]$Id,[string]$Label,[string]$Executable,[stri
     foreach ($dependency in $Depends) { $extra += '<depend>'+(Xml $dependency)+'</depend>' }
     $argumentsTag = if ($StopArguments) { 'startarguments' } else { 'arguments' }
     if ($StopArguments) { $extra += '<stoparguments>'+(Xml $StopArguments)+'</stoparguments>' }
-    $accountXml = if ($Id -eq 'VaultcastPHP') { '<serviceaccount><user>LocalSystem</user></serviceaccount>' } else { '<serviceaccount><domain>NT AUTHORITY</domain><user>LocalService</user></serviceaccount>' }
+    $accountXml = if ($Id -match '^VaultcastPHP(?:[2-9]|1[0-6])?$') { '<serviceaccount><user>LocalSystem</user></serviceaccount>' } else { '<serviceaccount><domain>NT AUTHORITY</domain><user>LocalService</user></serviceaccount>' }
     $xml = '<service><id>'+ $Id +'</id><name>'+ (Xml $Label) +'</name><description>Vaultcast native application service</description><executable>'+ (Xml $Executable) +'</executable><'+$argumentsTag+'>'+ (Xml $Arguments) +'</'+$argumentsTag+'><workingdirectory>'+ (Xml $Directory) +'</workingdirectory><startmode>Automatic</startmode><onfailure action="restart" delay="5 sec"/><stoptimeout>30 sec</stoptimeout><logpath>'+ (Xml (Join-Path $runtime 'logs')) +'</logpath><log mode="roll"/>'+ $accountXml + $extra +'</service>'
     Save-Text (Join-Path $services "$Id.xml") $xml
     $operation = if (Get-Service -Name $Id -ErrorAction SilentlyContinue) { 'refresh' } else { 'install' }
     if ((Invoke-Native $wrapper @($operation)) -ne 0) { throw "Could not register/update the $Label service." }
     # Explicitly migrate the account when updating an existing installation.
-    if ($Id -eq 'VaultcastPHP') {
+    if ($Id -match '^VaultcastPHP(?:[2-9]|1[0-6])?$') {
         if ((Invoke-Native (Join-Path $env:SystemRoot 'System32/sc.exe') @('config',$Id,'obj=','LocalSystem')) -ne 0) { throw 'Could not enable administrator access for the PHP service.' }
     }
     Start-Service -Name $Id
@@ -516,7 +516,8 @@ if ($Dependency) {
 }
 Show-SetupStage 1 'Preparing the application and choosing ports'
 # Stop only services belonging to this installation, never another server.
-foreach ($id in @('VaultcastWeb','VaultcastPHP','VaultcastNetplay','VaultcastDatabase')) {
+$ownedServiceIds = @('VaultcastWeb') + @(16..2 | ForEach-Object { 'VaultcastPHP'+$_ }) + @('VaultcastPHP','VaultcastNetplay','VaultcastDatabase')
+foreach ($id in $ownedServiceIds) {
     $existing = Get-CimInstance Win32_Service -Filter "Name='$id'" -ErrorAction SilentlyContinue
     if ($existing) {
         $expected = Join-Path $services "$id.exe"
@@ -537,6 +538,10 @@ if ($sourceRoot.TrimEnd('\') -ne $installRoot) {
         Copy-Item -LiteralPath (Join-Path $sourceRoot 'data') -Destination $installRoot -Recurse
         if (Test-Path -LiteralPath (Join-Path $sourceRoot 'config.php')) { Copy-Item -LiteralPath (Join-Path $sourceRoot 'config.php') -Destination $installRoot }
     }
+}
+foreach ($legalFile in @('LICENSE','NOTICE')) {
+    $legalSource = Join-Path (Split-Path $sourceRoot -Parent) $legalFile
+    if (Test-Path -LiteralPath $legalSource) { Copy-Item -LiteralPath $legalSource -Destination (Join-Path $installRoot $legalFile) -Force }
 }
 foreach ($folder in @($runtime,$services,(Join-Path $runtime 'logs'),(Join-Path $installRoot 'data/sessions'),(Join-Path $installRoot 'data/tmp'))) { New-Item -ItemType Directory -Path $folder -Force | Out-Null }
 Set-InstallPermissions
@@ -561,6 +566,9 @@ if (Test-Path -LiteralPath $databaseState) {
 $webDefault = if ($saved.webPort) { [int]$saved.webPort } else { $LibraryPort }
 $webPort = Choose-Port 'Library port' $webDefault -Public
 $phpPort = Choose-Port 'Private PHP port' $(if ($saved.phpPort) { [int]$saved.phpPort } else { $FastCgiPort })
+$phpWorkers = if ($saved.phpWorkers) { [Math]::Max(1,[Math]::Min(16,[int]$saved.phpWorkers)) } else { 4 }
+$phpPorts = @($phpPort)
+for ($worker=2; $worker -le $phpWorkers; $worker++) { $phpPorts += Choose-Port "Private PHP worker $worker port" ($phpPorts[-1]+1) }
 $netplayPort = Choose-Port 'Private multiplayer port' $(if ($saved.netplayPort) { [int]$saved.netplayPort } else { $RelayPort })
 $listenAddress = if ($saved.listenAddress) { $saved.listenAddress } else { '0.0.0.0' }
 if (!$basic) { $answer=Read-Host "Listen address [$listenAddress; use 127.0.0.1 for this PC only]"; if ($answer) { $listenAddress=$answer } }
@@ -622,8 +630,11 @@ $nginxDir=Split-Path $nginxExe -Parent
 Grant-ServiceWrite (Join-Path $nginxDir 'logs')
 $rootForNginx=$installRoot.Replace('\','/')
 $config=Get-Content -LiteralPath 'deploy/nginx.conf.example' -Raw
-$config=$config.Replace('listen 80;',"listen $($listenAddress):$webPort;").Replace('server_name vaultcast.local;','server_name _;').Replace('root /srv/vaultcast;',"root ""$rootForNginx"";").Replace('unix:/run/php/php7.4-fpm.sock',"127.0.0.1:$phpPort").Replace('127.0.0.1:3100',"127.0.0.1:$netplayPort")
-$config=[regex]::Replace($config,'(?s)    location \^~ /_vaultcast_media/ \{.*?\n    \}','')
+$config=$config.Replace('listen 80;',"listen $($listenAddress):$webPort;").Replace('server_name vaultcast.local;','server_name _;').Replace('root /srv/vaultcast;',"root ""$rootForNginx"";").Replace('unix:/run/php/php7.4-fpm.sock','vaultcast_php').Replace('127.0.0.1:3100',"127.0.0.1:$netplayPort")
+$mediaLocation = '    location ~ "^/_vaultcast_media/([A-Za-z]):/(.*)$" {' + "`n" + '        internal; alias $1:/$2; sendfile on;' + "`n    }"
+$config=[regex]::Replace($config,'(?s)    location \^~ /_vaultcast_media/ \{.*?\n    \}',[Text.RegularExpressions.MatchEvaluator]{ param($match) $mediaLocation })
+$upstream = "upstream vaultcast_php {`n    least_conn;`n" + (($phpPorts | ForEach-Object { "    server 127.0.0.1:$_;" }) -join "`n") + "`n}`n"
+$config = $upstream + $config
 $temporaryPaths = ''
 foreach ($kind in @('client_body','proxy','fastcgi','uwsgi','scgi')) {
     $temporaryPaths += "$($kind)_temp_path ""$tempPath/$kind"";`n"
@@ -636,17 +647,22 @@ try {
     if ($BundleDirectory) { $npmArguments += @('--offline','--cache',(Join-Path $BundleDirectory 'npm-cache')) }
     if ((Invoke-Native $npm $npmArguments) -ne 0) { throw 'Multiplayer dependencies could not be installed. Rerun setup to resume.' }
 } finally { Pop-Location }
-Install-AppService 'VaultcastPHP' 'Vaultcast PHP' (Join-Path $phpDir 'php-cgi.exe') ('-c "'+$ini+'" -b 127.0.0.1:'+$phpPort) $installRoot @{PATH=$servicePath;PHP_FCGI_MAX_REQUESTS='0'} $databaseDependency
+$phpServiceIds = @()
+for ($worker=0; $worker -lt $phpPorts.Count; $worker++) {
+    $serviceId = if ($worker -eq 0) { 'VaultcastPHP' } else { 'VaultcastPHP'+($worker+1) }
+    $phpServiceIds += $serviceId
+    Install-AppService $serviceId ("Vaultcast PHP worker "+($worker+1)) (Join-Path $phpDir 'php-cgi.exe') ('-c "'+$ini+'" -b 127.0.0.1:'+$phpPorts[$worker]) $installRoot @{PATH=$servicePath;PHP_FCGI_MAX_REQUESTS='0'} $databaseDependency
+}
 Install-AppService 'VaultcastNetplay' 'Vaultcast Multiplayer' $nodeExe ('"'+(Join-Path $installRoot 'netplay/server.js')+'"') $installRoot @{PATH=$servicePath;PORT="$netplayPort";HOST='127.0.0.1';NETPLAY_LOG=(Join-Path $installRoot 'data/netplay.log')}
 $nginxArguments='-p "'+$nginxDir.Replace('\','/')+'/" -c conf/vaultcast.conf'
-Install-AppService 'VaultcastWeb' 'Vaultcast Web' $nginxExe $nginxArguments $nginxDir @{} @('VaultcastPHP','VaultcastNetplay') ($nginxArguments+' -s quit')
-Save-Text $savedPath ([pscustomobject]@{webPort=$webPort;phpPort=$phpPort;netplayPort=$netplayPort;listenAddress=$listenAddress;installRoot=$installRoot} | ConvertTo-Json)
+Install-AppService 'VaultcastWeb' 'Vaultcast Web' $nginxExe $nginxArguments $nginxDir @{} ($phpServiceIds + @('VaultcastNetplay')) ($nginxArguments+' -s quit')
+Save-Text $savedPath ([pscustomobject]@{webPort=$webPort;phpPort=$phpPort;phpWorkers=$phpWorkers;mediaAccel=$true;netplayPort=$netplayPort;listenAddress=$listenAddress;installRoot=$installRoot} | ConvertTo-Json)
 Show-SetupStage 8 'Configuring network access and waiting for startup'
 Get-NetFirewallRule -Name VaultcastWeb -ErrorAction SilentlyContinue | Remove-NetFirewallRule
 if ($listenAddress -ne '127.0.0.1') { New-NetFirewallRule -Name VaultcastWeb -DisplayName 'Vaultcast library' -Direction Inbound -Action Allow -Protocol TCP -LocalPort $webPort -Program $nginxExe -Profile Private,Domain -RemoteAddress LocalSubnet | Out-Null }
 $urlHost = if ($listenAddress -in @('0.0.0.0','127.0.0.1')) { 'localhost' } else { $listenAddress }
 $url="http://$($urlHost):$webPort/"
-Wait-Listening '127.0.0.1' $phpPort
+foreach ($workerPort in $phpPorts) { Wait-Listening '127.0.0.1' $workerPort }
 Wait-Listening '127.0.0.1' $netplayPort
 Wait-Listening $(if ($listenAddress -eq '0.0.0.0') { '127.0.0.1' } else { $listenAddress }) $webPort
 $shortcut=Join-Path ([Environment]::GetFolderPath('CommonPrograms')) 'Vaultcast.url'
