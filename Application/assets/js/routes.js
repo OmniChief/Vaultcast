@@ -26,6 +26,8 @@
     if (v === 'live') return st.liveCh ? (String(st.liveCh).indexOf('radio:')===0?'live/radio/'+enc(String(st.liveCh).slice(6)):'live/' + enc(st.liveCh)) : (st.liveTab && st.liveTab!=='now' ? 'live/'+enc(st.liveTab) : 'live');
     if (v === 'play') {
       if (st.playTab === 'lobby') return 'games/lobby';
+      if (st.playTab === 'leaderboards') return 'games/leaderboards' + (st.playSub ? '/' + enc(st.playSub) : '');
+      if (st.playTab === 'arcade' || st.playTab === 'quiz' || st.playTab === 'social') return 'play/' + st.playTab + (st.playSub ? '/' + String(st.playSub).split('/').map(enc).join('/') : '');
       if (st.gamePath) return 'games/' + String(st.gamePath).split('/').map(enc).join('/') + (/^[a-f0-9]{16}$/.test(st.roomId || '') ? '?room=' + enc(st.roomId) : '');
       if (st.systemSlug) return withLetter('games/' + enc(st.systemSlug), st.sectionLetter);
       return withLetter('games', st.sectionLetter);
@@ -38,6 +40,7 @@
       var sec = v === 'admin' ? (st.adminTab || 'general') : st.settingsSection;
       return sec && sec !== 'account' ? 'settings/' + enc(sec) : 'settings';
     }
+    if (v === 'misc') return 'misc' + (st.miscTab ? '/' + enc(st.miscTab) + (st.miscSub ? '/' + enc(st.miscSub) : '') : '');
     if (v === 'welcome') return 'welcome';
     if (v === 'login') return 'login';
     return '';
@@ -65,6 +68,17 @@
     if (head === 'tvshows' && parts[1]) return { view:'show', slug:parts[1], resolve:true };
     if (head === 'tvshows') return { view:'home' };
     if (head === 'live') return ['now','relay','iptv','radio','guide'].indexOf(parts[1])>=0 ? {view:'live',liveTab:parts[1]==='guide'?'now':parts[1],liveCh:parts[1]==='radio'&&parts[2]?'radio:'+parts[2]:null} : {view:'live',liveTab:'now',liveCh:parts[1]||null};
+    if (head === 'play') {
+      var pt = parts[1] || 'arcade';
+      if (['arcade','quiz','social'].indexOf(pt) < 0) return { view:'notfound', path:path };
+      return { view:'play', playTab:pt, playSub:parts.slice(2, 4).join('/') };
+    }
+    if (head === 'misc') {
+      var mt = parts[1] || '';
+      if (mt && ['board','drop','ambient'].indexOf(mt) < 0) return { view:'notfound', path:path };
+      return { view:'misc', miscTab:mt || 'board', miscSub:parts[2] || '' };
+    }
+    if (head === 'games' && parts[1] === 'leaderboards' && !parts[3]) return { view:'play', playTab:'leaderboards', playSub:parts[2] || '' };
     if (head === 'games') {
       if (parts[1] === 'lobby' || !parts[1]) return { view:'play', playTab: parts[1] === 'lobby' ? 'lobby' : 'games', sectionLetter:parts[1] === 'lobby' ? '' : letter(params.letter) };
       if (parts[2]) return { view:'game', system: parts[1], slug: parts[2], resolve:true, roomId:/^[a-f0-9]{16}$/.test(params.room || '') ? params.room : null };

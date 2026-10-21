@@ -22,6 +22,7 @@
     st.sectionLetter = state.sectionLetter || '';
     st.collectionsLetter = state.collectionsLetter || '';
     st.hubTab=state.hubTab || 'overview';st.cinemaId=state.cinemaId || null;
+    st.playSub=state.playSub || '';st.miscTab=state.miscTab || '';st.miscSub=state.miscSub || '';
     st.roomId = state.gameLobby ? state.gameLobby.session.id : null;
     st.liveTab=state.liveTab||'now';st.liveChannel=state.liveChannel||null;
     if (extra) Object.keys(extra).forEach(function(k){ st[k]=extra[k]; });
@@ -1989,6 +1990,7 @@ function confirmDialog(message, opts){
     state.showSeason = st.showSeason != null ? st.showSeason : null; state.showEpisode = st.showEpisode != null ? st.showEpisode : null;
     if (st.settingsSection != null) state.settingsSection = st.settingsSection;
     if (st.playTab != null) state.playTab = st.playTab;
+    state.playSub = st.playSub || ''; state.miscTab = st.miscTab || 'board'; state.miscSub = st.miscSub || '';
     if (st.sectionSystem != null) { state.sectionSystem = st.sectionSystem; state.sectionSystemSlug = st.sectionSystemSlug || null; }
     if (st.searchQuery != null) state.searchQuery = st.searchQuery;
     render();
@@ -3517,8 +3519,9 @@ function confirmDialog(message, opts){
   }
   function goPlayTab(tab){
 
-    state.playTab = tab === 'lobby' ? 'lobby' : 'games';
-    if (state.playTab === 'games') lobbyStopPoll();
+    state.playTab = ['lobby','arcade','quiz','social','leaderboards'].indexOf(tab) >= 0 ? tab : 'games';
+    state.playSub = '';
+    if (state.playTab !== 'lobby') lobbyStopPoll();
     if (state.view !== 'play') navigate('play');
     else render();
   }
@@ -4326,6 +4329,7 @@ try {
     vod: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4.5" width="18" height="12.5" rx="2.6" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M10.2 8.2v5.1l4.4-2.55z" fill="currentColor"/><path d="M8 20h8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
     live: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="2.3" fill="currentColor"/><path d="M8.2 8.2a5.4 5.4 0 0 0 0 7.6M15.8 8.2a5.4 5.4 0 0 1 0 7.6M5.3 5.3a9.5 9.5 0 0 0 0 13.4M18.7 5.3a9.5 9.5 0 0 1 0 13.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
     play: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.2 7.5h9.6a4.2 4.2 0 0 1 4.2 4.2v.9a3.9 3.9 0 0 1-6.9 2.5l-.5-.6h-3.2l-.5.6a3.9 3.9 0 0 1-6.9-2.5v-.9a4.2 4.2 0 0 1 4.2-4.2z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M7.6 9.9v3M6.1 11.4h3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="15.6" cy="10.5" r="1.05" fill="currentColor"/><circle cx="17.6" cy="12.6" r="1.05" fill="currentColor"/></svg>',
+    misc: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="3.5" width="7.2" height="7.2" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="3.5" y="13.3" width="7.2" height="7.2" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="13.3" y="13.3" width="7.2" height="7.2" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M16.9 3.2l1.05 2.35 2.35 1.05-2.35 1.05-1.05 2.35-1.05-2.35-2.35-1.05 2.35-1.05z" fill="currentColor"/></svg>',
     search: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="1.9"/><path d="M16 16l4.2 4.2" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>',
     user: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8.6" r="3.8" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M4.8 20a7.2 7.2 0 0 1 14.4 0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
     chevL: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 5.5L8 12l6.5 6.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
@@ -4358,6 +4362,7 @@ try {
     if (v === 'home') return 'home';
     if (v === 'live') return 'live';
     if (v === 'play' || v === 'game') return 'play';
+    if (v === 'misc') return 'misc';
     if (v === 'section' && state.sectionType === 'roms') return 'play';
     if (v === 'admin' || v === 'settings' || v === 'login' || v === 'welcome') return '';
     return 'vod';
@@ -4365,7 +4370,8 @@ try {
   function goMode(mode){
     state.searchQuery = '';
     if (mode === 'live') goLiveTab('now');
-    else if (mode === 'play') { state.sectionQ = ''; state.sectionSystem = ''; if (!state.playTab) state.playTab = 'games'; navigate('play'); }
+    else if (mode === 'play') { state.sectionQ = ''; state.sectionSystem = ''; if (!state.playTab || (state.playTab === 'games' && !romsSection())) state.playTab = romsSection() ? 'games' : 'arcade'; state.playSub = ''; navigate('play'); }
+    else if (mode === 'misc') { if (!state.miscTab) state.miscTab = 'board'; state.miscSub = ''; navigate('misc'); }
     else if (mode === 'home') { state.hubTab=(state.user && state.user.prefs || {}).home_landing || 'overview';state.cinemaId=null;navigate('home'); }
     else navigate('library');
   }
@@ -4378,7 +4384,7 @@ try {
     extra = extra || {};
     if (state.view === 'game' && state.gamePath && !extra.live) return R.build({ view:'play', gamePath: state.gamePath, roomId:state.gameLobby ? state.gameLobby.session.id : null });
     return R.build({ systemSlug: state.view === 'play' && state.sectionSystem ? (state.sectionSystemSlug || null) : null, view: state.view, movieSlug: state.movieSlug, movieId: state.movieId, showSlug: state.showSlug, showKey: state.showKey,
-      season: state.showSeason, episode: state.showEpisode, liveCh: extra.live || state.liveChannel || null, liveTab:state.liveTab, playTab: state.playTab, section: state.section,
+      season: state.showSeason, episode: state.showEpisode, liveCh: extra.live || state.liveChannel || null, liveTab:state.liveTab, playTab: state.playTab, playSub: state.playSub, miscTab: state.miscTab, miscSub: state.miscSub, section: state.section,
       collectionId: state.collectionId, searchQuery: state.searchQuery, settingsSection: state.settingsSection, adminTab: state.adminTab,
       sectionLetter:state.sectionLetter, collectionsLetter:state.collectionsLetter, hubTab:state.hubTab, cinemaId:state.cinemaId });
   }
@@ -4410,9 +4416,10 @@ try {
         else { state.view = 'show'; state.showKey = j.show_key; state.showSlug = r.slug; state.showSeason = j.season; state.showEpisode = j.episode; state._showEpisodeItem = j.item_id || null; }
       });
     }
+    if (r.view === 'misc') { state.view = 'misc'; state.miscTab = r.miscTab || 'board'; state.miscSub = r.miscSub || ''; return Promise.resolve(); }
     if (r.view === 'live') { state.view = 'live'; state.liveTab=r.liveCh?(String(r.liveCh).indexOf('radio:')===0?'radio':String(r.liveCh).indexOf('iptv:')===0?'iptv':'relay'):(r.liveTab||'now'); state.liveChannel=r.liveCh||null; state._openLiveCh=null; return Promise.resolve(); }
     if (r.view === 'play' || r.view === 'game') {
-      state.view = 'play'; state.playTab = r.playTab || 'games';
+      state.view = 'play'; state.playTab = r.playTab || 'games'; state.playSub = r.playSub || '';
       var rs = romsSection();
       if (rs) { state.section = rs.id; state.sectionType = 'roms'; state.sectionLabel = rs.label; }
       state.sectionSystem = ''; state.sectionSystemSlug = null;
@@ -4659,8 +4666,14 @@ try {
     } else if (mode === 'play') {
       var rs = romsSection();
       var tab = state.playTab || 'games';
-      items.push({ label: rs ? (rs.label.indexOf('Games') >= 0 ? rs.label : 'Games / ROMs') : 'Games / ROMs', active: tab === 'games', go: function(){ state.sectionQ = ''; state.sectionLetter = ''; state.sectionSystem = ''; goPlayTab('games'); } });
-      items.push({ label: 'Lobby', active: tab === 'lobby', go: function(){ goPlayTab('lobby'); } });
+      if (rs) items.push({ label: rs.label.indexOf('Games') >= 0 ? rs.label : 'Games / ROMs', active: tab === 'games', go: function(){ state.sectionQ = ''; state.sectionLetter = ''; state.sectionSystem = ''; goPlayTab('games'); } });
+      if (rs) items.push({ label: 'Lobby', active: tab === 'lobby', go: function(){ goPlayTab('lobby'); } });
+      items.push({ label: 'Arcade', active: tab === 'arcade', go: function(){ goPlayTab('arcade'); } });
+      items.push({ label: 'Quiz', active: tab === 'quiz', go: function(){ goPlayTab('quiz'); } });
+      items.push({ label: 'Teams & friends', active: tab === 'social', go: function(){ goPlayTab('social'); } });
+      items.push({ label: 'Leaderboards', active: tab === 'leaderboards', go: function(){ goPlayTab('leaderboards'); } });
+    } else if (mode === 'misc') {
+      [['board','Board'],['drop','Drop'],['ambient','Ambient']].forEach(function(t){ items.push({ label:t[1], active:(state.miscTab||'board')===t[0], go:function(){ state.miscTab=t[0]; state.miscSub=''; if(state.view!=='misc')navigate('misc'); else { pushNav(); render(); } } }); });
     } else {
       return null;
     }
@@ -4824,12 +4837,13 @@ try {
       ['home', 'Home', 'Your lists, friends and next great night'],
       ['vod', 'Library', 'Films, shows and music'],
       ['live', 'Live', 'Relay, IPTV, radio & programme guides'],
-      ['play', 'Play', 'Retro games in your browser']
+      ['play', 'Play', 'Retro games, arcade, quiz nights and leaderboards'],
+      ['misc', 'Misc', 'Dashboards, private file drop and ambient screens']
     ];
     modes = modes.filter(function(m){
+      if (m[0] === 'misc') return !!(state.user && state.user.id && state.user.role !== 'guest');
       if (m[0] !== 'home' && !userAreaAllowed({vod:'library', live:'live', play:'games'}[m[0]])) return false;
       if (m[0] === 'live') return !!(state.home && state.home.features && state.home.features.live);
-      if (m[0] === 'play') return !!romsSection();
       return true;
     });
     var header = h('header', { className:'topnav xnav' }, [
@@ -5137,10 +5151,19 @@ try {
     }).catch(function(e){ toast(String(e), { kind:'bad' }); });
   }
 
+    /* Lazy feature modules (Arcade / Quiz / Teams, Misc): fetched on first use so page loads stay light. */
+    function lazyView(file, globalName, cls, paint){
+      var host = h('div', { className:'vc-lazy ' + cls }, [ pendingContent({ text:'Loading…' }) ]);
+      loadModule(file, globalName).then(function(mod){ if (host.isConnected || document.body.contains(host)) { host.replaceChildren(); paint(mod, host); } else setTimeout(function(){ if (host.isConnected) { host.replaceChildren(); paint(mod, host); } }, 0); })
+        .catch(function(){ host.replaceChildren(emptyState('This page could not load', 'Check the connection and try again.', [h('button', { className:'btn primary', text:'Retry', onClick:function(){ render(); } })])); });
+      return host;
+    }
     function viewPlay(){
     if ((state.playTab || 'games') === 'lobby') return viewLobby();
     lobbyStopPoll();
     var rs = romsSection();
+    if ((state.playTab || 'games') === 'games' && !rs) state.playTab = 'arcade';
+    if (['arcade','quiz','social','leaderboards'].indexOf(state.playTab) >= 0) return shell(lazyView('vc-play.js', 'VaultcastPlay', 'play-extra-view', function(mod, host){ mod.render(host, state.playTab, state.playSub || ''); }));
     if (!rs) return shell(h('div', { className:'panel' }, [ emptyState('No games library', 'Add a ROMs library under Admin → Libraries, then scan.') ]));
     state.section = rs.id; state.sectionType = 'roms'; state.sectionLabel = rs.label;
     var wrap = h('div', { id:'section-view', className:'play-view' }, [ sectionHeroEl(rs.id, '') ]);
@@ -14789,6 +14812,7 @@ function viewCollectionDetail(){
     else if (state.view === 'colmember') root.appendChild(viewCollectionMember());
     else if (state.view === 'live') { root.appendChild(viewLive()); setTimeout(consumePendingLiveChannel, 0); }
     else if (state.view === 'play') root.appendChild(viewPlay());
+    else if (state.view === 'misc') root.appendChild(shell(lazyView('vc-misc.js', 'VaultcastMisc', 'misc-view', function(mod, host){ mod.render(host, state.miscTab || 'board', state.miscSub || ''); })));
     else root.appendChild(viewHome());
   }
 
@@ -14896,6 +14920,44 @@ function viewCollectionDetail(){
   window.NSApp = { h: h, api: api, toast: toast, confirmDialog: confirmDialog, render: render, state: state, can:can,
     openSettings: openSettings, openShow: openShow, openMovie: openMovie, openGame:openGame, navigate:navigate, refreshArtwork:refreshArtwork, fmtSize: fmtSize, version: APP_VERSION,
     shell:shell,communityPoster:communityPoster,refreshCommunityRating:refreshCommunityRating,heroClock:heroClock,homePosterEl:homePosterEl,homeSectionPosterEl:homeSectionPosterEl,collectionsPosterEl:collectionsPosterEl,librarySummary:librarySummary,cardEl:cardEl,homeActivitySections:homeActivitySections,applyRoute:applyRoute,replaceNav:replaceNav,openPlayer:openPlayer,playItem:playItem,copyText:copyText,shareUrl:shareUrl,startLobbyHost:startLobbyHost,captureGameState:lobbyCaptureState,loadGameState:loadGameState,restoreMultiplayerState:restoreMultiplayerState,quitGame:function(){closePlayer();} };
+  var moduleLoads = {};
+  function loadModule(file, globalName){
+    if (globalName && window[globalName]) return Promise.resolve(window[globalName]);
+    if (moduleLoads[file]) return moduleLoads[file];
+    moduleLoads[file] = new Promise(function(resolve, reject){
+      var sm = document.createElement('script');
+      sm.src = BASE + 'index.php?asset=assets/js/' + file + '&v=' + encodeURIComponent(window.__ASSET_VERSION__ || APP_VERSION);
+      sm.async = true;
+      sm.onload = function(){ var mod = globalName ? window[globalName] : true; if (mod) { if (mod.init) mod.init(window.NSApp); resolve(mod); } else { moduleLoads[file] = null; reject(new Error('Module missing')); } };
+      sm.onerror = function(){ moduleLoads[file] = null; reject(new Error('Could not load ' + file)); };
+      document.head.appendChild(sm);
+    });
+    return moduleLoads[file];
+  }
+  Object.assign(window.NSApp, { loadModule:loadModule, icon:icon, emptyState:emptyState, pendingContent:pendingContent, goMode:goMode, goPlayTab:goPlayTab, pushNav:pushNav,
+    userAreaAllowed:userAreaAllowed, romsSection:romsSection, loadHls:loadHls, attachIptvStream:attachIptvStream, hlsJar:hlsJar, liveApi:liveApi, ensureLiveData:ensureLiveData,
+    liveData:function(){ return live; }, loadRadio:loadRadio, stopRadio:stopRadio, streamPlayUrl:streamPlayUrl, closePlayer:closePlayer, API:API, BASE:BASE,
+    apiUrl:function(u){ u = String(u || ''); return u.indexOf('/api/') === 0 ? API + u.slice(4) : u; } });
+  /* Ambient screensaver: start after the configured idle time (admin default, per-device override). */
+  (function(){
+    var last = Date.now(), cfg = null, cfgAt = 0;
+    function poke(){ last = Date.now(); }
+    ['pointermove','pointerdown','keydown','wheel','touchstart'].forEach(function(e){ window.addEventListener(e, poke, { passive:true, capture:true }); });
+    function minutes(){
+      var own = null; try { own = localStorage.getItem('vaultcast-ambient-idle'); } catch (e) {}
+      if (own !== null && own !== '' && !isNaN(Number(own))) return Number(own);
+      return cfg ? Number(cfg.idle_minutes || 0) : 0;
+    }
+    setInterval(function(){
+      if (!state.user || state.user.role === 'guest' || document.hidden) return;
+      if (!cfg || Date.now() - cfgAt > 900000) { cfgAt = Date.now(); api('/misc/ambient').then(function(j){ if (j && j.ok) cfg = j; }).catch(function(){}); return; }
+      var m = minutes(); if (!m || Date.now() - last < m * 60000) return;
+      var busy = document.getElementById('player-overlay') || document.querySelector('.vc-ambient') || Array.prototype.some.call(document.querySelectorAll('video,audio'), function(v){ return !v.paused && !v.muted; });
+      if (busy || (state.view === 'misc' && state.miscTab === 'board' && document.body.classList.contains('vc-kiosk'))) { last = Date.now(); return; }
+      last = Date.now();
+      loadModule('vc-misc.js', 'VaultcastMisc').then(function(mod){ mod.startAmbient({ idle:true }); }).catch(function(){});
+    }, 15000);
+  })();
   window.VaultcastHub.init(window.NSApp);
   window.VaultcastHomeExtras.init(window.NSApp);
   // Load matching tools when Settings or a detail-page action needs them.
