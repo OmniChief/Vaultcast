@@ -34,7 +34,6 @@ try {
             break;
         case 'drop-cleanup':
         case 'scan':
-        case 'conversion-repair':
         case 'collections':
         case 'downloads':
         case 'durations':
