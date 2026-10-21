@@ -158,6 +158,7 @@ CREATE TABLE IF NOT EXISTS vaultcast_drop_files (
  name VARCHAR(255) NOT NULL DEFAULT '', mime VARCHAR(120) NOT NULL DEFAULT '',
  bytes BIGINT UNSIGNED NOT NULL DEFAULT 0, received BIGINT UNSIGNED NOT NULL DEFAULT 0,
  body TEXT NULL, complete TINYINT NOT NULL DEFAULT 0, created_at BIGINT NOT NULL, expires_at BIGINT NOT NULL DEFAULT 0,
+ max_downloads INT UNSIGNED NOT NULL DEFAULT 0, downloads INT UNSIGNED NOT NULL DEFAULT 0, purged TINYINT NOT NULL DEFAULT 0, inbox TINYINT NOT NULL DEFAULT 0,
  INDEX drop_user (user_id,created_at), INDEX drop_expiry (expires_at), INDEX drop_pending (complete,created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE TABLE IF NOT EXISTS vaultcast_drop_links (
@@ -167,4 +168,10 @@ CREATE TABLE IF NOT EXISTS vaultcast_drop_links (
  expires_at BIGINT NOT NULL DEFAULT 0, max_downloads INT UNSIGNED NOT NULL DEFAULT 0, downloads INT UNSIGNED NOT NULL DEFAULT 0,
  revoked TINYINT NOT NULL DEFAULT 0, created_at BIGINT NOT NULL,
  INDEX drop_link_file (file_id), INDEX drop_link_user (user_id,created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS vaultcast_play_emulator (
+ user_id VARCHAR(64) NOT NULL, day CHAR(10) CHARACTER SET ascii NOT NULL,
+ seconds INT UNSIGNED NOT NULL DEFAULT 0, sessions INT UNSIGNED NOT NULL DEFAULT 0,
+ PRIMARY KEY (user_id, day), INDEX emu_day (day)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

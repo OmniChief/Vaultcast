@@ -31,6 +31,7 @@ try {
             });
             $result = ['ok' => true];
             break;
+        case 'drop-cleanup':
         case 'scan':
         case 'collections':
         case 'downloads':

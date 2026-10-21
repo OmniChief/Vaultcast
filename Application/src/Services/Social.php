@@ -174,16 +174,18 @@ final class Social {
     }
     public static function leaderboard(array $user, array $q): array {
         $kind = (string)($q['board'] ?? 'points'); $period = in_array($q['period'] ?? '', ['day', 'week', 'month', 'all'], true) ? $q['period'] : 'week';
-        $scope = ($q['scope'] ?? '') === 'friends' ? 'friends' : 'all'; $uid = (string)($user['id'] ?? '');
+        $scope = in_array($q['scope'] ?? '', ['friends', 'team'], true) ? $q['scope'] : 'all'; $uid = (string)($user['id'] ?? '');
+        if ($scope === 'team') { $mine = self::teamOf($uid); if (!$mine) return ['ok' => true, 'board' => $kind, 'period' => $period, 'scope' => 'team', 'rows' => [], 'note' => 'Join a team to see your team board.']; }
         $since = max(self::periodStart($period), self::resetSince($kind === 'points' || $kind === 'teams' ? '' : $kind));
         $filter = ''; $params = [$since];
-        if ($scope === 'friends' && $uid !== '') { $ids = array_merge([$uid], self::friends($uid)); $filter = ' AND user_id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')'; $params = array_merge($params, $ids); }
+        if ($scope !== 'all' && $uid !== '') { $ids = $scope === 'team' ? array_map('strval', array_keys((array)$mine['members'])) : array_merge([$uid], self::friends($uid)); $filter = ' AND user_id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')'; $params = array_merge($params, $ids); }
         if ($kind === 'teams') {
             $rows = Arcade::query('SELECT team_id id, SUM(points) value, COUNT(DISTINCT user_id) players FROM vaultcast_play_points WHERE team_id<>\'\' AND created_at>=? GROUP BY team_id ORDER BY value DESC LIMIT 50', [$since])->fetchAll(PDO::FETCH_ASSOC);
             $teams = self::teams(); $out = [];
             foreach ($rows as $r) if (isset($teams[$r['id']])) $out[] = ['team' => ['id' => $r['id'], 'name' => $teams[$r['id']]['name'], 'colour' => $teams[$r['id']]['colour'], 'emblem' => $teams[$r['id']]['emblem']], 'value' => (int)$r['value'], 'players' => (int)$r['players']];
             return ['ok' => true, 'board' => 'teams', 'period' => $period, 'rows' => $out];
         }
+        if ($kind === 'emu-time' || $kind === 'emu-sessions') return self::emulatorBoard($uid, $period, $scope === 'all' ? null : ($scope === 'team' ? array_map('strval', array_keys((array)$mine['members'])) : array_merge([$uid], self::friends($uid))), $kind);
         if ($kind === 'points') $sql = 'SELECT user_id, SUM(points) value FROM vaultcast_play_points WHERE created_at>=?' . $filter . ' GROUP BY user_id HAVING value>0 ORDER BY value DESC LIMIT 50';
         else {
             if (!isset(Arcade::GAMES[$kind])) throw new DomainException('Unknown leaderboard.');
@@ -194,6 +196,46 @@ final class Social {
         $people = Arcade::people(array_column($rows, 'user_id')); $out = [];
         foreach ($rows as $i => $r) { $t = self::teamOf((string)$r['user_id']); $out[] = ['rank' => $i + 1, 'user' => $people[$r['user_id']], 'value' => (int)$r['value'], 'plays' => (int)($r['plays'] ?? 0), 'me' => $r['user_id'] === $uid, 'team' => $t ? ['name' => $t['name'], 'colour' => $t['colour'], 'emblem' => $t['emblem']] : null]; }
         return ['ok' => true, 'board' => $kind, 'period' => $period, 'scope' => $scope, 'rows' => $out];
+    }
+
+    // ---------------------------------------------------------------- emulator (Play → Games) play stats
+    /** Daily roll-up written next to the Home hub's per-game totals whenever the emulator reports play time. */
+    public static function logEmulator(string $uid, int $seconds, int $sessions): void {
+        try {
+            Arcade::query('INSERT INTO vaultcast_play_emulator (user_id,day,seconds,sessions) VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE seconds=seconds+VALUES(seconds), sessions=sessions+VALUES(sessions)', [$uid, date('Y-m-d'), max(0, $seconds), max(0, $sessions)]);
+        } catch (Throwable $e) {}
+    }
+    /** All-time totals come from the Home hub game history (complete since play time was first tracked). */
+    private static function emulatorTotals(): array {
+        $hit = \Vaultcast\Repository::cacheGet('play-emu-totals');
+        if (is_array($hit)) return $hit;
+        $out = [];
+        $s = \Vaultcast\Database::connection()->query("SELECT name, payload FROM vaultcast_documents WHERE name LIKE 'home-hub:%'");
+        foreach ($s as $row) {
+            $d = json_decode((string)$row['payload'], true); if (!is_array($d) || empty($d['games'])) continue;
+            $sec = 0; $ses = 0; foreach ((array)$d['games'] as $g) { $sec += max(0, (int)($g['seconds'] ?? 0)); $ses += max(0, (int)($g['sessions'] ?? 0)); }
+            $out[substr((string)$row['name'], 9)] = ['seconds' => $sec, 'sessions' => $ses, 'games' => count((array)$d['games'])];
+        }
+        \Vaultcast\Repository::cachePut('play-emu-totals', $out, 120);
+        return $out;
+    }
+    private static function emulatorBoard(string $uid, string $period, ?array $only, string $kind): array {
+        $field = $kind === 'emu-time' ? 'seconds' : 'sessions'; $since = max(self::periodStart($period), self::resetSince($kind));
+        $totals = [];
+        if ($period === 'all' && $since === 0) foreach (self::emulatorTotals() as $id => $t) $totals[$id] = $t[$field];
+        else foreach (Arcade::query('SELECT user_id, SUM(seconds) seconds, SUM(sessions) sessions FROM vaultcast_play_emulator WHERE day>=? GROUP BY user_id', [date('Y-m-d', $since)]) as $r) $totals[$r['user_id']] = (int)$r[$field];
+        if ($only !== null) $totals = array_intersect_key($totals, array_flip($only));
+        $totals = array_filter($totals); arsort($totals); $totals = array_slice($totals, 0, 50, true);
+        $people = Arcade::people(array_map('strval', array_keys($totals))); $out = []; $i = 0;
+        foreach ($totals as $id => $v) { $id = (string)$id; if (!isset($people[$id]) || $people[$id]['id'] === '') continue; $t = self::teamOf($id); $out[] = ['rank' => ++$i, 'user' => $people[$id], 'value' => (int)$v, 'me' => $id === $uid, 'team' => $t ? ['name' => $t['name'], 'colour' => $t['colour'], 'emblem' => $t['emblem']] : null]; }
+        return ['ok' => true, 'board' => $kind, 'period' => $period, 'unit' => $field, 'rows' => $out];
+    }
+    /** Team board for emulator stats: members' totals added together. */
+    public static function emulatorTeams(string $period, string $kind): array {
+        $b = self::emulatorBoard('', $period, null, $kind); $teams = [];
+        foreach ($b['rows'] as $r) if ($r['team']) { $k = $r['team']['name']; $teams[$k] = ($teams[$k] ?? ['team' => $r['team'], 'value' => 0]); $teams[$k]['value'] += $r['value']; }
+        usort($teams, function ($a, $b) { return $b['value'] <=> $a['value']; });
+        return array_values($teams);
     }
 
     // ---------------------------------------------------------------- profile, achievements, activity
@@ -284,7 +326,7 @@ final class Social {
     }
     public static function reset(array $body): array {
         $game = (string)($body['game'] ?? '');
-        if ($game !== '' && !isset(Arcade::GAMES[$game])) throw new DomainException('Unknown game.');
+        if ($game !== '' && !isset(Arcade::GAMES[$game]) && !in_array($game, ['emu-time', 'emu-sessions'], true)) throw new DomainException('Unknown game.');
         HomeHub::mutate('play-resets', function (array $r) use ($game): array { if ($game === '') $r['all'] = time(); else $r['games'][$game] = time(); return $r; });
         return ['ok' => true];
     }
