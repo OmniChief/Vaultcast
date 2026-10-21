@@ -3,6 +3,10 @@ declare(strict_types=1);
 
 class Stream {
     public static function playbackItem(array $item): array {
+        if(!empty($item['directplay_path']) && !is_file($item['directplay_path'])) {
+            unset($item['directplay_path'],$item['directplay_ready'],$item['prepared_copy']);
+            $item['directplay_versions']=[];
+        }
         if ((Store::settings()['convert']['prefer_directplay'] ?? true) && !empty($item['directplay_ready']) && !empty($item['directplay_path']) && is_file($item['directplay_path'])) {
             $item['path']=$item['directplay_path'];$item['ext']=strtolower(pathinfo($item['path'],PATHINFO_EXTENSION));
             $item['prepared_copy']=true;
@@ -124,7 +128,7 @@ class Stream {
             'transcode_allowed'=>Transcode::allowed() && Transcode::eligible($libraryItem),
             'transcode_mode'=>Transcode::settings()['mode'],
             'active_conversion'=>Transcode::allowed() && Transcode::eligible($libraryItem)?Transcode::activeFor((string)$libraryItem['id'],(string)$user['id']):null,
-            'transcode_save_allowed'=>Transcode::allowed() && Transcode::eligible($libraryItem) && empty($libraryItem['directplay_path']) && !preg_match('/\.directplay\.[^.]+$/i',(string)$libraryItem['path']) && !empty(Transcode::settings()['allow_save']) && ($user['role'] ?? '')==='admin',
+            'transcode_save_allowed'=>Transcode::allowed() && Transcode::eligible($libraryItem) && empty($item['directplay_path']) && !preg_match('/\.directplay\.[^.]+$/i',(string)$libraryItem['path']) && !empty(Transcode::settings()['allow_save']) && ($user['role'] ?? '')==='admin',
             'prepared_copy'=>!empty($item['prepared_copy']),
             'progress' => $progress,
             'resume_position' => $progress ? $progress['position'] : 0,

@@ -1609,10 +1609,11 @@ function confirmDialog(message, opts){
         postProgress(item.id, openPlayer._absTime ? openPlayer._absTime() : (media.currentTime||0), openPlayer._absDuration ? openPlayer._absDuration() : (media.duration||0));
       }
     });
-    media.addEventListener('playing', function(){ openPlayer._deskPlayStarted = true; openPlayer._deskRecoverTries = 0; });
+    media.addEventListener('playing', function(){ if(!overlay._closing&&overlay.isConnected)openPlayer._deskPlayStarted = true; });
     media.addEventListener('waiting', function(){ if (openPlayer._deskPlayStarted) toast('Buffering…'); });
     var directTried = false;
     media.addEventListener('error', function(){
+      if(overlay._closing||!overlay.isConnected)return;
       if(overlay._transcodeActive||overlay._transcodePending)return;
       /* Failed before playing: retry once with PHP delivery (nginx could not serve the file). */
       var cur = media.currentSrc || media.src || '';
@@ -1621,7 +1622,7 @@ function confirmDialog(message, opts){
         try { media.src = cur + (cur.indexOf('?') >= 0 ? '&' : '?') + 'direct=1'; if (play.autoplay !== false || openPlayer._deskPlayStarted) media.play(); } catch (eD) {}
         return;
       }
-      if(play.transcode_allowed && !overlay._transcodeAttempted && overlay._startTranscode && media.error && (media.error.code===3||media.error.code===4)) {
+      if((play.autoplay!==false||openPlayer._deskPlayStarted) && play.transcode_allowed && !overlay._transcodeAttempted && overlay._startTranscode && media.error && (media.error.code===3||media.error.code===4)) {
         overlay._startTranscode(false,openPlayer._absTime?openPlayer._absTime():resumeAt||media.currentTime||0);return;
       }
       /* soft mid-play recover (token refresh + seek) before convert toast */
@@ -1631,6 +1632,7 @@ function confirmDialog(message, opts){
         var t = media.currentTime || 0;
         toast('Reconnecting stream…');
         api('/items/'+item.id+'/play', { method:'POST', body: {} }).then(function(nj){
+          if(overlay._closing||!overlay.isConnected)return;
           var nsrc = (nj && nj.ok && nj.url) ? streamPlayUrl(nj.url) : src;
           if (directTried && nsrc && nsrc.indexOf('direct=1') < 0) nsrc += (nsrc.indexOf('?') >= 0 ? '&' : '?') + 'direct=1';
           try { media.src = nsrc; } catch (e1) {}
@@ -1638,6 +1640,8 @@ function confirmDialog(message, opts){
           function resume(){
             if (done) return;
             done = true;
+            media.removeEventListener('loadedmetadata',resume);
+            if(overlay._closing||!overlay.isConnected)return;
             try { if (t > 1) media.currentTime = t; } catch (e2) {}
             try { media.play(); } catch (e3) {}
             openPlayer._deskRecovering = false;
@@ -1857,7 +1861,11 @@ function confirmDialog(message, opts){
     media.addEventListener('timeupdate',function(){if(!overlay._transcodeActive)return;seek.max=String(sourceDuration||1);seek.value=String(offset+(media.currentTime||0));clock.textContent=fmtResumeClock(offset+(media.currentTime||0))+' / '+fmtResumeClock(sourceDuration);});
     overlay._startTranscode=start;overlay._getTranscodeAudio=function(){return audioIndex;};overlay._transcodeAudio=function(index){if(job&&job.save){note('Saved-copy sessions keep the audio track chosen at the start. Return to DirectPlay to choose a different track.');return false;}var at=offset+(media.currentTime||0);audioIndex=Number(index)||0;return start(false,at);};
     overlay._transcodeCleanup=function(){alive=false;gen++;stop();};
-    if(play.transcode_mode==='always')setTimeout(function(){if(alive)start(false,resumePositionFor(item,play),available);},0);
+    if(play.transcode_mode==='always'){
+      var beginTranscode=function(){if(alive&&!overlay._transcodeAttempted)start(false,resumePositionFor(item,play),available);};
+      if(play.autoplay!==false)setTimeout(beginTranscode,0);
+      else media.addEventListener('play',beginTranscode,{once:true});
+    }
   }
   var _emuSessionId = 0;
   var _emuLoading = false;

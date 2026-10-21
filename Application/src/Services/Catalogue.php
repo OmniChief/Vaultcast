@@ -2482,7 +2482,7 @@ class Catalogue {
         $changed=false;
         foreach ($cat['items'] ?? [] as $id => $it) {
             $versions=$it['directplay_versions'] ?? [];
-            if(in_array($path,$versions,true)) {
+            if(in_array($path,$versions,true) || ($it['directplay_path'] ?? '')===$path) {
                 $versions=array_values(array_filter($versions,static function($p)use($path){return $p!==$path;}));
                 unset($cat['items'][$id]['directplay_path'],$cat['items'][$id]['directplay_versions'],$cat['items'][$id]['directplay_ready']);
                 if($versions){$cat['items'][$id]['directplay_versions']=$versions;$cat['items'][$id]['directplay_path']=$versions[0];$cat['items'][$id]['directplay_ready']=!empty(Store::get('directplay_profiles',[])[$versions[0]]['ready']);}

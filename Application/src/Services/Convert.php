@@ -955,7 +955,14 @@ class Convert {
             }
             clearstatcache(true, $destReal);
             $deletedPath = $destReal;
-            $removedIds = Catalogue::removePath($destReal);
+        }
+        // Also clear stale catalogue links when the copy was already deleted on disk.
+        if($dest!=='') {
+            $removedIds=Catalogue::removePath($destReal!==false?$destReal:$dest);
+            $profiles=Store::get('directplay_profiles',[]);
+            unset($profiles[str_replace('\\','/',$dest)]);
+            if($destReal!==false)unset($profiles[str_replace('\\','/',$destReal)]);
+            Store::set('directplay_profiles',$profiles);
         }
 
         $destItemId = (string)($job['dest_item_id'] ?? '');
