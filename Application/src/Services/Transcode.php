@@ -112,7 +112,11 @@ final class Transcode {
     }
     private static function publicJob(array $job): array {
         $base=\Vaultcast\Database::basePath().'api/stream/transcode?t='.rawurlencode($job['token']).'&s='.$job['id'].'&file=';
-        return ['ok'=>true,'id'=>$job['id'],'token'=>$job['token'],'status'=>$job['status'],'offset'=>$job['offset'],'save'=>$job['save'],'ready'=>is_file(self::dir($job['id']).'/index.m3u8'),
+        $playlist=self::dir($job['id']).'/index.m3u8';
+        $text=is_file($playlist)?(string)@file_get_contents($playlist):'';
+        // A single fragment is too little runway when encoding is slower than playback.
+        $ready=preg_match_all('/^segment\d{6,}\.ts\s*$/m',$text)>=3 || (strpos($text,'#EXT-X-ENDLIST')!==false && strpos($text,'#EXTINF:')!==false);
+        return ['ok'=>true,'id'=>$job['id'],'token'=>$job['token'],'status'=>$job['status'],'offset'=>$job['offset'],'save'=>$job['save'],'ready'=>$ready,
             'duration'=>$job['duration'] ?? 0,'error'=>$job['error'] ?? null,'url'=>$base.'index.m3u8','status_url'=>$base.'status',
             'stop_url'=>$base.'stop','startup_seconds'=>$job['config']['startup_seconds']];
     }
@@ -136,8 +140,12 @@ final class Transcode {
         header('Cache-Control: private, no-store');header('X-Content-Type-Options: nosniff');
         if($file==='index.m3u8') {
             $body=(string)file_get_contents($path);$base=\Vaultcast\Database::basePath().'api/stream/transcode?t='.rawurlencode($token).'&s='.$job['id'].'&file=';
+            $body=str_replace("\r\n","\n",$body);
             $body=preg_replace_callback('/^segment\d{6,}\.ts$/m',static function($m)use($base){return $base.$m[0];},$body);
             header('Content-Type: application/vnd.apple.mpegurl');
+            header('Content-Length: '.strlen($body));
+            header('X-Accel-Buffering: no');
+            \Vaultcast\Database::releaseForStreaming();
             if(($_SERVER['REQUEST_METHOD'] ?? 'GET')!=='HEAD')echo $body;
             exit;
         }

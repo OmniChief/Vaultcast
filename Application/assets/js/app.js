@@ -1752,7 +1752,7 @@ function confirmDialog(message, opts){
   }
   function libraryTranscodeControls(overlay,media,item,play){
     if(media.tagName!=='VIDEO'||!play.transcode_allowed)return;
-    var gen=0,hls=null,job=null,timer=null,alive=true,offset=0,audioIndex=Number(play.preferred_audio)||0,sourceDuration=Number(play.duration)||0;
+    var gen=0,hls=null,job=null,timer=null,recoveryTimer=null,alive=true,offset=0,audioIndex=Number(play.preferred_audio)||0,sourceDuration=Number(play.duration)||0;
     var tools=overlay.classList.contains('player-inline')?detailPlayerTools(overlay.closest('.detail-player')):overlay;
     var label=h('span',{className:'muted',role:'status',text:play.prepared_copy?'DirectPlay · prepared copy':'DirectPlay · original file'});
     var seek=h('input',{type:'range',min:'0',max:'1',step:'0.1',value:'0','aria-label':'Seek within the full source video'}),clock=h('span',{className:'muted'});
@@ -1762,7 +1762,7 @@ function confirmDialog(message, opts){
       play.transcode_save_allowed?h('button',{className:'btn ghost sm',text:'Watch & prepare copy',onClick:function(){confirmDialog('Start from the beginning and prepare a reusable MP4 while watching? It keeps running after you close the player. The copy contains the selected audio track; the original stays until you explicitly replace it. Settings → DirectPlay Settings controls quality and limits.',{okText:'Watch & prepare'}).then(function(ok){if(ok)start(true,0);});}}):null,
       h('button',{className:'btn ghost sm',text:'Return to DirectPlay',onClick:function(){if(!overlay._transcodeActive&&!overlay._transcodePending)return;openPlayer(item,Object.assign({},play,{transcode_mode:'fallback',from_start:false,progress:{position:offset+(media.currentTime||0),duration:sourceDuration}}));}}),label
     ]);var trackBar=tools.querySelector('.player-tracks')||tools;trackBar.appendChild(bar);trackBar.appendChild(timeline);
-    function stop(){clearTimeout(timer);timer=null;if(hls){hls.destroy();hls=null;}if(job){fetch(streamPlayUrl(job.stop_url),{method:'POST',credentials:'same-origin'}).catch(function(){});}job=null;}
+    function stop(){clearTimeout(timer);timer=null;clearTimeout(recoveryTimer);recoveryTimer=null;if(hls){hls.destroy();hls=null;}if(job){fetch(streamPlayUrl(job.stop_url),{method:'POST',credentials:'same-origin'}).catch(function(){});}job=null;}
     function active(g){return alive&&g===gen&&overlay.isConnected;}
     function note(text){label.textContent=text;}
     function json(url){return fetch(streamPlayUrl(url),{credentials:'same-origin',cache:'no-store'}).then(function(r){return r.json();}).then(function(j){if(!j.ok)throw new Error(j.error||'Playback worker unavailable');return j;});}
@@ -1775,9 +1775,25 @@ function confirmDialog(message, opts){
       return loadHls().then(function(Hls){
         if(!active(g))return;
         if(Hls&&Hls.isSupported()){
-          hls=new Hls({enableWorker:true,lowLatencyMode:false,startPosition:0});
+          var recoveries=0;
+          hls=new Hls({enableWorker:true,lowLatencyMode:false,startPosition:0,maxBufferLength:20,
+            manifestLoadingTimeOut:30000,levelLoadingTimeOut:30000,fragLoadingTimeOut:60000});
           hls.on(Hls.Events.MANIFEST_PARSED,function(){if(active(g)&&play.autoplay!==false)media.play().catch(function(){});});
-          hls.on(Hls.Events.ERROR,function(_event,data){if(data&&data.fatal&&active(g))note('Transcode playback failed. '+(data.details||'Try DirectPlay or review the playback worker.'));});
+          hls.on(Hls.Events.ERROR,function(_event,data){
+            if(!data||!data.fatal||!active(g))return;
+            if(data.type===Hls.ErrorTypes.NETWORK_ERROR&&recoveries<2){
+              recoveries++;note('Waiting for transcoded video · retrying playback…');
+              clearTimeout(recoveryTimer);recoveryTimer=setTimeout(function(){
+                if(!active(g)||!hls||!job)return;
+                json(job.status_url).then(function(j){
+                  if(!active(g)||!hls)return;
+                  if(j.status==='failed'||j.status==='cancelled')throw new Error(j.error||'Transcoding stopped.');
+                  hls.startLoad(media.currentTime||0);
+                }).catch(function(e){if(active(g))note(e.message||'Playback worker unavailable.');});
+              },2000);return;
+            }
+            note('Transcode playback failed. '+(data.details||'Try DirectPlay or review the playback worker.'));
+          });
           hls.loadSource(streamPlayUrl(job.url));hls.attachMedia(media);
         }else if(media.canPlayType('application/vnd.apple.mpegurl')){media.src=streamPlayUrl(job.url);media.load();if(play.autoplay!==false)media.play().catch(function(){});}
         else throw new Error('This browser cannot play HLS. Use DirectPlay or an external player.');
