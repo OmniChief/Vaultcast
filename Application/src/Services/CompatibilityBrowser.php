@@ -11,6 +11,7 @@ final class CompatibilityBrowser {
     private static $base;
     private static $viewer;
     private static $personal;
+    private static $theme='dark';
     private static $signed=false;
     private static function esc($text): string { return htmlspecialchars((string)$text,ENT_QUOTES|ENT_SUBSTITUTE,'UTF-8'); }
     private static function url(array $params=[]): string { return self::$base.'?'.http_build_query(['compat'=>'on']+$params,'','&',PHP_QUERY_RFC3986); }
@@ -69,9 +70,13 @@ final class CompatibilityBrowser {
         }
         return $items;
     }
+    private static function artwork(string $kind='home'): string {
+        $route=in_array($kind,SiteArtwork::SECTIONS,true)?'home-section/'.$kind:$kind.'-poster';
+        return '<img class="compat-hero-art" data-compat-poster="1" src="'.self::esc(self::$base.'api/site/'.$route.'?theme='.rawurlencode(self::$theme)).'" alt="" width="240" height="360">';
+    }
     private static function home(array $home): string {
         $name=self::$signed?((self::$viewer['display_name'] ?? '') ?: self::$viewer['username']):'';
-        $html='<div class="compat-hero">'.self::heading('YOUR SPACE. YOUR STORIES.',$name!==''?'Welcome back, '.$name:'Make yourself at home.','Your favourites, your next episode and something new to discover.').'<div class="compat-actions">'.(AreaAccess::allowed(self::$viewer,'library')?self::link('Explore the library',['view'=>'library']):'').(!empty($home['features']['live'])?self::link('Live',['view'=>'live']):'').'</div></div>';
+        $html='<div class="compat-hero">'.self::artwork().'<div class="compat-hero-copy">'.self::heading('YOUR SPACE. YOUR STORIES.',$name!==''?'Welcome back, '.$name:'Make yourself at home.','Your favourites, your next episode and something new to discover.').'<div class="compat-actions">'.(AreaAccess::allowed(self::$viewer,'library')?self::link('Explore the library',['view'=>'library']):'').(!empty($home['features']['live'])?self::link('Live',['view'=>'live']):'').'</div></div></div>';
         $panels=[];$continue=array_slice($home['continue_watching'] ?? [],0,6);if(!$continue)$continue=self::recentProgress();
         if($continue)$panels['recent']='<section class="compat-shelf"><h2>Continue watching</h2>'.self::cards($continue).'</section>';
         $personal=self::personal();$favourites=[];
@@ -247,6 +252,8 @@ final class CompatibilityBrowser {
     public static function render(array $startup,string $base,string $site,string $error=''): void {
         self::$base=$base;self::$signed=!empty($startup['me']['user']);self::$personal=null;
         self::$viewer=$startup['me']['user'] ?? guest_user();AreaAccess::remember(self::$viewer);
+        $theme=(string)self::preference('theme',Store::settings()['theme'] ?? 'dark');
+        self::$theme=in_array($theme,SiteArtwork::THEMES,true)?$theme:'dark';
         $home=$startup['home'] ?? null;$body='';$view=(string)($_GET['view'] ?? 'home');
         if(($_SERVER['REQUEST_METHOD'] ?? '')==='POST' && isset($_POST['compat_action'])){
             if(!hash_equals(self::token(),(string)($_POST['compat_token'] ?? ''))){http_response_code(403);$body='<p class="compat-error">This form expired. Reload the page and try again.</p>';}
@@ -298,8 +305,13 @@ final class CompatibilityBrowser {
                 $body=$notice.'</ul>'.self::link('Open maintenance tools',['view'=>'tools']).'</div>'.$body;
             }
         }
+        if(in_array($view,array_merge(SiteArtwork::SECTIONS,['collections']),true)){
+            $heading='<div class="compat-heading">';$at=strpos($body,$heading);
+            if($at!==false)$body=substr_replace($body,'<div class="compat-heading compat-section-heading">'.self::artwork($view),$at,strlen($heading));
+        }
+        $body=str_replace(['<section ','</section>'],['<div ','</div>'],$body);
         $css=(string)file_get_contents(STREAM_ROOT.'/assets/css/compatibility.css');$scriptVersion=substr(hash_file('sha256',STREAM_ROOT.'/assets/js/compatibility.js'),0,16);release_request_locks();
         header('Content-Type: text/html; charset=utf-8');
-        echo '<!DOCTYPE html><html lang="en"><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'.self::esc($site).'</title><style>'.$css.'</style></head><body class="'.(self::preference('theme','dark')==='light'?'compat-light ':(self::preference('theme','dark')==='steampunk'?'compat-steampunk ':'')).(self::preference('theme','dark')==='vintage-tv'?'compat-vintage-tv ':'').(self::preference('theme','dark')==='after-hours'?'compat-after-hours ':'').(self::preference('theme','dark')==='ninja-extreme'?'compat-ninja-extreme ':'').(self::preference('theme','dark')==='anime'?'compat-anime ':'').(self::preference('theme','dark')==='manly-man'?'compat-manly-man ':'').(self::preference('home_compact',false)?'compat-compact':'').'"><a class="compat-skip" href="#compat-content">Skip to content</a>'.$nav.'<div id="compat-shell"><div id="compat-content" role="main">'.$body.'</div><div class="compat-footer"><span>Compatibility mode · '.self::esc(STREAM_VERSION).'</span><a href="'.self::esc($base.'?compat=auto').'">Automatic detection</a><a href="'.self::esc($base.'?compat=off').'">Full interface</a></div></div><script>window.__VC_COMPAT_BASE__='.json_encode($base,JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT).';</script><script src="'.self::esc($base.'index.php?asset=assets/js/compatibility.js&v='.$scriptVersion).'"></script></body></html>';
+        echo '<!DOCTYPE html><html lang="en"><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'.self::esc($site).'</title><style>'.$css.'</style></head><body class="'.self::esc('compat-'.self::$theme.' ').(self::preference('home_compact',false)?'compat-compact':'').'"><a class="compat-skip" href="#compat-content">Skip to content</a>'.$nav.'<div id="compat-shell"><div id="compat-content" role="main">'.$body.'</div><div class="compat-footer"><span>Compatibility mode · '.self::esc(STREAM_VERSION).'</span><a href="'.self::esc($base.'?compat=auto').'">Automatic detection</a><a href="'.self::esc($base.'?compat=off').'">Full interface</a></div></div><script>window.__VC_COMPAT_BASE__='.json_encode($base,JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT).';</script><script src="'.self::esc($base.'index.php?asset=assets/js/compatibility.js&v='.$scriptVersion).'"></script></body></html>';
     }
 }
