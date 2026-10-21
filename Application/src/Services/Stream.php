@@ -130,7 +130,8 @@ class Stream {
         return [
             'transcode_allowed'=>Transcode::allowed() && Transcode::eligible($libraryItem),
             'transcode_auto_blocked'=>$automaticBlocked,
-            'transcode_mode'=>Transcode::settings()['mode'],
+            'transcode_mode'=>'manual', // never automatic; kept for cached older clients
+            'playback_hint'=>$saveAllowed ? null : (($item['media_kind'] ?? '')==='video' && (Transcode::allowed() || Remux::enabled()) && Transcode::eligible($libraryItem) ? Transcode::defaultSaveMode($libraryItem) : null),
             'active_conversion'=>Transcode::allowed() && Transcode::eligible($libraryItem)?Transcode::activeFor((string)$libraryItem['id'],(string)$user['id']):null,
             'transcode_save_allowed'=>$saveAllowed,
             'save_copy_default'=>$saveAllowed?Transcode::defaultSaveMode($libraryItem):null,

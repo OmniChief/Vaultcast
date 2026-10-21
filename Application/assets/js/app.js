@@ -405,14 +405,16 @@
       if(!overlay.isConnected)return;
       probeTracks = probe && probe.ok ? (probe.audio_tracks || []) : [];
       probeDuration = probe && probe.duration ? Number(probe.duration) : 0;
-      /* Saved choice that the browser cannot apply natively: start the remux at the current position. */
+      /* Saved choice that the browser cannot apply natively: never start a remux on its own (only a click
+         converts anything). Play the default track and say how to get the saved one. */
       var nat = media.audioTracks;
       if (!audioApplied && audioPreference != null && !(nat && nat.length > 1) && probeTracks.length > 1 && audioPreference < probeTracks.length) {
         var def = probeTracks.filter(function(t){return t.default;})[0] || probeTracks[0];
         audioApplied = true;
-        if (audioPreference !== (def ? def.relative : 0) && play.remux_allowed) {
-          var go = function(){ if(overlay.isConnected)switchViaRemux(audioPreference); };
-          if (media.readyState >= 1) go(); else media.addEventListener('loadedmetadata', go, { once:true });
+        if (audioPreference !== (def ? def.relative : 0)) {
+          refresh();
+          note.textContent = play.remux_url ? 'Playing the default audio track. Choose your saved track above to switch (this browser needs it converted).' : 'Playing the default audio track.';
+          return;
         }
       }
       refresh();
@@ -1629,14 +1631,15 @@ function confirmDialog(message, opts){
       media = h('video', { id:'player-media', controls:true, autoplay:play.autoplay !== false, playsinline:true, preload:play.transcode_auto_blocked?'none':'metadata' });
       media.setAttribute('webkit-playsinline', 'true');
       media.setAttribute('playsinline', 'true');
-      if (play.mime && !(play.transcode_allowed && play.transcode_mode==='always' && !play.transcode_auto_blocked)) {
+      /* Always start with the original (or the attached ready DirectPlay copy). Nothing transcodes unless clicked. */
+      if (play.mime) {
         try {
           var source = document.createElement('source');
           source.src = src; source.type = play.mime;
           media.appendChild(source);
         } catch (eS) {}
       }
-      if (!(play.transcode_allowed && play.transcode_mode==='always' && !play.transcode_auto_blocked)) media.src = src;
+      media.src = src;
     }
     /* resume — seek to saved progress (play.progress from /items/{id}/play, else item.progress) once metadata is ready.
        Progress saves are held until the resume seek lands so the 0:00 start can't overwrite the saved position. */
@@ -1684,9 +1687,9 @@ function confirmDialog(message, opts){
         try { media.src = cur + (cur.indexOf('?') >= 0 ? '&' : '?') + 'direct=1'; if (play.autoplay !== false || openPlayer._deskPlayStarted) media.play(); } catch (eD) {}
         return;
       }
-      if(!play.transcode_auto_blocked && !play.library_conversion && (play.autoplay!==false||openPlayer._deskPlayStarted) && play.transcode_allowed && !overlay._transcodeAttempted && overlay._startTranscode && media.error && (media.error.code===3||media.error.code===4)) {
-        overlay._startTranscode(false,openPlayer._absTime?openPlayer._absTime():resumeAt||media.currentTime||0);return;
-      }
+      /* Unsupported / undecodable before playback started: no retries and no automatic transcode.
+         Say so in the player and leave the choice (Live transcode / Convert audio only) to the user. */
+      if (!openPlayer._deskPlayStarted && media.error && (media.error.code===3||media.error.code===4)) { playbackProblem('error'); return; }
       /* soft mid-play recover (token refresh + seek) before convert toast */
       if (openPlayer._deskPlayStarted && !openPlayer._deskRecovering && (openPlayer._deskRecoverTries||0) < 3) {
         openPlayer._deskRecovering = true;
@@ -1713,14 +1716,17 @@ function confirmDialog(message, opts){
         }).catch(function(){ openPlayer._deskRecovering = false; });
         return;
       }
-      if (needsConvertExt(item) && state.user && state.user.role === 'admin') {
-        toast('Playback error \u2014 Convert to DirectPlay MP4 for this device.');
-      } else if (needsConvertExt(item)) {
-        toast('This device may not decode this file (audio-only). Try another device or ask admin to Convert.');
-      } else {
-        toast('Playback error');
-      }
+      playbackProblem('error');
     });
+    /* Inline notice in the player; the playback options bar (if mounted) highlights a suggested option. */
+    function playbackProblem(kind){
+      if(overlay._closing||!overlay.isConnected||overlay._transcodeActive||overlay._transcodePending)return;
+      if(overlay._playbackProblem){overlay._playbackProblem(kind);return;}
+      var text=kind==='video'?'The picture isn\u2019t decoding in this browser.':'This video didn\u2019t play in this browser.';
+      if(needsConvertExt(item)&&state.user&&state.user.role==='admin')text+=' Convert it to a DirectPlay MP4 from the title\u2019s actions.';
+      var existingNotice=overlay.querySelector('.player-notice');if(existingNotice)existingNotice.remove();
+      overlay.appendChild(h('div',{className:'player-notice',role:'alert',text:text}));
+    }
 
     overlay.appendChild(media);
     if(media.tagName==='VIDEO'&&typeof play.hub_cinema_guest==='undefined'){
@@ -1798,15 +1804,11 @@ function confirmDialog(message, opts){
         if (vw > 0 || blackChecks > 8 || !overlay.isConnected) {
           clearInterval(blackTimer);
           if (vw > 0 || !overlay.isConnected || !openPlayer._deskPlayStarted) return;
-          if (state.user && state.user.role === 'admin') {
-            if (convertBtn) {
-              convertBtn.textContent = 'Convert — black video / no picture';
-              convertBtn.classList.add('danger');
-            }
-            toast('Video track not decoding (black picture). Convert to DirectPlay MP4.', { kind:'bad', ms: 6500 });
-          } else {
-            toast('Audio only / black video — this device may not decode this file. Ask admin to Convert.', { kind:'bad', ms: 6500 });
+          if (convertBtn) {
+            convertBtn.textContent = 'Convert — black video / no picture';
+            convertBtn.classList.add('danger');
           }
+          playbackProblem('video');
         }
       }, 400);
     }
@@ -1850,10 +1852,10 @@ function confirmDialog(message, opts){
     var directButton=option('Play original','Stop the converted stream and go back to playing the original file directly.',function(){
       var position=openPlayer._absTime?openPlayer._absTime():media.currentTime||0;
       if(overlay._transcodeActive||overlay._transcodePending||leftOriginal){
-        openPlayer(item,Object.assign({},play,{active_conversion:job?(job.save&&job.status!=='done'?job:null):available,transcode_mode:'fallback',from_start:false,progress:{position:offset+(media.currentTime||0),duration:sourceDuration}}));
+        openPlayer(item,Object.assign({},play,{active_conversion:job?(job.save&&job.status!=='done'?job:null):available,from_start:false,progress:{position:offset+(media.currentTime||0),duration:sourceDuration}}));
       }else if(overlay._isRemuxing&&overlay._isRemuxing()){
         if(overlay._clearAudioChoice)overlay._clearAudioChoice();
-        openPlayer(item,Object.assign({},play,{active_conversion:available,transcode_mode:'fallback',from_start:false,progress:{position:position,duration:sourceDuration||Number(play.duration)||0}}));
+        openPlayer(item,Object.assign({},play,{active_conversion:available,from_start:false,progress:{position:position,duration:sourceDuration||Number(play.duration)||0}}));
       }
     });
     function playMode(){return overlay._transcodeActive||overlay._transcodePending?'transcode':overlay._isRemuxing&&overlay._isRemuxing()?'audio':'direct';}
@@ -1984,11 +1986,19 @@ function confirmDialog(message, opts){
     media.addEventListener('timeupdate',function(){if(!overlay._transcodeActive)return;seek.max=String(sourceDuration||1);seek.value=String(offset+(media.currentTime||0));clock.textContent=fmtResumeClock(offset+(media.currentTime||0))+' / '+fmtResumeClock(sourceDuration);});
     overlay._startTranscode=start;overlay._getTranscodeAudio=function(){return audioIndex;};overlay._transcodeAudio=function(index){if(job&&job.save){note('A saved copy keeps the audio track chosen at the start. Use Play original to choose a different track.');return false;}var at=offset+(media.currentTime||0);audioIndex=Number(index)||0;return start(false,at);};
     overlay._transcodeCleanup=function(){alive=false;gen++;clearTimeout(pollTimer);pollTimer=null;stop();};
-    if(canTranscode&&play.transcode_mode==='always'&&!play.transcode_auto_blocked&&!queued){
-      var beginTranscode=function(){if(alive&&!overlay._transcodeAttempted)start(false,resumePositionFor(item,play),available);};
-      if(play.autoplay!==false)setTimeout(beginTranscode,0);
-      else media.addEventListener('play',beginTranscode,{once:true});
-    }
+    /* Playback failed or the picture is not decoding: explain and suggest, never start anything. */
+    overlay._playbackProblem=function(kind){
+      if(!alive||playMode()!=='direct')return;
+      var hint=play.playback_hint||play.save_copy_default||{},suggest=null;
+      if(kind!=='video'&&hint.mode==='audio'&&audioButton&&!audioButton.hidden)suggest=audioButton;
+      else if(transcodeButton&&!transcodeButton.hidden)suggest=transcodeButton;
+      else if(audioButton&&!audioButton.hidden)suggest=audioButton;
+      [transcodeButton,audioButton].forEach(function(b){if(b)b.classList.remove('is-suggested');});
+      if(suggest)suggest.classList.add('is-suggested');
+      mode.textContent=kind==='video'?'No picture':'Didn\u2019t play';mode.setAttribute('data-kind','stopped');
+      var options=[transcodeButton&&!transcodeButton.hidden?'Live transcode':null,audioButton&&!audioButton.hidden?'Convert audio only':null].filter(Boolean);
+      note((kind==='video'?'The picture isn\u2019t decoding in this browser.':'This video didn\u2019t play in this browser.')+(options.length?' Try '+options.join(' or ')+'.':(queued||available?' A conversion of this title is already running.':'')));
+    };
   }
   var _emuSessionId = 0;
   var _emuLoading = false;
@@ -10696,10 +10706,9 @@ h('div', { className:'cv-find-bar' }, [
     root.appendChild(card('Choose how the server plays video','DirectPlay sends the file as it is. Remuxing copies video and can convert audio. Transcoding creates H.264/AAC video for this device.',[
       toggle('directplay_only','DirectPlay only','Blocks playback remuxing and video transcoding. Manually queued library conversions remain available.',st.directplay_only!==false),
       toggle('allow_remux','Allow audio remuxing','Copies video; converts incompatible audio when switching tracks. Uses the thread, AAC bitrate and channel controls below, even when video transcoding is off.',st.allow_remux!==false),
-      toggle('enabled','Allow video transcoding','For local library movies and episodes only. Never used for IPTV, webcams, radio, games or Relay feeds.',!!c.enabled),status
+      toggle('enabled','Allow video transcoding','For local library movies and episodes only, and only when someone clicks Live transcode, Watch & save copy or Convert audio only. Playback never switches to a transcode on its own. Never used for IPTV, webcams, radio, games or Relay feeds.',!!c.enabled),status
     ]));
     var encoding=card('Playback encoder','Software H.264 (libx264) + AAC over HLS. Each decoder, encoder and filter pool uses the selected thread limit; this is not a strict process-wide CPU cap.',[
-      choice('mode','When to transcode',[['fallback','Prefer DirectPlay; transcode after a playback failure'],['always','Transcode library video whenever it is opened']]),
       range('threads','Threads per worker',1,maxThreads,''),range('max_sessions','Maximum simultaneous playback workers',1,4,''),
       range('crf','Video quality (lower = higher quality / larger files)',14,28,''),
       choice('preset','Encoder speed', ['ultrafast','superfast','veryfast','faster','fast','medium','slow','slower','veryslow'].map(function(v){return [v,v+(v==='veryfast'?' · recommended for playback':v==='veryslow'?' · highest CPU cost':'')];})),

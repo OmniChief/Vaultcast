@@ -8,7 +8,7 @@ final class Transcode {
     const SAVE_MODE_LABELS=['audio'=>'Audio only','video'=>'Video only','both'=>'Video and audio'];
     public const PRESETS = ['ultrafast','superfast','veryfast','faster','fast','medium','slow','slower','veryslow'];
     public static function defaults(): array {
-        return ['enabled'=>false,'mode'=>'fallback','threads'=>1,'max_sessions'=>1,'crf'=>20,'preset'=>'veryfast',
+        return ['enabled'=>false,'mode'=>'manual','threads'=>1,'max_sessions'=>1,'crf'=>20,'preset'=>'veryfast',
             'audio_bitrate'=>'192k','audio_channels'=>'2','max_height'=>0,'max_bitrate'=>0,'segment_seconds'=>4,
             'startup_seconds'=>90,'idle_seconds'=>120,'cache_hours'=>6,'cache_gb'=>10,'allow_save'=>true];
     }
@@ -16,19 +16,23 @@ final class Transcode {
         $s = Store::settings()['transcoding'] ?? [];
         $s = array_replace(self::defaults(), is_array($s) ? $s : []);
         $s['threads'] = Convert::sanitizeThreadCount($s['threads']);
+        // Transcoding only ever starts from an explicit click; an older saved 'always'/'fallback' cannot re-enable automatic starts.
+        $s['mode'] = 'manual';
         return $s;
     }
     public static function allowed(): bool {
         return (Store::settings()['streaming']['directplay_only'] ?? true) === false && !empty(self::settings()['enabled']);
     }
     public static function validate(array $input): array {
-        $rules = ['mode'=>['fallback','always'],'preset'=>self::PRESETS,'audio_bitrate'=>['96k','128k','160k','192k','256k','320k'],
+        $rules = ['preset'=>self::PRESETS,'audio_bitrate'=>['96k','128k','160k','192k','256k','320k'],
             'audio_channels'=>['source','2'],'max_height'=>[0,480,720,1080,1440,2160],
             'max_bitrate'=>[0,1000,2000,4000,8000,12000,20000,40000],'segment_seconds'=>[2,4,6]];
         $ranges = ['threads'=>[1,Convert::cpuCount()],'max_sessions'=>[1,4],'crf'=>[14,28],
             'startup_seconds'=>[10,120],'idle_seconds'=>[30,600],'cache_hours'=>[1,72],'cache_gb'=>[1,100]];
         $out = [];
         foreach ($input as $key=>$value) {
+            // Legacy "When to transcode" value from older settings pages: accepted, always stored as manual.
+            if ($key==='mode') { $out['mode']='manual'; continue; }
             if (in_array($key,['enabled','allow_save'],true)) {
                 if (!is_bool($value)) throw new InvalidArgumentException('Choose on or off for ' . $key . '.');
             } elseif (isset($rules[$key])) {
