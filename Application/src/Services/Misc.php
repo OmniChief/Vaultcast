@@ -221,6 +221,34 @@ final class Misc {
         return ['ok' => true, 'recording' => $rec, 'upcoming' => array_slice($up, 0, 12)];
     }
 
+    /** Now playing from a radio stream's ICY metadata (shared stations, or a public custom URL). */
+    public static function radioNow(array $user, string $id, string $url): array {
+        $allowPrivate = false; $target = '';
+        if ($id !== '') { foreach (Radio::stations() as $s) if ((string)($s['id'] ?? '') === $id) { $target = (string)$s['url']; $allowPrivate = true; } }
+        elseif ($url !== '') $target = self::external($user, $url);
+        if ($target === '' || !function_exists('curl_init')) return ['ok' => true, 'title' => null];
+        self::rate($user, 'radio', 30);
+        return ['ok' => true] + self::cached('radio-now:' . $target, 20, function () use ($target, $allowPrivate) {
+            $p = parse_url($target); $host = (string)($p['host'] ?? '');
+            $ips = filter_var($host, FILTER_VALIDATE_IP) ? [$host] : (array)@gethostbynamel($host);
+            if (!$ips) return ['title' => null];
+            if (!$allowPrivate) foreach ($ips as $ip) if (!WebFetch::publicIp($ip)) return ['title' => null];
+            $metaint = 0; $buf = ''; $title = null;
+            $ch = curl_init($target);
+            $port = (int)($p['port'] ?? (strtolower((string)($p['scheme'] ?? '')) === 'https' ? 443 : 80));
+            curl_setopt_array($ch, [CURLOPT_RESOLVE => [$host . ':' . $port . ':' . (strpos($ips[0], ':') !== false ? '[' . $ips[0] . ']' : $ips[0])], CURLOPT_HTTPHEADER => ['Icy-MetaData: 1'], CURLOPT_CONNECTTIMEOUT => 4, CURLOPT_TIMEOUT => 6, CURLOPT_FOLLOWLOCATION => false, CURLOPT_USERAGENT => 'Vaultcast/1',
+                CURLOPT_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
+                CURLOPT_HEADERFUNCTION => function ($c, $line) use (&$metaint) { if (stripos($line, 'icy-metaint:') === 0) $metaint = (int)trim(substr($line, 12)); return strlen($line); },
+                CURLOPT_WRITEFUNCTION => function ($c, $chunk) use (&$buf, &$metaint) { if ($metaint <= 0 || $metaint > 65536) return 0; $buf .= $chunk; return strlen($buf) > $metaint + 4081 ? 0 : strlen($chunk); }]);
+            curl_exec($ch); curl_close($ch);
+            if ($metaint > 0 && strlen($buf) > $metaint) {
+                $len = ord($buf[$metaint]) * 16; $meta = substr($buf, $metaint + 1, $len);
+                if (preg_match("/StreamTitle='(.*?)';/s", $meta, $m)) $title = trim(mb_convert_encoding($m[1], 'UTF-8', 'UTF-8, ISO-8859-1')) ?: null;
+            }
+            return ['title' => $title ? mb_substr($title, 0, 200) : null];
+        });
+    }
+
     // ---------------------------------------------------------------- media widget: movie picking
     public static function movies(array $user, string $q, string $source, int $n): array {
         if (!AreaAccess::allowed($user, 'library')) throw new DomainException('Your account does not have access to the Library.');

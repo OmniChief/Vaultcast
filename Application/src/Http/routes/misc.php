@@ -42,6 +42,7 @@ try {
     if ($path === '/misc/widget/nowplaying' && $method === 'GET') json_out(Misc::nowPlaying($user));
     if ($path === '/misc/widget/downloads' && $method === 'GET') json_out(Misc::downloads($user));
     if ($path === '/misc/widget/recordings' && $method === 'GET') json_out(Misc::recordings($user));
+    if ($path === '/misc/widget/radio-now' && $method === 'GET') json_out(Misc::radioNow($user, (string)($_GET['id'] ?? ''), (string)($_GET['url'] ?? '')));
     if ($path === '/misc/movies' && $method === 'GET') json_out(Misc::movies($user, trim((string)($_GET['q'] ?? '')), (string)($_GET['source'] ?? ''), (int)($_GET['n'] ?? 24)));
     if ($path === '/misc/movies/sources' && $method === 'GET') json_out(Misc::movieSources($user));
     if ($path === '/misc/movies/next' && $method === 'POST') { $b = body_json(); json_out(Misc::nextMovie($user, (string)($b['after'] ?? ''), (string)($b['source'] ?? ''), (array)($b['queue'] ?? []))); }
