@@ -365,7 +365,10 @@ button.vc-choice:active:not(:disabled) { transform: scale(.98); }
 .vc-board.editing .vc-board-grid { background-image: linear-gradient(to right, color-mix(in srgb, var(--accent) 10%, transparent) 1px, transparent 1px); background-size: calc((100% + 12px) / 24) 100%; border-radius: var(--radius-lg); outline: 1px dashed color-mix(in srgb, var(--accent) 30%, transparent); outline-offset: 6px; }
 .vc-board-empty { grid-column: 1 / -1; grid-row: 1 / span 6; display: grid; place-items: center; }
 .vc-widget { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; border-radius: var(--radius-xl); overflow: hidden; border: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
-  background: color-mix(in srgb, var(--bg3) 55%, transparent); backdrop-filter: blur(18px) saturate(140%); -webkit-backdrop-filter: blur(18px) saturate(140%); box-shadow: 0 14px 40px -24px rgba(0,0,0,.8), inset 0 1px 0 color-mix(in srgb, var(--text) 8%, transparent); transition: opacity .2s; animation: vc-fade .35s ease both; }
+  /* Static glass: a near-opaque tinted panel with a fixed top highlight. No backdrop-filter: a live blur(18px)
+     saturate(140%) re-sampled the page behind each card on every composite and showed as a shifting lighter
+     vertical band on TVs/NAS browsers. */
+  background: linear-gradient(180deg, color-mix(in srgb, var(--text) 4%, color-mix(in srgb, var(--bg3) 86%, transparent)), color-mix(in srgb, var(--bg3) 86%, transparent) 40%); box-shadow: 0 14px 40px -24px rgba(0,0,0,.8), inset 0 1px 0 color-mix(in srgb, var(--text) 8%, transparent); transition: opacity .2s; animation: vc-fade .35s ease both; }
 /* Shadow transitions only while arranging (drag/hover feedback); never on periodic updates. */
 .vc-board.editing .vc-widget { transition: box-shadow .2s, opacity .2s; }
 .vc-board[data-theme="solid"] .vc-widget { background: var(--bg3); backdrop-filter: none; -webkit-backdrop-filter: none; }
@@ -493,13 +496,13 @@ button.vc-choice:active:not(:disabled) { transform: scale(.98); }
 /* media */
 .vc-media { background: #000; }
 .vc-media-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
-.vc-media-bar { position: absolute; left: 8px; right: 8px; bottom: 8px; display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 12px; border-radius: var(--radius-lg); background: color-mix(in srgb, var(--bg) 70%, transparent); backdrop-filter: blur(10px); opacity: 0; transform: translateY(6px); transition: opacity .25s, transform .25s; z-index: 3; }
+.vc-media-bar { position: absolute; left: 8px; right: 8px; bottom: 8px; display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 12px; border-radius: var(--radius-lg); background: color-mix(in srgb, var(--bg) 84%, transparent); opacity: 0; transform: translateY(6px); transition: opacity .25s, transform .25s; z-index: 3; }
 .vc-media-bar strong { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .vc-media:hover .vc-media-bar, .vc-media:focus-within .vc-media-bar, .vc-media:has(.vc-radio) .vc-media-bar { opacity: 1; transform: none; }
 @media (hover: none) { .vc-media-bar { opacity: 1; transform: none; } }
 .vc-media:has(video[controls]) .vc-media-bar { top: 8px; bottom: auto; }
 .vc-media-note { position: absolute; left: 12px; top: 10px; right: 12px; margin: 0; color: #fff; z-index: 2; text-shadow: 0 1px 6px #000; }
-.vc-media-over { position: absolute; inset: 0; z-index: 4; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 16px; text-align: center; background: color-mix(in srgb, var(--bg) 82%, transparent); backdrop-filter: blur(8px); overflow: auto; }
+.vc-media-over { position: absolute; inset: 0; z-index: 4; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 16px; text-align: center; background: color-mix(in srgb, var(--bg) 88%, transparent); overflow: auto; }
 .vc-media-over[hidden] { display: none; }
 .vc-media-next { display: flex; gap: 16px; align-items: center; text-align: left; max-width: 640px; }
 .vc-next-poster { width: clamp(70px, 16%, 130px); aspect-ratio: 2 / 3; object-fit: cover; border-radius: var(--radius-md); box-shadow: var(--shadow); }
@@ -868,7 +871,8 @@ html[data-motion="reduced"] .vc-play *, html[data-motion="reduced"] .vc-misc *, 
 .vc-amb-dim, .vc-amb-warm { position: absolute; inset: 0; pointer-events: none; transition: opacity 20s linear; z-index: 3; }
 .vc-amb-warm { background: rgba(255,130,30,.16); mix-blend-mode: multiply; opacity: 0; }
 .vc-amb-host .vc-amb-overlay { position: absolute; inset: 0; z-index: 4; pointer-events: none; padding: calc(var(--amb-u) * 3.6); display: grid; gap: calc(var(--amb-u) * 1.4); background: none; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr auto; transition: transform 20s ease-in-out; }
-.vc-amb-host .vc-amb-overlay.scrim .vc-amb-clock, .vc-amb-host .vc-amb-overlay.scrim .vc-amb-block { background: rgba(0,0,0,.34); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); border-radius: calc(var(--amb-u) * 1.2); padding: calc(var(--amb-u) * .9) calc(var(--amb-u) * 1.4); }
+/* Static darken behind text (no live blur over moving scenes/webcams, which shimmered as bands). */
+.vc-amb-host .vc-amb-overlay.scrim .vc-amb-clock, .vc-amb-host .vc-amb-overlay.scrim .vc-amb-block { background: rgba(0,0,0,.5); border-radius: calc(var(--amb-u) * 1.2); padding: calc(var(--amb-u) * .9) calc(var(--amb-u) * 1.4); }
 .vc-amb-host .vc-amb-clock { display: flex; flex-direction: column; text-shadow: 0 4px 24px rgba(0,0,0,.6); align-self: end; justify-self: start; grid-column: 1; grid-row: 2; }
 .vc-amb-info { display: flex; flex-direction: column; gap: calc(var(--amb-u) * .8); align-self: end; justify-self: end; grid-column: 2; grid-row: 2; align-items: flex-end; max-width: 100%; }
 .vc-amb-overlay.pos-br .vc-amb-clock { grid-column: 2; justify-self: end; align-items: flex-end; }
@@ -962,4 +966,10 @@ html[data-motion="reduced"] .vc-play *, html[data-motion="reduced"] .vc-misc *, 
   .vc-wa-row > .btn { grid-column: 2; grid-row: 1; align-self: start; }
   .vc-wa-toggle { grid-column: 1 / -1; }
   .vc-wa-add { grid-template-columns: 1fr; }
+}
+
+/* Board and Ambient: honour reduced motion (entry fades, pulses, equaliser, picture pans and crossfades). */
+@media (prefers-reduced-motion: reduce) {
+  .vc-widget, .vc-ambient, .vc-rec-dot, .vc-pulse, .vc-radio-art.on span, .vc-kb-img { animation: none !important; }
+  .vc-frame-layer, .vc-kb-layer, .vc-cam-layer, .vc-media-bar { transition: none !important; }
 }
