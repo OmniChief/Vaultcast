@@ -14,7 +14,12 @@
     if(!Array.prototype.forEach||!Array.prototype.map||!Array.prototype.filter||!Array.prototype.indexOf||!String.prototype.trim||!Date.now||!window.JSON||!window.XMLHttpRequest||!document.addEventListener)reasons.push('JavaScript APIs');
     var reduced=preference==='on'||(preference!=='off'&&reasons.length>0);
     window.VaultcastCompatibility={active:reduced,preference:preference,reasons:reasons};
-    if(reduced){location.replace(base+'?compat=on&detected=1');return;}
+    if(reduced){
+      var query=location.search||'';
+      query=query.replace(/([?&])compat=(on|off|auto)(?=&|$)/,'$1compat=on');
+      if(!/(?:^|[?&])compat=on(?:&|$)/.test(query))query+=(query?'&':'?')+'compat=on';
+      location.replace(location.pathname+query+'&detected=1');return;
+    }
     function asset(path){return base+'index.php?asset='+path+'&v='+encodeURIComponent(version);}
     function style(path){var link=document.createElement('link');link.rel='stylesheet';link.href=asset(path);document.getElementsByTagName('head')[0].appendChild(link);}
     function failure(){var panel=document.createElement('p'),link=document.createElement('a');panel.style.cssText='padding:20px;background:#111;color:white;font:18px sans-serif';link.href=base+'?compat=on';link.appendChild(document.createTextNode('Open compatibility mode'));panel.appendChild(document.createTextNode('The interface could not load. '));panel.appendChild(link);document.body.appendChild(panel);}

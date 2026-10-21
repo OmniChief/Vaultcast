@@ -1,12 +1,19 @@
 (function(){
   function compatListen(node,event,fn){if(!node)return;if(node.addEventListener)node.addEventListener(event,fn,false);else if(node.attachEvent)node.attachEvent('on'+event,fn);else node['on'+event]=fn;}
   function compatText(node,value){if(!node)return;while(node.firstChild)node.removeChild(node.firstChild);node.appendChild(document.createTextNode(value));}
+  var compatStyle=document.documentElement.style||{};
+  if(typeof compatStyle.boxSizing==='undefined'&&typeof compatStyle.MozBoxSizing==='undefined'&&typeof compatStyle.WebkitBoxSizing==='undefined')document.body.className+=' compat-content-box';
+  // CSS media queries arrived later than ES3. Keep the same card breakpoints.
+  if(!window.matchMedia){
+    var compatLayout=function(){var width=document.documentElement.clientWidth||document.body.clientWidth||1024;var size=width<=480?'tiny':width<=760?'small':width<=1100?'medium':'';document.body.className=document.body.className.replace(/ compat-width-[a-z]+/g,'')+(size?' compat-width-'+size:'');};
+    compatLayout();compatListen(window,'resize',compatLayout);
+  }
   var featureRequests=[],featuresAlive=true,featureTimers=[];
   function compatRequest(path,body,done){
     if(!featuresAlive||!window.XMLHttpRequest||!window.JSON||!window.JSON.parse||!window.JSON.stringify)return false;
-    var xhr=new XMLHttpRequest(),finished=false,timer;
+    var xhr,finished=false,timer;
     function finish(error,data){if(finished)return;finished=true;clearTimeout(timer);for(var i=featureRequests.length-1;i>=0;i--)if(featureRequests[i]===xhr)featureRequests.splice(i,1);if(featuresAlive)done(error,data);}
-    try{xhr.open(body===null?'GET':'POST',(window.__VC_COMPAT_BASE__||'/')+'api'+path,true);if(body!==null)xhr.setRequestHeader('Content-Type','application/json');featureRequests.push(xhr);xhr.onreadystatechange=function(){if(xhr.readyState!==4)return;var data;try{data=window.JSON.parse(xhr.responseText);}catch(parseError){finish('Could not read the response.');return;}finish(xhr.status>=200&&xhr.status<300&&data.ok!==false?null:(data.error||'Request failed.'),data);};timer=setTimeout(function(){finish('Request timed out.');try{xhr.abort();}catch(abortError){}},15000);xhr.send(body===null?null:window.JSON.stringify(body));return true;}catch(requestError){finish('Could not contact the server.');return false;}
+    try{xhr=new XMLHttpRequest();xhr.open(body===null?'GET':'POST',(window.__VC_COMPAT_BASE__||'/')+'api'+path,true);if(body!==null)xhr.setRequestHeader('Content-Type','application/json');featureRequests.push(xhr);xhr.onreadystatechange=function(){if(xhr.readyState!==4)return;var data;try{data=window.JSON.parse(xhr.responseText);}catch(parseError){finish('Could not read the response.');return;}finish(xhr.status>=200&&xhr.status<300&&data.ok!==false?null:(data.error||'Request failed.'),data);};timer=setTimeout(function(){finish('Request timed out.');try{xhr.abort();}catch(abortError){}},15000);xhr.send(body===null?null:window.JSON.stringify(body));return true;}catch(requestError){finish('Could not contact the server.');return false;}
   }
   compatListen(window,'pagehide',function(){featuresAlive=false;clearTimeout(chatTimer);for(var i=0;i<featureTimers.length;i++)clearTimeout(featureTimers[i]);for(i=0;i<featureRequests.length;i++)try{featureRequests[i].abort();}catch(abortError){}});
   // Optional progressive enhancement: ordinary forms remain available without JSON/XHR.

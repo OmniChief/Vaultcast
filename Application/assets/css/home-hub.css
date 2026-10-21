@@ -780,7 +780,7 @@ body[data-motion="full"] .hero-art,body[data-motion="full"] .hub-orbit{opacity:.
 body[data-motion="full"] .page-hero-poster img[data-site-artwork][data-bundled-artwork="true"]{animation:theme-poster-drift 18s ease-in-out infinite;transform-origin:50% 50%}
 body[data-theme="ninja-extreme"].ninja-calm .page-hero-poster img[data-site-artwork]{animation:none}
 
-body[data-motion="full"] .vintage-clock-tv>.hero-art{opacity:.28}
+
 
 .account-drawer-theme{display:grid;gap:8px;margin:10px;font-size:.9rem;color:var(--text)}
 .account-drawer-theme select{width:100%;min-width:0;min-height:44px;padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:var(--surface-2);color:var(--text);font:inherit}

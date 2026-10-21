@@ -11,6 +11,7 @@ final class CompatibilityBrowser {
     private static $base;
     private static $viewer;
     private static $personal;
+    private static $theme='dark';
     private static $signed=false;
     private static function esc($text): string { return htmlspecialchars((string)$text,ENT_QUOTES|ENT_SUBSTITUTE,'UTF-8'); }
     private static function url(array $params=[]): string { return self::$base.'?'.http_build_query(['compat'=>'on']+$params,'','&',PHP_QUERY_RFC3986); }
@@ -69,9 +70,13 @@ final class CompatibilityBrowser {
         }
         return $items;
     }
+    private static function artwork(string $kind='home'): string {
+        $route=in_array($kind,SiteArtwork::SECTIONS,true)?'home-section/'.$kind:$kind.'-poster';
+        return '<img class="compat-hero-art" data-compat-poster="1" src="'.self::esc(self::$base.'api/site/'.$route.'?theme='.rawurlencode(self::$theme)).'" alt="" width="240" height="360">';
+    }
     private static function home(array $home): string {
         $name=self::$signed?((self::$viewer['display_name'] ?? '') ?: self::$viewer['username']):'';
-        $html='<div class="compat-hero">'.self::heading('YOUR SPACE. YOUR STORIES.',$name!==''?'Welcome back, '.$name:'Make yourself at home.','Your favourites, your next episode and something new to discover.').'<div class="compat-actions">'.(AreaAccess::allowed(self::$viewer,'library')?self::link('Explore the library',['view'=>'library']):'').(!empty($home['features']['live'])?self::link('Live',['view'=>'live']):'').'</div></div>';
+        $html='<div class="compat-hero">'.self::artwork().'<div class="compat-hero-copy">'.self::heading('YOUR SPACE. YOUR STORIES.',$name!==''?'Welcome back, '.$name:'Make yourself at home.','Your favourites, your next episode and something new to discover.').'<div class="compat-actions">'.(AreaAccess::allowed(self::$viewer,'library')?self::link('Explore the library',['view'=>'library']):'').(!empty($home['features']['live'])?self::link('Live',['view'=>'live']):'').'</div></div></div>';
         $panels=[];$continue=array_slice($home['continue_watching'] ?? [],0,6);if(!$continue)$continue=self::recentProgress();
         if($continue)$panels['recent']='<section class="compat-shelf"><h2>Continue watching</h2>'.self::cards($continue).'</section>';
         $personal=self::personal();$favourites=[];
@@ -197,7 +202,8 @@ final class CompatibilityBrowser {
     }
     private static function live(string $id,int $page,string $query): string {
         self::allow('live');if(empty(Store::settings()['features']['live']))throw new RuntimeException('Live is disabled.');
-        if(($_GET['tab'] ?? '')==='radio'){
+        $tab=in_array($_GET['tab'] ?? '',['now','relay','iptv','radio'],true)?$_GET['tab']:'now';
+        if($tab==='radio'){
             $stations=Radio::stations();$html='<h2>Radio</h2>'.self::link('Live television',['view'=>'live']);
             if($id!==''){foreach($stations as $radio)if($radio['id']===$id){$html.='<section class="compat-panel"><h3>'.self::esc($radio['name']).'</h3><audio controls="controls" preload="none" src="'.self::esc($radio['url']).'">Your browser needs support for this audio format.</audio><p>'.self::esc($radio['description'] ?: ($radio['tags'] ?? '')).'</p></section>';break;}}
             $html.=self::searchForm(['view'=>'live','tab'=>'radio'],$query);$stations=array_values(array_filter($stations,static function($radio)use($query){return $query===''||mb_stripos($radio['name'].' '.($radio['country'] ?? '').' '.($radio['tags'] ?? ''),$query)!==false;}));
@@ -219,34 +225,44 @@ final class CompatibilityBrowser {
                 if(!empty($block['url'])){$url=$block['url'];if(preg_match('#(?:^|/)api[.]php[?]action=([a-z_]+)&?(.*)$#',$url,$m))$url=self::$base.'api/live/'.$m[1].(!empty($m[2])?'?'.$m[2]:'');if(!preg_match('#^(?:https?://|/)#i',$url))$url=self::$base.'live/'.$url;
                     $offset=max(0,((int)($block['mediaOffsetMs'] ?? 0)+$now-(int)$block['startUnix'])/1000);$html.=self::player($url.'#t='.(int)$offset,false,[],['relay'=>['id'=>$id,'seek'=>$offset,'end'=>(int)($block['endUnix'] ?? 0)]]);
                 }else $html.='<p>This channel is currently off air.</p>';
-                $html.=self::link('Retune to live',['view'=>'live','id'=>$id]).'<p><a class="compat-button" href="'.self::esc(self::$base.'api/live/m3u?channel='.rawurlencode($id)).'">Open channel playlist</a></p><p class="compat-note">If automatic retuning is unavailable, use the channel playlist or retune when this programme ends.</p>';
+                $html.=self::link('Retune to live',['view'=>'live','tab'=>$tab,'id'=>$id]).'<p><a class="compat-button" href="'.self::esc(self::$base.'api/live/m3u?channel='.rawurlencode($id)).'">Open channel playlist</a></p><p class="compat-note">If automatic retuning is unavailable, use the channel playlist or retune when this programme ends.</p>';
             }
         }
         if($schedule!==''){
             $selected=null;foreach($guide['channels'] ?? [] as $channel)if((string)$channel['id']===$schedule)$selected=$channel;
             if(!$selected)throw new RuntimeException('Channel unavailable.');
-            $html.='<section class="compat-panel"><h3>'.self::esc($selected['name']).' · Programme guide</h3>'.self::link('Watch channel',['view'=>'live','id'=>$schedule]).'<p class="compat-note">Times shown in UTC. Schedule covers the next two hours.</p>';
+            $html.='<section class="compat-panel"><h3>'.self::esc($selected['name']).' · Programme guide</h3>'.self::link('Watch channel',['view'=>'live','tab'=>$tab,'id'=>$schedule]).'<p class="compat-note">Times shown in UTC. Schedule covers the next two hours.</p>';
             $programs=array_values(array_filter($selected['programs'] ?? [],static function($program){return (int)($program['endUnix'] ?? 0)>(int)(microtime(true)*1000);}));
             $schedulePage=max(1,min(1000,(int)($_GET['schedule_page'] ?? 1)));
             foreach(array_slice($programs,($schedulePage-1)*16,16) as $program)$html.=self::programme($program);
             if(!$programs)$html.='<p>No programme details available.</p>';
-            if($schedulePage>1)$html.=self::link('Earlier programmes',['view'=>'live','schedule'=>$schedule,'schedule_page'=>$schedulePage-1]);
-            if($schedulePage*16<count($programs))$html.=self::link('Later programmes',['view'=>'live','schedule'=>$schedule,'schedule_page'=>$schedulePage+1]);
+            if($schedulePage>1)$html.=self::link('Earlier programmes',['view'=>'live','tab'=>$tab,'schedule'=>$schedule,'schedule_page'=>$schedulePage-1]);
+            if($schedulePage*16<count($programs))$html.=self::link('Later programmes',['view'=>'live','tab'=>$tab,'schedule'=>$schedule,'schedule_page'=>$schedulePage+1]);
             $html.='</section>';
         }
-        $html.=self::searchForm(['view'=>'live'],$query);$channels=array_values(array_filter($guide['channels'] ?? [],static function($ch)use($query){return $query===''||mb_stripos($ch['name'] ?? '',$query)!==false;}));
+        $html.=self::searchForm(['view'=>'live','tab'=>$tab],$query);$channels=array_values(array_filter($guide['channels'] ?? [],static function($ch)use($query,$tab){return ($tab==='now'||($tab==='iptv'?($ch['kind'] ?? '')==='iptv':($ch['kind'] ?? '')!=='iptv'))&&($query===''||mb_stripos($ch['name'] ?? '',$query)!==false);}));
         usort($channels,static function($a,$b){return (int)($a['number'] ?? 0)<=>(int)($b['number'] ?? 0);});$html.='<ul class="compat-list">';
         foreach(array_slice($channels,($page-1)*16,16) as $ch){
-            $html.='<li>'.self::link(($ch['number'] ?? '').' - '.($ch['name'] ?? 'Channel'),['view'=>'live','id'=>$ch['id']]).self::link('Programme guide',['view'=>'live','schedule'=>$ch['id']]);
+            $html.='<li>'.self::link(($ch['number'] ?? '').' - '.($ch['name'] ?? 'Channel'),['view'=>'live','tab'=>$tab,'id'=>$ch['id']]).self::link('Programme guide',['view'=>'live','tab'=>$tab,'schedule'=>$ch['id']]);
             if(!empty($ch['now']))$html.=self::programme($ch['now'],'Now · ');
             if(!empty($ch['next']))$html.=self::programme($ch['next'],'Next · ');
             $html.='</li>';
         }
-        return $html.'</ul>'.self::pages(['view'=>'live','q'=>$query],$page,$page*16<count($channels));
+        return $html.'</ul>'.self::pages(['view'=>'live','tab'=>$tab,'q'=>$query],$page,$page*16<count($channels));
     }
     public static function render(array $startup,string $base,string $site,string $error=''): void {
         self::$base=$base;self::$signed=!empty($startup['me']['user']);self::$personal=null;
         self::$viewer=$startup['me']['user'] ?? guest_user();AreaAccess::remember(self::$viewer);
+        $theme=(string)self::preference('theme',Store::settings()['theme'] ?? 'dark');
+        self::$theme=in_array($theme,SiteArtwork::THEMES,true)?$theme:'dark';
+        if(!isset($_GET['view'])){
+            $path=(string)parse_url($_SERVER['REQUEST_URI'] ?? $base,PHP_URL_PATH);
+            if(strpos($path,$base)===0)$path=substr($path,strlen($base));
+            $parts=array_map('rawurldecode',explode('/',trim($path,'/')));$route=$parts[0] ?? '';
+            if($route==='library'){$_GET['view']=empty($parts[1])?'library':'section';if(!empty($parts[1]))$_GET['id']=$parts[1];}
+            elseif($route==='collections'){$_GET['view']=empty($parts[1])?'collections':'collection';if(!empty($parts[1]))$_GET['id']=$parts[1];}
+            elseif($route==='live'){$_GET['view']='live';if(in_array($parts[1] ?? '',['now','relay','iptv','radio'],true)){$_GET['tab']=$parts[1];if($parts[1]==='radio'&&!empty($parts[2]))$_GET['id']=$parts[2];}elseif(!empty($parts[1]))$_GET['id']=$parts[1];}
+        }
         $home=$startup['home'] ?? null;$body='';$view=(string)($_GET['view'] ?? 'home');
         if(($_SERVER['REQUEST_METHOD'] ?? '')==='POST' && isset($_POST['compat_action'])){
             if(!hash_equals(self::token(),(string)($_POST['compat_token'] ?? ''))){http_response_code(403);$body='<p class="compat-error">This form expired. Reload the page and try again.</p>';}
@@ -278,7 +294,12 @@ final class CompatibilityBrowser {
         if($home){
             $nav.='<div class="compat-subnav">';
             if(in_array($view,['library','section','show','item','search','collections','collection'],true)){
-                $nav.=self::link('Discover',['view'=>'library']);foreach($home['sections'] ?? [] as $section)if(($section['type'] ?? '')!=='roms')$nav.=self::link($section['label'] ?? $section['type'],['view'=>'section','id'=>$section['id']]);$nav.=self::link('Collections',['view'=>'collections']);
+                $libraryTabs=[['label'=>'Discover','params'=>['view'=>'library'],'active'=>$view==='library']];
+                foreach($home['sections'] ?? [] as $section)if(($section['type'] ?? '')!=='roms')$libraryTabs[]=['label'=>$section['label'] ?? $section['type'],'params'=>['view'=>'section','id'=>$section['id']],'active'=>$view==='section'&&($_GET['id'] ?? '')===$section['id']];
+                $libraryTabs[]=['label'=>'Collections','params'=>['view'=>'collections'],'active'=>in_array($view,['collections','collection'],true)];
+                foreach($libraryTabs as $tab)$nav.='<a'.($tab['active']?' class="active" aria-current="page"':'').' href="'.self::esc(self::url($tab['params'])).'">'.self::esc($tab['label']).'</a>';
+            }elseif($view==='live'){
+                foreach(['now'=>'On now','relay'=>'Relay','iptv'=>'IPTV','radio'=>'Radio'] as $tab=>$label){$selected=($_GET['tab'] ?? 'now')===$tab;$nav.='<a'.($selected?' class="active" aria-current="page"':'').' href="'.self::esc(self::url(['view'=>'live','tab'=>$tab])).'">'.self::esc($label).'</a>';}
             }else{foreach(['home'=>'Overview','favourites'=>'Favourites','watchlist'=>'Watchlist','calendar'=>'Release calendar','history'=>'History','arrivals'=>'New arrivals','tonight'=>'Find a watch','cinema'=>'Watch together','invitations'=>'Invitations','home-options'=>'Customise Home','lists'=>'Custom lists','friends'=>'Friends','inbox'=>'Inbox','chat'=>'Chat'] as $key=>$label){if($key!=='home'&&!self::$signed)continue;$nav.='<a'.($view===$key?' class="active" aria-current="page"':'').' href="'.self::esc(self::url($key==='home'?['view'=>'home','overview'=>'1']:['view'=>$key])).'">'.self::esc($label).'</a>';}}
             $nav.='</div>';
         }
@@ -298,8 +319,13 @@ final class CompatibilityBrowser {
                 $body=$notice.'</ul>'.self::link('Open maintenance tools',['view'=>'tools']).'</div>'.$body;
             }
         }
+        if(in_array($view,array_merge(SiteArtwork::SECTIONS,['collections']),true)){
+            $heading='<div class="compat-heading">';$at=strpos($body,$heading);
+            if($at!==false)$body=substr_replace($body,'<div class="compat-heading compat-section-heading">'.self::artwork($view),$at,strlen($heading));
+        }
+        $body=str_replace(['<section ','</section>'],['<div ','</div>'],$body);
         $css=(string)file_get_contents(STREAM_ROOT.'/assets/css/compatibility.css');$scriptVersion=substr(hash_file('sha256',STREAM_ROOT.'/assets/js/compatibility.js'),0,16);release_request_locks();
         header('Content-Type: text/html; charset=utf-8');
-        echo '<!DOCTYPE html><html lang="en"><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'.self::esc($site).'</title><style>'.$css.'</style></head><body class="'.(self::preference('theme','dark')==='light'?'compat-light ':(self::preference('theme','dark')==='steampunk'?'compat-steampunk ':'')).(self::preference('theme','dark')==='vintage-tv'?'compat-vintage-tv ':'').(self::preference('theme','dark')==='after-hours'?'compat-after-hours ':'').(self::preference('theme','dark')==='ninja-extreme'?'compat-ninja-extreme ':'').(self::preference('theme','dark')==='anime'?'compat-anime ':'').(self::preference('theme','dark')==='manly-man'?'compat-manly-man ':'').(self::preference('home_compact',false)?'compat-compact':'').'"><a class="compat-skip" href="#compat-content">Skip to content</a>'.$nav.'<div id="compat-shell"><div id="compat-content" role="main">'.$body.'</div><div class="compat-footer"><span>Compatibility mode · '.self::esc(STREAM_VERSION).'</span><a href="'.self::esc($base.'?compat=auto').'">Automatic detection</a><a href="'.self::esc($base.'?compat=off').'">Full interface</a></div></div><script>window.__VC_COMPAT_BASE__='.json_encode($base,JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT).';</script><script src="'.self::esc($base.'index.php?asset=assets/js/compatibility.js&v='.$scriptVersion).'"></script></body></html>';
+        echo '<!DOCTYPE html><html lang="en"><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'.self::esc($site).'</title><style>'.$css.'</style></head><body class="'.self::esc('compat-'.self::$theme.' ').(self::preference('home_compact',false)?'compat-compact':'').'"><a class="compat-skip" href="#compat-content">Skip to content</a>'.$nav.'<div id="compat-shell"><div id="compat-content" role="main">'.$body.'</div><div class="compat-footer"><span>Compatibility mode · '.self::esc(STREAM_VERSION).'</span><a href="'.self::esc($base.'?compat=auto').'">Automatic detection</a><a href="'.self::esc($base.'?compat=off').'">Full interface</a></div></div><script>window.__VC_COMPAT_BASE__='.json_encode($base,JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT).';</script><script src="'.self::esc($base.'index.php?asset=assets/js/compatibility.js&v='.$scriptVersion).'"></script></body></html>';
     }
 }
