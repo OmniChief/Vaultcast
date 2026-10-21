@@ -210,11 +210,29 @@
       loading(body); load(); return poll(load, 60000, s);
     }
   };
+  var DL_STATUS = { downloading:'', queued:'Queued', queued_local:'Queued', download_wait:'Waiting', check_wait:'Waiting to check', checking:'Checking', stalled:'Stalled', stopped:'Paused', error:'Error' };
+  function dlPercent(d){
+    var p = d.percent == null || d.percent === '' ? NaN : Number(d.percent);
+    if (isFinite(p) && p > 0 && p <= 1 && d.size == null) p = p * 100;
+    if ((!isFinite(p) || p <= 0) && Number(d.size) > 0 && d.left != null && isFinite(Number(d.left))) p = (Number(d.size) - Number(d.left)) * 100 / Number(d.size);
+    return isFinite(p) ? Math.max(0, Math.min(100, p)) : null;
+  }
+  function dlEta(sec){ sec = Math.round(Number(sec)); if (!isFinite(sec) || sec <= 0) return ''; if (sec < 60) return sec + 's left'; if (sec < 3600) return Math.floor(sec / 60) + 'm left'; if (sec < 86400) { var m = Math.floor((sec % 3600) / 60); return Math.floor(sec / 3600) + 'h' + (m ? ' ' + m + 'm' : '') + ' left'; } return Math.floor(sec / 86400) + 'd left'; }
+  function dlRow(d){
+    var pct = dlPercent(d), st = String(d.status || ''), label = DL_STATUS.hasOwnProperty(st) ? DL_STATUS[st] : st.replace(/_/g, ' ');
+    var rate = Number(d.rate) > 0 ? size(d.rate) + '/s' : '';
+    var meta = [pct != null && st !== 'queued' ? Math.floor(pct) + '%' : '', label, rate, dlEta(d.eta)].filter(function(x){ return x && x !== 'null' && x !== 'undefined'; }).join(' · ');
+    var fill = h('i'); fill.style.width = (pct || 0) + '%';
+    var bar = h('span', { className:'vc-progress' + (st === 'error' ? ' bad' : ''), role:'progressbar', 'aria-valuemin':'0', 'aria-valuemax':'100', 'aria-valuenow':pct != null ? String(Math.round(pct)) : null, 'aria-label':'Download progress' }, [fill]);
+    var name = String(d.name || d.title || '').trim() || 'Download';
+    return h('li', { className:'vc-dl', 'data-key':String(d.id || name), title:name }, [h('span', { className:'vc-dl-name', text:name }), bar, meta ? h('small', { className:'muted', text:meta }) : null]);
+  }
   W.downloads = { name:'Downloads', desc:'Progress of downloads in the request queue.', icon:'⬇️', w:6, h:6,
     render:function(body, s){
       function load(){ call('/misc/widget/downloads').then(function(j){
         if (j.unavailable) { swap(body, h('p', { className:'muted', text:'Downloads are not available for your account.' })); return; }
-        swap(body, j.items.length ? list(j.items.map(function(d){ var pct = Math.max(0, Math.min(100, Number(d.percent || 0))); return h('li', { className:'vc-dl', 'data-key':String(d.id || d.name) }, [h('span', { className:'vc-dl-name', text:d.name }), h('span', { className:'vc-progress', role:'progressbar', 'aria-valuenow':String(Math.round(pct)), 'aria-valuemin':'0', 'aria-valuemax':'100' }, [h('i', { style:'width:' + pct + '%' })]), h('small', { className:'muted', text:Math.round(pct) + '% · ' + (d.status || '') })]); })) : h('p', { className:'muted', text:'Nothing downloading.' }));
+        var items = Array.isArray(j.items) ? j.items.filter(function(d){ return d && typeof d === 'object'; }) : [];
+        swap(body, items.length ? list(items.map(dlRow)) : h('p', { className:'muted', text:'Nothing downloading right now.' }));
       }).catch(function(e){ wErr(body, e); }); }
       loading(body); load(); return poll(load, 10000, s);
     }

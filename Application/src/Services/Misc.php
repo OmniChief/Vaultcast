@@ -236,8 +236,31 @@ final class Misc {
     public static function downloads(array $user): array {
         if (empty(Store::settings()['features']['downloads']) || !Permissions::allowed($user, 'downloads_request')) return ['ok' => true, 'items' => [], 'unavailable' => true];
         return ['ok' => true] + self::cached('downloads', 10, function () {
-            $out = [];
-            foreach (Acquisition::publicDownloadBadges() as $b) $out[] = ['name' => $b['name'] ?: trim(($b['show_guess'] ?? '') . ' S' . str_pad((string)($b['season'] ?? ''), 2, '0', STR_PAD_LEFT) . 'E' . str_pad((string)($b['episode'] ?? ''), 2, '0', STR_PAD_LEFT)), 'percent' => $b['percent'], 'status' => $b['status']];
+            $out = []; $full = Acquisition::downloadStatus();
+            $label = function ($show, $season, $episode, string $fallback): string {
+                $s = is_numeric($season) ? (int)$season : -1; $e = is_numeric($episode) ? (int)$episode : -1;
+                $show = trim((string)$show);
+                if ($show !== '' && $s >= 0 && $e > 0) return $show . ' ' . sprintf('S%02dE%02d', $s, $e);
+                return trim($fallback) !== '' ? trim($fallback) : ($show !== '' ? $show : 'Download');
+            };
+            foreach ((array)($full['transmission']['torrents'] ?? []) as $t) {
+                $st = (string)($t['status'] ?? '');
+                if (in_array($st, ['finished', 'seeding', 'seed_wait'], true)) continue;
+                $m = is_array($t['match'] ?? null) ? $t['match'] : [];
+                $size = (int)($t['size'] ?? 0); $left = (int)($t['left'] ?? 0);
+                $pct = isset($t['percent']) && is_numeric($t['percent']) ? (float)$t['percent'] : null;
+                if (($pct === null || $pct <= 0) && $size > 0 && $left >= 0 && $left <= $size) $pct = round(($size - $left) * 100 / $size, 1);
+                $eta = (int)($t['eta'] ?? -1);
+                $out[] = ['id' => 't' . ($t['id'] ?? count($out)), 'name' => $label($m['show_guess'] ?? null, $m['season'] ?? null, $m['episode'] ?? null, (string)($t['name'] ?? '')),
+                    'percent' => $pct, 'status' => $st !== '' ? $st : 'downloading', 'rate' => max(0, (int)($t['rate_download'] ?? 0)),
+                    'eta' => $eta > 0 ? $eta : null, 'size' => $size > 0 ? $size : null, 'left' => $size > 0 ? max(0, $left) : null];
+            }
+            foreach ((array)($full['local_queue'] ?? []) as $e) {
+                $st = (string)($e['status'] ?? 'queued');
+                if (!in_array($st, ['queued', 'queued_local'], true)) continue;
+                $out[] = ['id' => 'q' . ($e['id'] ?? count($out)), 'name' => $label($e['show'] ?? null, $e['season'] ?? null, $e['episode'] ?? null, (string)(($e['title'] ?? '') ?: ($e['query'] ?? ''))),
+                    'percent' => null, 'status' => 'queued', 'rate' => 0, 'eta' => null, 'size' => null, 'left' => null];
+            }
             return ['items' => array_slice($out, 0, 30)];
         });
     }

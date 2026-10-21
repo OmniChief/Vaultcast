@@ -128,6 +128,8 @@ class Acquisition {
                         'status_code' => $statusCode,
                         'rate_download' => (int)($t['rateDownload'] ?? 0),
                         'rate_upload' => (int)($t['rateUpload'] ?? 0),
+                        'size' => (int)($t['sizeWhenDone'] ?? 0),
+                        'left' => (int)($t['leftUntilDone'] ?? 0),
                         'error' => $t['errorString'] ?? '',
                         'match' => self::parseEpisodeFromName((string)($t['name'] ?? '')),
                     ];
