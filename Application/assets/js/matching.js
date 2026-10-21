@@ -8,6 +8,8 @@
   window.NSMatch = M;
 
   function isAdmin(){ var s = A.state; return !!(s && s.user && s.user.role === 'admin'); }
+  function canViewIngest(){return A.can('ingest_view');}
+  function canImportIngest(){return A.can('ingest_import');}
   function $(sel, el){ return (el || document).querySelector(sel); }
   function clear(el){ while (el && el.firstChild) el.removeChild(el.firstChild); return el; }
   function pad2(n){ n = parseInt(n, 10); return isNaN(n) ? '' : (n < 10 ? '0' + n : String(n)); }
@@ -64,11 +66,11 @@
     if (M.counts.ingest > 0) bits.push(M.counts.ingest + ' download' + (M.counts.ingest === 1 ? '' : 's') + ' to ingest');
     if (M.counts.reports > 0) bits.push(M.counts.reports + ' label report' + (M.counts.reports === 1 ? '' : 's'));
     var onSettings = A.state.view === 'settings' && (A.state.settingsSection === 'ingest' || A.state.settingsSection === 'reports');
-    bar.hidden = !(n > 0 && isAdmin()) || onSettings;
+    bar.hidden = !(n > 0 && (isAdmin()||canViewIngest())) || onSettings;
     bar.textContent = bits.join(' · ') + ' - review';
   }
   M.refreshCounts = function(){
-    if (!isAdmin()) { M.counts = { ingest: 0, reports: 0 }; paintBadges(); return; }
+    if (!isAdmin()&&!canViewIngest()) { M.counts = { ingest: 0, reports: 0 }; paintBadges(); return; }
     api('/admin/match/counts').then(function(j){
       if (j && j.ok) { M.counts.ingest = j.ingest || 0; M.counts.reports = j.reports || 0; M.mode = j.ingest_mode; }
       paintBadges();
@@ -114,8 +116,10 @@
         h('option', { value: 'ask_all', text: 'Ask me for every finished download', selected: j.mode === 'ask_all' }),
         h('option', { value: 'auto', text: 'Import automatically (previous behaviour)', selected: j.mode === 'auto' })
       ]);
+      modeSel.disabled=!isAdmin();
+      if(!canImportIngest())host.appendChild(h('p',{className:'muted',text:'Read-only access. Importing and changing inbox items require the import permission.'}));
       host.appendChild(h('div', { className: 'settings-card nsm-toolbar' }, [
-        h('label', { className: 'nsm-field grow' }, [ h('span', { text: 'When a download finishes' }), modeSel ]),
+        isAdmin()?h('label', { className: 'nsm-field grow' }, [ h('span', { text: 'When a download finishes' }), modeSel ]):null,
         h('label', { className: 'check-label' }, [ h('input', { type: 'checkbox', checked: showAll, onChange: function(e){ M.ui.ingestAll = e.target.checked; renderIngest(host); } }), ' Show done (imported / dismissed)' ]),
         h('button', { className: 'btn', type: 'button', text: 'Refresh', onClick: function(){ renderIngest(host); } })
       ]));
@@ -142,7 +146,7 @@
         ].filter(Boolean)),
         body
       ]),
-      h('div', { className: 'row-actions' }, [
+      h('div', { className: 'row-actions' }, canImportIngest()?[
         h('button', { className: 'btn primary', type: 'button', text: 'Review & import', onClick: function(e){
           body.hidden = !body.hidden;
           e.currentTarget.textContent = body.hidden ? 'Review & import' : 'Close';
@@ -151,7 +155,7 @@
         it.status === 'dismissed'
           ? h('button', { className: 'btn ghost', type: 'button', text: 'Restore', onClick: function(){ setIngestStatus(it.hash, 'awaiting', listHost); } })
           : h('button', { className: 'btn ghost', type: 'button', text: 'Dismiss', title: 'Hide from the inbox and leave the files in the download folder', onClick: function(){ setIngestStatus(it.hash, 'dismissed', listHost); } })
-      ])
+      ]:[])
     ]);
     return card;
   }
@@ -387,8 +391,7 @@
       bApply.addEventListener('click', function(){ busy(bApply, true, 'Applying…'); api('/admin/match/reparse', { method: 'POST', body: { apply: true } }).then(function(r){ paintReparse(r); load(); }); });
       rp.appendChild(h('div', { className: 'row-actions' }, [bPrev, bApply]));
     }
-    paintReparse(null);
-    host.appendChild(rp);
+    if(isAdmin()){paintReparse(null);host.appendChild(rp);}
     host.appendChild(h('div', { className: 'cv-search-row' }, [ qIn, filt, h('button', { className: 'btn', type: 'button', text: 'Search', onClick: load }) ]));
     host.appendChild(list);
     load();
@@ -854,7 +857,7 @@
     var out = [ h('button', { className: 'btn ghost nsm-report-btn', type: 'button', text: '⚑ Report', title: 'Report a wrong title / year / poster', onClick: function(){
       reportDialog({ kind: 'movie', item_id: item.id, label: (item.title || '') + (item.year ? ' (' + item.year + ')' : '') });
     }}) ];
-    if (isAdmin()) out.push(h('button', { className: 'btn ghost', type: 'button', text: 'Fix match', onClick: function(){ M.openMovieFix(item); }}));
+    if (A.can('fix_match')) out.push(h('button', { className: 'btn ghost', type: 'button', text: 'Fix match', onClick: function(){ M.openMovieFix(item); }}));
     return out;
   };
   M.openShowFix = function(showKey, onSaved){
@@ -915,7 +918,7 @@
     var out = [ h('button', { className: 'btn ghost nsm-report-btn', type: 'button', text: '⚑ Report', title: 'Report a wrong show match or wrong episode labels', onClick: function(){
       reportDialog({ kind: 'show', show_key: showKey, label: show.title || '' });
     }}) ];
-    if (isAdmin()) out.push(h('button', { className: 'btn ghost', type: 'button', text: 'Fix matching', onClick: function(){ M.ui.openShow = showKey; A.openSettings('matching'); } }));
+    if (A.can('fix_match')) out.push(h('button', { className: 'btn ghost', type: 'button', text: 'Fix matching', onClick: function(){ M.ui.openShow = showKey; A.openSettings('matching'); } }));
     return out;
   };
   M.episodeButton = function(ep, show){

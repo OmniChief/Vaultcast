@@ -33,7 +33,7 @@ trait CompatibilityTools {
             'transmission'=>['Download manager','/admin/transmission','GET','admin',[]],
             'import-downloads'=>['Import completed downloads','/admin/downloads/process-completed','POST','admin',[]],
             'reports'=>['Content reports','/admin/reports','GET','admin',['status'=>['Status','select','open',['open'=>'Open','resolved'=>'Resolved','all'=>'All']]]],
-            'ingest'=>['Import inbox','/admin/ingest','GET','admin',[]],
+            'ingest'=>['Import inbox','/admin/ingest','GET','ingest_view',[]],
             'media'=>['Manage library','/admin/media/browse','GET','admin',['q'=>['Search','text',''],'section'=>['Library ID (optional)','text',''],'per'=>['Results per page','number','16'],'page'=>['Page','number','1']]],
             'files'=>['Browse media files','/admin/media/files','GET','admin',['path'=>['Folder','text','']]],
             'paths'=>['Diagnose media paths','/admin/media/diagnose','POST','admin',['limit'=>['Maximum items','number','100'],'include_orphans'=>['Include untracked files','checkbox',false]]],

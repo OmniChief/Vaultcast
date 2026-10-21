@@ -2,7 +2,7 @@
 declare(strict_types=1);
 
 final class Permissions {
-    const CAPABILITIES = ['rss_search'=>'Search RSS sources','downloads_request'=>'Request downloads','fix_match'=>'Fix movie, show and game matches','metadata_edit'=>'Edit titles, synopsis and posters','library_remove'=>'Remove entries from the library (media files kept)','timing_edit'=>'Search and edit intro / credits timings','artwork_manage'=>'Check and repair artwork integrity','iptv_manage'=>'Manage IPTV feeds and shared channels','radio_manage'=>'Manage shared radio stations'];
+    const CAPABILITIES = ['ingest_view'=>'View the import inbox','ingest_import'=>'Import inbox downloads (includes viewing; moves files into the library)','rss_search'=>'Search RSS sources','downloads_request'=>'Request downloads','fix_match'=>'Fix movie, show and game matches','metadata_edit'=>'Edit titles, synopsis and posters','library_remove'=>'Remove entries from the library (media files kept)','timing_edit'=>'Search and edit intro / credits timings','artwork_manage'=>'Check and repair artwork integrity','iptv_manage'=>'Manage IPTV feeds and shared channels','radio_manage'=>'Manage shared radio stations'];
     private static $roles;
     public static function roles(): array {
         if(self::$roles===null)self::$roles=\Vaultcast\Repository::document('permission_roles',['curator'=>['name'=>'Curator','permissions'=>[]]]);
@@ -11,6 +11,7 @@ final class Permissions {
     public static function allowed(?array $user,string $permission): bool {
         if(!isset(self::CAPABILITIES[$permission])||!$user)return false;
         $role=$user['role'] ?? 'user';if($role==='admin')return true;if($role==='user'||!isset(self::roles()[$role]))return false;
+        if($permission==='ingest_view'&&self::allowed($user,'ingest_import'))return true;
         return ($user['permissions'][$permission] ?? self::roles()[$role]['permissions'][$permission] ?? false)===true;
     }
     public static function publicUser(array $user): array {
@@ -65,6 +66,14 @@ final class Permissions {
         }elseif(!empty($body['image']))json_error('Choose artwork from a metadata search or upload a poster.',403);
         return $body;
     }
+    public static function ingestSelection(array $body): array {
+        $user=AreaAccess::viewer();if(($user['role'] ?? '')==='admin')return $body;
+        if(($body['match']['source'] ?? '')==='manual'){
+            $body['match']=['source'=>'manual','id'=>null,'title'=>(string)($body['match']['title'] ?? ''),'year'=>$body['match']['year'] ?? null];
+        }else $body=self::selection($body);
+        $body['tvmaze_id']=($body['match']['source'] ?? '')==='tvmaze'?(int)($body['match']['id'] ?? 0):0;
+        return $body;
+    }
     private static function item(string $id,array $user): void {
         $item=Catalogue::item($id);if(!$item)json_error('Item not found',404);
         if(!AreaAccess::allowed($user,AreaAccess::itemArea($item)))json_error('This media area is not available to your account.',403);
@@ -75,9 +84,12 @@ final class Permissions {
         $showRead=$method==='GET'&&($path==='/admin/match/shows'||preg_match('#^/admin/match/show/[a-f0-9]{16}$#D',$path));
         $matchWrite=$method==='POST'&&(in_array($path,['/admin/match/search','/admin/match/items','/admin/match/items/clear'],true)||preg_match('#^/admin/match/show/[a-f0-9]{16}/(?:propose|apply|pin|numbering(?:/preview)?)$#D',$path)||preg_match('#^/admin/match/movie/[a-f0-9]{16}$#D',$path));
         if($showRead||$matchWrite)$permission='fix_match';
+        if($method==='GET'&&in_array($path,['/admin/ingest','/admin/ingest/progress','/admin/match/counts'],true))$permission='ingest_view';
+        if($method==='POST'&&in_array($path,['/admin/ingest/search','/admin/ingest/plan','/admin/ingest/commit','/admin/ingest/status'],true))$permission='ingest_import';
         if($path==='/admin/media/edit'&&$method==='POST')$permission=!empty(body_json()['remove'])?'library_remove':'metadata_edit';
         if(in_array($path,['/admin/posters/audit','/admin/posters/audit/status','/admin/posters/audit/repair'],true)&&$method==='POST')$permission='artwork_manage';
         if(!$permission||!self::allowed($user,$permission))json_error('Forbidden',403);
+        if(($permission==='ingest_view'||$permission==='ingest_import')&&!AreaAccess::allowed($user,'library'))json_error('Library access required',403);
         if(strpos($path,'/admin/match/show')===0&&!AreaAccess::allowed($user,'library'))json_error('Library access required',403);
         if(preg_match('#^/admin/match/movie/([a-f0-9]{16})$#D',$path,$m))self::item($m[1],$user);
         if($method==='POST'){

@@ -117,7 +117,7 @@ if ($path === '/admin/library/roots' && $method === 'GET') {
 // ---- Matching / Ingest inbox / Label reports ----
 if (strpos($path, '/admin/match') === 0 || strpos($path, '/admin/ingest') === 0 || strpos($path, '/admin/reports') === 0) {
     if ($path === '/admin/match/counts' && $method === 'GET') {
-        json_out(['ok' => true, 'reports' => Matching::openReportCount(), 'ingest' => Ingest::pendingCount(), 'ingest_mode' => Ingest::mode()]);
+        json_out(['ok' => true, 'reports' => (AreaAccess::viewer()['role'] ?? '')==='admin'?Matching::openReportCount():0, 'ingest' => Ingest::pendingCount(), 'ingest_mode' => Ingest::mode()]);
     }
     if ($path === '/admin/match/shows' && $method === 'GET') {
         json_out(Matching::showsOverview((string)($_GET['q'] ?? ''), (string)($_GET['filter'] ?? 'problems')));
@@ -179,16 +179,18 @@ if (strpos($path, '/admin/match') === 0 || strpos($path, '/admin/ingest') === 0 
     }
     if ($path === '/admin/ingest/search' && $method === 'POST') {
         $b = body_json();
-        json_out(Ingest::search((string)($b['kind'] ?? 'tv'), (string)($b['q'] ?? '')));
+        $result=Ingest::search((string)($b['kind'] ?? 'tv'), (string)($b['q'] ?? ''));
+        Permissions::rememberSelections($result);
+        json_out($result);
     }
     if ($path === '/admin/ingest/plan' && $method === 'POST') {
-        json_out(Ingest::plan(body_json()));
+        json_out(Ingest::plan(Permissions::ingestSelection(body_json())));
     }
     if ($path === '/admin/ingest/commit' && $method === 'POST') {
-        $b = body_json();
+        $b = Permissions::ingestSelection(body_json());
         // Run as a background job (no PHP/nginx request timeout); inline only if the CLI worker cannot start
         try {
-            $started = Maintenance::start('ingest', Auth::requireAdmin()['username'], (string)($b['hash'] ?? ''), $b);
+            $started = Maintenance::start('ingest', Auth::requireUser()['username'], (string)($b['hash'] ?? ''), $b);
             json_out(['ok' => true, 'job' => $started['job']['id'], 'background' => true]);
         } catch (RuntimeException $e) {
             @set_time_limit(600);

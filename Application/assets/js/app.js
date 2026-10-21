@@ -930,7 +930,7 @@ function confirmDialog(message, opts){
     return !areas || areas[area] === true;
   }
   function can(permission){return !!(state.user&&(state.user.role==='admin'||state.user.role!=='user'&&state.user.capabilities&&state.user.capabilities[permission]===true));}
-  function canSettings(section){if(state.user&&state.user.role==='admin')return true;var permission={'live-iptv':'iptv_manage','live-radio':'radio_manage','artwork-integrity':'artwork_manage'}[section];return !!permission&&can(permission);}
+  function canSettings(section){if(state.user&&state.user.role==='admin')return true;var permission={matching:'fix_match',ingest:'ingest_view','live-iptv':'iptv_manage','live-radio':'radio_manage','artwork-integrity':'artwork_manage'}[section];return !!permission&&can(permission)&&(['ingest','matching'].indexOf(section)<0||userAreaAllowed('library'));}
   function canSearchRss(){return can('rss_search')&&!!(state.home&&state.home.features&&state.home.features.downloads);}
   function canManageDownloads(){return can('downloads_request')&&!!(state.home&&state.home.features&&state.home.features.downloads);}
   function loadDownloadStatus(force){
@@ -9472,7 +9472,7 @@ try {
     [['library','Library'],['live','Live'],['games','Games']].forEach(function(entry){var checkbox=h('input',{type:'checkbox',checked:admin||areas[entry[0]]===true,disabled:admin});inputs[entry[0]]=checkbox;body.appendChild(h('label',{className:'check-label'},[checkbox,entry[1]]));});
     body.appendChild(h('h4',{text:'Permission overrides'}));
     Object.keys(state.permissionChoices||{}).forEach(function(key){var select=h('select',{'aria-label':state.permissionChoices[key]},[h('option',{value:'inherit',text:'Use role default'}),h('option',{value:'allow',text:'Allow'}),h('option',{value:'deny',text:'Deny'})]);select.value=user.permissions&&typeof user.permissions[key]==='boolean'?(user.permissions[key]?'allow':'deny'):'inherit';overrides[key]=select;body.appendChild(h('label',{},[state.permissionChoices[key],select]));});
-    function defaults(){Object.keys(overrides).forEach(function(key){var select=overrides[key];select.disabled=admin||role.value==='user';var inherited=admin||!!(state.userRoles[role.value]&&state.userRoles[role.value].permissions[key]);select.options[0].textContent='Use role default ('+(inherited?'allowed':'denied')+')';});}role.onchange=defaults;defaults();
+    function defaults(){Object.keys(overrides).forEach(function(key){var select=overrides[key];select.disabled=admin||role.value==='user';var grants=state.userRoles[role.value]&&state.userRoles[role.value].permissions||{};var inherited=admin||!!grants[key]||(key==='ingest_view'&&grants.ingest_import===true);select.options[0].textContent='Use role default ('+(inherited?'allowed':'denied')+')';});}role.onchange=defaults;defaults();
     var save=h('button',{className:'btn primary',text:'Save',disabled:admin});body.appendChild(save);var dialog=permissionDialog('Edit user · '+user.username,body);
     save.onclick=function(){var areaValues={},permissions={};Object.keys(inputs).forEach(function(key){areaValues[key]=inputs[key].checked;});Object.keys(overrides).forEach(function(key){if(overrides[key].value!=='inherit')permissions[key]=overrides[key].value==='allow';});save.disabled=true;api('/admin/users/'+encodeURIComponent(user.id)+'/permissions',{method:'POST',body:{role:role.value,areas:areaValues,permissions:permissions}}).then(function(r){if(!r.ok)throw new Error(r.error||'Could not save user');dialog.close();loadUsers();toast('User permissions updated');}).catch(function(e){status.textContent=e.message;save.disabled=false;});};
   }
@@ -9542,7 +9542,7 @@ try {
         if (!result.ok) throw new Error(result.error || 'Library entry not found');
         var item = showKey ? result.show : result.item;
         window.__nsEnsureMatching(function(){
-          if (!(state.user && state.user.role === 'admin') || !window.NSMatch) return;
+          if (!can(edit?'metadata_edit':'fix_match') || !window.NSMatch) return;
           if (edit) window.NSMatch.editDialog(item, showKey, saved);
           else if (showKey) window.NSMatch.openShowFix(showKey, saved);
           else window.NSMatch.openMovieFix(item, saved);
@@ -9555,8 +9555,8 @@ try {
       rows.slice(page * 100, page * 100 + 100).forEach(function(row){
         var checkbox = h('input', {type:'checkbox', checked:!!selected[row.key], disabled:running, 'aria-label':'Select ' + row.title, onChange:function(event){selected[row.key] = event.target.checked; controls();}});
         var actions = [h('button', {className:'btn ghost', type:'button', disabled:running, text:'Repair', onClick:function(){runRepairs([row]);}}),
-          h('button', {className:'btn ghost', type:'button', disabled:running, text:'Fix match', onClick:function(){openTools(row, false);}}),
-          h('button', {className:'btn ghost', type:'button', disabled:running, text:'Manual edit', onClick:function(){openTools(row, true);}})];
+          can('fix_match')?h('button', {className:'btn ghost', type:'button', disabled:running, text:'Fix match', onClick:function(){openTools(row, false);}}):null,
+          can('metadata_edit')?h('button', {className:'btn ghost', type:'button', disabled:running, text:'Manual edit', onClick:function(){openTools(row, true);}}):null].filter(Boolean);
         list.appendChild(h('div', {className:'panel', style:'padding:12px;margin:8px 0'}, [
           h('label', {}, [checkbox, ' ' + (row.title || row.id) + ' · ' + row.kind + (row.season != null ? ' ' + row.season : '')]),
           h('p', {className:row.missing ? 'bad' : 'muted', text:row.problems.join(' · ')}),

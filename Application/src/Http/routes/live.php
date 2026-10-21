@@ -55,7 +55,7 @@ function live_bridge_require_admin(): void {
     require_once STREAM_ROOT . '/src/bootstrap.php';
     $action=live_bridge_action();
     if($action==='radio_save'){Permissions::require('radio_manage');return;}
-    if(in_array($action,['iptv_preview','iptv_add','iptv_remove','iptv_toggle','iptv_probe','iptv_save','epg_channels','epg_map'],true)){Permissions::require('iptv_manage');return;}
+    if(in_array($action,['epg_refresh','iptv_preview','iptv_add','iptv_remove','iptv_toggle','iptv_probe','iptv_save','epg_channels','epg_map'],true)){Permissions::require('iptv_manage');return;}
     Auth::requireAdmin();
 }
 
@@ -190,6 +190,7 @@ if ($__liveAction !== null) {
     }
 
     if (in_array($__liveAction, ['tv_studio', 'tv_preview', 'tv_health'], true)) live_bridge_require_admin();
+    if ($__liveAction === 'epg_refresh') live_bridge_require_admin();
     if ($__liveAction === 'xmltv' || $__liveAction === 'playlist') live_bridge_tv_export($__liveAction);
     if ($__liveAction === 'logo') live_bridge_logo();
     if ($__liveAction === 'm3u') live_bridge_m3u();
