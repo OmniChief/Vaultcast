@@ -8085,7 +8085,6 @@ try {
   window.addEventListener('beforeunload',function(e){if(state.view==='settings'&&(settingsDraftChanged()||(state.settingsSection==='live-studio'&&tvs.dirty))){e.preventDefault();e.returnValue='';}});
   function renderTaskCentre(host){
     var info={browse:['Browsing','Build the search index and show summaries together. Useful after importing a large library.'],search:['Browsing','Rebuild fast search suggestions without rescanning folders.'],views:['Browsing','Prepare cached library rows, collections and the live guide.'],scan:['Library','Discover files in configured folders. Does not download artwork.'],metadata:['Library','Fetch missing artwork and descriptions, then preserve sidecars. Network requests may take time.'],'game-metadata':['Library','Refresh game posters and descriptions using the current game matching rules.'],facts:['Library','Probe file codecs and durations and store show guides. Reads media files.'],collections:['Library','Match media to public collections.'],segments:['Playback','Match episode intro/credit timings and available movie credits.'],epg:['Live','Refresh the programme guide from configured sources.'],durations:['Live','Read missing Live media durations.'],downloads:['Downloads','Import completed downloads using the configured rules.'],'site-artwork':['Artwork','Create WebP copies of bundled theme posters and custom site uploads. Originals remain unchanged.'],'drop-cleanup':['Storage','Delete the stored bytes of Drop items that expired, used their last download or were abandoned mid-upload. They are already unavailable; this frees the space. Schedule with: php src/Console.php drop-cleanup']};
-    info['conversion-repair']=['Library','Restore original catalogue entries from deleted-conversion job records and clear missing copy links. Media files are not modified.'];
     var filter='All',busy=false,timer=null,sequence=0,lastData=null;
     function requestAction(url,body,button){button.disabled=true;return api(url,{method:'POST',body:body}).then(function(j){if(!j.ok)throw new Error(j.error||'Task request failed');if(host.isConnected)refresh();}).catch(function(e){toast(e.message,{kind:'bad'});if(button.isConnected)button.disabled=false;});}
     function refresh(useCache){
@@ -8101,10 +8100,6 @@ try {
           if(progress.total>0)row.appendChild(h('progress',{value:progress.done||0,max:progress.total,'aria-label':'Task progress'}));
           if(progress.phase||progress.file)row.appendChild(h('p',{className:'muted',text:[progress.phase,progress.total>0?(progress.done||0)+' / '+progress.total:'',progress.file].filter(Boolean).join(' · ')}));
           if(job.result&&job.result.warning)row.appendChild(h('p',{className:'bad',text:String(job.result.warning)}));
-          if(job.result&&job.task==='conversion-repair'){
-            row.appendChild(h('p',{text:(job.result.restored||0)+' original entries restored · '+(job.result.skipped||0)+' intentionally hidden entries skipped · '+(job.result.issues||[]).length+' issues'}));
-            (job.result.issues||[]).forEach(function(issue){row.appendChild(h('p',{className:'bad',text:issue.item_id+': '+issue.error}));});
-          }
           if(job.result&&job.task==='site-artwork')row.appendChild(h('p',{text:(job.result.optimised||0)+' images optimised · '+(job.result.already_ready||0)+' already prepared · '+(job.result.failed||0)+' failed · '+fmtBytes(job.result.bytes_saved||0)+' saved'}));
           if(job.error)row.appendChild(h('p',{className:'bad',text:job.error}));
           if(job.result)row.appendChild(h('details',{className:'settings-job-result','data-job-id':job.id,open:openResults.has(job.id)},[h('summary',{text:job.result.continuation?'Pass complete · continuing in another job':'View result details'}),h('pre',{text:JSON.stringify(job.result,null,2)})]));
@@ -11668,13 +11663,6 @@ h('div', { className:'cv-find-bar' }, [
           h('div', { id:'cv_batch_list', className:'cv-batch-list cv-glass-wrap' }, [ pendingContent({ className:'muted', }) ]),
           h('div', { className:'row-actions' }, [
             h('button', { className:'btn', text:'Refresh queue', onClick: function(){ refreshConvertAdmin(); } }),
-            h('button',{className:'btn ghost',text:'Repair deleted-conversion entries',onClick:function(e){
-              var button=e.currentTarget;button.disabled=true;
-              api('/admin/maintenance',{method:'POST',body:{task:'conversion-repair'}}).then(function(j){
-                if(!j.ok)throw new Error(j.error||'Could not start repair.');
-                toast('Repair queued. Existing original files will be re-indexed; media files are not changed. Progress and results are in Maintenance.');
-              }).catch(function(e){toast(e.message||String(e),{kind:'bad'});}).then(function(){button.disabled=false;});
-            }}),
             h('button', { className:'btn ghost', text:'Clear finished', onClick: function(){
               api('/admin/convert/clear-finished', { method:'POST' }).then(function(r){
                 toast(r.ok ? 'Cleared finished jobs' : (r.error||'Failed'), { kind: r.ok?'ok':'bad' });
