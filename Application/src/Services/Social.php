@@ -30,9 +30,62 @@ final class Social {
         return array_keys(array_filter($f, function ($v) use ($state) { return $state === '*' || $v === $state; }));
     }
 
-    /** Inbox notification reusing the Home hub (one per $key, newest replaces older). */
+    // ---------------------------------------------------------------- privacy and blocking
+    const PRIVACY_DOC = 'play-privacy';
+    private static $privacy = null;
+    private static function privacyAll(): array {
+        if (self::$privacy === null) self::$privacy = (array)\Vaultcast\Repository::document(self::PRIVACY_DOC, []);
+        return self::$privacy;
+    }
+    public static function privacy(string $uid): array {
+        $p = (array)(self::privacyAll()[$uid] ?? []);
+        return ['hide' => !empty($p['hide']), 'profile' => in_array($p['profile'] ?? '', ['everyone', 'friends', 'private'], true) ? $p['profile'] : 'everyone', 'blocked' => (array)($p['blocked'] ?? [])];
+    }
+    /** Users who asked to stay off public leaderboards. */
+    public static function hidden(): array {
+        $out = []; foreach (self::privacyAll() as $uid => $p) if (!empty($p['hide'])) $out[(string)$uid] = true;
+        return $out;
+    }
+    public static function blockedEither(string $a, string $b): bool {
+        if ($a === '' || $b === '') return false;
+        return isset(self::privacy($a)['blocked'][$b]) || isset(self::privacy($b)['blocked'][$a]);
+    }
+    public static function privacyState(array $user): array {
+        Arcade::signed($user); $p = self::privacy((string)$user['id']);
+        $people = Arcade::people(array_map('strval', array_keys($p['blocked'])));
+        return ['ok' => true, 'hide' => $p['hide'], 'profile' => $p['profile'], 'blocked' => array_values(array_filter($people, function ($x) { return $x['id'] !== ''; }))];
+    }
+    public static function savePrivacy(array $user, array $body): array {
+        Arcade::signed($user); $uid = (string)$user['id']; $action = (string)($body['action'] ?? 'save'); $other = (string)($body['user_id'] ?? '');
+        if (($action === 'block' || $action === 'unblock') && ($other === '' || $other === $uid || !\Vaultcast\Repository::user($other, true))) throw new DomainException('Choose another player.');
+        $doc = HomeHub::mutate(self::PRIVACY_DOC, function (array $d) use ($uid, $action, $body, $other): array {
+            $p = (array)($d[$uid] ?? []);
+            if ($action === 'save') {
+                if (array_key_exists('hide', $body)) $p['hide'] = !empty($body['hide']);
+                if (in_array($body['profile'] ?? '', ['everyone', 'friends', 'private'], true)) $p['profile'] = $body['profile'];
+            } elseif ($action === 'block') {
+                $p['blocked'] = (array)($p['blocked'] ?? []);
+                if (count($p['blocked']) >= 500) throw new DomainException('Your block list is full.');
+                $p['blocked'][$other] = time();
+            } elseif ($action === 'unblock') unset($p['blocked'][$other]);
+            else throw new DomainException('Unknown privacy action.');
+            $d[$uid] = $p; return $d;
+        });
+        self::$privacy = $doc;
+        if ($action === 'block') {
+            // Blocking ends the friendship and any pending request, and withdraws team invites between the two.
+            try { HomeHub::friendship($user, ['action' => 'remove', 'user_id' => $other]); } catch (Throwable $e) {}
+            self::change(function (array $teams) use ($uid, $other): array { foreach ($teams as $id => $t) { if (isset($t['members'][$uid])) unset($teams[$id]['invites'][$other], $teams[$id]['requests'][$other]); if (isset($t['members'][$other])) unset($teams[$id]['invites'][$uid], $teams[$id]['requests'][$uid]); } return $teams; });
+            self::$lbCache = [];
+        }
+        \Vaultcast\Repository::cachePut('play-lb-gen', ['g' => bin2hex(random_bytes(4))], 86400 * 30);
+        return self::privacyState($user);
+    }
+
+    /** Inbox notification reusing the Home hub (one per $key, newest replaces older). Blocked senders are dropped. */
     public static function notify(string $to, array $from, string $key, string $verb, string $title, string $path): void {
         if ($to === '' || $to === ($from['id'] ?? '')) return;
+        if (self::blockedEither($to, (string)($from['id'] ?? ''))) return;
         $person = Arcade::person($from);
         HomeHub::mutate('home-hub:' . $to, function (array $d) use ($key, $person, $verb, $title, $path): array {
             $nid = 'play:' . $key . ':' . $person['id'];
@@ -52,22 +105,35 @@ final class Social {
         foreach ($banned as $w) if ($w !== '' && strpos(mb_strtolower($name), $w) !== false) throw new DomainException('Choose a different team name.');
         return $name;
     }
-    private static function publicTeam(array $t, ?string $viewer = null): array {
-        $ids = array_keys((array)$t['members']); $people = Arcade::people(array_merge($ids, array_keys((array)($t['invites'] ?? []))));
-        $points = Arcade::query('SELECT COALESCE(SUM(points),0) FROM vaultcast_play_points WHERE team_id=? AND created_at>=?', [$t['id'], self::resetSince('')])->fetchColumn();
-        $out = ['id' => $t['id'], 'name' => $t['name'], 'colour' => $t['colour'], 'emblem' => $t['emblem'], 'motto' => $t['motto'] ?? '', 'created_at' => $t['created_at'], 'points' => (int)$points,
-            'members' => array_map(function ($id) use ($t, $people) { return $people[$id] + ['role' => $t['members'][$id]]; }, $ids)];
-        if ($viewer !== null && isset($t['members'][$viewer])) $out['invites'] = array_map(function ($id) use ($people, $t) { return $people[$id] + ['invited_at' => $t['invites'][$id]['at'] ?? 0]; }, array_keys((array)($t['invites'] ?? [])));
-        if ($viewer !== null && isset($t['invites'][$viewer])) $out['invited_by'] = Arcade::person(\Vaultcast\Repository::user((string)$t['invites'][$viewer]['by'], true));
+    /** $people and $points come from one batched lookup for every team on the page (see teamsState). */
+    private static function publicTeam(array $t, ?string $viewer, array $people, array $points): array {
+        $ids = array_map('strval', array_keys((array)$t['members']));
+        $card = function ($id) use ($people) { return $people[(string)$id] ?? Arcade::person(null); };
+        $member = $viewer !== null && isset($t['members'][$viewer]); $captain = $member && $t['members'][$viewer] === 'captain';
+        $out = ['id' => $t['id'], 'name' => $t['name'], 'colour' => $t['colour'], 'emblem' => $t['emblem'], 'motto' => $t['motto'] ?? '', 'created_at' => $t['created_at'], 'points' => (int)($points[$t['id']] ?? 0),
+            'members' => array_map(function ($id) use ($t, $card) { return $card($id) + ['role' => $t['members'][$id]]; }, $ids)];
+        if ($member) {
+            $out['invites'] = array_map(function ($id) use ($card, $t) { return $card($id) + ['invited_at' => $t['invites'][$id]['at'] ?? 0]; }, array_keys((array)($t['invites'] ?? [])));
+            $out['wall'] = array_map(function ($w) use ($card, $viewer, $captain) { return ['id' => $w['id'], 'user' => $card($w['uid']), 'text' => $w['text'], 'at' => (int)$w['at'], 'can_delete' => $captain || $w['uid'] === $viewer]; }, array_reverse((array)($t['wall'] ?? [])));
+        }
+        if ($viewer !== null && isset($t['invites'][$viewer])) $out['invited_by'] = $card($t['invites'][$viewer]['by']);
         if ($viewer !== null && isset($t['requests'][$viewer])) $out['requested'] = true;
-        if ($viewer !== null && in_array($t['members'][$viewer] ?? '', ['captain'], true)) $out['requests'] = array_values(Arcade::people(array_keys((array)($t['requests'] ?? []))));
+        if ($captain) { $out['requests'] = array_map($card, array_keys((array)($t['requests'] ?? []))); $out['link'] = (string)($t['link'] ?? ''); }
         return $out;
     }
     public static function teamsState(array $user): array {
         $uid = (string)$user['id']; $mine = self::teamOf($uid); $invites = []; $all = [];
-        foreach (self::teams() as $t) { if (isset($t['invites'][$uid])) $invites[] = self::publicTeam($t, $uid); $all[] = self::publicTeam($t, $uid); }
+        $teams = self::teams(); $ids = [];
+        foreach ($teams as $t) {
+            $ids = array_merge($ids, array_keys((array)$t['members']));
+            if (isset($t['members'][$uid])) { $ids = array_merge($ids, array_keys((array)($t['invites'] ?? [])), array_keys((array)($t['requests'] ?? [])), array_column((array)($t['wall'] ?? []), 'uid')); }
+            if (isset($t['invites'][$uid])) $ids[] = $t['invites'][$uid]['by'];
+        }
+        $people = Arcade::people(array_map('strval', $ids)); $points = [];
+        foreach (Arcade::query('SELECT team_id, SUM(points) p FROM vaultcast_play_points WHERE team_id<>\'\' AND created_at>=? GROUP BY team_id', [self::resetSince('')]) as $r) $points[$r['team_id']] = (int)$r['p'];
+        foreach ($teams as $t) { $pub = self::publicTeam($t, $uid, $people, $points); if (isset($t['invites'][$uid])) $invites[] = $pub; $all[] = $pub; }
         usort($all, function ($a, $b) { return $b['points'] <=> $a['points']; });
-        return ['ok' => true, 'team' => $mine ? self::publicTeam($mine, $uid) : null, 'invites' => $invites, 'teams' => $all, 'colours' => self::COLOURS, 'emblems' => self::EMBLEMS];
+        return ['ok' => true, 'team' => $mine ? self::publicTeam($mine, $uid, $people, $points) : null, 'invites' => $invites, 'teams' => $all, 'colours' => self::COLOURS, 'emblems' => self::EMBLEMS];
     }
     public static function teamAction(array $user, array $body): array {
         Arcade::signed($user); $uid = (string)$user['id']; $action = (string)($body['action'] ?? ''); $notify = [];
@@ -99,6 +165,7 @@ final class Social {
                     if (!$mineId) throw new DomainException('Create or join a team first.');
                     $u = \Vaultcast\Repository::user($other, true);
                     if (!$u || $other === $uid) throw new DomainException('Choose another player.');
+                    if (self::blockedEither($uid, $other)) throw new DomainException('You cannot invite this player.');
                     foreach ($teams as $t) if (isset($t['members'][$other])) throw new DomainException('That player is already in a team.');
                     if (count($teams[$mineId]['members']) >= 30) throw new DomainException('Teams hold up to 30 players.');
                     $teams[$mineId]['invites'][$other] = ['by' => $uid, 'at' => time()];
@@ -119,8 +186,39 @@ final class Social {
                 case 'request':
                     if ($mineId) throw new DomainException('Leave your current team first.');
                     if (!isset($teams[$target])) throw new DomainException('Team not found.');
+                    // Only the first request notifies the captains; repeating it does not spam them.
+                    if (!isset($teams[$target]['requests'][$uid])) foreach ($teams[$target]['members'] as $m => $role) if ($role === 'captain') $notify[] = [$m, 'asked to join your team', $teams[$target]['name']];
                     $teams[$target]['requests'][$uid] = time();
-                    foreach ($teams[$target]['members'] as $m => $role) if ($role === 'captain') $notify[] = [$m, 'asked to join your team', $teams[$target]['name']];
+                    break;
+                case 'link': case 'unlink':
+                    if (!$captain) throw new DomainException('Only a captain can manage the invite link.');
+                    if ($action === 'link') $teams[$mineId]['link'] = bin2hex(random_bytes(10)); else unset($teams[$mineId]['link']);
+                    break;
+                case 'join-link':
+                    $token = (string)($body['token'] ?? ''); $found = null;
+                    if (preg_match('/^[a-f0-9]{20}$/D', $token)) foreach ($teams as $id => $t) if (isset($t['link']) && hash_equals((string)$t['link'], $token)) $found = $id;
+                    if ($found === null) throw new DomainException('This invite link is no longer valid.');
+                    if ($mineId === $found) break;
+                    if ($mineId) throw new DomainException('Leave your current team first.');
+                    if (count($teams[$found]['members']) >= 30) throw new DomainException('Teams hold up to 30 players.');
+                    foreach ($teams[$found]['members'] as $m => $role) if (self::blockedEither($uid, (string)$m)) throw new DomainException('You cannot join this team.');
+                    $teams[$found]['members'][$uid] = 'member';
+                    foreach ($teams as $id => $t) unset($teams[$id]['invites'][$uid], $teams[$id]['requests'][$uid]);
+                    $teamName = $teams[$found]['name'];
+                    foreach ($teams[$found]['members'] as $m => $role) if ($role === 'captain') $notify[] = [$m, 'joined your team with the invite link', $teamName];
+                    break;
+                case 'post':
+                    if (!$mineId) throw new DomainException('Join a team first.');
+                    $text = trim(preg_replace('/[ \t]+/u', ' ', (string)($body['text'] ?? '')));
+                    if ($text === '' || mb_strlen($text) > 280) throw new DomainException('Posts use 1–280 characters.');
+                    $wall = (array)($teams[$mineId]['wall'] ?? []); $last = end($wall);
+                    if ($last && $last['uid'] === $uid && time() - (int)$last['at'] < 5) throw new DomainException('Slow down a moment and try again.');
+                    $wall[] = ['id' => bin2hex(random_bytes(5)), 'uid' => $uid, 'text' => $text, 'at' => time()];
+                    $teams[$mineId]['wall'] = array_slice($wall, -40);
+                    break;
+                case 'unpost':
+                    if (!$mineId) throw new DomainException('Join a team first.');
+                    $teams[$mineId]['wall'] = array_values(array_filter((array)($teams[$mineId]['wall'] ?? []), function ($w) use ($body, $uid, $captain) { return !($w['id'] === (string)($body['post_id'] ?? '') && ($captain || $w['uid'] === $uid)); }));
                     break;
                 case 'approve': case 'reject':
                     if (!$captain) throw new DomainException('Only a captain can answer requests.');
@@ -179,6 +277,15 @@ final class Social {
         $since = max(self::periodStart($period), self::resetSince($kind === 'points' || $kind === 'teams' ? '' : $kind));
         $filter = ''; $params = [$since];
         if ($scope !== 'all' && $uid !== '') { $ids = $scope === 'team' ? array_map('strval', array_keys((array)$mine['members'])) : array_merge([$uid], self::friends($uid)); $filter = ' AND user_id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')'; $params = array_merge($params, $ids); }
+        $cacheKey = 'play-lb:' . self::lbGen() . ':' . $kind . ':' . $period . ':' . $since;
+        if ($scope === 'all' && $kind !== 'teams' && $kind !== 'emu-time' && $kind !== 'emu-sessions') {
+            // The public board is the same for everyone: aggregate at most every 30 s, then mark the viewer's row.
+            $hit = self::$lbCache[$cacheKey] ?? \Vaultcast\Repository::cacheGet($cacheKey);
+            if (is_array($hit) && ($hit['at'] ?? 0) > time() - 30) {
+                $out = array_map(function ($r) use ($uid) { $r['me'] = $r['user']['id'] === $uid; return $r; }, (array)$hit['rows']);
+                return ['ok' => true, 'board' => $kind, 'period' => $period, 'scope' => $scope, 'rows' => $out];
+            }
+        }
         if ($kind === 'teams') {
             $rows = Arcade::query('SELECT team_id id, SUM(points) value, COUNT(DISTINCT user_id) players FROM vaultcast_play_points WHERE team_id<>\'\' AND created_at>=? GROUP BY team_id ORDER BY value DESC LIMIT 50', [$since])->fetchAll(PDO::FETCH_ASSOC);
             $teams = self::teams(); $out = [];
@@ -193,11 +300,17 @@ final class Social {
             // Chess rows are one per win, so the board counts wins; every other game ranks the best score.
             $sql = 'SELECT user_id, ' . ($kind === 'chess' ? 'SUM(score)' : 'MAX(score)') . ' value, COUNT(*) plays FROM vaultcast_play_scores WHERE created_at>=?' . $filter . ' AND game=? GROUP BY user_id HAVING value>0 ORDER BY value DESC LIMIT 50';
         }
+        $hidden = self::hidden(); unset($hidden[$uid]);
+        if ($hidden) { $sql = str_replace(' GROUP BY user_id', ' AND user_id NOT IN (' . implode(',', array_fill(0, count($hidden), '?')) . ') GROUP BY user_id', $sql); $params = array_merge($params, array_map('strval', array_keys($hidden))); }
         $rows = Arcade::query($sql, $params)->fetchAll(PDO::FETCH_ASSOC);
         $people = Arcade::people(array_column($rows, 'user_id')); $out = [];
-        foreach ($rows as $i => $r) { $t = self::teamOf((string)$r['user_id']); $out[] = ['rank' => $i + 1, 'user' => $people[$r['user_id']], 'value' => (int)$r['value'], 'plays' => (int)($r['plays'] ?? 0), 'me' => $r['user_id'] === $uid, 'team' => $t ? ['name' => $t['name'], 'colour' => $t['colour'], 'emblem' => $t['emblem']] : null]; }
+        foreach ($rows as $i => $r) { $t = self::teamOf((string)$r['user_id']); $out[] = ['rank' => $i + 1, 'user' => $people[$r['user_id']] ?? Arcade::person(null), 'value' => (int)$r['value'], 'plays' => (int)($r['plays'] ?? 0), 'me' => $r['user_id'] === $uid, 'team' => $t ? ['name' => $t['name'], 'colour' => $t['colour'], 'emblem' => $t['emblem']] : null]; }
+        if ($scope === 'all' && !isset(self::hidden()[$uid])) { self::$lbCache[$cacheKey] = ['at' => time(), 'rows' => $out]; \Vaultcast\Repository::cachePut($cacheKey, self::$lbCache[$cacheKey], 120); }
         return ['ok' => true, 'board' => $kind, 'period' => $period, 'scope' => $scope, 'rows' => $out];
     }
+    private static $lbCache = [];
+    /** Bumped when privacy settings change so cached public boards drop hidden players at once. */
+    private static function lbGen(): string { return (string)((\Vaultcast\Repository::cacheGet('play-lb-gen') ?: ['g' => '0'])['g']); }
 
     // ---------------------------------------------------------------- emulator (Play → Games) play stats
     /** Daily roll-up written next to the Home hub's per-game totals whenever the emulator reports play time. */
@@ -217,7 +330,7 @@ final class Social {
             $sec = 0; $ses = 0; foreach ((array)$d['games'] as $g) { $sec += max(0, (int)($g['seconds'] ?? 0)); $ses += max(0, (int)($g['sessions'] ?? 0)); }
             $out[substr((string)$row['name'], 9)] = ['seconds' => $sec, 'sessions' => $ses, 'games' => count((array)$d['games'])];
         }
-        \Vaultcast\Repository::cachePut('play-emu-totals', $out, 120);
+        \Vaultcast\Repository::cachePut('play-emu-totals', $out, 600);
         return $out;
     }
     private static function emulatorBoard(string $uid, string $period, ?array $only, string $kind): array {
@@ -226,6 +339,7 @@ final class Social {
         if ($period === 'all' && $since === 0) foreach (self::emulatorTotals() as $id => $t) $totals[$id] = $t[$field];
         else foreach (Arcade::query('SELECT user_id, SUM(seconds) seconds, SUM(sessions) sessions FROM vaultcast_play_emulator WHERE day>=? GROUP BY user_id', [date('Y-m-d', $since)]) as $r) $totals[$r['user_id']] = (int)$r[$field];
         if ($only !== null) $totals = array_intersect_key($totals, array_flip($only));
+        $hidden = self::hidden(); unset($hidden[$uid]); if ($hidden) $totals = array_diff_key($totals, $hidden);
         $totals = array_filter($totals); arsort($totals); $totals = array_slice($totals, 0, 50, true);
         $people = Arcade::people(array_map('strval', array_keys($totals))); $out = []; $i = 0;
         foreach ($totals as $id => $v) { $id = (string)$id; if (!isset($people[$id]) || $people[$id]['id'] === '') continue; $t = self::teamOf($id); $out[] = ['rank' => ++$i, 'user' => $people[$id], 'value' => (int)$v, 'me' => $id === $uid, 'team' => $t ? ['name' => $t['name'], 'colour' => $t['colour'], 'emblem' => $t['emblem']] : null]; }
@@ -262,7 +376,12 @@ final class Social {
     public static function profile(array $viewer, string $id): array {
         $target = $id === '' || $id === ($viewer['id'] ?? '') ? $viewer : \Vaultcast\Repository::user($id, true);
         if (!$target) throw new DomainException('Player not found.');
-        $uid = (string)$target['id'];
+        $uid = (string)$target['id']; $vid = (string)($viewer['id'] ?? '');
+        if ($uid !== $vid && ($viewer['role'] ?? '') !== 'admin') {
+            if (self::blockedEither($uid, $vid)) throw new DomainException('Player not found.');
+            $vis = self::privacy($uid)['profile'];
+            if ($vis === 'private' || ($vis === 'friends' && !in_array($vid, self::friends($uid), true))) return ['ok' => true, 'person' => Arcade::person($target), 'me' => false, 'friend' => in_array($uid, self::friends($vid), true), 'private' => true, 'stats' => null, 'bests' => [], 'badges' => [], 'team' => null, 'activity' => []];
+        }
         $games = Arcade::query('SELECT game, COUNT(*) plays, MAX(score) best, MAX(created_at) last FROM vaultcast_play_scores WHERE user_id=? GROUP BY game', [$uid])->fetchAll(PDO::FETCH_ASSOC);
         $bests = []; $plays = 0;
         foreach ($games as $g) { $plays += (int)$g['plays']; if (isset(Arcade::GAMES[$g['game']])) $bests[$g['game']] = ['name' => Arcade::GAMES[$g['game']]['name'], 'best' => (int)$g['best'], 'plays' => (int)$g['plays'], 'rank' => in_array($g['game'], Arcade::RUN_GAMES, true) ? Arcade::rankOf($uid, $g['game']) : null]; }
@@ -305,12 +424,12 @@ final class Social {
     }
     public static function friendsState(array $user): array {
         $uid = (string)$user['id']; $f = (array)(\Vaultcast\Repository::document('home-hub:' . $uid, [])['friends'] ?? []);
-        $people = Arcade::people(array_keys($f)); $out = [];
+        $ids = array_map('strval', array_keys($f)); $people = Arcade::people($ids); $out = []; $week = [];
+        if ($ids) foreach (Arcade::query('SELECT user_id, SUM(points) p FROM vaultcast_play_points WHERE created_at>=? AND user_id IN (' . implode(',', array_fill(0, count($ids), '?')) . ') GROUP BY user_id', array_merge([self::periodStart('week')], $ids)) as $r) $week[(string)$r['user_id']] = (int)$r['p'];
         foreach ($f as $id => $state) {
-            if (!isset($people[$id])) continue;
-            $pts = (int)Arcade::query('SELECT COALESCE(SUM(points),0) FROM vaultcast_play_points WHERE user_id=? AND created_at>=?', [$id, self::periodStart('week')])->fetchColumn();
-            $t = self::teamOf((string)$id);
-            $out[] = $people[$id] + ['state' => $state, 'points_week' => $pts, 'team' => $t ? ['name' => $t['name'], 'emblem' => $t['emblem'], 'colour' => $t['colour']] : null];
+            $id = (string)$id; if (!isset($people[$id]) || $people[$id]['id'] === '') continue;
+            $t = self::teamOf($id);
+            $out[] = $people[$id] + ['state' => $state, 'points_week' => $week[$id] ?? 0, 'team' => $t ? ['name' => $t['name'], 'emblem' => $t['emblem'], 'colour' => $t['colour']] : null];
         }
         usort($out, function ($a, $b) { return [$a['state'] !== 'incoming', -$a['points_week']] <=> [$b['state'] !== 'incoming', -$b['points_week']]; });
         return ['ok' => true, 'friends' => $out];
@@ -318,7 +437,7 @@ final class Social {
     public static function challenge(array $user, array $body): array {
         Arcade::signed($user); $uid = (string)$user['id'];
         $to = (string)($body['user_id'] ?? ''); $game = (string)($body['game'] ?? '');
-        if (!in_array($to, self::friends($uid), true)) throw new DomainException('Challenge an accepted friend.');
+        if (!in_array($to, self::friends($uid), true) || self::blockedEither($uid, $to)) throw new DomainException('Challenge an accepted friend.');
         if (!in_array($game, Arcade::RUN_GAMES, true) && $game !== 'word') throw new DomainException('Choose an arcade game.');
         $best = Arcade::best($uid, $game);
         $name = Arcade::GAMES[$game]['name'];

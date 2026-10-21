@@ -26,9 +26,14 @@ final class Arcade {
         if (!$user) return ['id' => '', 'name' => 'Former player', 'avatar_url' => null];
         return ['id' => (string)$user['id'], 'name' => (string)(($user['display_name'] ?? '') ?: $user['username']), 'username' => (string)$user['username'], 'avatar_url' => Profiles::avatarUrl($user)];
     }
+    /** Public cards for many users in one query (missing users become "Former player"). */
     public static function people(array $ids): array {
-        $out = [];
-        foreach (array_unique(array_filter($ids, 'strlen')) as $id) $out[$id] = self::person(\Vaultcast\Repository::user((string)$id, true));
+        $ids = array_values(array_unique(array_filter(array_map('strval', $ids), function ($v) { return $v !== '' && strpos($v, 'anon:') !== 0; })));
+        if (!$ids) return [];
+        $found = [];
+        foreach (array_chunk($ids, 200) as $part)
+            foreach (\Vaultcast\Repository::rows('SELECT payload FROM vaultcast_users WHERE id IN (' . implode(',', array_fill(0, count($part), '?')) . ')', $part) as $u) if (isset($u['id'])) $found[(string)$u['id']] = $u;
+        $out = []; foreach ($ids as $id) $out[$id] = self::person($found[$id] ?? null);
         return $out;
     }
     public static function signed(array $user): array {
@@ -72,6 +77,12 @@ final class Arcade {
         if (!preg_match('/^[a-f0-9]{32}$/D', $runId)) throw new DomainException('Start a game before submitting a score.');
         $run = \Vaultcast\Repository::cacheGet('play-run:' . $runId);
         if (!$run || $run['user'] !== $user['id']) throw new DomainException('This game session has expired.');
+        // Claim the run atomically so two parallel submissions cannot both count.
+        $claims = STREAM_SHM . '/play-runs'; if (!is_dir($claims)) @mkdir($claims, 0775, true);
+        $claim = @fopen($claims . '/' . $runId, 'x');
+        if (!$claim) throw new DomainException('This game session has expired.');
+        fclose($claim);
+        if (random_int(1, 50) === 1) foreach ((array)glob($claims . '/*') as $old) if (is_file($old) && filemtime($old) < time() - 7 * 3600) @unlink($old);
         \Vaultcast\Repository::cachePut('play-run:' . $runId, ['used' => true, 'user' => '', 'game' => ''], 60);
         $game = (string)$run['game']; $cfg = self::GAMES[$game];
         $score = (int)($body['score'] ?? -1);
@@ -170,23 +181,28 @@ final class Arcade {
         if (!is_array($g)) throw new DomainException('Game not found.');
         return $g;
     }
-    private static function chessPublic(array $g, string $uid): array {
+    private static function chessPublic(array $g, string $uid, ?array $people = null, bool $legal = true): array {
         $s = Chess::parse($g['fen']);
         $g['colour'] = $g['white'] === $uid ? 'w' : ($g['black'] === $uid ? 'b' : '');
         $g['your_turn'] = $g['status'] === 'active' && $g['colour'] === $s['turn'];
-        $g['legal'] = $g['your_turn'] ? Chess::legal($s) : [];
+        if ($legal) $g['legal'] = $g['your_turn'] ? Chess::legal($s) : [];
         $g['check'] = $g['status'] === 'active' && Chess::inCheck($s, $s['turn']);
-        $g['players'] = self::people([$g['white'], $g['black']]);
+        $g['players'] = $people !== null ? [$g['white'] => $people[$g['white']] ?? self::person(null), $g['black'] => $people[$g['black']] ?? self::person(null)] : self::people([$g['white'], $g['black']]);
         return $g;
     }
     public static function chessList(array $user): array {
         self::signed($user);
         $ids = (array)\Vaultcast\Repository::document('play-chess-index:' . $user['id'], []);
-        $games = [];
-        foreach (array_slice(array_reverse($ids), 0, 40) as $id) {
-            $g = \Vaultcast\Repository::document('play-chess:' . $id, null);
-            if (is_array($g)) { $p = self::chessPublic($g, (string)$user['id']); unset($p['legal']); $games[] = $p; }
+        $games = []; $ids = array_values(array_filter(array_slice(array_reverse($ids), 0, 40), function ($id) { return is_string($id) && preg_match('/^[a-f0-9]{16}$/D', $id); }));
+        if (!$ids) return ['ok' => true, 'games' => []];
+        // One query for the games and one for everyone in them, instead of one per game and two per player.
+        $docs = [];
+        foreach (self::query('SELECT name, payload FROM vaultcast_documents WHERE name IN (' . implode(',', array_fill(0, count($ids), '?')) . ')', array_map(function ($id) { return 'play-chess:' . $id; }, $ids))->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $g = json_decode((string)$row['payload'], true); if (is_array($g) && !empty($g['white'])) $docs[] = $g;
         }
+        $uids = []; foreach ($docs as $g) { $uids[] = $g['white']; $uids[] = $g['black']; }
+        $people = self::people($uids);
+        foreach ($docs as $g) $games[] = self::chessPublic($g, (string)$user['id'], $people, false);
         usort($games, function ($a, $b) { return [$b['your_turn'], $b['updated_at']] <=> [$a['your_turn'], $a['updated_at']]; });
         return ['ok' => true, 'games' => $games];
     }
@@ -199,6 +215,7 @@ final class Arcade {
         self::signed($user);
         $other = \Vaultcast\Repository::user((string)($body['opponent'] ?? ''), true);
         if (!$other || $other['id'] === $user['id'] || !Access::state($other)['active']) throw new DomainException('Choose another player on this server.');
+        if (Social::blockedEither((string)$user['id'], (string)$other['id'])) throw new DomainException('You cannot challenge this player.');
         self::limit('chess-new:' . $user['id'], 5, 40);
         $id = bin2hex(random_bytes(8)); $white = !empty($body['play_black']) ? $other['id'] : $user['id'];
         $g = ['id' => $id, 'white' => $white, 'black' => $white === $user['id'] ? $other['id'] : $user['id'], 'fen' => Chess::START, 'moves' => [],

@@ -143,22 +143,23 @@ CREATE TABLE IF NOT EXISTS vaultcast_play_scores (
  user_id VARCHAR(64) NOT NULL, game VARCHAR(24) CHARACTER SET ascii NOT NULL,
  score INT NOT NULL, duration_ms INT UNSIGNED NOT NULL DEFAULT 0, meta VARCHAR(255) NOT NULL DEFAULT '',
  created_at BIGINT NOT NULL,
- INDEX play_board (game,created_at,score), INDEX play_user (user_id,game,score), INDEX play_time (created_at)
+ INDEX play_board (game,created_at,score), INDEX play_board_user (game,created_at,user_id,score), INDEX play_user (user_id,game,score), INDEX play_time (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE TABLE IF NOT EXISTS vaultcast_play_points (
  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
  user_id VARCHAR(64) NOT NULL, team_id VARCHAR(32) CHARACTER SET ascii NOT NULL DEFAULT '',
  source VARCHAR(24) CHARACTER SET ascii NOT NULL, points INT NOT NULL DEFAULT 0,
  label VARCHAR(200) NOT NULL DEFAULT '', created_at BIGINT NOT NULL,
- INDEX play_points_user (user_id,created_at), INDEX play_points_team (team_id,created_at), INDEX play_points_time (created_at)
+ INDEX play_points_user (user_id,created_at), INDEX play_points_team (team_id,created_at), INDEX play_points_time (created_at), INDEX play_points_board (created_at,user_id,points)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE TABLE IF NOT EXISTS vaultcast_drop_files (
  id CHAR(32) CHARACTER SET ascii NOT NULL PRIMARY KEY,
  user_id VARCHAR(64) NOT NULL, kind VARCHAR(8) CHARACTER SET ascii NOT NULL,
  name VARCHAR(255) NOT NULL DEFAULT '', mime VARCHAR(120) NOT NULL DEFAULT '',
  bytes BIGINT UNSIGNED NOT NULL DEFAULT 0, received BIGINT UNSIGNED NOT NULL DEFAULT 0,
- body TEXT NULL, complete TINYINT NOT NULL DEFAULT 0, created_at BIGINT NOT NULL, expires_at BIGINT NOT NULL DEFAULT 0,
+ body MEDIUMTEXT NULL, complete TINYINT NOT NULL DEFAULT 0, created_at BIGINT NOT NULL, expires_at BIGINT NOT NULL DEFAULT 0,
  max_downloads INT UNSIGNED NOT NULL DEFAULT 0, downloads INT UNSIGNED NOT NULL DEFAULT 0, purged TINYINT NOT NULL DEFAULT 0, inbox TINYINT NOT NULL DEFAULT 0,
+ origin VARCHAR(64) NOT NULL DEFAULT '',
  INDEX drop_user (user_id,created_at), INDEX drop_expiry (expires_at), INDEX drop_pending (complete,created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE TABLE IF NOT EXISTS vaultcast_drop_links (

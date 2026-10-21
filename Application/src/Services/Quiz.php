@@ -98,34 +98,84 @@ final class Quiz {
     }
 
     // ---------------------------------------------------------------- image questions
-    public static function frame(string $itemId): ?string {
+    /**
+     * A still for $itemId, cached in STREAM_SHM. ffmpeg runs at most twice at once across all requests, once per item
+     * (other requests for the same item wait for it), and a failed extraction is not retried for a day.
+     * With $wait false the call never blocks on ffmpeg: it returns null when the frame is not ready and no slot is free.
+     */
+    public static function frame(string $itemId, bool $wait = true): ?string {
         $dir = STREAM_SHM . '/quiz-frames'; if (!is_dir($dir)) @mkdir($dir, 0775, true);
         $safe = preg_replace('/[^A-Za-z0-9_-]/', '', $itemId); $out = $dir . '/' . $safe . '.jpg';
         if (is_file($out) && filesize($out) > 1000) return $out;
+        $lock = @fopen($out . '.lock', 'c');
+        if ($lock) {
+            if (!flock($lock, LOCK_EX | LOCK_NB)) {
+                if (!$wait) { fclose($lock); return null; }
+                // Someone is extracting this frame: wait for them (bounded by their ffmpeg timeout).
+                $until = microtime(true) + 25; $got = false;
+                while (microtime(true) < $until) { usleep(150000); if (flock($lock, LOCK_EX | LOCK_NB)) { $got = true; break; } }
+                if (!$got) { fclose($lock); return null; }
+            }
+            clearstatcache(true, $out);
+            if (is_file($out) && filesize($out) > 1000) { flock($lock, LOCK_UN); fclose($lock); return $out; }
+        }
+        try { return self::extract($itemId, $out, $wait); }
+        finally { if ($lock) { flock($lock, LOCK_UN); fclose($lock); } }
+    }
+    private static function extract(string $itemId, string $out, bool $wait): ?string {
         $item = \Vaultcast\Repository::item($itemId);
         if (!$item) return null;
         $path = (string)($item['path'] ?? '');
-        $duration = (float)Arcade::query('SELECT duration FROM vaultcast_media_facts WHERE item_id=?', [$itemId])->fetchColumn();
-        if ($path !== '' && is_file($path) && function_exists('proc_open')) {
-            $at = $duration > 120 ? $duration * (0.25 + (crc32($itemId) % 40) / 100) : 300;
-            Process::capture([Remux::ffmpegBin(), '-nostdin', '-hide_banner', '-loglevel', 'error', '-ss', (string)round($at, 1), '-i', $path, '-frames:v', '1', '-vf', 'scale=960:-2', '-q:v', '5', '-y', $out], 20);
-            if (is_file($out) && filesize($out) > 1000) return $out;
-            @unlink($out);
+        $failed = is_file($out . '.fail') && filemtime($out . '.fail') > time() - 86400;
+        if (!$failed && $path !== '' && is_file($path) && function_exists('proc_open')) {
+            $slot = self::ffmpegSlot();
+            if ($slot === null && !$wait) return null;
+            if ($slot !== null) {
+                try {
+                    if (function_exists('set_time_limit')) @set_time_limit(60);
+                    $duration = (float)Arcade::query('SELECT duration FROM vaultcast_media_facts WHERE item_id=?', [$itemId])->fetchColumn();
+                    $at = $duration > 120 ? $duration * (0.25 + (crc32($itemId) % 40) / 100) : 300;
+                    $tmp = $out . '.' . getmypid() . '.jpg';
+                    Process::capture([Remux::ffmpegBin(), '-nostdin', '-hide_banner', '-loglevel', 'error', '-ss', (string)round($at, 1), '-i', $path, '-frames:v', '1', '-vf', 'scale=960:-2', '-q:v', '5', '-y', $tmp], 20);
+                    if (is_file($tmp) && filesize($tmp) > 1000 && @rename($tmp, $out)) { @unlink($out . '.fail'); return $out; }
+                    @unlink($tmp); @touch($out . '.fail');
+                } finally { flock($slot, LOCK_UN); fclose($slot); }
+            }
         }
         // Fallback: a zoomed crop of the poster's centre (titles usually sit at the top or bottom).
         $poster = Posters::resolveItem($item, false);
         if (!$poster || !is_file($poster)) return null;
-        if (function_exists('imagecreatefromstring')) {
+        if (function_exists('imagecreatefromstring') && filesize($poster) < 12000000) {
             $img = @imagecreatefromstring((string)file_get_contents($poster));
             if ($img) {
                 $w = imagesx($img); $h = imagesy($img); $cw = (int)($w * 0.7); $ch = (int)min($h * 0.4, $cw * 0.5625);
                 $dst = imagecreatetruecolor(960, 540);
                 imagecopyresampled($dst, $img, 0, 0, (int)(($w - $cw) / 2), (int)(($h - $ch) / 2), 960, 540, $cw, $ch);
-                imagejpeg($dst, $out, 82); imagedestroy($dst); imagedestroy($img);
-                if (is_file($out)) return $out;
+                $tmp = $out . '.' . getmypid() . '.jpg';
+                imagejpeg($dst, $tmp, 82); imagedestroy($dst); imagedestroy($img);
+                if (is_file($tmp) && @rename($tmp, $out)) return $out;
+                @unlink($tmp);
             }
         }
         return $poster;
+    }
+    /** One of two global ffmpeg slots for frame extraction, or null when both are busy. */
+    private static function ffmpegSlot() {
+        for ($i = 0; $i < 2; $i++) {
+            $h = @fopen(STREAM_SHM . '/quiz-frames/slot-' . $i . '.lock', 'c');
+            if ($h && flock($h, LOCK_EX | LOCK_NB)) return $h;
+            if ($h) fclose($h);
+        }
+        return null;
+    }
+    /** After the response is sent (PHP-FPM), extract the frames a quiz will need so questions never wait on ffmpeg. */
+    private static function prewarm(array $items): void {
+        $items = array_values(array_unique(array_filter($items))); if (!$items || !function_exists('fastcgi_finish_request')) return;
+        register_shutdown_function(function () use ($items) {
+            @fastcgi_finish_request(); ignore_user_abort(true); if (function_exists('set_time_limit')) @set_time_limit(150);
+            $until = time() + 120;
+            foreach (array_slice($items, 0, 40) as $id) { if (time() > $until) break; try { self::frame((string)$id, true); } catch (Throwable $e) {} }
+        });
     }
     private static function sendImage(?string $file): void {
         if (!$file) { http_response_code(404); exit; }
@@ -160,7 +210,7 @@ final class Quiz {
     public static function create(array $user, array $body): array {
         Arcade::signed($user);
         $index = (array)\Vaultcast\Repository::document('quiz-rooms', []);
-        foreach ($index as $code => $at) if ($at < time() - 43200) { Arcade::query('DELETE FROM vaultcast_documents WHERE name=?', [self::key((string)$code)]); unset($index[$code]); }
+        foreach ($index as $code => $at) if ($at < time() - 43200) { Arcade::query('DELETE FROM vaultcast_documents WHERE name=?', [self::key((string)$code)]); @unlink(self::pulseFile((string)$code)); unset($index[$code]); }
         $mine = 0; foreach ($index as $code => $at) if ((\Vaultcast\Repository::document(self::key((string)$code), [])['host'] ?? '') === $user['id']) $mine++;
         if ($mine >= 3) throw new DomainException('Close one of your open quiz rooms first.');
         do { $code = ''; for ($i = 0; $i < 4; $i++) $code .= self::ALPHA[random_int(0, strlen(self::ALPHA) - 1)]; } while (isset($index[$code]));
@@ -168,15 +218,39 @@ final class Quiz {
         $room = ['code' => $code, 'host' => $user['id'], 'host_name' => Arcade::person($user)['name'], 'host_hash' => hash('sha256', $token), 'settings' => self::settings((array)($body['settings'] ?? [])),
             'status' => 'lobby', 'index' => -1, 'questions' => [], 'rounds' => [], 'players' => [], 'started_at' => 0, 'ends_at' => 0, 'version' => 1, 'created_at' => time(), 'awarded' => false];
         \Vaultcast\Repository::putDocument(self::key($code), $room);
+        self::pulse($room);
         HomeHub::mutate('quiz-rooms', function (array $i) use ($code): array { $i[$code] = time(); return $i; });
         return ['ok' => true, 'code' => $code, 'host_token' => $token];
     }
     private static function mutate(string $code, callable $fn): array {
         $code = self::code($code);
-        return HomeHub::mutate(self::key($code), function (array $r) use ($fn): array {
+        $r = HomeHub::mutate(self::key($code), function (array $r) use ($fn): array {
             if (empty($r['code'])) throw new DomainException('That quiz room is not open.');
             $r = $fn($r); $r['version'] = (int)$r['version'] + 1; $r['updated_at'] = time(); return $r;
         });
+        self::pulse($r);
+        return $r;
+    }
+    /**
+     * A tiny per-room file with the version and the timestamps of the next timed transition. Polls compare against it
+     * and answer "same" without reading the room document while nothing changed and nothing is due.
+     */
+    private static function pulseFile(string $code): string { return STREAM_SHM . '/quiz-pulse/' . $code . '.json'; }
+    private static function pulse(array $r): void {
+        $dir = STREAM_SHM . '/quiz-pulse'; if (!is_dir($dir)) @mkdir($dir, 0775, true);
+        $f = self::pulseFile((string)$r['code']); $tmp = $f . '.' . getmypid();
+        $data = ['v' => (int)$r['version'], 'status' => (string)$r['status'], 'ends_at' => (int)($r['ends_at'] ?? 0), 'reveal_at' => (int)($r['reveal_at'] ?? 0), 'intro_at' => (int)($r['intro_at'] ?? 0), 'scores_at' => (int)($r['scores_at'] ?? 0), 'auto' => !empty($r['settings']['auto'])];
+        if (@file_put_contents($tmp, json_encode($data)) !== false) @rename($tmp, $f);
+    }
+    /** True when a poll at version $v can be answered "same" from the pulse file alone. */
+    private static function quiet(string $code, int $v): bool {
+        if ($v <= 0) return false;
+        $raw = @file_get_contents(self::pulseFile($code)); $p = $raw ? json_decode($raw, true) : null;
+        if (!is_array($p) || (int)$p['v'] !== $v) return false;
+        $now = time();
+        if ($p['status'] === 'question' && $now >= (int)$p['ends_at']) return false;
+        if ($p['auto'] && (($p['status'] === 'reveal' && $now - (int)$p['reveal_at'] >= self::REVEAL_SECONDS) || ($p['status'] === 'intro' && $now - (int)$p['intro_at'] >= 5) || ($p['status'] === 'scores' && $now - (int)$p['scores_at'] >= 10))) return false;
+        return true;
     }
     private static function due(array $r): bool {
         if ($r['status'] !== 'question') return false;
@@ -204,7 +278,7 @@ final class Quiz {
     }
     private static function standings(array $r): array {
         $players = [];
-        foreach ((array)$r['players'] as $pid => $p) $players[] = ['id' => (string)$pid, 'name' => $p['name'], 'avatar_url' => $p['avatar_url'] ?? null, 'team' => $p['team'] ?? null, 'score' => (int)($p['score'] ?? 0), 'previous' => (int)($p['last'] ?? 0), 'correct' => (int)($p['correct'] ?? 0), 'streak' => (int)($p['streak'] ?? 0), 'left' => !empty($p['left'])];
+        foreach ((array)$r['players'] as $pid => $p) $players[] = ['id' => (string)$pid, 'name' => $p['name'], 'avatar_url' => $p['avatar_url'] ?? null, 'team' => $p['team'] ?? null, 'score' => (int)($p['score'] ?? 0), 'previous' => (int)($p['last'] ?? 0), 'correct' => (int)($p['correct'] ?? 0), 'streak' => (int)($p['streak'] ?? 0), 'left' => !empty($p['left']), 'signed' => ($p['uid'] ?? '') !== ''];
         usort($players, function ($a, $b) { return [$b['score'], $b['correct']] <=> [$a['score'], $a['correct']]; });
         $teams = [];
         if ($r['settings']['mode'] === 'teams') {
@@ -271,7 +345,13 @@ final class Quiz {
                 case 'reveal': if ($r['status'] === 'question') $r = self::reveal($r); break;
                 case 'end': if ($r['status'] === 'question') $r = self::reveal($r); $r = self::finish($r); break;
                 case 'lobby': $r['status'] = 'lobby'; $r['index'] = -1; break;
-                case 'kick': $pid = (string)($body['player'] ?? ''); if (isset($r['players'][$pid])) $r['players'][$pid]['left'] = true; break;
+                case 'kick': $pid = (string)($body['player'] ?? ''); if (isset($r['players'][$pid])) { $r['players'][$pid]['left'] = true; $r['players'][$pid]['kicked'] = true; } break;
+                case 'transfer':
+                    // Hand the room to a signed-in player; the old host token stops working.
+                    $pid = (string)($body['player'] ?? ''); $p = $r['players'][$pid] ?? null;
+                    if (!$p || ($p['uid'] ?? '') === '' || !empty($p['left'])) throw new DomainException('Choose a signed-in player who is still in the room.');
+                    $r['host'] = (string)$p['uid']; $r['host_name'] = (string)$p['name']; $r['host_hash'] = hash('sha256', bin2hex(random_bytes(16)));
+                    break;
                 case 'team': $pid = (string)($body['player'] ?? ''); if (isset($r['players'][$pid])) $r['players'][$pid]['team'] = max(0, min($r['settings']['teams'] - 1, (int)($body['team'] ?? 0))); break;
                 case 'close': $r['status'] = 'closed'; break;
                 default: throw new DomainException('Unknown host action.');
@@ -279,6 +359,8 @@ final class Quiz {
             return $r;
         });
         if ($action === 'close') HomeHub::mutate('quiz-rooms', function (array $i) use ($r): array { unset($i[$r['code']]); return $i; });
+        if ($action === 'start' || $action === 'restart') self::prewarm(array_map(function ($q) { return (string)($q['item'] ?? ''); }, (array)$r['questions']));
+        if ($action === 'transfer') return self::view($r, $user, false, self::playerFor($r, $user));
         return self::view($r, $user, true, null);
     }
     public static function join(array $user, string $code, array $body): array {
@@ -289,6 +371,8 @@ final class Quiz {
         $r = self::mutate($code, function (array $r) use ($user, $signed, $name, $body, $token, &$pid): array {
             if ($r['status'] === 'closed') throw new DomainException('This quiz has finished.');
             if ($signed) foreach ($r['players'] as $id => $p) if (($p['uid'] ?? '') === $user['id']) $pid = (string)$id;
+            if ($pid === null && !empty($body['player']) && isset($r['players'][(string)$body['player']]) && hash_equals((string)($r['players'][(string)$body['player']]['hash'] ?? ''), hash('sha256', (string)($body['player_token'] ?? '')))) $pid = (string)$body['player'];
+            if ($pid !== null && !empty($r['players'][$pid]['kicked'])) throw new DomainException('The host removed you from this room.');
             if ($pid === null) {
                 if (count($r['players']) >= 40) throw new DomainException('This room is full.');
                 foreach ($r['players'] as $p) if (mb_strtolower($p['name']) === mb_strtolower($name) && empty($p['left'])) throw new DomainException('Someone already uses that name here.');
@@ -313,6 +397,7 @@ final class Quiz {
             $pid = self::playerFor($r, $user, $pidIn, $token);
             if ($pid === null) throw new DomainException('Join the room first.');
             if ($r['status'] !== 'question' || time() > (int)$r['ends_at'] + 1) throw new DomainException('Too late — answers are locked.');
+            if (!empty($r['players'][$pid]['left'])) throw new DomainException(!empty($r['players'][$pid]['kicked']) ? 'The host removed you from this room.' : 'Rejoin the room first.');
             if (isset($r['players'][$pid]['answers'][$r['index']])) throw new DomainException('You already answered.');
             if ($choice < 0 || $choice > 3) throw new DomainException('Choose one of the answers.');
             $r['players'][$pid]['answers'][$r['index']] = ['c' => $choice, 't' => round(microtime(true) - (float)$r['started_at'], 2)];
@@ -322,6 +407,8 @@ final class Quiz {
         return self::view($r, $user, false, $pid);
     }
     public static function state(array $user, string $code, array $q): array {
+        $code = self::code($code);
+        if (self::quiet($code, (int)($q['v'] ?? 0))) return ['ok' => true, 'same' => true, 'version' => (int)$q['v'], 'now' => microtime(true)];
         $r = self::room($code);
         $host = self::isHost($r, $user, (string)($q['host_token'] ?? ''));
         $pid = self::playerFor($r, $user, (string)($q['player'] ?? ''), (string)($q['player_token'] ?? ''));
@@ -347,14 +434,18 @@ final class Quiz {
                 'question' => $q['question'], 'clue' => $q['clue'] ?? null, 'choices' => $q['choices'], 'category' => $q['category'], 'source' => $q['source'],
                 'image' => !empty($q['item']) ? '/api/play/quiz/rooms/' . $r['code'] . '/image/' . (int)$r['index'] : null,
                 'ends_at' => (int)$r['ends_at'], 'timer' => (int)$r['settings']['timer'], 'answered' => $answered];
-            if ($r['status'] !== 'question') $out['question']['answer'] = (int)$q['answer'];
+            if ($r['status'] !== 'question') {
+                $out['question']['answer'] = (int)$q['answer'];
+                $stats = [0, 0, 0, 0]; foreach ($r['players'] as $p) { $c = (int)($p['answers'][$r['index']]['c'] ?? -1); if ($c >= 0 && $c < 4) $stats[$c]++; }
+                $out['question']['stats'] = $stats;
+            }
             $nq = $r['questions'][$r['index'] + 1] ?? null;
             if ($host && $nq && !empty($nq['item'])) $out['prefetch'] = '/api/play/quiz/rooms/' . $r['code'] . '/image/' . ((int)$r['index'] + 1);
         }
         if ($r['status'] === 'intro' && !empty($r['questions'][0]['item']) && $host) $out['prefetch'] = '/api/play/quiz/rooms/' . $r['code'] . '/image/0';
         if ($pid !== null) {
             $p = $r['players'][$pid];
-            $out['me'] = ['id' => $pid, 'name' => $p['name'], 'team' => $p['team'] ?? null, 'score' => (int)($p['score'] ?? 0), 'answer' => $p['answers'][$r['index']] ?? null, 'rank' => 1 + (int)array_search($pid, array_column($players, 'id'), true), 'left' => !empty($p['left'])];
+            $out['me'] = ['id' => $pid, 'name' => $p['name'], 'team' => $p['team'] ?? null, 'score' => (int)($p['score'] ?? 0), 'streak' => (int)($p['streak'] ?? 0), 'answer' => $p['answers'][$r['index']] ?? null, 'rank' => 1 + (int)array_search($pid, array_column($players, 'id'), true), 'left' => !empty($p['left']), 'kicked' => !empty($p['kicked'])];
         }
         return $out;
     }

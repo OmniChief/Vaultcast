@@ -9,7 +9,7 @@ final class Misc {
     public static function boards(array $user): array {
         Arcade::signed($user);
         $doc = (array)\Vaultcast\Repository::document('misc-boards:' . $user['id'], []);
-        return ['ok' => true, 'boards' => array_values((array)($doc['boards'] ?? [])), 'default' => (string)($doc['default'] ?? ''), 'widgets' => self::WIDGETS,
+        return ['ok' => true, 'boards' => array_values((array)($doc['boards'] ?? [])), 'default' => (string)($doc['default'] ?? ''), 'rotate' => (int)($doc['rotate'] ?? 0), 'widgets' => self::WIDGETS,
             'features' => ['live' => !empty(Store::settings()['features']['live']), 'downloads' => !empty(Store::settings()['features']['downloads']), 'library' => AreaAccess::allowed($user, 'library'), 'admin' => ($user['role'] ?? '') === 'admin']];
     }
     private static function clean($v, int $depth = 0) {
@@ -33,14 +33,26 @@ final class Misc {
                     'settings' => self::clean((array)($w['settings'] ?? []))];
             }
             $boards[] = ['id' => $id, 'name' => mb_substr(trim((string)($b['name'] ?? '')), 0, 40) ?: 'Board', 'theme' => in_array($b['theme'] ?? '', ['glass', 'solid', 'clear'], true) ? $b['theme'] : 'glass',
-                'background' => mb_substr((string)($b['background'] ?? ''), 0, 400), 'widgets' => $widgets];
+                'background' => self::background((string)($b['background'] ?? '')), 'color' => self::colour((string)($b['color'] ?? '')), 'locked' => !empty($b['locked']), 'widgets' => $widgets];
         }
         $json = json_encode($boards);
         if (strlen((string)$json) > 400000) throw new DomainException('These boards are too large to save. Remove some widgets or long notes.');
         $default = (string)($body['default'] ?? '');
         if (!in_array($default, array_column($boards, 'id'), true)) $default = $boards[0]['id'] ?? '';
-        \Vaultcast\Repository::putDocument('misc-boards:' . $user['id'], ['boards' => $boards, 'default' => $default, 'updated_at' => time()]);
-        return ['ok' => true, 'boards' => $boards, 'default' => $default];
+        $rotate = (int)($body['rotate'] ?? 0); $rotate = $rotate <= 0 ? 0 : max(15, min(3600, $rotate));
+        \Vaultcast\Repository::putDocument('misc-boards:' . $user['id'], ['boards' => $boards, 'default' => $default, 'rotate' => $rotate, 'updated_at' => time()]);
+        return ['ok' => true, 'boards' => $boards, 'default' => $default, 'rotate' => $rotate];
+    }
+    /** Board backgrounds end up inside CSS url(): only plain http(s) or same-site paths without quotes, parentheses or escapes. */
+    private static function background(string $v): string {
+        $v = trim($v);
+        if ($v === '' || strlen($v) > 400) return '';
+        if (!preg_match('#^(https?://|/)[^\s"\'()<>\\\\]+$#i', $v) || strpos($v, '//') === 0) return '';
+        return $v;
+    }
+    private static function colour(string $v): string {
+        $v = trim($v);
+        return preg_match('/^#[0-9a-f]{3}([0-9a-f]{3})?$/i', $v) ? strtolower($v) : '';
     }
 
     // ---------------------------------------------------------------- widget data
@@ -173,6 +185,8 @@ final class Misc {
     public static function recent(array $user, int $n): array {
         if (!AreaAccess::allowed($user, 'library')) return ['ok' => true, 'items' => []];
         $n = max(4, min(30, $n));
+        // The same list for every viewer with Library access: build it at most once a minute.
+        return ['ok' => true] + self::cached('recent:' . $n, 60, function () use ($n) {
         $rows = \Vaultcast\Repository::rows("SELECT payload FROM vaultcast_items WHERE media_kind='video' ORDER BY added_at DESC, id LIMIT 120");
         $out = []; $shows = [];
         foreach ($rows as $it) {
@@ -183,20 +197,28 @@ final class Misc {
                 'type' => $card['type'] ?? '', 'poster' => '/api/items/' . rawurlencode((string)$card['id']) . '/poster?fetch=0&variant=thumb', 'added_at' => (int)($it['added_at'] ?? $it['mtime'] ?? 0)];
             if (count($out) >= $n) break;
         }
-        return ['ok' => true, 'items' => $out];
+        return ['items' => $out];
+        });
     }
     /** Who is watching right now: admins see everyone, others see themselves and friends. */
     public static function nowPlaying(array $user): array {
         if (!AreaAccess::allowed($user, 'library')) return ['ok' => true, 'sessions' => []];
-        $rows = Arcade::query("SELECT p.user_id, p.item_id, p.updated_at, p.payload, i.title, i.show_title FROM vaultcast_progress p JOIN vaultcast_items i ON i.id=p.item_id WHERE p.updated_at>=? AND i.media_kind='video' ORDER BY p.updated_at DESC LIMIT 40", [time() - 180])->fetchAll(PDO::FETCH_ASSOC);
+        // One shared snapshot every 15 s for all viewers (progress has no updated_at index), then filtered per viewer.
+        $all = self::cached('nowplaying', 15, function () {
+            $rows = Arcade::query("SELECT p.user_id, p.item_id, p.updated_at, p.payload, i.title, i.show_title FROM vaultcast_progress p JOIN vaultcast_items i ON i.id=p.item_id WHERE p.updated_at>=? AND i.media_kind='video' ORDER BY p.updated_at DESC LIMIT 40", [time() - 180])->fetchAll(PDO::FETCH_ASSOC);
+            $people = Arcade::people(array_values(array_unique(array_column($rows, 'user_id')))); $out = [];
+            foreach ($rows as $r) {
+                $p = json_decode((string)$r['payload'], true) ?: [];
+                $pos = (float)($p['position'] ?? $p['t'] ?? 0); $dur = (float)($p['duration'] ?? $p['d'] ?? 0);
+                $out[] = ['uid' => (string)$r['user_id'], 'user' => $people[$r['user_id']] ?? null, 'item_id' => $r['item_id'], 'title' => $r['show_title'] !== '' ? $r['show_title'] . ' · ' . $r['title'] : $r['title'], 'percent' => $dur > 0 ? (int)round(100 * $pos / $dur) : null, 'updated_at' => (int)$r['updated_at'],
+                    'poster' => '/api/items/' . rawurlencode((string)$r['item_id']) . '/poster?fetch=0&variant=thumb'];
+            }
+            return ['rows' => $out];
+        });
         $admin = ($user['role'] ?? '') === 'admin'; $friends = array_flip(Social::friends((string)$user['id'])); $out = [];
-        foreach ($rows as $r) {
-            if (!$admin && $r['user_id'] !== $user['id'] && !isset($friends[$r['user_id']])) continue;
-            $p = json_decode((string)$r['payload'], true) ?: [];
-            $pos = (float)($p['position'] ?? $p['t'] ?? 0); $dur = (float)($p['duration'] ?? $p['d'] ?? 0);
-            $person = Arcade::people([$r['user_id']])[$r['user_id']];
-            $out[] = ['user' => $person, 'item_id' => $r['item_id'], 'title' => $r['show_title'] !== '' ? $r['show_title'] . ' · ' . $r['title'] : $r['title'], 'percent' => $dur > 0 ? (int)round(100 * $pos / $dur) : null, 'updated_at' => (int)$r['updated_at'],
-                'poster' => '/api/items/' . rawurlencode((string)$r['item_id']) . '/poster?fetch=0&variant=thumb'];
+        foreach ((array)($all['rows'] ?? []) as $r) {
+            if (!$admin && $r['uid'] !== $user['id'] && !isset($friends[$r['uid']])) continue;
+            unset($r['uid']); $out[] = $r;
         }
         return ['ok' => true, 'sessions' => $out];
     }
@@ -210,6 +232,7 @@ final class Misc {
     }
     public static function recordings(array $user): array {
         if (empty(Store::settings()['features']['live'])) return ['ok' => true, 'recording' => [], 'upcoming' => [], 'unavailable' => true];
+        return ['ok' => true] + self::cached('recordings', 30, function () {
         require_once STREAM_ROOT . '/src/Live/tvstudio.php';
         $st = tvs_load(); $now = time(); $rec = []; $up = [];
         $names = []; foreach ((array)($st['channels'] ?? []) as $c) if (isset($c['id'])) $names[$c['id']] = $c['name'] ?? $c['title'] ?? '';
@@ -218,7 +241,8 @@ final class Misc {
             if ($row['start'] <= $now && $row['end'] > $now) $rec[] = $row; elseif ($row['start'] > $now) $up[] = $row;
         }
         usort($up, function ($a, $b) { return $a['start'] <=> $b['start']; });
-        return ['ok' => true, 'recording' => $rec, 'upcoming' => array_slice($up, 0, 12)];
+        return ['recording' => $rec, 'upcoming' => array_slice($up, 0, 12)];
+        });
     }
 
     /** Now playing from a radio stream's ICY metadata (shared stations, or a public custom URL). */
@@ -230,7 +254,7 @@ final class Misc {
         self::rate($user, 'radio', 30);
         return ['ok' => true] + self::cached('radio-now:' . $target, 20, function () use ($target, $allowPrivate) {
             $p = parse_url($target); $host = (string)($p['host'] ?? '');
-            $ips = filter_var($host, FILTER_VALIDATE_IP) ? [$host] : (array)@gethostbynamel($host);
+            $ips = filter_var($host, FILTER_VALIDATE_IP) ? [$host] : WebFetch::resolve($host);
             if (!$ips) return ['title' => null];
             if (!$allowPrivate) foreach ($ips as $ip) if (!WebFetch::publicIp($ip)) return ['title' => null];
             $metaint = 0; $buf = ''; $title = null;
@@ -287,6 +311,7 @@ final class Misc {
     }
     public static function movieSources(array $user): array {
         if (!AreaAccess::allowed($user, 'library')) return ['ok' => true, 'collections' => [], 'genres' => []];
+        return ['ok' => true] + self::cached('movie-sources', 300, function () {
         $cols = []; foreach ((array)(Collections::publicList()['collections'] ?? []) as $c) if ((int)$c['available_count'] > 0 && ($c['type'] ?? 'movies') !== 'shows') $cols[] = ['id' => $c['id'], 'name' => $c['name'], 'count' => (int)$c['available_count']];
         $genres = [];
         foreach (Arcade::query("SELECT DISTINCT section_id FROM vaultcast_browse_items WHERE media_kind='video' AND show_key=''")->fetchAll(PDO::FETCH_COLUMN) as $section) {
@@ -294,7 +319,8 @@ final class Misc {
             foreach ((array)($pack['facets']['genres'] ?? []) as $g => $count) { $name = is_array($count) ? (string)($count['name'] ?? $g) : (string)$g; $genres[$name] = ($genres[$name] ?? 0) + (is_array($count) ? (int)($count['count'] ?? 0) : (int)$count); }
         }
         arsort($genres);
-        return ['ok' => true, 'collections' => array_slice($cols, 0, 200), 'genres' => array_map(function ($g, $n) { return ['name' => $g, 'count' => $n]; }, array_keys($genres), array_values($genres))];
+        return ['collections' => array_slice($cols, 0, 200), 'genres' => array_map(function ($g, $n) { return ['name' => $g, 'count' => $n]; }, array_keys($genres), array_values($genres))];
+        });
     }
     /** What to play after $after finishes, from a collection order, a genre, the user's queue or anything unwatched. */
     public static function nextMovie(array $user, string $after, string $source, array $queue): array {
@@ -348,8 +374,9 @@ final class Misc {
     }
     public static function frame(array $user, string $itemId): void {
         if (!AreaAccess::allowed($user, 'library') || !preg_match('/^[A-Za-z0-9_-]{1,64}$/D', $itemId)) { http_response_code(404); exit; }
-        $file = Quiz::frame($itemId);
-        if (!$file) { http_response_code(404); exit; }
+        // Frames are cached; when one is not ready yet and the extractor is busy, show the poster instead of waiting on ffmpeg.
+        $file = Quiz::frame($itemId, false);
+        if (!$file) { header('Cache-Control: no-store'); header('Location: ' . rtrim(\Vaultcast\Database::basePath(), '/') . '/api/items/' . rawurlencode($itemId) . '/poster?fetch=0&variant=full', true, 302); exit; }
         header('Content-Type: ' . (@mime_content_type($file) ?: 'image/jpeg')); header('Cache-Control: private, max-age=86400'); header('Content-Length: ' . filesize($file)); readfile($file); exit;
     }
 }

@@ -41,11 +41,14 @@ try {
     if ($path === '/play/friends' && $method === 'POST') {
         $b = body_json(); $action = (string)($b['action'] ?? '');
         if ($action === 'decline') $b['action'] = 'remove';
+        if (($action === 'request' || $action === 'accept') && Social::blockedEither((string)$user['id'], (string)($b['user_id'] ?? ''))) throw new DomainException('You cannot add this player.');
         $r = HomeHub::friendship($user, $b);
         if ($action === 'request') { $u = \Vaultcast\Repository::user((string)($b['user_id'] ?? ''), true); if ($u) Social::notify((string)$u['id'], $user, 'friend', 'sent you a friend request', 'Friend request', 'play/social/friends'); }
         if ($action === 'accept') Social::notify((string)($b['user_id'] ?? ''), $user, 'friend', 'accepted your friend request', 'You are now friends', 'play/social/friends');
         json_out(Social::friendsState($user));
     }
+    if ($path === '/play/privacy' && $method === 'GET') json_out(Social::privacyState($user));
+    if ($path === '/play/privacy' && $method === 'POST') json_out(Social::savePrivacy($user, body_json()));
     if ($path === '/play/people' && $method === 'GET') json_out(HomeHub::people($user, (string)($_GET['q'] ?? '')));
     if ($path === '/play/challenge' && $method === 'POST') json_out(Social::challenge($user, body_json()));
     if ($path === '/play/activity' && $method === 'GET') json_out(Social::activity($user));

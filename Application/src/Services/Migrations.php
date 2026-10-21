@@ -6,7 +6,7 @@
  */
 final class Migrations
 {
-    const VERSION = 8; // 8: play scores/points and drop storage; 2: library folder access pass for nginx (step 5); 3: re-run it, recording results; 4: media facts table; 5: arrival timestamps and indexed running times; 6: chat storage; 7: prepared browsing
+    const VERSION = 9; // 9: leaderboard covering indexes, Drop anonymous origin column and MEDIUMTEXT notes; 8: play scores/points and drop storage; 2: library folder access pass for nginx (step 5); 3: re-run it, recording results; 4: media facts table; 5: arrival timestamps and indexed running times; 6: chat storage; 7: prepared browsing
 
     public static function stampFile(): string
     {
@@ -72,12 +72,30 @@ final class Migrations
     }
 
     /** @return array<string,mixed> what each step did */
+    /**
+     * v9: covering indexes for leaderboards and Drop columns. Idempotent and guarded with SHOW checks so it
+     * works on MariaDB and MySQL alike (neither ADD INDEX IF NOT EXISTS nor ADD COLUMN IF NOT EXISTS is portable).
+     */
+    private static function playDropUpgrade(PDO $pdo): array {
+        $done = [];
+        $hasIndex = function (string $table, string $name) use ($pdo): bool { $s = $pdo->prepare('SHOW INDEX FROM ' . $table . ' WHERE Key_name = ?'); $s->execute([$name]); return (bool)$s->fetch(); };
+        $column = function (string $table, string $name) use ($pdo): ?array { $s = $pdo->query('SHOW COLUMNS FROM ' . $table . " LIKE '" . $name . "'"); $r = $s ? $s->fetch(PDO::FETCH_ASSOC) : false; return $r ?: null; };
+        if (!$hasIndex('vaultcast_play_scores', 'play_board_user')) { $pdo->exec('ALTER TABLE vaultcast_play_scores ADD INDEX play_board_user (game,created_at,user_id,score)'); $done[] = 'play_board_user'; }
+        if (!$hasIndex('vaultcast_play_points', 'play_points_board')) { $pdo->exec('ALTER TABLE vaultcast_play_points ADD INDEX play_points_board (created_at,user_id,points)'); $done[] = 'play_points_board'; }
+        if (!$column('vaultcast_drop_files', 'origin')) { $pdo->exec("ALTER TABLE vaultcast_drop_files ADD COLUMN origin VARCHAR(64) NOT NULL DEFAULT ''"); $done[] = 'drop_origin'; }
+        $body = $column('vaultcast_drop_files', 'body');
+        if ($body && strtolower((string)$body['Type']) === 'text') { $pdo->exec('ALTER TABLE vaultcast_drop_files MODIFY body MEDIUMTEXT NULL'); $done[] = 'drop_body_mediumtext'; }
+        return $done;
+    }
+
     public static function run(PDO $pdo): array
     {
         $log = [];
         foreach (explode(';', (string)file_get_contents(dirname(__DIR__) . '/schema.sql')) as $sql) {
             if (preg_match('/CREATE TABLE IF NOT EXISTS vaultcast_(chat_|browse_items|show_summaries|play_|drop_)/i',$sql)) $pdo->exec($sql);
         }
+        $upgrade = self::playDropUpgrade($pdo);
+        if (is_file(STREAM_DATA.'/runtime/migrations-v8.done')) return ['play_drop_upgrade'=>$upgrade];
         if (is_file(STREAM_DATA.'/runtime/migrations-v7.done')) return ['play_and_drop'=>true];
         if (is_file(STREAM_DATA.'/runtime/migrations-v6.done')) return ['prepared_browsing'=>true];
         if (is_file(STREAM_DATA.'/runtime/migrations-v5.done')) return ['chat'=>true];
