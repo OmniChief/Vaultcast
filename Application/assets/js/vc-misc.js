@@ -192,6 +192,60 @@
       refresh(); return poll(refresh, 60000, s);
     }
   };
+  W.recordings = { name:'Recordings', desc:'What is recording now and what is scheduled next.', icon:'⏺️', w:6, h:6,
+    render:function(body, s){
+      function load(){ call('/misc/widget/recordings').then(function(j){
+        if (j.unavailable) { body.replaceChildren(h('p', { className:'muted', text:'Live TV is turned off on this server.' })); return; }
+        var rows = j.recording.map(function(r){ return h('li', { className:'vc-rec live' }, [h('span', { className:'vc-rec-dot', 'aria-label':'Recording' }), h('span', null, [h('strong', { text:r.title }), h('small', { className:'muted', text:r.channel + ' · until ' + new Date(r.end * 1000).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }) })])]); })
+          .concat(j.upcoming.map(function(r){ var d = new Date(r.start * 1000); return h('li', { className:'vc-rec' }, [h('span', { className:'vc-rec-time', text:d.toLocaleDateString([], { weekday:'short' }) + ' ' + d.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }) }), h('span', null, [h('strong', { text:r.title }), h('small', { className:'muted', text:r.channel })])]); }));
+        body.replaceChildren(rows.length ? list(rows) : h('p', { className:'muted', text:'No recordings scheduled.' }));
+      }).catch(function(e){ wErr(body, e); }); }
+      loading(body); load(); return poll(load, 60000, s);
+    }
+  };
+  W.downloads = { name:'Downloads', desc:'Progress of downloads in the request queue.', icon:'⬇️', w:6, h:6,
+    render:function(body, s){
+      function load(){ call('/misc/widget/downloads').then(function(j){
+        if (j.unavailable) { body.replaceChildren(h('p', { className:'muted', text:'Downloads are not available for your account.' })); return; }
+        body.replaceChildren(j.items.length ? list(j.items.map(function(d){ var pct = Math.max(0, Math.min(100, Number(d.percent || 0))); return h('li', { className:'vc-dl' }, [h('span', { className:'vc-dl-name', text:d.name }), h('span', { className:'vc-progress', role:'progressbar', 'aria-valuenow':String(Math.round(pct)), 'aria-valuemin':'0', 'aria-valuemax':'100' }, [h('i', { style:'width:' + pct + '%' })]), h('small', { className:'muted', text:Math.round(pct) + '% · ' + (d.status || '') })]); })) : h('p', { className:'muted', text:'Nothing downloading.' }));
+      }).catch(function(e){ wErr(body, e); }); }
+      loading(body); load(); return poll(load, 10000, s);
+    }
+  };
+  function pick(o, keys){ for (var i = 0; i < keys.length; i++) if (o && o[keys[i]] != null) return o[keys[i]]; return null; }
+  function pct(v){ if (v == null) return null; if (typeof v === 'number') return v; if (typeof v === 'object') { var p = pick(v, ['percent', 'used_percent', 'pct']); if (p != null) return Number(p); var u = pick(v, ['used']), t = pick(v, ['total', 'size']); if (u != null && t) return 100 * u / t; } return null; }
+  W.health = { name:'NAS health', desc:'CPU, memory, disks, temperature and services.', icon:'🩺', w:6, h:6,
+    render:function(body, s){
+      function load(){ call('/misc/widget/health').then(function(j){
+        if (j.limited) { body.replaceChildren(h('div', { className:'vc-health-ok' }, [h('span', { className:'vc-rec-dot ok' }), h('strong', { text:'Server online' }), h('small', { className:'muted', text:'Detailed health is visible to administrators.' })])); return; }
+        var gauges = [['CPU', pct(pick(j, ['cpu_percent', 'cpu']))], ['Memory', pct(pick(j, ['memory', 'mem']))], ['Media disk', pct(pick(j, ['media_disk', 'disk']))], ['Data disk', pct(pick(j, ['data_disk']))]].filter(function(g){ return g[1] != null && !isNaN(g[1]); });
+        var temp = pick(j, ['temperature', 'temp']); if (temp && typeof temp === 'object') temp = pick(temp, ['cpu', 'value', 'max']);
+        body.replaceChildren(h('div', { className:'vc-health' }, [
+          h('div', { className:'vc-gauges' }, gauges.map(function(g){ var v = Math.round(g[1]); return h('div', { className:'vc-gauge' + (v > 90 ? ' bad' : v > 75 ? ' warn' : ''), style:'--vc-p:' + v }, [h('strong', { text:v + '%' }), h('small', { className:'muted', text:g[0] })]); })),
+          h('p', { className:'muted' }, [j.uptime_human ? 'Up ' + j.uptime_human : '', temp ? ' · ' + Math.round(Number(temp)) + '°C' : '', j.load ? ' · load ' + (Array.isArray(j.load) ? j.load.slice(0, 3).map(function(x){ return Number(x).toFixed(2); }).join(' ') : j.load) : '']),
+          j.services ? h('div', { className:'vc-services' }, j.services.slice(0, 8).map(function(s){ var ok = s.active === true || s.active === 'active' || s.active === 'running'; return h('span', { className:'vc-chip' + (ok ? ' ok' : ' bad'), text:(ok ? '● ' : '○ ') + s.name }); })) : null]));
+      }).catch(function(e){ wErr(body, e); }); }
+      loading(body); load(); return poll(load, 20000, s);
+    }
+  };
+  W.recent = { name:'Recently added', desc:'The newest films and shows in the library.', icon:'🆕', w:12, h:6,
+    render:function(body, s){
+      function load(){ call('/misc/widget/recent?n=' + (s.count || 12)).then(function(j){
+        if (!j.items.length) { body.replaceChildren(h('p', { className:'muted', text:'Nothing new yet.' })); return; }
+        body.replaceChildren(h('div', { className:'vc-poster-row' }, j.items.map(function(it){ return h('button', { type:'button', className:'vc-poster', title:it.title, onClick:function(){ if (it.show_key && A.openShow) A.openShow(it.show_key); else if (A.openMovie) A.openMovie(it.id); } }, [h('img', { src:url(it.poster), alt:'', loading:'lazy' }), h('span', { className:'vc-poster-cap' }, [h('strong', { text:it.title }), h('small', { className:'muted', text:it.subtitle || '' })])]); })));
+      }).catch(function(e){ wErr(body, e); }); }
+      loading(body); load(); return poll(load, 600000, s);
+    },
+    form:function(s){ return textForm([{ key:'count', label:'How many', type:'number', min:4, max:30, value:s.count || 12 }]); }
+  };
+  W.nowplaying = { name:'Now playing', desc:'What you and your friends are watching (admins see everyone).', icon:'▶️', w:8, h:5,
+    render:function(body, s){
+      function load(){ call('/misc/widget/nowplaying').then(function(j){
+        body.replaceChildren(j.sessions.length ? list(j.sessions.map(function(x){ return h('li', { className:'vc-np' }, [h('img', { src:url(x.poster), alt:'', loading:'lazy' }), h('span', { className:'vc-np-copy' }, [h('strong', { text:x.title }), h('small', { className:'muted', text:x.user.name + ' · ' + ago(x.updated_at) }), x.percent != null ? h('span', { className:'vc-progress' }, [h('i', { style:'width:' + x.percent + '%' })]) : null])]); })) : h('p', { className:'muted', text:'Nobody is watching right now.' }));
+      }).catch(function(e){ wErr(body, e); }); }
+      loading(body); load(); return poll(load, 20000, s);
+    }
+  };
   W.leaderboard = { name:'Leaderboard', desc:'Top players or teams this week.', icon:'🏆', w:6, h:7,
     render:function(body, s){
       function load(){ call('/play/leaderboard?board=' + (s.board || 'points') + '&period=' + (s.period || 'week')).then(function(j){
@@ -662,6 +716,21 @@
 
   // ------------------------------------------------------------------ Board (dashboard grid)
   var COLS = 24;
+  /* Saved boards may use older type keys or settings shapes; map them to the current ones when a board loads.
+     The normalised form is written back on the next save. */
+  var WIDGET_ALIASES = { recently_added:'recent', recentlyadded:'recent', 'recently-added':'recent', now_playing:'nowplaying', 'now-playing':'nowplaying',
+    bins:'reminders', binday:'reminders', bin_day:'reminders', 'bin-day':'reminders', picture_frame:'frame', pictureframe:'frame', webcam:'webcams',
+    nas_health:'health', nashealth:'health', news:'rss', note:'notes', slides:'slideshow', recording:'recordings', download:'downloads' };
+  function widgetType(t, aliases){ var k = String(t || '').trim().toLowerCase(); if (W[k]) return k; k = (aliases && aliases[k]) || WIDGET_ALIASES[k] || ''; return W[k] ? k : ''; }
+  function normaliseWidget(w, aliases){
+    if (!w || typeof w !== 'object') return w;
+    var type = widgetType(w.type, aliases); if (type) w.type = type;
+    var s = w.settings = w.settings && typeof w.settings === 'object' && !Array.isArray(w.settings) ? w.settings : {};
+    if (w.type === 'recent' && s.count != null) s.count = Math.max(4, Math.min(30, Number(s.count) || 12));
+    if (w.type === 'slideshow' && ['frames', 'posters', 'mixed'].indexOf(s.source) >= 0) { s.art = s.art || s.source; s.source = 'library'; }
+    return w;
+  }
+  function normaliseBoards(d){ (d.boards || []).forEach(function(b){ b.widgets = (Array.isArray(b.widgets) ? b.widgets : []).map(function(w){ return normaliseWidget(w, d.aliases); }); }); return d; }
   var STARTER = [{ type:'clock', x:0, y:0, w:6, h:4 }, { type:'weather', x:6, y:0, w:8, h:6 }, { type:'reminders', x:14, y:0, w:5, h:6 }, { type:'notes', x:19, y:0, w:5, h:6, settings:{ text:'[ ] Welcome to your board\n[ ] Press Edit to move, resize and add widgets' } }, { type:'recent', x:0, y:6, w:14, h:6 }, { type:'nowplaying', x:14, y:6, w:10, h:6 }];
   // Ready-made layouts for "New board".
   var TEMPLATES = {
@@ -716,7 +785,7 @@
           f.text().then(function(txt){
             var j = JSON.parse(txt), src = j && (j.board || j);
             if (!src || !Array.isArray(src.widgets)) throw new Error('Not a board layout');
-            var widgets = src.widgets.filter(function(w){ return w && W[w.type]; }).slice(0, 40).map(function(w){ return { id:rid(8), type:w.type, x:+w.x || 0, y:+w.y || 0, w:+w.w || 4, h:+w.h || 3, settings:(w.settings && typeof w.settings === 'object') ? w.settings : {} }; });
+            var widgets = src.widgets.map(function(w){ return normaliseWidget(w, data.aliases); }).filter(function(w){ return w && W[w.type]; }).slice(0, 40).map(function(w){ return { id:rid(8), type:w.type, x:+w.x || 0, y:+w.y || 0, w:+w.w || 4, h:+w.h || 3, settings:(w.settings && typeof w.settings === 'object') ? w.settings : {} }; });
             add({ id:rid(10), name:String(name.value.trim() || src.name || 'Imported board').slice(0, 40), theme:src.theme || 'glass', background:typeof src.background === 'string' ? src.background : '', color:typeof src.color === 'string' ? src.color : '', locked:false, widgets:widgets });
             A.toast('Board imported', { kind:'ok' });
           }).catch(function(){ A.toast('That file is not a Vaultcast board layout.', { kind:'bad' }); });
@@ -845,7 +914,7 @@
       if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(function(){});
     }
     call('/misc/boards').then(function(j){
-      data = j;
+      data = normaliseBoards(j);
       if (!data.boards.length) { data.boards = [{ id:rid(10), name:'My board', theme:'glass', background:'', widgets:STARTER.map(function(w){ return Object.assign({ id:rid(8), settings:{} }, JSON.parse(JSON.stringify(w))); }) }]; data.default = data.boards[0].id; save(true); }
       var parts = String(sub || '').split('/');
       cur = data.boards.filter(function(b){ return b.id === parts[0]; })[0] || data.boards.filter(function(b){ return b.id === data.default; })[0] || data.boards[0];

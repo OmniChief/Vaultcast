@@ -4,12 +4,20 @@ declare(strict_types=1);
 /** Misc → Board (dashboards and widget data) and Ambient (screensaver stills, webcams). */
 final class Misc {
     const WIDGETS = ['clock', 'weather', 'calendar', 'reminders', 'media', 'recordings', 'downloads', 'health', 'recent', 'nowplaying', 'notes', 'slideshow', 'rss', 'drop', 'leaderboard', 'frame', 'webcams'];
+    /** Older or alternative spellings of widget types; saved boards using them keep working and are stored under the current key. */
+    const WIDGET_ALIASES = ['recently_added' => 'recent', 'recentlyadded' => 'recent', 'recently-added' => 'recent', 'now_playing' => 'nowplaying', 'now-playing' => 'nowplaying',
+        'bins' => 'reminders', 'binday' => 'reminders', 'bin_day' => 'reminders', 'bin-day' => 'reminders', 'picture_frame' => 'frame', 'pictureframe' => 'frame', 'webcam' => 'webcams',
+        'nas_health' => 'health', 'nashealth' => 'health', 'news' => 'rss', 'note' => 'notes', 'slides' => 'slideshow', 'recording' => 'recordings', 'download' => 'downloads'];
+    public static function widgetType(string $t): string {
+        $k = strtolower(trim($t));
+        return in_array($k, self::WIDGETS, true) ? $k : (self::WIDGET_ALIASES[$k] ?? '');
+    }
 
     // ---------------------------------------------------------------- boards
     public static function boards(array $user): array {
         Arcade::signed($user);
         $doc = (array)\Vaultcast\Repository::document('misc-boards:' . $user['id'], []);
-        return ['ok' => true, 'boards' => array_values((array)($doc['boards'] ?? [])), 'default' => (string)($doc['default'] ?? ''), 'rotate' => (int)($doc['rotate'] ?? 0), 'widgets' => self::WIDGETS,
+        return ['ok' => true, 'boards' => array_values((array)($doc['boards'] ?? [])), 'default' => (string)($doc['default'] ?? ''), 'rotate' => (int)($doc['rotate'] ?? 0), 'widgets' => self::WIDGETS, 'aliases' => self::WIDGET_ALIASES,
             'features' => ['live' => !empty(Store::settings()['features']['live']), 'downloads' => !empty(Store::settings()['features']['downloads']), 'library' => AreaAccess::allowed($user, 'library'), 'admin' => ($user['role'] ?? '') === 'admin']];
     }
     private static function clean($v, int $depth = 0) {
@@ -27,8 +35,8 @@ final class Misc {
             $id = preg_match('/^[a-z0-9]{6,16}$/', (string)($b['id'] ?? '')) ? (string)$b['id'] : bin2hex(random_bytes(5));
             $widgets = [];
             foreach (array_slice((array)($b['widgets'] ?? []), 0, 40) as $w) {
-                if (!is_array($w) || !in_array($w['type'] ?? '', self::WIDGETS, true)) continue;
-                $widgets[] = ['id' => preg_match('/^[a-z0-9]{4,16}$/', (string)($w['id'] ?? '')) ? (string)$w['id'] : bin2hex(random_bytes(4)), 'type' => $w['type'],
+                if (!is_array($w) || ($type = self::widgetType((string)($w['type'] ?? ''))) === '') continue;
+                $widgets[] = ['id' => preg_match('/^[a-z0-9]{4,16}$/', (string)($w['id'] ?? '')) ? (string)$w['id'] : bin2hex(random_bytes(4)), 'type' => $type,
                     'x' => max(0, min(23, (int)($w['x'] ?? 0))), 'y' => max(0, min(200, (int)($w['y'] ?? 0))), 'w' => max(1, min(24, (int)($w['w'] ?? 4))), 'h' => max(1, min(24, (int)($w['h'] ?? 3))),
                     'settings' => self::clean((array)($w['settings'] ?? []))];
             }
