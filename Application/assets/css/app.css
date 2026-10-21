@@ -2607,13 +2607,27 @@ html[data-motion="reduced"]{scroll-behavior:auto!important}
 .directplay-settings .feature-range { min-width: 120px; max-width: 240px; }
 .directplay-settings .feature-row { gap: 14px; }
 .directplay-settings .feature-text .muted { line-height: 1.5; }
-.dp-player-actions { display: flex; flex-wrap: wrap; flex-basis: 100%; align-items: center; gap: 8px; }
+.dp-player-actions { display: flex; flex-wrap: wrap; flex-basis: 100%; align-items: center; justify-content: space-between; gap: 10px 14px; padding-top: 10px; border-top: 1px solid var(--border, #ffffff1f); min-width: 0; }
+.dp-player-actions [hidden] { display: none !important; }
+.dp-status { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; min-width: 0; flex: 1 1 220px; }
+.dp-mode { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; font-size: .78rem; font-weight: 700; white-space: nowrap; background: rgba(255,255,255,.08); border: 1px solid var(--border, #ffffff26); }
+.dp-mode::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: #34d399; flex: none; }
+.dp-mode[data-kind=live]::before { background: var(--accent, #8b5cf6); animation: dpPulse 1.6s ease-in-out infinite; }
+.dp-mode[data-kind=stopped]::before { background: #f59e0b; }
+@keyframes dpPulse { 50% { opacity: .35; } }
+.dp-note { font-size: .8rem; line-height: 1.35; min-width: 0; overflow-wrap: anywhere; }
+.dp-note:empty { display: none; }
+.dp-buttons { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; }
+.dp-buttons:not(:has(.btn:not([hidden]))) { display: none; }
+.dp-player-actions .dp-option { padding: 7px 13px; min-height: 34px; font-size: .84rem; border-radius: var(--radius-md, 10px); white-space: nowrap; }
 .dp-transcode-timeline { display: flex; flex-basis: 100%; align-items: center; gap: 12px; padding: 10px; }
 .dp-transcode-timeline[hidden] { display: none; }
 .dp-transcode-timeline input { flex: 1; min-width: 80px; accent-color: var(--accent); }
 .dp-transcode-timeline span { white-space: nowrap; font-variant-numeric: tabular-nums; }
 @media (max-width: 600px) {
   .directplay-settings .feature-row { flex-wrap: wrap; }
-  .dp-player-actions .btn { flex: 1 1 150px; }
+  .dp-player-actions { justify-content: flex-start; }
+  .dp-buttons { width: 100%; justify-content: stretch; }
+  .dp-player-actions .dp-option { flex: 1 1 calc(50% - 8px); min-width: 0; padding-inline: 8px; overflow: hidden; text-overflow: ellipsis; }
 }
 .vc-lazy { min-height: 40vh; }

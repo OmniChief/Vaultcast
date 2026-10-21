@@ -173,6 +173,7 @@
       remuxBar.style.display = on ? 'flex' : 'none';
       media.controls = !on;
       paintRemuxBar();
+      try { overlay.dispatchEvent(new CustomEvent('vc-playmode')); } catch (eEv) {}
     }
     overlay._leaveRemux=function(){remux.gen++;remux.active=false;remux.seeking=false;setRemuxUi(false);};
     function switchViaRemux(index, at){
@@ -319,16 +320,17 @@
       } else toast('Audio switching is not available for this file.',{kind:'bad'});
       refresh();
     };
-    var restoreAudio=h('button',{className:'btn ghost sm',type:'button',text:'Restore audio',title:'Clear the saved audio choice, unmute and restore the default track',onClick:function(){
-      if(!overlay.isConnected)return;
-      audioPreference=null;audioApplied=true;setAudioPref(item.id,null);
-      var nativeAudio=media.audioTracks;
-      if(overlay._transcodeActive&&overlay._transcodeAudio)overlay._transcodeAudio(0);
-      else if(remux.active){var track=probeTracks.filter(function(t){return t.default;})[0]||probeTracks[0];if(track)switchViaRemux(track.relative!=null?track.relative:0);}
-      else if(nativeAudio&&nativeAudio.length){audioChanging=true;applyAudioTrack(media,0);audioChanging=false;}
-      media.muted=false;if(media.volume===0)media.volume=1;refresh();
-      if(media.paused){var playing=media.play();if(playing&&playing.catch)playing.catch(function(){toast('Press play to resume audio.');});}
-    }});bar.appendChild(restoreAudio);
+    /* Playback options ("Convert audio only" / "Play original") drive the server remux through these hooks:
+       video is copied untouched and only the audio is converted when the browser cannot play it. */
+    overlay._isRemuxing=function(){return remux.active;};
+    overlay._clearAudioChoice=function(){audioPreference=null;audioApplied=true;setAudioPref(item.id,null);};
+    overlay._audioOnly=function(){
+      if(!overlay.isConnected)return Promise.resolve(false);
+      var def=probeTracks.filter(function(t){return t.default;})[0]||probeTracks[0];
+      var index=remux.track!=null?remux.track:audioPreference!=null?audioPreference:(def&&def.relative!=null?def.relative:0);
+      media.muted=false;if(media.volume===0)media.volume=1;
+      return requestRemux(index).then(function(ok){if(ok){audioApplied=true;toast('Converting audio for this browser…',{ms:1800});}refresh();return ok;});
+    };
     captions.onchange = function(){
       if (captions.value === '__opensubtitles' || captions.value === '__upload') {
         var opener = captions.value === '__upload' ? openSubtitleUpload : openSubtitleSearch;
@@ -1623,7 +1625,7 @@ function confirmDialog(message, opts){
         try { media.src = cur + (cur.indexOf('?') >= 0 ? '&' : '?') + 'direct=1'; if (play.autoplay !== false || openPlayer._deskPlayStarted) media.play(); } catch (eD) {}
         return;
       }
-      if(!play.transcode_auto_blocked && (play.autoplay!==false||openPlayer._deskPlayStarted) && play.transcode_allowed && !overlay._transcodeAttempted && overlay._startTranscode && media.error && (media.error.code===3||media.error.code===4)) {
+      if(!play.transcode_auto_blocked && !play.library_conversion && (play.autoplay!==false||openPlayer._deskPlayStarted) && play.transcode_allowed && !overlay._transcodeAttempted && overlay._startTranscode && media.error && (media.error.code===3||media.error.code===4)) {
         overlay._startTranscode(false,openPlayer._absTime?openPlayer._absTime():resumeAt||media.currentTime||0);return;
       }
       /* soft mid-play recover (token refresh + seek) before convert toast */
@@ -1713,7 +1715,7 @@ function confirmDialog(message, opts){
     var detailActions = detailReport && detailReport.parentNode;
     if (detailActions) {
       detailActions.querySelectorAll('[data-player-convert]').forEach(function(button){button.remove();});
-      if (needsConvertExt(item) && !play.prepared_copy && state.user && state.user.role === 'admin') {
+      if (needsConvertExt(item) && !play.prepared_copy && !play.library_conversion && state.user && state.user.role === 'admin') {
         convertBtn = h('button', {
           className:'btn ghost', type:'button', 'data-player-convert':item.id,
           text:'Convert to DirectPlay MP4',
@@ -1756,30 +1758,90 @@ function confirmDialog(message, opts){
     if(miniStart){overlay.classList.add('player-inline');minimizeVideo();}
   }
   function libraryTranscodeControls(overlay,media,item,play){
-    if(media.tagName!=='VIDEO'||!play.transcode_allowed)return;
-    var gen=0,hls=null,job=null,timer=null,recoveryTimer=null,alive=true,offset=0,audioIndex=Number(play.preferred_audio)||0,sourceDuration=Number(play.duration)||0;
+    if(media.tagName!=='VIDEO')return;
+    var isAdmin=!!(state.user&&state.user.role==='admin');
+    var canTranscode=!!play.transcode_allowed;
+    var canAudio=!!(play.remux_url&&(play.remux_allowed||isAdmin));
+    if(!canTranscode&&!canAudio)return;
+    var gen=0,hls=null,job=null,timer=null,recoveryTimer=null,pollTimer=null,leftOriginal=false,alive=true,offset=0,audioIndex=Number(play.preferred_audio)||0,sourceDuration=Number(play.duration)||0;
     var tools=overlay.classList.contains('player-inline')?detailPlayerTools(overlay.closest('.detail-player')):overlay;
-    var label=h('span',{className:'muted',role:'status',text:play.prepared_copy?'DirectPlay · prepared copy':play.transcode_auto_blocked?'Converted copy was deleted · original file · choose Transcode to start another conversion':'DirectPlay · original file'});
+    /* Converting in the library's Video conversion queue: playback here must not start a second encode. */
+    var queued=play.library_conversion||null;
+    var label=h('span',{className:'dp-note muted',role:'status',text:play.transcode_auto_blocked?'The converted copy was deleted, so the original file is playing.':''});
+    var mode=h('span',{className:'dp-mode'});
     var seek=h('input',{type:'range',min:'0',max:'1',step:'0.1',value:'0','aria-label':'Seek within the full source video'}),clock=h('span',{className:'muted'});
     var timeline=h('div',{className:'dp-transcode-timeline',hidden:true},[seek,clock]);
     var available=play.active_conversion||null;
-    var transcodeButton=h('button',{className:'btn ghost sm',text:'Transcode for this device',onClick:function(){start(false,openPlayer._absTime?openPlayer._absTime():media.currentTime||0);}});
-    var prepareButton=play.transcode_save_allowed?h('button',{className:'btn ghost sm',text:'Watch & prepare copy',onClick:function(){confirmDialog('Start from the beginning and prepare a reusable MP4 while watching? It keeps running after you close the player. The copy contains the selected audio track; the original stays until you explicitly replace it. Settings → DirectPlay Settings controls quality and limits.',{okText:'Watch & prepare'}).then(function(ok){if(ok)start(true,0);});}}):null;
-    var watchButton=h('button',{className:'btn ghost sm',text:'Watch conversion in progress',onClick:function(){
-      if(overlay._transcodeActive){media.play().catch(function(){});return;}
-      if(overlay._transcodePending)return;
-      if(available)start(false,0,available);
-    }});
-    var directButton=h('button',{className:'btn ghost sm',text:'Return to DirectPlay',hidden:true,onClick:function(){if(!overlay._transcodeActive&&!overlay._transcodePending)return;openPlayer(item,Object.assign({},play,{active_conversion:job&&job.save?job:null,transcode_mode:'fallback',from_start:false,progress:{position:offset+(media.currentTime||0),duration:sourceDuration}}));}});
+    function option(text,tip,onClick,extra){return h('button',{className:'btn sm dp-option '+(extra||'ghost'),type:'button',text:text,title:tip,'aria-label':text+'. '+tip,hidden:true,onClick:onClick});}
+    var transcodeButton=canTranscode?option('Live transcode','Convert to H.264 / AAC on the fly from where you are, for devices that cannot play the original. Nothing is saved.',function(){
+      if(isBusy())return;start(false,openPlayer._absTime?openPlayer._absTime():media.currentTime||0);
+    }):null;
+    var prepareButton=canTranscode&&play.transcode_save_allowed?option('Watch & save copy','Restart from the beginning and watch while a reusable DirectPlay MP4 is saved. Keeps converting if you close the player.',function(){
+      if(isBusy())return;
+      confirmDialog('Start from the beginning and save a reusable DirectPlay MP4 while you watch? It keeps converting after you close the player. The copy uses the selected audio track, and the original stays until you replace it in Settings → Video conversion.',{okText:'Watch & save copy'}).then(function(ok){if(ok)start(true,0);});
+    }):null;
+    var audioButton=canAudio?option('Convert audio only','No sound or an unsupported audio track? Keep the original video and convert just the audio for this browser. Light on the NAS.',function(){
+      if(isBusy()||!overlay._audioOnly)return;audioButton.disabled=true;
+      overlay._audioOnly().then(function(){audioButton.disabled=false;syncActions();},function(){audioButton.disabled=false;});
+    }):null;
+    var watchButton=canTranscode?option('Watch converting copy','A conversion of this title is already running. Watch it from the beginning instead of starting another one.',function(){
+      if(overlay._transcodeActive||overlay._transcodePending||!available)return;
+      start(false,0,available);
+    },'primary'):null;
+    var directButton=option('Play original','Stop the converted stream and go back to playing the original file directly.',function(){
+      var position=openPlayer._absTime?openPlayer._absTime():media.currentTime||0;
+      if(overlay._transcodeActive||overlay._transcodePending||leftOriginal){
+        openPlayer(item,Object.assign({},play,{active_conversion:job?(job.save&&job.status!=='done'?job:null):available,transcode_mode:'fallback',from_start:false,progress:{position:offset+(media.currentTime||0),duration:sourceDuration}}));
+      }else if(overlay._isRemuxing&&overlay._isRemuxing()){
+        if(overlay._clearAudioChoice)overlay._clearAudioChoice();
+        openPlayer(item,Object.assign({},play,{active_conversion:available,transcode_mode:'fallback',from_start:false,progress:{position:position,duration:sourceDuration||Number(play.duration)||0}}));
+      }
+    });
+    function playMode(){return overlay._transcodeActive||overlay._transcodePending?'transcode':overlay._isRemuxing&&overlay._isRemuxing()?'audio':'direct';}
+    function isBusy(){return !!available||!!queued||!!overlay._transcodePending;}
+    function show(button,on){if(button)button.hidden=!on;}
+    /* One visible state at a time: converting → only "Watch converting copy"; converted stream → "Play original". */
     function syncActions(){
-      var converting=!!available||!!overlay._transcodePending||!!overlay._transcodeActive;
-      transcodeButton.hidden=converting;if(prepareButton)prepareButton.hidden=converting;
-      watchButton.hidden=!converting;watchButton.disabled=!!overlay._transcodePending;
-      directButton.hidden=!overlay._transcodeActive&&!overlay._transcodePending;
+      var current=playMode(),busy=isBusy();
+      show(directButton,current!=='direct'||leftOriginal);
+      show(watchButton,!!available&&current!=='transcode');
+      show(transcodeButton,current!=='transcode'&&!busy);
+      show(prepareButton,current!=='transcode'&&!busy);
+      show(audioButton,current==='direct'&&!busy);
+      var text,kind;
+      if(current==='transcode'){text=overlay._transcodePending?'Starting conversion…':job&&job.save?'Watching converting copy':'Live transcode';kind='live';}
+      else if(current==='audio'){text='Original video · converted audio';kind='live';}
+      else if(leftOriginal){text='Conversion stopped';kind='stopped';}
+      else{text=play.prepared_copy?'Direct play · saved copy':'Direct play · original';kind='direct';}
+      mode.textContent=text;mode.setAttribute('data-kind',kind);
+      if(queued&&!available&&current==='direct'&&!label.textContent)note('Converting in the Video conversion queue'+(queued.progress?' ('+Math.round(queued.progress)+'%)':'')+'. Transcode options are paused until it finishes.');
+      schedulePoll();
     }
-    var bar=h('div',{className:'dp-player-actions'},[
-      transcodeButton,prepareButton,watchButton,directButton,label
+    /* A saved copy keeps converting after the player closes; check its status rarely so the
+       "Watch converting copy" option disappears when it finishes. Temporary sessions are not polled. */
+    function schedulePoll(){
+      clearTimeout(pollTimer);pollTimer=null;
+      if(!alive||!available||!available.save||!available.status_url||playMode()==='transcode')return;
+      pollTimer=setTimeout(function(){
+        pollTimer=null;if(!alive||!overlay.isConnected||!available)return;
+        if(document.hidden){schedulePoll();return;}
+        json(available.status_url).then(function(j){
+          if(!alive||!available)return;
+          if(j.status==='done'){available=null;note('The saved copy is ready. Reopen this title to play it.');}
+          else if(j.status==='failed'||j.status==='cancelled'){available=null;note(j.error||'The conversion stopped.');}
+          syncActions();
+        }).catch(function(){
+          if(!alive||!available)return;
+          available._pollFails=(available._pollFails||0)+1;
+          if(available._pollFails>=3){available=null;syncActions();}else schedulePoll();
+        });
+      },30000);
+    }
+    var bar=h('div',{className:'dp-player-actions',role:'group','aria-label':'Playback options'},[
+      h('div',{className:'dp-status'},[mode,label]),
+      h('div',{className:'dp-buttons'},[watchButton,transcodeButton,prepareButton,audioButton,directButton])
     ]);var trackBar=tools.querySelector('.player-tracks')||tools;trackBar.appendChild(bar);trackBar.appendChild(timeline);
+    overlay.addEventListener('vc-playmode',function(){if(alive)syncActions();});
     syncActions();
     function stop(){clearTimeout(timer);timer=null;clearTimeout(recoveryTimer);recoveryTimer=null;if(hls){hls.destroy();hls=null;}if(job){fetch(streamPlayUrl(job.stop_url),{method:'POST',credentials:'same-origin'}).catch(function(){});}job=null;}
     function active(g){return alive&&g===gen&&overlay.isConnected;}
@@ -1811,14 +1873,14 @@ function confirmDialog(message, opts){
                 }).catch(function(e){if(active(g))note(e.message||'Playback worker unavailable.');});
               },2000);return;
             }
-            note('Transcode playback failed. '+(data.details||'Try DirectPlay or review the playback worker.'));
+            note('Transcode playback failed. '+(data.details||'Try Play original or review the playback worker.'));
           });
           hls.loadSource(streamPlayUrl(job.url));hls.attachMedia(media);
         }else if(media.canPlayType('application/vnd.apple.mpegurl')){media.src=streamPlayUrl(job.url);media.load();if(play.autoplay!==false)media.play().catch(function(){});}
-        else throw new Error('This browser cannot play HLS. Use DirectPlay or an external player.');
+        else throw new Error('This browser cannot play HLS. Use Play original or an external player.');
         overlay._transcodePending=false;overlay._transcodeActive=true;
         syncActions();
-        note(job.save?'Watch & prepare · original retained · encoding continues after closing':'Temporary transcode · H.264 / AAC');
+        note(job.save?'Saving a DirectPlay copy · the original is kept · converting continues if you close the player':'H.264 / AAC for this device · nothing is saved');
       });
     }
     function monitor(g,deadline,attached){
@@ -1829,7 +1891,8 @@ function confirmDialog(message, opts){
         if(j.status==='failed'||j.status==='cancelled'){available=null;throw new Error(j.error||'Transcoding stopped.');}
         if(!attached&&j.ready)return attach(g).then(function(){if(active(g))timer=setTimeout(function(){monitor(g,deadline,true);},5000);});
         if(!attached&&Date.now()>deadline)throw new Error('Video is taking too long to prepare. The worker will stop when idle; a saved-copy job continues in the background.');
-        if(attached&&j.status==='done')note(j.save?'DirectPlay copy ready · review it in Video conversion; original retained':'Temporary transcode ready');
+        if(j.status==='done'){job.status='done';if(available&&available.id===job.id)available=null;}
+        if(attached&&j.status==='done')note(j.save?'Saved copy ready · it plays next time you open this title; the original is kept':'Live transcode fully loaded');
         timer=setTimeout(function(){monitor(g,deadline,attached);},attached?5000:1000);
       }).catch(function(e){if(active(g)){overlay._transcodePending=false;note(e.message||String(e));if(!job||!job.save){stop();available=null;}syncActions();}});
     }
@@ -1837,11 +1900,11 @@ function confirmDialog(message, opts){
       if(!alive||!overlay.isConnected)return false;
       if(!job&&available)existing=existing||available;
       if(overlay._transcodePending){note('A playback worker is already starting…');return false;}
-      if(job&&job.save){note('A full DirectPlay copy is still being prepared. Use Return to DirectPlay to leave playback; the saved-copy worker continues.');return false;}
-      var previous=job;stop();var g=++gen;overlay._transcodeAttempted=true;overlay._transcodePending=true;overlay._transcodeActive=false;overlay._transcodeResumeHandled=true;
+      if(job&&job.save){note('A saved copy is still converting. Use Play original to leave; the conversion carries on.');return false;}
+      var previous=job;stop();var g=++gen;leftOriginal=true;overlay._transcodeAttempted=true;overlay._transcodePending=true;overlay._transcodeActive=false;overlay._transcodeResumeHandled=true;
       syncActions();
       if(overlay._leaveRemux)overlay._leaveRemux();media.pause();media.removeAttribute('src');media.querySelectorAll('source').forEach(function(el){el.remove();});media.load();
-      note(save?'Preparing playback and a reusable MP4…':'Preparing H.264 / AAC playback…');
+      note(save?'Starting playback and the saved copy…':'Starting H.264 / AAC playback…');
       (existing?json(existing.status_url):api('/items/'+encodeURIComponent(item.id)+'/transcode',{method:'POST',body:{t:play.token,start:Math.max(0,at||0),audio:audioIndex,save:!!save,replace:previous&&!previous.save?previous.id:null,replace_token:previous&&!previous.save?previous.token:null}})).then(function(j){
         if(!active(g)){if(j&&j.stop_url)fetch(streamPlayUrl(j.stop_url),{method:'POST',credentials:'same-origin'}).catch(function(){});return;}
         if(!j.ok)throw new Error(j.error||'Could not start transcoding');
@@ -1852,7 +1915,7 @@ function confirmDialog(message, opts){
           to=Math.max(0,Math.min(sourceDuration?Math.max(0,sourceDuration-.5):to,Number(to)||0));var relative=to-offset,ready=false;
           try{for(var n=0;n<media.seekable.length;n++)if(relative>=media.seekable.start(n)&&relative<=media.seekable.end(n)){ready=true;break;}}catch(e){}
           if(ready)media.currentTime=relative;
-          else if(job.save)note('That point is not encoded yet. The full DirectPlay copy is still being prepared.');
+          else if(job.save)note('That point is not converted yet. The saved copy is still converting.');
           else start(false,to);
         };
         monitor(g,Date.now()+Number(j.startup_seconds||90)*1000,false);
@@ -1860,9 +1923,9 @@ function confirmDialog(message, opts){
     }
     seek.addEventListener('change',function(){if(openPlayer._seekAbsolute)openPlayer._seekAbsolute(Number(seek.value));});
     media.addEventListener('timeupdate',function(){if(!overlay._transcodeActive)return;seek.max=String(sourceDuration||1);seek.value=String(offset+(media.currentTime||0));clock.textContent=fmtResumeClock(offset+(media.currentTime||0))+' / '+fmtResumeClock(sourceDuration);});
-    overlay._startTranscode=start;overlay._getTranscodeAudio=function(){return audioIndex;};overlay._transcodeAudio=function(index){if(job&&job.save){note('Saved-copy sessions keep the audio track chosen at the start. Return to DirectPlay to choose a different track.');return false;}var at=offset+(media.currentTime||0);audioIndex=Number(index)||0;return start(false,at);};
-    overlay._transcodeCleanup=function(){alive=false;gen++;stop();};
-    if(play.transcode_mode==='always'&&!play.transcode_auto_blocked){
+    overlay._startTranscode=start;overlay._getTranscodeAudio=function(){return audioIndex;};overlay._transcodeAudio=function(index){if(job&&job.save){note('A saved copy keeps the audio track chosen at the start. Use Play original to choose a different track.');return false;}var at=offset+(media.currentTime||0);audioIndex=Number(index)||0;return start(false,at);};
+    overlay._transcodeCleanup=function(){alive=false;gen++;clearTimeout(pollTimer);pollTimer=null;stop();};
+    if(canTranscode&&play.transcode_mode==='always'&&!play.transcode_auto_blocked&&!queued){
       var beginTranscode=function(){if(alive&&!overlay._transcodeAttempted)start(false,resumePositionFor(item,play),available);};
       if(play.autoplay!==false)setTimeout(beginTranscode,0);
       else media.addEventListener('play',beginTranscode,{once:true});
@@ -10591,7 +10654,7 @@ h('div', { className:'cv-find-bar' }, [
       range('startup_seconds','Time to wait for the first fragment',10,120,' seconds'),range('idle_seconds','Stop temporary encoding after inactivity',30,600,' seconds'),
       range('cache_hours','Keep finished fragments',1,72,' hours'),range('cache_gb','Maximum temporary data per stream',1,100,' GB'), h('button',{className:'btn ghost',text:'Clear inactive playback cache',onClick:function(){api('/admin/transcode/clear-cache',{method:'POST'}).then(function(j){toast(j.ok?'Removed '+j.removed+' expired or inactive sessions. Players accessed within five minutes are kept.':j.error);}).catch(function(e){toast(String(e.message||e));});}})
     ]));
-    root.appendChild(card('Watch while preparing a DirectPlay copy','Use “Watch & prepare copy” in the library player. It starts from the beginning, encodes once and lets you watch prepared fragments. Forward seeking is limited to what has been encoded. It continues after closing the player.',[
+    root.appendChild(card('Watch while preparing a DirectPlay copy','Use “Watch & save copy” in the library player. It starts from the beginning, encodes once and lets you watch prepared fragments. Forward seeking is limited to what has been encoded. It continues after closing the player.',[
       toggle('allow_save','Allow administrators to save watch-and-prepare sessions','The finished, duration-checked MP4 is saved beside the source as <name>.directplay.mp4. The saved copy contains the selected audio track; it does not embed subtitles or preserve other audio tracks.',c.allow_save!==false),
       toggle('prefer_directplay','Prefer completed DirectPlay copies','One library title; original and converted files remain on disk. Future playback uses the completed copy when available.',(s.convert||{}).prefer_directplay!==false),
       h('p',{className:'dp-policy-summary',text:'Originals are never replaced automatically. Review the finished job in Video conversion, then choose Replace Original to validate and remove the source. Watch history and collection links follow the retained version. Closing a temporary session stops it; closing a watch-and-prepare session leaves it running.'}),
@@ -11713,7 +11776,7 @@ h('div', { className:'cv-find-bar' }, [
               var detail=job.status==='saving'?'Saving MP4 copy':job.status==='done'?(job.save?'Copy ready · review in the batch converter below':'Temporary playback complete'):job.status;
               var card=h('div',{className:'cv-card'},[h('div',{className:'cv-card-main'},[
                 h('strong',{text:job.title||'Playback conversion'}),
-                h('div',{className:'muted',text:(job.save?'Watch & prepare copy':'Temporary playback')+' · '+detail+' · '+job.threads+' threads'}),
+                h('div',{className:'muted',text:(job.save?'Watch & save copy':'Live transcode')+' · '+detail+' · '+job.threads+' threads'}),
                 h('progress',{max:100,value:pct,'aria-label':'Conversion progress'}),
                 h('div',{className:'muted',text:(duration?pct+'% · ':'')+Math.round(prepared)+'s prepared'+(duration?' / '+Math.round(duration)+'s':'')+(job.created_at?' · Started '+new Date(job.created_at*1000).toLocaleString():'')}),
                 job.error?h('p',{text:job.error}):null
@@ -11736,7 +11799,7 @@ h('div', { className:'cv-find-bar' }, [
         }
         root.insertBefore(h('section',{className:'cv-section settings-card'},[
           h('h3',{text:'Playback conversions'}),
-          h('p',{className:'muted',text:'Watch & prepare keeps converting after you leave the player. Completed copies appear in the batch converter below for review or replacement; originals are kept. Temporary playback stops after the player closes and is not saved as a reusable copy. Recent sessions remain here until their playback cache expires.'}),
+          h('p',{className:'muted',text:'Watch & save copy keeps converting after you leave the player. Completed copies appear in the batch converter below for review or replacement; originals are kept. Temporary playback stops after the player closes and is not saved as a reusable copy. Recent sessions remain here until their playback cache expires.'}),
           playbackJobs,h('button',{className:'btn ghost',text:'Refresh playback conversions',onClick:refreshPlaybackJobs})
         ]),root.children[1]||null);
         setTimeout(refreshPlaybackJobs,0);
