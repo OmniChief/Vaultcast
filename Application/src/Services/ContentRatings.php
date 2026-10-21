@@ -130,6 +130,7 @@ final class ContentRatings
         else $pdo->prepare("INSERT INTO vaultcast_content_ratings (target,bucket,raw,source,updated_at) VALUES (?,?,?,'manual',?) ON DUPLICATE KEY UPDATE bucket=VALUES(bucket),raw=VALUES(raw),source='manual',updated_at=VALUES(updated_at)")
             ->execute([$target, $bucket, self::LABELS[$bucket], time()]);
         self::$map = null;
+        if (class_exists('SmartCollections')) SmartCollections::bump();
         return self::get($target);
     }
 

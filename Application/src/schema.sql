@@ -233,6 +233,20 @@ CREATE TABLE IF NOT EXISTS vaultcast_content_ratings (
  INDEX rating_bucket (bucket)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS vaultcast_smart_collections (
+ id CHAR(16) CHARACTER SET ascii NOT NULL PRIMARY KEY, owner_id VARCHAR(64) NOT NULL DEFAULT '',
+ name VARCHAR(120) NOT NULL, description VARCHAR(400) NOT NULL DEFAULT '', rules TEXT NOT NULL,
+ pin_home TINYINT NOT NULL DEFAULT 0, created_at BIGINT NOT NULL DEFAULT 0, updated_at BIGINT NOT NULL DEFAULT 0,
+ INDEX smart_owner (owner_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS vaultcast_smart_facts (
+ item_id VARCHAR(64) CHARACTER SET ascii NOT NULL PRIMARY KEY, show_key VARCHAR(16) CHARACTER SET ascii NOT NULL DEFAULT '',
+ genres VARCHAR(1500) NOT NULL DEFAULT '', people TEXT NULL, community DECIMAL(3,1) NOT NULL DEFAULT 0,
+ height INT NOT NULL DEFAULT 0, sig VARCHAR(32) CHARACTER SET ascii NOT NULL DEFAULT '', updated_at BIGINT NOT NULL DEFAULT 0,
+ INDEX smart_facts_show (show_key)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS vaultcast_parental (
  user_id VARCHAR(64) NOT NULL PRIMARY KEY,
  settings TEXT NOT NULL, pin_hash VARCHAR(255) NOT NULL DEFAULT '',

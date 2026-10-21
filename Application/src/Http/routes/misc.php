@@ -101,7 +101,11 @@ try {
     if ($path === '/misc/widget/rss' && $method === 'GET') json_out(Misc::rss($user, (string)($_GET['url'] ?? '')));
     if ($path === '/misc/widget/ics' && $method === 'GET') json_out(Misc::ics($user, (string)($_GET['url'] ?? ''), (int)($_GET['days'] ?? 14)));
     if ($path === '/misc/widget/health' && $method === 'GET') json_out(Misc::health($user));
-    if ($path === '/misc/widget/recent' && $method === 'GET') json_out(Misc::recent($user, (int)($_GET['n'] ?? 12)));
+    if ($path === '/misc/widget/recent' && $method === 'GET') {
+        $source = (string)($_GET['source'] ?? '');
+        if (preg_match('/^smart:([a-f0-9]{16})$/', $source, $sm)) json_out(SmartCollections::widget($user, $sm[1], (int)($_GET['n'] ?? 12)));
+        json_out(Misc::recent($user, (int)($_GET['n'] ?? 12)));
+    }
     if ($path === '/misc/widget/nowplaying' && $method === 'GET') json_out(Misc::nowPlaying($user));
     if ($path === '/misc/widget/downloads' && $method === 'GET') json_out(Misc::downloads($user));
     if ($path === '/misc/widget/recordings' && $method === 'GET') json_out(Misc::recordings($user));

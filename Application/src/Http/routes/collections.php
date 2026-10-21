@@ -14,6 +14,21 @@ if (preg_match('#^/collections/poster/([a-f0-9]{16}\.(?:jpg|png))$#', $path, $m)
     exit;
 }
 
+// Smart collections (rule based). Personal ones need a signed-in user; shared ones are made by admins.
+if (strpos($path, '/smart-collections') === 0) {
+    $user = Auth::requireUser();
+    try {
+        if ($path === '/smart-collections' && $method === 'GET') json_out(SmartCollections::listFor($user));
+        if ($path === '/smart-collections/home' && $method === 'GET') json_out(SmartCollections::homeRows($user));
+        if ($path === '/smart-collections/preview' && $method === 'POST') json_out(SmartCollections::preview($user, body_json()['rules'] ?? []));
+        if ($path === '/smart-collections' && $method === 'POST') json_out(SmartCollections::save($user, body_json()));
+        if (preg_match('#^/smart-collections/([a-f0-9]{16})$#', $path, $sm) && $method === 'GET') json_out(SmartCollections::items($sm[1], $user));
+        if (preg_match('#^/smart-collections/([a-f0-9]{16})$#', $path, $sm) && $method === 'DELETE') json_out(SmartCollections::delete($sm[1], $user));
+    } catch (InvalidArgumentException $e) { json_error($e->getMessage(), 422); }
+    catch (DomainException $e) { json_error($e->getMessage(), 403); }
+    json_error('Not found', 404);
+}
+
 if ($path === '/collections' && $method === 'GET') {
     json_out(Collections::publicList());
 }

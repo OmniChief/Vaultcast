@@ -990,6 +990,7 @@ class Posters {
         if ($apiKey !== '') {
             $omdb = self::omdbLookup($title, $year, $apiKey);
             if (is_array($omdb) && isset($omdb['Rated']) && class_exists('ContentRatings')) ContentRatings::capture('item:' . $itemId, $omdb['Rated'], 'omdb');
+            if (is_array($omdb) && class_exists('SmartCollections')) SmartCollections::captureOmdb($itemId, $omdb);
             if (is_array($omdb) && !empty($omdb['Plot']) && strtolower((string)$omdb['Plot']) !== 'n/a') {
                 $summary = trim((string)$omdb['Plot']);
                 $source = 'omdb:' . ($omdb['imdbID'] ?? '');
