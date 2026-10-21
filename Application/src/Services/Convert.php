@@ -442,6 +442,7 @@ class Convert {
         }
         Store::invalidate('convert_queue');
         $q = self::queue();
+        $beforeTick=$q;
         $running = null;
         $completed = [];
         foreach ($q as &$job) {
@@ -508,13 +509,13 @@ class Convert {
                 }
             }
             unset($rj);
-            self::saveQueue($q);
+            if($q!==$beforeTick)self::saveQueue($q);
             self::unlockQueue($lock);
             return ['ok' => true, 'running' => $running, 'queue' => $q];
         }
 
         if(empty($cv['enabled'])) {
-            self::saveQueue($q);self::unlockQueue($lock);
+            if($q!==$beforeTick)self::saveQueue($q);self::unlockQueue($lock);
             return ['ok'=>true,'enabled'=>false,'queue'=>$q];
         }
         foreach ($q as &$job) {
@@ -524,7 +525,7 @@ class Convert {
             break;
         }
         unset($job);
-        self::saveQueue($q);
+        if($q!==$beforeTick)self::saveQueue($q);
         self::unlockQueue($lock);
         return ['ok' => true, 'queue' => $q];
     }
@@ -931,6 +932,43 @@ class Convert {
      * Completed job: delete the converted output (bad quality), keep the original.
      * Removes dest from disk + catalogue; marks job resolved as deleted_conversion.
      */
+    public static function repairDeletedEntries(): array {
+        $files=[];$jobs=[];$seen=[];$skipped=0;$issues=[];
+        $hidden=Store::get('library_removed',[]);
+        foreach(self::queue() as $job){
+            if(empty($job['dest_deleted'])||!empty($job['original_removed']))continue;
+            $id=(string)($job['item_id'] ?? '');$src=(string)($job['src'] ?? '');
+            if($id===''||isset($seen[$id]))continue;$seen[$id]=true;
+            Maintenance::checkpoint();
+            $real=$src!==''?\Vaultcast\Paths::real($src):false;
+            $existing=Catalogue::item($id);
+            if(isset($hidden[$id])){$skipped++;continue;}
+            if(!$real||!is_file($real)||!self::underLibraryRoot($real)){$issues[]=['item_id'=>$id,'error'=>'Original file is unavailable or outside the library.'];continue;}
+            if($existing && str_replace('\\','/',(string)$existing['path'])!==$real){$issues[]=['item_id'=>$id,'error'=>'Library identity points to another file; left unchanged.'];continue;}
+            $section=(string)($job['section'] ?? $existing['section'] ?? '');
+            if($section===''){$issues[]=['item_id'=>$id,'error'=>'Original library section is unknown.'];continue;}
+            $files[]=[$real,$section];$jobs[]=$job;
+        }
+        if(!$files)return ['ok'=>true,'restored'=>0,'skipped'=>$skipped,'issues'=>$issues];
+        $built=Catalogue::ingestFiles($files);
+        $cat=Catalogue::get();$profiles=Store::get('directplay_profiles',[]);$restored=0;
+        foreach($jobs as $index=>$job){
+            Maintenance::checkpoint();$item=$built[$index] ?? null;$oldId=(string)$job['item_id'];
+            if(!$item||!isset($cat['items'][$item['id']])){$issues[]=['item_id'=>$oldId,'error'=>'Original could not be restored; check the library configuration.'];continue;}
+            $newId=(string)$item['id'];
+            if($newId!==$oldId && isset($cat['items'][$oldId])){$issues[]=['item_id'=>$oldId,'error'=>'Conflicting library identity; left unchanged.'];continue;}
+            $item=$cat['items'][$newId];$item['id']=$oldId;
+            $versions=array_values(array_filter($item['directplay_versions'] ?? [],static function($path){return is_file($path);}));
+            unset($item['directplay_path'],$item['directplay_versions'],$item['directplay_ready']);
+            if($versions){$item['directplay_versions']=$versions;$item['directplay_path']=$versions[0];$item['directplay_ready']=!empty($profiles[$versions[0]]['ready']);}
+            unset($cat['items'][$newId]);$cat['items'][$oldId]=$item;
+            $dest=str_replace('\\','/',(string)($job['dest'] ?? ''));
+            if($dest!==''&&!is_file($dest))unset($profiles[$dest]);
+            $restored++;
+        }
+        \Vaultcast\Database::transaction(static function()use($cat,$profiles){Store::set('directplay_profiles',$profiles);Catalogue::save($cat);});
+        return ['ok'=>true,'restored'=>$restored,'skipped'=>$skipped,'issues'=>$issues,'message'=>'Original entries rebuilt; media files were not changed.'];
+    }
     public static function automaticPlaybackBlocked(string $itemId): bool {
         foreach(array_reverse(self::queue()) as $job) {
             if(($job['item_id'] ?? '')!==$itemId)continue;

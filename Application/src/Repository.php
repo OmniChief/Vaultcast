@@ -139,15 +139,25 @@ final class Repository
                 // Serialize catalogue replacements without exposing a half-written scan.
                 $pdo->exec("INSERT IGNORE INTO vaultcast_documents (name,payload) VALUES ('catalogue','{}')");
                 $pdo->query("SELECT name FROM vaultcast_documents WHERE name='catalogue' FOR UPDATE")->fetch();
+                // A conversion changes one or two records, not every row in the library.
+                // Keep the catalogue transaction, but leave identical InnoDB rows untouched.
+                $existing=[];
+                foreach($pdo->query('SELECT id,MD5(payload) AS fingerprint FROM vaultcast_items') as $row)$existing[(string)$row['id']]=$row['fingerprint'];
                 $generation = bin2hex(random_bytes(16));
                 $upsert = $pdo->prepare('INSERT INTO vaultcast_items (id,section_id,media_kind,title,show_title,system_name,initial,modified_at,added_at,generation,payload) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE section_id=VALUES(section_id), media_kind=VALUES(media_kind), title=VALUES(title), show_title=VALUES(show_title), system_name=VALUES(system_name), initial=VALUES(initial), modified_at=VALUES(modified_at), generation=VALUES(generation), payload=VALUES(payload)');
                 foreach ($value['items'] ?? [] as $item) {
+                    $id=(string)$item['id'];$encoded=self::encode($item);
+                    $unchanged=isset($existing[$id]) && hash_equals((string)$existing[$id],md5($encoded));
+                    unset($existing[$id]);
+                    if($unchanged)continue;
                     $initial = mb_strtoupper(mb_substr(trim($item['title'] ?? ''), 0, 1, 'UTF-8'), 'UTF-8');
                     if (!preg_match('/^[A-Z]$/D', $initial)) $initial = '#';
-                    $upsert->execute([$item['id'], $item['section'], $item['media_kind'] ?? '', $item['title'] ?? '', $item['show'] ?? '', trim($item['system'] ?? ''), $initial, (int)($item['mtime'] ?? 0), time(), $generation, self::encode($item)]);
+                    $upsert->execute([$item['id'], $item['section'], $item['media_kind'] ?? '', $item['title'] ?? '', $item['show'] ?? '', trim($item['system'] ?? ''), $initial, (int)($item['mtime'] ?? 0), time(), $generation, $encoded]);
                 }
-                $delete = $pdo->prepare('DELETE FROM vaultcast_items WHERE generation <> ?');
-                $delete->execute([$generation]);
+                foreach(array_chunk(array_keys($existing),200) as $ids){
+                    $delete=$pdo->prepare('DELETE FROM vaultcast_items WHERE id IN ('.implode(',',array_fill(0,count($ids),'?')).')');
+                    $delete->execute($ids);
+                }
                 if (class_exists('BrowseIndex')) { \BrowseIndex::sync($value['items'] ?? [],$value['sections'] ?? []); \BrowseIndex::schedule(); }
                 unset($value['items']);
             } elseif ($name === 'progress') {
