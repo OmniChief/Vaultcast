@@ -133,13 +133,15 @@
     function absTime(){ return (remux.active ? remux.offset : 0) + (media.currentTime || 0); }
     openPlayer._absTime = absTime;
     openPlayer._seekAbsolute = function(seconds){
-      if(remux.seeking)return;
+      if(remux.seeking&&!overlay._unifiedBar)return; /* the unified bar debounces; a newer seek supersedes */
       seconds=Math.max(0,Number(seconds)||0);
       var relative=seconds-(remux.active?remux.offset:0);
       if(remux.active && !inBuffered(relative))return switchViaRemux(remux.track,seconds);
       media.currentTime=relative;
     };
-    openPlayer._absDuration = function(){ return remux.active ? fullDuration() : (media.duration || 0); };
+    /* Full title length from the library (play data / probe), never the stream: a transcode or remux
+       stream only knows the part it has produced. Direct play falls back to the file's own duration. */
+    openPlayer._absDuration = function(){ var d = fullDuration(); if (d) return d; var md = media.duration; return isFinite(md) && md > 0 ? md : 0; };
     function remuxSrc(index, at){
       return streamPlayUrl(play.remux_url) + '&a=' + encodeURIComponent(index) + '&ss=' + Math.max(0, at).toFixed(3);
     }
@@ -148,25 +150,29 @@
       var hh = Math.floor(t / 3600), mm = Math.floor(t / 60) % 60, ss = t % 60;
       return (hh ? hh + ':' + (mm < 10 ? '0' : '') : '') + mm + ':' + (ss < 10 ? '0' : '') + ss;
     }
-    var rbPlay = h('button', { className:'btn ghost sm', type:'button', 'aria-label':'Play or pause', text:'❚❚' });
-    var rbRange = h('input', { type:'range', min:'0', max:'0', step:'0.1', value:'0', 'aria-label':'Seek', style:'flex:1;min-width:120px' });
-    var rbTime = h('span', { className:'muted', style:'font-variant-numeric:tabular-nums;white-space:nowrap', text:'0:00 / 0:00' });
+    /* ONE control bar for library video in every mode (direct play, Convert audio only, Live transcode,
+       Watch converting copy). Native controls stay off so no second timeline can appear. Time and
+       seeking go through openPlayer._absTime / _absDuration / _seekAbsolute, which each mode owns:
+       direct play seeks the file (byte ranges), remux/transcode restart the server stream at the target. */
+    var unifiedBar = media.tagName === 'VIDEO' && typeof play.hub_cinema_guest === 'undefined';
+    overlay._unifiedBar = unifiedBar;
+    var rbPlay = h('button', { className:'btn ghost sm', type:'button', 'aria-label':'Play or pause', text:'▶' });
+    var rbRange = h('input', { type:'range', min:'0', max:'0', step:'0.1', value:'0', 'aria-label':'Seek', className:'player-bar-seek' });
+    var rbTime = h('span', { className:'muted', text:'0:00 / 0:00' });
     var rbFull = h('button', { className:'btn ghost sm', type:'button', 'aria-label':'Full screen', text:'⛶' });
     var rbMute = h('button', { className:'btn ghost sm', type:'button', 'aria-label':'Mute', text:'🔊' });
     var rbVol = h('input', { type:'range', min:'0', max:'1', step:'0.05', value:'1', 'aria-label':'Volume', className:'player-remux-volume' });
-    /* The audio-only stream has no usable native timeline (it starts mid-file and has no duration), so
-       native controls are off and this bar replaces them. It is positioned over the video: in the inline
-       player the overlay is a 16:9 padding box with overflow hidden, which clipped a bar left in normal flow. */
-    var remuxBar = h('div', { className:'player-remux-bar', style:'display:none' }, [rbPlay, rbRange, rbTime, rbMute, rbVol, rbFull]);
-    overlay.appendChild(remuxBar);
+    var remuxBar = h('div', { className:'player-remux-bar player-bar', style:'display:none' }, [rbPlay, rbRange, rbTime, rbMute, rbVol, rbFull]);
+    var spinner = h('div', { className:'player-spinner', hidden:true, role:'status', 'aria-label':'Buffering' });
+    overlay.appendChild(remuxBar); overlay.appendChild(spinner);
     function togglePlay(){ if (media.paused) { var pr = media.play(); if (pr && pr.catch) pr.catch(function(){}); } else media.pause(); }
     rbPlay.onclick = togglePlay;
-    media.addEventListener('click', function(){ if (remux.active) togglePlay(); });
+    media.addEventListener('click', function(){ if (unifiedBar || remux.active) togglePlay(); });
     function paintVolume(){ rbMute.textContent = media.muted || media.volume === 0 ? '🔇' : '🔊'; rbMute.setAttribute('aria-label', media.muted ? 'Unmute' : 'Mute'); rbVol.value = String(media.muted ? 0 : media.volume); }
     rbMute.onclick = function(){ media.muted = !media.muted; if (!media.muted && media.volume === 0) media.volume = 1; paintVolume(); };
     rbVol.addEventListener('input', function(){ var v = Number(rbVol.value) || 0; media.volume = v; media.muted = v === 0; paintVolume(); });
     media.addEventListener('volumechange', paintVolume);
-    rbFull.onclick = function(){
+    function toggleFullscreen(){
       try {
         if (document.fullscreenElement || document.webkitFullscreenElement) { (document.exitFullscreen || document.webkitExitFullscreen).call(document); return; }
         var target = overlay.requestFullscreen || overlay.webkitRequestFullscreen ? overlay : media;
@@ -174,22 +180,91 @@
         var pr = request && request.call(request === media.webkitEnterFullscreen ? media : target);
         if (pr && pr.catch) pr.catch(function(){});
       } catch (eF) {}
-    };
-    rbRange.addEventListener('input', function(){ remux.dragging = true; rbTime.textContent = fmtT(+rbRange.value) + ' / ' + fmtT(fullDuration()); });
-    rbRange.addEventListener('change', function(){ remux.dragging = false; switchViaRemux(remux.track, +rbRange.value); });
-    function paintRemuxBar(){
-      if (!remux.active) return;
-      var d = fullDuration();
-      rbRange.max = String(d || Math.max(absTime(), 1));
-      if (!remux.dragging) rbRange.value = String(absTime());
-      rbTime.textContent = fmtT(absTime()) + ' / ' + (d ? fmtT(d) : '–:––');
-      rbPlay.textContent = media.paused ? '▶' : '❚❚';
     }
-    ['timeupdate','play','pause','loadedmetadata'].forEach(function(ev){ media.addEventListener(ev, paintRemuxBar); });
+    rbFull.onclick = toggleFullscreen;
+    /* Buffering spinner: waiting / a restarted stream that has not played yet. */
+    var spinnerWanted = false;
+    function setSpinner(on){ spinnerWanted = !!on; spinner.hidden = !on; }
+    media.addEventListener('waiting', function(){ if (unifiedBar || remux.active) setSpinner(true); });
+    media.addEventListener('playing', function(){ if (!overlay._transcodePending) setSpinner(false); });
+    ['pause','seeked','canplay'].forEach(function(ev){ media.addEventListener(ev, function(){ if (ev === 'canplay' && media.paused === false) return; if (!overlay._transcodePending && !remux.seeking) setSpinner(false); }); });
+    media.addEventListener('timeupdate', function(){ if (spinnerWanted && !overlay._transcodePending && !remux.seeking && !media.paused && media.readyState >= 3) setSpinner(false); });
+    overlay._setSpinner = setSpinner;
+    function streamed(){ return remux.active || overlay._transcodeActive || overlay._transcodePending; }
+    function absNow(){ return openPlayer._absTime ? openPlayer._absTime() : (media.currentTime || 0); }
+    /* Seeking: direct play scrubs the file live; a server stream (remux/transcode) restarts only once the
+       drag or key presses settle, so a scrub never spawns a pile of ffmpeg processes. */
+    var seekTimer = null, seekTarget = null, dragging = false, holdTime = null;
+    /* While a server stream restarts the element reads 0; keep showing the target until it plays. */
+    media.addEventListener('playing', function(){ holdTime = null; });
+    media.addEventListener('timeupdate', function(){ if (holdTime != null && !overlay._transcodePending && !remux.seeking && Math.abs(absNow() - holdTime) < 15) holdTime = null; });
+    function commitSeek(){
+      clearTimeout(seekTimer); seekTimer = null;
+      var target = seekTarget; seekTarget = null; dragging = false;
+      if (target == null) return;
+      var d = openPlayer._absDuration ? openPlayer._absDuration() : 0;
+      target = Math.max(0, d ? Math.min(target, Math.max(0, d - 0.5)) : target);
+      if (streamed()) { setSpinner(true); holdTime = target; }
+      if (openPlayer._seekAbsolute) openPlayer._seekAbsolute(target); else media.currentTime = target;
+      paintRemuxBar();
+    }
+    function requestSeek(target, delay){
+      seekTarget = Math.max(0, Number(target) || 0);
+      clearTimeout(seekTimer);
+      seekTimer = setTimeout(commitSeek, delay == null ? (streamed() ? 450 : 0) : delay);
+      paintRemuxBar();
+    }
+    overlay._requestSeek = requestSeek;
+    var lastScrub = 0;
+    rbRange.addEventListener('input', function(){
+      dragging = true; seekTarget = +rbRange.value;
+      if (!streamed() && Date.now() - lastScrub > 150) { lastScrub = Date.now(); try { media.currentTime = seekTarget; } catch (eS) {} }
+      paintRemuxBar();
+    });
+    rbRange.addEventListener('change', function(){ requestSeek(+rbRange.value); });
+    function paintRemuxBar(){
+      if (!unifiedBar && !remux.active) return;
+      var d = openPlayer._absDuration ? openPlayer._absDuration() : fullDuration();
+      var now = seekTarget != null ? seekTarget : holdTime != null ? holdTime : absNow();
+      rbRange.max = String(d || Math.max(now, 1));
+      if (!dragging) rbRange.value = String(now);
+      rbTime.textContent = fmtT(now) + ' / ' + (d ? fmtT(d) : '–:––');
+      rbPlay.textContent = media.paused ? '▶' : '❚❚';
+      rbPlay.setAttribute('aria-label', media.paused ? 'Play' : 'Pause');
+    }
+    ['timeupdate','play','pause','loadedmetadata','durationchange','emptied'].forEach(function(ev){ media.addEventListener(ev, paintRemuxBar); });
+    /* Keyboard: Space/K play-pause, ←/→ (J/L) 10 s, ↑/↓ volume, F full screen, M mute. */
+    function onPlayerKey(e){
+      if (!overlay.isConnected) { document.removeEventListener('keydown', onPlayerKey); return; }
+      if (!unifiedBar || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
+      var tag = (e.target && e.target.tagName || '').toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select' || (e.target && e.target.isContentEditable)) return;
+      if (document.querySelector('.confirm-overlay, .hub-modal-backdrop')) return;
+      /* Inline on a detail page, keys belong to the page unless the player is focused, hovered or full screen. */
+      var fs = document.fullscreenElement || document.webkitFullscreenElement;
+      var owns = (fs && (fs === overlay || overlay.contains(fs))) || overlay.contains(document.activeElement) || overlay.matches(':hover') || (!overlay.classList.contains('player-inline') && !overlay.closest('.video-mini-player'));
+      if (!owns) return;
+      var k = e.key, step = 0;
+      if (k === ' ' || k === 'k' || k === 'K') { if (k === ' ' && tag === 'button') return; e.preventDefault(); togglePlay(); return; }
+      if (k === 'ArrowLeft' || k === 'j' || k === 'J') step = -10;
+      else if (k === 'ArrowRight' || k === 'l' || k === 'L') step = 10;
+      else if (k === 'ArrowUp' || k === 'ArrowDown') { e.preventDefault(); media.muted = false; media.volume = Math.max(0, Math.min(1, (media.volume || 0) + (k === 'ArrowUp' ? 0.1 : -0.1))); return; }
+      else if (k === 'f' || k === 'F') { e.preventDefault(); toggleFullscreen(); return; }
+      else if (k === 'm' || k === 'M') { e.preventDefault(); media.muted = !media.muted; return; }
+      if (!step) return;
+      e.preventDefault();
+      requestSeek((seekTarget != null ? seekTarget : absNow()) + step, streamed() ? 700 : 0);
+    }
+    if (unifiedBar) document.addEventListener('keydown', onPlayerKey);
+    /* Hide the bar while playing and idle, like native controls. */
+    var idleTimer = null;
+    function wake(){ overlay.classList.remove('bar-idle'); clearTimeout(idleTimer); idleTimer = setTimeout(function(){ if (!media.paused && !dragging) overlay.classList.add('bar-idle'); }, 3000); }
+    ['mousemove','touchstart','keydown','focusin'].forEach(function(ev){ overlay.addEventListener(ev, wake, { passive:true }); });
+    media.addEventListener('pause', wake);
+    if (unifiedBar) { media.controls = false; remuxBar.style.display = 'flex'; overlay.classList.add('has-player-bar'); paintVolume(); }
     function setRemuxUi(on){
-      remuxBar.style.display = on ? 'flex' : 'none';
       overlay.classList.toggle('is-remuxing', !!on);
-      media.controls = !on;
+      if (!unifiedBar) { remuxBar.style.display = on ? 'flex' : 'none'; media.controls = !on; }
       paintRemuxBar(); paintVolume();
       try { overlay.dispatchEvent(new CustomEvent('vc-playmode')); } catch (eEv) {}
     }
@@ -199,13 +274,14 @@
       var target = Math.max(0, at != null ? at : absTime());
       var d = fullDuration();
       if (d && target > d - 0.5) target = Math.max(0, d - 0.5);
-      var wasPaused = media.paused && media.currentTime > 0;
+      var wasPaused = media.paused && media.currentTime > 0 && !remux.seeking;
       var gen = ++remux.gen;
+      setSpinner(true);
       remux.seeking = true; remux.track = index;
       var info = streamPlayUrl(play.remux_url) + '&info=1&ss=' + target.toFixed(3);
       fetch(info, { credentials:'same-origin', cache:'no-store' }).then(function(r){ return r.json(); }).catch(function(){ return null; }).then(function(j){
         if (gen !== remux.gen || !overlay.isConnected) return;
-        if (j && j.ok === false) { remux.seeking = false; toast(j.error || 'Audio switching is not available.', { kind:'bad' }); return; }
+        if (j && j.ok === false) { remux.seeking = false; setSpinner(false); toast(j.error || 'Audio switching is not available.', { kind:'bad' }); return; }
         var start = j && isFinite(j.start) ? Math.min(target, Math.max(0, Number(j.start))) : target;
         if (j && j.duration && !probeDuration) probeDuration = Number(j.duration);
         remux.active = true; remux.offset = start;
@@ -214,9 +290,10 @@
         try { media.src = remuxSrc(index, seekAt); media.load(); } catch (eRm) {}
         media.addEventListener('loadedmetadata', function(){
           if (gen !== remux.gen) return;
-          if (target - start > 0.25) { try { media.currentTime = target - start; } catch (eS) {} }
-          if (!wasPaused) { var pr = media.play(); if (pr && pr.catch) pr.catch(function(){}); }
-          setTimeout(function(){ if (gen === remux.gen) remux.seeking = false; }, 400);
+          /* No forward seek here: the remux stream has no byte ranges, and Chrome snaps such a seek back
+             to 0, which left the clock wrong. It starts at the keyframe before the target (offset). */
+          if (!wasPaused) { var pr = media.play(); if (pr && pr.catch) pr.catch(function(){}); } else setSpinner(false);
+          setTimeout(function(){ if (gen === remux.gen) { remux.seeking = false; if (media.paused) setSpinner(false); } }, 400);
           paintRemuxBar();
         }, { once:true });
       });
@@ -248,7 +325,7 @@
     }
     /* Keyboard / programmatic seeks set media.currentTime (relative to the remux start). */
     media.addEventListener('seeking', function(){
-      if (!remux.active || remux.seeking) return;
+      if (unifiedBar || !remux.active || remux.seeking) return;
       var t = media.currentTime || 0;
       if (!inBuffered(t)) switchViaRemux(remux.track, remux.offset + t);
     });
@@ -1675,7 +1752,7 @@ function confirmDialog(message, opts){
       }
     });
     media.addEventListener('playing', function(){ if(!overlay._closing&&overlay.isConnected)openPlayer._deskPlayStarted = true; });
-    media.addEventListener('waiting', function(){ if (openPlayer._deskPlayStarted) toast('Buffering…'); });
+    media.addEventListener('waiting', function(){ if (openPlayer._deskPlayStarted && !overlay._unifiedBar) toast('Buffering…'); });
     var directTried = false;
     media.addEventListener('error', function(){
       if(overlay._closing||!overlay.isConnected)return;
@@ -1830,8 +1907,10 @@ function confirmDialog(message, opts){
     var queued=play.library_conversion||null;
     var label=h('span',{className:'dp-note muted',role:'status',text:play.transcode_auto_blocked?'The converted copy was deleted, so the original file is playing.':''});
     var mode=h('span',{className:'dp-mode'});
-    var seek=h('input',{type:'range',min:'0',max:'1',step:'0.1',value:'0','aria-label':'Seek within the full source video'}),clock=h('span',{className:'muted'});
-    var timeline=h('div',{className:'dp-transcode-timeline',hidden:true},[seek,clock]);
+    /* No timeline of its own: the player's single control bar (playerTrackControls) shows the full
+       source duration and seeks through openPlayer._seekAbsolute, which start() points at this stream. */
+    var queuedSeek=null;
+    function spin(on){if(overlay._setSpinner)overlay._setSpinner(on);}
     var available=play.active_conversion||null;
     function option(text,tip,onClick,extra){return h('button',{className:'btn sm dp-option '+(extra||'ghost'),type:'button',text:text,title:tip,'aria-label':text+'. '+tip,hidden:true,onClick:onClick});}
     var transcodeButton=canTranscode?option('Live transcode','Convert to H.264 / AAC on the fly from where you are, for devices that cannot play the original. Nothing is saved.',function(){
@@ -1901,7 +1980,7 @@ function confirmDialog(message, opts){
     var bar=h('div',{className:'dp-player-actions',role:'group','aria-label':'Playback options'},[
       h('div',{className:'dp-status'},[mode,label]),
       h('div',{className:'dp-buttons'},[watchButton,transcodeButton,prepareButton,audioButton,directButton])
-    ]);var trackBar=tools.querySelector('.player-tracks')||tools;trackBar.appendChild(bar);trackBar.appendChild(timeline);
+    ]);var trackBar=tools.querySelector('.player-tracks')||tools;trackBar.appendChild(bar);
     overlay.addEventListener('vc-playmode',function(){if(alive)syncActions();});
     syncActions();
     function stop(){clearTimeout(timer);timer=null;clearTimeout(recoveryTimer);recoveryTimer=null;if(hls){hls.destroy();hls=null;}if(job){fetch(streamPlayUrl(job.stop_url),{method:'POST',credentials:'same-origin'}).catch(function(){});}job=null;}
@@ -1941,6 +2020,7 @@ function confirmDialog(message, opts){
         else throw new Error('This browser cannot play HLS. Use Play original or an external player.');
         overlay._transcodePending=false;overlay._transcodeActive=true;
         syncActions();
+        if(queuedSeek!=null){var q=queuedSeek;queuedSeek=null;if(Math.abs(q-offset)>6&&openPlayer._seekAbsolute)setTimeout(function(){if(active(g)&&openPlayer._seekAbsolute)openPlayer._seekAbsolute(q);},0);}
         note(job.save?'Saving a DirectPlay copy · the original is kept · converting continues if you close the player':'H.264 / AAC for this device · nothing is saved');
       });
     }
@@ -1955,35 +2035,49 @@ function confirmDialog(message, opts){
         if(j.status==='done'){job.status='done';if(available&&available.id===job.id)available=null;}
         if(attached&&j.status==='done')note(j.save?'Saved copy ready · it plays next time you open this title; the original is kept':'Live transcode fully loaded');
         timer=setTimeout(function(){monitor(g,deadline,attached);},attached?5000:1000);
-      }).catch(function(e){if(active(g)){overlay._transcodePending=false;note(e.message||String(e));if(!job||!job.save){stop();available=null;}syncActions();}});
+      }).catch(function(e){if(active(g)){overlay._transcodePending=false;spin(false);note(e.message||String(e));if(!job||!job.save){stop();available=null;}syncActions();}});
     }
-    function start(save,at,existing,saveMode){
+    function start(save,at,existing,saveMode,retry){
       if(!alive||!overlay.isConnected)return false;
       if(!job&&available)existing=existing||available;
-      if(overlay._transcodePending){note('A playback worker is already starting…');return false;}
+      /* A seek while the worker is still starting is kept and applied once it plays. */
+      if(overlay._transcodePending){if(!save&&!existing&&at!=null){queuedSeek=Math.max(0,Number(at)||0);note('Starting from '+fmtResumeClock(queuedSeek)+' once the worker is ready…');}else note('A playback worker is already starting…');return false;}
       if(job&&job.save){note('A saved copy is still converting. Use Play original to leave; the conversion carries on.');return false;}
-      var previous=job;stop();var g=++gen;leftOriginal=true;overlay._transcodeAttempted=true;overlay._transcodePending=true;overlay._transcodeActive=false;overlay._transcodeResumeHandled=true;
-      syncActions();
+      var previous=job;stop();if(previous&&!previous.save&&available===previous)available=null;var g=++gen;leftOriginal=true;overlay._transcodeAttempted=true;overlay._transcodePending=true;overlay._transcodeActive=false;overlay._transcodeResumeHandled=true;queuedSeek=null;
+      syncActions();spin(true);
       if(overlay._leaveRemux)overlay._leaveRemux();media.pause();media.removeAttribute('src');media.querySelectorAll('source').forEach(function(el){el.remove();});media.load();
       note(save?'Starting playback and the saved copy…':'Starting H.264 / AAC playback…');
       (existing?json(existing.status_url):api('/items/'+encodeURIComponent(item.id)+'/transcode',{method:'POST',body:{t:play.token,start:Math.max(0,at||0),audio:audioIndex,save:!!save,save_mode:save?(saveMode||'both'):undefined,replace:previous&&!previous.save?previous.id:null,replace_token:previous&&!previous.save?previous.token:null}})).then(function(j){
         if(!active(g)){if(j&&j.stop_url)fetch(streamPlayUrl(j.stop_url),{method:'POST',credentials:'same-origin'}).catch(function(){});return;}
         if(!j.ok)throw new Error(j.error||'Could not start transcoding');
         if(j.status==='failed'||j.status==='cancelled'){available=null;throw new Error(j.error||'Conversion stopped.');}
-        job=j;available=j;syncActions();offset=Number(j.offset)||0;timeline.hidden=false;
+        job=j;available=j;syncActions();offset=Number(j.offset)||0;
         openPlayer._absTime=function(){return offset+(media.currentTime||0);};openPlayer._absDuration=function(){return sourceDuration;};
         openPlayer._seekAbsolute=function(to){
-          to=Math.max(0,Math.min(sourceDuration?Math.max(0,sourceDuration-.5):to,Number(to)||0));var relative=to-offset,ready=false;
-          try{for(var n=0;n<media.seekable.length;n++)if(relative>=media.seekable.start(n)&&relative<=media.seekable.end(n)){ready=true;break;}}catch(e){}
-          if(ready)media.currentTime=relative;
-          else if(job.save)note('That point is not converted yet. The saved copy is still converting.');
+          to=Math.max(0,Math.min(sourceDuration?Math.max(0,sourceDuration-.5):to,Number(to)||0));var relative=to-offset,ready=false,edge=0;
+          /* The HLS playlist grows as ffmpeg encodes; seeking near its end only waits for the encoder
+             (the endless "buffering"). Jump inside what is already encoded, with a margin; anywhere
+             else restart the encode at the target (the server stops the previous ffmpeg first). */
+          var done=job&&job.status==='done',margin=done?0:12;
+          try{for(var n=0;n<media.seekable.length;n++){edge=Math.max(edge,media.seekable.end(n));if(relative>=media.seekable.start(n)-.5&&relative<=media.seekable.end(n)-margin){ready=true;break;}}}catch(e){}
+          if(ready){spin(!inBufferedRange(relative));media.currentTime=Math.max(0,relative);}
+          else if(job&&job.save){var clampTo=Math.max(0,Math.min(relative,edge-margin));if(relative>edge-margin)note('That point is not converted yet. The saved copy is still converting; jumped to the furthest converted point.');media.currentTime=clampTo;}
           else start(false,to);
         };
         monitor(g,Date.now()+Number(j.startup_seconds||90)*1000,false);
-      }).catch(function(e){if(active(g)){overlay._transcodePending=false;note(e.message||String(e));syncActions();}});return true;
+      }).catch(function(e){
+        if(!active(g))return;
+        /* The previous ffmpeg is still being stopped (1 GB NAS, one session): retry the restart shortly
+           instead of leaving the player without a source. */
+        var msg=e&&e.message||String(e);
+        if(!save&&!existing&&(retry||0)<4&&/previous worker is stopping|retry playback shortly/i.test(msg)){
+          note('Restarting from '+fmtResumeClock(Math.max(0,at||0))+'…');
+          setTimeout(function(){if(!active(g))return;overlay._transcodePending=false;start(false,at,null,null,(retry||0)+1);},1500);return;
+        }
+        overlay._transcodePending=false;spin(false);note(msg);syncActions();
+      });return true;
     }
-    seek.addEventListener('change',function(){if(openPlayer._seekAbsolute)openPlayer._seekAbsolute(Number(seek.value));});
-    media.addEventListener('timeupdate',function(){if(!overlay._transcodeActive)return;seek.max=String(sourceDuration||1);seek.value=String(offset+(media.currentTime||0));clock.textContent=fmtResumeClock(offset+(media.currentTime||0))+' / '+fmtResumeClock(sourceDuration);});
+    function inBufferedRange(t){try{for(var b=0;b<media.buffered.length;b++)if(t>=media.buffered.start(b)-.3&&t<=media.buffered.end(b))return true;}catch(e){}return false;}
     overlay._startTranscode=start;overlay._getTranscodeAudio=function(){return audioIndex;};overlay._transcodeAudio=function(index){if(job&&job.save){note('A saved copy keeps the audio track chosen at the start. Use Play original to choose a different track.');return false;}var at=offset+(media.currentTime||0);audioIndex=Number(index)||0;return start(false,at);};
     overlay._transcodeCleanup=function(){alive=false;gen++;clearTimeout(pollTimer);pollTimer=null;stop();};
     /* Playback failed or the picture is not decoding: explain and suggest, never start anything. */

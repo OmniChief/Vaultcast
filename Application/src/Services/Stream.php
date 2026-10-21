@@ -2,6 +2,17 @@
 declare(strict_types=1);
 
 class Stream {
+    /**
+     * Full title length for the player's seek bar. Catalogue duration first, then the background
+     * facts row (one cached primary-key read, no probe), so transcoded/remuxed streams still show
+     * the whole title rather than the part encoded so far.
+     */
+    private static function titleDuration(array $item): ?float {
+        if (isset($item['duration']) && (float)$item['duration'] > 0) return (float)$item['duration'];
+        if (($item['media_kind'] ?? '') !== 'video') return isset($item['duration']) ? (float)$item['duration'] : null;
+        try { $d = (float)(MediaFacts::get($item)['duration'] ?? 0); } catch (\Throwable $e) { $d = 0.0; }
+        return $d > 0 ? $d : null;
+    }
     public static function playbackItem(array $item): array {
         if(!empty($item['directplay_path']) && !is_file($item['directplay_path'])) {
             unset($item['directplay_path'],$item['directplay_ready'],$item['prepared_copy']);
@@ -163,7 +174,7 @@ class Stream {
             'directplay_audio_select' => $directPlayAudioSelect,
             'remux_url' => ($item['media_kind'] ?? '') === 'video' ? ($base . '/api/stream/remux?t=' . $token) : null,
             'remux_allowed' => Remux::enabled(),
-            'duration' => isset($item['duration']) ? (float)$item['duration'] : null,
+            'duration' => self::titleDuration($item),
             'video_codec' => $videoCodec,
             'needs_convert_hint' => $needsConvertHint,
             'audio_note' => count($audioTracks) > 1
