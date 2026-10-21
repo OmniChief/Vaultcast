@@ -11651,6 +11651,52 @@ h('div', { className:'cv-find-bar' }, [
       else {
         Array.from(root.children).slice(0,3).forEach(function(child){child.remove();});
         root.insertBefore(h('div',{className:'settings-card'},[h('h3',{text:'Encoding configuration'}),h('p',{className:'muted',text:'Playback policy, encoder options, threads and output configuration have moved to DirectPlay Settings.'}),h('button',{className:'btn',text:'Open DirectPlay Settings',onClick:function(){openSettings('directplay');}})]),root.firstChild);
+        var playbackJobs=h('div',{className:'cv-batch-list','aria-live':'polite'},[pendingContent({className:'muted'})]);
+        var playbackTimer=null,playbackBusy=false,knownCompleted={};
+        function refreshPlaybackJobs(){
+          clearTimeout(playbackTimer);
+          if(!root.isConnected||playbackBusy)return;
+          if(document.hidden){playbackTimer=setTimeout(refreshPlaybackJobs,5000);return;}
+          playbackBusy=true;
+          api('/admin/transcode').then(function(r){
+            if(!root.isConnected)return;
+            if(!r.ok)throw new Error(r.error||'Could not load playback conversions.');
+            playbackJobs.innerHTML='';var completed=false;
+            (r.sessions||[]).forEach(function(job){
+              var running=['queued','running','saving'].indexOf(job.status)>=0;
+              var duration=Math.max(0,Number(job.duration||0)-Number(job.offset||0));
+              var prepared=Math.max(0,Number(job.prepared_seconds)||0);
+              var pct=job.status==='done'?100:(duration?Math.min(99,Math.round(prepared/duration*100)):0);
+              var detail=job.status==='saving'?'Saving MP4 copy':job.status==='done'?(job.save?'Copy ready · review in the batch converter below':'Temporary playback complete'):job.status;
+              var card=h('div',{className:'cv-card'},[h('div',{className:'cv-card-main'},[
+                h('strong',{text:job.title||'Playback conversion'}),
+                h('div',{className:'muted',text:(job.save?'Watch & prepare copy':'Temporary playback')+' · '+detail+' · '+job.threads+' threads'}),
+                h('progress',{max:100,value:pct,'aria-label':'Conversion progress'}),
+                h('div',{className:'muted',text:(duration?pct+'% · ':'')+Math.round(prepared)+'s prepared'+(duration?' / '+Math.round(duration)+'s':'')+(job.created_at?' · Started '+new Date(job.created_at*1000).toLocaleString():'')}),
+                job.error?h('p',{text:job.error}):null
+              ])]);
+              if(running)card.appendChild(h('button',{className:'btn ghost sm',text:'Stop conversion',onClick:function(e){
+                var button=e.currentTarget;button.disabled=true;
+                confirmDialog('Stop this '+(job.save?'saved-copy conversion':'temporary playback conversion')+'? Playback will stop when its prepared video runs out. The original file is retained.',{okText:'Stop conversion'}).then(function(ok){
+                  if(!ok){button.disabled=false;return;}
+                  return api('/admin/transcode/'+job.id+'/stop',{method:'POST'}).then(function(j){if(!j.ok)throw new Error(j.error||'Could not stop conversion.');toast('Stop requested · original retained.');refreshPlaybackJobs();});
+                }).catch(function(e){button.disabled=false;toast(e.message||String(e),{kind:'bad'});});
+              }}));
+              playbackJobs.appendChild(card);
+              if(job.conversion_job_id&&!knownCompleted[job.id]){knownCompleted[job.id]=true;completed=true;}
+            });
+            if(!(r.sessions||[]).length)playbackJobs.appendChild(h('p',{className:'muted',text:'No playback conversions. Start one from a video player.'}));
+            if(completed)refreshConvertAdmin({quiet:true});
+          }).catch(function(e){if(root.isConnected){playbackJobs.innerHTML='';playbackJobs.appendChild(h('p',{className:'muted',text:e.message||'Could not load playback conversions.'}));}}).then(function(){
+            playbackBusy=false;if(root.isConnected)playbackTimer=setTimeout(refreshPlaybackJobs,5000);
+          });
+        }
+        root.insertBefore(h('section',{className:'cv-section settings-card'},[
+          h('h3',{text:'Playback conversions'}),
+          h('p',{className:'muted',text:'Watch & prepare keeps converting after you leave the player. Completed copies appear in the batch converter below for review or replacement; originals are kept. Temporary playback stops after the player closes and is not saved as a reusable copy. Recent sessions remain here until their playback cache expires.'}),
+          playbackJobs,h('button',{className:'btn ghost',text:'Refresh playback conversions',onClick:refreshPlaybackJobs})
+        ]),root.children[1]||null);
+        setTimeout(refreshPlaybackJobs,0);
       }
       setTimeout(function(){
         syncModeUi();

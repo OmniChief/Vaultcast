@@ -255,8 +255,11 @@ final class Transcode {
         foreach(glob(self::root().'/*/session.json') ?: [] as $file) {
             $j=json_decode((string)@file_get_contents($file),true) ?: [];if(!$j)continue;
             $jobs[]=['id'=>$j['id'],'title'=>$j['title'],'status'=>$j['status'],'save'=>$j['save'],'threads'=>$j['config']['threads'],
-                'prepared_seconds'=>$j['prepared_seconds'] ?? 0,'duration'=>$j['duration'] ?? 0,'error'=>$j['error'] ?? null];
+                'prepared_seconds'=>$j['prepared_seconds'] ?? 0,'duration'=>$j['duration'] ?? 0,'offset'=>$j['offset'] ?? 0,
+                'created_at'=>$j['created_at'] ?? 0,'updated_at'=>$j['updated_at'] ?? 0,
+                'conversion_job_id'=>$j['conversion']['job_id'] ?? null,'error'=>$j['error'] ?? null];
         }
+        usort($jobs,static function($a,$b){return $b['created_at']<=>$a['created_at'];});
         return ['ok'=>true,'sessions'=>$jobs];
     }
     public static function cancel(string $id): array {
