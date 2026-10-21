@@ -4722,7 +4722,23 @@ try {
     });
   }
   function librarySummary(home){home=home||state.home||{};return (home.item_count||0)+' titles available';}
-  function clockFace(children){return [h('div',{className:'hero-clock-art','aria-hidden':'true'},[heroArt('clock')]),h('div',{className:'hero-clock-face'},children),h('span',{className:'tv-clock-tuner','aria-hidden':'true'})];}
+  function enhanceThemeHeroes(content){
+    if(window.VaultcastThemePlay)window.VaultcastThemePlay.enhance(content);
+    if(document.body.getAttribute('data-theme')==='ninja-extreme'){
+      var clock=content.querySelector('.hero-clock-face');
+      if(clock&&!clock.querySelector('.ninja-training-open'))clock.appendChild(h('button',{type:'button',className:'btn ghost ninja-training-open',text:document.body.classList.contains('ninja-calm')?'★ Ninja training · Calm':'★ Ninja training',title:'Ninja training and calm-mode controls',onClick:ninjaTraining}));
+    }
+  }
+  function clockFace(children){
+    var face=h('div',{className:'hero-clock-face'},children);
+    // Live and other async views insert their clocks after shell() has enhanced the page.
+    setTimeout(function(){
+      if(!face.isConnected)return;
+      var panel=face.parentNode;
+      if(!panel.querySelector('.theme-play-open,.ninja-training-open,.theme-dancer'))enhanceThemeHeroes(panel);
+    },0);
+    return [h('div',{className:'hero-clock-art','aria-hidden':'true'},[heroArt('clock')]),face,h('span',{className:'tv-clock-tuner','aria-hidden':'true'})];
+  }
   function heroClock(meta){
     var now=new Date();
     return h('div',{className:'live-hero-side hero-clock-panel'},clockFace([
@@ -4813,11 +4829,7 @@ try {
   function shell(content){
     var mode = currentMode();
     applyTheme();
-    if(document.body.getAttribute('data-theme')==='ninja-extreme'){
-      var ninjaClock=content.querySelector('.hero-clock-face');
-      if(ninjaClock&&!ninjaClock.querySelector('.ninja-training-open'))ninjaClock.appendChild(h('button',{type:'button',className:'btn ghost ninja-training-open',text:document.body.classList.contains('ninja-calm')?'★ Ninja training · Calm':'★ Ninja training',title:'A short, untimed star-collecting activity and calm-mode controls',onClick:ninjaTraining}));
-    }
-    if(window.VaultcastThemePlay)window.VaultcastThemePlay.enhance(content);
+    enhanceThemeHeroes(content);
     document.body.classList.toggle('has-az-rail',state.view==='section'||state.view==='collections'||(state.view==='play'&&(state.playTab||'games')==='games'));
     try { document.body.setAttribute('data-mode', mode || 'none'); } catch (e) {}
     var modes = [
@@ -5464,7 +5476,7 @@ try {
         h('button',{className:'btn',text:'On now',onClick:function(){goLiveTab('now');}}),
         h('button',{className:'btn',text:tab==='radio'?'Browse stations':'Programme guide',onClick:function(){if(tab==='radio')radioDirectory();else{var guide=document.getElementById('live-guide');if(guide)guide.scrollIntoView({behavior:'smooth',block:'start'});}}})
       ])]),
-      h('div',{className:'live-hero-side vintage-clock-tv'},clockFace([h('div',{className:'live-clock',id:'live-clock',text:fmtClock(Date.now())}),h('div',{className:'live-count',text:total+(tab==='radio'?' stations':' channels')})]).concat([heroArt('live')]))
+      h('div',{className:'live-hero-side vintage-clock-tv'},clockFace([h('div',{className:'live-clock',id:'live-clock',text:fmtClock(Date.now())}),h('div',{className:'live-count',text:total+(tab==='radio'?' stations':' channels')})]))
     ]);
   }
   var radioState={resizeObserver:null,stations:null,loaded:0,pending:null,audio:null,station:null,hls:null,token:0,status:'',bar:null};
@@ -5679,7 +5691,7 @@ try {
       h('div', { className:'live-clock', id:'live-clock', text: fmtClock(now) }),
       h('div', { className:'muted', text: new Date(now).toLocaleDateString([], { weekday:'long', day:'numeric', month:'long' }) }),
       h('div', { className:'live-count', text: total + ' channel' + (total === 1 ? '' : 's') + ' live' })
-    ]).concat([heroArt('live')]));
+    ]));
     if (!feat) {
       return h('section', { className:'live-hero', id:'live-top' }, [
         h('div', { className:'live-hero-copy' }, [ h('div', { className:'eyebrow', text:'Live' }), h('h1', { text:'Nothing on air' }),
