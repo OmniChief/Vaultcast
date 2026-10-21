@@ -18,7 +18,7 @@
     function asset(path){return base+'index.php?asset='+path+'&v='+encodeURIComponent(version);}
     function style(path){var link=document.createElement('link');link.rel='stylesheet';link.href=asset(path);document.getElementsByTagName('head')[0].appendChild(link);}
     function failure(){var panel=document.createElement('p'),link=document.createElement('a');panel.style.cssText='padding:20px;background:#111;color:white;font:18px sans-serif';link.href=base+'?compat=on';link.appendChild(document.createTextNode('Open compatibility mode'));panel.appendChild(document.createTextNode('The interface could not load. '));panel.appendChild(link);document.body.appendChild(panel);}
-    style('assets/css/app.css');style('assets/css/home-hub.css');style('assets/css/vc-extra.css');
+    style('assets/css/app.css');style('assets/css/home-hub.css');
     var files=['routes.js','netplay_sync.js','request-cache.js','chat.js','home-hub.js','home-extras.js','live-search.js','theme-play.js','app.js'];
     for(var i=0;i<files.length;i++){var script=document.createElement('script');script.async=false;script.src=asset('assets/js/'+files[i]);script.onerror=failure;document.getElementsByTagName('head')[0].appendChild(script);}
   }

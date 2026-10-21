@@ -22,8 +22,9 @@
   /** Canvas that fills its host at device pixel ratio; draw(ctx2d, w, h) works in CSS pixels. */
   function stage(host, aspect){
     var canvas = document.createElement('canvas'); canvas.className = 'vc-game-canvas'; host.appendChild(canvas);
-    var g = canvas.getContext('2d'), w = 0, hgt = 0;
+    var g = canvas.getContext('2d'), w = 0, hgt = 0, api = { dirty:true };
     function fit(){
+      api.dirty = true; // resizing clears the canvas, so loops that skip idle frames must redraw
       var box = host.getBoundingClientRect(), maxW = Math.max(160, box.width), maxH = Math.max(160, box.height || window.innerHeight * 0.7);
       if (aspect) { w = Math.min(maxW, maxH * aspect); hgt = w / aspect; } else { w = maxW; hgt = maxH; }
       var dpr = Math.min(3, window.devicePixelRatio || 1);
@@ -32,13 +33,18 @@
     }
     fit();
     var ro = window.ResizeObserver ? new ResizeObserver(function(){ fit(); }) : null; if (ro) ro.observe(host); else window.addEventListener('resize', fit);
-    return { canvas:canvas, g:g, size:function(){ return { w:w, h:hgt }; }, destroy:function(){ if (ro) ro.disconnect(); else window.removeEventListener('resize', fit); canvas.remove(); } };
+    api.canvas = canvas; api.g = g; api.size = function(){ return { w:w, h:hgt }; };
+    api.destroy = function(){ if (ro) ro.disconnect(); else window.removeEventListener('resize', fit); canvas.remove(); };
+    return api;
   }
   function roundRect(g, x, y, w, h, r){ g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath(); }
-  /** A requestAnimationFrame loop with pause support. */
+  /**
+   * A requestAnimationFrame loop. Engines stop it while paused or over (one last frame is drawn), so a paused
+   * or finished game costs nothing; browsers also stop rAF in hidden tabs and the host pauses the game there.
+   */
   function loop(step){
     var raf = 0, last = 0, running = false;
-    function frame(t){ if (!running) return; var dt = last ? Math.min(100, t - last) : 16; last = t; step(dt); raf = requestAnimationFrame(frame); }
+    function frame(t){ if (!running) return; var dt = last ? Math.min(100, t - last) : 16; last = t; raf = requestAnimationFrame(frame); step(dt); }
     return { start:function(){ if (running) return; running = true; last = 0; raf = requestAnimationFrame(frame); }, stop:function(){ running = false; cancelAnimationFrame(raf); }, get running(){ return running; } };
   }
 
@@ -115,7 +121,7 @@
       y += s * 2; g.fillStyle = pal.muted; g.font = '600 ' + Math.max(11, s * .5) + 'px system-ui, sans-serif'; g.fillText('LINES', px, y + 12); g.fillStyle = pal.text; g.font = '700 ' + Math.max(14, s * .8) + 'px system-ui, sans-serif'; g.fillText(String(lines), px, y + 14 + s * .8);
     }
     var lp = loop(function(dt){
-      if (paused || over) { draw(); return; }
+      if (paused || over) { draw(); lp.stop(); return; }
       acc += dt;
       if (acc >= dropMs) { acc = 0; if (!collide(piece, 0, 1, piece.cells)) piece.y++; else { lockT += dropMs; } }
       if (collide(piece, 0, 1, piece.cells)) { lockT += dt; if (lockT > 500) { lockT = 0; lock(); } }
@@ -123,7 +129,7 @@
     });
     reset(); lp.start();
     return {
-      pause:function(){ paused = true; }, resume:function(){ paused = false; }, restart:function(){ reset(); },
+      pause:function(){ paused = true; }, resume:function(){ paused = false; if (!over) lp.start(); }, restart:function(){ reset(); lp.start(); },
       destroy:function(){ lp.stop(); st.destroy(); },
       input:function(a, down){ if (!down || paused || over) return; if (a === 'left') move(-1); else if (a === 'right') move(1); else if (a === 'down') soft(); else if (a === 'up' || a === 'rotate') rotate(1); else if (a === 'rotateL') rotate(-1); else if (a === 'drop' || a === 'action') hard(); else if (a === 'hold') doHold(); },
       repeat:['left','right','down'], controls:[['left','◀'],['rotate','⟳'],['right','▶'],['down','▼'],['drop','⤓'],['hold','Hold']],
@@ -159,11 +165,11 @@
     }
     var lp = loop(function(dt){
       if (!paused && !over) { acc += dt; if (bonus) { bonus.ttl -= dt; if (bonus.ttl <= 0) bonus = null; } while (acc >= stepMs && !over) { acc -= stepMs; step(); } }
-      draw();
+      draw(); if (paused || over) lp.stop();
     });
     reset(); lp.start();
     function turn(d){ if (d[0] === -dir[0] && d[1] === -dir[1]) return; nextDir = d; }
-    return { pause:function(){ paused = true; }, resume:function(){ paused = false; }, restart:reset, destroy:function(){ lp.stop(); st.destroy(); },
+    return { pause:function(){ paused = true; }, resume:function(){ paused = false; if (!over) lp.start(); }, restart:function(){ reset(); lp.start(); }, destroy:function(){ lp.stop(); st.destroy(); },
       input:function(a, down){ if (!down || paused || over) return; if (a === 'left') turn([-1, 0]); else if (a === 'right') turn([1, 0]); else if (a === 'up') turn([0, -1]); else if (a === 'down') turn([0, 1]); },
       swipe:true, controls:[['up','▲'],['left','◀'],['down','▼'],['right','▶']], help:'Arrow keys, WASD, swipe or D-pad to steer' };
   }
@@ -175,7 +181,8 @@
     function emptyCells(){ var out = []; for (var y = 0; y < N; y++) for (var x = 0; x < N; x++) if (!at(x, y)) out.push([x, y]); return out; }
     function at(x, y){ for (var i = 0; i < tiles.length; i++) if (tiles[i].x === x && tiles[i].y === y && !tiles[i].dead) return tiles[i]; return null; }
     function add(){ var e = emptyCells(); if (!e.length) return; var c = e[Math.floor(Math.random() * e.length)]; tiles.push({ id:++idSeq, x:c[0], y:c[1], px:c[0], py:c[1], v:Math.random() < .9 ? 2 : 4, born:Date.now() }); }
-    function reset(){ tiles = []; score = 0; over = false; paused = false; won = false; idSeq = 0; add(); add(); anim = 0; ctx.score(0); }
+    var busyUntil = 0; function busy(){ busyUntil = Date.now() + 260; if (!lp.running && !paused) lp.start(); }
+    function reset(){ tiles = []; score = 0; over = false; paused = false; won = false; idSeq = 0; add(); add(); anim = 0; ctx.score(0); busy(); }
     function maxTile(){ return tiles.reduce(function(m, t){ return t.dead ? m : Math.max(m, t.v); }, 0); }
     function canMove(){ if (emptyCells().length) return true; for (var y = 0; y < N; y++) for (var x = 0; x < N; x++) { var t = at(x, y); if ((x + 1 < N && at(x + 1, y).v === t.v) || (y + 1 < N && at(x, y + 1).v === t.v)) return true; } return false; }
     function move(dx, dy){
@@ -196,7 +203,7 @@
         if (!t.dead && (nx !== x || ny !== y)) { t.x = nx; t.y = ny; moved = true; }
       }); });
       if (!moved) return;
-      score += gained; anim = Date.now(); if (gained) beep(ctx, 300 + Math.log2(gained) * 40, .07, 'triangle', .04); else beep(ctx, 200, .03, 'triangle', .02);
+      score += gained; anim = Date.now(); busy(); if (gained) beep(ctx, 300 + Math.log2(gained) * 40, .07, 'triangle', .04); else beep(ctx, 200, .03, 'triangle', .02);
       add(); ctx.score(score);
       if (!won && maxTile() >= 2048) { won = true; ctx.status('2048! Keep going for a higher score.'); beep(ctx, 1046, .3, 'triangle', .06); }
       if (!canMove()) { over = true; setTimeout(function(){ ctx.over({ score:score, meta:'tile:' + maxTile() }); }, 300); }
@@ -218,9 +225,18 @@
       });
       g.textAlign = 'start'; g.textBaseline = 'alphabetic';
     }
-    var lp = loop(function(){ draw(); });
+    // 2048 only changes when a move animates, so the loop sleeps between moves instead of redrawing 60 times a second.
+    var lp = loop(function(){ if (st.dirty || Date.now() < busyUntil) { st.dirty = false; draw(); } else { lp.stop(); idleWatch(); } });
+    var idleTimer = 0; function idleWatch(){ clearTimeout(idleTimer); idleTimer = setTimeout(function(){ if (st.dirty && !lp.running && st.canvas.isConnected) { st.dirty = false; draw(); } if (st.canvas.isConnected) idleWatch(); }, 250); }
     reset(); lp.start();
-    return { pause:function(){ paused = true; }, resume:function(){ paused = false; }, restart:reset, destroy:function(){ lp.stop(); st.destroy(); },
+    return { pause:function(){ paused = true; }, resume:function(){ paused = false; busy(); }, restart:function(){ reset(); }, destroy:function(){ clearTimeout(idleTimer); lp.stop(); st.destroy(); },
+      snapshot:function(){ return over ? null : { tiles:tiles.filter(function(t){ return !t.dead; }).map(function(t){ return [t.x, t.y, t.v]; }), score:score, won:won }; },
+      restore:function(snap){
+        if (!snap || !Array.isArray(snap.tiles) || !snap.tiles.length) return false;
+        var ok = snap.tiles.every(function(t){ return Array.isArray(t) && t[0] >= 0 && t[0] < N && t[1] >= 0 && t[1] < N && t[2] >= 2 && (t[2] & (t[2] - 1)) === 0; });
+        if (!ok) return false;
+        tiles = snap.tiles.map(function(t){ return { id:++idSeq, x:t[0], y:t[1], px:t[0], py:t[1], v:t[2] }; }); score = Math.max(0, Number(snap.score) || 0); won = !!snap.won; over = false; anim = 0; ctx.score(score); busy(); return true;
+      },
       input:function(a, down){ if (!down || paused || over) return; if (a === 'left') move(-1, 0); else if (a === 'right') move(1, 0); else if (a === 'up') move(0, -1); else if (a === 'down') move(0, 1); },
       swipe:true, controls:[['up','▲'],['left','◀'],['down','▼'],['right','▶']], help:'Arrow keys, WASD or swipe to slide the tiles' };
   }
@@ -293,9 +309,9 @@
     function pointer(e){ var r = st.canvas.getBoundingClientRect(); paddle.x = ((e.clientX - r.left) / r.width) * W - paddle.w / 2; }
     st.canvas.addEventListener('pointermove', pointer); st.canvas.addEventListener('pointerdown', function(e){ pointer(e); if (!paused && !over) launch(); });
     st.canvas.style.touchAction = 'none';
-    var lp = loop(function(dt){ if (!paused && !over) update(dt); draw(); });
+    var lp = loop(function(dt){ if (!paused && !over) update(dt); draw(); if (paused || over) lp.stop(); });
     reset(); lp.start();
-    return { pause:function(){ paused = true; keys = {}; }, resume:function(){ paused = false; }, restart:reset, destroy:function(){ lp.stop(); st.destroy(); },
+    return { pause:function(){ paused = true; keys = {}; }, resume:function(){ paused = false; if (!over) lp.start(); }, restart:function(){ reset(); lp.start(); }, destroy:function(){ lp.stop(); st.destroy(); },
       input:function(a, down){ if (a === 'left' || a === 'right') keys[a] = down; else if (down && (a === 'action' || a === 'drop' || a === 'up') && !paused && !over) launch(); },
       hold:true, controls:[['left','◀'],['action','Launch'],['right','▶']], help:'← → or mouse / touch to move · Space to launch' };
   }

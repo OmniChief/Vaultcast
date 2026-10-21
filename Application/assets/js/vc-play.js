@@ -11,6 +11,12 @@
     chess:{ name:'Chess', blurb:'Challenge a friend by correspondence or play the computer.', icon:'<svg viewBox="0 0 48 48"><path d="M18 40h12l-2-12c4-2 6-6 6-10a10 10 0 0 0-20 0c0 4 2 8 6 10z"/><rect x="13" y="40" width="22" height="4" rx="2"/></svg>', hue:45 }
   };
   var RUN = ['blocks', 'snake', 'merge', 'breakout'];
+  var HOWTO = {
+    blocks:['Pieces fall into the well. Fill a whole row to clear it; clearing several rows at once scores much more.', 'Move with ← → (or A D), rotate with ↑ or X, soft drop with ↓ and hard drop with Space. C or Shift holds a piece for later.', 'Every ten lines the level and the speed go up. The game ends when a new piece has no room.'],
+    snake:['Steer the snake to the red food. Every bite makes you longer and a little faster.', 'Use the arrow keys, WASD, a swipe or the D-pad. Gold bonus food appears now and then and is worth five times as much, but it fades.', 'Hitting a wall or your own tail ends the game.'],
+    merge:['Slide every tile in one direction with the arrow keys, WASD or a swipe.', 'Two tiles with the same number merge into one and add to your score. A new tile appears after every move.', 'Reach 2048 and keep going. The game ends when no move is possible. Leaving mid-game saves it so you can resume.'],
+    breakout:['Move the paddle with ← →, the mouse or your finger and press Space or tap to launch the ball.', 'Break every brick to reach the next level. Darker bricks need two hits. Some bricks drop a wide paddle or an extra ball.', 'You have three lives; a ball that falls past the paddle costs one.']
+  };
   function signed(){ return !!(A.state.user && A.state.user.id && A.state.user.role !== 'guest'); }
   function me(){ return A.state.user || {}; }
   function fmt(n){ return Number(n || 0).toLocaleString(); }
@@ -104,26 +110,35 @@
     var stageEl = h('div', { className:'vc-game-stage', tabindex:'0', 'aria-label':g.name + ' game area' }), overlay = h('div', { className:'vc-game-overlay', hidden:true });
     var soundBtn = btn(soundOn() ? '🔊' : '🔇', function(){ try { localStorage.setItem('vaultcast-arcade-sound', soundOn() ? 'off' : 'on'); } catch (e) {} soundBtn.textContent = soundOn() ? '🔊' : '🔇'; soundBtn.setAttribute('aria-label', soundOn() ? 'Mute sound' : 'Turn sound on'); }, 'ghost vc-icon-btn', { 'aria-label':soundOn() ? 'Mute sound' : 'Turn sound on' });
     var pauseBtn = btn('Pause', function(){ toggle(); }, 'ghost');
+    var helpBtn = btn('?', function(){ if (engine && !paused && !ended) setPaused(true); showHowTo(function(){ if (engine && !ended) setPaused(false); else hideOverlay(); }); }, 'ghost vc-icon-btn', { 'aria-label':'How to play' });
     var wrap = h('div', { className:'vc-game-wrap' }, [
       h('div', { className:'vc-game-bar' }, [btn('← Arcade', function(){ go('arcade'); }, 'ghost'), h('div', { className:'vc-game-title' }, [h('h1', { text:g.name }), statusEl]), h('div', { className:'vc-hud' }, [h('span', { className:'muted', text:'Score' }), scoreEl, bestEl]),
-        h('div', { className:'vc-game-tools' }, [pauseBtn, soundBtn, btn('⛶', function(){ var el = wrap; if (document.fullscreenElement) document.exitFullscreen(); else if (el.requestFullscreen) el.requestFullscreen().catch(function(){}); }, 'ghost vc-icon-btn', { 'aria-label':'Full screen' })])]),
+        h('div', { className:'vc-game-tools' }, [pauseBtn, helpBtn, soundBtn, btn('⛶', function(){ var el = wrap; if (document.fullscreenElement) document.exitFullscreen(); else if (el.requestFullscreen) el.requestFullscreen().catch(function(){}); }, 'ghost vc-icon-btn', { 'aria-label':'Full screen' })])]),
       h('div', { className:'vc-game-body' }, [stageEl, overlay]),
       h('div', { className:'vc-touch-pad' }),
       h('p', { className:'vc-game-help muted' })
     ]);
     host.appendChild(wrap);
-    var engine = null, run = null, startedAt = 0, activeMs = 0, lastResume = 0, paused = false, ended = false, best = 0, held = {}, repeatTimers = {}, gpPrev = {}, gpRaf = 0;
-    function score(n){ scoreEl.textContent = fmt(n); if (n > best && best > 0) scoreEl.classList.add('vc-pb'); }
+    var engine = null, run = null, startedAt = 0, activeMs = 0, lastResume = 0, paused = false, ended = false, best = 0, held = {}, repeatTimers = {}, gpPrev = {}, gpRaf = 0, pbShown = false, lastScore = 0;
+    var resumeKey = 'vaultcast-arcade-resume:' + (me().id || 'guest') + ':' + id;
+    function score(n){ lastScore = n; scoreEl.textContent = fmt(n); if (n > best && best > 0) { scoreEl.classList.add('vc-pb'); if (!pbShown) { pbShown = true; A.toast('🎉 New personal best in ' + g.name + '!', { kind:'ok' }); } } }
+    function playedMs(){ return activeMs + (paused || ended || !lastResume ? 0 : Date.now() - lastResume); }
+    /** Games that can snapshot (2048) are saved when you leave or pause, and offered again for six hours. */
+    function saveSnap(){ if (!engine || ended || !engine.snapshot) return; var snap = engine.snapshot(); if (snap && lastScore > 0) store(resumeKey, { run:run, best:best, ms:playedMs(), state:snap, at:Date.now() }); }
+    function showHowTo(done){
+      showOverlay([h('h2', { text:'How to play ' + g.name }), h('ul', { className:'vc-howto' }, (HOWTO[id] || []).map(function(t){ return h('li', { text:t }); })), h('p', { className:'muted', text:'P or Esc pauses. Games pause by themselves when you switch tabs or windows. A gamepad works too.' }), btn('Got it', function(){ try { localStorage.setItem('vaultcast-arcade-howto:' + id, '1'); } catch (e) {} done(); }, 'primary')]);
+    }
     function setPaused(p, reason){
       if (ended || !engine) return; if (p === paused) return; paused = p;
-      if (p) { activeMs += Date.now() - lastResume; engine.pause(); pauseBtn.textContent = 'Resume'; showOverlay([h('h2', { text:'Paused' }), reason ? h('p', { className:'muted', text:reason }) : null, btn('Resume', function(){ setPaused(false); }, 'primary'), btn('Restart', function(){ start(); }, 'ghost'), btn('Quit', function(){ go('arcade'); }, 'ghost')]); }
+      if (p) { activeMs += Date.now() - lastResume; engine.pause(); saveSnap(); pauseBtn.textContent = 'Resume'; showOverlay([h('h2', { text:'Paused' }), reason ? h('p', { className:'muted', text:reason }) : null, btn('Resume', function(){ setPaused(false); }, 'primary'), btn('Restart', function(){ start(); }, 'ghost'), btn('Quit', function(){ go('arcade'); }, 'ghost')]); }
       else { lastResume = Date.now(); engine.resume(); pauseBtn.textContent = 'Pause'; hideOverlay(); stageEl.focus(); }
     }
     function toggle(){ setPaused(!paused); }
     function showOverlay(kids){ overlay.replaceChildren(h('div', { className:'vc-overlay-card' }, kids)); overlay.hidden = false; }
     function hideOverlay(){ overlay.hidden = true; overlay.replaceChildren(); }
-    function start(){
-      hideOverlay(); ended = false; paused = false; pauseBtn.textContent = 'Pause'; scoreEl.textContent = '0'; scoreEl.classList.remove('vc-pb'); statusEl.textContent = '';
+    function start(resume){
+      if (!resume) store(resumeKey, null);
+      hideOverlay(); ended = false; paused = false; pbShown = false; lastScore = 0; pauseBtn.textContent = 'Pause'; scoreEl.textContent = '0'; scoreEl.classList.remove('vc-pb'); statusEl.textContent = '';
       if (engine) { engine.destroy(); engine = null; } stageEl.replaceChildren();
       run = null;
       var begin = function(){
@@ -132,6 +147,7 @@
           engine = G[id](stageEl, { sound:soundOn, score:score, status:function(t){ statusEl.textContent = t; }, over:finish });
           current = { destroy:cleanup };
           startedAt = Date.now(); lastResume = startedAt; activeMs = 0;
+          if (resume && engine.restore && engine.restore(resume.state)) { activeMs = Math.max(0, resume.ms || 0); statusEl.textContent = 'Resumed'; }
           wrap.querySelector('.vc-game-help').textContent = engine.help || '';
           var pad = wrap.querySelector('.vc-touch-pad'); pad.replaceChildren();
           (engine.controls || []).forEach(function(c){
@@ -143,11 +159,13 @@
           stageEl.focus();
         }).catch(err);
       };
-      if (signed()) call('/play/arcade/start', { method:'POST', body:{ game:id } }).then(function(j){ run = j.run; best = j.best || 0; bestEl.textContent = best ? 'Best ' + fmt(best) : ''; begin(); }).catch(function(e){ err(e); begin(); });
+      // A resumed game keeps its original run, so the server's clock covers the whole game (runs last six hours).
+      if (resume && resume.run && signed()) { run = resume.run; best = resume.best || 0; bestEl.textContent = best ? 'Best ' + fmt(best) : ''; begin(); }
+      else if (signed()) call('/play/arcade/start', { method:'POST', body:{ game:id } }).then(function(j){ run = j.run; best = j.best || 0; bestEl.textContent = best ? 'Best ' + fmt(best) : ''; begin(); }).catch(function(e){ err(e); begin(); });
       else { bestEl.textContent = 'Guest: scores are not saved'; begin(); }
     }
     function finish(res){
-      if (ended) return; ended = true; activeMs += Date.now() - lastResume;
+      if (ended) return; ended = true; activeMs += Date.now() - lastResume; store(resumeKey, null);
       var card = [h('h2', { text:'Game over' }), h('div', { className:'vc-final-score', text:fmt(res.score) }), h('p', { className:'muted vc-result-line', text:signed() ? 'Saving score…' : 'Sign in to save scores and earn points.' }),
         h('div', { className:'vc-overlay-actions' }, [btn('Play again', function(){ start(); }, 'primary'), btn('Leaderboard', function(){ go('leaderboards', id); }, 'ghost'), signed() ? btn('Challenge a friend', function(){ challenge(id); }, 'ghost') : null])];
       showOverlay(card);
@@ -193,15 +211,20 @@
       ['up','down','left','right','rotate','drop','hold','action','pause'].forEach(function(a){ if (!!now[a] !== !!gpPrev[a]) press(a, !!now[a]); });
       gpPrev = now;
     }
-    function onHide(){ if (document.hidden) setPaused(true, 'Paused while you were away.'); }
+    function onHide(){ if (document.hidden) { setPaused(true, 'Paused while you were away.'); saveSnap(); } }
     function onBlur(){ setPaused(true, 'Paused while the window was in the background.'); }
     function cleanup(){
+      saveSnap();
       document.removeEventListener('keydown', onKey); document.removeEventListener('keyup', onKey); document.removeEventListener('visibilitychange', onHide); window.removeEventListener('blur', onBlur);
       cancelAnimationFrame(gpRaf); Object.keys(repeatTimers).forEach(function(k){ clearTimeout(repeatTimers[k]); clearInterval(repeatTimers[k]); });
       if (engine) { engine.destroy(); engine = null; }
     }
     document.addEventListener('keydown', onKey); document.addEventListener('keyup', onKey); document.addEventListener('visibilitychange', onHide); window.addEventListener('blur', onBlur);
-    poll(); start();
+    poll();
+    var saved = store(resumeKey), seen = false; try { seen = !!localStorage.getItem('vaultcast-arcade-howto:' + id); } catch (e) {}
+    if (saved && saved.state && Date.now() - saved.at < 6 * 3600000 - 120000) showOverlay([h('h2', { text:'Resume your game?' }), h('p', { className:'muted', text:'Score ' + fmt(saved.state.score || 0) + ' · saved ' + ago(Math.floor(saved.at / 1000)) }), h('div', { className:'vc-overlay-actions' }, [btn('Resume', function(){ start(saved); }, 'primary'), btn('New game', function(){ start(); }, 'ghost')])]);
+    else if (!seen && HOWTO[id]) showHowTo(function(){ start(); });
+    else start();
   }
 
   // ------------------------------------------------------------------ Daily Five
@@ -401,6 +424,21 @@
   var SHAPES = ['▲', '◆', '●', '■'];
   function store(k, v){ try { if (v === undefined) return JSON.parse(localStorage.getItem(k) || 'null'); if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, JSON.stringify(v)); } catch (e) { return null; } }
   function img(src){ return A.apiUrl ? A.apiUrl(src) : src; }
+  /** Quiz sounds: short synthesized tones, muted with one switch that is remembered on this device. */
+  var qAudio = null;
+  function quizSoundOn(){ try { return localStorage.getItem('vaultcast-quiz-sound') !== 'off'; } catch (e) { return true; } }
+  function tone(freq, dur, type, vol, delay){
+    if (!quizSoundOn() || document.hidden) return;
+    try {
+      qAudio = qAudio || new (window.AudioContext || window.webkitAudioContext)(); if (qAudio.state === 'suspended') qAudio.resume();
+      var o = qAudio.createOscillator(), g = qAudio.createGain(), t = qAudio.currentTime + (delay || 0);
+      o.type = type || 'sine'; o.frequency.setValueAtTime(freq, t); g.gain.setValueAtTime(vol || 0.06, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      o.connect(g); g.connect(qAudio.destination); o.start(t); o.stop(t + dur + 0.02);
+    } catch (e) {}
+  }
+  var SOUNDS = { question:function(){ tone(523, .12); tone(784, .18, 'sine', .06, .12); }, tick:function(){ tone(880, .05, 'square', .025); }, reveal:function(){ tone(659, .15, 'triangle'); tone(988, .3, 'triangle', .06, .15); }, right:function(){ tone(784, .1, 'triangle'); tone(1175, .2, 'triangle', .06, .1); }, wrong:function(){ tone(220, .25, 'sawtooth', .04); }, join:function(){ tone(1046, .07, 'sine', .04); }, final:function(){ [523, 659, 784, 1046].forEach(function(f, i){ tone(f, .25, 'triangle', .06, i * .14); }); } };
+  function muteBtn(){ var b = btn(quizSoundOn() ? '🔊' : '🔇', function(){ try { localStorage.setItem('vaultcast-quiz-sound', quizSoundOn() ? 'off' : 'on'); } catch (e) {} b.textContent = quizSoundOn() ? '🔊' : '🔇'; b.setAttribute('aria-label', quizSoundOn() ? 'Mute quiz sounds' : 'Turn quiz sounds on'); }, 'ghost vc-icon-btn', { 'aria-label':quizSoundOn() ? 'Mute quiz sounds' : 'Turn quiz sounds on' }); return b; }
+  function playerChip(p, extra){ return h('span', { className:'vc-player-chip pop' }, [avatar(p, 24), h('span', { text:p.name }), p.streak >= 3 ? h('span', { className:'vc-streak', title:p.streak + ' right in a row', text:'🔥' + p.streak }) : null].concat(extra || [])); }
   function quiz(host, sub){
     var parts = String(sub || '').split('/');
     if (parts[0] === 'host' && /^[A-Za-z]{4}$/.test(parts[1] || '')) return quizHost(host, parts[1].toUpperCase());
@@ -467,7 +505,9 @@
   function choiceButtons(q, opts){
     return h('div', { className:'vc-choices' + (opts.big ? ' big' : '') }, q.choices.map(function(c, i){
       var cls = 'vc-choice c' + i + (q.answer != null ? (i === q.answer ? ' right' : ' wrong') : '') + (opts.chosen === i ? ' chosen' : '');
-      return h(opts.onPick ? 'button' : 'div', { type:opts.onPick ? 'button' : null, className:cls, disabled:opts.onPick && (opts.locked || q.answer != null) ? true : null, onClick:opts.onPick ? function(){ opts.onPick(i); } : null }, [h('span', { className:'vc-shape', text:SHAPES[i], 'aria-hidden':'true' }), h('span', { className:'vc-choice-text', text:c })]);
+      var total = q.stats ? q.stats.reduce(function(a, b){ return a + b; }, 0) : 0, n = q.stats ? q.stats[i] || 0 : 0;
+      var stat = q.stats ? h('span', { className:'vc-choice-stat', 'aria-label':n + ' of ' + total + ' chose this' }, [h('span', { className:'vc-choice-stat-bar', style:'width:' + (total ? Math.round(100 * n / total) : 0) + '%' }), h('span', { className:'vc-choice-stat-n', text:String(n) })]) : null;
+      return h(opts.onPick ? 'button' : 'div', { type:opts.onPick ? 'button' : null, className:cls, disabled:opts.onPick && (opts.locked || q.answer != null) ? true : null, onClick:opts.onPick ? function(){ opts.onPick(i); } : null }, [h('span', { className:'vc-shape', text:SHAPES[i], 'aria-hidden':'true' }), h('span', { className:'vc-choice-text', text:c }), stat]);
     }));
   }
   function scoreboard(players, teams, mode, animate){
@@ -494,7 +534,7 @@
     var token = store('vaultcast-quiz-host:' + code);
     var screen = h('div', { className:'vc-quiz-screen' }), bar = h('div', { className:'vc-quiz-hostbar' });
     host.appendChild(h('div', { className:'vc-quiz-host' }, [screen, bar]));
-    var st = null, v = 0, offset = 0, lastKey = '', busy = false, options = null;
+    var st = null, v = 0, offset = 0, lastKey = '', busy = false, options = null, seen = {}, tickTimer = 0;
     function act(action, extra){ if (busy) return Promise.resolve(); busy = true; return call('/play/quiz/rooms/' + code + '/host', { method:'POST', body:Object.assign({ action:action, host_token:token }, extra || {}) }).then(function(j){ busy = false; apply(j); }).catch(function(e){ busy = false; err(e); }); }
     function poll(){
       clearTimeout(pollTimer);
@@ -502,16 +542,38 @@
       api('/play/quiz/rooms/' + code + '?v=' + v + '&host_token=' + encodeURIComponent(token || '')).then(function(j){
         if (!screen.isConnected) return;
         if (!j.ok) { screen.replaceChildren(empty('Room closed', j.error || 'This quiz room is no longer open.', [btn('Back to Quiz', function(){ store('vaultcast-quiz-host:' + code, null); go('quiz'); }, 'primary')])); bar.replaceChildren(); return; }
+        host.classList.remove('vc-offline');
         if (!j.same) apply(j); else offset = j.now - Date.now() / 1000;
         pollTimer = setTimeout(poll, document.hidden ? 4000 : 1000);
-      }).catch(function(){ pollTimer = setTimeout(poll, 3000); });
+      }).catch(function(){ host.classList.add('vc-offline'); pollTimer = setTimeout(poll, 3000); });
     }
     function apply(j){
       st = j; v = j.version; offset = j.now - Date.now() / 1000;
-      if (!j.is_host) { screen.replaceChildren(empty('Not the host screen', 'This room is controlled from another screen.', [btn('Join as a player', function(){ go('quiz', code); }, 'primary')])); bar.replaceChildren(); return; }
+      if (!j.is_host) { if (token) { store('vaultcast-quiz-host:' + code, null); token = null; } screen.replaceChildren(empty('Not the host screen', 'This room is controlled from another screen.', [btn('Join as a player', function(){ go('quiz', code); }, 'primary')])); bar.replaceChildren(); return; }
       if (j.prefetch) { var im = new Image(); im.src = img(j.prefetch); }
       var key = j.status + ':' + j.index;
+      if (key !== lastKey) cue(j);
+      if (j.status === 'lobby') { var fresh = j.players.some(function(p){ return !p.left && !seen[p.id]; }); j.players.forEach(function(p){ seen[p.id] = true; }); if (fresh && lastKey) SOUNDS.join(); }
       if (key !== lastKey || j.status === 'lobby' || j.status === 'question') { draw(key !== lastKey); lastKey = key; }
+    }
+    /** Sounds on the big screen: a sting for each question, ticks for the last five seconds and a chime at the reveal. */
+    function cue(j){
+      clearTimeout(tickTimer);
+      if (j.status === 'question' && j.question) { SOUNDS.question(); (function tick(){ if (!screen.isConnected || st.status !== 'question') return; var left = j.question.ends_at - (Date.now() / 1000 + offset); if (left <= 0) return; if (left <= 5.05) SOUNDS.tick(); tickTimer = setTimeout(tick, left > 6 ? (left - 5) * 1000 : 1000); })(); }
+      else if (j.status === 'reveal') SOUNDS.reveal();
+      else if (j.status === 'final') SOUNDS.final();
+    }
+    /** Players at any point in the game: remove someone, or hand the room to a signed-in player. */
+    function managePlayers(){
+      window.VaultcastHub.modal('Players', function(body, close){
+        var live = st.players.filter(function(p){ return !p.left; });
+        if (!live.length) { body.appendChild(empty('No players yet', '')); return; }
+        body.appendChild(h('div', { className:'vc-people-list' }, live.map(function(p){
+          return h('div', { className:'vc-person-row' }, [avatar(p), h('span', { className:'vc-person-name' }, [h('strong', { text:p.name }), h('small', { className:'muted', text:fmt(p.score) + ' pts' + (p.signed ? '' : ' · guest') })]),
+            h('div', { className:'vc-row-actions' }, [p.signed ? btn('Make host', function(){ A.confirmDialog('Hand this room to ' + p.name + '? They control it from their own device and this screen stops being the host.', { okText:'Make host' }).then(function(ok){ if (!ok) return; close(); act('transfer', { player:p.id }).then(function(){ store('vaultcast-quiz-host:' + code, null); }); }); }, 'ghost small') : null,
+              btn('Remove', function(){ A.confirmDialog('Remove ' + p.name + ' from the quiz? They cannot rejoin this room.', { okText:'Remove', danger:true }).then(function(ok){ if (ok) { close(); act('kick', { player:p.id }); } }); }, 'ghost small danger')])]);
+        })));
+      });
     }
     function controls(){
       var s = st.status, kids = [h('span', { className:'vc-quiz-code-small', text:'Room ' + code })];
@@ -520,6 +582,8 @@
       else if (s === 'intro' || s === 'reveal' || s === 'scores') kids.push(btn(st.settings.auto ? 'Next now' : 'Next', function(){ act('next'); }, 'primary'));
       else if (s === 'final') kids.push(btn('Play again', function(){ act('restart'); }, 'primary'), btn('Back to lobby', function(){ act('lobby'); }, 'ghost'));
       if (s !== 'lobby' && s !== 'final') kids.push(btn('End quiz', function(){ A.confirmDialog('End the quiz now and show the final scores?', { okText:'End quiz' }).then(function(ok){ if (ok) act('end'); }); }, 'ghost'));
+      if (s !== 'closed') kids.push(btn('Players', managePlayers, 'ghost'));
+      kids.push(muteBtn());
       kids.push(btn('⛶', function(){ var el = host.querySelector('.vc-quiz-host'); if (document.fullscreenElement) document.exitFullscreen(); else if (el.requestFullscreen) el.requestFullscreen().catch(function(){}); }, 'ghost vc-icon-btn', { 'aria-label':'Full screen' }));
       kids.push(btn('Close room', function(){ A.confirmDialog('Close this room? Players will be disconnected.', { okText:'Close room', danger:true }).then(function(ok){ if (ok) act('close').then(function(){ store('vaultcast-quiz-host:' + code, null); go('quiz'); }); }); }, 'ghost danger'));
       bar.replaceChildren.apply(bar, kids);
@@ -536,9 +600,9 @@
         var people = h('div', { className:'vc-lobby-players' });
         if (st.settings.mode === 'teams') {
           st.team_names.slice(0, st.settings.teams).forEach(function(t, ti){
-            people.appendChild(h('div', { className:'vc-lobby-team', style:'--vc-team:' + t[1] }, [h('h3', { text:t[0] })].concat(st.players.filter(function(p){ return p.team === ti && !p.left; }).map(function(p){ return h('button', { type:'button', className:'vc-player-chip', title:'Move to the next team', text:p.name, onClick:function(){ act('team', { player:p.id, team:(ti + 1) % st.settings.teams }); } }); }))));
+            people.appendChild(h('div', { className:'vc-lobby-team', style:'--vc-team:' + t[1] }, [h('h3', { text:t[0] })].concat(st.players.filter(function(p){ return p.team === ti && !p.left; }).map(function(p){ return h('span', { className:'vc-player-chip' }, [avatar(p, 24), h('button', { type:'button', className:'vc-chip-move', title:'Move to the next team', 'aria-label':'Move ' + p.name + ' to the next team', text:p.name, onClick:function(){ act('team', { player:p.id, team:(ti + 1) % st.settings.teams }); } }), h('button', { type:'button', className:'vc-chip-x', 'aria-label':'Remove ' + p.name, text:'×', onClick:function(){ act('kick', { player:p.id }); } })]); }))));
           });
-        } else st.players.filter(function(p){ return !p.left; }).forEach(function(p){ people.appendChild(h('span', { className:'vc-player-chip pop' }, [p.name, h('button', { type:'button', className:'vc-chip-x', 'aria-label':'Remove ' + p.name, text:'×', onClick:function(){ act('kick', { player:p.id }); } })])); });
+        } else st.players.filter(function(p){ return !p.left; }).forEach(function(p){ people.appendChild(playerChip(p, [h('button', { type:'button', className:'vc-chip-x', 'aria-label':'Remove ' + p.name, text:'×', onClick:function(){ act('kick', { player:p.id }); } })])); });
         screen.replaceChildren(h('div', { className:'vc-lobby' }, [
           h('div', { className:'vc-lobby-join' }, [h('p', { className:'eyebrow', text:'Join on your phone' }), h('div', { className:'vc-room-code', text:code }), h('p', { className:'muted vc-join-url', text:joinUrl(code).replace(/^https?:\/\//, '') }), qrBox(joinUrl(code), 'Scan to join room ' + code)]),
           h('div', { className:'vc-lobby-side' }, [h('h1', { text:st.settings.title }), h('p', { className:'muted', text:st.settings.rounds + ' rounds × ' + st.settings.per_round + ' questions · ' + st.settings.timer + ' s each · ' + (st.settings.mode === 'teams' ? st.settings.teams + ' teams' : 'solo') }),
@@ -561,7 +625,8 @@
         confetti(screen);
       } else screen.replaceChildren(empty('Room closed', ''));
     }
-    if (!token) { screen.appendChild(empty('Not the host screen', 'Open this room from the device that created it, or join as a player.', [btn('Join as a player', function(){ go('quiz', code); }, 'primary')])); return; }
+    // A signed-in host (including one the room was handed to) is recognised by account, so no token is needed.
+    if (!token && !signed()) { screen.appendChild(empty('Not the host screen', 'Open this room from the device that created it, or join as a player.', [btn('Join as a player', function(){ go('quiz', code); }, 'primary')])); return; }
     screen.appendChild(A.pendingContent({ text:'Opening room…' }));
     poll();
   }
@@ -573,7 +638,12 @@
   }
   function quizPlayer(host, code){
     var box = h('div', { className:'vc-quiz-phone' }); host.appendChild(box);
-    var cred = store('vaultcast-quiz-player:' + code), v = 0, st = null, lastKey = '', sending = false, offset = 0;
+    var cred = store('vaultcast-quiz-player:' + code), v = 0, st = null, lastKey = '', sending = false, offset = 0, fails = 0;
+    var banner = h('p', { className:'vc-offline-banner', role:'status', hidden:true, text:'Connection lost. Reconnecting…' });
+    function offline(on){ banner.hidden = !on; if (on && !banner.isConnected) box.prepend(banner); }
+    // Coming back to the tab (or the network) reconnects at once instead of waiting for the next slow poll.
+    function wake(){ if (!box.isConnected) { document.removeEventListener('visibilitychange', wake); window.removeEventListener('online', wake); return; } if (!document.hidden && cred && st) poll(); }
+    document.addEventListener('visibilitychange', wake); window.addEventListener('online', wake);
     function q(){ return cred ? '&player=' + encodeURIComponent(cred.player) + '&player_token=' + encodeURIComponent(cred.token) : ''; }
     function joinForm(msg){
       var name = h('input', { type:'text', maxlength:'24', placeholder:'Your name', 'aria-label':'Your name', value:signed() ? (me().display_name || me().username || '') : '', disabled:signed() ? true : null });
@@ -588,29 +658,35 @@
       api('/play/quiz/rooms/' + code + '?v=' + v + q()).then(function(j){
         if (!box.isConnected) return;
         if (!j.ok) { box.replaceChildren(empty('Room not open', j.error || '', [btn('Back', function(){ go('quiz'); }, 'primary')])); return; }
+        fails = 0; offline(false);
         if (!j.same) apply(j); else offset = j.now - Date.now() / 1000;
         pollTimer = setTimeout(poll, document.hidden ? 4000 : 1000);
-      }).catch(function(){ pollTimer = setTimeout(poll, 3000); });
+      }).catch(function(){ fails++; offline(true); pollTimer = setTimeout(poll, Math.min(10000, 1500 * fails)); });
     }
     function apply(j){
       st = j; v = j.version; offset = j.now - Date.now() / 1000;
       if (!j.me) { if (j.status === 'closed') box.replaceChildren(empty('This quiz has finished', '')); else joinForm(); return; }
-      if (j.me.left) { box.replaceChildren(empty('You were removed from this room', '', [btn('Rejoin', function(){ join(j.me.name); }, 'primary')])); return; }
-      var key = j.status + ':' + j.index + ':' + (j.me.answer ? 1 : 0) + ':' + j.me.team;
-      if (key === lastKey) return; lastKey = key;
+      if (j.me.kicked) { box.replaceChildren(empty('The host removed you from this quiz', 'You can still watch the big screen.', [btn('Back to Quiz', function(){ store('vaultcast-quiz-player:' + code, null); go('quiz'); }, 'primary')])); return; }
+      if (j.me.left) { box.replaceChildren(empty('You left this room', '', [btn('Rejoin', function(){ join(j.me.name); }, 'primary')])); return; }
+      var key = j.status + ':' + j.index + ':' + (j.me.answer ? 1 : 0) + ':' + j.me.team + ':' + (j.is_host ? 1 : 0);
+      if (key === lastKey) return;
+      var changedStatus = lastKey.split(':').slice(0, 2).join(':') !== j.status + ':' + j.index; lastKey = key;
       var s = j.status, qq = j.question, team = j.me.team != null && j.settings.mode === 'teams' ? j.team_names[j.me.team] : null;
-      var head = h('div', { className:'vc-phone-head', style:team ? '--vc-team:' + team[1] : null }, [h('strong', { text:j.me.name }), team ? h('span', { className:'vc-chip', text:team[0] }) : null, h('span', { className:'muted', text:fmt(j.me.score) + ' pts' })]);
+      var head = h('div', { className:'vc-phone-head', style:team ? '--vc-team:' + team[1] : null }, [h('strong', { text:j.me.name }), team ? h('span', { className:'vc-chip', text:team[0] }) : null, j.me.streak >= 2 ? h('span', { className:'vc-streak', text:'🔥 ' + j.me.streak + ' in a row' }) : null, h('span', { className:'muted', text:fmt(j.me.score) + ' pts' }), muteBtn()]);
+      var hostLink = j.is_host ? h('p', { className:'vc-host-note' }, ['You are now the host. ', btn('Open host controls', function(){ go('quiz', 'host/' + code); }, 'primary small')]) : null;
       var main;
       if (s === 'lobby') main = h('div', { className:'vc-phone-wait' }, [h('h1', { text:'You\u2019re in!' }), h('p', { className:'muted vc-pulse', text:'Waiting for ' + j.host_name + ' to start…' }),
+        h('div', { className:'vc-lobby-mini' }, j.players.filter(function(p){ return !p.left; }).slice(0, 24).map(function(p){ return h('span', { className:'vc-lobby-face', title:p.name }, [avatar(p, 28)]); })),
         j.settings.mode === 'teams' ? h('div', { className:'vc-field' }, [h('span', { text:'Pick your team' }), h('div', { className:'vc-team-pick' }, j.team_names.slice(0, j.settings.teams).map(function(t, i){ return h('button', { type:'button', className:'vc-team-btn' + (j.me.team === i ? ' active' : ''), style:'--vc-team:' + t[1], text:t[0], onClick:function(){ join(j.me.name, i); } }); }))]) : null]);
       else if (s === 'intro') main = h('div', { className:'vc-phone-wait' }, [h('h1', { text:'Get ready…' }), h('p', { className:'muted', text:j.rounds.length + ' rounds coming up' })]);
       else if (s === 'question') main = j.me.answer ? h('div', { className:'vc-phone-wait' }, [h('h1', { text:'Locked in' }), h('span', { className:'vc-shape-big c' + j.me.answer.c, text:SHAPES[j.me.answer.c] }), h('p', { className:'muted', text:'Waiting for everyone else…' })])
         : h('div', { className:'vc-phone-q' }, [h('div', { className:'vc-quiz-meta' }, [h('span', { className:'muted', text:'Q' + (qq.n + 1) + ' / ' + j.total }), timerRing(qq.ends_at, qq.timer, offset)]), h('p', { className:'vc-phone-question', text:qq.question }), choiceButtons(qq, { onPick:answer, locked:sending })]);
-      else if (s === 'reveal') { var a = j.me.answer || {}; main = h('div', { className:'vc-phone-result ' + (a.ok ? 'ok' : 'bad') }, [h('h1', { text:a.ok ? 'Correct!' : (a.c === -1 || a.c == null ? 'Too slow' : 'Not quite') }), a.ok ? h('p', { className:'vc-phone-points', text:'+' + fmt(a.pts) }) : h('p', { className:'muted', text:'Answer: ' + qq.choices[qq.answer] }), h('p', { className:'muted', text:'You are #' + j.me.rank }) ]); }
+      else if (s === 'reveal') { var a = j.me.answer || {}; main = h('div', { className:'vc-phone-result ' + (a.ok ? 'ok' : 'bad') }, [h('h1', { text:a.ok ? 'Correct!' : (a.c === -1 || a.c == null ? 'Too slow' : 'Not quite') }), a.ok ? h('p', { className:'vc-phone-points', text:'+' + fmt(a.pts) }) : h('p', { className:'muted', text:'Answer: ' + qq.choices[qq.answer] }), a.ok && j.me.streak >= 2 ? h('p', { className:'vc-streak', text:'🔥 ' + j.me.streak + ' in a row' }) : null, h('p', { className:'muted', text:'You are #' + j.me.rank }), qq.stats ? choiceButtons(qq, { chosen:a.c }) : null]); }
       else if (s === 'scores') main = h('div', { className:'vc-phone-wait' }, [h('h1', { text:'#' + j.me.rank }), h('p', { className:'muted', text:fmt(j.me.score) + ' points so far' })]);
       else if (s === 'final') main = h('div', { className:'vc-phone-wait' }, [h('p', { className:'eyebrow', text:'Final' }), h('h1', { text:j.me.rank === 1 ? '🏆 You won!' : 'You finished #' + j.me.rank }), h('p', { className:'muted', text:fmt(j.me.score) + ' points' }), signed() ? btn('Leaderboard', function(){ go('leaderboards', 'quiz'); }, 'ghost') : null]);
       else main = empty('This quiz has finished', '');
-      box.replaceChildren(head, main);
+      box.replaceChildren.apply(box, [head, hostLink, main].filter(Boolean)); if (!banner.hidden) box.prepend(banner);
+      if (changedStatus) { if (s === 'reveal') ((j.me.answer || {}).ok ? SOUNDS.right : SOUNDS.wrong)(); else if (s === 'final' && j.me.rank === 1) SOUNDS.final(); }
       if (s === 'reveal' && navigator.vibrate) try { navigator.vibrate((j.me.answer || {}).ok ? 60 : [40, 60, 40]); } catch (e) {}
     }
     function answer(i){
@@ -674,10 +750,17 @@
     var parts = String(sub || '').split('/'), tab = parts[0] || 'overview';
     host.appendChild(hero('Teams & friends', 'Build a crew, challenge friends and collect badges. Every point you earn also counts for your team.', null, 'PLAY'));
     if (!signed()) { host.appendChild(empty('Sign in to join teams', 'Teams, friends and profiles need an account.')); return; }
-    var tabs = [['overview', 'Overview'], ['teams', 'Teams'], ['friends', 'Friends'], ['profile', 'My profile']];
+    if (tab === 'join' && /^[a-f0-9]{20}$/.test(parts[1] || '')) return joinTeamLink(host, parts[1]);
+    var tabs = [['overview', 'Overview'], ['teams', 'Teams'], ['friends', 'Friends'], ['profile', 'My profile'], ['privacy', 'Privacy']];
     if (me().role === 'admin') tabs.push(['admin', 'Moderation']);
-    host.appendChild(h('nav', { className:'vc-tabs', 'aria-label':'Social sections' }, tabs.map(function(t){ return h('button', { type:'button', className:'vc-tab' + (t[0] === tab ? ' active' : ''), 'aria-current':t[0] === tab ? 'page' : null, text:t[1], onClick:function(){ go('social', t[0] === 'overview' ? '' : t[0]); } }); })));
+    var badges = {};
+    host.appendChild(h('nav', { className:'vc-tabs', 'aria-label':'Social sections' }, tabs.map(function(t){ badges[t[0]] = h('span', { className:'vc-tab-badge', hidden:true }); return h('button', { type:'button', className:'vc-tab' + (t[0] === tab ? ' active' : ''), 'aria-current':t[0] === tab ? 'page' : null, onClick:function(){ go('social', t[0] === 'overview' ? '' : t[0]); } }, [t[1], badges[t[0]]]); })));
     var body = h('div', { className:'vc-social' }); host.appendChild(body);
+    // Badges for things waiting on you: friend requests and team invitations (one small request each, only when not on that tab).
+    function badge(k, n, label){ if (!badges[k] || !n) return; badges[k].hidden = false; badges[k].textContent = String(n); badges[k].setAttribute('aria-label', n + ' ' + label); }
+    if (tab !== 'friends') call('/play/friends').then(function(j){ badge('friends', j.friends.filter(function(f){ return f.state === 'incoming'; }).length, 'waiting requests'); }).catch(function(){});
+    if (tab !== 'teams') call('/play/teams').then(function(j){ badge('teams', j.team ? (j.team.requests || []).length : j.invites.length, j.team ? 'join requests' : 'invitations'); }).catch(function(){});
+    if (tab === 'privacy') return privacyView(body);
     if (tab === 'teams') return teamsView(body);
     if (tab === 'friends') return friendsView(body);
     if (tab === 'profile') return profileView(body, parts[1] || '');
@@ -733,6 +816,14 @@
             captain && m.id !== me().id ? btn(m.role === 'captain' ? 'Make member' : 'Make captain', function(){ act({ action:m.role === 'captain' ? 'demote' : 'promote', user_id:m.id }); }, 'ghost small') : null,
             captain && m.id !== me().id ? btn('Remove', function(){ A.confirmDialog('Remove ' + m.name + ' from the team?', { okText:'Remove', danger:true }).then(function(ok){ if (ok) act({ action:'remove', user_id:m.id }); }); }, 'ghost small danger') : null]));
         }))]));
+        var wallText = h('textarea', { rows:'2', maxlength:'280', placeholder:'Say something to your team', 'aria-label':'Message to your team' });
+        kids.push(panel('Team wall', [h('form', { className:'vc-wall-form', onSubmit:function(e){ e.preventDefault(); var v = wallText.value.trim(); if (!v) return; act({ action:'post', text:v }); } }, [wallText, h('button', { type:'submit', className:'btn primary small', text:'Post' })]),
+          (t.wall || []).length ? h('ul', { className:'vc-wall' }, t.wall.slice().reverse().map(function(w){ return h('li', null, [avatar(w.user), h('div', { className:'vc-grow' }, [h('strong', { text:w.user.name }), h('p', { className:'vc-wall-text', text:w.text }), h('time', { className:'muted', text:ago(w.at) })]), w.can_delete ? btn('×', function(){ act({ action:'unpost', post_id:w.id }); }, 'ghost small vc-icon-btn', { 'aria-label':'Delete this post' }) : null]); })) : h('p', { className:'muted', text:'No posts yet.' })]));
+        if (captain) {
+          var linkUrl = t.link ? location.origin + (A.BASE || '/') + 'play/social/join/' + t.link : '';
+          kids.push(panel('Invite link', t.link ? [h('p', { className:'muted', text:'Anyone signed in on this server who opens this link joins the team straight away. Replace it to stop the old one working.' }), h('div', { className:'vc-share-row' }, [h('code', { text:linkUrl.replace(/^https?:\/\//, '') }), btn('Copy', function(){ (navigator.clipboard ? navigator.clipboard.writeText(linkUrl) : Promise.reject()).then(function(){ A.toast('Copied', { kind:'ok' }); }).catch(function(){ window.prompt('Copy this link', linkUrl); }); }, 'ghost small'), btn('Replace', function(){ act({ action:'link' }); }, 'ghost small'), btn('Turn off', function(){ act({ action:'unlink' }); }, 'ghost small danger')]), qrBox(linkUrl, 'QR code for the team invite link')]
+            : [h('p', { className:'muted', text:'Create a link people can open to join without an invitation.' }), btn('Create invite link', function(){ act({ action:'link' }); }, 'primary')]));
+        }
         if (captain && (t.requests || []).length) kids.push(panel('Join requests', [h('div', { className:'vc-people-list' }, t.requests.map(function(p){ return personRow(p, h('span', { className:'vc-row-actions' }, [btn('Approve', function(){ act({ action:'approve', user_id:p.id }); }, 'primary small'), btn('Reject', function(){ act({ action:'reject', user_id:p.id }); }, 'ghost small')])); }))]));
         if ((t.invites || []).length) kids.push(panel('Pending invitations', [h('div', { className:'vc-people-list' }, t.invites.map(function(p){ return personRow(p, captain ? btn('Cancel', function(){ act({ action:'cancel-invite', user_id:p.id }); }, 'ghost small') : null); }))]));
       } else {
@@ -770,14 +861,34 @@
     var box = h('div', { className:'vc-profile' }, [A.pendingContent({ text:'Loading profile…' })]); body.appendChild(box);
     call('/play/profile' + (id ? '?id=' + encodeURIComponent(id) : '')).then(function(p){
       var s = p.stats;
+      var blockBtn = !p.me ? btn('Block', function(){ A.confirmDialog('Block ' + p.person.name + '? You stop being friends, they cannot challenge you, invite you or see your profile, and you will not get notifications from them.', { okText:'Block', danger:true }).then(function(ok){ if (ok) call('/play/privacy', { method:'POST', body:{ action:'block', user_id:p.person.id } }).then(function(){ A.toast(p.person.name + ' is blocked'); go('social', 'privacy'); }).catch(err); }); }, 'ghost danger') : null;
+      if (p.private) { box.replaceChildren(h('div', { className:'vc-profile-head' }, [avatar(p.person, 72), h('div', { className:'vc-grow' }, [h('h2', { text:p.person.name }), h('p', { className:'muted', text:'This profile is private.' })]), !p.friend ? btn('Add friend', function(e){ e.currentTarget.disabled = true; call('/play/friends', { method:'POST', body:{ action:'request', user_id:p.person.id } }).then(function(){ A.toast('Request sent', { kind:'ok' }); }).catch(err); }, 'primary') : null, blockBtn])); return; }
       box.replaceChildren(
         h('div', { className:'vc-profile-head' }, [avatar(p.person, 72), h('div', { className:'vc-grow' }, [h('h2', { text:p.person.name }), h('p', { className:'muted', text:(p.team ? p.team.emblem + ' ' + p.team.name + (p.team.role === 'captain' ? ' · captain' : '') + ' · ' : '') + fmt(s.points) + ' points' + (s.rank ? ' · #' + s.rank + ' overall' : '') })]),
-          !p.me && !p.friend ? btn('Add friend', function(e){ e.currentTarget.disabled = true; call('/play/friends', { method:'POST', body:{ action:'request', user_id:p.person.id } }).then(function(){ A.toast('Request sent', { kind:'ok' }); }).catch(err); }, 'primary') : null]),
+          !p.me && !p.friend ? btn('Add friend', function(e){ e.currentTarget.disabled = true; call('/play/friends', { method:'POST', body:{ action:'request', user_id:p.person.id } }).then(function(){ A.toast('Request sent', { kind:'ok' }); }).catch(err); }, 'primary') : null, blockBtn, p.me ? btn('Privacy', function(){ go('social', 'privacy'); }, 'ghost') : null]),
         h('div', { className:'vc-stat-row' }, [['Games played', s.games_played], ['Points this week', s.points_week], ['Quiz wins', s.quiz_wins], ['Chess wins', s.chess_wins], ['Daily Five streak', s.word_streak], ['Friends', s.friends]].map(function(x){ return h('div', { className:'vc-stat' }, [h('strong', { text:fmt(x[1]) }), h('span', { className:'muted', text:x[0] })]); })),
         panel('Achievements', [h('div', { className:'vc-badges' }, p.badges.map(function(b){ return h('div', { className:'vc-badge' + (b.earned ? ' earned' : ''), title:b.detail }, [h('span', { className:'vc-badge-icon', text:b.icon, 'aria-hidden':'true' }), h('strong', { text:b.name }), h('small', { className:'muted', text:b.detail }), h('span', { className:'sr-only', text:b.earned ? 'Earned' : 'Not earned yet' })]); }))]),
         panel('Personal bests', [Object.keys(p.bests).length ? h('div', { className:'vc-bests' }, Object.keys(p.bests).map(function(g){ var b = p.bests[g]; return h('button', { type:'button', className:'vc-best-row', onClick:function(){ go('leaderboards', g); } }, [h('strong', { text:b.name }), h('span', { text:g === 'chess' ? 'Played ' + b.plays : fmt(b.best) }), h('span', { className:'muted', text:b.plays + ' plays' + (b.rank ? ' · #' + b.rank : '') })]); })) : h('p', { className:'muted', text:'No games yet.' })]),
         panel('Recent activity', [activityList(p.activity)]));
     }).catch(function(e){ box.replaceChildren(empty('Profile unavailable', (e && e.error) || '')); });
+  }
+  function privacyView(body){
+    var box = h('div', { className:'vc-privacy' }, [A.pendingContent({ text:'Loading…' })]); body.appendChild(box);
+    function save(payload){ return call('/play/privacy', { method:'POST', body:payload }).then(function(){ A.toast('Saved', { kind:'ok' }); return call('/play/privacy').then(draw); }).catch(err); }
+    function draw(j){
+      var hide = h('input', { type:'checkbox', checked:j.hide ? true : null, onChange:function(){ save({ action:'save', hide:this.checked }); } });
+      var vis = seg([['everyone', 'Everyone'], ['friends', 'Friends only'], ['private', 'Only me']], j.profile, function(v){ save({ action:'save', profile:v }); }, 'Who can see my profile');
+      box.replaceChildren(
+        panel('Leaderboards', [h('label', { className:'vc-check' }, [hide, h('span', { text:'Hide me from leaderboards' })]), h('p', { className:'muted', text:'Your scores still count for you and your team; your name just does not appear on the public boards.' })]),
+        panel('Profile', [h('div', { className:'vc-field' }, [h('span', { text:'Who can see my profile, stats and activity' }), vis])]),
+        panel('Blocked players', [j.blocked.length ? h('div', { className:'vc-people-list' }, j.blocked.map(function(p){ return h('div', { className:'vc-person-row' }, [avatar(p), h('span', { className:'vc-person-name' }, [h('strong', { text:p.name })]), btn('Unblock', function(){ save({ action:'unblock', user_id:p.id }); }, 'ghost small')]); })) : h('p', { className:'muted', text:'You have not blocked anyone. Block someone from their profile.' })]));
+    }
+    call('/play/privacy').then(draw).catch(function(e){ box.replaceChildren(empty('Privacy settings unavailable', (e && e.error) || '')); });
+  }
+  function joinTeamLink(host, token){
+    var box = h('div', { className:'vc-social' }); host.appendChild(box);
+    if (!signed()) { box.appendChild(empty('Sign in to join this team', 'Team invite links work for accounts on this server.')); return; }
+    box.appendChild(panel('Join a team', [h('p', { className:'muted', text:'You were sent an invite link to a team.' }), h('div', { className:'vc-overlay-actions' }, [btn('Join the team', function(e){ e.currentTarget.disabled = true; call('/play/teams', { method:'POST', body:{ action:'join-link', token:token } }).then(function(){ A.toast('Welcome to the team!', { kind:'ok' }); go('social', 'teams'); }).catch(function(x){ err(x); go('social', 'teams'); }); }, 'primary'), btn('Not now', function(){ go('social'); }, 'ghost')])]));
   }
   function adminView(body){
     var box = h('div', { className:'vc-admin' }, [A.pendingContent({ text:'Loading…' })]); body.appendChild(box);

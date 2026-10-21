@@ -14932,14 +14932,28 @@ function viewCollectionDetail(){
     openSettings: openSettings, openShow: openShow, openMovie: openMovie, openGame:openGame, navigate:navigate, refreshArtwork:refreshArtwork, fmtSize: fmtSize, version: APP_VERSION,
     shell:shell,communityPoster:communityPoster,refreshCommunityRating:refreshCommunityRating,heroClock:heroClock,homePosterEl:homePosterEl,homeSectionPosterEl:homeSectionPosterEl,collectionsPosterEl:collectionsPosterEl,librarySummary:librarySummary,cardEl:cardEl,homeActivitySections:homeActivitySections,applyRoute:applyRoute,replaceNav:replaceNav,openPlayer:openPlayer,playItem:playItem,copyText:copyText,shareUrl:shareUrl,startLobbyHost:startLobbyHost,captureGameState:lobbyCaptureState,loadGameState:loadGameState,restoreMultiplayerState:restoreMultiplayerState,quitGame:function(){closePlayer();} };
   var moduleLoads = {};
+  /** The feature modules' stylesheet is fetched with the first module, so pages that never open them skip it. */
+  var extraCss = null;
+  function loadExtraCss(){
+    if (extraCss) return extraCss;
+    extraCss = new Promise(function(resolve){
+      var link = document.createElement('link'); link.rel = 'stylesheet';
+      link.href = BASE + 'index.php?asset=assets/css/vc-extra.css&v=' + encodeURIComponent(window.__ASSET_VERSION__ || APP_VERSION);
+      link.onload = function(){ resolve(); }; link.onerror = function(){ extraCss = null; resolve(); };
+      setTimeout(resolve, 4000); // never hold a page back on a slow stylesheet
+      document.head.appendChild(link);
+    });
+    return extraCss;
+  }
   function loadModule(file, globalName){
     if (globalName && window[globalName]) return Promise.resolve(window[globalName]);
     if (moduleLoads[file]) return moduleLoads[file];
+    var css = /^vc-(play|misc|games)\.js$/.test(file) ? loadExtraCss() : Promise.resolve();
     moduleLoads[file] = new Promise(function(resolve, reject){
       var sm = document.createElement('script');
       sm.src = BASE + 'index.php?asset=assets/js/' + file + '&v=' + encodeURIComponent(window.__ASSET_VERSION__ || APP_VERSION);
       sm.async = true;
-      sm.onload = function(){ var mod = globalName ? window[globalName] : true; if (mod) { if (mod.init) mod.init(window.NSApp); resolve(mod); } else { moduleLoads[file] = null; reject(new Error('Module missing')); } };
+      sm.onload = function(){ var mod = globalName ? window[globalName] : true; if (mod) { if (mod.init) mod.init(window.NSApp); css.then(function(){ resolve(mod); }); } else { moduleLoads[file] = null; reject(new Error('Module missing')); } };
       sm.onerror = function(){ moduleLoads[file] = null; reject(new Error('Could not load ' + file)); };
       document.head.appendChild(sm);
     });

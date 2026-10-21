@@ -2589,3 +2589,4 @@ input[type=checkbox],input[type=radio],input[type=range] { accent-color:var(--ac
 }
 
 html[data-motion="reduced"]{scroll-behavior:auto!important}
+.vc-lazy { min-height: 40vh; }

@@ -1,6 +1,6 @@
 /* Vaultcast Play extras and Misc (Board, Drop, Ambient). Theme tokens only, so every theme applies. */
 body[data-mode="misc"] { --accent: var(--vod-a); --accent-2: var(--vod-b); }
-.vc-lazy { min-height: 40vh; }
+/* .vc-lazy lives in app.css: it is shown before this stylesheet loads. */
 .vc-play, .vc-misc { padding: 18px var(--gutter) 64px; display: flex; flex-direction: column; gap: 18px; }
 .vc-grow { flex: 1 1 auto; min-width: 0; }
 .sr-only { position: absolute !important; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
@@ -617,3 +617,63 @@ body.vc-ambient-on { overflow: hidden; }
   .vc-kb-img { animation: none !important; }
 }
 html[data-motion="reduced"] .vc-play *, html[data-motion="reduced"] .vc-misc *, html[data-motion="reduced"] .vc-ambient * { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+.vc-ambient .vc-kb-layer { transition-duration: var(--vc-kb-fade, 1.6s); }
+.vc-amb-dim { position: absolute; inset: 0; background: #000; pointer-events: none; transition: opacity 30s linear; z-index: 3; }
+
+/* ---- second pass: Drop previews, ZIP selection, anonymous Drop admin ---- */
+.vc-drop-pick { width: 20px; height: 20px; flex: 0 0 20px; accent-color: var(--accent); }
+.vc-zip-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 14px; margin-bottom: 10px; border-radius: var(--radius-lg); border: 1px solid var(--border-strong); background: var(--surface-2, var(--surface-1)); position: sticky; top: 8px; z-index: 2; }
+.vc-zip-bar[hidden] { display: none; }
+.vc-zip-bar > span { flex: 1 1 auto; font-weight: 600; }
+.vc-drop-preview { display: grid; place-items: center; max-height: 72vh; overflow: auto; }
+.vc-drop-preview img, .vc-drop-preview video { max-width: 100%; max-height: 70vh; border-radius: var(--radius-md, 10px); background: #000; }
+.vc-drop-preview audio { width: min(520px, 100%); }
+.vc-drop-text-preview { width: 100%; max-height: 66vh; overflow: auto; margin: 0; padding: 14px; border-radius: var(--radius-md, 10px); background: var(--surface-1); border: 1px solid var(--border); font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-word; color: var(--text); }
+.vc-share-extra { flex-basis: 100%; display: flex; justify-content: center; }
+.vc-share-extra:empty { display: none; }
+.vc-chip.muted { opacity: .7; }
+.vc-anon-admin { display: grid; gap: 10px; padding: 14px; border-radius: var(--radius-lg); border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--border)); background: color-mix(in srgb, var(--danger) 7%, transparent); }
+.vc-warn-danger { margin: 0; color: var(--danger-strong, var(--danger)); font-weight: 500; line-height: 1.45; }
+.vc-warn-danger strong { color: var(--danger-strong, var(--danger)); }
+.vc-notes { margin: 0; padding-left: 18px; }
+.vc-progress[role="progressbar"] { display: block; }
+
+/* ---- Board: colour background and locked layout ---- */
+.vc-board.bg-colour { padding: 14px; }
+.vc-board.locked .vc-w-resize { display: none !important; }
+
+/* ---- Arcade / Quiz / Social ---- */
+.vc-howto { text-align: left; margin: 0 0 10px; padding-left: 20px; display: grid; gap: 8px; max-width: 520px; line-height: 1.45; }
+.vc-streak { display: inline-flex; align-items: center; gap: 4px; font-weight: 700; color: var(--warn); white-space: nowrap; }
+.vc-choice { position: relative; overflow: hidden; }
+.vc-choice-text { position: relative; z-index: 1; }
+.vc-choice-stat { position: absolute; inset: auto 0 0 0; height: 100%; pointer-events: none; }
+.vc-choice-stat-bar { position: absolute; left: 0; top: 0; bottom: 0; background: rgba(255,255,255,.14); transition: width .9s cubic-bezier(.2,.8,.2,1); }
+.vc-choice-stat-n { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); font-weight: 800; font-size: 1.1em; z-index: 1; }
+.vc-player-chip { display: inline-flex; align-items: center; gap: 6px; }
+.vc-player-chip .vc-avatar { width: 24px; height: 24px; font-size: 12px; }
+.vc-chip-move { background: none; border: 0; color: inherit; font: inherit; cursor: pointer; padding: 0; }
+.vc-chip-move:hover, .vc-chip-move:focus-visible { text-decoration: underline; }
+.vc-lobby-mini { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; margin: 14px 0; }
+.vc-lobby-face .vc-avatar { width: 28px; height: 28px; }
+.vc-host-note { display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; padding: 10px; border-radius: var(--radius-lg); background: color-mix(in srgb, var(--accent) 12%, transparent); margin: 8px 0; }
+.vc-offline-banner { margin: 0 0 8px; padding: 8px 12px; border-radius: 999px; text-align: center; background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--text); font-weight: 600; }
+.vc-offline-banner[hidden] { display: none; }
+.vc-offline > .vc-quiz-host .vc-quiz-hostbar::after { content: 'Reconnecting…'; color: var(--warn); font-weight: 600; margin-left: 8px; }
+.vc-tab-badge { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; margin-left: 6px; border-radius: 999px; background: var(--danger-strong, var(--danger)); color: #111; font-size: 11px; font-weight: 800; vertical-align: middle; }
+.vc-tab-badge[hidden] { display: none; }
+.vc-wall-form { display: flex; gap: 8px; align-items: flex-end; margin-bottom: 12px; }
+.vc-wall-form textarea { flex: 1 1 auto; min-height: 44px; resize: vertical; }
+.vc-wall { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.vc-wall li { display: flex; gap: 10px; align-items: flex-start; }
+.vc-wall-text { margin: 2px 0; white-space: pre-wrap; word-break: break-word; }
+.vc-privacy { display: grid; gap: 16px; }
+@media (max-width: 640px) {
+  .vc-wall-form { flex-direction: column; align-items: stretch; }
+  .vc-zip-bar { top: 0; }
+  .vc-choice-stat-n { right: 8px; font-size: 1em; }
+}
+@media (min-width: 1800px) {
+  .vc-howto { font-size: 1.2em; max-width: 760px; }
+  .vc-choice-stat-n { font-size: 1.5em; }
+}

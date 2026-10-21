@@ -39,6 +39,19 @@
   var cleanups = [];
   function onCleanup(fn){ cleanups.push(fn); }
   function stopAll(){ var c = cleanups; cleanups = []; c.forEach(function(fn){ try { fn(); } catch (e) {} }); }
+  /**
+   * Widget refresh loop: the first refresh is staggered so a board's widgets do not all hit the server together,
+   * nothing runs while the tab is hidden, and a refresh that came due while hidden runs once on return.
+   * s.refresh (seconds) overrides the widget's default interval. Returns the stop function widgets hand back.
+   */
+  function poll(fn, ms, s){
+    var every = s && Number(s.refresh) > 0 ? Math.max(5, Number(s.refresh)) * 1000 : ms, timer = 0, due = false, stopped = false;
+    function run(){ if (stopped) return; if (document.hidden) { due = true; return; } due = false; try { fn(); } catch (e) {} timer = setTimeout(run, every); }
+    function vis(){ if (!document.hidden && due && !stopped) { clearTimeout(timer); run(); } }
+    document.addEventListener('visibilitychange', vis);
+    timer = setTimeout(run, every + (every >= 5000 ? Math.floor(Math.random() * Math.min(every * 0.25, 30000)) : 0));
+    return function(){ stopped = true; clearTimeout(timer); document.removeEventListener('visibilitychange', vis); };
+  }
   function every(ms, fn, host){ var t = setInterval(function(){ if (host && !host.isConnected) { clearInterval(t); return; } if (!document.hidden) fn(); }, ms); onCleanup(function(){ clearInterval(t); }); return t; }
 
   // ------------------------------------------------------------------ weather helpers (Open-Meteo WMO codes)
@@ -87,7 +100,7 @@
         } else face.querySelector('.vc-clock-time').textContent = clockText(d, { seconds:s.seconds, h12:s.h12 === 'on' ? true : s.h12 === 'off' ? false : null, tz:s.tz });
         face.querySelector('.vc-clock-date').textContent = s.date === false ? '' : (s.label ? s.label + ' · ' : '') + dateText(d, s.tz);
       }
-      tick(); var t = setInterval(tick, 1000); return function(){ clearInterval(t); };
+      tick(); return poll(tick, 1000);
     },
     form:function(s){ return textForm([{ key:'style', label:'Style', type:'select', value:s.style || 'digital', options:[['digital', 'Digital'], ['analog', 'Analogue']] }, { key:'seconds', label:'Show seconds', type:'checkbox', value:!!s.seconds }, { key:'date', label:'Show the date', type:'checkbox', value:s.date !== false }, { key:'h12', label:'Clock format', type:'select', value:s.h12 || 'auto', options:[['auto', 'Device default'], ['off', '24-hour'], ['on', '12-hour']] }, { key:'tz', label:'Time zone (optional)', value:s.tz || '', placeholder:'e.g. America/New_York', hint:'Leave empty for this device\u2019s time zone.' }, { key:'label', label:'Label (optional)', value:s.label || '' }]); }
   };
@@ -104,7 +117,7 @@
           h('div', { className:'vc-wx-days' }, j.days.slice(0, 5).map(function(d, i){ return h('div', { className:'vc-wx-d' }, [h('small', { text:i === 0 ? 'Today' : new Date(d.date + 'T12:00').toLocaleDateString([], { weekday:'short' }) }), h('span', { text:wx(d.code).icon }), h('strong', { text:Math.round(d.max) + '°' }), h('small', { className:'muted', text:Math.round(d.min) + '°' })]); })),
           h('small', { className:'vc-w-source muted', text:'Open-Meteo' + (j.stale ? ' · offline, showing last update' : '') })]));
       }).catch(function(e){ wErr(body, e); }); }
-      loading(body); load(); var t = setInterval(load, 600000); return function(){ clearInterval(t); };
+      loading(body); load(); return poll(load, 600000, s);
     },
     form:function(s){
       var loc = s.loc || null, units = select([['c', 'Celsius, km/h'], ['f', 'Fahrenheit, mph']], s.units || 'c');
@@ -126,7 +139,7 @@
           body.replaceChildren(list(groups, 'vc-cal'));
         });
       }
-      loading(body); load(); var t = setInterval(load, 900000); return function(){ clearInterval(t); };
+      loading(body); load(); return poll(load, 900000, s);
     },
     form:function(s){ return textForm([{ key:'urls', label:'Calendar links (one per line)', type:'textarea', value:s.urls || '', placeholder:'https://…/basic.ics', hint:'Private Google/Outlook/iCloud ICS links work. Public internet addresses only.' }, { key:'days', label:'Days ahead', type:'number', min:1, max:60, value:s.days || 14 }]); }
   };
@@ -180,29 +193,29 @@
   };
 
   W.recordings = { name:'Recordings', desc:'What is recording now and what is scheduled next.', icon:'⏺️', w:6, h:6,
-    render:function(body){
+    render:function(body, s){
       function load(){ call('/misc/widget/recordings').then(function(j){
         if (j.unavailable) { body.replaceChildren(h('p', { className:'muted', text:'Live TV is turned off on this server.' })); return; }
         var rows = j.recording.map(function(r){ return h('li', { className:'vc-rec live' }, [h('span', { className:'vc-rec-dot', 'aria-label':'Recording' }), h('span', null, [h('strong', { text:r.title }), h('small', { className:'muted', text:r.channel + ' · until ' + new Date(r.end * 1000).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }) })])]); })
           .concat(j.upcoming.map(function(r){ var d = new Date(r.start * 1000); return h('li', { className:'vc-rec' }, [h('span', { className:'vc-rec-time', text:d.toLocaleDateString([], { weekday:'short' }) + ' ' + d.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }) }), h('span', null, [h('strong', { text:r.title }), h('small', { className:'muted', text:r.channel })])]); }));
         body.replaceChildren(rows.length ? list(rows) : h('p', { className:'muted', text:'No recordings scheduled.' }));
       }).catch(function(e){ wErr(body, e); }); }
-      loading(body); load(); var t = setInterval(load, 60000); return function(){ clearInterval(t); };
+      loading(body); load(); return poll(load, 60000, s);
     }
   };
   W.downloads = { name:'Downloads', desc:'Progress of downloads in the request queue.', icon:'⬇️', w:6, h:6,
-    render:function(body){
+    render:function(body, s){
       function load(){ call('/misc/widget/downloads').then(function(j){
         if (j.unavailable) { body.replaceChildren(h('p', { className:'muted', text:'Downloads are not available for your account.' })); return; }
         body.replaceChildren(j.items.length ? list(j.items.map(function(d){ var pct = Math.max(0, Math.min(100, Number(d.percent || 0))); return h('li', { className:'vc-dl' }, [h('span', { className:'vc-dl-name', text:d.name }), h('span', { className:'vc-progress', role:'progressbar', 'aria-valuenow':String(Math.round(pct)), 'aria-valuemin':'0', 'aria-valuemax':'100' }, [h('i', { style:'width:' + pct + '%' })]), h('small', { className:'muted', text:Math.round(pct) + '% · ' + (d.status || '') })]); })) : h('p', { className:'muted', text:'Nothing downloading.' }));
       }).catch(function(e){ wErr(body, e); }); }
-      loading(body); load(); var t = setInterval(load, 10000); return function(){ clearInterval(t); };
+      loading(body); load(); return poll(load, 10000, s);
     }
   };
   function pick(o, keys){ for (var i = 0; i < keys.length; i++) if (o && o[keys[i]] != null) return o[keys[i]]; return null; }
   function pct(v){ if (v == null) return null; if (typeof v === 'number') return v; if (typeof v === 'object') { var p = pick(v, ['percent', 'used_percent', 'pct']); if (p != null) return Number(p); var u = pick(v, ['used']), t = pick(v, ['total', 'size']); if (u != null && t) return 100 * u / t; } return null; }
   W.health = { name:'NAS health', desc:'CPU, memory, disks, temperature and services.', icon:'🩺', w:6, h:6,
-    render:function(body){
+    render:function(body, s){
       function load(){ call('/misc/widget/health').then(function(j){
         if (j.limited) { body.replaceChildren(h('div', { className:'vc-health-ok' }, [h('span', { className:'vc-rec-dot ok' }), h('strong', { text:'Server online' }), h('small', { className:'muted', text:'Detailed health is visible to administrators.' })])); return; }
         var gauges = [['CPU', pct(pick(j, ['cpu_percent', 'cpu']))], ['Memory', pct(pick(j, ['memory', 'mem']))], ['Media disk', pct(pick(j, ['media_disk', 'disk']))], ['Data disk', pct(pick(j, ['data_disk']))]].filter(function(g){ return g[1] != null && !isNaN(g[1]); });
@@ -212,25 +225,25 @@
           h('p', { className:'muted' }, [j.uptime_human ? 'Up ' + j.uptime_human : '', temp ? ' · ' + Math.round(Number(temp)) + '°C' : '', j.load ? ' · load ' + (Array.isArray(j.load) ? j.load.slice(0, 3).map(function(x){ return Number(x).toFixed(2); }).join(' ') : j.load) : '']),
           j.services ? h('div', { className:'vc-services' }, j.services.slice(0, 8).map(function(s){ var ok = s.active === true || s.active === 'active' || s.active === 'running'; return h('span', { className:'vc-chip' + (ok ? ' ok' : ' bad'), text:(ok ? '● ' : '○ ') + s.name }); })) : null]));
       }).catch(function(e){ wErr(body, e); }); }
-      loading(body); load(); var t = setInterval(load, 20000); return function(){ clearInterval(t); };
+      loading(body); load(); return poll(load, 20000, s);
     }
   };
   W.recent = { name:'Recently added', desc:'The newest films and shows in the library.', icon:'🆕', w:12, h:6,
     render:function(body, s){
-      call('/misc/widget/recent?n=' + (s.count || 12)).then(function(j){
+      function load(){ call('/misc/widget/recent?n=' + (s.count || 12)).then(function(j){
         if (!j.items.length) { body.replaceChildren(h('p', { className:'muted', text:'Nothing new yet.' })); return; }
         body.replaceChildren(h('div', { className:'vc-poster-row' }, j.items.map(function(it){ return h('button', { type:'button', className:'vc-poster', title:it.title, onClick:function(){ if (it.show_key && A.openShow) A.openShow(it.show_key); else if (A.openMovie) A.openMovie(it.id); } }, [h('img', { src:url(it.poster), alt:'', loading:'lazy' }), h('span', { className:'vc-poster-cap' }, [h('strong', { text:it.title }), h('small', { className:'muted', text:it.subtitle || '' })])]); })));
-      }).catch(function(e){ wErr(body, e); });
-      loading(body);
+      }).catch(function(e){ wErr(body, e); }); }
+      loading(body); load(); return poll(load, 600000, s);
     },
     form:function(s){ return textForm([{ key:'count', label:'How many', type:'number', min:4, max:30, value:s.count || 12 }]); }
   };
   W.nowplaying = { name:'Now playing', desc:'What you and your friends are watching (admins see everyone).', icon:'▶️', w:8, h:5,
-    render:function(body){
+    render:function(body, s){
       function load(){ call('/misc/widget/nowplaying').then(function(j){
         body.replaceChildren(j.sessions.length ? list(j.sessions.map(function(x){ return h('li', { className:'vc-np' }, [h('img', { src:url(x.poster), alt:'', loading:'lazy' }), h('span', { className:'vc-np-copy' }, [h('strong', { text:x.title }), h('small', { className:'muted', text:x.user.name + ' · ' + ago(x.updated_at) }), x.percent != null ? h('span', { className:'vc-progress' }, [h('i', { style:'width:' + x.percent + '%' })]) : null])]); })) : h('p', { className:'muted', text:'Nobody is watching right now.' }));
       }).catch(function(e){ wErr(body, e); }); }
-      loading(body); load(); var t = setInterval(load, 20000); return function(){ clearInterval(t); };
+      loading(body); load(); return poll(load, 20000, s);
     }
   };
   W.notes = { name:'Notes', desc:'A sticky note. Lines starting with [ ] become checkboxes.', icon:'📝', w:6, h:6,
@@ -269,12 +282,12 @@
       function load(){ call('/misc/widget/rss?url=' + encodeURIComponent(s.url)).then(function(j){
         body.replaceChildren(h('p', { className:'vc-rss-title', text:j.title || s.url }), list(j.items.slice(0, s.count || 10).map(function(i){ return h('li', { className:'vc-rss-item' }, [i.link ? h('a', { href:i.link, target:'_blank', rel:'noopener noreferrer', text:i.title }) : h('span', { text:i.title }), i.date ? h('small', { className:'muted', text:ago(i.date) }) : null]); })));
       }).catch(function(e){ wErr(body, e); }); }
-      loading(body); load(); var t = setInterval(load, 900000); return function(){ clearInterval(t); };
+      loading(body); load(); return poll(load, 900000, s);
     },
     form:function(s){ return textForm([{ key:'url', label:'Feed address', type:'url', value:s.url || '', placeholder:'https://example.com/feed.xml' }, { key:'count', label:'Headlines', type:'number', min:3, max:25, value:s.count || 10 }]); }
   };
   W.drop = { name:'Drop', desc:'Drop files here to keep them for a while, or send them to your other devices.', icon:'📥', w:6, h:6,
-    render:function(body){
+    render:function(body, s){
       var zone = h('div', { className:'vc-mini-drop', tabindex:'0', role:'button', 'aria-label':'Choose files to upload to Drop' }, [h('strong', { text:'Drop files here' }), h('small', { className:'muted', text:'Kept for 24 hours · sent to your devices' })]), items = h('div');
       body.append(zone, items);
       var picker = h('input', { type:'file', multiple:true, hidden:true }); body.appendChild(picker);
@@ -284,7 +297,7 @@
       picker.addEventListener('change', function(){ send(picker.files); picker.value = ''; });
       zone.addEventListener('dragover', function(e){ e.preventDefault(); zone.classList.add('over'); }); zone.addEventListener('dragleave', function(){ zone.classList.remove('over'); });
       zone.addEventListener('drop', function(e){ e.preventDefault(); zone.classList.remove('over'); send(e.dataTransfer.files); });
-      refresh(); var t = setInterval(refresh, 60000); return function(){ clearInterval(t); };
+      refresh(); return poll(refresh, 60000, s);
     }
   };
   W.leaderboard = { name:'Leaderboard', desc:'Top players or teams this week.', icon:'🏆', w:6, h:7,
@@ -292,7 +305,7 @@
       function load(){ call('/play/leaderboard?board=' + (s.board || 'points') + '&period=' + (s.period || 'week')).then(function(j){
         body.replaceChildren(j.rows.length ? h('ol', { className:'vc-w-list vc-mini-lb' }, j.rows.slice(0, 8).map(function(r, i){ var who = r.team && s.board === 'teams' ? r.team : r.user; return h('li', { className:r.me ? 'me' : '' }, [h('span', { className:'vc-lb-rank', text:String(i + 1) }), h('strong', { text:(r.team && s.board === 'teams' ? r.team.emblem + ' ' : '') + who.name }), h('span', { className:'vc-lb-value', text:j.unit === 'seconds' ? Math.round(r.value / 3600) + ' h' : Number(r.value).toLocaleString() })]); })) : h('p', { className:'muted', text:'No scores yet.' }));
       }).catch(function(e){ wErr(body, e); }); }
-      loading(body); load(); var t = setInterval(load, 120000); return function(){ clearInterval(t); };
+      loading(body); load(); return poll(load, 120000, s);
     },
     form:function(s){ return textForm([{ key:'board', label:'Board', type:'select', value:s.board || 'points', options:[['points', 'Points'], ['teams', 'Teams'], ['blocks', 'Stackfall'], ['snake', 'Neon Snake'], ['merge', '2048 Merge'], ['breakout', 'Brickbreak'], ['quiz', 'Quiz'], ['emu-time', 'Most time played'], ['emu-sessions', 'Most games played']] }, { key:'period', label:'Period', type:'select', value:s.period || 'week', options:[['day', 'Today'], ['week', 'This week'], ['month', 'This month'], ['all', 'All time']] }]); }
   };
@@ -304,8 +317,13 @@
     layers.forEach(function(l){ stage.appendChild(l); }); if (opts.captions) stage.appendChild(cap);
     var reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
     function refill(){ return source().then(function(list){ pool = list.slice(); for (var k = pool.length - 1; k > 0; k--) { var r = Math.floor(Math.random() * (k + 1)), t = pool[k]; pool[k] = pool[r]; pool[r] = t; } i = 0; }); }
+    var waiting = false;
+    function onVis(){ if (!document.hidden && waiting && !stopped) { waiting = false; next(); } }
+    document.addEventListener('visibilitychange', onVis);
     function next(){
-      if (stopped || !stage.isConnected) return;
+      if (stopped || !stage.isConnected) { document.removeEventListener('visibilitychange', onVis); return; }
+      // A hidden tab neither decodes pictures nor keeps a timer chain going; it resumes when shown again.
+      if (document.hidden) { waiting = true; return; }
       if (i >= pool.length) { refill().then(function(){ if (pool.length) next(); else stage.replaceChildren(h('p', { className:'muted vc-kb-empty', text:'No pictures available yet.' })); }).catch(function(){ timer = setTimeout(next, 30000); }); return; }
       var item = pool[i++], img = new Image();
       img.onload = function(){
@@ -322,7 +340,7 @@
       img.alt = ''; img.decoding = 'async'; img.src = item.url;
     }
     next();
-    return { stop:function(){ stopped = true; clearTimeout(timer); } };
+    return { stop:function(){ stopped = true; clearTimeout(timer); document.removeEventListener('visibilitychange', onVis); } };
   }
 
   // ------------------------------------------------------------------ media widget: IPTV, internet radio or a library film
@@ -442,6 +460,18 @@
   // ------------------------------------------------------------------ Board (dashboard grid)
   var COLS = 24;
   var STARTER = [{ type:'clock', x:0, y:0, w:6, h:4 }, { type:'weather', x:6, y:0, w:8, h:6 }, { type:'reminders', x:14, y:0, w:5, h:6 }, { type:'notes', x:19, y:0, w:5, h:6, settings:{ text:'[ ] Welcome to your board\n[ ] Press Edit to move, resize and add widgets' } }, { type:'recent', x:0, y:6, w:14, h:6 }, { type:'nowplaying', x:14, y:6, w:10, h:6 }];
+  // Ready-made layouts for "New board".
+  var TEMPLATES = {
+    starter:['Starter', STARTER],
+    kitchen:['Kitchen', [{ type:'clock', x:0, y:0, w:6, h:4 }, { type:'weather', x:6, y:0, w:10, h:6 }, { type:'reminders', x:16, y:0, w:8, h:6 }, { type:'calendar', x:0, y:4, w:6, h:8 }, { type:'notes', x:6, y:6, w:10, h:6, settings:{ text:'[ ] Shopping list' } }, { type:'media', x:16, y:6, w:8, h:6 }]],
+    lounge:['Living-room TV', [{ type:'clock', x:0, y:0, w:6, h:4 }, { type:'weather', x:0, y:4, w:6, h:6 }, { type:'recent', x:6, y:0, w:18, h:6 }, { type:'nowplaying', x:6, y:6, w:9, h:5 }, { type:'recordings', x:15, y:6, w:9, h:5 }]],
+    server:['Server room', [{ type:'health', x:0, y:0, w:8, h:7 }, { type:'downloads', x:8, y:0, w:8, h:7 }, { type:'recordings', x:16, y:0, w:8, h:7 }, { type:'nowplaying', x:0, y:7, w:12, h:5 }, { type:'clock', x:12, y:7, w:6, h:5 }, { type:'drop', x:18, y:7, w:6, h:5 }]],
+    games:['Game night', [{ type:'leaderboard', x:0, y:0, w:8, h:8 }, { type:'leaderboard', x:8, y:0, w:8, h:8, settings:{ board:'teams' } }, { type:'clock', x:16, y:0, w:8, h:4 }, { type:'notes', x:16, y:4, w:8, h:4, settings:{ text:'Tonight:\n[ ] Quiz\n[ ] Chess rematch' } }]]
+  };
+  function fromTemplate(list){ return list.map(function(w){ return Object.assign({ id:rid(8), settings:{} }, JSON.parse(JSON.stringify(w))); }); }
+  // Widgets that refresh on their own get a "Refresh every" setting even when they have no other options.
+  var POLLED = ['weather', 'calendar', 'recordings', 'downloads', 'health', 'recent', 'nowplaying', 'rss', 'drop', 'leaderboard'];
+  function hasSettings(type){ return !!((W[type] && W[type].form) || POLLED.indexOf(type) >= 0); }
   function overlaps(a, b){ return a !== b && a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h; }
   /** Push anything that collides with the moved widget further down, then float everything up (gridstack-style). */
   function settle(widgets, moved){
@@ -458,7 +488,7 @@
     var data = null, cur = null, editing = false, saveT = 0, mounted = {}, grid = h('div', { className:'vc-board-grid', role:'list' }), head = h('div', { className:'vc-board-head' }), shell = h('div', { className:'vc-board' }, [head, grid]);
     host.appendChild(shell);
     grid.appendChild(A.pendingContent({ text:'Loading your boards…' }));
-    function save(now){ clearTimeout(saveT); saveT = setTimeout(function(){ call('/misc/boards', { method:'POST', body:{ boards:data.boards, default:data.default } }).then(function(j){ data.boards.forEach(function(b, i){ if (j.boards[i] && b.id !== j.boards[i].id) b.id = j.boards[i].id; }); }).catch(err); }, now ? 0 : 800); }
+    function save(now){ clearTimeout(saveT); saveT = setTimeout(function(){ call('/misc/boards', { method:'POST', body:{ boards:data.boards, default:data.default, rotate:data.rotate || 0 } }).then(function(j){ data.boards.forEach(function(b, i){ if (j.boards[i] && b.id !== j.boards[i].id) b.id = j.boards[i].id; }); }).catch(err); }, now ? 0 : 800); }
     onCleanup(function(){ clearTimeout(saveT); Object.keys(mounted).forEach(function(k){ unmount(k); }); exitKiosk(); });
     var watch = setInterval(function(){ if (!shell.isConnected) { clearInterval(watch); stopAll(); } }, 3000); onCleanup(function(){ clearInterval(watch); });
     function unmount(id){ var m = mounted[id]; if (m && m.cleanup) try { m.cleanup(); } catch (e) {} delete mounted[id]; }
@@ -467,36 +497,74 @@
       head.replaceChildren(
         h('div', { className:'vc-board-title' }, [sel, editing ? null : h('span', { className:'muted', text:cur.widgets.length + ' widgets' })]),
         h('div', { className:'vc-board-tools' }, editing ? [btn('+ Add widget', addWidget, 'primary'), btn('Board settings', boardSettings, 'ghost'), btn('Done', function(){ setEdit(false); }, 'primary')]
-          : [btn('Edit', function(){ setEdit(true); }, 'ghost'), btn('New board', newBoard, 'ghost'), btn('Kiosk', function(){ enterKiosk(); }, 'primary', { title:'Full screen, hide the menus and keep the screen awake' })]));
+          : [cur.locked ? btn('🔒 Locked', function(){ A.confirmDialog('Unlock the layout of “' + cur.name + '” so it can be edited?', { okText:'Unlock' }).then(function(ok){ if (!ok) return; cur.locked = false; save(true); setEdit(true); }); }, 'ghost', { title:'This layout is locked. Click to unlock it.' }) : btn('Edit', function(){ setEdit(true); }, 'ghost'), btn('New board', newBoard, 'ghost'), btn('Kiosk', function(){ enterKiosk(); }, 'primary', { title:'Full screen, hide the menus and keep the screen awake' })]));
     }
-    function switchTo(id){ var b = data.boards.filter(function(x){ return x.id === id; })[0]; if (!b) return; cur = b; A.state.miscSub = id; A.pushNav(); paint(); }
+    function switchTo(id, quiet){ var b = data.boards.filter(function(x){ return x.id === id; })[0]; if (!b) return; cur = b; A.state.miscSub = id; if (!quiet) A.pushNav(); paint(); }
     function setEdit(on){ editing = on; shell.classList.toggle('editing', on); paint(); }
     function newBoard(){
       modal('New board', function(b, close){
-        var name = input('text', '', { placeholder:'e.g. Kitchen', maxlength:'40', 'aria-label':'Board name' }), starter = input('checkbox', true);
-        b.appendChild(h('form', { className:'vc-form', onSubmit:function(e){ e.preventDefault(); var nb = { id:rid(10), name:name.value.trim() || 'Board', theme:'glass', background:'', widgets:starter.checked ? STARTER.map(function(w){ return Object.assign({ id:rid(8), settings:{} }, JSON.parse(JSON.stringify(w))); }) : [] }; data.boards.push(nb); if (data.boards.length > 12) { data.boards.pop(); A.toast('Up to 12 boards'); return; } save(true); close(); switchTo(nb.id); setEdit(!starter.checked); } }, [field('Name', name), h('label', { className:'vc-check' }, [starter, h('span', { text:'Start with a few useful widgets' })]), h('button', { type:'submit', className:'btn primary', text:'Create board' })]));
+        var name = input('text', '', { placeholder:'e.g. Kitchen', maxlength:'40', 'aria-label':'Board name' });
+        var tpl = select([['', 'Empty board']].concat(Object.keys(TEMPLATES).map(function(k){ return [k, TEMPLATES[k][0]]; })), 'starter', { 'aria-label':'Template' });
+        var file = h('input', { type:'file', accept:'application/json,.json', hidden:true });
+        function add(nb){ if (data.boards.length >= 12) { A.toast('Up to 12 boards'); return false; } data.boards.push(nb); save(true); close(); switchTo(nb.id); return true; }
+        file.addEventListener('change', function(){
+          var f = file.files && file.files[0]; if (!f) return;
+          if (f.size > 400000) { A.toast('That file is too large for a board layout.', { kind:'bad' }); return; }
+          f.text().then(function(txt){
+            var j = JSON.parse(txt), src = j && (j.board || j);
+            if (!src || !Array.isArray(src.widgets)) throw new Error('Not a board layout');
+            var widgets = src.widgets.filter(function(w){ return w && W[w.type]; }).slice(0, 40).map(function(w){ return { id:rid(8), type:w.type, x:+w.x || 0, y:+w.y || 0, w:+w.w || 4, h:+w.h || 3, settings:(w.settings && typeof w.settings === 'object') ? w.settings : {} }; });
+            add({ id:rid(10), name:String(name.value.trim() || src.name || 'Imported board').slice(0, 40), theme:src.theme || 'glass', background:typeof src.background === 'string' ? src.background : '', color:typeof src.color === 'string' ? src.color : '', locked:false, widgets:widgets });
+            A.toast('Board imported', { kind:'ok' });
+          }).catch(function(){ A.toast('That file is not a Vaultcast board layout.', { kind:'bad' }); });
+        });
+        b.appendChild(h('form', { className:'vc-form', onSubmit:function(e){ e.preventDefault(); var t = TEMPLATES[tpl.value]; add({ id:rid(10), name:name.value.trim() || (t ? t[0] : 'Board'), theme:'glass', background:'', color:'', locked:false, widgets:t ? fromTemplate(t[1]) : [] }); if (!t) setEdit(true); } }, [field('Name', name), field('Start from', tpl),
+          h('div', { className:'vc-overlay-actions' }, [h('button', { type:'submit', className:'btn primary', text:'Create board' }), btn('Import layout (JSON)…', function(){ file.click(); }, 'ghost'), file])]));
         setTimeout(function(){ name.focus(); }, 50);
       });
     }
     function boardSettings(){
       modal('Board settings', function(b, close){
-        var name = input('text', cur.name, { maxlength:'40', 'aria-label':'Board name' }), theme = select([['glass', 'Glass (frosted panels)'], ['solid', 'Solid panels'], ['clear', 'Minimal (no panels)']], cur.theme || 'glass'), bg = input('url', /^https?:/.test(cur.background || '') ? cur.background : '', { placeholder:'https://… (optional)' }), bgKind = select([['', 'Theme background'], ['aurora', 'Aurora gradient'], ['image', 'Image link']], /^https?:/.test(cur.background || '') ? 'image' : (cur.background || '')), def = input('checkbox', data.default === cur.id);
-        b.appendChild(h('form', { className:'vc-form', onSubmit:function(e){ e.preventDefault(); cur.name = name.value.trim() || 'Board'; cur.theme = theme.value; cur.background = bgKind.value === 'image' ? bg.value.trim() : bgKind.value; if (def.checked) data.default = cur.id; save(true); close(); paint(); } }, [
-          field('Name', name), field('Panel style', theme), field('Background', bgKind), field('Background image link', bg), h('label', { className:'vc-check' }, [def, h('span', { text:'Open this board by default' })]),
-          h('div', { className:'vc-overlay-actions' }, [h('button', { type:'submit', className:'btn primary', text:'Save' }), btn('Duplicate', function(){ var copy = JSON.parse(JSON.stringify(cur)); copy.id = rid(10); copy.name = cur.name + ' copy'; copy.widgets.forEach(function(w){ w.id = rid(8); }); data.boards.push(copy); save(true); close(); switchTo(copy.id); }, 'ghost'),
+        var isImg = /^(https?:\/\/|\/)/.test(cur.background || '');
+        var name = input('text', cur.name, { maxlength:'40', 'aria-label':'Board name' }), theme = select([['glass', 'Glass (frosted panels)'], ['solid', 'Solid panels'], ['clear', 'Minimal (no panels)']], cur.theme || 'glass'), bg = input('url', isImg ? cur.background : '', { placeholder:'https://… (optional)' }), colour = input('color', cur.color || '#10162a', { 'aria-label':'Background colour' });
+        var bgKind = select([['', 'Theme background'], ['aurora', 'Aurora gradient'], ['colour', 'Plain colour'], ['image', 'Image link']], isImg ? 'image' : (cur.color ? 'colour' : (cur.background || ''))), def = input('checkbox', data.default === cur.id), lock = input('checkbox', !!cur.locked);
+        var rotate = select([['0', 'Off'], ['30', 'Every 30 seconds'], ['60', 'Every minute'], ['120', 'Every 2 minutes'], ['300', 'Every 5 minutes'], ['900', 'Every 15 minutes']], String(data.rotate || 0), { 'aria-label':'Rotate boards' });
+        function syncBg(){ bg.closest('.vc-field').hidden = bgKind.value !== 'image'; colour.closest('.vc-field').hidden = bgKind.value !== 'colour'; }
+        bgKind.addEventListener('change', syncBg);
+        function exportLayout(){
+          var out = { vaultcast_board:1, board:{ name:cur.name, theme:cur.theme, background:cur.background || '', color:cur.color || '', widgets:cur.widgets.map(function(w){ return { type:w.type, x:w.x, y:w.y, w:w.w, h:w.h, settings:w.settings || {} }; }) } };
+          var a = h('a', { href:URL.createObjectURL(new Blob([JSON.stringify(out, null, 2)], { type:'application/json' })), download:(cur.name || 'board').replace(/[^\w.-]+/g, '-') + '.board.json' });
+          document.body.appendChild(a); a.click(); setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+        }
+        b.appendChild(h('form', { className:'vc-form', onSubmit:function(e){ e.preventDefault(); cur.name = name.value.trim() || 'Board'; cur.theme = theme.value; cur.background = bgKind.value === 'image' ? bg.value.trim() : (bgKind.value === 'aurora' ? 'aurora' : ''); cur.color = bgKind.value === 'colour' ? colour.value : ''; cur.locked = lock.checked; data.rotate = Number(rotate.value) || 0; if (def.checked) data.default = cur.id; save(true); close(); if (cur.locked) setEdit(false); else paint(); startRotation(); } }, [
+          field('Name', name), field('Panel style', theme), field('Background', bgKind), field('Background image link', bg), field('Background colour', colour),
+          h('label', { className:'vc-check' }, [def, h('span', { text:'Open this board by default' })]), h('label', { className:'vc-check' }, [lock, h('span', { text:'Lock the layout (prevents accidental edits on shared screens)' })]),
+          field('Rotate between boards', rotate, 'Cycles through all your boards while this page is visible — handy for kiosk screens.'),
+          h('div', { className:'vc-overlay-actions' }, [h('button', { type:'submit', className:'btn primary', text:'Save' }), btn('Duplicate', function(){ var copy = JSON.parse(JSON.stringify(cur)); copy.id = rid(10); copy.name = cur.name + ' copy'; copy.locked = false; copy.widgets.forEach(function(w){ w.id = rid(8); }); if (data.boards.length >= 12) { A.toast('Up to 12 boards'); return; } data.boards.push(copy); save(true); close(); switchTo(copy.id); }, 'ghost'),
+            btn('Export layout', exportLayout, 'ghost'),
             data.boards.length > 1 ? btn('Delete board', function(){ A.confirmDialog('Delete the board “' + cur.name + '”?', { okText:'Delete', danger:true }).then(function(ok){ if (!ok) return; data.boards = data.boards.filter(function(x){ return x !== cur; }); if (data.default === cur.id) data.default = data.boards[0].id; save(true); close(); switchTo(data.boards[0].id); }); }, 'ghost danger') : null])]));
+        syncBg();
       });
     }
+    var rotStop = null;
+    function startRotation(){
+      if (rotStop) { rotStop(); rotStop = null; }
+      if (!data.rotate || data.boards.length < 2) return;
+      rotStop = poll(function(){ if (editing || !shell.isConnected) return; var i = data.boards.indexOf(cur); switchTo(data.boards[(i + 1) % data.boards.length].id, true); }, data.rotate * 1000);
+    }
+    onCleanup(function(){ if (rotStop) rotStop(); });
     function addWidget(){
       modal('Add a widget', function(b, close){
         b.appendChild(h('div', { className:'vc-widget-catalogue' }, data.widgets.filter(function(t){ return W[t]; }).map(function(t){ var d = W[t]; return h('button', { type:'button', className:'vc-catalogue-item', onClick:function(){ close(); var spot = freeSpot(cur.widgets, d.w, d.h), w = { id:rid(8), type:t, x:spot.x, y:spot.y, w:d.w, h:d.h, settings:{} }; cur.widgets.push(w); save(); paint(); if (d.form) setTimeout(function(){ widgetSettings(w); }, 60); } }, [h('span', { className:'vc-catalogue-icon', text:d.icon, 'aria-hidden':'true' }), h('strong', { text:d.name }), h('small', { className:'muted', text:d.desc })]); })));
       });
     }
     function widgetSettings(w){
-      var d = W[w.type]; if (!d || !d.form) return;
+      var d = W[w.type]; if (!d || !hasSettings(w.type)) return;
       modal(d.name + ' settings', function(b, close){
-        var f = d.form(w.settings || {});
-        b.appendChild(h('form', { className:'vc-form', onSubmit:function(e){ e.preventDefault(); w.settings = Object.assign({}, w.settings || {}, f.read()); save(); close(); remount(w); } }, [f.el, h('div', { className:'vc-overlay-actions' }, [h('button', { type:'submit', className:'btn primary', text:'Save' })])]));
+        var f = d.form ? d.form(w.settings || {}) : { el:h('div'), read:function(){ return {}; } };
+        var polled = POLLED.indexOf(w.type) >= 0, cur0 = (w.settings && w.settings.refresh) || '';
+        var refresh = select([['', 'Automatic'], ['15', 'Every 15 seconds'], ['30', 'Every 30 seconds'], ['60', 'Every minute'], ['300', 'Every 5 minutes'], ['900', 'Every 15 minutes'], ['3600', 'Every hour']], String(cur0), { 'aria-label':'Refresh interval' });
+        b.appendChild(h('form', { className:'vc-form', onSubmit:function(e){ e.preventDefault(); var next = Object.assign({}, w.settings || {}, f.read()); if (polled) { if (refresh.value) next.refresh = Number(refresh.value); else delete next.refresh; } w.settings = next; save(); close(); remount(w); } }, [f.el, polled ? field('Refresh', refresh, 'Widgets pause while this tab is hidden and catch up when you come back.') : null, h('div', { className:'vc-overlay-actions' }, [h('button', { type:'submit', className:'btn primary', text:'Save' })])]));
       });
     }
     function place(el, w){ el.style.gridColumn = (w.x + 1) + ' / span ' + w.w; el.style.gridRow = (w.y + 1) + ' / span ' + w.h; el.style.setProperty('--vc-rows', String(Math.max(4, w.h))); }
@@ -534,14 +602,17 @@
       Object.keys(mounted).forEach(unmount);
       headBar();
       shell.setAttribute('data-theme', cur.theme || 'glass');
-      shell.style.backgroundImage = /^https?:\/\//.test(cur.background || '') ? 'url("' + cur.background.replace(/["\\]/g, '') + '")' : '';
-      shell.classList.toggle('bg-aurora', cur.background === 'aurora'); shell.classList.toggle('bg-image', /^https?:\/\//.test(cur.background || ''));
+      // Same rule as the server: plain http(s) or same-site paths only, never quotes, parentheses or escapes inside url().
+      var img = /^(https?:\/\/|\/(?!\/))[^\s"'()<>\\]+$/i.test(cur.background || '');
+      shell.style.backgroundImage = img ? 'url("' + cur.background + '")' : '';
+      shell.style.backgroundColor = /^#[0-9a-f]{3}([0-9a-f]{3})?$/i.test(cur.color || '') ? cur.color : '';
+      shell.classList.toggle('bg-aurora', cur.background === 'aurora'); shell.classList.toggle('bg-image', img); shell.classList.toggle('bg-colour', !!shell.style.backgroundColor); shell.classList.toggle('locked', !!cur.locked);
       grid.replaceChildren();
       if (!cur.widgets.length) grid.appendChild(h('div', { className:'vc-board-empty' }, [empty('This board is empty', 'Add clocks, weather, live TV, notes and more.', [btn('+ Add widget', function(){ if (!editing) setEdit(true); addWidget(); }, 'primary')])]));
       cur.widgets.slice().sort(function(a, b){ return a.y - b.y || a.x - b.x; }).forEach(function(w){
         var d = W[w.type] || { name:w.type, icon:'?' }, body = h('div', { className:'vc-w-body' });
         var handle = h('div', { className:'vc-w-head', tabindex:editing ? '0' : null, 'aria-label':editing ? 'Move ' + d.name + ' (arrow keys; Shift to resize)' : null }, [h('span', { className:'vc-w-icon', text:d.icon, 'aria-hidden':'true' }), h('span', { className:'vc-w-name', text:(w.settings && w.settings.title) || d.name }),
-          editing ? h('span', { className:'vc-w-actions' }, [d.form ? btn('⚙', function(e){ e.stopPropagation(); widgetSettings(w); }, 'ghost vc-icon-btn small', { 'aria-label':'Settings for ' + d.name }) : null, btn('×', function(e){ e.stopPropagation(); A.confirmDialog('Remove this ' + d.name + ' widget?', { okText:'Remove', danger:true }).then(function(ok){ if (!ok) return; cur.widgets = cur.widgets.filter(function(x){ return x !== w; }); save(); paint(); }); }, 'ghost vc-icon-btn small', { 'aria-label':'Remove ' + d.name })]) : (d.form ? btn('⚙', function(){ widgetSettings(w); }, 'ghost vc-icon-btn small vc-w-quickset', { 'aria-label':'Settings for ' + d.name }) : null)]);
+          editing ? h('span', { className:'vc-w-actions' }, [hasSettings(w.type) ? btn('⚙', function(e){ e.stopPropagation(); widgetSettings(w); }, 'ghost vc-icon-btn small', { 'aria-label':'Settings for ' + d.name }) : null, btn('×', function(e){ e.stopPropagation(); A.confirmDialog('Remove this ' + d.name + ' widget?', { okText:'Remove', danger:true }).then(function(ok){ if (!ok) return; cur.widgets = cur.widgets.filter(function(x){ return x !== w; }); save(); paint(); }); }, 'ghost vc-icon-btn small', { 'aria-label':'Remove ' + d.name })]) : (hasSettings(w.type) && !cur.locked ? btn('⚙', function(){ widgetSettings(w); }, 'ghost vc-icon-btn small vc-w-quickset', { 'aria-label':'Settings for ' + d.name }) : null)]);
         var el = h('article', { className:'vc-widget w-' + w.type, 'data-wid':w.id, role:'listitem', 'aria-label':d.name }, [handle, body]);
         if (editing) { var rz = h('span', { className:'vc-w-resize', 'aria-hidden':'true' }); el.appendChild(rz); dragify(el, w, handle, 'move'); dragify(el, w, rz, 'resize'); }
         place(el, w); grid.appendChild(el); mountBody(w, body);
@@ -571,7 +642,7 @@
       if (!data.boards.length) { data.boards = [{ id:rid(10), name:'My board', theme:'glass', background:'', widgets:STARTER.map(function(w){ return Object.assign({ id:rid(8), settings:{} }, JSON.parse(JSON.stringify(w))); }) }]; data.default = data.boards[0].id; save(true); }
       var parts = String(sub || '').split('/');
       cur = data.boards.filter(function(b){ return b.id === parts[0]; })[0] || data.boards.filter(function(b){ return b.id === data.default; })[0] || data.boards[0];
-      paint();
+      paint(); startRotation();
       if (parts[1] === 'kiosk') enterKiosk();
     }).catch(function(e){ grid.replaceChildren(empty('Boards unavailable', (e && e.error) || '')); });
   }
@@ -580,36 +651,82 @@
   function kindIcon(i){ if (i.kind === 'link') return '🔗'; if (i.kind === 'text') return '📝'; var m = String(i.mime || ''); if (/^image\//.test(m)) return '🖼️'; if (/^video\//.test(m)) return '🎬'; if (/^audio\//.test(m)) return '🎵'; if (/pdf/.test(m)) return '📄'; if (/zip|compressed|tar|7z|rar/.test(m)) return '🗜️'; return '📦'; }
   var STATUS = { available:['Available', 'ok'], expired:['Expired', 'muted'], exhausted:['Download limit reached', 'muted'], uploading:['Uploading', 'warn'], deleted:['Deleted', 'muted'] };
   function fileKey(f){ return 'vaultcast-drop-up:' + [f.name, f.size, f.lastModified || 0].join('|'); }
-  /** Upload one file in chunks; resumes a previous attempt of the same file (same name, size and date). */
+  function eta(secs){ secs = Math.max(0, Math.round(secs)); if (secs < 60) return secs + ' s'; if (secs < 3600) return Math.floor(secs / 60) + ' min ' + (secs % 60) + ' s'; return Math.floor(secs / 3600) + ' h ' + Math.floor(secs % 3600 / 60) + ' min'; }
+  /**
+   * Upload one file in chunks (XHR, so progress moves within a chunk too). A previous attempt of the same file
+   * (same name, size and date) resumes from what the server already has, including after a page refresh.
+   * control: { paused, cancelled, abort() } — cancelling deletes the partial upload on the server.
+   * onProgress({ sent, id, done, item, rate, eta })
+   */
   function uploadFile(file, opts, onProgress, control){
     control = control || {};
-    var key = fileKey(file), saved = store(key), id = null, chunk = 2097152;
+    var key = fileKey(file), saved = store(key), id = null, chunk = 8388608, started = Date.now(), base = 0, xhr = null;
+    control.abort = function(){ control.cancelled = true; if (xhr) xhr.abort(); if (control.resume) control.resume(); };
     function begin(){
-      if (saved && saved.id) return api('/drop/upload/' + saved.id).then(function(j){ if (j && j.ok && !j.complete && j.bytes === file.size) { id = saved.id; chunk = j.chunk || chunk; return j.received; } store(key, null); return fresh(); });
+      if (saved && saved.id) return api('/drop/upload/' + saved.id).then(function(j){ if (j && j.ok && !j.complete && !j.purged && j.bytes === file.size) { id = saved.id; chunk = j.chunk || chunk; return j.received; } store(key, null); return fresh(); });
       return fresh();
     }
     function fresh(){ return call('/drop/upload', { method:'POST', body:Object.assign({ name:file.name, size:file.size, mime:file.type || 'application/octet-stream' }, opts) }).then(function(j){ id = j.id; chunk = j.chunk || chunk; store(key, { id:id, at:Date.now() }); return 0; }); }
-    function send(offset, tries){
-      if (control.cancelled) return Promise.reject({ error:'Cancelled', cancelled:true });
-      if (control.paused) return new Promise(function(res){ control.resume = function(){ control.resume = null; res(send(offset, 0)); }; });
-      onProgress({ sent:offset, id:id });
-      if (offset >= file.size) return Promise.resolve();
-      var end = Math.min(file.size, offset + chunk);
-      return fetch(A.API + '/drop/upload/' + id + '?offset=' + offset, { method:'POST', credentials:'same-origin', headers:{ 'Content-Type':'application/octet-stream' }, body:file.slice(offset, end) }).then(function(r){
-        if (r.status === 413) throw { error:'The web server refused a ' + (chunk / 1048576).toFixed(1) + ' MB upload piece (HTTP 413). Ask the administrator to raise the web server body limit (client_max_body_size / LimitRequestBody) to at least 3 MB.', fatal:true };
-        return r.json().catch(function(){ return { ok:false, error:'HTTP ' + r.status }; }).then(function(j){
-          if (r.status === 409 && j.received != null) return send(j.received, tries);
-          if (!j.ok) { if (r.status >= 500 || r.status === 0) throw { error:j.error || 'Server error', retry:true }; throw { error:j.error || 'Upload failed', fatal:true }; }
-          if (j.complete) { store(key, null); onProgress({ sent:file.size, id:id, done:true, item:j.item }); return j; }
-          return send(j.received, 0);
-        });
-      }).catch(function(e){
-        if (e && (e.fatal || e.cancelled)) throw e;
-        if (tries >= 5) throw { error:(e && e.error) || 'Connection lost. Add the same file again later to resume.' };
-        return new Promise(function(res){ setTimeout(res, 1000 * Math.pow(2, tries)); }).then(function(){ return api('/drop/upload/' + id).then(function(j){ return send(j && j.ok ? j.received : offset, tries + 1); }, function(){ return send(offset, tries + 1); }); });
+    function report(sent, extra){ var secs = (Date.now() - started) / 1000, rate = secs > 0.5 ? (sent - base) / secs : 0; onProgress(Object.assign({ sent:sent, id:id, rate:rate, eta:rate > 0 ? (file.size - sent) / rate : null }, extra || {})); }
+    function piece(offset){
+      return new Promise(function(resolve, reject){
+        var end = Math.min(file.size, offset + chunk), x = new XMLHttpRequest(); xhr = x;
+        x.open('POST', A.API + '/drop/upload/' + id + '?offset=' + offset); x.withCredentials = true; x.setRequestHeader('Content-Type', 'application/octet-stream');
+        x.upload.onprogress = function(ev){ report(offset + ev.loaded); };
+        x.onload = function(){ var j = {}; try { j = JSON.parse(x.responseText); } catch (e) { j = { ok:false, error:'HTTP ' + x.status }; } j.status = x.status; resolve(j); };
+        x.onerror = function(){ reject({ error:'Connection lost', retry:true }); };
+        x.onabort = function(){ reject({ error:'Cancelled', cancelled:true }); };
+        x.send(file.slice(offset, end));
       });
     }
-    return begin().then(function(start){ return send(start, 0); }).then(function(r){ return r; });
+    function waitIfPaused(){ return control.paused ? new Promise(function(res){ control.resume = function(){ control.resume = null; started = Date.now(); res(); }; }) : Promise.resolve(); }
+    // Iterative loop (no promise recursion), so a 1 GB file does not build a long promise chain.
+    function run(offset){
+      var tries = 0;
+      base = offset; started = Date.now(); report(offset);
+      return new Promise(function(resolve, reject){
+        function step(){
+          if (control.cancelled) return reject({ error:'Cancelled', cancelled:true });
+          waitIfPaused().then(function(){
+            if (control.cancelled) return reject({ error:'Cancelled', cancelled:true });
+            if (offset >= file.size) { store(key, null); return resolve({}); }
+            return piece(offset).then(function(j){
+              if (j.status === 413) return reject({ error:'The web server refused a ' + (chunk / 1048576).toFixed(1) + ' MB upload piece (HTTP 413). Ask the administrator to raise the web server body limit (client_max_body_size / LimitRequestBody) to at least ' + Math.ceil(chunk / 1048576 + 1) + ' MB.', fatal:true });
+              if (j.status === 409 && j.received != null) { offset = j.received; return step(); }
+              if (!j.ok) { if (j.status >= 500 || j.status === 0 || j.status === 429) throw { error:j.error || 'Server busy', retry:true }; return reject({ error:j.error || 'Upload failed', fatal:true }); }
+              tries = 0; offset = j.received;
+              if (j.complete) { store(key, null); report(file.size, { done:true, item:j.item }); return resolve(j); }
+              report(offset); step();
+            }).catch(function(e){
+              if (e && (e.cancelled || control.cancelled)) return reject({ error:'Cancelled', cancelled:true });
+              if (++tries > 6) return reject({ error:'Connection lost. Add the same file again later to resume.' });
+              setTimeout(function(){ api('/drop/upload/' + id).then(function(r){ if (r && r.ok) offset = r.received; step(); }, step); }, Math.min(30000, 1000 * Math.pow(2, tries)));
+            });
+          });
+        }
+        step();
+      });
+    }
+    return begin().then(run).catch(function(e){
+      if (e && e.cancelled && id) { store(key, null); api('/drop/items/' + id, { method:'DELETE' }); }
+      throw e;
+    });
+  }
+  /** Run uploads two at a time so a batch of files does not saturate the link or the server. */
+  var upQueue = [], upRunning = 0;
+  function queueUpload(task){ return new Promise(function(resolve, reject){ upQueue.push(function(){ return task().then(resolve, reject); }); pumpUploads(); }); }
+  function pumpUploads(){ while (upRunning < 2 && upQueue.length) { upRunning++; upQueue.shift()().catch(function(){}).then(function(){ upRunning--; pumpUploads(); }); } }
+  function preview(item){
+    var src = url('/api/drop/items/' + item.id + '/download?inline=1');
+    if (item.preview === 'pdf') { window.open(src, '_blank', 'noopener'); return; }
+    modal(item.name, function(b){
+      var box = h('div', { className:'vc-drop-preview' });
+      if (item.preview === 'image') box.appendChild(h('img', { src:src, alt:item.name }));
+      else if (item.preview === 'video') box.appendChild(h('video', { src:src, controls:true, playsinline:true, preload:'metadata' }));
+      else if (item.preview === 'audio') box.appendChild(h('audio', { src:src, controls:true, preload:'metadata' }));
+      else if (item.preview === 'text') { var pre = h('pre', { className:'vc-drop-text-preview', text:'Loading…' }); box.appendChild(pre); fetch(src, { credentials:'same-origin' }).then(function(r){ return r.text(); }).then(function(t){ pre.textContent = t.length > 200000 ? t.slice(0, 200000) + '\n…' : t; }).catch(function(){ pre.textContent = 'Could not load the preview.'; }); }
+      b.append(box, h('div', { className:'vc-overlay-actions' }, [h('a', { className:'btn primary', href:url('/api/drop/items/' + item.id + '/download'), download:item.name, text:'Download' })]));
+    });
   }
   function shareDialog(item, refresh, pub){
     modal('Share “' + item.name + '”', function(b){
@@ -617,7 +734,16 @@
       function drawLinks(it){
         var live = (it.links || []).filter(function(l){ return !l.revoked; });
         links.replaceChildren(live.length ? h('h3', { text:'Active links' }) : null);
-        live.forEach(function(l){ var full = location.origin + l.url; links.appendChild(h('div', { className:'vc-share-row' }, [h('code', { text:full.replace(/^https?:\/\//, '') }), h('span', { className:'vc-chip', text:(l.require_login ? 'Sign-in' : 'Public') + (l.password ? ' · password' : '') + ' · ' + l.downloads + ' downloads' }), btn('Copy', function(){ copy(full); }, 'ghost small'), btn('Revoke', function(){ call('/drop/links/' + l.token + '/revoke', { method:'POST' }).then(function(){ l.revoked = true; drawLinks(it); refresh(); }).catch(err); }, 'ghost small danger')])); });
+        live.forEach(function(l){
+        var full = location.origin + l.url, extra = h('div', { className:'vc-share-extra' });
+        var expired = l.expires_at && l.expires_at * 1000 <= Date.now();
+        var chip = (l.require_login ? 'Sign-in' : 'Public') + (l.password ? ' · password' : '') + ' · ' + l.downloads + ' download' + (l.downloads === 1 ? '' : 's') + (l.expires_at ? (expired ? ' · link expired' : ' · link ends in ' + until(l.expires_at)) : '');
+        links.appendChild(h('div', { className:'vc-share-row' }, [h('code', { text:full.replace(/^https?:\/\//, '') }), h('span', { className:'vc-chip' + (expired ? ' muted' : ''), text:chip }),
+          btn('Copy', function(){ copy(full); }, 'ghost small'), btn('QR', function(){ if (extra.firstChild) extra.replaceChildren(); else extra.replaceChildren(qr(full)); }, 'ghost small', { 'aria-label':'Show a QR code for this link' }),
+          navigator.share ? btn('Share…', function(){ navigator.share({ title:item.name, url:full }).catch(function(){}); }, 'ghost small') : null,
+          h('select', { className:'small', 'aria-label':'Link lifetime', onChange:function(){ var v = this.value; if (v === '') return; call('/drop/links/' + l.token + '/extend', { method:'POST', body:{ hours:Number(v) } }).then(function(j){ drawLinks(j.item); refresh(); A.toast('Link updated', { kind:'ok' }); }).catch(err); } }, [h('option', { value:'', text:'Link lifetime…' }), h('option', { value:'0', text:'Same as the item' }), h('option', { value:'1', text:'1 hour from now' }), h('option', { value:'24', text:'24 hours from now' }), h('option', { value:'168', text:'7 days from now' })]),
+          btn('Revoke', function(){ call('/drop/links/' + l.token + '/revoke', { method:'POST' }).then(function(){ l.revoked = true; drawLinks(it); refresh(); }).catch(err); }, 'ghost small danger'), extra]));
+      });
       }
       b.append(h('p', { className:'muted', text:'Links follow the item\u2019s own limits: they stop working when it expires or its download limit is reached (' + (item.max_downloads ? item.max_downloads - item.downloads + ' downloads left' : 'unlimited downloads') + ', expires in ' + until(item.expires_at) + ').' }),
         h('form', { className:'vc-form', onSubmit:function(e){ e.preventDefault(); call('/drop/items/' + item.id + '/links', { method:'POST', body:{ require_login:login.checked, password:pw.value } }).then(function(j){
@@ -647,7 +773,15 @@
     var st = null, queue = h('div', { className:'vc-upload-queue', 'aria-live':'polite' }), itemsBox = h('div', { className:'vc-drop-items' }), usage = h('div', { className:'vc-usage' }), tick = 0;
     function refresh(){ return call('/drop/state').then(function(j){ st = j; drawUsage(); drawItems(); }).catch(err); }
     function drawUsage(){ var pctUsed = st.quota ? Math.min(100, 100 * st.used / st.quota) : 0; usage.replaceChildren(h('div', { className:'vc-usage-text' }, [h('strong', { text:size(st.used) }), h('span', { className:'muted', text:st.quota ? ' of ' + size(st.quota) + ' in use' : ' in use (no limit)' })]), st.quota ? h('span', { className:'vc-progress' + (pctUsed > 90 ? ' bad' : ''), role:'progressbar', 'aria-valuenow':String(Math.round(pctUsed)), 'aria-valuemin':'0', 'aria-valuemax':'100' }, [h('i', { style:'width:' + pctUsed + '%' })]) : null); }
+    var selected = {}, zipBar = h('div', { className:'vc-zip-bar', hidden:true });
+    function drawZipBar(){
+      var ids = Object.keys(selected).filter(function(id){ return st.items.some(function(i){ return i.id === id && i.status === 'available'; }); });
+      zipBar.hidden = ids.length < 1;
+      var total = st.items.filter(function(i){ return selected[i.id]; }).reduce(function(n, i){ return n + i.bytes; }, 0);
+      zipBar.replaceChildren(h('span', { text:ids.length + ' selected · ' + size(total) }), h('a', { className:'btn primary small', href:url('/api/drop/zip?ids=' + ids.join(',')), text:'Download as ZIP' }), btn('Clear', function(){ selected = {}; drawItems(); }, 'ghost small'));
+    }
     function drawItems(){
+      drawZipBar();
       var visible = st.items.filter(function(i){ return i.status !== 'deleted'; });
       if (!visible.length) { itemsBox.replaceChildren(h('p', { className:'muted vc-drop-empty', text:'Nothing here yet. Drop a file or write a note above.' })); return; }
       itemsBox.replaceChildren.apply(itemsBox, visible.map(function(i){
@@ -655,13 +789,14 @@
         var meta = [i.kind === 'file' ? size(i.bytes) : (i.kind === 'link' ? 'Link' : 'Note'), live ? 'expires in ' + until(i.expires_at) : null, i.max_downloads ? i.downloads + ' / ' + i.max_downloads + ' downloads' : (i.downloads ? i.downloads + ' downloads' : null), i.inbox ? 'sent to my devices' : null, ago(i.created_at)].filter(Boolean).join(' · ');
         var actions = [];
         if (live && i.kind === 'file') actions.push(h('a', { className:'btn primary small', href:url('/api/drop/items/' + i.id + '/download'), download:i.name, text:'Download' }));
-        if (live && i.kind === 'file' && /^(image|video|audio)\/|pdf/.test(i.mime)) actions.push(h('a', { className:'btn ghost small', href:url('/api/drop/items/' + i.id + '/download?inline=1'), target:'_blank', rel:'noopener', text:'Open' }));
+        if (live && i.kind === 'file' && i.preview) actions.push(btn('Preview', function(){ preview(i); }, 'ghost small'));
         if (live && i.kind === 'link') actions.push(h('a', { className:'btn primary small', href:i.body, target:'_blank', rel:'noopener noreferrer', text:'Open link' }));
         if (live && i.kind !== 'file') actions.push(btn('Copy', function(){ copy(i.body); }, 'ghost small'));
         if (live && st.can_upload) actions.push(btn('Share', function(){ shareDialog(i, refresh, st.public_links); }, 'ghost small'));
         if (i.status !== 'uploading') actions.push(btn('Limits', function(){ limitsDialog(i); }, 'ghost small'));
         actions.push(btn('Delete', function(){ A.confirmDialog('Delete “' + i.name + '” now? Share links stop working.', { okText:'Delete', danger:true }).then(function(ok){ if (ok) call('/drop/items/' + i.id, { method:'DELETE' }).then(refresh).catch(err); }); }, 'ghost small danger'));
-        return h('article', { className:'vc-drop-item ' + i.status }, [h('span', { className:'vc-drop-icon', text:kindIcon(i), 'aria-hidden':'true' }), h('div', { className:'vc-drop-copy' }, [h('strong', { text:i.name }), h('small', { className:'muted', text:meta }), i.kind === 'text' && live ? h('p', { className:'vc-drop-text', text:i.body.length > 280 ? i.body.slice(0, 280) + '…' : i.body }) : null]), h('span', { className:'vc-chip ' + s[1], text:s[0] }), h('div', { className:'vc-row-actions' }, actions)]);
+        var pickBox = live && i.kind === 'file' ? input('checkbox', !!selected[i.id], { 'aria-label':'Select ' + i.name + ' for a ZIP download', className:'vc-drop-pick', onChange:function(){ if (this.checked) selected[i.id] = true; else delete selected[i.id]; drawZipBar(); } }) : h('span', { className:'vc-drop-pick' });
+        return h('article', { className:'vc-drop-item ' + i.status }, [pickBox, h('span', { className:'vc-drop-icon', text:kindIcon(i), 'aria-hidden':'true' }), h('div', { className:'vc-drop-copy' }, [h('strong', { text:i.name }), h('small', { className:'muted', text:meta }), i.kind === 'text' && live ? h('p', { className:'vc-drop-text', text:i.body.length > 280 ? i.body.slice(0, 280) + '…' : i.body }) : null]), h('span', { className:'vc-chip ' + s[1], text:s[0] }), h('div', { className:'vc-row-actions' }, actions)]);
       }));
     }
     function limitsDialog(i){
@@ -683,16 +818,17 @@
       var tabs = seg([['file', 'Files'], ['text', 'Note or link']], 'file', function(v){ mode = v; zone.hidden = v !== 'file'; textForm.hidden = v !== 'text'; }, 'What to drop');
       function add(files){
         Array.prototype.forEach.call(files || [], function(f){
-          var control = {}, bar = h('i'), label = h('small', { className:'muted', text:'Starting…' }), pause = btn('Pause', function(){ control.paused = !control.paused; pause.textContent = control.paused ? 'Resume' : 'Pause'; if (!control.paused && control.resume) control.resume(); }, 'ghost small'), cancel = btn('Cancel', function(){ control.cancelled = true; if (control.resume) control.resume(); }, 'ghost small');
-          var row = h('div', { className:'vc-upload' }, [h('span', { className:'vc-drop-icon', text:kindIcon({ kind:'file', mime:f.type }) }), h('div', { className:'vc-drop-copy' }, [h('strong', { text:f.name }), h('span', { className:'vc-progress' }, [bar]), label]), h('div', { className:'vc-row-actions' }, [pause, cancel])]);
+          var control = {}, bar = h('i'), label = h('small', { className:'muted', text:'Starting…' }), pause = btn('Pause', function(){ control.paused = !control.paused; pause.textContent = control.paused ? 'Resume' : 'Pause'; if (!control.paused && control.resume) control.resume(); }, 'ghost small'), cancel = btn('Cancel', function(){ if (control.abort) control.abort(); else control.cancelled = true; if (control.resume) control.resume(); }, 'ghost small');
+          var row = h('div', { className:'vc-upload' }, [h('span', { className:'vc-drop-icon', text:kindIcon({ kind:'file', mime:f.type }) }), h('div', { className:'vc-drop-copy' }, [h('strong', { text:f.name }), h('span', { className:'vc-progress', role:'progressbar', 'aria-valuemin':'0', 'aria-valuemax':'100', 'aria-valuenow':'0', 'aria-label':'Upload progress for ' + f.name }, [bar]), label]), h('div', { className:'vc-row-actions' }, [pause, cancel])]);
           queue.appendChild(row);
-          var t0 = Date.now(), first = null;
-          uploadFile(f, { expires_hours:exp.hours(), max_downloads:dl.value(), inbox:inbox.checked }, function(p){
+          var first = null, opts = { expires_hours:exp.hours(), max_downloads:dl.value(), inbox:inbox.checked };
+          if (f.size > st.limits.max_file) { row.classList.add('failed'); label.textContent = 'Too large: up to ' + size(st.limits.max_file) + ' per file.'; pause.remove(); cancel.textContent = 'Dismiss'; cancel.onclick = function(){ row.remove(); }; return; }
+          label.textContent = 'Waiting…';
+          queueUpload(function(){ if (control.cancelled) return Promise.reject({ cancelled:true }); return uploadFile(f, opts, function(p){
             if (first == null) first = p.sent;
-            var pc = f.size ? 100 * p.sent / f.size : 100; bar.style.width = pc + '%';
-            var rate = (p.sent - first) / Math.max(1, (Date.now() - t0) / 1000);
-            label.textContent = p.done ? 'Uploaded · ' + size(f.size) : Math.floor(pc) + '% · ' + size(p.sent) + ' of ' + size(f.size) + (rate > 0 ? ' · ' + size(rate) + '/s' : '') + (first > 0 ? ' · resumed' : '');
-          }, control).then(function(){ row.classList.add('done'); pause.remove(); cancel.remove(); setTimeout(function(){ row.remove(); }, 4000); refresh(); if (inbox.checked) A.toast('Sent to your devices', { kind:'ok' }); })
+            var pc = f.size ? 100 * p.sent / f.size : 100; bar.style.width = pc + '%'; bar.parentNode.setAttribute('aria-valuenow', String(Math.floor(pc)));
+            label.textContent = p.done ? 'Uploaded · ' + size(f.size) : Math.floor(pc) + '% · ' + size(p.sent) + ' of ' + size(f.size) + (p.rate > 0 ? ' · ' + size(p.rate) + '/s' : '') + (p.eta != null && p.rate > 0 ? ' · ' + eta(p.eta) + ' left' : '') + (first > 0 ? ' · resumed' : '');
+          }, control); }).then(function(){ row.classList.add('done'); pause.remove(); cancel.remove(); setTimeout(function(){ row.remove(); }, 4000); refresh(); if (inbox.checked) A.toast('Sent to your devices', { kind:'ok' }); })
             .catch(function(e){ row.classList.add('failed'); label.textContent = (e && e.error) || 'Upload failed'; pause.remove(); cancel.textContent = 'Dismiss'; cancel.onclick = function(){ row.remove(); }; if (e && e.cancelled) row.remove(); refresh(); });
         });
       }
@@ -712,44 +848,67 @@
       function load(){ call('/drop/admin').then(function(o){
         var s = o.settings;
         var en = input('checkbox', s.enabled), ur = input('checkbox', s.user_role_upload), pub = input('checkbox', s.public_links), maxf = input('number', s.max_file_mb, { min:'1' }), defq = input('number', s.default_quota_mb, { min:'0' });
+        var anon = input('checkbox', s.anonymous), anonFile = input('number', s.anon_max_file_mb, { min:'1' }), anonTotal = input('number', s.anon_quota_mb, { min:'1' }), anonDays = input('number', s.anon_max_days, { min:'1', max:'30' }), accel = input('checkbox', s.nginx_downloads), confirmed = false;
+        // Turning anonymous uploads on needs an explicit confirmation; the server refuses it without one.
+        anon.addEventListener('change', function(){
+          if (!anon.checked || s.anonymous) { anonBox.hidden = !anon.checked; return; }
+          anon.checked = false;
+          A.confirmDialog('Allow anonymous Drop? Anyone who can reach this server will be able to upload files without signing in. They could fill the disk or use your server to host files. Only turn this on if you understand and accept that risk.', { okText:'Allow anonymous uploads', danger:true }).then(function(ok){ if (!ok) return; confirmed = true; anon.checked = true; anonBox.hidden = false; });
+        });
+        var anonBox = h('div', { className:'vc-field-row', hidden:!s.anonymous }, [field('Anonymous: largest file (MB)', anonFile), field('Anonymous: total storage (MB)', anonTotal), field('Anonymous: longest expiry (days)', anonDays, 'Uploads default to 24 hours.')]);
+        var anonSection = h('div', { className:'vc-anon-admin' }, [
+          h('label', { className:'vc-check' }, [anon, h('span', { text:'Allow anonymous Drop' })]),
+          h('p', { className:'vc-warn-danger', role:'note' }, [h('strong', { text:'This is not recommended. ' }), 'Anyone who can reach this server can upload without an account, fill the disk or use it to host files. Uploads are limited per network address, kept apart from each other and from the rest of the site, and admins can delete them below.']),
+          anonBox, s.anonymous ? h('p', { className:'muted' }, ['Anonymous page: ', h('a', { href:o.anon_url, target:'_blank', rel:'noopener', text:location.origin + o.anon_url }), ' · in use: ' + size(o.anon_used || 0) + ' of ' + size(s.anon_quota_mb * 1048576)]) : null]);
         var quotaInputs = Object.keys(o.roles).map(function(r){ var i = input('number', s.quotas[r] != null ? s.quotas[r] : '', { min:'0', placeholder:'default', 'data-role':r }); return field((o.roles[r].name || r) + ' quota (MB)', i); });
         var last = o.last_cleanup ? (function(){ try { var j = typeof o.last_cleanup === 'string' ? JSON.parse(o.last_cleanup) : o.last_cleanup; return j; } catch (e) { return null; } })() : null;
         box.replaceChildren(
           h('div', { className:'vc-stat-row' }, [['Stored', size(o.total_bytes)], ['Free on disk', o.free_bytes != null ? size(o.free_bytes) : '—'], ['Reclaimable', size(o.reclaimable.bytes) + ' · ' + o.reclaimable.items + ' items'], ['Upload piece', size(o.limits.chunk)]].map(function(x){ return h('div', { className:'vc-stat' }, [h('strong', { text:x[1] }), h('span', { className:'muted', text:x[0] })]); })),
           h('div', { className:'vc-cleanup' }, [h('div', null, [h('strong', { text:'Cleanup task' }), h('p', { className:'muted', text:'Expired and used-up items are hidden straight away; this task deletes their files. ' + (last && last.finished_at ? 'Last run ' + ago(Date.parse(last.finished_at) / 1000) + '.' : 'Not run yet.') + ' Schedule it with the operating system (cron / Task Scheduler): php src/Console.php drop-cleanup' })]), btn('Run cleanup now', function(){ call('/drop/admin/cleanup', { method:'POST' }).then(function(){ A.toast('Cleanup started. Follow it under Settings → Maintenance.', { kind:'ok' }); setTimeout(load, 4000); }).catch(err); }, 'primary', { disabled:!o.reclaimable.items ? true : null })]),
-          h('form', { className:'vc-form', onSubmit:function(e){ e.preventDefault(); var q = {}; box.querySelectorAll('input[data-role]').forEach(function(i){ if (i.value !== '') q[i.getAttribute('data-role')] = Number(i.value); }); call('/drop/admin/settings', { method:'POST', body:{ enabled:en.checked, user_role_upload:ur.checked, public_links:pub.checked, max_file_mb:Number(maxf.value), default_quota_mb:Number(defq.value), quotas:q } }).then(function(){ A.toast('Drop settings saved', { kind:'ok' }); load(); refresh(); }).catch(err); } }, [
+          h('form', { className:'vc-form', onSubmit:function(e){ e.preventDefault(); var q = {}; box.querySelectorAll('input[data-role]').forEach(function(i){ if (i.value !== '') q[i.getAttribute('data-role')] = Number(i.value); }); call('/drop/admin/settings', { method:'POST', body:{ enabled:en.checked, user_role_upload:ur.checked, public_links:pub.checked, max_file_mb:Number(maxf.value), default_quota_mb:Number(defq.value), quotas:q, anonymous:anon.checked, confirm_anonymous:confirmed, anon_max_file_mb:Number(anonFile.value), anon_quota_mb:Number(anonTotal.value), anon_max_days:Number(anonDays.value), nginx_downloads:accel.checked } }).then(function(j){ A.toast('Drop settings saved', { kind:'ok' }); (j.notes || []).forEach(function(n){ A.toast(n); }); load(); refresh(); }).catch(err); } }, [
             h('label', { className:'vc-check' }, [en, h('span', { text:'Drop is enabled' })]), h('label', { className:'vc-check' }, [ur, h('span', { text:'Standard users may upload (other roles use the Drop permission; per-user overrides live under Users)' })]), h('label', { className:'vc-check' }, [pub, h('span', { text:'Allow public share links (no sign-in)' })]),
-            h('div', { className:'vc-field-row' }, [field('Largest file (MB)', maxf), field('Default quota (MB, 0 = none)', defq)].concat(quotaInputs)), h('button', { type:'submit', className:'btn primary', text:'Save settings' })]),
+            h('div', { className:'vc-field-row' }, [field('Largest file (MB)', maxf, 'Default 1024 MB. A role quota below this caps that role\u2019s largest file.'), field('Default quota (MB, 0 = none)', defq)].concat(quotaInputs)),
+            (o.notes || []).length ? h('ul', { className:'muted vc-notes' }, o.notes.map(function(n){ return h('li', { text:n }); })) : null,
+            h('label', { className:'vc-check' }, [accel, h('span', { text:'Let nginx serve Drop downloads (needs nginx accel on, and nginx able to read the Drop folder)' })]),
+            anonSection, h('button', { type:'submit', className:'btn primary', text:'Save settings' })]),
           o.users.length ? h('table', { className:'vc-table' }, [h('thead', null, [h('tr', null, [h('th', { text:'User' }), h('th', { text:'Items' }), h('th', { text:'Stored' })])]), h('tbody', null, o.users.map(function(u){ return h('tr', null, [h('td', { text:u.user.name }), h('td', { text:String(u.items) }), h('td', { text:size(u.bytes) })]); }))]) : null,
-          o.items.length ? h('details', { className:'vc-admin-items' }, [h('summary', { text:'All items (' + o.items.length + ')' }), h('div', { className:'vc-drop-items' }, o.items.map(function(i){ var s2 = STATUS[i.status] || [i.status, 'muted']; return h('div', { className:'vc-drop-item ' + i.status }, [h('span', { className:'vc-drop-icon', text:kindIcon(i) }), h('div', { className:'vc-drop-copy' }, [h('strong', { text:i.name }), h('small', { className:'muted', text:i.owner.name + ' · ' + size(i.bytes) + ' · ' + ago(i.created_at) })]), h('span', { className:'vc-chip ' + s2[1], text:s2[0] }), btn('Delete', function(){ A.confirmDialog('Delete “' + i.name + '”?', { okText:'Delete', danger:true }).then(function(ok){ if (ok) call('/drop/admin/items/' + i.id, { method:'DELETE' }).then(load).catch(err); }); }, 'ghost small danger')]); }))]) : null);
+          o.items.length ? h('details', { className:'vc-admin-items' }, [h('summary', { text:'All items (' + o.items.length + ')' }), h('div', { className:'vc-drop-items' }, o.items.map(function(i){ var s2 = STATUS[i.status] || [i.status, 'muted']; return h('div', { className:'vc-drop-item ' + i.status }, [h('span', { className:'vc-drop-icon', text:kindIcon(i) }), h('div', { className:'vc-drop-copy' }, [h('strong', { text:i.name }), h('small', { className:'muted', text:i.owner.name + (i.anonymous && i.origin ? ' (' + i.origin + ')' : '') + ' · ' + size(i.bytes) + ' · ' + i.downloads + ' download' + (i.downloads === 1 ? '' : 's') + ' · ' + ago(i.created_at) })]), h('span', { className:'vc-chip ' + s2[1], text:s2[0] }), btn('Delete', function(){ A.confirmDialog('Delete “' + i.name + '”?', { okText:'Delete', danger:true }).then(function(ok){ if (ok) call('/drop/admin/items/' + i.id, { method:'DELETE' }).then(load).catch(err); }); }, 'ghost small danger')]); }))]) : null);
       }).catch(function(e){ box.replaceChildren(empty('Overview unavailable', (e && e.error) || '')); }); }
       load();
       return panel('Administration', [box]);
     }
     call('/drop/state').then(function(j){
       st = j; drawUsage(); drawItems();
-      body.replaceChildren(st.can_upload ? composer() : panel('Drop', [h('p', { className:'muted', text:'Your account can receive and manage Drop items but cannot upload. Ask an administrator for the Drop permission.' }), usage]), panel('Your items', [itemsBox], btn('Refresh', refresh, 'ghost small')), isAdmin() ? adminPanel() : null);
+      body.replaceChildren(st.can_upload ? composer() : panel('Drop', [h('p', { className:'muted', text:'Your account can receive and manage Drop items but cannot upload. Ask an administrator for the Drop permission.' }), usage]), panel('Your items', [zipBar, itemsBox], btn('Refresh', refresh, 'ghost small')), isAdmin() ? adminPanel() : null);
       tick = setInterval(function(){ if (!body.isConnected) { clearInterval(tick); return; } if (!document.hidden && st) drawItems(); }, 60000); onCleanup(function(){ clearInterval(tick); });
     }).catch(function(e){ body.replaceChildren(empty('Drop unavailable', (e && e.error) || '')); });
   }
 
   // ------------------------------------------------------------------ Ambient screen
-  var MODES = [['stills', 'Film stills', 'Frames from your library with a slow pan and zoom', '🎞️'], ['posters', 'Poster wall', 'Library artwork drifting by', '🖼️'], ['webcams', 'Webcams', 'Live views from the cameras your admin picked', '📷'], ['clock', 'Clock only', 'A calm, dim clock with the weather', '🕰️']];
-  function ambientPrefs(){ return Object.assign({ mode:'stills', clock:true, weather:true, radio:'', seconds:14 }, store('vaultcast-ambient') || {}); }
+  var MODES = [['stills', 'Film stills', 'Frames from your library with a slow pan and zoom', '🎞️'], ['posters', 'Poster wall', 'Library artwork drifting by', '🖼️'], ['webcams', 'Webcams', 'Live views from the cameras your admin picked', '📷'], ['mixed', 'Library mix', 'Film stills and posters together', '🎬'], ['links', 'Your pictures', 'Picture addresses you list below', '🌄'], ['clock', 'Clock only', 'A calm, dim clock with the weather', '🕰️']];
+  function minutesOf(t){ var m = /^(\d{1,2}):(\d{2})$/.exec(t || ''); return m ? (Number(m[1]) % 24) * 60 + Math.min(59, Number(m[2])) : null; }
+  /** True while the night dim window is active; windows may cross midnight (22:00 → 07:00). */
+  function inDim(p, d){ if (!p.dim) return false; var a = minutesOf(p.dimFrom), b = minutesOf(p.dimTo); if (a == null || b == null || a === b) return false; var n = d.getHours() * 60 + d.getMinutes(); return a < b ? (n >= a && n < b) : (n >= a || n < b); }
+  function safeImageUrl(u){ u = String(u || '').trim(); return /^https?:\/\/[^\s"'()\\]+$/i.test(u) ? u : ''; }
+  function ambientPrefs(){ return Object.assign({ mode:'stills', clock:true, weather:true, radio:'', seconds:14, fade:1.6, dim:false, dimFrom:'22:00', dimTo:'07:00', dimLevel:60, links:[] }, store('vaultcast-ambient') || {}); }
   var amb = null;
   function startAmbient(opts){
     opts = opts || {};
     if (amb) return;
     var p = Object.assign(ambientPrefs(), opts.mode ? { mode:opts.mode } : {}), layer = h('div', { className:'vc-ambient mode-' + p.mode, role:'dialog', 'aria-label':'Ambient screen. Press any key to exit.' }), stage = h('div', { className:'vc-amb-stage' });
+    var fade = Math.max(0.2, Math.min(8, Number(p.fade) || 1.6)); layer.style.setProperty('--vc-kb-fade', fade + 's');
+    var dimEl = h('div', { className:'vc-amb-dim', 'aria-hidden':'true' }); dimEl.style.opacity = '0'; layer.appendChild(dimEl);
+    function applyDim(d){ dimEl.style.opacity = inDim(p, d) ? String(Math.max(10, Math.min(90, Number(p.dimLevel) || 60)) / 100) : '0'; }
     var overlay = h('div', { className:'vc-amb-overlay' }), clock = h('div', { className:'vc-amb-clock' }), wxEl = h('div', { className:'vc-amb-wx' }), hint = h('div', { className:'vc-amb-hint', text:'Press any key or tap to return' });
     layer.append(stage, overlay, hint); if (p.clock !== false || p.mode === 'clock') overlay.appendChild(clock); if (p.weather !== false && p.loc) overlay.appendChild(wxEl);
     document.body.appendChild(layer); document.body.classList.add('vc-ambient-on');
     var stops = [], since = Date.now();
     amb = { layer:layer };
-    function tickClock(){ var d = new Date(); clock.replaceChildren(h('strong', { text:clockText(d, {}) }), h('span', { text:dateText(d) })); }
+    function tickClock(){ var d = new Date(); if (d.getSeconds() === 0 || tickClock.first !== false) { applyDim(d); tickClock.first = false; } clock.replaceChildren(h('strong', { text:clockText(d, {}) }), h('span', { text:dateText(d) })); }
     tickClock(); var ct = setInterval(tickClock, 1000); stops.push(function(){ clearInterval(ct); });
     if (p.weather !== false && p.loc) { var wl = function(){ weatherData(p.loc).then(function(j){ var w = wx(j.current.code, j.current.day); wxEl.replaceChildren(h('span', { className:'vc-amb-wx-icon', text:w.icon }), h('strong', { text:Math.round(j.current.temp) + j.units }), h('small', { text:w.text + ' · ' + p.loc.name })); }).catch(function(){}); }; wl(); var wt = setInterval(wl, 600000); stops.push(function(){ clearInterval(wt); }); }
-    if (p.mode === 'stills' || p.mode === 'posters') { var kb = kenBurns(stage, function(){ return call('/misc/ambient/stills?n=40&kind=' + (p.mode === 'stills' ? 'frames' : 'posters')).then(function(j){ return j.stills.map(function(x){ return { url:url(x.url), title:x.title + (x.year ? ' (' + x.year + ')' : '') }; }); }); }, { interval:(p.seconds || 14) * 1000, captions:true }); stops.push(kb.stop); }
+    if (p.mode === 'links') { var own = (p.links || []).map(safeImageUrl).filter(Boolean); var kbl = kenBurns(stage, function(){ return Promise.resolve(own.map(function(u){ return { url:u, title:'' }; })); }, { interval:(p.seconds || 14) * 1000 }); stops.push(kbl.stop); }
+    else if (p.mode === 'stills' || p.mode === 'posters' || p.mode === 'mixed') { var kb = kenBurns(stage, function(){ return call('/misc/ambient/stills?n=40&kind=' + (p.mode === 'stills' ? 'frames' : p.mode === 'mixed' ? 'mixed' : 'posters')).then(function(j){ return j.stills.map(function(x){ return { url:url(x.url), title:x.title + (x.year ? ' (' + x.year + ')' : '') }; }); }); }, { interval:(p.seconds || 14) * 1000, captions:true }); stops.push(kb.stop); }
     else if (p.mode === 'webcams') {
       call('/misc/ambient').then(function(cfg){
         var cams = cfg.webcams || [], i = 0, timer = 0, refresh = 0, hls = null;
@@ -794,12 +953,18 @@
     var modes = h('div', { className:'vc-mode-grid', role:'radiogroup', 'aria-label':'Ambient mode' }, MODES.map(function(m){ return h('button', { type:'button', role:'radio', 'aria-checked':String(p.mode === m[0]), className:'vc-mode-card' + (p.mode === m[0] ? ' active' : ''), onClick:function(){ p.mode = m[0]; save(); modes.querySelectorAll('.vc-mode-card').forEach(function(c){ c.classList.toggle('active', c === this); c.setAttribute('aria-checked', String(c === this)); }, this); }, onDblclick:function(){ startAmbient({ mode:m[0] }); } }, [h('span', { className:'vc-mode-icon', text:m[3], 'aria-hidden':'true' }), h('strong', { text:m[1] }), h('small', { className:'muted', text:m[2] })]); }));
     var clockC = input('checkbox', p.clock !== false, { onChange:function(){ p.clock = this.checked; save(); } }), wxC = input('checkbox', p.weather !== false, { onChange:function(){ p.weather = this.checked; save(); } });
     var secs = input('number', p.seconds || 14, { min:'5', max:'120', onChange:function(){ p.seconds = Math.max(5, Math.min(120, Number(this.value) || 14)); save(); } });
+    var fadeSel = select([['0.6', 'Quick (0.6 s)'], ['1.6', 'Gentle (1.6 s)'], ['3', 'Slow (3 s)'], ['6', 'Very slow (6 s)']], String(p.fade || 1.6), { onChange:function(){ p.fade = Number(this.value); save(); } });
+    var linksTa = h('textarea', { rows:4, placeholder:'https://example.local/photos/1.jpg', 'aria-label':'Picture addresses, one per line', onChange:function(){ p.links = this.value.split(/\s+/).map(safeImageUrl).filter(Boolean).slice(0, 200); this.value = p.links.join('\n'); save(); } }); linksTa.value = (p.links || []).join('\n');
+    var dimC = input('checkbox', !!p.dim, { onChange:function(){ p.dim = this.checked; save(); } }), dimFrom = input('time', p.dimFrom || '22:00', { onChange:function(){ p.dimFrom = this.value; save(); } }), dimTo = input('time', p.dimTo || '07:00', { onChange:function(){ p.dimTo = this.value; save(); } });
+    var dimLvl = input('range', p.dimLevel || 60, { min:'10', max:'90', step:'5', 'aria-label':'How dark at night', onInput:function(){ p.dimLevel = Number(this.value); save(); } });
     var radioSel = select([['', 'No radio']], p.radio || '', { onChange:function(){ p.radio = this.value; save(); } });
     (A.loadRadio ? A.loadRadio() : Promise.resolve([])).then(function(list){ list.forEach(function(st){ radioSel.appendChild(h('option', { value:st.id, text:st.name })); }); radioSel.value = p.radio || ''; }).catch(function(){});
     var own = null; try { own = localStorage.getItem('vaultcast-ambient-idle'); } catch (e) {}
     var idleSel = select([['', 'Use the server default'], ['0', 'Never on this device'], ['2', 'After 2 minutes'], ['5', 'After 5 minutes'], ['10', 'After 10 minutes'], ['15', 'After 15 minutes'], ['30', 'After 30 minutes'], ['60', 'After 1 hour']], own == null ? '' : own, { onChange:function(){ try { if (this.value === '') localStorage.removeItem('vaultcast-ambient-idle'); else localStorage.setItem('vaultcast-ambient-idle', this.value); } catch (e) {} } });
     var serverIdle = h('small', { className:'muted' });
-    body.append(panel('Mode', [modes]), panel('Overlay & sound', [h('div', { className:'vc-form' }, [h('label', { className:'vc-check' }, [clockC, h('span', { text:'Show the clock' })]), h('label', { className:'vc-check' }, [wxC, h('span', { text:'Show the weather' })]), field('Weather location', locationPicker(p.loc, function(l){ p.loc = l; save(); })), field('Seconds per picture', secs), field('Radio while ambient runs', radioSel)])]),
+    body.append(panel('Mode', [modes]), panel('Overlay & sound', [h('div', { className:'vc-form' }, [h('label', { className:'vc-check' }, [clockC, h('span', { text:'Show the clock' })]), h('label', { className:'vc-check' }, [wxC, h('span', { text:'Show the weather' })]), field('Weather location', locationPicker(p.loc, function(l){ p.loc = l; save(); })), field('Seconds per picture', secs), field('Transition speed', fadeSel), field('Radio while ambient runs', radioSel)])]),
+      panel('Your pictures', [h('div', { className:'vc-form' }, [field('Picture addresses (one per line, used by the “Your pictures” mode)', linksTa, 'Pictures load straight from your browser; the server never fetches them.')])]),
+      panel('Night dimming', [h('div', { className:'vc-form' }, [h('label', { className:'vc-check' }, [dimC, h('span', { text:'Dim the screen at night' })]), h('div', { className:'vc-field-row' }, [field('From', dimFrom), field('Until', dimTo), field('Darkness', dimLvl)])])]),
       panel('Start automatically', [h('div', { className:'vc-form' }, [field('On this device', idleSel), serverIdle, h('p', { className:'muted', text:'Ambient waits while video or audio is playing. Any key, tap or mouse movement returns you to where you were.' })])]));
     call('/misc/ambient').then(function(cfg){
       serverIdle.textContent = cfg.idle_minutes ? 'Server default: after ' + cfg.idle_minutes + ' minutes.' : 'Server default: off.';
