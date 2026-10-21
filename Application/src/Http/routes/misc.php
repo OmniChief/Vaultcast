@@ -5,6 +5,27 @@ try {
     // Share links: the per-link setting decides whether a sign-in is needed (Access gate lets these through).
     if (preg_match('#^/drop/s/([a-f0-9]{32})(/download)?$#D', $path, $m) && in_array($method, ['GET', 'HEAD', 'POST'], true)) Drop::share($m[1], $method, !empty($m[2]));
     header('Cache-Control: no-store');
+    // Anonymous Drop (admin opt-in, off by default): works without an account, even when guest browsing is off,
+    // and reaches nothing but the visitor's own uploads. The Access gate lets /drop/anon through; everything is checked here.
+    if (preg_match('#^/drop/anon(/.*)?$#D', $path, $m)) {
+        $sub = $m[1] ?? '';
+        if ($sub === '' && in_array($method, ['GET', 'HEAD'], true)) Drop::anonPage();
+        Drop::requireAnon();
+        Drop::ipLimit('req', 900, 600);
+        $anon = Drop::anonUser(true);
+        if ($sub === '/state' && $method === 'GET') json_out(Drop::state($anon));
+        if ($sub === '/upload' && $method === 'POST') { Drop::ipLimit('init', 30, 3600); json_out(Drop::init($anon, body_json())); }
+        if (preg_match('#^/upload/([a-f0-9]{32})$#D', $sub, $mm) && $method === 'GET') json_out(Drop::resume($anon, $mm[1]));
+        if (preg_match('#^/upload/([a-f0-9]{32})$#D', $sub, $mm) && ($method === 'POST' || $method === 'PUT')) {
+            Drop::ipLimit('chunk', 600, 3600);
+            $r = Drop::chunk($anon, $mm[1], (int)($_GET['offset'] ?? -1));
+            json_out($r, !empty($r['ok']) ? 200 : 409);
+        }
+        if (preg_match('#^/items/([a-f0-9]{32})$#D', $sub, $mm) && $method === 'DELETE') json_out(Drop::delete($anon, $mm[1]));
+        if (preg_match('#^/items/([a-f0-9]{32})/download$#D', $sub, $mm) && in_array($method, ['GET', 'HEAD'], true)) { Drop::ipLimit('dl', 200, 3600); Drop::ownerDownload($anon, $mm[1], false); }
+        if (preg_match('#^/items/([a-f0-9]{32})/links$#D', $sub, $mm) && $method === 'POST') { Drop::ipLimit('link', 30, 3600); json_out(Drop::link($anon, $mm[1], body_json())); }
+        json_error('Drop endpoint not found.', 404);
+    }
     $user = Auth::requireUser();
 
     if (strpos($path, '/drop/') === 0 || $path === '/drop') {
@@ -21,6 +42,8 @@ try {
         if (preg_match('#^/drop/items/([a-f0-9]{32})/download$#D', $path, $m) && in_array($method, ['GET', 'HEAD'], true)) Drop::ownerDownload($user, $m[1], !empty($_GET['inline']));
         if (preg_match('#^/drop/items/([a-f0-9]{32})/links$#D', $path, $m) && $method === 'POST') json_out(Drop::link($user, $m[1], body_json()));
         if (preg_match('#^/drop/links/([a-f0-9]{32})/revoke$#D', $path, $m) && $method === 'POST') json_out(Drop::revoke($user, $m[1]));
+        if (preg_match('#^/drop/links/([a-f0-9]{32})/extend$#D', $path, $m) && $method === 'POST') json_out(Drop::extendLink($user, $m[1], body_json()));
+        if ($path === '/drop/zip' && $method === 'GET') Drop::zip($user, explode(',', (string)($_GET['ids'] ?? '')));
         if (strpos($path, '/drop/admin') === 0) {
             Auth::requireAdmin();
             if ($path === '/drop/admin' && $method === 'GET') json_out(Drop::overview());

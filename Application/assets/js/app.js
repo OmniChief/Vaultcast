@@ -14660,9 +14660,20 @@ function viewCollectionDetail(){
         h('label', {}, ['Password', h('input', { id:'lp', type:'password', autocomplete:'current-password', onKeydown: function(e){ if(e.key==='Enter') doLogin(); } })]),
         h('button', { id:'login-submit', className:'btn primary', text:'Sign in', onClick: doLogin }),
         h('button', { className:'btn ghost', text: state.user || state._guest ? 'Back to catalogue' : 'Back', onClick: function(){ state._wantAdmin=false; if (state.user || state._guest) { state.view='home'; render(); } else showWelcome(); } }),
-        h('p', { id:'login-err', className:'bad' })
+        h('p', { id:'login-err', className:'bad' }),
+        anonDropLink()
       ])
     ]);
+  }
+  /** "Send a file without an account" appears only when an admin enabled anonymous Drop. */
+  function anonDropLink(){
+    var box = h('p', { className:'muted', hidden:true });
+    api('/status').then(function(s){
+      if (!s || !s.drop_anonymous) return;
+      box.appendChild(h('a', { href: BASE + 'api/drop/anon', text:'Send a file without an account' }));
+      box.hidden = false;
+    });
+    return box;
   }
   function doLogin(){
     if (state._loginBusy) return;

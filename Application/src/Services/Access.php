@@ -90,6 +90,8 @@ final class Access
         if (in_array($path, self::OPEN_PATHS, true) || strpos($path, '/player-assets/') === 0) return null;
         // Drop share links decide for themselves whether a sign-in is needed (per-link setting).
         if (preg_match('#^/drop/s/[a-f0-9]{32}(?:/download)?$#D', $path)) return null;
+        // Anonymous Drop answers for itself (refused unless the admin enabled it) and serves nothing else.
+        if (preg_match('#^/drop/anon(?:/(?:state|upload(?:/[a-f0-9]{32})?|items/[a-f0-9]{32}(?:/download|/links)?))?$#D', $path)) return null;
         if (strpos($path, '/stream/') === 0 && strpos($path, '/stream/bios/') !== 0) {
             // Streams are token-addressed (players cannot always send cookies): check the token owner.
             $p = $token();
