@@ -192,6 +192,7 @@ final class Drop {
     private static function selfNotice(array $user, string $id, string $name): void {
         if (self::isAnon($user)) return;
         $person = Arcade::person($user);
+        Inbox::add((string)$user['id'], 'system', 'drop', 'drop:' . $id, $person, 'Sent to your devices', mb_substr($name, 0, 120), ['kind' => 'path', 'path' => 'misc/drop']);
         HomeHub::mutate('home-hub:' . $user['id'], function (array $d) use ($id, $name, $person): array {
             $nid = 'drop:' . $id;
             $d['notifications'][$nid] = ['id' => $nid, 'from' => $person, 'title' => mb_substr($name, 0, 120), 'text' => 'Sent to your devices', 'kind' => 'drop', 'action' => 'Open', 'path' => 'misc/drop', 'created_at' => time()];

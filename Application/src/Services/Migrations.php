@@ -6,7 +6,7 @@
  */
 final class Migrations
 {
-    const VERSION = 13; // 13: smart collections and their facts index; 12: age ratings and parental controls / kids profiles; 11: site-wide webcam registry (Ambient); 10: calendars, events, reminders and personal pictures (Misc); 9: leaderboard covering indexes, Drop anonymous origin column and MEDIUMTEXT notes; 8: play scores/points and drop storage; 2: library folder access pass for nginx (step 5); 3: re-run it, recording results; 4: media facts table; 5: arrival timestamps and indexed running times; 6: chat storage; 7: prepared browsing
+    const VERSION = 14; // 14: unified inbox; 13: smart collections and their facts index; 12: age ratings and parental controls / kids profiles; 11: site-wide webcam registry (Ambient); 10: calendars, events, reminders and personal pictures (Misc); 9: leaderboard covering indexes, Drop anonymous origin column and MEDIUMTEXT notes; 8: play scores/points and drop storage; 2: library folder access pass for nginx (step 5); 3: re-run it, recording results; 4: media facts table; 5: arrival timestamps and indexed running times; 6: chat storage; 7: prepared browsing
 
     public static function stampFile(): string
     {
@@ -92,10 +92,12 @@ final class Migrations
     {
         $log = [];
         foreach (explode(';', (string)file_get_contents(dirname(__DIR__) . '/schema.sql')) as $sql) {
-            if (preg_match('/CREATE TABLE IF NOT EXISTS vaultcast_(chat_|browse_items|show_summaries|play_|drop_|cal_|pictures\b|webcams\b|content_ratings\b|parental\b|smart_)/i',$sql)) $pdo->exec($sql);
+            if (preg_match('/CREATE TABLE IF NOT EXISTS vaultcast_(chat_|browse_items|show_summaries|play_|drop_|cal_|pictures\b|webcams\b|content_ratings\b|parental\b|smart_|inbox)/i',$sql)) $pdo->exec($sql);
         }
         $upgrade = self::playDropUpgrade($pdo);
         // v11: the registry table only; existing webcams are imported lazily (Webcams::ensureBackfill) on first use.
+        // v14: unified inbox tables above; nothing to convert.
+        if (is_file(STREAM_DATA.'/runtime/migrations-v13.done')) return ['unified_inbox'=>true, 'play_drop_upgrade'=>$upgrade];
         // v13: smart collection tables above; nothing to convert.
         if (is_file(STREAM_DATA.'/runtime/migrations-v12.done')) return ['smart_collections'=>true, 'play_drop_upgrade'=>$upgrade];
         // v12: the two new tables above (age ratings, parental settings); nothing to convert.

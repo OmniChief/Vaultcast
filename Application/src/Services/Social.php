@@ -87,6 +87,7 @@ final class Social {
         if ($to === '' || $to === ($from['id'] ?? '')) return;
         if (self::blockedEither($to, (string)($from['id'] ?? ''))) return;
         $person = Arcade::person($from);
+        Inbox::fromNotice($to, $person, 'play:' . $key, 'play', $person['name'] . ' ' . $verb, mb_substr($title, 0, 160), $path);
         HomeHub::mutate('home-hub:' . $to, function (array $d) use ($key, $person, $verb, $title, $path): array {
             $nid = 'play:' . $key . ':' . $person['id'];
             unset($d['notifications'][$nid]);

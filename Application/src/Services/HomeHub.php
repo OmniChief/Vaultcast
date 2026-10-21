@@ -329,6 +329,9 @@ final class HomeHub {
             } else throw new DomainException('Unknown friend action.');
             foreach ($all as $id=>$data) \Vaultcast\Repository::putDocument(self::key($id),$data);
         });
+        $act=$body['action'] ?? 'request';
+        if ($act==='request') Inbox::fromNotice((string)$other['id'],self::profile($user),'friend-request','friend',(self::profile($user)['name'] ?? 'Someone').' sent you a friend request','Accept it on your Friends page.','home/friends');
+        if ($act==='accept') Inbox::fromNotice((string)$other['id'],self::profile($user),'friend-accepted','friend',(self::profile($user)['name'] ?? 'Someone').' accepted your friend request','You are now friends.','home/friends');
         return ['ok'=>true];
     }
     public static function friendProfile(array $user,string $id): array {
@@ -351,6 +354,8 @@ final class HomeHub {
             if (!$room || ($room['host_user_id'] ?? '')!==$user['id']) throw new DomainException('Only your active lobby can be shared.');
             $card=self::entity('item:'.$room['item_id'],$recipient); $url='games/'.$card['game_path'].'?room='.$roomId;
         } else throw new DomainException('Choose a cinema room or game lobby.');
+        $who=self::profile($user);
+        Inbox::fromNotice($id,$who,$kind.':'.$roomId,$kind,($who['name'] ?? 'A friend').($kind==='cinema'?' invited you to watch together':' invited you to play'),(string)$card['title'],$url);
         self::mutate(self::key($id),function(array $d) use ($user,$roomId,$kind,$url,$card): array {
             $nid=$kind.':'.$roomId.':'.$user['id'];
             $d['notifications'][$nid]=['id'=>$nid,'from'=>self::profile($user),'title'=>$card['title'],'kind'=>$kind,'path'=>$url,'created_at'=>time()];

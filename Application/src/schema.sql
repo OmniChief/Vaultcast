@@ -247,6 +247,18 @@ CREATE TABLE IF NOT EXISTS vaultcast_smart_facts (
  INDEX smart_facts_show (show_key)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS vaultcast_inbox (
+ id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, user_id VARCHAR(64) NOT NULL,
+ type VARCHAR(16) CHARACTER SET ascii NOT NULL, subtype VARCHAR(32) CHARACTER SET ascii NOT NULL DEFAULT '',
+ dedupe VARCHAR(120) NOT NULL, actor TEXT NOT NULL, title VARCHAR(255) NOT NULL DEFAULT '', body VARCHAR(600) NOT NULL DEFAULT '',
+ action TEXT NOT NULL, payload TEXT NOT NULL, created_at BIGINT NOT NULL DEFAULT 0, read_at BIGINT NOT NULL DEFAULT 0, deleted TINYINT NOT NULL DEFAULT 0,
+ UNIQUE KEY inbox_dedupe (user_id, dedupe), INDEX inbox_user (user_id, deleted, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS vaultcast_inbox_seen (
+ user_id VARCHAR(64) NOT NULL PRIMARY KEY, last_seen BIGINT NOT NULL DEFAULT 0
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS vaultcast_parental (
  user_id VARCHAR(64) NOT NULL PRIMARY KEY,
  settings TEXT NOT NULL, pin_hash VARCHAR(255) NOT NULL DEFAULT '',

@@ -130,6 +130,19 @@ if (strpos($path, '/offline/') === 0) {
     json_error('Not found', 404);
 }
 
+// Unified inbox: messages, invitations, library imports, requests and maintenance in one list.
+if ($path === '/inbox' || strpos($path, '/inbox/') === 0) {
+    $user = Auth::requireUser();
+    if (($user['role'] ?? '') === 'guest') json_error('Sign in to use your inbox.', 403);
+    if ($path === '/inbox' && $method === 'GET') json_out(Inbox::list($user, preg_replace('/[^a-z]/', '', (string)($_GET['type'] ?? 'all')) ?: 'all', max(0, (int)($_GET['before'] ?? 0))));
+    if ($path === '/inbox/badge' && $method === 'GET') json_out(['ok' => true] + Inbox::badge($user));
+    $b = body_json();
+    if ($path === '/inbox/seen' && $method === 'POST') json_out(Inbox::seen($user));
+    if ($path === '/inbox/read' && $method === 'POST') json_out(Inbox::markRead($user, (array)($b['ids'] ?? []), !array_key_exists('read', $b) || !empty($b['read'])));
+    if ($path === '/inbox/delete' && $method === 'POST') json_out(Inbox::delete($user, (array)($b['ids'] ?? [])));
+    json_error('Not found', 404);
+}
+
 // Parental controls for the signed-in profile. The PIN hash never leaves the server.
 if ($path === '/me/parental' && $method === 'GET') json_out(Parental::status(Auth::requireUser()));
 if ($path === '/me/parental' && $method === 'POST') {
