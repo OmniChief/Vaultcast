@@ -63,11 +63,12 @@ final class Transcode {
         if(!AreaAccess::allowed($user,'library'))throw new DomainException('Library access is required.');
         $config=self::settings(); $save=!empty($body['save']);
         if(array_key_exists('save',$body) && !is_bool($body['save']))throw new InvalidArgumentException('Choose whether to save the completed copy.');
+        if($save && !Permissions::allowed($user,'save_copy'))throw new DomainException('Your role is not allowed to use Watch & save copy. Ask an administrator to enable the "Watch & save copy" permission.');
+        if($save && empty($config['allow_save']))throw new DomainException('Watch & save copy is turned off in DirectPlay Settings.');
         if(!$save)$item=Stream::playbackItem($item);
         $src=\Vaultcast\Paths::real((string)$item['path']);
         if(!$src || !is_file($src))throw new DomainException('The source file is unavailable.');
         if(!LibraryDelete::rootFor($src))throw new DomainException('Choose a file inside an enabled library folder.');
-        if($save && (($user['role'] ?? '')!=='admin' || empty($config['allow_save'])))throw new DomainException('Saving a DirectPlay copy requires administrator access and must be enabled in settings.');
         if($save && preg_match('/\.directplay\.[^.]+$/i',$src))throw new DomainException('This is already a prepared DirectPlay copy.');
         if($save && (!is_writable(dirname($src)) || is_file(Convert::destFor($src))))throw new DomainException('A copy already exists, or the source folder is not writable.');
         $lock=fopen(self::root().'/queue.lock','c');
