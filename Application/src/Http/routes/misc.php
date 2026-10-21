@@ -115,5 +115,14 @@ try {
     if ($path === '/misc/ambient/stills' && $method === 'GET') json_out(Misc::stills($user, (string)($_GET['kind'] ?? 'mixed'), (int)($_GET['n'] ?? 30), (string)($_GET['type'] ?? 'both'), (string)($_GET['order'] ?? 'random'), (string)($_GET['variant'] ?? 'full')));
     if (preg_match('#^/misc/ambient/frame/([A-Za-z0-9_-]{1,64})$#D', $path, $m) && $method === 'GET') Misc::frame($user, $m[1]);
     if ($path === '/misc/admin/ambient' && $method === 'POST') { Auth::requireAdmin(); json_out(Misc::saveAmbient(body_json())); }
+    // Site webcam registry (Administration → Settings → Ambient). Admin only; writes go through the global Origin (CSRF) check.
+    if (strpos($path, '/misc/admin/webcams') === 0) {
+        $admin = Auth::requireAdmin();
+        if ($path === '/misc/admin/webcams' && $method === 'GET') json_out(Webcams::adminList());
+        if ($path === '/misc/admin/webcams' && $method === 'POST') json_out(Webcams::adminAdd($admin, body_json()));
+        if (preg_match('#^/misc/admin/webcams/([a-f0-9]{16})$#D', $path, $m) && $method === 'POST') json_out(Webcams::adminUpdate($m[1], body_json()));
+        if (preg_match('#^/misc/admin/webcams/([a-f0-9]{16})$#D', $path, $m) && $method === 'DELETE') json_out(Webcams::adminDelete($m[1]));
+        json_error('Webcam endpoint not found.', 404);
+    }
 } catch (DomainException $e) { json_error($e->getMessage(), 422); }
 json_error('Misc endpoint not found.', 404);
