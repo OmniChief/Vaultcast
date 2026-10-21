@@ -102,15 +102,15 @@ button.vc-person-row:hover, .vc-person-row:hover { border-color: var(--border); 
 .vc-hud-status { color: var(--muted); font-size: .85rem; }
 .vc-game-tools { display: flex; gap: 6px; }
 .vc-game-body { position: relative; }
-.vc-game-stage { position: relative; height: min(72vh, 760px); min-height: 320px; border-radius: var(--radius-xl); border: 1px solid var(--border); background: radial-gradient(100% 80% at 50% 0%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 70%), var(--bg2); overflow: hidden; touch-action: none; outline: none; }
+/* One shared stage rule: every engine's canvas is sized to its own aspect ratio, so the stage centres it both ways. */
+.vc-game-stage { position: relative; display: grid; place-content: center; place-items: center; height: min(72vh, 760px); min-height: 320px; border-radius: var(--radius-xl); border: 1px solid var(--border); background: radial-gradient(100% 80% at 50% 0%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 70%), var(--bg2); overflow: hidden; touch-action: none; outline: none; }
 .vc-game-stage:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
 .vc-game-wrap:fullscreen .vc-game-stage { height: calc(100vh - 170px); }
-.vc-game-canvas { display: block; width: 100%; height: 100%; }
+.vc-game-canvas { display: block; flex: none; max-width: none; image-rendering: auto; filter: none; }
 .vc-game-overlay { position: absolute; inset: 0; display: grid; place-items: center; background: color-mix(in srgb, var(--bg) 70%, transparent); border-radius: var(--radius-xl); z-index: 2; animation: vc-fade .2s ease; }
 /* Only a visible overlay softens the game behind it; a hidden one must not exist on screen at all. */
 .vc-game-overlay:not([hidden]) { -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); }
 .vc-game-overlay[hidden] { display: none !important; }
-.vc-game-canvas { image-rendering: auto; filter: none; }
 .vc-overlay-card { display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; padding: 26px 30px; border-radius: var(--radius-xl); background: var(--glass); border: 1px solid var(--border-strong); box-shadow: var(--shadow); max-width: min(92%, 420px); }
 .vc-overlay-card h2 { margin: 0; }
 .vc-final-score { font-size: clamp(2.4rem, 7vw, 4rem); font-weight: 800; letter-spacing: -.03em; background: linear-gradient(135deg, var(--accent), var(--accent-2)); -webkit-background-clip: text; background-clip: text; color: transparent; font-variant-numeric: tabular-nums; }
