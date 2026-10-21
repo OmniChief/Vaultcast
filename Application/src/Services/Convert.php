@@ -971,6 +971,11 @@ class Convert {
         $token=Stream::createToken((string)$user['id'],(string)$job['item_id'],$real,'video','library');
         return ['ok'=>true,'title'=>$job['title'] ?? 'Converted preview','url'=>\Vaultcast\Database::basePath().'api/stream/play?t='.$token];
     }
+
+    /**
+     * Completed job: delete the converted output (bad quality), keep the original.
+     * Removes dest from disk + catalogue; marks job resolved as deleted_conversion.
+     */
     public static function deleteConverted(string $jobId): array {
         $q = self::queue();
         $i = self::findJob($q, $jobId);
