@@ -5905,6 +5905,69 @@ try {
     });
     return _hlsLoading;
   }
+  /* Some IPTV sources change the audio format (e.g. 44.1 kHz to 48 kHz around ad breaks) without an
+     EXT-X-DISCONTINUITY tag. hls.js only reads the AAC config at the start of a transmux session, so the
+     new audio keeps being labelled with the old sample rate: it plays lower in pitch and stutters until the
+     next real discontinuity. This fragment loader peeks at each segment's first ADTS header and, when the
+     format changes mid-session, restarts loading from the playhead so hls.js re-reads the audio config. */
+  function iptvAudioSignature(bytes){
+    function adts(at,end){if(at+4>end||bytes[at]!==0xFF||(bytes[at+1]&0xF6)!==0xF0)return null;var b2=bytes[at+2],b3=bytes[at+3];return (b2>>6)+'/'+((b2>>2)&15)+'/'+(((b2&1)<<2)|(b3>>6));}
+    var n=bytes.length;if(n<10)return null;
+    if(bytes[0]===0x49&&bytes[1]===0x44&&bytes[2]===0x33){var id3=10+(((bytes[6]&127)<<21)|((bytes[7]&127)<<14)|((bytes[8]&127)<<7)|(bytes[9]&127));return adts(id3,n);}
+    if(n<376||bytes[0]!==0x47||bytes[188]!==0x47)return null;
+    var pmtPid=-1,aacPid=-1;
+    for(var at=0;at+188<=n;at+=188){
+      if(bytes[at]!==0x47)return null;
+      var pid=((bytes[at+1]&31)<<8)|bytes[at+2],start=bytes[at+1]&64,afc=(bytes[at+3]>>4)&3,p=at+4,end=at+188;
+      if(!(afc&1))continue;if(afc&2)p+=1+bytes[p];if(p>=end||!start)continue;
+      if(pid===0||pid===pmtPid){
+        p+=1+bytes[p];if(p+12>end)continue;
+        var secEnd=Math.min(end,p+3+(((bytes[p+1]&15)<<8)|bytes[p+2]))-4,i;
+        if(pid===0){for(i=p+8;i+4<=secEnd;i+=4){if((bytes[i]<<8|bytes[i+1])!==0){pmtPid=((bytes[i+2]&31)<<8)|bytes[i+3];break;}}}
+        else{for(i=p+12+(((bytes[p+10]&15)<<8)|bytes[p+11]);i+5<=secEnd;i+=5+(((bytes[i+3]&15)<<8)|bytes[i+4])){if(bytes[i]===0x0F){aacPid=((bytes[i+1]&31)<<8)|bytes[i+2];break;}}if(aacPid<0)return null;}
+      }else if(pid===aacPid){
+        if(p+9>end||bytes[p]!==0||bytes[p+1]!==0||bytes[p+2]!==1)return null;
+        return adts(p+9+bytes[p+8],end);
+      }
+    }
+    return null;
+  }
+  function iptvFragmentLoader(Hls,owner){
+    var Base=Hls.DefaultConfig.loader,seen={},lastResync=0;
+    function Loader(config){this.inner=new Base(config);this.held=null;}
+    Object.defineProperty(Loader.prototype,'stats',{get:function(){return this.inner.stats;}});
+    Object.defineProperty(Loader.prototype,'context',{get:function(){return this.inner.context;}});
+    Loader.prototype.load=function(context,config,callbacks){
+      var self=this,frag=context&&context.frag,checked=false,wrapped={};
+      Object.keys(callbacks).forEach(function(k){wrapped[k]=callbacks[k];});
+      self.callbacks=callbacks;
+      // hls.js may start transmuxing from onProgress (which XHR fires with the whole segment) before onSuccess.
+      function hold(data,stats,ctx,details){
+        if(checked)return !!self.held;checked=true;
+        var sig=null;
+        try{if(frag&&typeof frag.sn==='number'&&data instanceof ArrayBuffer)sig=iptvAudioSignature(new Uint8Array(data));}catch(ignore){}
+        if(!sig)return false;
+        var key=frag.type||'main',prev=seen[key],changed=prev&&prev.sig!==sig&&prev.cc===frag.cc&&prev.level===frag.level&&frag.sn===prev.sn+1;
+        seen[key]={sig:sig,cc:frag.cc,level:frag.level,sn:frag.sn};
+        var hls=owner(),now=Date.now();
+        if(!changed||!hls||now-lastResync<10000)return false;
+        lastResync=now;self.held={stats:stats,context:ctx,details:details};
+        try{console.info('[Vaultcast] IPTV audio format changed mid-stream ('+prev.sig+' \u2192 '+sig+'), resyncing the player');}catch(ignore){}
+        setTimeout(function(){try{hls.startLoad(-1);}catch(ignore){}self.release();},0);
+        return true;
+      }
+      wrapped.onProgress=function(stats,ctx,data,details){if(hold(data,stats,ctx,details))return;if(callbacks.onProgress)callbacks.onProgress(stats,ctx,data,details);};
+      wrapped.onSuccess=function(response,stats,ctx,details){if(hold(response&&response.data,stats,ctx,details))return;callbacks.onSuccess(response,stats,ctx,details);};
+      self.inner.load(context,config,wrapped);
+    };
+    // A held segment is dropped as "aborted"; hls.js then reloads it into a fresh transmux session.
+    Loader.prototype.release=function(){var held=this.held,callbacks=this.callbacks;this.held=null;this.callbacks=null;if(held&&callbacks&&callbacks.onAbort){held.stats.aborted=true;callbacks.onAbort(held.stats,held.context,held.details);}};
+    Loader.prototype.abort=function(){if(this.held){this.release();return;}this.inner.abort();};
+    Loader.prototype.destroy=function(){this.held=null;this.callbacks=null;this.inner.destroy();};
+    Loader.prototype.getCacheAge=function(){return this.inner.getCacheAge?this.inner.getCacheAge():null;};
+    Loader.prototype.getResponseHeader=function(name){return this.inner.getResponseHeader?this.inner.getResponseHeader(name):null;};
+    return Loader;
+  }
   function attachIptvStream(video,source,options){
     var current=options.current||function(){return true;},url=source.url;
     // Keep normal viewing and browse previews on exactly the same playback path.
@@ -5916,7 +5979,7 @@ try {
     return loadHls().then(function(Hls){
       if(!current())return;
       if(Hls&&Hls.isSupported()){
-        var stream=new Hls({enableWorker:true,lowLatencyMode:false}),recovered=false;options.stream(stream);
+        var stream=null;stream=new Hls({enableWorker:true,lowLatencyMode:false,fLoader:iptvFragmentLoader(Hls,function(){return stream;})});var recovered=false;options.stream(stream);
         stream.on(Hls.Events.MANIFEST_PARSED,function(){if(current())options.play();});
         stream.on(Hls.Events.ERROR,function(event,data){
           if(!current()||!data||!data.fatal)return;
