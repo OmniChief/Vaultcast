@@ -271,40 +271,6 @@ class MediaManager {
         return PublicMetadata::search($kind, $q);
     }
 
-    /**
-     * Strip common scene/release-group noise so metadata search works.
-     * e.g. "Alien Covenant WEB-DL -EVO 1080p" → "Alien Covenant"
-     */
-    private static function cleanMovieQuery(string $q): string {
-        $q = trim($q);
-        // Remove year in parentheses first so we can re-attach later if needed
-        $year = null;
-        if (preg_match('/\((\d{4})\)/', $q, $m)) {
-            $year = $m[1];
-            $q = preg_replace('/\s*\(\d{4}\)\s*/', ' ', $q);
-        }
-        // Common release tags / codecs / sources
-        $junk = [
-            'WEB[-.]?DL', 'WEB[-.]?Rip', 'BluRay', 'Blu-Ray', 'BRRip', 'BDRip', 'HDRip',
-            'DVDRip', 'HDTV', 'PDTV', 'CAM', 'TS', 'TC', 'R5', 'SCR', 'DVDscr',
-            'x264', 'x265', 'h264', 'h265', 'HEVC', 'AVC', 'XviD', 'DivX',
-            'AAC', 'AC3', 'DTS', 'TrueHD', 'Atmos', 'DD5\.1', 'DDP5\.1',
-            '1080p', '720p', '2160p', '4K', 'UHD', 'HDR', 'HDR10', 'DV', 'DoVi',
-            'REPACK', 'PROPER', 'EXTENDED', 'UNRATED', 'DIRECTORS?\.?CUT', 'DC',
-            'MULTI', 'SUBBED', 'DUBBED', 'ENG', 'ITA', 'FRA', 'GER', 'SPA',
-            '-EVO', '-RARBG', '-YIFY', '-YTS', '-SPARKS', '-GECKOS', '-FGT',
-            '-AMZN', '-NF', '-DSNP', '-HULU', '-ATVP', '-iT', '-PCOK',
-        ];
-        $pattern = '/\b(' . implode('|', $junk) . ')\b/i';
-        $q = preg_replace($pattern, ' ', $q);
-        // Collapse leftover punctuation / multiple spaces
-        $q = preg_replace('/[._]+/', ' ', $q);
-        $q = preg_replace('/\s{2,}/', ' ', $q);
-        $q = trim($q, " \t-");
-        if ($year) $q .= ' ' . $year;
-        return trim($q);
-    }
-
     /** Update catalogue fields for an item (optional on-disk rename via Library::apply). */
     public static function updateItem(array $body): array {
         $id = trim((string)($body['id'] ?? $body['item_id'] ?? ''));

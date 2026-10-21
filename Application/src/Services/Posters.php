@@ -810,10 +810,6 @@ class Posters {
         ];
     }
 
-    /** Prefetch posters for up to $limit shows missing cache. Time-budgeted to avoid nginx/php 502. */
-    public static function prefetchShows(int $limit = 5): array {
-        return self::prefetchMissing($limit, ['shows']);
-    }
     /**
      * Resolve TVMaze show id + official episode list (cached under data/tvmaze/).
      * No API key. Returns null on failure.

@@ -2506,7 +2506,7 @@ function confirmDialog(message, opts){
         try { row[k] = data[k]; } catch (eC) {}
       }
     }
-    try { console.log('[lobby]', JSON.stringify(row)); } catch (eL) { try { console.log('[lobby]', event, data); } catch (e2) {} }
+    try { console.debug('[lobby]', JSON.stringify(row)); } catch (eL) {}
     try {
       if (!window.__STREAM_LOBBY_LOG_Q) window.__STREAM_LOBBY_LOG_Q = [];
       window.__STREAM_LOBBY_LOG_Q.push(row);
@@ -11993,20 +11993,6 @@ h('div', { className:'cv-find-bar' }, [
   function fieldEl(id, label, value, type){
     return h('label', {}, [ label, h('input', { id:id, value: value==null?'':String(value), type: type||'text' }) ]);
   }
-  function formBlock(fields, onSave){
-    return h('div', { className:'stack' }, fields.map(function(f){
-      return fieldEl(f.id, f.label, f.value, f.type);
-    }).concat([
-      h('button', { className:'btn primary', text:'Save', onClick: function(){
-        var data = {};
-        fields.forEach(function(f){
-          var v = $('#'+f.id).value;
-          data[f.id] = f.type==='number' ? +v : v;
-        });
-        onSave(data);
-      }})
-    ]));
-  }
   function saveSettings(patch){
     var focus=document.activeElement,scope=state.adminTab==='general'?null:focus&&focus.closest('.settings-fieldset'),savedFields=captureSettingsDraft(scope);
     var applySeed = !!(patch && patch._apply_transmission_seeding);
@@ -14740,9 +14726,6 @@ function viewCollectionDetail(){
       h('div', { className: 'row-actions player-actions' }, actions)
     ]);
   }
-  /* programmatic entry kept for stale callers: never navigates; copies the URL instead */
-  function openInPlayer(url){ return copyStreamUrl(url); }
-  function openInVlc(url){ return copyStreamUrl(url); }
   /* ---------------- IPTV ---------------- */
   function paintLiveIptv(host){
     if(!host||!host.isConnected)return;
@@ -15633,54 +15616,6 @@ function viewCollectionDetail(){
     };
     document.head.appendChild(sm);
   };
-
-  // Initial HTML images also need bounded scheduling; native lazy loading can
-  // enqueue whole horizontal rails and consume all HTTP/1.1 connections.
-  function enhanceFirstPosters(){
-    var first = document.getElementById('first-home');
-    if (!first) return;
-    var queue = [], active = 0, observer;
-    function pump(){
-      while (active < 2 && queue.length) {
-        var img = queue.shift();
-        if (img.isConnected === false) continue;
-        var url = img.getAttribute('data-first-src');
-        if (!url) continue;
-        img.removeAttribute('data-first-src'); active++;
-        (function(image){
-          var finished = false;
-          function done(){ if (finished) return; finished = true; active--; pump(); }
-          image.addEventListener('load', done, {once:true});
-          image.addEventListener('error', done, {once:true});
-          image.src = url;
-        })(img);
-      }
-    }
-    var images = first.querySelectorAll('img[data-first-src]');
-    if (typeof IntersectionObserver === 'undefined') {
-      Array.prototype.forEach.call(images, function(img){ queue.push(img); }); pump(); return;
-    }
-    observer = new IntersectionObserver(function(entries){
-      entries.forEach(function(entry){
-        if (!entry.isIntersecting) return;
-        observer.unobserve(entry.target); queue.push(entry.target);
-      });
-      pump();
-    }, {root:null, rootMargin:'80px 0px', threshold:0.01});
-    Array.prototype.forEach.call(images, function(img){ observer.observe(img); });
-  }
-
-  // Reuse the same interactive navigation as in-app transitions, retaining the
-  // first-response cards and avoiding another Home request or full repaint.
-  function enhanceHomeNavigation(){
-    var first = document.getElementById('first-home');
-    if (!first) return;
-    var enhanced = shell(null);
-    var header = first.querySelector('header');
-    var sections = first.querySelector('.first-sections');
-    if (header) first.replaceChild(enhanced.querySelector('header'), header);
-    if (sections) first.replaceChild(enhanced.querySelector('.subnav'), sections);
-  }
 
   // Enhance actual first-response content without clearing it or waiting for /home.
   function enhanceFirstPage(){

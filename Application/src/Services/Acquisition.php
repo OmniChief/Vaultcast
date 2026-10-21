@@ -1229,23 +1229,6 @@ class Acquisition {
         ];
     }
 
-    public static function cancelLocal(string $id): array {
-        $q = Store::get('acquire_queue', []);
-        if (!is_array($q)) $q = [];
-        $found = false;
-        foreach ($q as &$e) {
-            if (($e['id'] ?? '') !== $id) continue;
-            $e['status'] = 'cancelled';
-            $e['message'] = 'Cancelled by admin';
-            $e['cancelled_at'] = date('c');
-            $found = true;
-        }
-        unset($e);
-        if (!$found) return ['ok' => false, 'error' => 'Queue entry not found'];
-        Store::set('acquire_queue', $q);
-        return ['ok' => true, 'id' => $id];
-    }
-
     public static function cancelTransmission(int $torrentId, bool $deleteLocal = false): array {
         if ($torrentId < 1) return ['ok' => false, 'error' => 'Invalid torrent id'];
         $tr = Store::settings()['acquisition']['transmission'] ?? [];

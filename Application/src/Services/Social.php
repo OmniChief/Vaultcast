@@ -345,13 +345,6 @@ final class Social {
         foreach ($totals as $id => $v) { $id = (string)$id; if (!isset($people[$id]) || $people[$id]['id'] === '') continue; $t = self::teamOf($id); $out[] = ['rank' => ++$i, 'user' => $people[$id], 'value' => (int)$v, 'me' => $id === $uid, 'team' => $t ? ['name' => $t['name'], 'colour' => $t['colour'], 'emblem' => $t['emblem']] : null]; }
         return ['ok' => true, 'board' => $kind, 'period' => $period, 'unit' => $field, 'rows' => $out];
     }
-    /** Team board for emulator stats: members' totals added together. */
-    public static function emulatorTeams(string $period, string $kind): array {
-        $b = self::emulatorBoard('', $period, null, $kind); $teams = [];
-        foreach ($b['rows'] as $r) if ($r['team']) { $k = $r['team']['name']; $teams[$k] = ($teams[$k] ?? ['team' => $r['team'], 'value' => 0]); $teams[$k]['value'] += $r['value']; }
-        usort($teams, function ($a, $b) { return $b['value'] <=> $a['value']; });
-        return array_values($teams);
-    }
 
     // ---------------------------------------------------------------- profile, achievements, activity
     const BADGES = [
