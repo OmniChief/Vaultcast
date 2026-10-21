@@ -119,24 +119,27 @@ final class Pictures
         foreach (array_slice(array_unique(array_map('strval', $ids)), 0, 500) as $id) {
             $r = self::own($user, $id);
             @unlink(self::path($r));
-            self::q('DELETE FROM vaultcast_pictures WHERE id=?', [$id]);
+            self::q('DELETE FROM vaultcast_pictures WHERE id=? AND user_id=?', [$id, $user['id']]);
         }
         return self::list($user);
     }
     public static function rename(array $user, string $id, string $name): array {
-        self::own($user, $id);
+        self::signed($user); self::own($user, $id);
         $name = mb_substr(trim(preg_replace('/[\x00-\x1F\x7F\/\\\\]+/u', '', $name) ?? ''), 0, 200);
         if ($name === '') throw new DomainException('Give the picture a name.');
-        self::q('UPDATE vaultcast_pictures SET name=? WHERE id=?', [$name, $id]);
+        self::q('UPDATE vaultcast_pictures SET name=? WHERE id=? AND user_id=?', [$name, $id, $user['id']]);
         return self::list($user);
     }
     /** Owner-only download; images render inline, nothing else is ever stored. */
     public static function serve(array $user, string $id): void {
-        $r = self::own($user, $id); $file = self::path($r);
+        // Owner only (admins included: there is no admin view of other people's pictures).
+        self::signed($user); $r = self::own($user, $id); $file = self::path($r);
         if (!is_file($file)) { http_response_code(410); header('Content-Type: text/plain'); exit('This picture is no longer available.'); }
         while (ob_get_level()) @ob_end_clean();
         $etag = '"' . $r['sha1'] . '"';
-        header('Cache-Control: private, max-age=604800, immutable');
+        // Private and revalidated on every view (cheap 304), so a shared browser cannot keep showing it after sign-out.
+        header('Cache-Control: private, no-cache');
+        header('Vary: Cookie');
         header('ETag: ' . $etag);
         header('X-Content-Type-Options: nosniff');
         header("Content-Security-Policy: default-src 'none'; sandbox");
@@ -145,6 +148,40 @@ final class Pictures
         if (trim((string)($_SERVER['HTTP_IF_NONE_MATCH'] ?? '')) === $etag) { http_response_code(304); exit; }
         Stream::sendFile($file, (string)$r['mime']);
         exit;
+    }
+    /** Ids of the user's own pictures (for checking references in saved settings). */
+    public static function ownedIds(string $uid): array {
+        if ($uid === '' || $uid === 'public') return [];
+        try { return array_fill_keys(array_map('strval', self::q('SELECT id FROM vaultcast_pictures WHERE user_id=?', [$uid])->fetchAll(PDO::FETCH_COLUMN)), true); }
+        catch (Throwable $e) { return []; }
+    }
+    /**
+     * Remove references to pictures the user does not own from saved widget/Ambient settings: picture ids under
+     * picture/pictures keys and /api/misc/pictures/<id> links in any string (lines with a foreign id are dropped).
+     */
+    public static function scrub(string $uid, $value, ?array &$owned = null, string $key = '') {
+        if (is_array($value)) {
+            $isList = array_keys($value) === range(0, count($value) - 1); $dropped = false;
+            foreach ($value as $k => $v) {
+                $value[$k] = self::scrub($uid, $v, $owned, is_string($k) ? $k : $key);
+                // A list entry that only pointed at someone else's picture is removed rather than left blank.
+                if (is_int($k) && is_string($v) && $v !== '' && $value[$k] === '') { unset($value[$k]); $dropped = true; }
+            }
+            return $isList && $dropped ? array_values($value) : $value;
+        }
+        if (!is_string($value)) return $value;
+        $isIdKey = in_array($key, ['picture', 'pictureId', 'pictures', 'pictureIds'], true);
+        if (!$isIdKey && strpos($value, 'misc/pictures/') === false) return $value;
+        if ($owned === null) $owned = self::ownedIds($uid);
+        if ($isIdKey && preg_match('/^[a-f0-9]{16}$/D', $value)) return isset($owned[$value]) ? $value : '';
+        if (strpos($value, 'misc/pictures/') === false) return $value;
+        $lines = preg_split('/(\r?\n)/', $value, -1, PREG_SPLIT_DELIM_CAPTURE); $out = '';
+        for ($i = 0; $i < count($lines); $i += 2) {
+            $line = $lines[$i]; $ok = true;
+            if (preg_match_all('#misc/pictures/([a-f0-9]{16})#', $line, $m)) foreach ($m[1] as $id) if (!isset($owned[$id])) $ok = false;
+            if ($ok) $out .= $line . ($lines[$i + 1] ?? '');
+        }
+        return $out;
     }
     /** Admin overview: per-user totals for the storage picture. */
     public static function usage(): array {

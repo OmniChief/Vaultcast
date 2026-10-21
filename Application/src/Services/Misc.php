@@ -38,10 +38,10 @@ final class Misc {
                 if (!is_array($w) || ($type = self::widgetType((string)($w['type'] ?? ''))) === '') continue;
                 $widgets[] = ['id' => preg_match('/^[a-z0-9]{4,16}$/', (string)($w['id'] ?? '')) ? (string)$w['id'] : bin2hex(random_bytes(4)), 'type' => $type,
                     'x' => max(0, min(23, (int)($w['x'] ?? 0))), 'y' => max(0, min(200, (int)($w['y'] ?? 0))), 'w' => max(1, min(24, (int)($w['w'] ?? 4))), 'h' => max(1, min(24, (int)($w['h'] ?? 3))),
-                    'settings' => self::clean((array)($w['settings'] ?? []))];
+                    'settings' => Pictures::scrub((string)$user['id'], self::clean((array)($w['settings'] ?? [])))];
             }
             $boards[] = ['id' => $id, 'name' => mb_substr(trim((string)($b['name'] ?? '')), 0, 40) ?: 'Board', 'theme' => in_array($b['theme'] ?? '', ['glass', 'solid', 'clear'], true) ? $b['theme'] : 'glass',
-                'background' => self::background((string)($b['background'] ?? '')), 'color' => self::colour((string)($b['color'] ?? '')), 'locked' => !empty($b['locked']), 'widgets' => $widgets];
+                'background' => (string)Pictures::scrub((string)$user['id'], self::background((string)($b['background'] ?? ''))), 'color' => self::colour((string)($b['color'] ?? '')), 'locked' => !empty($b['locked']), 'widgets' => $widgets];
         }
         $json = json_encode($boards);
         if (strlen((string)$json) > 400000) throw new DomainException('These boards are too large to save. Remove some widgets or long notes.');
@@ -49,6 +49,7 @@ final class Misc {
         if (!in_array($default, array_column($boards, 'id'), true)) $default = $boards[0]['id'] ?? '';
         $rotate = (int)($body['rotate'] ?? 0); $rotate = $rotate <= 0 ? 0 : max(15, min(3600, $rotate));
         \Vaultcast\Repository::putDocument('misc-boards:' . $user['id'], ['boards' => $boards, 'default' => $default, 'rotate' => $rotate, 'updated_at' => time()]);
+        if ($legacy = Webcams::fromBoards($boards)) Webcams::record((string)$user['id'], $legacy);
         return ['ok' => true, 'boards' => $boards, 'default' => $default, 'rotate' => $rotate];
     }
     /** Board backgrounds end up inside CSS url(): only plain http(s) or same-site paths without quotes, parentheses or escapes. */
@@ -355,13 +356,19 @@ final class Misc {
     public static function prefs(array $user): array {
         Arcade::signed($user);
         $d = (array)\Vaultcast\Repository::document('misc-prefs:' . $user['id'], []);
-        return ['ok' => true, 'ambient' => is_array($d['ambient'] ?? null) ? $d['ambient'] : null, 'webcams' => array_values((array)($d['webcams'] ?? []))];
+        $amb = is_array($d['ambient'] ?? null) ? $d['ambient'] : null;
+        if ($amb !== null && (string)($amb['webcam'] ?? '') !== '' && !Webcams::ambientEnabled((string)$amb['webcam'])) $amb['webcam'] = '';
+        return ['ok' => true, 'ambient' => $amb, 'webcams' => array_values((array)($d['webcams'] ?? []))];
     }
     public static function savePrefs(array $user, array $body): array {
         Arcade::signed($user);
-        HomeHub::mutate('misc-prefs:' . $user['id'], function (array $d) use ($body): array {
+        $uid = (string)$user['id']; $recorded = null;
+        HomeHub::mutate('misc-prefs:' . $uid, function (array $d) use ($body, $uid, &$recorded): array {
             if (array_key_exists('ambient', $body) && is_array($body['ambient'])) {
-                $json = json_encode(self::clean($body['ambient']));
+                $amb = Pictures::scrub($uid, self::clean($body['ambient']));
+                // Ambient may only use webcams an admin has made available; anything else is dropped.
+                if (is_array($amb) && (string)($amb['webcam'] ?? '') !== '' && !Webcams::ambientEnabled((string)$amb['webcam'])) $amb['webcam'] = '';
+                $json = json_encode($amb);
                 if (strlen((string)$json) > 20000) throw new DomainException('Ambient settings are too large.');
                 $d['ambient'] = json_decode((string)$json, true);
             }
@@ -374,26 +381,22 @@ final class Misc {
                     $cams[] = ['id' => $id, 'name' => mb_substr(trim((string)($c['name'] ?? '')), 0, 60), 'url' => mb_substr($url, 0, 1000),
                         'kind' => in_array($c['kind'] ?? '', ['auto', 'image', 'mjpeg', 'video', 'youtube', 'embed'], true) ? $c['kind'] : 'auto', 'refresh' => max(5, min(3600, (int)($c['refresh'] ?? 30)))];
                 }
-                $d['webcams'] = $cams;
+                $d['webcams'] = $cams; $recorded = $cams;
             }
             return $d;
         });
+        if ($recorded) Webcams::record($uid, $recorded);
         return self::prefs($user);
     }
     public static function ambientSettings(): array {
         $m = (array)(Store::settings()['misc'] ?? []);
-        $cams = [];
-        foreach ((array)($m['webcams'] ?? []) as $c) if (is_array($c) && !empty($c['url'])) $cams[] = ['name' => (string)($c['name'] ?? ''), 'url' => (string)$c['url'], 'kind' => in_array($c['kind'] ?? '', ['auto', 'image', 'mjpeg', 'video', 'youtube', 'embed'], true) ? $c['kind'] : 'auto', 'refresh' => max(5, (int)($c['refresh'] ?? 30))];
-        return ['idle_minutes' => max(0, min(240, (int)($m['ambient_idle_minutes'] ?? 0))), 'webcams' => $cams, 'radio' => (string)($m['ambient_radio'] ?? '')];
+        // Webcams come from the site registry: only the ones an admin enabled for Ambient, under the admin-set names.
+        return ['idle_minutes' => max(0, min(240, (int)($m['ambient_idle_minutes'] ?? 0))), 'webcams' => Webcams::ambient(), 'radio' => (string)($m['ambient_radio'] ?? '')];
     }
     public static function saveAmbient(array $body): array {
-        $all = Store::settings(); $cams = [];
-        foreach (array_slice((array)($body['webcams'] ?? []), 0, 40) as $c) {
-            if (!is_array($c)) continue; $url = trim((string)($c['url'] ?? ''));
-            if (!preg_match('#^https?://[^\s"<>]+$#i', $url)) continue;
-            $cams[] = ['name' => mb_substr(trim((string)($c['name'] ?? '')), 0, 60), 'url' => mb_substr($url, 0, 1000), 'kind' => in_array($c['kind'] ?? '', ['auto', 'image', 'mjpeg', 'video', 'youtube', 'embed'], true) ? $c['kind'] : 'auto', 'refresh' => max(5, min(3600, (int)($c['refresh'] ?? 30)))];
-        }
-        $all['misc'] = array_merge((array)($all['misc'] ?? []), ['webcams' => $cams, 'ambient_idle_minutes' => max(0, min(240, (int)($body['idle_minutes'] ?? 0))), 'ambient_radio' => mb_substr(trim((string)($body['radio'] ?? '')), 0, 120)]);
+        // Webcams are managed in Administration → Settings → Ambient (the registry); the old site list is left as it was.
+        $all = Store::settings();
+        $all['misc'] = array_merge((array)($all['misc'] ?? []), ['ambient_idle_minutes' => max(0, min(240, (int)($body['idle_minutes'] ?? 0))), 'ambient_radio' => mb_substr(trim((string)($body['radio'] ?? '')), 0, 120)]);
         Store::saveSettings($all);
         return ['ok' => true, 'settings' => self::ambientSettings()];
     }

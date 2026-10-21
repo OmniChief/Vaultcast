@@ -318,6 +318,9 @@
   var camsCache = null;
   /** The user's saved webcams (server-side, per user), shared by the Webcams and Media widgets and Ambient. */
   function myCams(fresh){ if (!fresh && camsCache) return camsCache; camsCache = call('/misc/prefs').then(function(j){ return j.webcams || []; }).catch(function(e){ camsCache = null; throw e; }); return camsCache; }
+  /** Webcams an admin made available for Ambient (site registry); cached for a minute. */
+  var ambCams = null, ambCamsAt = 0;
+  function ambientCams(fresh){ if (fresh || !ambCams || Date.now() - ambCamsAt > 60000) { ambCamsAt = Date.now(); ambCams = call('/misc/ambient').then(function(c){ return c.webcams || []; }).catch(function(){ ambCams = null; return []; }); } return ambCams; }
   function saveCams(list){ camsCache = call('/misc/prefs', { method:'POST', body:{ webcams:list } }).then(function(j){ return j.webcams || []; }); return camsCache; }
   /**
    * Show webcams one at a time with a crossfade and a small name label. Only one player is alive: the
@@ -328,7 +331,7 @@
     opts = opts || {};
     var i = opts.start || 0, cur = null, timer = 0, stopped = false, hovering = false, fadeMs = Math.max(0, (opts.fade == null ? 0.8 : opts.fade) * 1000);
     var label = h('div', { className:'vc-cam-label' }), wrap = h('div', { className:'vc-cam-cycle' });
-    stage.replaceChildren(wrap, label);
+    stage.replaceChildren(wrap, label); if (opts.label === false) label.hidden = true;
     if (opts.controls !== false && cams.length > 1) stage.appendChild(btn('›', function(){ clearTimeout(timer); step(); }, 'ghost small vc-cam-next', { 'aria-label':'Next webcam' }));
     function alive(){ return !stopped && stage.isConnected; }
     function arm(){ clearTimeout(timer); if (cams.length > 1 && !stopped) timer = setTimeout(function(){ if (hovering || document.hidden) { arm(); return; } step(); }, Math.max(10, Math.min(600, Number(opts.seconds) || 30)) * 1000); }
@@ -1016,7 +1019,7 @@
       var login = input('checkbox', true), pw = input('password', '', { placeholder:'Optional password', autocomplete:'new-password', minlength:'4', maxlength:'72' }), out = h('div', { className:'vc-share-out' }), links = h('div', { className:'vc-share-links' });
       function drawLinks(it){
         var live = (it.links || []).filter(function(l){ return !l.revoked; });
-        links.replaceChildren(live.length ? h('h3', { text:'Active links' }) : null);
+        links.replaceChildren(live.length ? h('h3', { text:'Active links' }) : '');
         live.forEach(function(l){
         var full = location.origin + l.url, extra = h('div', { className:'vc-share-extra' });
         var expired = l.expires_at && l.expires_at * 1000 <= Date.now();
@@ -1055,7 +1058,7 @@
     var body = h('div', { className:'vc-drop' }, [A.pendingContent({ text:'Loading…' })]); host.appendChild(body);
     var st = null, queue = h('div', { className:'vc-upload-queue', 'aria-live':'polite' }), itemsBox = h('div', { className:'vc-drop-items' }), usage = h('div', { className:'vc-usage' }), tick = 0;
     function refresh(){ return call('/drop/state').then(function(j){ st = j; drawUsage(); drawItems(); }).catch(err); }
-    function drawUsage(){ var pctUsed = st.quota ? Math.min(100, 100 * st.used / st.quota) : 0; usage.replaceChildren(h('div', { className:'vc-usage-text' }, [h('strong', { text:size(st.used) }), h('span', { className:'muted', text:st.quota ? ' of ' + size(st.quota) + ' in use' : ' in use (no limit)' })]), st.quota ? h('span', { className:'vc-progress' + (pctUsed > 90 ? ' bad' : ''), role:'progressbar', 'aria-valuenow':String(Math.round(pctUsed)), 'aria-valuemin':'0', 'aria-valuemax':'100' }, [h('i', { style:'width:' + pctUsed + '%' })]) : null); }
+    function drawUsage(){ var pctUsed = st.quota ? Math.min(100, 100 * st.used / st.quota) : 0; usage.replaceChildren(h('div', { className:'vc-usage-text' }, [h('strong', { text:size(st.used) }), h('span', { className:'muted', text:st.quota ? ' of ' + size(st.quota) + ' in use' : ' in use (no limit)' })]), st.quota ? h('span', { className:'vc-progress' + (pctUsed > 90 ? ' bad' : ''), role:'progressbar', 'aria-valuenow':String(Math.round(pctUsed)), 'aria-valuemin':'0', 'aria-valuemax':'100' }, [h('i', { style:'width:' + pctUsed + '%' })]) : ''); }
     var selected = {}, zipBar = h('div', { className:'vc-zip-bar', hidden:true });
     function drawZipBar(){
       var ids = Object.keys(selected).filter(function(id){ return st.items.some(function(i){ return i.id === id && i.status === 'available'; }); });
@@ -1154,15 +1157,15 @@
             (o.notes || []).length ? h('ul', { className:'muted vc-notes' }, o.notes.map(function(n){ return h('li', { text:n }); })) : null,
             h('label', { className:'vc-check' }, [accel, h('span', { text:'Let nginx serve Drop downloads (needs nginx accel on, and nginx able to read the Drop folder)' })]),
             anonSection, h('button', { type:'submit', className:'btn primary', text:'Save settings' })]),
-          o.users.length ? h('table', { className:'vc-table' }, [h('thead', null, [h('tr', null, [h('th', { text:'User' }), h('th', { text:'Items' }), h('th', { text:'Stored' })])]), h('tbody', null, o.users.map(function(u){ return h('tr', null, [h('td', { text:u.user.name }), h('td', { text:String(u.items) }), h('td', { text:size(u.bytes) })]); }))]) : null,
-          o.items.length ? h('details', { className:'vc-admin-items' }, [h('summary', { text:'All items (' + o.items.length + ')' }), h('div', { className:'vc-drop-items' }, o.items.map(function(i){ var s2 = STATUS[i.status] || [i.status, 'muted']; return h('div', { className:'vc-drop-item ' + i.status }, [h('span', { className:'vc-drop-icon', text:kindIcon(i) }), h('div', { className:'vc-drop-copy' }, [h('strong', { text:i.name }), h('small', { className:'muted', text:i.owner.name + (i.anonymous && i.origin ? ' (' + i.origin + ')' : '') + ' · ' + size(i.bytes) + ' · ' + i.downloads + ' download' + (i.downloads === 1 ? '' : 's') + ' · ' + ago(i.created_at) })]), h('span', { className:'vc-chip ' + s2[1], text:s2[0] }), btn('Delete', function(){ A.confirmDialog('Delete “' + i.name + '”?', { okText:'Delete', danger:true }).then(function(ok){ if (ok) call('/drop/admin/items/' + i.id, { method:'DELETE' }).then(load).catch(err); }); }, 'ghost small danger')]); }))]) : null);
+          o.users.length ? h('table', { className:'vc-table' }, [h('thead', null, [h('tr', null, [h('th', { text:'User' }), h('th', { text:'Items' }), h('th', { text:'Stored' })])]), h('tbody', null, o.users.map(function(u){ return h('tr', null, [h('td', { text:u.user.name }), h('td', { text:String(u.items) }), h('td', { text:size(u.bytes) })]); }))]) : '',
+          o.items.length ? h('details', { className:'vc-admin-items' }, [h('summary', { text:'All items (' + o.items.length + ')' }), h('div', { className:'vc-drop-items' }, o.items.map(function(i){ var s2 = STATUS[i.status] || [i.status, 'muted']; return h('div', { className:'vc-drop-item ' + i.status }, [h('span', { className:'vc-drop-icon', text:kindIcon(i) }), h('div', { className:'vc-drop-copy' }, [h('strong', { text:i.name }), h('small', { className:'muted', text:i.owner.name + (i.anonymous && i.origin ? ' (' + i.origin + ')' : '') + ' · ' + size(i.bytes) + ' · ' + i.downloads + ' download' + (i.downloads === 1 ? '' : 's') + ' · ' + ago(i.created_at) })]), h('span', { className:'vc-chip ' + s2[1], text:s2[0] }), btn('Delete', function(){ A.confirmDialog('Delete “' + i.name + '”?', { okText:'Delete', danger:true }).then(function(ok){ if (ok) call('/drop/admin/items/' + i.id, { method:'DELETE' }).then(load).catch(err); }); }, 'ghost small danger')]); }))]) : '');
       }).catch(function(e){ box.replaceChildren(empty('Overview unavailable', (e && e.error) || '')); }); }
       load();
       return panel('Administration', [box]);
     }
     call('/drop/state').then(function(j){
       st = j; drawUsage(); drawItems();
-      body.replaceChildren(st.can_upload ? composer() : panel('Drop', [h('p', { className:'muted', text:'Your account can receive and manage Drop items but cannot upload. Ask an administrator for the Drop permission.' }), usage]), panel('Your items', [zipBar, itemsBox], btn('Refresh', refresh, 'ghost small')), isAdmin() ? adminPanel() : null);
+      body.replaceChildren(st.can_upload ? composer() : panel('Drop', [h('p', { className:'muted', text:'Your account can receive and manage Drop items but cannot upload. Ask an administrator for the Drop permission.' }), usage]), panel('Your items', [zipBar, itemsBox], btn('Refresh', refresh, 'ghost small')), isAdmin() ? adminPanel() : '');
       tick = setInterval(function(){ if (!body.isConnected) { clearInterval(tick); return; } if (!document.hidden && st) drawItems(); }, 60000); onCleanup(function(){ clearInterval(tick); });
     }).catch(function(e){ body.replaceChildren(empty('Drop unavailable', (e && e.error) || '')); });
   }
@@ -1177,7 +1180,7 @@
     ['posters', 'Poster wall', 'Library artwork drifting by', '🖼️', { bg:'library', library:'posters' }],
     ['mixed', 'Library mix', 'Film stills and posters together', '🎬', { bg:'library', library:'mixed' }],
     ['links', 'Your pictures', 'Pictures you upload, plus any picture links', '🌄', { bg:'pictures' }],
-    ['webcams', 'Webcams', 'Live views from your saved and curated webcams', '📷', { bg:'webcam' }],
+    ['webcams', 'Webcams', 'Live views from the webcams your administrator made available', '📷', { bg:'webcam' }],
     ['clock', 'Clock only', 'A calm, dim clock with the weather', '🕰️', { bg:'gradient', gradient:'midnight', clock:{ show:true, style:'minimal', size:'xl', pos:'center' } }]
   ].concat(FX_SCENES.map(function(f){ return ['fx-' + f[0], f[1], 'Animated scene behind the clock', f[2], { bg:'fx', fx:f[0], clock:{ show:true, style:'minimal', size:'l', pos:'center' } }]; }));
   var QUOTES = [['The best way out is always through.', 'Robert Frost'], ['Simplicity is the ultimate sophistication.', 'Leonardo da Vinci'], ['Well done is better than well said.', 'Benjamin Franklin'], ['What we think, we become.', 'Buddha'], ['Stay hungry, stay foolish.', 'Stewart Brand'], ['Not all those who wander are lost.', 'J. R. R. Tolkien'], ['The journey of a thousand miles begins with one step.', 'Lao Tzu'], ['Happiness depends upon ourselves.', 'Aristotle'], ['Turn your wounds into wisdom.', 'Oprah Winfrey'], ['Do what you can, with what you have, where you are.', 'Theodore Roosevelt'], ['Little by little, one travels far.', 'J. R. R. Tolkien'], ['Act as if what you do makes a difference. It does.', 'William James'], ['The only way to do great work is to love what you do.', 'Steve Jobs'], ['Dwell on the beauty of life.', 'Marcus Aurelius'], ['Be curious, not judgemental.', 'Walt Whitman'], ['Wherever you go, go with all your heart.', 'Confucius'], ['Everything you can imagine is real.', 'Pablo Picasso'], ['Nothing is impossible; the word itself says I’m possible.', 'Audrey Hepburn'], ['Keep your face always toward the sunshine.', 'Walt Whitman'], ['The secret of getting ahead is getting started.', 'Mark Twain'], ['Quality is not an act, it is a habit.', 'Aristotle'], ['Tomorrow is a new day with no mistakes in it yet.', 'L. M. Montgomery'], ['It always seems impossible until it’s done.', 'Nelson Mandela'], ['Life is really simple, but we insist on making it complicated.', 'Confucius'], ['Whatever you are, be a good one.', 'Abraham Lincoln'], ['Make each day your masterpiece.', 'John Wooden'], ['Light tomorrow with today.', 'Elizabeth Barrett Browning'], ['The best is yet to come.', 'Robert Browning'], ['Kindness is a language the deaf can hear and the blind can see.', 'Mark Twain'], ['Slow and steady wins the race.', 'Aesop']];
@@ -1219,7 +1222,7 @@
   }
   /**
    * Render Ambient into host (full screen or the preview box). Returns { stop }.
-   * opts.preview keeps it light: no webcam players, no radio, fewer requests.
+   * opts.preview keeps it light: one muted webcam player at most, no radio, fewer requests.
    */
   function buildAmbient(host, p, opts){
     opts = opts || {};
@@ -1238,13 +1241,16 @@
     else if (bgKind === 'pictures') { var own = (p.links || []).map(function(u){ return { url:u, title:'' }; }); var kp = kenBurns(stage, function(){ return ownPictures().catch(function(){ return []; }).then(function(m){ return m.concat(own); }); }, { interval:(p.seconds || 14) * 1000 }); stops.push(kp.stop); }
     else if (bgKind === 'library') { var kl = kenBurns(stage, function(){ return call('/misc/ambient/stills?n=40&kind=' + (p.library === 'posters' || p.library === 'mixed' ? p.library : 'frames') + (opts.preview ? '&variant=medium' : '')).then(function(j){ return j.stills.map(function(x){ return { url:url(x.url), title:x.title + (x.year ? ' (' + x.year + ')' : '') }; }); }); }, { interval:(p.seconds || 14) * 1000, captions:!opts.preview }); stops.push(kl.stop); }
     else if (bgKind === 'webcam') {
-      Promise.all([call('/misc/ambient').then(function(c){ return c.webcams || []; }).catch(function(){ return []; }), myCams().catch(function(){ return []; })]).then(function(r){
+      // Only webcams an admin made available for Ambient (the server sends nothing else), under their admin-set names.
+      ambientCams().then(function(all){
         if (!isAlive()) return;
-        var all = r[1].concat(r[0]).filter(function(c){ return youtubeId(c.url) || safeHttpUrl(c.url); }), chosen = p.webcam ? all.filter(function(c){ return (c.id || c.url) === p.webcam; }) : all;
+        all = all.filter(function(c){ return youtubeId(c.url) || safeHttpUrl(c.url); });
+        var chosen = p.webcam ? all.filter(function(c){ return c.id === p.webcam; }) : all;
         if (!chosen.length) chosen = all;
-        if (!chosen.length) { stage.appendChild(h('p', { className:'vc-kb-empty', text:'No webcams yet. Add your own in a Webcams widget, or ask an admin for curated ones.' })); return; }
-        if (opts.preview) { stage.style.background = GRADIENTS.slate; stage.appendChild(h('p', { className:'vc-kb-empty', text:'📷 ' + camLabel(chosen[0]) + (chosen.length > 1 ? ' + ' + (chosen.length - 1) + ' more' : '') })); return; }
-        var cyc = camCycle(stage, chosen, { seconds:Math.max(30, (p.seconds || 14) * 3), fade:1, controls:false }); stops.push(cyc.stop);
+        if (!chosen.length) { stage.style.background = GRADIENTS.slate; stage.appendChild(h('p', { className:'vc-kb-empty', text:'No webcams available yet.' })); return; }
+        // The preview runs the same renderer, scaled into the box: muted, one player, torn down with the preview.
+        stage.classList.add('vc-cam-stage');
+        var cyc = camCycle(stage, opts.preview ? chosen.slice(0, 1) : chosen, { seconds:Math.max(30, (p.seconds || 14) * 3), fade:1, controls:false, label:!opts.preview }); stops.push(cyc.stop);
       });
     } else if (bgKind === 'nowplaying') {
       var npBg = h('div', { className:'vc-amb-np-bg' }), npArt = h('img', { className:'vc-amb-np-art', alt:'' }); stage.append(npBg, npArt); stage.style.background = '#000';
@@ -1352,7 +1358,13 @@
       var grad = bind(select(Object.keys(GRADIENTS).map(function(k){ return [k, k.charAt(0).toUpperCase() + k.slice(1)]; }), p.gradient), null, function(v){ p.gradient = v; });
       var solid = bind(input('color', p.solid), null, function(v){ p.solid = v; });
       var cam = select([['', 'Cycle through all']], p.webcam); bind(cam, null, function(v){ p.webcam = v; });
-      Promise.all([myCams().catch(function(){ return []; }), call('/misc/ambient').then(function(c){ return c.webcams || []; }).catch(function(){ return []; })]).then(function(r){ r[0].concat(r[1]).forEach(function(c){ cam.appendChild(h('option', { value:c.id || c.url, text:camLabel(c) })); }); cam.value = p.webcam || ''; });
+      var camNote = h('small', { className:'muted', text:'Loading webcams…' });
+      ambientCams(true).then(function(list){
+        list.forEach(function(c){ cam.appendChild(h('option', { value:c.id, text:camLabel(c) })); });
+        if (p.webcam && !list.some(function(c){ return c.id === p.webcam; })) { p.webcam = ''; saveAmbientPrefs(p); }
+        cam.value = p.webcam || ''; cam.hidden = !list.length;
+        camNote.textContent = list.length ? (list.length === 1 ? 'One webcam is available.' : list.length + ' webcams are available.') + ' Only one webcam player runs at a time.' : 'No webcams available yet. An administrator can make webcams available for Ambient.';
+      });
       var secs = bind(input('number', p.seconds, { min:'5', max:'120' }), null, function(v){ p.seconds = Math.max(5, Math.min(120, Number(v) || 14)); });
       var fadeSel = bind(select([['0.6', 'Quick (0.6 s)'], ['1.6', 'Gentle (1.6 s)'], ['3', 'Slow (3 s)'], ['6', 'Very slow (6 s)']], String(p.fade)), null, function(v){ p.fade = Number(v); });
       var bgRows = [field('Background', bg)];
@@ -1360,7 +1372,7 @@
       if (p.bg === 'fx') bgRows.push(field('Scene', fx, 'Lightweight canvas animation; pauses when hidden and stays still with reduced motion.'));
       if (p.bg === 'gradient') bgRows.push(field('Gradient', grad));
       if (p.bg === 'solid') bgRows.push(field('Colour', solid));
-      if (p.bg === 'webcam') bgRows.push(field('Webcam', cam, 'Only one webcam player runs at a time.'));
+      if (p.bg === 'webcam') bgRows.push(h('div', { className:'vc-field' }, [h('span', { text:'Webcam' }), cam, camNote]));
       if (p.bg === 'library' || p.bg === 'pictures') bgRows.push(field('Seconds per picture', secs), field('Transition speed', fadeSel));
       // Clock
       var c = p.clock;
@@ -1395,9 +1407,41 @@
       if (!isAdmin()) return;
       var idle = input('number', cfg.idle_minutes || 0, { min:'0', max:'240' }), radio = select([['', 'None']], cfg.radio || ''), cams = (cfg.webcams || []).map(function(c){ return Object.assign({}, c); });
       (A.loadRadio ? A.loadRadio() : Promise.resolve([])).then(function(list){ list.forEach(function(st){ radio.appendChild(h('option', { value:st.id, text:st.name })); }); radio.value = cfg.radio || ''; }).catch(function(){});
-      var camBox = camEditor(cams);
-      body.appendChild(panel('Administration', [h('form', { className:'vc-form', onSubmit:function(e){ e.preventDefault(); call('/misc/admin/ambient', { method:'POST', body:{ idle_minutes:Number(idle.value), radio:radio.value, webcams:cams.filter(function(c){ return c.url; }) } }).then(function(){ A.toast('Ambient settings saved', { kind:'ok' }); }).catch(err); } }, [field('Start after N idle minutes for everyone (0 = off)', idle), field('Suggested radio station', radio), h('div', { className:'vc-field' }, [h('span', { text:'Curated webcams' }), h('small', { className:'muted', text:'YouTube live links, public camera images, MJPEG or HLS streams, or embeddable pages. The name is shown as the label. Check each source allows this use.' }), camBox]), h('button', { type:'submit', className:'btn primary', text:'Save' })])]));
+      body.appendChild(panel('Administration', [h('form', { className:'vc-form', onSubmit:function(e){ e.preventDefault(); call('/misc/admin/ambient', { method:'POST', body:{ idle_minutes:Number(idle.value), radio:radio.value } }).then(function(){ A.toast('Ambient settings saved', { kind:'ok' }); }).catch(err); } }, [field('Start after N idle minutes for everyone (0 = off)', idle), field('Suggested radio station', radio), h('div', { className:'vc-field' }, [h('span', { text:'Webcams' }), h('small', { className:'muted', text:'Webcams people save on their boards are collected in Administration → Settings → Ambient & webcams. Choose there which ones Ambient offers.' }), h('a', { className:'btn ghost small', href:'/settings/ambient', onClick:function(e){ if (A.openSettings) { e.preventDefault(); A.openSettings('ambient'); } } , text:'Manage webcams' })]), h('button', { type:'submit', className:'btn primary', text:'Save' })])]));
     }).catch(function(){});
+  }
+
+  // ------------------------------------------------------------------ Administration → Settings → Ambient & webcams
+  var KIND_LABEL = { youtube:'YouTube', image:'Image', mjpeg:'MJPEG', video:'HLS / video', embed:'Page', auto:'Auto' };
+  function adminWebcams(host){
+    var list = h('div', { className:'vc-wa-list', role:'list' }), count = h('p', { className:'muted vc-wa-count' });
+    var name = input('text', '', { placeholder:'Name (optional)', 'aria-label':'New webcam name', maxlength:'120' }), addr = input('url', '', { placeholder:'https://… (YouTube, image, MJPEG or HLS)', 'aria-label':'New webcam address', required:true });
+    var add = h('form', { className:'vc-wa-add', onSubmit:function(e){ e.preventDefault(); var u = addr.value.trim(); if (!u) return;
+      call('/misc/admin/webcams', { method:'POST', body:{ url:u, name:name.value.trim() } }).then(function(j){ addr.value = ''; name.value = ''; draw(j.webcams); A.toast('Webcam added', { kind:'ok' }); }).catch(err); } },
+      [name, addr, h('button', { type:'submit', className:'btn primary', text:'Add webcam' })]);
+    host.replaceChildren(h('fieldset', { className:'settings-fieldset vc-wa' }, [h('legend', { text:'Webcams' }), count, list, h('h3', { className:'vc-wa-sub', text:'Add a webcam' }), add]));
+    function kindOf(c){ return c.kind && c.kind !== 'auto' ? c.kind : (youtubeId(c.url) ? 'youtube' : camKind(c)); }
+    function row(c){
+      var nm = input('text', c.name || '', { placeholder:camLabel({ url:c.url }), 'aria-label':'Name for ' + c.url, maxlength:'120' }), last = c.name || '';
+      function saveName(){ var v = nm.value.trim(); if (v === last) return; call('/misc/admin/webcams/' + c.id, { method:'POST', body:{ name:v } }).then(function(){ last = v; A.toast('Name saved', { kind:'ok' }); }).catch(function(e){ nm.value = last; err(e); }); }
+      nm.addEventListener('change', saveName); nm.addEventListener('keydown', function(e){ if (e.key === 'Enter') { e.preventDefault(); nm.blur(); } });
+      var on = input('checkbox', !!c.enabled_ambient, { 'aria-label':'Available in Ambient: ' + (c.name || c.url) });
+      on.addEventListener('change', function(){ var want = on.checked; on.disabled = true;
+        call('/misc/admin/webcams/' + c.id, { method:'POST', body:{ enabled_ambient:want } }).then(function(j){ on.disabled = false; c.enabled_ambient = j.webcam.enabled_ambient; on.checked = c.enabled_ambient; el.classList.toggle('on', c.enabled_ambient); ambCams = null; })
+          .catch(function(e){ on.disabled = false; on.checked = !want; err(e); }); });
+      var k = kindOf(c), short = String(c.url).replace(/^https?:\/\//i, '');
+      var el = h('div', { className:'vc-wa-row' + (c.enabled_ambient ? ' on' : ''), role:'listitem' }, [
+        h('div', { className:'vc-wa-main' }, [nm, h('div', { className:'vc-wa-meta' }, [h('span', { className:'vc-chip vc-wa-kind', text:KIND_LABEL[k] || 'Auto' }), h('a', { className:'vc-wa-url', href:safeHttpUrl(c.url) || '#', target:'_blank', rel:'noopener noreferrer', title:c.url, text:short }), h('small', { className:'muted', text:'Added by ' + (c.added_by_name || 'someone') + (c.created_at ? ' · ' + new Date(c.created_at * 1000).toLocaleDateString() : '') })])]),
+        h('label', { className:'vc-check vc-wa-toggle' }, [on, h('span', { text:'Available in Ambient' })]),
+        btn('Remove', function(){ A.confirmDialog('Remove “' + (c.name || short) + '” from the list? It reappears if someone saves it on a board again.', { okText:'Remove', danger:true }).then(function(ok){ if (ok) call('/misc/admin/webcams/' + c.id, { method:'DELETE' }).then(function(j){ ambCams = null; draw(j.webcams); }).catch(err); }); }, 'ghost small danger')]);
+      return el;
+    }
+    function draw(cams){
+      cams = cams || []; var n = cams.filter(function(c){ return c.enabled_ambient; }).length;
+      count.textContent = cams.length ? cams.length + (cams.length === 1 ? ' webcam' : ' webcams') + ' · ' + n + ' available in Ambient' : '';
+      list.replaceChildren.apply(list, cams.length ? cams.map(row) : [h('p', { className:'muted', text:'No webcams yet. They appear here when someone saves one on a board, or add one below.' })]);
+    }
+    call('/misc/admin/webcams').then(function(j){ draw(j.webcams); }).catch(function(e){ list.replaceChildren(h('p', { className:'muted', text:(e && e.error) || 'Webcams unavailable.' })); });
   }
 
   // ------------------------------------------------------------------ module API
@@ -1411,6 +1455,7 @@
       return board(host, sub);
     },
     startAmbient:startAmbient,
+    adminWebcams:adminWebcams,
     stop:stopAll,
     upload:uploadFile
   };

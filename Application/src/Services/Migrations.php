@@ -6,7 +6,7 @@
  */
 final class Migrations
 {
-    const VERSION = 10; // 10: calendars, events, reminders and personal pictures (Misc); 9: leaderboard covering indexes, Drop anonymous origin column and MEDIUMTEXT notes; 8: play scores/points and drop storage; 2: library folder access pass for nginx (step 5); 3: re-run it, recording results; 4: media facts table; 5: arrival timestamps and indexed running times; 6: chat storage; 7: prepared browsing
+    const VERSION = 11; // 11: site-wide webcam registry (Ambient); 10: calendars, events, reminders and personal pictures (Misc); 9: leaderboard covering indexes, Drop anonymous origin column and MEDIUMTEXT notes; 8: play scores/points and drop storage; 2: library folder access pass for nginx (step 5); 3: re-run it, recording results; 4: media facts table; 5: arrival timestamps and indexed running times; 6: chat storage; 7: prepared browsing
 
     public static function stampFile(): string
     {
@@ -92,9 +92,11 @@ final class Migrations
     {
         $log = [];
         foreach (explode(';', (string)file_get_contents(dirname(__DIR__) . '/schema.sql')) as $sql) {
-            if (preg_match('/CREATE TABLE IF NOT EXISTS vaultcast_(chat_|browse_items|show_summaries|play_|drop_|cal_|pictures\b)/i',$sql)) $pdo->exec($sql);
+            if (preg_match('/CREATE TABLE IF NOT EXISTS vaultcast_(chat_|browse_items|show_summaries|play_|drop_|cal_|pictures\b|webcams\b)/i',$sql)) $pdo->exec($sql);
         }
         $upgrade = self::playDropUpgrade($pdo);
+        // v11: the registry table only; existing webcams are imported lazily (Webcams::ensureBackfill) on first use.
+        if (is_file(STREAM_DATA.'/runtime/migrations-v10.done')) return ['webcam_registry'=>true, 'play_drop_upgrade'=>$upgrade];
         if (is_file(STREAM_DATA.'/runtime/migrations-v9.done')) return ['calendar_reminders_pictures'=>true, 'play_drop_upgrade'=>$upgrade];
         if (is_file(STREAM_DATA.'/runtime/migrations-v8.done')) return ['play_drop_upgrade'=>$upgrade];
         if (is_file(STREAM_DATA.'/runtime/migrations-v7.done')) return ['play_and_drop'=>true];

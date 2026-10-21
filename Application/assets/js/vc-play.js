@@ -262,7 +262,7 @@
         info.appendChild(btn('Share result', share, 'primary'));
         info.appendChild(h('p', { className:'muted', text:'A new word arrives at midnight.' }));
       } else info.appendChild(h('p', { className:'muted', text:'Streak ' + state.streak + ' · ' + (6 - state.guesses.length) + ' guesses left' }));
-      box.replaceChildren(grid, info, state.done ? null : kb);
+      box.replaceChildren(grid, info, state.done ? '' : kb);
     }
     function share(){
       var lines = state.guesses.map(function(g){ return g.marks.split('').map(function(m){ return m === 'g' ? '🟩' : m === 'y' ? '🟨' : '⬛'; }).join(''); });
@@ -405,10 +405,10 @@
       board.set(g.fen, g.legal || [], g.last_move || g.moves[g.moves.length - 1] || '', g.colour === 'b', g.your_turn && !sending);
       var coin = coinNote[g.id]; delete coinNote[g.id];
       side.replaceChildren(
-        coin ? h('div', { className:'vc-chess-coin', role:'status' }, [h('span', { className:'vc-coin ' + coin, 'aria-hidden':'true', text:coin === 'w' ? '♔' : '♚' }), h('span', { text:'Coin toss: you\'re ' + (coin === 'w' ? 'White' : 'Black') + (coin === 'w' ? '. You move first.' : '. ' + oppName + ' moves first.') })]) : null,
+        coin ? h('div', { className:'vc-chess-coin', role:'status' }, [h('span', { className:'vc-coin ' + coin, 'aria-hidden':'true', text:coin === 'w' ? '♔' : '♚' }), h('span', { text:'Coin toss: you\'re ' + (coin === 'w' ? 'White' : 'Black') + (coin === 'w' ? '. You move first.' : '. ' + oppName + ' moves first.') })]) : '',
         h('div', { className:'vc-chess-player' }, [avatar(opp), h('strong', { text:oppName }), h('span', { className:'muted', text:g.colour === 'b' ? '♔ White' : '♚ Black' })]),
         h('p', { className:'vc-chess-status' + (g.your_turn ? ' your-turn' : ''), 'aria-live':'polite', text:chessStatus(g, opp, false) }),
-        g.draw_offer && String(g.draw_offer) !== String(me().id) && g.status === 'active' ? h('p', { className:'vc-chip accent', text:oppName + ' offers a draw' }) : null,
+        g.draw_offer && String(g.draw_offer) !== String(me().id) && g.status === 'active' ? h('p', { className:'vc-chip accent', text:oppName + ' offers a draw' }) : '',
         h('div', { className:'vc-move-head' }, [h('strong', { text:'Moves' }), h('small', { className:'muted', text:g.moves.length ? g.moves.length + (g.moves.length === 1 ? ' move' : ' moves') : '—' })]),
         moveList(g.moves, g.san),
         h('div', { className:'vc-chess-player' }, [avatar(mine), h('strong', { text:'You' }), h('span', { className:'muted', text:g.colour === 'b' ? '♚ Black' : '♔ White' })]),
@@ -985,7 +985,7 @@
     Object.keys(groups).forEach(function(g){ picker.appendChild(h('div', { className:'vc-board-group' }, [h('span', { className:'eyebrow', text:g })].concat(groups[g].map(function(b){ return h('button', { type:'button', className:'vc-board-btn' + (b[0] === board ? ' active' : ''), 'aria-current':b[0] === board ? 'true' : null, text:b[1], onClick:function(){ A.state.playSub = b[0]; A.pushNav(); board = b[0]; picker.querySelectorAll('.vc-board-btn').forEach(function(x){ x.classList.toggle('active', x === this); x.removeAttribute('aria-current'); }, this); this.setAttribute('aria-current', 'true'); load(); } }); })))); });
     function drawFilters(){
       filters.replaceChildren(seg([['day', 'Today'], ['week', 'Week'], ['month', 'Month'], ['all', 'All time']], period, function(v){ period = v; save(); drawFilters(); load(); }, 'Period'),
-        board === 'teams' ? null : seg([['all', 'Everyone'], ['friends', 'Friends'], ['team', 'My team']], scope, function(v){ if (!signed() && v !== 'all') { A.toast('Sign in to filter by friends or team'); return; } scope = v; save(); drawFilters(); load(); }, 'Who'));
+        board === 'teams' ? '' : seg([['all', 'Everyone'], ['friends', 'Friends'], ['team', 'My team']], scope, function(v){ if (!signed() && v !== 'all') { A.toast('Sign in to filter by friends or team'); return; } scope = v; save(); drawFilters(); load(); }, 'Who'));
     }
     function save(){ store('vaultcast-lb', { period:period, scope:scope }); }
     function value(r, j){ if (j.unit === 'seconds') return dur(r.value); if (board === 'chess') return fmt(r.value) + (r.value === 1 ? ' win' : ' wins'); if (j.unit === 'sessions') return fmt(r.value) + ' sessions'; return fmt(r.value) + (board === 'points' || board === 'teams' ? ' pts' : ''); }

@@ -930,3 +930,25 @@ html[data-motion="reduced"] .vc-play *, html[data-motion="reduced"] .vc-misc *, 
 @keyframes vc-coin-flip { 0% { transform: rotateY(0) scale(.6); } 70% { transform: rotateY(1440deg) scale(1.1); } 100% { transform: rotateY(1440deg) scale(1); } }
 @media (prefers-reduced-motion: reduce) { .vc-coin, .vc-chess-coin { animation: none; } .vc-move-list { scroll-behavior: auto; } }
 .vc-move-list { position: relative; }
+
+/* ---------------------------------------------------------------- Administration → Ambient & webcams */
+.vc-wa { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.vc-wa-count { margin: 0; }
+.vc-wa-list { display: flex; flex-direction: column; gap: 8px; }
+.vc-wa-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 12px; padding: 10px 12px; border-radius: var(--radius-lg); border: 1px solid var(--border); background: var(--surface-1); }
+.vc-wa-row.on { border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); box-shadow: inset 3px 0 0 var(--accent); }
+.vc-wa-main { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.vc-wa-main input[type="text"] { width: 100%; max-width: 420px; font-weight: 650; }
+.vc-wa-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; min-width: 0; font-size: .85rem; }
+.vc-wa-kind { font-size: .72rem; text-transform: uppercase; letter-spacing: .05em; }
+.vc-wa-url { color: var(--muted); max-width: min(100%, 360px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vc-wa-url:hover { color: var(--text); }
+.vc-wa-toggle { white-space: nowrap; min-height: 40px; }
+.vc-wa-sub { margin: 10px 0 0; font-size: .95rem; }
+.vc-wa-add { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) auto; gap: 8px; }
+@media (max-width: 720px) {
+  .vc-wa-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .vc-wa-row > .btn { grid-column: 2; grid-row: 1; align-self: start; }
+  .vc-wa-toggle { grid-column: 1 / -1; }
+  .vc-wa-add { grid-template-columns: 1fr; }
+}
