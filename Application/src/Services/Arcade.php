@@ -182,12 +182,23 @@ final class Arcade {
         return $g;
     }
     private static function chessPublic(array $g, string $uid, ?array $people = null, bool $legal = true): array {
-        $s = Chess::parse($g['fen']);
+        // Older documents may lack newer fields; never send null where the client expects text.
+        $g['white'] = (string)($g['white'] ?? ''); $g['black'] = (string)($g['black'] ?? '');
+        foreach (['winner', 'reason', 'draw_offer', 'status'] as $k) $g[$k] = (string)($g[$k] ?? ($k === 'status' ? 'active' : ''));
+        $g['moves'] = array_values(array_map('strval', (array)($g['moves'] ?? [])));
+        $g['updated_at'] = (int)($g['updated_at'] ?? 0); $g['created_at'] = (int)($g['created_at'] ?? 0);
+        $s = Chess::parse((string)($g['fen'] ?? Chess::START));
         $g['colour'] = $g['white'] === $uid ? 'w' : ($g['black'] === $uid ? 'b' : '');
+        $g['turn'] = $s['turn'];
         $g['your_turn'] = $g['status'] === 'active' && $g['colour'] === $s['turn'];
-        if ($legal) $g['legal'] = $g['your_turn'] ? Chess::legal($s) : [];
+        if ($legal) {
+            $g['legal'] = $g['your_turn'] ? Chess::legal($s) : [];
+            $san = array_values(array_map('strval', (array)($g['san'] ?? [])));
+            $g['san'] = count($san) === count($g['moves']) ? $san : Chess::sanList($g['moves']);
+        } elseif (!isset($g['san'])) $g['san'] = [];
+        $g['last_move'] = $g['moves'] ? end($g['moves']) : '';
         $g['check'] = $g['status'] === 'active' && Chess::inCheck($s, $s['turn']);
-        $g['players'] = $people !== null ? [$g['white'] => $people[$g['white']] ?? self::person(null), $g['black'] => $people[$g['black']] ?? self::person(null)] : self::people([$g['white'], $g['black']]);
+        $g['players'] = (object)($people !== null ? [$g['white'] => $people[$g['white']] ?? self::person(null), $g['black'] => $people[$g['black']] ?? self::person(null)] : self::people([$g['white'], $g['black']]));
         return $g;
     }
     public static function chessList(array $user): array {
@@ -208,7 +219,7 @@ final class Arcade {
     }
     public static function chessGet(array $user, string $id): array {
         self::signed($user); $g = self::chessDoc($id);
-        if ($g['white'] !== $user['id'] && $g['black'] !== $user['id']) throw new DomainException('This game belongs to other players.');
+        if ((string)$g['white'] !== (string)$user['id'] && (string)$g['black'] !== (string)$user['id']) throw new DomainException('This game belongs to other players.');
         return ['ok' => true, 'game' => self::chessPublic($g, (string)$user['id'])];
     }
     public static function chessNew(array $user, array $body): array {
@@ -217,25 +228,37 @@ final class Arcade {
         if (!$other || $other['id'] === $user['id'] || !Access::state($other)['active']) throw new DomainException('Choose another player on this server.');
         if (Social::blockedEither((string)$user['id'], (string)$other['id'])) throw new DomainException('You cannot challenge this player.');
         self::limit('chess-new:' . $user['id'], 5, 40);
-        $id = bin2hex(random_bytes(8)); $white = !empty($body['play_black']) ? $other['id'] : $user['id'];
-        $g = ['id' => $id, 'white' => $white, 'black' => $white === $user['id'] ? $other['id'] : $user['id'], 'fen' => Chess::START, 'moves' => [],
+        $me = (string)$user['id']; $them = (string)$other['id'];
+        $choice = (string)($body['colour'] ?? (!empty($body['play_black']) ? 'black' : 'white'));
+        if (!in_array($choice, ['white', 'black', 'random'], true)) $choice = 'white';
+        // Coin toss: decided here on the server, once, when the game is created.
+        $coin = $choice === 'random';
+        if ($coin) $choice = random_int(0, 1) === 1 ? 'black' : 'white';
+        $id = bin2hex(random_bytes(8)); $white = $choice === 'black' ? $them : $me;
+        $g = ['id' => $id, 'white' => $white, 'black' => $white === $me ? $them : $me, 'fen' => Chess::START, 'moves' => [], 'san' => [], 'coin_toss' => $coin,
             'status' => 'active', 'winner' => '', 'reason' => '', 'draw_offer' => '', 'created_by' => $user['id'], 'created_at' => time(), 'updated_at' => time()];
         \Vaultcast\Repository::putDocument('play-chess:' . $id, $g);
         foreach ([$user['id'], $other['id']] as $uid) HomeHub::mutate('play-chess-index:' . $uid, function (array $ids) use ($id): array { $ids[] = $id; return array_slice(array_values($ids), -200); });
-        Social::notify((string)$other['id'], $user, 'chess:' . $id, 'challenged you to chess', 'Your move' . ($white === $other['id'] ? '' : ' after theirs'), 'play/arcade/chess/' . $id);
-        return ['ok' => true, 'game' => self::chessPublic($g, (string)$user['id'])];
+        Social::notify($them, $user, 'chess:' . $id, 'challenged you to chess', ($coin ? 'Coin toss: you\'re ' . ($white === $them ? 'White. ' : 'Black. ') : '') . 'Your move' . ($white === $them ? '' : ' after theirs'), 'play/arcade/chess/' . $id);
+        return ['ok' => true, 'game' => self::chessPublic($g, $me), 'coin_toss' => $coin, 'colour' => $white === $me ? 'w' : 'b'];
     }
     public static function chessAction(array $user, string $id, string $action, array $body): array {
         self::signed($user); $uid = (string)$user['id']; $done = null;
         $g = HomeHub::mutate('play-chess:' . $id, function (array $g) use ($uid, $action, $body, &$done): array {
-            if (!$g || ($g['white'] !== $uid && $g['black'] !== $uid)) throw new DomainException('Game not found.');
-            if ($g['status'] !== 'active') throw new DomainException('This game has finished.');
+            if (!$g || ((string)($g['white'] ?? '') !== $uid && (string)($g['black'] ?? '') !== $uid)) throw new DomainException('Game not found.');
+            if (($g['status'] ?? 'active') !== 'active') throw new DomainException('This game has finished.');
+            $g['white'] = (string)$g['white']; $g['black'] = (string)$g['black'];
             $me = $g['white'] === $uid ? 'w' : 'b'; $other = $me === 'w' ? $g['black'] : $g['white'];
             if ($action === 'move') {
                 $s = Chess::parse($g['fen']);
                 if ($s['turn'] !== $me) throw new DomainException('Wait for your opponent\'s move.');
-                $s = Chess::play($s, (string)($body['move'] ?? ''));
-                $g['fen'] = Chess::fen($s); $g['moves'][] = strtolower((string)$body['move']); $g['draw_offer'] = '';
+                $u = Chess::normalise($s, (string)($body['move'] ?? ''));
+                $prior = array_values((array)($g['moves'] ?? []));
+                $san = array_values((array)($g['san'] ?? []));
+                if (count($san) !== count($prior)) $san = Chess::sanList($prior);
+                $san[] = Chess::san($s, $u);
+                $s = Chess::play($s, $u);
+                $g['fen'] = Chess::fen($s); $prior[] = $u; $g['moves'] = $prior; $g['san'] = $san; $g['draw_offer'] = '';
                 $end = Chess::outcome($s);
                 if ($end === 'checkmate') { $g['status'] = 'finished'; $g['winner'] = $uid; $g['reason'] = 'checkmate'; }
                 elseif ($end !== '') { $g['status'] = 'finished'; $g['winner'] = ''; $g['reason'] = $end; }

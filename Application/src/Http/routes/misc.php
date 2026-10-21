@@ -26,7 +26,47 @@ try {
         if (preg_match('#^/items/([a-f0-9]{32})/links$#D', $sub, $mm) && $method === 'POST') { Drop::ipLimit('link', 30, 3600); json_out(Drop::link($anon, $mm[1], body_json())); }
         json_error('Drop endpoint not found.', 404);
     }
+    // Calendar feeds for other apps (webcal/https): the secret token is the only key; revoked or unknown tokens answer 404.
+    if (preg_match('#^/misc/cal/feed/([a-f0-9]{40})\.ics$#D', $path, $m) && in_array($method, ['GET', 'HEAD'], true)) Calendar::publicFeed($m[1]);
     $user = Auth::requireUser();
+
+    if (strpos($path, '/misc/cal/') === 0) {
+        if ($path === '/misc/cal/calendars' && $method === 'GET') json_out(Calendar::calendars($user));
+        if ($path === '/misc/cal/calendars' && $method === 'POST') json_out(Calendar::saveCalendar($user, null, body_json()));
+        if (preg_match('#^/misc/cal/calendars/([a-f0-9]{16})$#D', $path, $m) && $method === 'POST') json_out(Calendar::saveCalendar($user, $m[1], body_json()));
+        if (preg_match('#^/misc/cal/calendars/([a-f0-9]{16})$#D', $path, $m) && $method === 'DELETE') json_out(Calendar::deleteCalendar($user, $m[1]));
+        if (preg_match('#^/misc/cal/calendars/([a-f0-9]{16})/feed$#D', $path, $m) && $method === 'POST') json_out(Calendar::feed($user, $m[1], (string)(body_json()['action'] ?? 'create')));
+        if (preg_match('#^/misc/cal/calendars/([a-f0-9]{16})/share$#D', $path, $m) && $method === 'POST') json_out(Calendar::share($user, $m[1], body_json()));
+        if (preg_match('#^/misc/cal/calendars/([a-f0-9]{16})/export$#D', $path, $m) && in_array($method, ['GET', 'HEAD'], true)) Calendar::export($user, $m[1]);
+        if (preg_match('#^/misc/cal/calendars/([a-f0-9]{16})/import$#D', $path, $m) && $method === 'POST') json_out(Calendar::import($user, $m[1], (string)(body_json()['ics'] ?? '')));
+        if ($path === '/misc/cal/events' && $method === 'GET') json_out(Calendar::range($user, (int)($_GET['from'] ?? time()), (int)($_GET['to'] ?? time() + 30 * 86400), array_values(array_filter(explode(',', (string)($_GET['ids'] ?? '')), function ($x) { return (bool)preg_match('/^[a-f0-9]{16}$/D', $x); })), !empty($_GET['reminders'])));
+        if ($path === '/misc/cal/events' && $method === 'POST') json_out(Calendar::createEvent($user, body_json()));
+        if (preg_match('#^/misc/cal/events/([a-f0-9]{16})$#D', $path, $m) && $method === 'POST') json_out(Calendar::updateEvent($user, $m[1], body_json()));
+        if (preg_match('#^/misc/cal/events/([a-f0-9]{16})$#D', $path, $m) && $method === 'DELETE') json_out(Calendar::deleteEvent($user, $m[1], (int)($_GET['occurrence'] ?? 0)));
+        if ($path === '/misc/cal/alerts' && $method === 'GET') json_out(Calendar::alerts($user, (int)($_GET['window'] ?? 600)));
+        if ($path === '/misc/cal/refresh-episodes' && $method === 'POST') { Calendar::queueEpisodes(true); json_out(['ok' => true]); }
+        json_error('Calendar endpoint not found.', 404);
+    }
+    if (strpos($path, '/misc/reminders') === 0) {
+        if ($path === '/misc/reminders' && $method === 'GET') json_out(Reminders::list($user));
+        if ($path === '/misc/reminders' && $method === 'POST') json_out(Reminders::create($user, body_json()));
+        if ($path === '/misc/reminders/import' && $method === 'POST') { $b = body_json(); json_out(Reminders::importLegacy($user, (array)($b['items'] ?? []), (string)($b['tz'] ?? ''))); }
+        if (preg_match('#^/misc/reminders/([a-f0-9]{16})$#D', $path, $m) && $method === 'POST') json_out(Reminders::update($user, $m[1], body_json()));
+        if (preg_match('#^/misc/reminders/([a-f0-9]{16})$#D', $path, $m) && $method === 'DELETE') json_out(Reminders::delete($user, $m[1]));
+        if (preg_match('#^/misc/reminders/([a-f0-9]{16})/done$#D', $path, $m) && $method === 'POST') json_out(Reminders::done($user, $m[1]));
+        if (preg_match('#^/misc/reminders/([a-f0-9]{16})/undo$#D', $path, $m) && $method === 'POST') json_out(Reminders::undo($user, $m[1], (string)(body_json()['through'] ?? '')));
+        if (preg_match('#^/misc/reminders/([a-f0-9]{16})/snooze$#D', $path, $m) && $method === 'POST') json_out(Reminders::snooze($user, $m[1], (int)(body_json()['minutes'] ?? 60)));
+        json_error('Reminders endpoint not found.', 404);
+    }
+    if (strpos($path, '/misc/pictures') === 0) {
+        if ($path === '/misc/pictures' && $method === 'GET') json_out(Pictures::list($user));
+        if ($path === '/misc/pictures' && $method === 'POST') json_out(Pictures::upload($user));
+        if ($path === '/misc/pictures/delete' && $method === 'POST') json_out(Pictures::delete($user, (array)(body_json()['ids'] ?? [])));
+        if (preg_match('#^/misc/pictures/([a-f0-9]{16})$#D', $path, $m) && in_array($method, ['GET', 'HEAD'], true)) Pictures::serve($user, $m[1]);
+        if (preg_match('#^/misc/pictures/([a-f0-9]{16})$#D', $path, $m) && $method === 'POST') json_out(Pictures::rename($user, $m[1], (string)(body_json()['name'] ?? '')));
+        if (preg_match('#^/misc/pictures/([a-f0-9]{16})$#D', $path, $m) && $method === 'DELETE') json_out(Pictures::delete($user, [$m[1]]));
+        json_error('Pictures endpoint not found.', 404);
+    }
 
     if (strpos($path, '/drop/') === 0 || $path === '/drop') {
         if ($path === '/drop/state' && $method === 'GET') json_out(Drop::state($user));
@@ -69,8 +109,10 @@ try {
     if ($path === '/misc/movies' && $method === 'GET') json_out(Misc::movies($user, trim((string)($_GET['q'] ?? '')), (string)($_GET['source'] ?? ''), (int)($_GET['n'] ?? 24)));
     if ($path === '/misc/movies/sources' && $method === 'GET') json_out(Misc::movieSources($user));
     if ($path === '/misc/movies/next' && $method === 'POST') { $b = body_json(); json_out(Misc::nextMovie($user, (string)($b['after'] ?? ''), (string)($b['source'] ?? ''), (array)($b['queue'] ?? []))); }
+    if ($path === '/misc/prefs' && $method === 'GET') json_out(Misc::prefs($user));
+    if ($path === '/misc/prefs' && $method === 'POST') json_out(Misc::savePrefs($user, body_json()));
     if ($path === '/misc/ambient' && $method === 'GET') json_out(['ok' => true] + Misc::ambientSettings());
-    if ($path === '/misc/ambient/stills' && $method === 'GET') json_out(Misc::stills($user, (string)($_GET['kind'] ?? 'mixed'), (int)($_GET['n'] ?? 30)));
+    if ($path === '/misc/ambient/stills' && $method === 'GET') json_out(Misc::stills($user, (string)($_GET['kind'] ?? 'mixed'), (int)($_GET['n'] ?? 30), (string)($_GET['type'] ?? 'both'), (string)($_GET['order'] ?? 'random'), (string)($_GET['variant'] ?? 'full')));
     if (preg_match('#^/misc/ambient/frame/([A-Za-z0-9_-]{1,64})$#D', $path, $m) && $method === 'GET') Misc::frame($user, $m[1]);
     if ($path === '/misc/admin/ambient' && $method === 'POST') { Auth::requireAdmin(); json_out(Misc::saveAmbient(body_json())); }
 } catch (DomainException $e) { json_error($e->getMessage(), 422); }

@@ -75,7 +75,7 @@
     }
     if (head === 'misc') {
       var mt = parts[1] || '';
-      if (mt && ['board','drop','ambient'].indexOf(mt) < 0) return { view:'notfound', path:path };
+      if (mt && ['board','calendar','drop','ambient'].indexOf(mt) < 0) return { view:'notfound', path:path };
       return { view:'misc', miscTab:mt || 'board', miscSub:parts[2] || '' };
     }
     if (head === 'games' && parts[1] === 'leaderboards' && !parts[3]) return { view:'play', playTab:'leaderboards', playSub:parts[2] || '' };

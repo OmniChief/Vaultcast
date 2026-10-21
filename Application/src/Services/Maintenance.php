@@ -7,7 +7,7 @@ final class Maintenance
     private static $checked = 0.0;
     /** Background-only tasks started by the app itself (not listed in the maintenance UI). */
     const INTERNAL = ['ingest' => 'Import reviewed download'];
-    const TASKS = ['site-artwork'=>'Optimise site and theme posters (WebP)','segments'=>'Match TV / anime intros and credits, and movie credits','browse'=>'Prepare search and show summaries','search' => 'Prepare live search index', 'views' => 'Prepare browsing pages', 'epg' => 'Refresh programme guide', 'metadata' => 'Prepare artwork and synopses', 'game-metadata' => 'Refresh game posters and synopses', 'scan' => 'Scan library folders', 'collections' => 'Match collections', 'downloads' => 'Import completed downloads', 'durations' => 'Fill Live media durations', 'facts' => 'Probe new media codecs and store show guides', 'drop-cleanup' => 'Delete expired Drop files'];
+    const TASKS = ['site-artwork'=>'Optimise site and theme posters (WebP)','segments'=>'Match TV / anime intros and credits, and movie credits','browse'=>'Prepare search and show summaries','search' => 'Prepare live search index', 'views' => 'Prepare browsing pages', 'epg' => 'Refresh programme guide', 'metadata' => 'Prepare artwork and synopses', 'game-metadata' => 'Refresh game posters and synopses', 'scan' => 'Scan library folders', 'collections' => 'Match collections', 'downloads' => 'Import completed downloads', 'durations' => 'Fill Live media durations', 'facts' => 'Probe new media codecs and store show guides', 'drop-cleanup' => 'Delete expired Drop files', 'calendar-episodes' => 'Refresh episode release calendars'];
 
     public static function runCommand(string $task, ?string $target = null): array
     {
@@ -164,6 +164,11 @@ final class Maintenance
                     $job['result'] = MediaFacts::refresh(function () { self::checkpoint(); });
                     $backup = MetadataSidecars::schedule();
                     if (empty($backup['ok'])) $job['result']['warning'] = $backup['warning'];
+                    // Fresh guides feed the episode-release calendars straight away (database only, quick).
+                    try { $job['result']['calendar'] = Calendar::refreshEpisodes(function () { self::checkpoint(); }); } catch (Throwable $e) { error_log('Vaultcast calendar episodes: ' . $e->getMessage()); }
+                    break;
+                case 'calendar-episodes':
+                    $job['result'] = Calendar::refreshEpisodes(function () { self::checkpoint(); });
                     break;
                 case 'drop-cleanup':
                     $lastProgress=0.0;
