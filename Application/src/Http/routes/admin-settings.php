@@ -158,7 +158,7 @@ if ($path === '/admin/users' && $method === 'GET') {
         $u['is_self'] = (string)$u['id'] === (string)$me['id'];
     }
     unset($u);
-    json_out(['ok' => true, 'users' => $users, 'now' => time(), 'role_counts'=>array_count_values(array_column($users,'role')),'permission_choices'=>Permissions::CAPABILITIES,'roles'=>Permissions::roles()]);
+    json_out(['ok' => true, 'users' => $users, 'now' => time(), 'role_counts'=>array_count_values(array_column($users,'role')),'permission_choices'=>Permissions::CAPABILITIES,'roles'=>Permissions::roles(),'user_role_capabilities'=>Permissions::USER_ROLE_CAPABILITIES,'user_role_defaults'=>Permissions::userRoleDefaults()]);
 }
 
 if ($path==='/admin/roles' && $method==='POST') {
@@ -172,7 +172,7 @@ if (preg_match('#^/admin/users/([A-Za-z0-9_-]{1,64})/permissions$#', $path, $m) 
         Permissions::lock($pdo);if($role!=='user'&&!isset(Permissions::roles()[$role]))throw new InvalidArgumentException('Choose an existing custom role or User.');
         return \Vaultcast\Repository::updateUser($m[1],static function(array $user)use($role,$permissions,$areas):array{
             if(($user['role'] ?? '')==='admin')throw new InvalidArgumentException('Administrator permissions cannot be changed here.');
-            $user['role']=$role;$user['permissions']=$role==='user'?[]:$permissions;$user['areas']=$areas;return $user;
+            $user['role']=$role;$user['permissions']=$role==='user'?array_intersect_key($permissions,array_flip(Permissions::USER_ROLE_CAPABILITIES)):$permissions;$user['areas']=$areas;return $user;
         });
     });}catch(InvalidArgumentException $e){json_error($e->getMessage());}
     Store::invalidate('users');unset($saved['password_hash']);json_out(['ok'=>true,'user'=>Permissions::publicUser($saved)]);

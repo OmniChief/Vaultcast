@@ -88,6 +88,8 @@ final class Access
     public static function gate(string $path, ?array $session, callable $findUser, bool $requireLogin, callable $token, ?int $now = null): ?array
     {
         if (in_array($path, self::OPEN_PATHS, true) || strpos($path, '/player-assets/') === 0) return null;
+        // Drop share links decide for themselves whether a sign-in is needed (per-link setting).
+        if (preg_match('#^/drop/s/[a-f0-9]{32}(?:/download)?$#D', $path)) return null;
         if (strpos($path, '/stream/') === 0 && strpos($path, '/stream/bios/') !== 0) {
             // Streams are token-addressed (players cannot always send cookies): check the token owner.
             $p = $token();
