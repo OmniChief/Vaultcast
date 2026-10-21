@@ -42,6 +42,7 @@
     }
     if (v === 'misc') return 'misc' + (st.miscTab ? '/' + enc(st.miscTab) + (st.miscSub ? '/' + enc(st.miscSub) : '') : '');
     if (v === 'offline') return 'offline';
+    if (v === 'inbox') return st.inboxPane === 'mail' ? 'inbox/private' : 'inbox';
     if (v === 'welcome') return 'welcome';
     if (v === 'login') return 'login';
     return '';
@@ -58,6 +59,9 @@
     var params = {};
     q.split('&').forEach(function(kv){ if (!kv) return; var i = kv.indexOf('='); params[dec(i < 0 ? kv : kv.slice(0, i))] = dec(i < 0 ? '' : kv.slice(i + 1).replace(/\+/g, ' ')); });
     if (head === '') return { view:'home' };
+    /* Unified inbox; the old Home → Inbox and Settings → Inbox addresses land here too. */
+    if (head === 'inbox') return { view:'inbox', inboxPane: parts[1] === 'private' ? 'mail' : null };
+    if ((head === 'home' || head === 'settings') && parts[1] === 'inbox') return { view:'inbox' };
     if (head === 'home') {
       var tab = parts[1] || 'overview';
       if (['overview','favourites','watchlist','calendar','friends','history','stats','inbox','cinema','arrivals','lists','chat'].indexOf(tab) < 0) return {view:'notfound'};

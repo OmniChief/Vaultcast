@@ -4887,6 +4887,7 @@ try {
     }
     if (r.view === 'collections') { state.view = 'collections'; return Promise.resolve(); }
     if (r.view === 'offline') { state.view = 'offline'; return Promise.resolve(); }
+    if (r.view === 'inbox') { state.view = 'inbox'; state.inboxPane = r.inboxPane || null; return Promise.resolve(); }
     if (r.view === 'library') { state.view = 'library'; return Promise.resolve(); }
     if (r.view === 'collection') { state.view = 'collection'; state.collectionId = r.collectionId; return Promise.resolve(); }
     if (r.view === 'search') { state.view = 'search'; state.searchQuery = r.searchQuery || ''; return Promise.resolve(); }
@@ -4953,14 +4954,16 @@ try {
   var accountDrawerClose = null;
   function accountHasUnread(){
     var owner=state.user&&state.user.role!=='guest'&&state.user.id;
-    return !!(owner && ((state.chatUnreadOwner===owner && state.chatUnread && (state.chatUnread.mail||state.chatUnread.dm)) || (state.inviteOwner===owner && state.inviteCount>0)));
+    /* One dot for everything: something newer than the last Inbox visit. Read/unread per item never drives it. */
+    return !!(owner && state.inboxOwner===owner && state.inboxNew && state.view!=='inbox');
   }
   function updateAccountIndicators(){
     $all('[data-account-dot]').forEach(function(el){el.hidden=!accountHasUnread();});
     $all('[data-account-notice]').forEach(function(el){
       var kind=el.getAttribute('data-account-notice'),owner=state.user&&state.user.id;
-      var count=kind==='invites'?(state.inviteOwner===owner?state.inviteCount:0):(state.chatUnreadOwner===owner&&state.chatUnread&&state.chatUnread[kind]?1:0);
-      el.hidden=!count;el.textContent=kind==='invites'?String(count||''):'New';
+      if(kind==='inbox'){el.hidden=!accountHasUnread();el.textContent='';el.classList.add('is-dot');el.setAttribute('aria-label','New in your inbox');return;}
+      var count=state.chatUnreadOwner===owner&&state.chatUnread&&state.chatUnread[kind]?1:0;
+      el.hidden=!count;el.textContent='New';
     });
   }
   document.addEventListener('vaultcast-notices-changed',updateAccountIndicators);
@@ -4998,8 +5001,11 @@ try {
     drawer.appendChild(h('div',{className:'account-drawer-head'},[h('h2',{id:'account-drawer-title',text:'Your space'}),h('button',{className:'icon-btn',type:'button','aria-label':'Close account menu',text:'×',onClick:function(){close();}})]));
     drawer.appendChild(h('div',{className:'account-drawer-profile'},[user?profileAvatar(user):icon('user'),h('div',{},[h('strong',{text:user?(user.display_name||user.username):'Welcome to Vaultcast'}),h('small',{text:signed?(user.role==='admin'?'Administrator':'Your personal space'):'Sign in for your own lists and messages'})])]));
     if(signed){
+      var topItems=[action('Inbox',function(){state.inboxPane=null;navigate('inbox');},'inbox')];
+      if(user.offline&&(user.offline.allowed||user.offline.held))topItems.push(action('Downloads on this device',function(){navigate('offline');}));
+      drawer.appendChild(h('section',{className:'account-drawer-group account-drawer-top'},topItems));
       group('Your collection',[action('My profile',function(){return window.VaultcastChat.profile(owner);}),action('Favourites',function(){hub('favourites');}),action('Watchlist',function(){hub('watchlist');}),action('My collections',function(){hub('lists');}),action('History',function(){hub('history');}),action('Release calendar',function(){hub('calendar');}),action('New episodes',function(){hub('arrivals');})]);
-      group('Stay connected',[action('Private inbox',function(){hub('inbox');},'mail'),action('Chat & direct messages',function(){hub('chat');},'dm'),action('Invitations',function(){hub('inbox');},'invites'),action('Friends',function(){hub('friends');}),action('Watch together',function(){hub('cinema');})]);
+      group('Stay connected',[action('Chat & direct messages',function(){hub('chat');}),action('Friends',function(){hub('friends');}),action('Watch together',function(){hub('cinema');})]);
       if(userAreaAllowed('games'))group('Your games',[action('Cloud saves',function(){openSettings('cloud-saves');}),action('Game statistics',function(){hub('stats');})]);
     }else group('Get started',[action('Sign in',function(){navigate('login');})]);
     var themeSelect=signed?h('select',{id:'account-quick-theme','aria-label':'Theme',onChange:function(){
@@ -5025,7 +5031,6 @@ try {
       }).then(function(){themeSelect.disabled=false;});
     }},themeOptions(user.prefs&&user.prefs.theme)):null;
     group('Preferences',[themeSelect?h('label',{className:'account-drawer-theme'},[h('span',{text:'Theme'}),themeSelect]):null,action('For you',function(){hub('overview');}),action('Profile & security',function(){openSettings('account');}),action('Playback preferences',function(){openSettings('playback');}),signed&&user.role==='admin'?action('Check for updates',function(){openSettings('updates');}):null,action('Settings',function(){openSettings('settings-home');})]);
-    if(signed&&user.offline&&(user.offline.allowed||user.offline.held))drawer.insertBefore(action('Downloads on this device',function(){state.view='offline';pushNav();render();}),drawer.querySelector('.account-drawer-link'));
     var parentalStatus=signed&&user.parental;
     if(parentalStatus&&(parentalStatus.kid||(parentalStatus.settings&&parentalStatus.settings.enabled)))drawer.appendChild(action(kidLocked()?'Grown-up mode (PIN)':(parentalStatus.unlocked_for>0?(parentalStatus.kid?'Back to kid mode':'Lock parental controls'):'Parental controls'),function(){close();loadModule('vc-parental.js','VaultcastParental').then(function(mod){if(kidLocked())mod.unlockPrompt(null);else if(parentalStatus.unlocked_for>0)mod.lock();else openSettings('parental');});}));
     if(signed)drawer.appendChild(action('Sign out',function(){
@@ -5041,7 +5046,7 @@ try {
     document.body.classList.add('account-drawer-open');if(trigger)trigger.setAttribute('aria-expanded','true');
     accountDrawerClose=close;document.addEventListener('keydown',keys,true);document.addEventListener('vaultcast-account-ready',accountChanged);
     updateAccountIndicators();requestAnimationFrame(function(){if(!closing){overlay.classList.add('is-open');drawer.querySelector('button').focus();}});
-    if(signed)api('/hub/inbox').then(function(j){if(!j.ok||owner!==(state.user&&state.user.id))return;state.inviteOwner=owner;state.inviteCount=(j.notifications||[]).length;updateAccountIndicators();}).catch(function(){});
+    if(signed)api('/inbox/badge').then(function(j){if(!j.ok||owner!==(state.user&&state.user.id))return;state.inboxOwner=owner;state.inboxNew=!!j.new;updateAccountIndicators();}).catch(function(){});
   }
   function accountMenu(){
     var user = state.user;
@@ -5091,7 +5096,7 @@ try {
   function subnavEl(mode){
     var items = [];
     if (mode === 'home') {
-      [['overview','For you'],['watchlist','Watchlist'],['favourites','Favourites'],['calendar','Release calendar'],['arrivals','New episodes'],['lists','My collections'],['friends','Friends'],['cinema','Watch together'],['history','History'],['stats','Game stats'],['chat','Chat'],['inbox','Inbox']].forEach(function(t){items.push({label:t[1],chatKind:t[0]==='inbox'?'mail':t[0]==='chat'?'dm':null,active:(state.hubTab||'overview')===t[0],go:function(){window.VaultcastHub.go(t[0]);}});});
+      [['overview','For you'],['watchlist','Watchlist'],['favourites','Favourites'],['calendar','Release calendar'],['arrivals','New episodes'],['lists','My collections'],['friends','Friends'],['cinema','Watch together'],['history','History'],['stats','Game stats'],['chat','Chat'],['inbox','Inbox']].forEach(function(t){items.push({label:t[1],chatKind:t[0]==='chat'?'dm':null,active:t[0]!=='inbox'&&(state.hubTab||'overview')===t[0],go:function(){if(t[0]==='inbox'){state.inboxPane=null;navigate('inbox');}else window.VaultcastHub.go(t[0]);}});});
     } else if (mode === 'vod') {
       items.push({ label:'Discover', active: state.view === 'library', go: function(){ navigate('library'); } });
       vodSections().forEach(function(s){
@@ -5254,29 +5259,7 @@ try {
     return Math.max(1,Math.floor((width-gutter*2-48+14)/(card+14)));
   }
 
-  var maintenanceNoticeCache=null,maintenanceNoticeAt=0,maintenanceNoticePending=null;
-  function maintenanceNoticeEl(){
-    if(!state.user||state.user.role!=='admin')return null;
-    var owner=state.user.id,host=h('div',{className:'maintenance-advisory-host'});
-    function paint(result){
-      if(!host.isConnected||!state.user||state.user.id!==owner||state.user.role!=='admin')return;
-      host.replaceChildren();
-      var needed=result.required||[];
-      if(!needed.length)return;
-      host.appendChild(h('div',{className:'maintenance-advisory',role:'status'},[
-        h('div',{},[h('strong',{text:'Maintenance needs your attention'}),h('p',{text:needed.map(function(item){return item.label;}).join(' · ')+'. Updates do not start these tasks automatically.'})]),
-        h('button',{className:'btn',type:'button',text:'Review required tasks',onClick:function(){openSettings('maintenance');}})
-      ]));
-    }
-    host._paintMaintenance=paint;
-    setTimeout(function(){
-      if(!host.isConnected)return;
-      if(maintenanceNoticeCache&&maintenanceNoticeCache.owner===owner&&Date.now()-maintenanceNoticeAt<30000){paint(maintenanceNoticeCache.result);return;}
-      if(!maintenanceNoticePending)maintenanceNoticePending=api('/admin/maintenance/requirements').finally(function(){maintenanceNoticePending=null;});
-      maintenanceNoticePending.then(function(result){if(result.ok&&state.user&&state.user.id===owner){maintenanceNoticeCache={owner:owner,result:result};maintenanceNoticeAt=Date.now();paint(result);}}).catch(function(){});
-    },0);
-    return host;
-  }
+  /* The old maintenance banner lives on as an Inbox item (System) with a Run task button. */
 
   function shell(content){
     var mode = currentMode();
@@ -5314,7 +5297,6 @@ try {
     return h('div', { className:'app-shell xshell' }, [
       header,
       subnavEl(mode),
-      maintenanceNoticeEl(),
       h('main', { className:'view view-enter', id:'main' }, [ content ])
     ]);
   }
@@ -8383,7 +8365,7 @@ try {
     var prefs = u.prefs || {};
     var isAdmin = !!(u && u.role === 'admin');
     var groups = [
-      {title:'Your account',description:'Your identity, personal preferences and saved games.',items:[{id:'settings-home',label:'Settings overview',hint:'Find a setting or choose a task'},{id:'account',label:'Profile & security',hint:'Display name, avatar, password and sign out'},{id:'parental',label:'Parental controls',hint:'Kids profile, age limits and PIN'},{id:'appearance',label:'Appearance & motion',hint:'Themes, animation and reduced motion'},{id:'playback',label:'Playback & skipping',hint:'Autoplay, mini player, intros and credits'},{id:'home-preferences',label:'Home & spoilers',hint:'Start page, compact layout and unwatched episode details'},{id:'cloud-saves',label:'Cloud saves',hint:'Save slots, backups, uploads and sharing'}]},
+      {title:'Your account',description:'Your identity, personal preferences and saved games.',items:[{id:'inbox',label:'Inbox',hint:'Messages, invitations and anything that needs you'},{id:'settings-home',label:'Settings overview',hint:'Find a setting or choose a task'},{id:'account',label:'Profile & security',hint:'Display name, avatar, password and sign out'},{id:'parental',label:'Parental controls',hint:'Kids profile, age limits and PIN'},{id:'appearance',label:'Appearance & motion',hint:'Themes, animation and reduced motion'},{id:'playback',label:'Playback & skipping',hint:'Autoplay, mini player, intros and credits'},{id:'home-preferences',label:'Home & spoilers',hint:'Start page, compact layout and unwatched episode details'},{id:'cloud-saves',label:'Cloud saves',hint:'Save slots, backups, uploads and sharing'}]},
       {title:'Library & metadata',description:'Connect folders, organise titles and correct missing information.',admin:true,items:[{id:'sections',label:'Libraries & folders',section:'Sources',hint:'Media types, paths and enabled libraries'},{id:'scan',label:'Scan for media',section:'Sources',hint:'Discover new or removed files'},{id:'ingest',label:'Import inbox',section:'Sources',hint:'Review incoming downloads before importing'},{id:'media',label:'Media manager',section:'Organise',hint:'Search and edit library records'},{id:'collections',label:'Collections',section:'Organise',hint:'Film sets and series groups'},{id:'library',label:'Find & rename',section:'Organise',hint:'Match names and organise files'},{id:'matching',label:'Metadata matching',section:'Metadata',hint:'Fix titles, posters and descriptions'},{id:'reports',label:'User reports',section:'Metadata',hint:'Review incorrect labels reported by users'}]},
       {title:'Artwork & design',description:'Site branding, bundled posters and library artwork.',admin:true,items:[{id:'site-artwork',label:'Site & theme posters',hint:'Replace default artwork and create smaller WebP images'},{id:'posters',label:'Library artwork',hint:'Fetch missing movie, show, season and game images'},{id:'artwork-integrity',label:'Repair missing images',hint:'Find broken records and missing files'},{id:'poster-optimise',label:'Optimise library images',hint:'Generate full, grid and search WebP variants'}]},
       {title:'Live broadcasting',description:'Build channels, schedule programmes and manage public streams.',admin:true,items:[{id:'live-studio',label:'PseudoTV Studio',section:'Relay',hint:'Schedule programmes, filler and advertising'},{id:'live-channels',label:'Relay channels',section:'Relay',hint:'Create channels and manage rotations'},{id:'live-library',label:'Live media library',section:'Relay',hint:'Import programmes and prepare durations'},{id:'live-playlists',label:'Rotation playlists',section:'Relay',hint:'Reusable channel programme rotations'},{id:'live-schedule',label:'Rotation rules',section:'Relay',hint:'Legacy rotation scheduling; Studio manages weekly slots'},{id:'live-iptv',label:'IPTV & guide matching',section:'Sources',hint:'Feeds, channel mapping and EPG'},{id:'live-radio',label:'Radio stations',section:'Sources',hint:'Add stations or browse the public directory'},{id:'live-station',label:'Station & outputs',section:'Outputs',hint:'Streams, guide exports and station configuration'}]},
@@ -8397,6 +8379,7 @@ try {
       g.items = g.items.filter(function(it){
         if(g.admin&&!canSettings(it.id))return false;
         if (it.id === 'parental') return !isAdmin && !!u.username;
+        if (it.id === 'inbox') return !!u.username && u.role !== 'guest';
         if (it.id.indexOf('live-') === 0) return !!features.live;
         if (it.id === 'acquisition' || it.id === 'queue') return !!features.downloads;
         if (it.id === 'system') return !!features.server_tools;
@@ -8412,6 +8395,7 @@ try {
     var sec = state.settingsSection;
 
     function goSec(id){
+      if(id==='inbox'){state.inboxPane=null;navigate('inbox');return;}
       if(id===sec)return;
       if(tvs.dirty&&sec==='live-studio'&&!confirm('Leave Studio with unsaved changes? Your draft stays here until you save or discard it.'))return;
       if(settingsDraftChanged()&&!confirm('Leave this page and discard unsaved form changes?'))return;
@@ -15475,6 +15459,7 @@ function viewCollectionDetail(){
     else if (state.view === 'live') { root.appendChild(viewLive()); setTimeout(consumePendingLiveChannel, 0); }
     else if (state.view === 'play') root.appendChild(viewPlay());
     else if (state.view === 'offline') root.appendChild(shell(lazyView('vc-offline.js', 'VaultcastOffline', 'offline-view', function(mod, host){ mod.render(host); })));
+    else if (state.view === 'inbox') { root.appendChild(shell(lazyView('vc-inbox.js', 'VaultcastInbox', 'inbox-view', function(mod, host){ mod.render(host); }))); updateAccountIndicators(); }
     else if (state.view === 'misc') root.appendChild(shell(lazyView('vc-misc.js', 'VaultcastMisc', 'misc-view', function(mod, host){ mod.render(host, state.miscTab || 'board', state.miscSub || ''); })));
     else root.appendChild(viewHome());
   }

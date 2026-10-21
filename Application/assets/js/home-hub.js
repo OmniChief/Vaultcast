@@ -22,7 +22,7 @@
     var current=pending;current.then(function(){if(pending===current)pending=null;},function(){if(pending===current)pending=null;});return current;
   }
   function openPath(path){history.pushState({},'',(window.__STREAM_BASE__||'/')+path);A.applyRoute().then(function(){A.render();A.replaceNav();});}
-  function go(tab,room){A.state.hubTab=tab||'overview';A.state.cinemaId=room||null;A.navigate('home');}
+  function go(tab,room){if(tab==='inbox'){A.state.inboxPane=null;A.navigate('inbox');return;}A.state.hubTab=tab||'overview';A.state.cinemaId=room||null;A.navigate('home');}
   function panel(title,kids,more){return h('section',{className:'hub-panel'},[h('div',{className:'hub-panel-head'},[h('h2',{text:title}),more||null]),h('div',{className:'hub-panel-body'},kids)]);}
   function cards(items,limit,shelf){return items.length?h('div',{className:'hub-cards'},items.slice(0,limit||8).map(function(it){var card=A.cardEl(it,it.progress);if(it.watch_status)card.appendChild(h('small',{className:'hub-watch-status',text:it.watch_status}));if(shelf){var remove=button('Remove',function(){remove.disabled=true;request('shelf',{key:it.hub_key||titleKey(it),shelf:shelf,enabled:false}).then(function(){card.remove();data[shelf]=data[shelf].filter(function(row){return row.id!==it.id;});loaded=0;}).catch(function(e){remove.disabled=false;error(e);});});remove.classList.add('hub-shelf-remove');card.appendChild(remove);}return card;})):empty('Nothing here yet. Your next favourite is waiting in the library.');}
   function controls(it){
@@ -128,7 +128,6 @@
     var seq=0;input.addEventListener('input',function(){clearTimeout(input.timer);var mine=++seq;input.timer=setTimeout(function(){request('people?q='+encodeURIComponent(input.value)).then(function(j){if(mine!==seq||!results.isConnected)return;results.replaceChildren();j.people.forEach(function(p){var existing=(data.friends||[]).some(function(f){return f.id===p.id;});results.appendChild(h('div',{className:'hub-person'},[avatar(p),h('strong',{text:p.name}),existing?h('small',{text:'Already connected or requested'}):button('Add friend',function(e){var target=e.currentTarget;target.disabled=true;request('friend',{user_id:p.id,action:'request'}).then(function(){target.textContent='Requested';loaded=0;}).catch(function(err){target.disabled=false;error(err);});})]));});}).catch(error);},300);});
     return h('div',{className:'hub-two'},[panel('Your people',data.friends.length?data.friends.map(friendCard):[empty('Make the next film night a shared one. Add a friend to get started.')]),panel('Find your friends',[input,results,h('p',{className:'muted',text:'Requests require acceptance. Only friends can view your play totals or send you invitations.'})])]);
   }
-  function notices(items){return (items||(data&&data.notifications)||[]).slice().reverse().map(function(n){return h('div',{className:'hub-notice'},[avatar(n.from),h('div',{},[h('strong',{text:n.text||(n.from.name+' invited you')}),h('p',{text:n.title})]),button(n.action||'Join',function(){openPath(n.path);},'primary'),button('Dismiss',function(e){var row=e.currentTarget.closest('.hub-notice');request('dismiss',{id:n.id}).then(function(){row.remove();loaded=0;if(data)data.notifications=(data.notifications||[]).filter(function(item){return item.id!==n.id;});if(A.state.inviteOwner===(A.state.user&&A.state.user.id)){A.state.inviteCount=Math.max(0,(A.state.inviteCount||0)-1);document.dispatchEvent(new Event('vaultcast-notices-changed'));}}).catch(error);})]);});}
   function recentCards(){
     var row=cards(data.recent,6);row.classList.add('hub-recent-cards');
     return h('div',{className:'hub-recent-width'},[row]);
@@ -238,12 +237,9 @@
     var root=h('div',{className:'home-hub'}),tab=A.state.hubTab||'overview';
     if(A.state.cinemaId)return A.shell(cinemaView(A.state.cinemaId));
     if(tab==='chat')return A.shell(window.VaultcastChat.view('chat'));
-    if(tab==='inbox'){
-      var inboxRoot=h('div',{className:'home-hub'}),invitations=panel('Your invitations',[empty('Loading invitations…')]),inboxOwner=A.state.user&&A.state.user.id;
-      inboxRoot.appendChild(window.VaultcastChat.view('mail'));inboxRoot.appendChild(invitations);
-      if(signed())setTimeout(function(){request('inbox').then(function(j){if(!inboxRoot.isConnected||inboxOwner!==(A.state.user&&A.state.user.id))return;invitations.querySelector('.hub-panel-body').replaceChildren.apply(invitations.querySelector('.hub-panel-body'),j.notifications.length?notices(j.notifications):[empty('All caught up. Your invitations appear here.')]);}).catch(function(e){if(inboxRoot.isConnected)invitations.querySelector('.hub-panel-body').replaceChildren(empty(e.message));});},0);
-      else invitations.querySelector('.hub-panel-body').replaceChildren(empty('Sign in to view invitations.'));
-      return A.shell(inboxRoot);
+    if(tab==='inbox'){ /* Retired: Home → Inbox now opens the unified Inbox. */
+      A.state.hubTab='overview';A.state.view='inbox';A.state.inboxPane=null;setTimeout(function(){A.replaceNav();A.render();},0);
+      return A.shell(h('div',{className:'home-hub'},[empty('Opening your Inbox…')]));
     }
 
     var name=A.state.user && (A.state.user.display_name||A.state.user.username),hour=new Date().getHours(),resume=((A.state.home||{}).continue_watching||[])[0];
@@ -395,7 +391,8 @@
   }
   function pollInbox(){
     setTimeout(pollInbox,30000);if(!A || !signed() || document.hidden || !A.state.home)return;
-    var uid=A.state.user.id;if(noticeOwner!==uid){noticeSeen={};noticeOwner=uid;}request('inbox').then(function(j){if(!signed()||A.state.user.id!==uid)return;if(data&&owner===uid)data.notifications=j.notifications;A.state.inviteOwner=uid;A.state.inviteCount=j.notifications.length;document.dispatchEvent(new Event('vaultcast-notices-changed'));j.notifications.forEach(function(n){if(noticeSeen[n.id])return;noticeSeen[n.id]=true;A.toast(n.text?(n.text+': '+n.title+' · Open Home → Inbox'):n.from.name+' invited you to '+n.title+' · Open Home → Inbox',{ms:8000});});var today=new Date().toISOString().slice(0,10);(data && owner===uid && data.upcoming || []).filter(function(ep){return ep.date===today;}).forEach(function(ep){var id=ep.card.id+ep.date+ep.season+ep.episode;if(noticeSeen[id])return;noticeSeen[id]=true;A.toast(ep.card.title+' · S'+ep.season+' E'+ep.episode+' is scheduled to air today',{ms:8000});});}).catch(function(){});
+    /* Invitations and messages now arrive through the unified Inbox (its dot rides on the chat presence poll); this loop only announces today's episodes. */
+    var uid=A.state.user.id;if(noticeOwner!==uid){noticeSeen={};noticeOwner=uid;}var today=new Date().toISOString().slice(0,10);(data && owner===uid && data.upcoming || []).filter(function(ep){return ep.date===today;}).forEach(function(ep){var id=ep.card.id+ep.date+ep.season+ep.episode;if(noticeSeen[id])return;noticeSeen[id]=true;A.toast(ep.card.title+' · S'+ep.season+' E'+ep.episode+' is scheduled to air today',{ms:8000});});
   }
   window.VaultcastHub={init:function(app){A=app;window.VaultcastChat.init(app);pollInbox();},view:view,details:details,episodeRows:episodeRows,controls:controls,cardAction:cardAction,gameStarted:gameStarted,go:go,
     modal:modal,picker:picker,chooseVideo:chooseVideo,profileHighlights:profileHighlights,invalidate:function(){loaded=0;},lobbyOpened:function(room){var friend=A.state._hubInviteFriend;A.state._hubInviteFriend=null;if(friend)request('invite',{kind:'game',room_id:room.id,user_id:friend.id}).then(function(){A.toast('Invitation sent to '+friend.name);}).catch(error);}};
