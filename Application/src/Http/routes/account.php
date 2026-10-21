@@ -15,6 +15,7 @@ if ($path === '/status' && $method === 'GET') {
         'authenticated' => $sess !== null,
         'base' => \Vaultcast\Database::basePath(),
         'public' => true,
+        'drop_anonymous' => (function () { try { return Drop::anonEnabled(); } catch (Throwable $e) { return false; } })(),
     ]);
 }
 

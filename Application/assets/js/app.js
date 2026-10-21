@@ -22,6 +22,7 @@
     st.sectionLetter = state.sectionLetter || '';
     st.collectionsLetter = state.collectionsLetter || '';
     st.hubTab=state.hubTab || 'overview';st.cinemaId=state.cinemaId || null;
+    st.playSub=state.playSub || '';st.miscTab=state.miscTab || '';st.miscSub=state.miscSub || '';
     st.roomId = state.gameLobby ? state.gameLobby.session.id : null;
     st.liveTab=state.liveTab||'now';st.liveChannel=state.liveChannel||null;
     if (extra) Object.keys(extra).forEach(function(k){ st[k]=extra[k]; });
@@ -1989,6 +1990,7 @@ function confirmDialog(message, opts){
     state.showSeason = st.showSeason != null ? st.showSeason : null; state.showEpisode = st.showEpisode != null ? st.showEpisode : null;
     if (st.settingsSection != null) state.settingsSection = st.settingsSection;
     if (st.playTab != null) state.playTab = st.playTab;
+    state.playSub = st.playSub || ''; state.miscTab = st.miscTab || 'board'; state.miscSub = st.miscSub || '';
     if (st.sectionSystem != null) { state.sectionSystem = st.sectionSystem; state.sectionSystemSlug = st.sectionSystemSlug || null; }
     if (st.searchQuery != null) state.searchQuery = st.searchQuery;
     render();
@@ -3517,8 +3519,9 @@ function confirmDialog(message, opts){
   }
   function goPlayTab(tab){
 
-    state.playTab = tab === 'lobby' ? 'lobby' : 'games';
-    if (state.playTab === 'games') lobbyStopPoll();
+    state.playTab = ['lobby','arcade','quiz','social','leaderboards'].indexOf(tab) >= 0 ? tab : 'games';
+    state.playSub = '';
+    if (state.playTab !== 'lobby') lobbyStopPoll();
     if (state.view !== 'play') navigate('play');
     else render();
   }
@@ -4326,6 +4329,7 @@ try {
     vod: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4.5" width="18" height="12.5" rx="2.6" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M10.2 8.2v5.1l4.4-2.55z" fill="currentColor"/><path d="M8 20h8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
     live: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="2.3" fill="currentColor"/><path d="M8.2 8.2a5.4 5.4 0 0 0 0 7.6M15.8 8.2a5.4 5.4 0 0 1 0 7.6M5.3 5.3a9.5 9.5 0 0 0 0 13.4M18.7 5.3a9.5 9.5 0 0 1 0 13.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
     play: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.2 7.5h9.6a4.2 4.2 0 0 1 4.2 4.2v.9a3.9 3.9 0 0 1-6.9 2.5l-.5-.6h-3.2l-.5.6a3.9 3.9 0 0 1-6.9-2.5v-.9a4.2 4.2 0 0 1 4.2-4.2z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M7.6 9.9v3M6.1 11.4h3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="15.6" cy="10.5" r="1.05" fill="currentColor"/><circle cx="17.6" cy="12.6" r="1.05" fill="currentColor"/></svg>',
+    misc: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="3.5" width="7.2" height="7.2" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="3.5" y="13.3" width="7.2" height="7.2" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="13.3" y="13.3" width="7.2" height="7.2" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M16.9 3.2l1.05 2.35 2.35 1.05-2.35 1.05-1.05 2.35-1.05-2.35-2.35-1.05 2.35-1.05z" fill="currentColor"/></svg>',
     search: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="1.9"/><path d="M16 16l4.2 4.2" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>',
     user: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8.6" r="3.8" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M4.8 20a7.2 7.2 0 0 1 14.4 0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
     chevL: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 5.5L8 12l6.5 6.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
@@ -4358,6 +4362,7 @@ try {
     if (v === 'home') return 'home';
     if (v === 'live') return 'live';
     if (v === 'play' || v === 'game') return 'play';
+    if (v === 'misc') return 'misc';
     if (v === 'section' && state.sectionType === 'roms') return 'play';
     if (v === 'admin' || v === 'settings' || v === 'login' || v === 'welcome') return '';
     return 'vod';
@@ -4365,7 +4370,8 @@ try {
   function goMode(mode){
     state.searchQuery = '';
     if (mode === 'live') goLiveTab('now');
-    else if (mode === 'play') { state.sectionQ = ''; state.sectionSystem = ''; if (!state.playTab) state.playTab = 'games'; navigate('play'); }
+    else if (mode === 'play') { state.sectionQ = ''; state.sectionSystem = ''; if (!state.playTab || (state.playTab === 'games' && !romsSection())) state.playTab = romsSection() ? 'games' : 'arcade'; state.playSub = ''; navigate('play'); }
+    else if (mode === 'misc') { if (!state.miscTab) state.miscTab = 'board'; state.miscSub = ''; navigate('misc'); }
     else if (mode === 'home') { state.hubTab=(state.user && state.user.prefs || {}).home_landing || 'overview';state.cinemaId=null;navigate('home'); }
     else navigate('library');
   }
@@ -4378,7 +4384,7 @@ try {
     extra = extra || {};
     if (state.view === 'game' && state.gamePath && !extra.live) return R.build({ view:'play', gamePath: state.gamePath, roomId:state.gameLobby ? state.gameLobby.session.id : null });
     return R.build({ systemSlug: state.view === 'play' && state.sectionSystem ? (state.sectionSystemSlug || null) : null, view: state.view, movieSlug: state.movieSlug, movieId: state.movieId, showSlug: state.showSlug, showKey: state.showKey,
-      season: state.showSeason, episode: state.showEpisode, liveCh: extra.live || state.liveChannel || null, liveTab:state.liveTab, playTab: state.playTab, section: state.section,
+      season: state.showSeason, episode: state.showEpisode, liveCh: extra.live || state.liveChannel || null, liveTab:state.liveTab, playTab: state.playTab, playSub: state.playSub, miscTab: state.miscTab, miscSub: state.miscSub, section: state.section,
       collectionId: state.collectionId, searchQuery: state.searchQuery, settingsSection: state.settingsSection, adminTab: state.adminTab,
       sectionLetter:state.sectionLetter, collectionsLetter:state.collectionsLetter, hubTab:state.hubTab, cinemaId:state.cinemaId });
   }
@@ -4410,9 +4416,10 @@ try {
         else { state.view = 'show'; state.showKey = j.show_key; state.showSlug = r.slug; state.showSeason = j.season; state.showEpisode = j.episode; state._showEpisodeItem = j.item_id || null; }
       });
     }
+    if (r.view === 'misc') { state.view = 'misc'; state.miscTab = r.miscTab || 'board'; state.miscSub = r.miscSub || ''; return Promise.resolve(); }
     if (r.view === 'live') { state.view = 'live'; state.liveTab=r.liveCh?(String(r.liveCh).indexOf('radio:')===0?'radio':String(r.liveCh).indexOf('iptv:')===0?'iptv':'relay'):(r.liveTab||'now'); state.liveChannel=r.liveCh||null; state._openLiveCh=null; return Promise.resolve(); }
     if (r.view === 'play' || r.view === 'game') {
-      state.view = 'play'; state.playTab = r.playTab || 'games';
+      state.view = 'play'; state.playTab = r.playTab || 'games'; state.playSub = r.playSub || '';
       var rs = romsSection();
       if (rs) { state.section = rs.id; state.sectionType = 'roms'; state.sectionLabel = rs.label; }
       state.sectionSystem = ''; state.sectionSystemSlug = null;
@@ -4659,8 +4666,14 @@ try {
     } else if (mode === 'play') {
       var rs = romsSection();
       var tab = state.playTab || 'games';
-      items.push({ label: rs ? (rs.label.indexOf('Games') >= 0 ? rs.label : 'Games / ROMs') : 'Games / ROMs', active: tab === 'games', go: function(){ state.sectionQ = ''; state.sectionLetter = ''; state.sectionSystem = ''; goPlayTab('games'); } });
-      items.push({ label: 'Lobby', active: tab === 'lobby', go: function(){ goPlayTab('lobby'); } });
+      if (rs) items.push({ label: rs.label.indexOf('Games') >= 0 ? rs.label : 'Games / ROMs', active: tab === 'games', go: function(){ state.sectionQ = ''; state.sectionLetter = ''; state.sectionSystem = ''; goPlayTab('games'); } });
+      if (rs) items.push({ label: 'Lobby', active: tab === 'lobby', go: function(){ goPlayTab('lobby'); } });
+      items.push({ label: 'Arcade', active: tab === 'arcade', go: function(){ goPlayTab('arcade'); } });
+      items.push({ label: 'Quiz', active: tab === 'quiz', go: function(){ goPlayTab('quiz'); } });
+      items.push({ label: 'Teams & friends', active: tab === 'social', go: function(){ goPlayTab('social'); } });
+      items.push({ label: 'Leaderboards', active: tab === 'leaderboards', go: function(){ goPlayTab('leaderboards'); } });
+    } else if (mode === 'misc') {
+      [['board','Board'],['drop','Drop'],['ambient','Ambient']].forEach(function(t){ items.push({ label:t[1], active:(state.miscTab||'board')===t[0], go:function(){ state.miscTab=t[0]; state.miscSub=''; if(state.view!=='misc')navigate('misc'); else { pushNav(); render(); } } }); });
     } else {
       return null;
     }
@@ -4836,12 +4849,13 @@ try {
       ['home', 'Home', 'Your lists, friends and next great night'],
       ['vod', 'Library', 'Films, shows and music'],
       ['live', 'Live', 'Relay, IPTV, radio & programme guides'],
-      ['play', 'Play', 'Retro games in your browser']
+      ['play', 'Play', 'Retro games, arcade, quiz nights and leaderboards'],
+      ['misc', 'Misc', 'Dashboards, private file drop and ambient screens']
     ];
     modes = modes.filter(function(m){
+      if (m[0] === 'misc') return !!(state.user && state.user.id && state.user.role !== 'guest');
       if (m[0] !== 'home' && !userAreaAllowed({vod:'library', live:'live', play:'games'}[m[0]])) return false;
       if (m[0] === 'live') return !!(state.home && state.home.features && state.home.features.live);
-      if (m[0] === 'play') return !!romsSection();
       return true;
     });
     var header = h('header', { className:'topnav xnav' }, [
@@ -5149,10 +5163,19 @@ try {
     }).catch(function(e){ toast(String(e), { kind:'bad' }); });
   }
 
+    /* Lazy feature modules (Arcade / Quiz / Teams, Misc): fetched on first use so page loads stay light. */
+    function lazyView(file, globalName, cls, paint){
+      var host = h('div', { className:'vc-lazy ' + cls }, [ pendingContent({ text:'Loading…' }) ]);
+      loadModule(file, globalName).then(function(mod){ if (host.isConnected || document.body.contains(host)) { host.replaceChildren(); paint(mod, host); } else setTimeout(function(){ if (host.isConnected) { host.replaceChildren(); paint(mod, host); } }, 0); })
+        .catch(function(){ host.replaceChildren(emptyState('This page could not load', 'Check the connection and try again.', [h('button', { className:'btn primary', text:'Retry', onClick:function(){ render(); } })])); });
+      return host;
+    }
     function viewPlay(){
     if ((state.playTab || 'games') === 'lobby') return viewLobby();
     lobbyStopPoll();
     var rs = romsSection();
+    if ((state.playTab || 'games') === 'games' && !rs) state.playTab = 'arcade';
+    if (['arcade','quiz','social','leaderboards'].indexOf(state.playTab) >= 0) return shell(lazyView('vc-play.js', 'VaultcastPlay', 'play-extra-view', function(mod, host){ mod.render(host, state.playTab, state.playSub || ''); }));
     if (!rs) return shell(h('div', { className:'panel' }, [ emptyState('No games library', 'Add a ROMs library under Admin → Libraries, then scan.') ]));
     state.section = rs.id; state.sectionType = 'roms'; state.sectionLabel = rs.label;
     var wrap = h('div', { id:'section-view', className:'play-view' }, [ sectionHeroEl(rs.id, '') ]);
@@ -7799,7 +7822,7 @@ try {
   }
   window.addEventListener('beforeunload',function(e){if(state.view==='settings'&&(settingsDraftChanged()||(state.settingsSection==='live-studio'&&tvs.dirty))){e.preventDefault();e.returnValue='';}});
   function renderTaskCentre(host){
-    var info={browse:['Browsing','Build the search index and show summaries together. Useful after importing a large library.'],search:['Browsing','Rebuild fast search suggestions without rescanning folders.'],views:['Browsing','Prepare cached library rows, collections and the live guide.'],scan:['Library','Discover files in configured folders. Does not download artwork.'],metadata:['Library','Fetch missing artwork and descriptions, then preserve sidecars. Network requests may take time.'],'game-metadata':['Library','Refresh game posters and descriptions using the current game matching rules.'],facts:['Library','Probe file codecs and durations and store show guides. Reads media files.'],collections:['Library','Match media to public collections.'],segments:['Playback','Match episode intro/credit timings and available movie credits.'],epg:['Live','Refresh the programme guide from configured sources.'],durations:['Live','Read missing Live media durations.'],downloads:['Downloads','Import completed downloads using the configured rules.'],'site-artwork':['Artwork','Create WebP copies of bundled theme posters and custom site uploads. Originals remain unchanged.']};
+    var info={browse:['Browsing','Build the search index and show summaries together. Useful after importing a large library.'],search:['Browsing','Rebuild fast search suggestions without rescanning folders.'],views:['Browsing','Prepare cached library rows, collections and the live guide.'],scan:['Library','Discover files in configured folders. Does not download artwork.'],metadata:['Library','Fetch missing artwork and descriptions, then preserve sidecars. Network requests may take time.'],'game-metadata':['Library','Refresh game posters and descriptions using the current game matching rules.'],facts:['Library','Probe file codecs and durations and store show guides. Reads media files.'],collections:['Library','Match media to public collections.'],segments:['Playback','Match episode intro/credit timings and available movie credits.'],epg:['Live','Refresh the programme guide from configured sources.'],durations:['Live','Read missing Live media durations.'],downloads:['Downloads','Import completed downloads using the configured rules.'],'site-artwork':['Artwork','Create WebP copies of bundled theme posters and custom site uploads. Originals remain unchanged.'],'drop-cleanup':['Storage','Delete the stored bytes of Drop items that expired, used their last download or were abandoned mid-upload. They are already unavailable; this frees the space. Schedule with: php src/Console.php drop-cleanup']};
     var filter='All',busy=false,timer=null,sequence=0,lastData=null;
     function requestAction(url,body,button){button.disabled=true;return api(url,{method:'POST',body:body}).then(function(j){if(!j.ok)throw new Error(j.error||'Task request failed');if(host.isConnected)refresh();}).catch(function(e){toast(e.message,{kind:'bad'});if(button.isConnected)button.disabled=false;});}
     function refresh(useCache){
@@ -7808,8 +7831,8 @@ try {
         var openResults=new Set(Array.from(host.querySelectorAll('details[data-job-id][open]')).map(function(details){return details.getAttribute('data-job-id');}));lastData=j;host.replaceChildren();var running=j.jobs.filter(function(job){return job.status==='queued'||job.status==='running';});
         host.appendChild(h('div',{className:'task-centre-toolbar'},[h('p',{className:'muted',text:running.length?running.length+' active / queued tasks':'No maintenance tasks running'}),h('button',{className:'btn',text:'Refresh status',onClick:refresh})]));
         if((j.requirements||[]).length)host.appendChild(h('section',{className:'settings-callout'},[h('h3',{text:'Recommended after your update'}),h('p',{text:'Features keep working with slower fallbacks until you choose to prepare this data.'})].concat(j.requirements.map(function(req){return h('p',{},[h('strong',{text:req.label+' · '}),req.reason]);}))));
-        var filters=h('div',{className:'settings-filter-tabs',role:'group','aria-label':'Task category'});['All','Browsing','Library','Artwork','Playback','Live','Downloads'].forEach(function(name){filters.appendChild(h('button',{type:'button',className:'btn'+(filter===name?' active':''),'aria-pressed':String(filter===name),text:name,onClick:function(){filter=name;refresh(true);}}));});host.appendChild(filters);
-        var cards=h('div',{className:'task-catalogue'});Object.keys(j.tasks).forEach(function(task){var meta=info[task]||['Other','Run this server preparation task.'];if(filter!=='All'&&meta[0]!==filter)return;var features=state.home&&state.home.features||{};if((meta[0]==='Live'&&!features.live)||(meta[0]==='Downloads'&&!features.downloads))return;var active=running.some(function(job){return job.task===task;});cards.appendChild(h('article',{className:'settings-task-card'},[h('small',{text:meta[0]}),h('h3',{text:j.tasks[task]}),h('p',{text:meta[1]}),h('button',{className:'btn',type:'button',disabled:active,text:active?'Queued / running':'Run task',onClick:function(e){requestAction('/admin/maintenance',{task:task},e.currentTarget);}})]));});host.appendChild(cards);
+        var filters=h('div',{className:'settings-filter-tabs',role:'group','aria-label':'Task category'});['All','Browsing','Library','Artwork','Playback','Live','Downloads','Storage'].forEach(function(name){filters.appendChild(h('button',{type:'button',className:'btn'+(filter===name?' active':''),'aria-pressed':String(filter===name),text:name,onClick:function(){filter=name;refresh(true);}}));});host.appendChild(filters);
+        var cards=h('div',{className:'task-catalogue'});Object.keys(j.tasks).forEach(function(task){var meta=info[task]||['Other','Run this server preparation task.'];if(filter!=='All'&&meta[0]!==filter)return;var features=state.home&&state.home.features||{};if((meta[0]==='Live'&&!features.live)||(meta[0]==='Downloads'&&!features.downloads))return;var active=running.some(function(job){return job.task===task;});cards.appendChild(h('article',{className:'settings-task-card'},[h('small',{text:meta[0]}),h('h3',{text:j.tasks[task]}),h('p',{text:meta[1]}),j.details&&j.details[task]?h('p',{className:'task-detail',text:j.details[task]}):null,h('button',{className:'btn',type:'button',disabled:active,text:active?'Queued / running':'Run task',onClick:function(e){requestAction('/admin/maintenance',{task:task},e.currentTarget);}})]));});host.appendChild(cards);
         host.appendChild(h('h3',{text:'Activity & results'}));if(!j.jobs.length)host.appendChild(h('p',{className:'muted',text:'Tasks you run will appear here with their progress and results.'}));
         j.jobs.forEach(function(job){var active=job.status==='queued'||job.status==='running',progress=job.progress||{},row=h('article',{className:'settings-job'},[h('div',{className:'settings-job-head'},[h('strong',{text:j.tasks[job.task]||job.task}),h('span',{className:'settings-job-state '+job.status,text:job.status})]),h('small',{className:'muted',text:(job.created_at?new Date(job.created_at).toLocaleString():'')+(job.requested_by?' · '+job.requested_by:'')})]);
           if(progress.total>0)row.appendChild(h('progress',{value:progress.done||0,max:progress.total,'aria-label':'Task progress'}));
@@ -9427,7 +9450,7 @@ try {
       var el = $('#user_list'); if(!el) return;
       el.innerHTML = '';
       if (!r.ok) { el.appendChild(h('p', { className:'bad', text:r.error || 'Could not load users' })); return; }
-      state.roleCounts=r.role_counts||{};state.userRoles=r.roles||{};state.permissionChoices=r.permission_choices||{};renderRoles();
+      state.roleCounts=r.role_counts||{};state.userRoles=r.roles||{};state.permissionChoices=r.permission_choices||{};state.userRoleCapabilities=r.user_role_capabilities||[];state.userRoleDefaults=r.user_role_defaults||{};renderRoles();
       var roleSelect=$('#nu_role');if(roleSelect){var selectedRole=roleSelect.value;roleSelect.querySelectorAll('[data-custom-role]').forEach(function(o){o.remove();});Object.keys(state.userRoles).forEach(function(id){roleSelect.appendChild(h('option',{value:id,text:state.userRoles[id].name,'data-custom-role':true}));});roleSelect.value=selectedRole;if(!roleSelect.value)roleSelect.value='user';}
       var table = h('table', { className:'table ua-table' }, [ h('tr', {}, [h('th',{text:'User'}),h('th',{text:'Role'}),h('th',{text:'Access'}),h('th',{text:'Expires'}),h('th',{text:'Change access'}),h('th',{text:''})]) ]);
       (r.users||[]).forEach(function(u){
@@ -9496,7 +9519,7 @@ try {
     [['library','Library'],['live','Live'],['games','Games']].forEach(function(entry){var checkbox=h('input',{type:'checkbox',checked:admin||areas[entry[0]]===true,disabled:admin});inputs[entry[0]]=checkbox;body.appendChild(h('label',{className:'check-label'},[checkbox,entry[1]]));});
     body.appendChild(h('h4',{text:'Permission overrides'}));
     Object.keys(state.permissionChoices||{}).forEach(function(key){var select=h('select',{'aria-label':state.permissionChoices[key]},[h('option',{value:'inherit',text:'Use role default'}),h('option',{value:'allow',text:'Allow'}),h('option',{value:'deny',text:'Deny'})]);select.value=user.permissions&&typeof user.permissions[key]==='boolean'?(user.permissions[key]?'allow':'deny'):'inherit';overrides[key]=select;body.appendChild(h('label',{},[state.permissionChoices[key],select]));});
-    function defaults(){Object.keys(overrides).forEach(function(key){var select=overrides[key];select.disabled=admin||role.value==='user';var grants=state.userRoles[role.value]&&state.userRoles[role.value].permissions||{};var inherited=admin||!!grants[key]||(key==='ingest_view'&&grants.ingest_import===true);select.options[0].textContent='Use role default ('+(inherited?'allowed':'denied')+')';});}role.onchange=defaults;defaults();
+    function defaults(){Object.keys(overrides).forEach(function(key){var select=overrides[key];var userCap=(state.userRoleCapabilities||[]).indexOf(key)>=0;select.disabled=admin||(role.value==='user'&&!userCap);var grants=role.value==='user'?(state.userRoleDefaults||{}):(state.userRoles[role.value]&&state.userRoles[role.value].permissions||{});var inherited=admin||!!grants[key]||(key==='ingest_view'&&grants.ingest_import===true);select.options[0].textContent='Use role default ('+(inherited?'allowed':'denied')+')';});}role.onchange=defaults;defaults();
     var save=h('button',{className:'btn primary',text:'Save',disabled:admin});body.appendChild(save);var dialog=permissionDialog('Edit user · '+user.username,body);
     save.onclick=function(){var areaValues={},permissions={};Object.keys(inputs).forEach(function(key){areaValues[key]=inputs[key].checked;});Object.keys(overrides).forEach(function(key){if(overrides[key].value!=='inherit')permissions[key]=overrides[key].value==='allow';});save.disabled=true;api('/admin/users/'+encodeURIComponent(user.id)+'/permissions',{method:'POST',body:{role:role.value,areas:areaValues,permissions:permissions}}).then(function(r){if(!r.ok)throw new Error(r.error||'Could not save user');dialog.close();loadUsers();toast('User permissions updated');}).catch(function(e){status.textContent=e.message;save.disabled=false;});};
   }
@@ -14649,9 +14672,20 @@ function viewCollectionDetail(){
         h('label', {}, ['Password', h('input', { id:'lp', type:'password', autocomplete:'current-password', onKeydown: function(e){ if(e.key==='Enter') doLogin(); } })]),
         h('button', { id:'login-submit', className:'btn primary', text:'Sign in', onClick: doLogin }),
         h('button', { className:'btn ghost', text: state.user || state._guest ? 'Back to catalogue' : 'Back', onClick: function(){ state._wantAdmin=false; if (state.user || state._guest) { state.view='home'; render(); } else showWelcome(); } }),
-        h('p', { id:'login-err', className:'bad' })
+        h('p', { id:'login-err', className:'bad' }),
+        anonDropLink()
       ])
     ]);
+  }
+  /** "Send a file without an account" appears only when an admin enabled anonymous Drop. */
+  function anonDropLink(){
+    var box = h('p', { className:'muted', hidden:true });
+    api('/status').then(function(s){
+      if (!s || !s.drop_anonymous) return;
+      box.appendChild(h('a', { href: BASE + 'api/drop/anon', text:'Send a file without an account' }));
+      box.hidden = false;
+    });
+    return box;
   }
   function doLogin(){
     if (state._loginBusy) return;
@@ -14801,6 +14835,7 @@ function viewCollectionDetail(){
     else if (state.view === 'colmember') root.appendChild(viewCollectionMember());
     else if (state.view === 'live') { root.appendChild(viewLive()); setTimeout(consumePendingLiveChannel, 0); }
     else if (state.view === 'play') root.appendChild(viewPlay());
+    else if (state.view === 'misc') root.appendChild(shell(lazyView('vc-misc.js', 'VaultcastMisc', 'misc-view', function(mod, host){ mod.render(host, state.miscTab || 'board', state.miscSub || ''); })));
     else root.appendChild(viewHome());
   }
 
@@ -14908,6 +14943,58 @@ function viewCollectionDetail(){
   window.NSApp = { h: h, api: api, toast: toast, confirmDialog: confirmDialog, render: render, state: state, can:can,
     openSettings: openSettings, openShow: openShow, openMovie: openMovie, openGame:openGame, navigate:navigate, refreshArtwork:refreshArtwork, fmtSize: fmtSize, version: APP_VERSION,
     shell:shell,communityPoster:communityPoster,refreshCommunityRating:refreshCommunityRating,heroClock:heroClock,homePosterEl:homePosterEl,homeSectionPosterEl:homeSectionPosterEl,collectionsPosterEl:collectionsPosterEl,librarySummary:librarySummary,cardEl:cardEl,homeActivitySections:homeActivitySections,applyRoute:applyRoute,replaceNav:replaceNav,openPlayer:openPlayer,playItem:playItem,copyText:copyText,shareUrl:shareUrl,startLobbyHost:startLobbyHost,captureGameState:lobbyCaptureState,loadGameState:loadGameState,restoreMultiplayerState:restoreMultiplayerState,quitGame:function(){closePlayer();} };
+  var moduleLoads = {};
+  /** The feature modules' stylesheet is fetched with the first module, so pages that never open them skip it. */
+  var extraCss = null;
+  function loadExtraCss(){
+    if (extraCss) return extraCss;
+    extraCss = new Promise(function(resolve){
+      var link = document.createElement('link'); link.rel = 'stylesheet';
+      link.href = BASE + 'index.php?asset=assets/css/vc-extra.css&v=' + encodeURIComponent(window.__ASSET_VERSION__ || APP_VERSION);
+      link.onload = function(){ resolve(); }; link.onerror = function(){ extraCss = null; resolve(); };
+      setTimeout(resolve, 4000); // never hold a page back on a slow stylesheet
+      document.head.appendChild(link);
+    });
+    return extraCss;
+  }
+  function loadModule(file, globalName){
+    if (globalName && window[globalName]) return Promise.resolve(window[globalName]);
+    if (moduleLoads[file]) return moduleLoads[file];
+    var css = /^vc-(play|misc|games)\.js$/.test(file) ? loadExtraCss() : Promise.resolve();
+    moduleLoads[file] = new Promise(function(resolve, reject){
+      var sm = document.createElement('script');
+      sm.src = BASE + 'index.php?asset=assets/js/' + file + '&v=' + encodeURIComponent(window.__ASSET_VERSION__ || APP_VERSION);
+      sm.async = true;
+      sm.onload = function(){ var mod = globalName ? window[globalName] : true; if (mod) { if (mod.init) mod.init(window.NSApp); css.then(function(){ resolve(mod); }); } else { moduleLoads[file] = null; reject(new Error('Module missing')); } };
+      sm.onerror = function(){ moduleLoads[file] = null; reject(new Error('Could not load ' + file)); };
+      document.head.appendChild(sm);
+    });
+    return moduleLoads[file];
+  }
+  Object.assign(window.NSApp, { loadModule:loadModule, icon:icon, emptyState:emptyState, pendingContent:pendingContent, goMode:goMode, goPlayTab:goPlayTab, pushNav:pushNav,
+    userAreaAllowed:userAreaAllowed, romsSection:romsSection, loadHls:loadHls, attachIptvStream:attachIptvStream, hlsJar:hlsJar, liveApi:liveApi, ensureLiveData:ensureLiveData,
+    liveData:function(){ return live; }, loadRadio:loadRadio, stopRadio:stopRadio, streamPlayUrl:streamPlayUrl, closePlayer:closePlayer, API:API, BASE:BASE,
+    apiUrl:function(u){ u = String(u || ''); return u.indexOf('/api/') === 0 ? API + u.slice(4) : u; } });
+  /* Ambient screensaver: start after the configured idle time (admin default, per-device override). */
+  (function(){
+    var last = Date.now(), cfg = null, cfgAt = 0;
+    function poke(){ last = Date.now(); }
+    ['pointermove','pointerdown','keydown','wheel','touchstart'].forEach(function(e){ window.addEventListener(e, poke, { passive:true, capture:true }); });
+    function minutes(){
+      var own = null; try { own = localStorage.getItem('vaultcast-ambient-idle'); } catch (e) {}
+      if (own !== null && own !== '' && !isNaN(Number(own))) return Number(own);
+      return cfg ? Number(cfg.idle_minutes || 0) : 0;
+    }
+    setInterval(function(){
+      if (!state.user || state.user.role === 'guest' || document.hidden) return;
+      if (!cfg || Date.now() - cfgAt > 900000) { cfgAt = Date.now(); api('/misc/ambient').then(function(j){ if (j && j.ok) cfg = j; }).catch(function(){}); return; }
+      var m = minutes(); if (!m || Date.now() - last < m * 60000) return;
+      var busy = document.getElementById('player-overlay') || document.querySelector('.vc-ambient') || Array.prototype.some.call(document.querySelectorAll('video,audio'), function(v){ return !v.paused && !v.muted; });
+      if (busy || (state.view === 'misc' && state.miscTab === 'board' && document.body.classList.contains('vc-kiosk'))) { last = Date.now(); return; }
+      last = Date.now();
+      loadModule('vc-misc.js', 'VaultcastMisc').then(function(mod){ mod.startAmbient({ idle:true }); }).catch(function(){});
+    }, 15000);
+  })();
   window.VaultcastHub.init(window.NSApp);
   window.VaultcastHomeExtras.init(window.NSApp);
   // Load matching tools when Settings or a detail-page action needs them.
