@@ -225,3 +225,17 @@ CREATE TABLE IF NOT EXISTS vaultcast_webcams (
  UNIQUE KEY webcams_url (url_key),
  INDEX webcams_enabled (enabled_ambient,name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS vaultcast_content_ratings (
+ target VARCHAR(80) CHARACTER SET ascii NOT NULL PRIMARY KEY,
+ bucket TINYINT NOT NULL DEFAULT 0, raw VARCHAR(40) NOT NULL DEFAULT '',
+ source VARCHAR(16) CHARACTER SET ascii NOT NULL DEFAULT '', updated_at BIGINT NOT NULL DEFAULT 0,
+ INDEX rating_bucket (bucket)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS vaultcast_parental (
+ user_id VARCHAR(64) NOT NULL PRIMARY KEY,
+ settings TEXT NOT NULL, pin_hash VARCHAR(255) NOT NULL DEFAULT '',
+ pin_failures INT NOT NULL DEFAULT 0, pin_locked_until BIGINT NOT NULL DEFAULT 0,
+ updated_at BIGINT NOT NULL DEFAULT 0
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
