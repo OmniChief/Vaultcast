@@ -2,13 +2,14 @@
 declare(strict_types=1);
 
 final class Permissions {
-    const CAPABILITIES = ['ingest_view'=>'View the import inbox','ingest_import'=>'Import inbox downloads (includes viewing; moves files into the library)','rss_search'=>'Search RSS sources','downloads_request'=>'Request downloads','fix_match'=>'Fix movie, show and game matches','metadata_edit'=>'Edit titles, synopsis and posters','library_remove'=>'Remove entries from the library (media files kept)','timing_edit'=>'Search and edit intro / credits timings','artwork_manage'=>'Check and repair artwork integrity','age_ratings'=>'Set age ratings for films and shows','iptv_manage'=>'Manage IPTV feeds and shared channels','radio_manage'=>'Manage shared radio stations','drop.upload'=>'Upload to Drop (files, text and share links)','pictures.upload'=>'Upload pictures for Ambient and the Picture frame widget','save_copy'=>'Watch & save copy (saves a reusable direct-play copy while watching)'];
+    const CAPABILITIES = ['ingest_view'=>'View the import inbox','ingest_import'=>'Import inbox downloads (includes viewing; moves files into the library)','rss_search'=>'Search RSS sources','downloads_request'=>'Request downloads','fix_match'=>'Fix movie, show and game matches','metadata_edit'=>'Edit titles, synopsis and posters','library_remove'=>'Remove entries from the library (media files kept)','timing_edit'=>'Search and edit intro / credits timings','artwork_manage'=>'Check and repair artwork integrity','age_ratings'=>'Set age ratings for films and shows','offline.download'=>'Download titles to watch offline on this device','iptv_manage'=>'Manage IPTV feeds and shared channels','radio_manage'=>'Manage shared radio stations','drop.upload'=>'Upload to Drop (files, text and share links)','pictures.upload'=>'Upload pictures for Ambient and the Picture frame widget','save_copy'=>'Watch & save copy (saves a reusable direct-play copy while watching)'];
     /** Capabilities the built-in User role may receive: an admin default plus per-user overrides. */
-    const USER_ROLE_CAPABILITIES = ['drop.upload','pictures.upload'];
+    const USER_ROLE_CAPABILITIES = ['drop.upload','pictures.upload','offline.download'];
     public static function userRoleDefaults(): array {
         $drop=(array)(Store::settings()['drop'] ?? []);
         $pictures=(array)(Store::settings()['pictures'] ?? []);
-        return ['drop.upload'=>!empty($drop['user_role_upload']),'pictures.upload'=>!array_key_exists('user_role_upload',$pictures)||!empty($pictures['user_role_upload'])];
+        $offline=(array)(Store::settings()['offline'] ?? []);
+        return ['drop.upload'=>!empty($drop['user_role_upload']),'pictures.upload'=>!array_key_exists('user_role_upload',$pictures)||!empty($pictures['user_role_upload']),'offline.download'=>!array_key_exists('user_role',$offline)||!empty($offline['user_role'])];
     }
     private static $roles;
     public static function roles(): array {

@@ -4886,6 +4886,7 @@ try {
       if (sec) { state.section = sec.id; state.sectionType = sec.type; state.sectionLabel = sec.label; state.view = sec.type === 'roms' ? 'play' : 'section'; return Promise.resolve(); }
     }
     if (r.view === 'collections') { state.view = 'collections'; return Promise.resolve(); }
+    if (r.view === 'offline') { state.view = 'offline'; return Promise.resolve(); }
     if (r.view === 'library') { state.view = 'library'; return Promise.resolve(); }
     if (r.view === 'collection') { state.view = 'collection'; state.collectionId = r.collectionId; return Promise.resolve(); }
     if (r.view === 'search') { state.view = 'search'; state.searchQuery = r.searchQuery || ''; return Promise.resolve(); }
@@ -5024,6 +5025,7 @@ try {
       }).then(function(){themeSelect.disabled=false;});
     }},themeOptions(user.prefs&&user.prefs.theme)):null;
     group('Preferences',[themeSelect?h('label',{className:'account-drawer-theme'},[h('span',{text:'Theme'}),themeSelect]):null,action('For you',function(){hub('overview');}),action('Profile & security',function(){openSettings('account');}),action('Playback preferences',function(){openSettings('playback');}),signed&&user.role==='admin'?action('Check for updates',function(){openSettings('updates');}):null,action('Settings',function(){openSettings('settings-home');})]);
+    if(signed&&user.offline&&(user.offline.allowed||user.offline.held))drawer.insertBefore(action('Downloads on this device',function(){state.view='offline';pushNav();render();}),drawer.querySelector('.account-drawer-link'));
     var parentalStatus=signed&&user.parental;
     if(parentalStatus&&(parentalStatus.kid||(parentalStatus.settings&&parentalStatus.settings.enabled)))drawer.appendChild(action(kidLocked()?'Grown-up mode (PIN)':(parentalStatus.unlocked_for>0?(parentalStatus.kid?'Back to kid mode':'Lock parental controls'):'Parental controls'),function(){close();loadModule('vc-parental.js','VaultcastParental').then(function(mod){if(kidLocked())mod.unlockPrompt(null);else if(parentalStatus.unlocked_for>0)mod.lock();else openSettings('parental');});}));
     if(signed)drawer.appendChild(action('Sign out',function(){
@@ -7018,12 +7020,30 @@ try {
     if (can('metadata_edit')||can('library_remove')) buttons.push(h('button', {className:'btn ghost', type:'button', text:'Manual edit', onClick:function(){
       withTools(function(tools){ if (can('metadata_edit')||can('library_remove')) tools.editDialog(item, showKey); });
     }}));
+    if(!showKey&&item.media_kind==='video'){var offlineBtn=offlineButton(item);if(offlineBtn)buttons.push(offlineBtn);}
     if(can('age_ratings')&&(showKey||(item.media_kind==='video'&&!item.show_key)))buttons.push(h('button',{className:'btn ghost',type:'button',text:'Age rating',onClick:function(){
       loadModule('vc-parental.js','VaultcastParental').then(function(mod){permissionDialog('Age rating · '+(item.show||item.title||'Title'),h('div',{className:'stack'},[h('p',{className:'muted',text:'Kids profiles hide titles above their age limit. Choose Automatic to use the rating found in NFO files, OMDb or TMDB.'}),mod.ratingControl(showKey?'show:'+showKey:'item:'+item.id)]));}).catch(function(){toast('Could not open age ratings',{kind:'bad'});});
     }}));
     if(can('timing_edit')&&!showKey&&!item.show&&item.media_kind==='video')buttons.push(h('button',{className:'btn ghost',text:'Edit credits',onClick:function(){editEpisodeSegments(item);}}));
     if (state.user && state.user.role === 'admin' && (item.type === 'roms' || item.media_kind === 'rom')) buttons.push(h('button', {className:'btn ghost', type:'button', text:'Refresh poster and synopsis', onClick:function(){ queueGameMetadata(item.id); }}));
     return buttons;
+  }
+
+  /* Offline downloads (PWA): only when the server allows it for this person and the browser can store video. */
+  function offlineButton(item){
+    var o=state.user&&state.user.offline;
+    if(!o||!o.allowed||!window.indexedDB||!item||!item.id)return null;
+    var b=h('button',{className:'btn ghost offline-download-btn',type:'button',text:'⬇ Download',title:'Save to this device to watch offline',onClick:function(e){e.stopPropagation();loadModule('vc-offline.js','VaultcastOffline').then(function(mod){mod.download(item,b);}).catch(function(){toast('Downloads could not load',{kind:'bad'});});}});
+    loadModule('vc-offline.js','VaultcastOffline').then(function(mod){return mod.onDevice(item.id);}).then(function(st){if(st==='done')b.textContent='✓ On this device';else if(st)b.textContent='⬇ Downloading…';}).catch(function(){});
+    return b;
+  }
+  function offlineSettingsCard(){
+    var max=h('input',{type:'number',min:0,max:500,value:0,'aria-label':'Most titles per person'}),role=h('input',{type:'checkbox'}),note=h('p',{className:'muted',role:'status',text:''});role.checked=true;
+    api('/admin/settings').then(function(s){var o=(s&&s.offline)||{};max.value=String(Number(o.max_items)||0);role.checked=!('user_role' in o)||!!o.user_role;}).catch(function(){});
+    var save=h('button',{className:'btn',type:'button',text:'Save download limits',onClick:function(){save.disabled=true;api('/admin/settings',{method:'POST',body:{offline:{max_items:Math.max(0,Math.min(500,Number(max.value)||0)),user_role:role.checked}}}).then(function(r){save.disabled=false;note.textContent=r&&r.ok?'Saved.':((r&&r.error)||'Could not save.');},function(){save.disabled=false;note.textContent='Could not reach the server.';});}});
+    return h('div',{className:'settings-card'},[h('h3',{text:'Offline downloads'}),h('p',{className:'muted',text:'Roles need the “Download titles to watch offline” permission (Accounts → roles). Kids profiles only ever get titles inside their age limit.'}),
+      h('label',{className:'check-label'},[role,' Standard users may download (you can still override per person)']),h('label',{},['Most titles one person can keep downloaded (0 = no limit) ',max]),
+      h('p',{className:'muted',text:'Browsers decide how much space a site gets. Safari on iPhone and iPad is the strictest and may clear downloads that haven’t been opened for a few weeks.'}),h('div',{className:'row-actions'},[save]),note]);
   }
 
   function queueGameMetadata(itemId){
@@ -8094,6 +8114,7 @@ try {
           var epPath = showPath + '/season-' + ep.season + (ep.episode != null && ep.episode !== '' ? '/episode-' + ep.episode : (ep.id ? '/' + encodeURIComponent(ep.id) : ''));
           actions.push(shareButton(epPath, 'Copy link to ' + (code || 'this episode')));
           if(isAvail)actions.push(vlcLinkButton(ep));
+          if(isAvail)actions.push(offlineButton(ep));
           var isTarget = (state.showEpisode != null && +ep.episode === +state.showEpisode && +ep.season === +cur.season) || (wantEpItem && ep.id === wantEpItem);
           return h('div', {
             className: 'panel episode-row' + (((state.user||{}).prefs||{}).hide_spoilers?' episode-spoiler-hidden':'') + (isAvail ? '' : ' episode-missing') + (isTarget ? ' episode-target' : ''),
@@ -8327,7 +8348,7 @@ try {
   }
   window.addEventListener('beforeunload',function(e){if(state.view==='settings'&&(settingsDraftChanged()||(state.settingsSection==='live-studio'&&tvs.dirty))){e.preventDefault();e.returnValue='';}});
   function renderTaskCentre(host){
-    var info={browse:['Browsing','Build the search index and show summaries together. Useful after importing a large library.'],search:['Browsing','Rebuild fast search suggestions without rescanning folders.'],views:['Browsing','Prepare cached library rows, collections and the live guide.'],scan:['Library','Discover files in configured folders. Does not download artwork.'],metadata:['Library','Fetch missing artwork and descriptions, then preserve sidecars. Network requests may take time.'],'game-metadata':['Library','Refresh game posters and descriptions using the current game matching rules.'],facts:['Library','Probe file codecs and durations and store show guides. Reads media files.'],collections:['Library','Match media to public collections.'],segments:['Playback','Match episode intro/credit timings and available movie credits.'],epg:['Live','Refresh the programme guide from configured sources.'],durations:['Live','Read missing Live media durations.'],downloads:['Downloads','Import completed downloads using the configured rules.'],'site-artwork':['Artwork','Create WebP copies of bundled theme posters and custom site uploads. Originals remain unchanged.'],'drop-cleanup':['Storage','Delete the stored bytes of Drop items that expired, used their last download or were abandoned mid-upload. They are already unavailable; this frees the space. Schedule with: php src/Console.php drop-cleanup']};
+    var info={'age-ratings':['Library','Look up age ratings (NFO, OMDb, TMDB) for films and shows so kids profiles can hide what’s above their limit.'],'smart-index':['Library','Gather genres, cast and resolution so smart collections can match on them.'],browse:['Browsing','Build the search index and show summaries together. Useful after importing a large library.'],search:['Browsing','Rebuild fast search suggestions without rescanning folders.'],views:['Browsing','Prepare cached library rows, collections and the live guide.'],scan:['Library','Discover files in configured folders. Does not download artwork.'],metadata:['Library','Fetch missing artwork and descriptions, then preserve sidecars. Network requests may take time.'],'game-metadata':['Library','Refresh game posters and descriptions using the current game matching rules.'],facts:['Library','Probe file codecs and durations and store show guides. Reads media files.'],collections:['Library','Match media to public collections.'],segments:['Playback','Match episode intro/credit timings and available movie credits.'],epg:['Live','Refresh the programme guide from configured sources.'],durations:['Live','Read missing Live media durations.'],downloads:['Downloads','Import completed downloads using the configured rules.'],'site-artwork':['Artwork','Create WebP copies of bundled theme posters and custom site uploads. Originals remain unchanged.'],'drop-cleanup':['Storage','Delete the stored bytes of Drop items that expired, used their last download or were abandoned mid-upload. They are already unavailable; this frees the space. Schedule with: php src/Console.php drop-cleanup']};
     var filter='All',busy=false,timer=null,sequence=0,lastData=null;
     function requestAction(url,body,button){button.disabled=true;return api(url,{method:'POST',body:body}).then(function(j){if(!j.ok)throw new Error(j.error||'Task request failed');if(host.isConnected)refresh();}).catch(function(e){toast(e.message,{kind:'bad'});if(button.isConnected)button.disabled=false;});}
     function refresh(useCache){
@@ -8480,7 +8501,8 @@ try {
       var featureOptions = [
         ['live','Live channels & IPTV','TV Studio schedules, IPTV sources (iptv-org is preinstalled) and the programme guide.'],
         ['downloads','Download integrations','Connect download services you already operate.'],
-        ['server_tools','Server administration tools','Optional Linux process and service controls. Configure permissions before use.']
+        ['server_tools','Server administration tools','Optional Linux process and service controls. Configure permissions before use.'],
+        ['offline','Offline downloads to devices','People can save browser-ready copies inside their browser and watch with no connection. Only titles that already play directly (or have a DirectPlay copy) can be downloaded; nothing new is encoded.']
       ];
       var featureRows = featureOptions.map(function(option){
         var id = 'feature-' + option[0];
@@ -8506,7 +8528,8 @@ try {
       bodyKids = [
         h('h2',{text:'Optional features'}),
         h('p',{className:'muted',text:'Keep your library light. Enable only the services you use. Media types and folders are managed under Libraries.'}),
-        h('div',{className:'settings-card feature-card'}, featureRows.concat([ h('div',{className:'feature-card-foot'},[saveFeatures]) ]))
+        h('div',{className:'settings-card feature-card'}, featureRows.concat([ h('div',{className:'feature-card-foot'},[saveFeatures]) ])),
+        offlineSettingsCard()
       ];
     } else if (sec === 'system') {
       bodyKids = [
@@ -15451,6 +15474,7 @@ function viewCollectionDetail(){
     else if (state.view === 'colmember') root.appendChild(viewCollectionMember());
     else if (state.view === 'live') { root.appendChild(viewLive()); setTimeout(consumePendingLiveChannel, 0); }
     else if (state.view === 'play') root.appendChild(viewPlay());
+    else if (state.view === 'offline') root.appendChild(shell(lazyView('vc-offline.js', 'VaultcastOffline', 'offline-view', function(mod, host){ mod.render(host); })));
     else if (state.view === 'misc') root.appendChild(shell(lazyView('vc-misc.js', 'VaultcastMisc', 'misc-view', function(mod, host){ mod.render(host, state.miscTab || 'board', state.miscSub || ''); })));
     else root.appendChild(viewHome());
   }
@@ -15556,7 +15580,7 @@ function viewCollectionDetail(){
   });
 
   /* helpers for assets/js/matching.js (Ingest inbox / Fix matching / Label reports) */
-  window.NSApp = { h: h, swap: swapChildren, api: api, toast: toast, dialog: permissionDialog, rowEl: rowEl, emptyState: emptyState, confirmDialog: confirmDialog, render: render, state: state, can:can,
+  window.NSApp = { h: h, swap: swapChildren, api: api, toast: toast, dialog: permissionDialog, base: BASE, rowEl: rowEl, emptyState: emptyState, confirmDialog: confirmDialog, render: render, state: state, can:can,
     openSettings: openSettings, openShow: openShow, openMovie: openMovie, openGame:openGame, navigate:navigate, refreshArtwork:refreshArtwork, fmtSize: fmtSize, version: APP_VERSION,
     shell:shell,communityPoster:communityPoster,refreshCommunityRating:refreshCommunityRating,heroClock:heroClock,homePosterEl:homePosterEl,homeSectionPosterEl:homeSectionPosterEl,collectionsPosterEl:collectionsPosterEl,librarySummary:librarySummary,cardEl:cardEl,homeActivitySections:homeActivitySections,applyRoute:applyRoute,replaceNav:replaceNav,openPlayer:openPlayer,playItem:playItem,copyText:copyText,shareUrl:shareUrl,startLobbyHost:startLobbyHost,captureGameState:lobbyCaptureState,loadGameState:loadGameState,restoreMultiplayerState:restoreMultiplayerState,quitGame:function(){closePlayer();} };
   var moduleLoads = {};
@@ -15568,6 +15592,7 @@ function viewCollectionDetail(){
     loadModule('vc-parental.js','VaultcastParental').then(function(mod){mod.apply();}).catch(function(){});
   }
   document.addEventListener('vaultcast-account-ready',applyParental);
+  document.addEventListener('vaultcast-account-ready',function(){var o=state.user&&state.user.offline;if(o&&(o.allowed||o.held)&&window.indexedDB)setTimeout(function(){loadModule('vc-offline.js','VaultcastOffline').catch(function(){});},4000);});
   /** The feature modules' stylesheet is fetched with the first module, so pages that never open them skip it. */
   var extraCss = null;
   function loadExtraCss(){

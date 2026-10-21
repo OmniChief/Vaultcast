@@ -41,6 +41,7 @@
       return sec && sec !== 'account' ? 'settings/' + enc(sec) : 'settings';
     }
     if (v === 'misc') return 'misc' + (st.miscTab ? '/' + enc(st.miscTab) + (st.miscSub ? '/' + enc(st.miscSub) : '') : '');
+    if (v === 'offline') return 'offline';
     if (v === 'welcome') return 'welcome';
     if (v === 'login') return 'login';
     return '';
@@ -73,6 +74,7 @@
       if (['arcade','quiz','social'].indexOf(pt) < 0) return { view:'notfound', path:path };
       return { view:'play', playTab:pt, playSub:parts.slice(2, 4).join('/') };
     }
+    if (head === 'offline' && !parts[1]) return { view:'offline' };
     if (head === 'misc') {
       var mt = parts[1] || '';
       if (mt && ['board','calendar','drop','ambient'].indexOf(mt) < 0) return { view:'notfound', path:path };

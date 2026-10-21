@@ -101,6 +101,7 @@ if ($path === '/me' && $method === 'GET') {
     $user['access_state'] = Access::state($user);
     $user = Permissions::publicUser($user);
     $user['parental'] = Parental::status($user);
+    try { $user['offline'] = Offline::status($user); } catch (Throwable $e) { $user['offline'] = ['enabled' => false, 'allowed' => false]; }
     $pendingConvert = 0;
     if (($user['role'] ?? '') === 'admin') {
         $pendingConvert = count(Convert::pendingRequests());
@@ -114,6 +115,20 @@ if ($path === '/me' && $method === 'GET') {
 }
 
 
+
+// Offline downloads (PWA): a ticket for a browser-ready file, the device inventory and offline progress.
+if (strpos($path, '/offline/') === 0) {
+    $user = Auth::requireUser();
+    try {
+        if ($path === '/offline/status' && $method === 'GET') json_out(Offline::status($user));
+        $b = body_json();
+        if ($path === '/offline/prepare' && $method === 'POST') json_out(Offline::prepare($user, (string)($b['item_id'] ?? ''), (string)($b['device'] ?? '')));
+        if ($path === '/offline/inventory' && $method === 'POST') json_out(Offline::inventory($user, (string)($b['device'] ?? ''), (array)($b['items'] ?? [])));
+        if ($path === '/offline/progress' && $method === 'POST') json_out(Offline::syncProgress($user, (array)($b['entries'] ?? [])));
+    } catch (InvalidArgumentException $e) { json_error($e->getMessage(), 422); }
+    catch (DomainException $e) { json_error($e->getMessage(), 403); }
+    json_error('Not found', 404);
+}
 
 // Parental controls for the signed-in profile. The PIN hash never leaves the server.
 if ($path === '/me/parental' && $method === 'GET') json_out(Parental::status(Auth::requireUser()));

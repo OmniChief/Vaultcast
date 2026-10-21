@@ -351,6 +351,7 @@ final class Repository
             // Personal pictures, reminders and owned calendars go with the account (shares in other calendars just stop resolving).
             try { \Pictures::purgeUser($id); } catch (\Throwable $e) { error_log('Vaultcast pictures cleanup: ' . $e->getMessage()); }
             try { \Calendar::purgeUser($id); } catch (\Throwable $e) { error_log('Vaultcast calendar cleanup: ' . $e->getMessage()); }
+            try { \Offline::purgeUser($id); } catch (\Throwable $e) { error_log('Vaultcast offline cleanup: ' . $e->getMessage()); }
             try { \SmartCollections::purgeUser($id); } catch (\Throwable $e) { error_log('Vaultcast smart collections cleanup: ' . $e->getMessage()); }
             try { \Parental::purgeUser($id); } catch (\Throwable $e) { error_log('Vaultcast parental cleanup: ' . $e->getMessage()); }
         }
