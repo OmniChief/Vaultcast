@@ -37,8 +37,10 @@ final class Misc {
             foreach (array_slice((array)($b['widgets'] ?? []), 0, 40) as $w) {
                 if (!is_array($w) || ($type = self::widgetType((string)($w['type'] ?? ''))) === '') continue;
                 $widgets[] = ['id' => preg_match('/^[a-z0-9]{4,16}$/', (string)($w['id'] ?? '')) ? (string)$w['id'] : bin2hex(random_bytes(4)), 'type' => $type,
-                    'x' => max(0, min(23, (int)($w['x'] ?? 0))), 'y' => max(0, min(200, (int)($w['y'] ?? 0))), 'w' => max(1, min(24, (int)($w['w'] ?? 4))), 'h' => max(1, min(24, (int)($w['h'] ?? 3))),
+                    'x' => max(0, min(23, (int)($w['x'] ?? 0))), 'y' => max(0, min(400, (int)($w['y'] ?? 0))), 'w' => max(1, min(24, (int)($w['w'] ?? 4))), 'h' => max(1, min(24, (int)($w['h'] ?? 3))),
                     'settings' => Pictures::scrub((string)$user['id'], self::clean((array)($w['settings'] ?? [])))];
+                // Free placement: positions are stored exactly as sent, only clamped so a widget never spills past the 24 columns.
+                $last = count($widgets) - 1; $widgets[$last]['x'] = min($widgets[$last]['x'], 24 - $widgets[$last]['w']);
             }
             $boards[] = ['id' => $id, 'name' => mb_substr(trim((string)($b['name'] ?? '')), 0, 40) ?: 'Board', 'theme' => in_array($b['theme'] ?? '', ['glass', 'solid', 'clear'], true) ? $b['theme'] : 'glass',
                 'background' => (string)Pictures::scrub((string)$user['id'], self::background((string)($b['background'] ?? ''))), 'color' => self::colour((string)($b['color'] ?? '')), 'locked' => !empty($b['locked']), 'widgets' => $widgets];

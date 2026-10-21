@@ -796,11 +796,41 @@
   var POLLED = ['weather', 'calendar', 'reminders', 'recordings', 'downloads', 'health', 'recent', 'nowplaying', 'rss', 'drop', 'leaderboard'];
   function hasSettings(type){ return !!((W[type] && W[type].form) || POLLED.indexOf(type) >= 0); }
   function overlaps(a, b){ return a !== b && a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h; }
-  /** Push anything that collides with the moved widget further down, then float everything up (gridstack-style). */
+  /**
+   * Free placement: widgets keep their exact x/y/w/h and gaps stay gaps. After a move or resize, only widgets
+   * that the moved one now overlaps are pushed down, by the minimum needed (to just below it), and that cascades
+   * only to widgets those pushed ones then overlap. Nothing is ever pulled up to fill space.
+   */
   function settle(widgets, moved){
-    var guard = 0, changed = true;
-    while (changed && guard++ < 500) { changed = false; widgets.forEach(function(w){ if (w === moved) return; widgets.forEach(function(o){ if (o !== w && overlaps(w, o) && (o === moved || o.y <= w.y)) { w.y = o.y + o.h; changed = true; } }); }); }
-    widgets.slice().sort(function(a, b){ return a.y - b.y || a.x - b.x; }).forEach(function(w){ if (w === moved) return; while (w.y > 0) { w.y--; if (widgets.some(function(o){ return overlaps(w, o); })) { w.y++; break; } } });
+    clampWidget(moved);
+    var queue = [moved], guard = 0;
+    while (queue.length && guard++ < 2000) {
+      var a = queue.shift();
+      widgets.forEach(function(o){ if (o === moved || o === a || !overlaps(a, o)) return; o.y = a.y + a.h; queue.push(o); });
+    }
+  }
+  function clampWidget(w){
+    w.w = Math.max(1, Math.min(COLS, Math.round(Number(w.w)) || 4)); w.h = Math.max(1, Math.min(24, Math.round(Number(w.h)) || 3));
+    w.x = Math.max(0, Math.min(COLS - w.w, Math.round(Number(w.x)) || 0)); w.y = Math.max(0, Math.round(Number(w.y)) || 0);
+  }
+  /**
+   * Load-time check only: keeps saved positions as they are. Widgets saved without a position (very old layouts)
+   * get one from their visual order, and any saved overlap is resolved by pushing down. Returns true when
+   * something changed so the caller saves once.
+   */
+  function fixLayout(widgets){
+    var changed = false, placed = [];
+    widgets.forEach(function(w){
+      var before = [w.x, w.y, w.w, w.h].join(), missing = !isFinite(parseFloat(w.x)) || !isFinite(parseFloat(w.y));
+      clampWidget(w);
+      if (missing) { var sp = freeSpot(placed, w.w, w.h); w.x = sp.x; w.y = sp.y; }
+      if ([w.x, w.y, w.w, w.h].join() !== before) changed = true;
+      placed.push(w);
+    });
+    placed.slice().sort(function(a, b){ return a.y - b.y || a.x - b.x; }).forEach(function(w, i, arr){
+      for (var k = 0; k < i; k++) if (overlaps(arr[k], w)) { w.y = arr[k].y + arr[k].h; changed = true; k = -1; }
+    });
+    return changed;
   }
   function freeSpot(widgets, w, hgt){
     for (var y = 0; y < 400; y++) for (var x = 0; x + w <= COLS; x++) { var c = { x:x, y:y, w:w, h:hgt }; if (!widgets.some(function(o){ return overlaps(c, o); })) return c; }
@@ -891,11 +921,14 @@
       });
     }
     function place(el, w){ el.style.gridColumn = (w.x + 1) + ' / span ' + w.w; el.style.gridRow = (w.y + 1) + ' / span ' + w.h; el.style.setProperty('--vc-rows', String(Math.max(4, w.h))); }
+    function placeAll(){ cur.widgets.forEach(function(x){ var n = grid.querySelector('[data-wid="' + x.id + '"]'); if (n) place(n, x); }); }
     function metrics(){ var r = grid.getBoundingClientRect(), cs = getComputedStyle(grid), gap = parseFloat(cs.columnGap) || 0, row = parseFloat(cs.gridAutoRows) || 40; return { left:r.left, top:r.top, col:(r.width + gap) / COLS, row:row + (parseFloat(cs.rowGap) || 0) }; }
+    // The single-column phone layout is only a view: it is never dragged and never saved over desktop positions.
+    function narrow(){ return !!(window.matchMedia && matchMedia('(max-width: 760px)').matches); }
     var CHROME_CONTROLS = 'button, a, input, select, textarea, label, [role="button"], .vc-w-actions, .vc-w-resize, [data-no-drag]';
     function dragify(el, w, handle, mode){
       handle.addEventListener('pointerdown', function(e){
-        if (!editing || e.button > 0 || (window.matchMedia && matchMedia('(max-width: 760px)').matches)) return;
+        if (!editing || e.button > 0 || narrow()) return;
         // Controls in the widget chrome (remove, settings, any input) must get their own click, never start a drag.
         if (mode === 'move' && e.target && e.target.closest && e.target.closest(CHROME_CONTROLS)) return;
         e.preventDefault(); e.stopPropagation();
@@ -905,18 +938,18 @@
         function move(ev){
           var dx = Math.round((ev.clientX - sx) / m.col), dy = Math.round((ev.clientY - sy) / m.row);
           if (mode === 'move') { w.x = Math.max(0, Math.min(COLS - w.w, ox + dx)); w.y = Math.max(0, oy + dy); el.style.transform = 'translate(' + (ev.clientX - sx) + 'px,' + (ev.clientY - sy) + 'px)'; }
-          else { w.w = Math.max(2, Math.min(COLS - w.x, ow + dx)); w.h = Math.max(2, Math.min(24, oh + dy)); el.style.width = (el._w0 + ev.clientX - sx) + 'px'; el.style.height = (el._h0 + ev.clientY - sy) + 'px'; }
+          else { w.w = Math.max(2, Math.min(COLS - w.x, ow + dx)); w.h = Math.max(2, Math.min(24, oh + dy)); w.x = ox; w.y = oy; el.style.width = (el._w0 + ev.clientX - sx) + 'px'; el.style.height = (el._h0 + ev.clientY - sy) + 'px'; }
           place(ghost, w);
         }
         el._w0 = el.offsetWidth; el._h0 = el.offsetHeight;
-        function up(){ handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', up); handle.removeEventListener('pointercancel', up); ghost.remove(); el.classList.remove('dragging'); el.style.transform = ''; el.style.width = ''; el.style.height = ''; settle(cur.widgets, w); cur.widgets.forEach(function(x){ var n = grid.querySelector('[data-wid="' + x.id + '"]'); if (n) place(n, x); }); save(); }
+        function up(){ handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', up); handle.removeEventListener('pointercancel', up); ghost.remove(); el.classList.remove('dragging'); el.style.transform = ''; el.style.width = ''; el.style.height = ''; if (w.x === ox && w.y === oy && w.w === ow && w.h === oh) return; settle(cur.widgets, w); placeAll(); save(); }
         handle.addEventListener('pointermove', move); handle.addEventListener('pointerup', up); handle.addEventListener('pointercancel', up);
       });
       // Keyboard: arrows move, shift+arrows resize while the handle has focus.
       handle.addEventListener('keydown', function(e){
-        if (!editing) return; var k = { ArrowLeft:[-1, 0], ArrowRight:[1, 0], ArrowUp:[0, -1], ArrowDown:[0, 1] }[e.key]; if (!k) return; e.preventDefault();
+        if (!editing || narrow()) return; var k = { ArrowLeft:[-1, 0], ArrowRight:[1, 0], ArrowUp:[0, -1], ArrowDown:[0, 1] }[e.key]; if (!k) return; e.preventDefault();
         if (e.shiftKey) { w.w = Math.max(2, Math.min(COLS - w.x, w.w + k[0])); w.h = Math.max(2, Math.min(24, w.h + k[1])); } else { w.x = Math.max(0, Math.min(COLS - w.w, w.x + k[0])); w.y = Math.max(0, w.y + k[1]); }
-        settle(cur.widgets, w); cur.widgets.forEach(function(x){ var n = grid.querySelector('[data-wid="' + x.id + '"]'); if (n) place(n, x); }); save();
+        settle(cur.widgets, w); placeAll(); save();
       });
     }
     function remount(w){ var el = grid.querySelector('[data-wid="' + w.id + '"]'); if (!el) return paint(); unmount(w.id); var body = el.querySelector('.vc-w-body'); body.replaceChildren(); body.className = 'vc-w-body'; body.removeAttribute('style'); mountBody(w, body); }
@@ -973,6 +1006,7 @@
     }
     call('/misc/boards').then(function(j){
       data = normaliseBoards(j);
+      var fixed = false; data.boards.forEach(function(b){ if (fixLayout(b.widgets)) fixed = true; }); if (fixed) save(true);
       if (!data.boards.length) { data.boards = [{ id:rid(10), name:'My board', theme:'glass', background:'', widgets:STARTER.map(function(w){ return Object.assign({ id:rid(8), settings:{} }, JSON.parse(JSON.stringify(w))); }) }]; data.default = data.boards[0].id; save(true); }
       var parts = String(sub || '').split('/');
       cur = data.boards.filter(function(b){ return b.id === parts[0]; })[0] || data.boards.filter(function(b){ return b.id === data.default; })[0] || data.boards[0];
