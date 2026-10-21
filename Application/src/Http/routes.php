@@ -10,17 +10,22 @@ $features = Store::settings()['features'] ?? [];
 \Vaultcast\Repository::healProgressOnce();
 // Access gate: expired / not-yet-approved users and deleted accounts are refused on every API
 // and stream request, whatever the UI shows. Admins always pass.
+$__tokenPayload = false;
+$__token = function () use ($path, &$__tokenPayload) {
+    if ($__tokenPayload !== false) return $__tokenPayload;
+    $t = '';
+    if ($path === '/stream/play' || $path === '/stream/remux' || $path === '/stream/transcode') $t = (string)($_GET['t'] ?? '');
+    elseif (preg_match('#^/stream/(?:rom|subtitles)/([a-f0-9]{48})/#', $path, $tm)) $t = $tm[1];
+    return $__tokenPayload = preg_match('/^[a-f0-9]{48}$/', $t) ? \Vaultcast\Repository::playbackToken($t) : null;
+};
 $__denied = Access::gate($path, Auth::currentSession(), function (string $id) { $user = $id === '' ? null : Auth::findById($id); AreaAccess::remember($user); return $user; },
-    !NetworkAccess::guestAllowed(),
-    function () use ($path) {
-        $t = '';
-        if ($path === '/stream/play' || $path === '/stream/remux' || $path === '/stream/transcode') $t = (string)($_GET['t'] ?? '');
-        elseif (preg_match('#^/stream/(?:rom|subtitles)/([a-f0-9]{48})/#', $path, $tm)) $t = $tm[1];
-        return preg_match('/^[a-f0-9]{48}$/', $t) ? \Vaultcast\Repository::playbackToken($t) : null;
-    });
+    !NetworkAccess::guestAllowed(), $__token);
 if ($__denied !== null) json_out($__denied[1], $__denied[0]);
 $__areaDenied = AreaAccess::gate($path);
 if ($__areaDenied !== null) json_out($__areaDenied[1], $__areaDenied[0]);
+// Parental controls: blocked titles and switched-off social surfaces, checked on the server for every request.
+$__parental = strpos($path, '/stream/') === 0 && strpos($path, '/stream/bios/') !== 0 ? Parental::streamGate($__token()) : Parental::gate($path);
+if ($__parental !== null) json_out($__parental[1], $__parental[0]);
 // Auth/session cookie already read above. Close any native PHP session so a long
 // stream/progress request cannot hold the session file lock across workers.
 release_request_locks();

@@ -637,6 +637,8 @@ final class Calendar
                     foreach (['favourites', 'watchlist'] as $shelf) foreach ((array)($hub[$shelf] ?? []) as $entry) { $card = (array)($entry['card'] ?? []); if (($card['kind'] ?? '') === 'show' && !empty($card['show_key'])) $keys[(string)$card['show_key']] = (string)($card['title'] ?? ''); }
                     $keys = array_keys($keys);
                 }
+                // Parental controls: never add shows above the owner's age ceiling.
+                if (class_exists('Parental') && Parental::restricted($owner)) $keys = array_values(array_filter($keys, static function ($k) use ($owner) { return Parental::allowsShowKey($owner, (string)$k); }));
             }
             $rows = [];
             foreach ($keys as $key) {

@@ -2,7 +2,7 @@
 declare(strict_types=1);
 
 final class Permissions {
-    const CAPABILITIES = ['ingest_view'=>'View the import inbox','ingest_import'=>'Import inbox downloads (includes viewing; moves files into the library)','rss_search'=>'Search RSS sources','downloads_request'=>'Request downloads','fix_match'=>'Fix movie, show and game matches','metadata_edit'=>'Edit titles, synopsis and posters','library_remove'=>'Remove entries from the library (media files kept)','timing_edit'=>'Search and edit intro / credits timings','artwork_manage'=>'Check and repair artwork integrity','iptv_manage'=>'Manage IPTV feeds and shared channels','radio_manage'=>'Manage shared radio stations','drop.upload'=>'Upload to Drop (files, text and share links)','pictures.upload'=>'Upload pictures for Ambient and the Picture frame widget','save_copy'=>'Watch & save copy (saves a reusable direct-play copy while watching)'];
+    const CAPABILITIES = ['ingest_view'=>'View the import inbox','ingest_import'=>'Import inbox downloads (includes viewing; moves files into the library)','rss_search'=>'Search RSS sources','downloads_request'=>'Request downloads','fix_match'=>'Fix movie, show and game matches','metadata_edit'=>'Edit titles, synopsis and posters','library_remove'=>'Remove entries from the library (media files kept)','timing_edit'=>'Search and edit intro / credits timings','artwork_manage'=>'Check and repair artwork integrity','age_ratings'=>'Set age ratings for films and shows','iptv_manage'=>'Manage IPTV feeds and shared channels','radio_manage'=>'Manage shared radio stations','drop.upload'=>'Upload to Drop (files, text and share links)','pictures.upload'=>'Upload pictures for Ambient and the Picture frame widget','save_copy'=>'Watch & save copy (saves a reusable direct-play copy while watching)'];
     /** Capabilities the built-in User role may receive: an admin default plus per-user overrides. */
     const USER_ROLE_CAPABILITIES = ['drop.upload','pictures.upload'];
     public static function userRoleDefaults(): array {
@@ -97,6 +97,7 @@ final class Permissions {
         if($method==='POST'&&in_array($path,['/admin/ingest/search','/admin/ingest/plan','/admin/ingest/commit','/admin/ingest/status'],true))$permission='ingest_import';
         if($path==='/admin/media/edit'&&$method==='POST')$permission=!empty(body_json()['remove'])?'library_remove':'metadata_edit';
         if(in_array($path,['/admin/posters/audit','/admin/posters/audit/status','/admin/posters/audit/repair'],true)&&$method==='POST')$permission='artwork_manage';
+        if($path==='/admin/ratings')$permission='age_ratings';
         if(!$permission||!self::allowed($user,$permission))json_error('Forbidden',403);
         if(($permission==='ingest_view'||$permission==='ingest_import')&&!AreaAccess::allowed($user,'library'))json_error('Library access required',403);
         if(strpos($path,'/admin/match/show')===0&&!AreaAccess::allowed($user,'library'))json_error('Library access required',403);

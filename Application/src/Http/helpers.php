@@ -13,6 +13,8 @@ function release_request_locks(): void {
 }
 
 function json_out($data, int $code = 200): void {
+    // Restricted (parental) viewers never receive cards for titles above their ceiling, whatever the endpoint.
+    if (class_exists('Parental', false) && is_array($data) && Parental::filtering()) $data = Parental::filterPayload($data);
     if(class_exists('CompatibilityApi',false) && CompatibilityApi::$context!==null)throw new CompatibilityApiResult($data,$code);
     release_request_locks();
     http_response_code($code);

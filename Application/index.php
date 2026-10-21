@@ -74,6 +74,9 @@ $browserMode = (string)($_GET['compat'] ?? $_COOKIE['vaultcast_browser_mode'] ??
 if (!in_array($browserMode,['on','off','auto'],true)) $browserMode='auto';
 if (isset($_GET['compat']) && empty($_GET['detected'])) setcookie('vaultcast_browser_mode',$browserMode,['expires'=>time()+31536000,'path'=>$base,'secure'=>!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS']!=='off','httponly'=>false,'samesite'=>'Lax']);
 $startup = Startup::snapshot();
+// Parental controls: the first-page snapshot is filtered like any API response. Compatibility mode renders
+// straight from the database, so restricted profiles always get the standard app instead.
+if (Parental::filtering()) { $startup = Parental::filterPayload($startup); $browserMode = 'off'; }
 if ($browserMode === 'on') { CompatibilityBrowser::render($startup,$base,$siteName,$loginError); exit; }
 $firstPage = FirstPage::render($startup, $base, $siteName, $loginError, substr((string)$path, strlen($base)));
 release_request_locks();

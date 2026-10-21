@@ -13,6 +13,12 @@ final class AreaAccess
     {
         $out = [];
         foreach (self::AREAS as $area) $out[$area] = !$user || ($user['role'] ?? '') === 'admin' || !is_array($user['areas'] ?? null) || !empty($user['areas'][$area]);
+        // Parental controls can switch Live and Play off on top of the admin's area choices.
+        if ($user && ($user['role'] ?? '') !== 'admin' && class_exists('Parental')) {
+            $limits = Parental::areaLimits($user);
+            if (!$limits['live']) $out['live'] = false;
+            if (!$limits['games']) $out['games'] = false;
+        }
         return $out;
     }
 

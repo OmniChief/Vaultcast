@@ -169,6 +169,9 @@ if ($path === '/admin/users' && $method === 'GET') {
         $u['is_self'] = (string)$u['id'] === (string)$me['id'];
     }
     unset($u);
+    $__parental = Parental::summaries();
+    foreach ($users as &$u) $u['parental'] = $__parental[(string)$u['id']] ?? null;
+    unset($u);
     json_out(['ok' => true, 'users' => $users, 'now' => time(), 'role_counts'=>array_count_values(array_column($users,'role')),'permission_choices'=>Permissions::CAPABILITIES,'roles'=>Permissions::roles(),'user_role_capabilities'=>Permissions::USER_ROLE_CAPABILITIES,'user_role_defaults'=>Permissions::userRoleDefaults()]);
 }
 
@@ -204,6 +207,26 @@ if (preg_match('#^/admin/users/([A-Za-z0-9_-]{1,64})/areas$#', $path, $m) && $me
     Store::invalidate('users');
     unset($saved['password_hash']);
     json_out(['ok'=>true, 'user'=>$saved]);
+}
+
+if (preg_match('#^/admin/users/([A-Za-z0-9_-]{1,64})/parental$#', $path, $m) && $method === 'POST') {
+    Auth::requireAdmin();
+    $target = Auth::findById($m[1]);
+    if (!$target) json_error('User not found', 404);
+    try { json_out(['ok' => true, 'parental' => Parental::adminSave($target, body_json())]); }
+    catch (InvalidArgumentException $e) { json_error($e->getMessage(), 422); }
+}
+
+// Age ratings: admins and roles with the age_ratings permission (Permissions::adminRoute).
+if ($path === '/admin/ratings' && $method === 'GET') {
+    $target = (string)($_GET['target'] ?? '');
+    if (!ContentRatings::validTarget($target)) json_error('Choose a film or show.');
+    json_out(['ok' => true, 'rating' => ContentRatings::get($target), 'choices' => Parental::ratingChoices()]);
+}
+if ($path === '/admin/ratings' && $method === 'POST') {
+    $b = body_json();
+    try { json_out(['ok' => true, 'rating' => ContentRatings::setManual((string)($b['target'] ?? ''), (int)($b['bucket'] ?? 0))]); }
+    catch (InvalidArgumentException $e) { json_error($e->getMessage(), 422); }
 }
 
 if (preg_match('#^/admin/users/([A-Za-z0-9_-]{1,64})/access$#', $path, $m) && $method === 'POST') {

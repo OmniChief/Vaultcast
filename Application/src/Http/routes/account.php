@@ -100,6 +100,7 @@ if ($path === '/me' && $method === 'GET') {
     $user['_session'] = $sess;
     $user['access_state'] = Access::state($user);
     $user = Permissions::publicUser($user);
+    $user['parental'] = Parental::status($user);
     $pendingConvert = 0;
     if (($user['role'] ?? '') === 'admin') {
         $pendingConvert = count(Convert::pendingRequests());
@@ -113,6 +114,21 @@ if ($path === '/me' && $method === 'GET') {
 }
 
 
+
+// Parental controls for the signed-in profile. The PIN hash never leaves the server.
+if ($path === '/me/parental' && $method === 'GET') json_out(Parental::status(Auth::requireUser()));
+if ($path === '/me/parental' && $method === 'POST') {
+    $user = Auth::requireUser();
+    try { json_out(Parental::selfSave($user, body_json())); }
+    catch (InvalidArgumentException $e) { json_error($e->getMessage(), 422); }
+    catch (DomainException $e) { json_error($e->getMessage(), 403); }
+}
+if ($path === '/me/parental/unlock' && $method === 'POST') {
+    $user = Auth::requireUser();
+    try { json_out(Parental::unlock($user, trim((string)(body_json()['pin'] ?? '')))); }
+    catch (DomainException $e) { json_error($e->getMessage(), 403); }
+}
+if ($path === '/me/parental/lock' && $method === 'POST') json_out(Parental::lock(Auth::requireUser()));
 
 // Prefs require a real logged-in user
 if ($path === '/me/prefs' && $method === 'POST') {

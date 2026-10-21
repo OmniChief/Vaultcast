@@ -196,6 +196,12 @@ final class Misc {
     public static function recent(array $user, int $n): array {
         if (!AreaAccess::allowed($user, 'library')) return ['ok' => true, 'items' => []];
         $n = max(4, min(30, $n));
+        // Parental controls: build a longer shared list, then keep only what this viewer may see.
+        if (Parental::restricted($user)) {
+            $all = self::recent(['role' => 'admin', 'id' => ''] + $user, 30);
+            $items = array_values(array_filter((array)($all['items'] ?? []), static function ($r) use ($user) { return Parental::allows($user, ['id' => $r['id'], 'title' => $r['title'], 'media_kind' => 'video', 'show_key' => $r['show_key'] ?? '']); }));
+            return ['ok' => true, 'items' => array_slice($items, 0, $n)];
+        }
         // The same list for every viewer with Library access: build it at most once a minute.
         return ['ok' => true] + self::cached('recent:' . $n, 60, function () use ($n) {
         $rows = \Vaultcast\Repository::rows("SELECT payload FROM vaultcast_items WHERE media_kind='video' ORDER BY added_at DESC, id LIMIT 120");
@@ -229,6 +235,7 @@ final class Misc {
         $admin = ($user['role'] ?? '') === 'admin'; $friends = array_flip(Social::friends((string)$user['id'])); $out = [];
         foreach ((array)($all['rows'] ?? []) as $r) {
             if (!$admin && $r['uid'] !== $user['id'] && !isset($friends[$r['uid']])) continue;
+            if (Parental::restricted($user) && (!($it = Catalogue::item((string)$r['item_id'])) || !Parental::allows($user, $it))) continue;
             unset($r['uid']); $out[] = $r;
         }
         return ['ok' => true, 'sessions' => $out];
