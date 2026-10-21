@@ -1,6 +1,9 @@
 <?php
 declare(strict_types=1);
 if ($path==='/admin/transcode' && $method==='GET') json_out(Transcode::status());
+if(preg_match('#^/admin/convert/([a-f0-9]+)/preview$#D',$path,$match) && $method==='POST') {
+    try {json_out(Convert::preview($match[1]));}catch(RuntimeException $e){json_error($e->getMessage(),409);}
+}
 if ($path==='/admin/transcode/clear-cache' && $method==='POST') json_out(['ok'=>true,'removed'=>Transcode::cleanup(true)]);
 if (preg_match('#^/admin/transcode/([a-f0-9]{32})/stop$#D',$path,$match) && $method==='POST') {
     try {json_out(Transcode::cancel($match[1]));}catch(InvalidArgumentException $e){json_error($e->getMessage(),404);}

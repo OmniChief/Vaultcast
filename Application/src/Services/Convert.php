@@ -931,6 +931,25 @@ class Convert {
      * Completed job: delete the converted output (bad quality), keep the original.
      * Removes dest from disk + catalogue; marks job resolved as deleted_conversion.
      */
+    public static function automaticPlaybackBlocked(string $itemId): bool {
+        foreach(array_reverse(self::queue()) as $job) {
+            if(($job['item_id'] ?? '')!==$itemId)continue;
+            if(!empty($job['dest_deleted']))return true;
+            if(($job['status'] ?? '')==='done')return false;
+        }
+        return false;
+    }
+    public static function preview(string $jobId): array {
+        $queue=self::queue();$index=self::findJob($queue,$jobId);
+        if($index<0)throw new RuntimeException('Conversion not found.');
+        $job=$queue[$index];$path=(string)($job['dest'] ?? '');
+        if(($job['status'] ?? '')!=='done'||!empty($job['dest_deleted'])||$path===''||!is_file($path))throw new RuntimeException('The converted file is unavailable. The original will not be used for this preview.');
+        $real=\Vaultcast\Paths::real($path);
+        if(!$real||!self::underLibraryRoot($real))throw new RuntimeException('The converted file is outside the library.');
+        $user=Auth::requireAdmin();
+        $token=Stream::createToken((string)$user['id'],(string)$job['item_id'],$real,'video','library');
+        return ['ok'=>true,'title'=>$job['title'] ?? 'Converted preview','url'=>\Vaultcast\Database::basePath().'api/stream/play?t='.$token];
+    }
     public static function deleteConverted(string $jobId): array {
         $q = self::queue();
         $i = self::findJob($q, $jobId);

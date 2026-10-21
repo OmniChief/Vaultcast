@@ -61,13 +61,14 @@
   function modal(title,build){
     var previous=document.activeElement;
     var layer=h('div',{className:'confirm-overlay hub-modal'}),body=h('div',{className:'hub-modal-body'});
-    function close(){layer.remove();document.removeEventListener('keydown',key);if(previous && previous.isConnected)previous.focus();}
+    var cleanup=null;
+    function close(){if(cleanup){var dispose=cleanup;cleanup=null;dispose();}layer.remove();document.removeEventListener('keydown',key);if(previous && previous.isConnected)previous.focus();}
     function key(e){if(e.key==='Escape')close();if(e.key==='Tab'){
       var nodes=layer.querySelectorAll('button:not([disabled]),input:not([disabled]),select:not([disabled]),a[href],textarea:not([disabled])');var first=nodes[0],last=nodes[nodes.length-1];
       if(e.shiftKey && document.activeElement===first){e.preventDefault();last.focus();}else if(!e.shiftKey && document.activeElement===last){e.preventDefault();first.focus();}
     }}
     layer.appendChild(h('section',{className:'hub-modal-card',role:'dialog','aria-modal':'true','aria-label':title},[h('div',{className:'hub-panel-head'},[h('h2',{text:title}),button('Close',close)]),body]));
-    document.body.appendChild(layer);document.addEventListener('keydown',key);build(body,close);layer.querySelector('button').focus();return layer;
+    document.body.appendChild(layer);document.addEventListener('keydown',key);var result=build(body,close);if(typeof result==='function')cleanup=result;layer.querySelector('button').focus();return layer;
   }
   function picker(kind,done){
     modal(kind==='game'?'Choose a game':'Choose something to watch',function(body,close){

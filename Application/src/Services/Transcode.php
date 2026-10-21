@@ -161,6 +161,7 @@ final class Transcode {
     }
     public static function run(string $id): array {
         if(PHP_SAPI!=='cli')throw new RuntimeException('Playback worker is CLI only.');
+        if(PHP_OS_FAMILY!=='Windows' && function_exists('proc_nice'))@proc_nice(10);
         $job=self::read($id);if(($job['status'] ?? '')!=='queued')throw new RuntimeException('Playback job is no longer queued.');
         $dir=self::dir($id);$lock=fopen($dir.'/worker.lock','c');
         if(!$lock || !flock($lock,LOCK_EX|LOCK_NB))throw new RuntimeException('Playback worker already running.');

@@ -1442,6 +1442,7 @@ function confirmDialog(message, opts){
       j.autoplay = opts.autoplay != null ? opts.autoplay !== false : (state.user && state.user.prefs || {}).autoplay_on_open !== false;
       j.from_start=!!(opts.fromStart || item._sequenceFromStart);
       if(item._sequenceFromStart)j.autoplay=true;
+      if(j.transcode_auto_blocked)j.autoplay=false;
       var sequence=state._movieSequence;
       if(sequence && String(sequence.itemId)===String(item.id))j.sequence_collection=sequence.collection;
       openPlayer(item, j);
@@ -1564,7 +1565,7 @@ function confirmDialog(message, opts){
     if (play.media_kind === 'audio') {
       media = h('audio', { id:'player-media', controls:true, autoplay:true, preload:'auto', src: src });
     } else {
-      media = h('video', { id:'player-media', controls:true, autoplay:play.autoplay !== false, playsinline:true, preload:'metadata' });
+      media = h('video', { id:'player-media', controls:true, autoplay:play.autoplay !== false, playsinline:true, preload:play.transcode_auto_blocked?'none':'metadata' });
       media.setAttribute('webkit-playsinline', 'true');
       media.setAttribute('playsinline', 'true');
       if (play.mime && !(play.transcode_allowed && play.transcode_mode==='always')) {
@@ -1622,7 +1623,7 @@ function confirmDialog(message, opts){
         try { media.src = cur + (cur.indexOf('?') >= 0 ? '&' : '?') + 'direct=1'; if (play.autoplay !== false || openPlayer._deskPlayStarted) media.play(); } catch (eD) {}
         return;
       }
-      if((play.autoplay!==false||openPlayer._deskPlayStarted) && play.transcode_allowed && !overlay._transcodeAttempted && overlay._startTranscode && media.error && (media.error.code===3||media.error.code===4)) {
+      if(!play.transcode_auto_blocked && (play.autoplay!==false||openPlayer._deskPlayStarted) && play.transcode_allowed && !overlay._transcodeAttempted && overlay._startTranscode && media.error && (media.error.code===3||media.error.code===4)) {
         overlay._startTranscode(false,openPlayer._absTime?openPlayer._absTime():resumeAt||media.currentTime||0);return;
       }
       /* soft mid-play recover (token refresh + seek) before convert toast */
@@ -1758,7 +1759,7 @@ function confirmDialog(message, opts){
     if(media.tagName!=='VIDEO'||!play.transcode_allowed)return;
     var gen=0,hls=null,job=null,timer=null,recoveryTimer=null,alive=true,offset=0,audioIndex=Number(play.preferred_audio)||0,sourceDuration=Number(play.duration)||0;
     var tools=overlay.classList.contains('player-inline')?detailPlayerTools(overlay.closest('.detail-player')):overlay;
-    var label=h('span',{className:'muted',role:'status',text:play.prepared_copy?'DirectPlay · prepared copy':'DirectPlay · original file'});
+    var label=h('span',{className:'muted',role:'status',text:play.prepared_copy?'DirectPlay · prepared copy':play.transcode_auto_blocked?'Converted copy was deleted · original file · choose Transcode to start another conversion':'DirectPlay · original file'});
     var seek=h('input',{type:'range',min:'0',max:'1',step:'0.1',value:'0','aria-label':'Seek within the full source video'}),clock=h('span',{className:'muted'});
     var timeline=h('div',{className:'dp-transcode-timeline',hidden:true},[seek,clock]);
     var available=play.active_conversion||null;
@@ -1861,7 +1862,7 @@ function confirmDialog(message, opts){
     media.addEventListener('timeupdate',function(){if(!overlay._transcodeActive)return;seek.max=String(sourceDuration||1);seek.value=String(offset+(media.currentTime||0));clock.textContent=fmtResumeClock(offset+(media.currentTime||0))+' / '+fmtResumeClock(sourceDuration);});
     overlay._startTranscode=start;overlay._getTranscodeAudio=function(){return audioIndex;};overlay._transcodeAudio=function(index){if(job&&job.save){note('Saved-copy sessions keep the audio track chosen at the start. Return to DirectPlay to choose a different track.');return false;}var at=offset+(media.currentTime||0);audioIndex=Number(index)||0;return start(false,at);};
     overlay._transcodeCleanup=function(){alive=false;gen++;stop();};
-    if(play.transcode_mode==='always'){
+    if(play.transcode_mode==='always'&&!play.transcode_auto_blocked){
       var beginTranscode=function(){if(alive&&!overlay._transcodeAttempted)start(false,resumePositionFor(item,play),available);};
       if(play.autoplay!==false)setTimeout(beginTranscode,0);
       else media.addEventListener('play',beginTranscode,{once:true});
@@ -11010,14 +11011,18 @@ h('div', { className:'cv-find-bar' }, [
 
       function previewConvertJob(job){
         if (!job) return;
-        var id = job.dest_item_id || null;
-        if (!id) {
-          toast('Converted file is not in the catalogue yet - wait for ingest to finish', { kind:'bad' });
-          return;
-        }
-        var item = { id: id, title: (job.title || 'Converted preview') + ' (preview)', type: 'movies', has_poster: true };
-        try { playItem(item, { audio: null }); }
-        catch (e) { toast('Preview failed: ' + e, { kind:'bad' }); }
+        api('/admin/convert/'+job.id+'/preview',{method:'POST'}).then(function(j){
+          if(!root.isConnected)return;
+          if(!j.ok)throw new Error(j.error||'Converted preview unavailable.');
+          closePlayer();
+          window.VaultcastHub.modal('Converted preview · '+(j.title||job.title||'Video'),function(body){
+            var video=h('video',{controls:true,playsinline:true,preload:'metadata',src:streamPlayUrl(j.url),style:'width:100%;max-height:65vh;display:block'});
+            var message=h('p',{className:'muted',role:'status',text:'Previewing the converted file only. Press Play to check it; no new conversion will start.'});
+            video.addEventListener('error',function(){message.textContent='The converted file could not play. The original has not been loaded and no conversion has started.';});
+            body.appendChild(video);body.appendChild(message);
+            return function(){video.pause();video.removeAttribute('src');video.load();};
+          });
+        }).catch(function(e){toast(e.message||'Preview failed',{kind:'bad'});});
       }
       function deleteConvertOutput(job, btn){
         if (!job || !job.id) return;
