@@ -649,7 +649,7 @@
             ]));
           });
           if (!(r.items||[]).length) list.appendChild(h('p', { className:'muted', text:'No RSS results. Check Admin → Acquisition feeds/filters.' }));
-        }).catch(function(e){ status.textContent = String(e); });
+        }).catch(function(e){ status.textContent = friendlyMessage(e); });
       }}),
       h('button', { className:'btn ghost', text:'Close', onClick: function(){ overlay.remove(); } })
     ]));
@@ -753,7 +753,7 @@
     msg = String(msg == null ? '' : msg).replace(/^(?:Uncaught\s+)?(?:[A-Z][A-Za-z]*Error|Error):\s*/, '').trim();
     if (!msg || msg === 'null' || msg === 'undefined' || msg === '[object Object]') return 'Something went wrong. Please try again.';
     if (/^(?:Failed to fetch|NetworkError when attempting to fetch resource\.?|Load failed|Network request failed)$/i.test(msg)) return 'Can\u2019t reach the server right now. Check your connection and try again.';
-    if (/^(?:Unexpected token|Unexpected end of JSON|JSON\.parse|The string did not match the expected pattern)/i.test(msg)) return 'The server sent an unexpected reply. Please try again in a moment.';
+    if (/^(?:Bad JSON$|Unexpected token|Unexpected end of JSON|JSON\.parse|The string did not match the expected pattern)/i.test(msg)) return 'The server sent an unexpected reply. Please try again in a moment.';
     return msg;
   }
   function toast(msg, opts){
@@ -4149,7 +4149,7 @@ function confirmDialog(message, opts){
         if (append) toast(String(e), { kind:'bad' });
         else {
           grid.innerHTML = '';
-          grid.appendChild(h('p', { className:'muted', text: String(e) }));
+          grid.appendChild(h('p', { className:'muted', text: friendlyMessage(e) }));
         }
       });
     }
@@ -4320,7 +4320,7 @@ function confirmDialog(message, opts){
       var list = wrap.querySelector('#lobby-session-list');
       if (list) {
         list.innerHTML = '';
-        list.appendChild(emptyState('Lobby unavailable', String(e), [
+        list.appendChild(emptyState('Lobby unavailable', friendlyMessage(e), [
           h('button', { className:'btn', type:'button', text:'Retry', onClick: function(){ fetchLobbySessions().then(paintLobbySessions); } })
         ]));
       }
@@ -6052,7 +6052,7 @@ try {
       var root = $('#live-view');
       if (!root) return;
       root.innerHTML = '';
-      root.appendChild(emptyState('Live is unavailable', 'Could not reach the Live API (' + String(e && e.message || e) + ').', [
+      root.appendChild(emptyState('Live is unavailable', friendlyMessage(e), [
         h('button', { className:'btn', text:'Retry', onClick: function(){ loadLive(true); } })
       ]));
     });
@@ -6712,7 +6712,7 @@ try {
         video.oncanplay = function(){ if (tok !== lp.token) return; seekLive(); };
         video.src = streamPlayUrl(liveUrl(b.url));
         safePlay();
-      }).catch(function(e){ if (tok === lp.token) { setTuning(false); msg('Tune failed: ' + String(e && e.message || e)); } });
+      }).catch(function(e){ if (tok === lp.token) { setTuning(false); msg('Couldn\u2019t tune this channel: ' + friendlyMessage(e)); } });
     }
     function tuneIptv(){
       var tok = lp.token;
@@ -10703,7 +10703,7 @@ h('div', { className:'cv-find-bar' }, [
     function reload(){
       api('/admin/system/optimise-status').then(paint).catch(function(e){
         host.innerHTML = '';
-        host.appendChild(h('p', { className:'bad', text: String(e) }));
+        host.appendChild(h('p', { className:'bad', text: friendlyMessage(e) }));
       });
     }
     reload();
@@ -12219,7 +12219,7 @@ h('div', { className:'cv-find-bar' }, [
       if ((r.page||1) > 1) nav.appendChild(h('button', { className:'btn', text:'Prev', onClick: function(){ state.mm.page--; mmLoadCatalogue(); } }));
       if (((r.page||1)*(r.per||40)) < (r.total||0)) nav.appendChild(h('button', { className:'btn', text:'Next', onClick: function(){ state.mm.page++; mmLoadCatalogue(); } }));
       list.appendChild(nav);
-    }).catch(function(e){ if(status) status.textContent = String(e); });
+    }).catch(function(e){ if(status) status.textContent = friendlyMessage(e); });
   }
 
   function mmOpenItemEditor(it){
