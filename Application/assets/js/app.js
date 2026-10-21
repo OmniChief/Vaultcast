@@ -1442,7 +1442,7 @@ function confirmDialog(message, opts){
       j.autoplay = opts.autoplay != null ? opts.autoplay !== false : (state.user && state.user.prefs || {}).autoplay_on_open !== false;
       j.from_start=!!(opts.fromStart || item._sequenceFromStart);
       if(item._sequenceFromStart)j.autoplay=true;
-      if(j.transcode_auto_blocked)j.autoplay=false;
+      if(j.transcode_auto_blocked)j.autoplay=opts.userInitiated===true||!opts.inline;
       var sequence=state._movieSequence;
       if(sequence && String(sequence.itemId)===String(item.id))j.sequence_collection=sequence.collection;
       openPlayer(item, j);
@@ -1568,14 +1568,14 @@ function confirmDialog(message, opts){
       media = h('video', { id:'player-media', controls:true, autoplay:play.autoplay !== false, playsinline:true, preload:play.transcode_auto_blocked?'none':'metadata' });
       media.setAttribute('webkit-playsinline', 'true');
       media.setAttribute('playsinline', 'true');
-      if (play.mime && !(play.transcode_allowed && play.transcode_mode==='always')) {
+      if (play.mime && !(play.transcode_allowed && play.transcode_mode==='always' && !play.transcode_auto_blocked)) {
         try {
           var source = document.createElement('source');
           source.src = src; source.type = play.mime;
           media.appendChild(source);
         } catch (eS) {}
       }
-      if (!(play.transcode_allowed && play.transcode_mode==='always')) media.src = src;
+      if (!(play.transcode_allowed && play.transcode_mode==='always' && !play.transcode_auto_blocked)) media.src = src;
     }
     /* resume — seek to saved progress (play.progress from /items/{id}/play, else item.progress) once metadata is ready.
        Progress saves are held until the resume seek lands so the 0:00 start can't overwrite the saved position. */
@@ -7881,7 +7881,7 @@ try {
         });root.appendChild(accordionList);if(window.VaultcastHub.episodeRows)window.VaultcastHub.episodeRows(root);firstPaint=false;
       }
       paint(selected);
-      if (state._pendingEpisode && String(state._pendingEpisode.show_key) === String(showKey)) { var pendingEpisode = state._pendingEpisode; state._pendingEpisode = null; playItem(pendingEpisode, {inline:true}); }
+      if (state._pendingEpisode && String(state._pendingEpisode.show_key) === String(showKey)) { var pendingEpisode = state._pendingEpisode; state._pendingEpisode = null; playItem(pendingEpisode, {inline:true,userInitiated:true}); }
       else if(miniVideo&&miniVideo.overlay._miniItem&&String(miniVideo.overlay._miniItem.show_key)===String(showKey))restoreMiniVideo(miniVideo.overlay._miniKey,root.querySelector('#detail-player'));
       loadDownloadStatus(false).then(function(fresh){
         if (!stillHere() || !fresh || JSON.stringify(fresh.downloading || []) === JSON.stringify(dl.downloading || [])) return;
