@@ -3,6 +3,9 @@ declare(strict_types=1);
 
 /** Library-only, bounded HLS workers. HTTP requests serve prepared fragments, not ffmpeg pipes. */
 final class Transcode {
+    /** Watch & save copy: which streams are re-encoded (the other is copied). */
+    const SAVE_MODES=['audio','video','both'];
+    const SAVE_MODE_LABELS=['audio'=>'Audio only','video'=>'Video only','both'=>'Video and audio'];
     public const PRESETS = ['ultrafast','superfast','veryfast','faster','fast','medium','slow','slower','veryslow'];
     public static function defaults(): array {
         return ['enabled'=>false,'mode'=>'fallback','threads'=>1,'max_sessions'=>1,'crf'=>20,'preset'=>'veryfast',
@@ -56,6 +59,16 @@ final class Transcode {
         $path=self::dir($job['id']).'/session.json'; $tmp=$path.'.tmp';
         if(file_put_contents($tmp,json_encode($job,JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR),LOCK_EX)===false || !@rename($tmp,$path))throw new RuntimeException('Could not save playback session.');
     }
+    /** Suggested Watch & save copy mode from the background codec facts (one primary-key row; never ffprobe). */
+    public static function defaultSaveMode(array $item): array {
+        $facts=MediaFacts::get($item);
+        if(!$facts)return ['mode'=>'both','video_codec'=>null,'audio_codec'=>null];
+        $vc=strtolower((string)$facts['video_codec']);$ac=strtolower((string)$facts['audio_codec']);
+        $videoOk=$vc==='h264'||strpos($vc,'avc')===0;
+        $audioOk=$ac===''||strpos($ac,'aac')===0||in_array($ac,Remux::BROWSER_AUDIO,true);
+        $mode=$videoOk&&!$audioOk?'audio':(!$videoOk&&$audioOk?'video':($videoOk&&$audioOk?'audio':'both'));
+        return ['mode'=>$mode,'video_codec'=>$vc!==''?$vc:null,'audio_codec'=>$ac!==''?$ac:null];
+    }
     public static function start(array $user,string $itemId,array $body): array {
         if(!self::allowed())throw new DomainException('Playback transcoding is disabled in DirectPlay Settings.');
         $item=Catalogue::item($itemId);
@@ -65,6 +78,8 @@ final class Transcode {
         if(array_key_exists('save',$body) && !is_bool($body['save']))throw new InvalidArgumentException('Choose whether to save the completed copy.');
         if($save && !Permissions::allowed($user,'save_copy'))throw new DomainException('Your role is not allowed to use Watch & save copy. Ask an administrator to enable the "Watch & save copy" permission.');
         if($save && empty($config['allow_save']))throw new DomainException('Watch & save copy is turned off in DirectPlay Settings.');
+        $saveMode=$save?($body['save_mode'] ?? 'both'):'both';
+        if(!is_string($saveMode)||!in_array($saveMode,self::SAVE_MODES,true))throw new InvalidArgumentException('Choose Audio only, Video only or Both for the saved copy.');
         if(!$save)$item=Stream::playbackItem($item);
         $src=\Vaultcast\Paths::real((string)$item['path']);
         if(!$src || !is_file($src))throw new DomainException('The source file is unavailable.');
@@ -104,7 +119,7 @@ final class Transcode {
             $id=bin2hex(random_bytes(16));@mkdir(self::dir($id),0775,true);
             $token=Stream::createToken((string)$user['id'],$itemId,$src,'video','library');
             $job=['id'=>$id,'item_id'=>$itemId,'title'=>$item['title'],'section'=>$item['section'],'src'=>$src,'token'=>$token,'owner'=>(string)$user['id'],'request_token'=>(string)($body['t'] ?? ''),
-                'save'=>$save,'offset'=>$offset,'audio'=>$audio,'config'=>$config,'status'=>'queued','created_at'=>time(),'updated_at'=>time(),
+                'save'=>$save,'save_mode'=>$saveMode,'offset'=>$offset,'audio'=>$audio,'config'=>$config,'status'=>'queued','created_at'=>time(),'updated_at'=>time(),
                 'source_stat'=>['size'=>(int)filesize($src),'mtime'=>(int)filemtime($src)],'error'=>null];
             self::write($job);@touch(self::dir($id).'/access');
             try {Process::startPhpWorker('transcode',$id);} catch(Throwable $e){error_log('Vaultcast playback worker: '.$e->getMessage());$job['status']='failed';$job['error']=$e instanceof RuntimeException?$e->getMessage():'Could not start the PHP playback worker. Check the server PHP error log for details.';self::write($job);throw new RuntimeException($job['error']);}
@@ -177,14 +192,24 @@ final class Transcode {
             $args=[Remux::ffmpegBin(),'-hide_banner','-loglevel','error','-nostdin','-y'];
             $args=array_merge($args,Convert::threadOptions((int)$c['threads'],'copy')['input']);
             if($job['offset']>0)array_push($args,'-ss',sprintf('%.3F',$job['offset']));
-            array_push($args,'-i',$job['src'],'-map','0:v:0','-map','0:a:'.$job['audio'].'?','-c:v','libx264',
-                '-preset',$c['preset'],'-crf',(string)$c['crf'],'-pix_fmt','yuv420p');
-            $args=array_merge($args,Convert::threadOptions((int)$c['threads'],'libx264')['encoder']);
-            $height=(int)$c['max_height'];$scale=$height>0?'scale=-2:trunc(min(ih\,'.$height.')/2)*2':'scale=trunc(iw/2)*2:trunc(ih/2)*2';
-            array_push($args,'-vf',$scale,'-c:a','aac','-b:a',$c['audio_bitrate'],'-threads:a',(string)$c['threads']);
-            if($c['audio_channels']==='2')array_push($args,'-ac','2');
-            if($c['max_bitrate']>0)array_push($args,'-maxrate',$c['max_bitrate'].'k','-bufsize',($c['max_bitrate']*2).'k');
-            array_push($args,'-sn','-dn','-force_key_frames','expr:gte(t,n_forced*'.$c['segment_seconds'].')',
+            /* Saved copies: audio = copy video + convert audio, video = convert video + copy audio,
+               both = convert both. Playback-only transcodes always convert both. */
+            $mode=$job['save'] ? (string)($job['save_mode'] ?? 'both') : 'both';
+            $encodeVideo=$mode!=='audio';$encodeAudio=$mode!=='video';
+            array_push($args,'-i',$job['src'],'-map','0:v:0','-map','0:a:'.$job['audio'].'?');
+            if($encodeVideo) {
+                array_push($args,'-c:v','libx264','-preset',$c['preset'],'-crf',(string)$c['crf'],'-pix_fmt','yuv420p');
+                $args=array_merge($args,Convert::threadOptions((int)$c['threads'],'libx264')['encoder']);
+                $height=(int)$c['max_height'];$scale=$height>0?'scale=-2:trunc(min(ih\,'.$height.')/2)*2':'scale=trunc(iw/2)*2:trunc(ih/2)*2';
+                array_push($args,'-vf',$scale);
+                if($c['max_bitrate']>0)array_push($args,'-maxrate',$c['max_bitrate'].'k','-bufsize',($c['max_bitrate']*2).'k');
+                array_push($args,'-force_key_frames','expr:gte(t,n_forced*'.$c['segment_seconds'].')');
+            } else array_push($args,'-c:v','copy');
+            if($encodeAudio) {
+                array_push($args,'-c:a','aac','-b:a',$c['audio_bitrate'],'-threads:a',(string)$c['threads']);
+                if($c['audio_channels']==='2')array_push($args,'-ac','2');
+            } else array_push($args,'-c:a','copy');
+            array_push($args,'-sn','-dn',
                 '-f','hls','-hls_time',(string)$c['segment_seconds'],'-hls_playlist_type','event','-hls_flags','independent_segments+temp_file',
                 '-hls_segment_filename',$dir.'/segment%06d.ts','-progress',$dir.'/progress','-nostats',$dir.'/index.m3u8');
             self::execute($args,$job);
@@ -195,14 +220,17 @@ final class Transcode {
                 $part=dirname($dest).'/.'.basename($dest).'.'.$id.'.part';
                 $job['output_part']=$part;
                 $copy=[Remux::ffmpegBin(),'-hide_banner','-loglevel','error','-nostdin','-n','-i',$dir.'/index.m3u8',
-                    '-map','0:v:0','-map','0:a?','-c','copy','-movflags','+faststart','-f','mp4','-progress',$dir.'/progress','-nostats',$part];
+                    '-map','0:v:0','-map','0:a?','-c','copy'];
+                // A copied HEVC stream needs the hvc1 tag for Safari / Apple devices.
+                if(!$encodeVideo && in_array(strtolower((string)($probe['video_codec'] ?? '')),['hevc','h265'],true))array_push($copy,'-tag:v','hvc1');
+                array_push($copy,'-movflags','+faststart','-f','mp4','-progress',$dir.'/progress','-nostats',$part);
                 self::execute($copy,$job);
                 $length=MediaProbe::duration($part,10);
                 if(!$length || abs($length-$job['duration'])>max(10,$job['duration']*.03))throw new RuntimeException('The completed copy did not pass the duration check. Original kept.');
                 clearstatcache(true,$job['src']);
                 if((int)@filesize($job['src'])!==$job['source_stat']['size'] || (int)@filemtime($job['src'])!==$job['source_stat']['mtime'])throw new RuntimeException('The original changed while converting. Original kept.');
                 if(is_file($dest) || !@rename($part,$dest))throw new RuntimeException('Could not publish the finished copy. Original kept.');
-                $part=null;$job['conversion']=Convert::adoptCompleted($job['item_id'],$job['src'],$dest,$job['section']);
+                $part=null;$job['conversion']=Convert::adoptCompleted($job['item_id'],$job['src'],$dest,$job['section'],$mode);
             }
             $job['status']='done';$job['updated_at']=time();self::write($job);
         } catch(Throwable $e) {

@@ -152,11 +152,28 @@
     var rbRange = h('input', { type:'range', min:'0', max:'0', step:'0.1', value:'0', 'aria-label':'Seek', style:'flex:1;min-width:120px' });
     var rbTime = h('span', { className:'muted', style:'font-variant-numeric:tabular-nums;white-space:nowrap', text:'0:00 / 0:00' });
     var rbFull = h('button', { className:'btn ghost sm', type:'button', 'aria-label':'Full screen', text:'⛶' });
-    var remuxBar = h('div', { className:'player-remux-bar', style:'display:none;align-items:center;gap:8px;padding:6px 10px;background:rgba(0,0,0,.6)' }, [rbPlay, rbRange, rbTime, rbFull]);
+    var rbMute = h('button', { className:'btn ghost sm', type:'button', 'aria-label':'Mute', text:'🔊' });
+    var rbVol = h('input', { type:'range', min:'0', max:'1', step:'0.05', value:'1', 'aria-label':'Volume', className:'player-remux-volume' });
+    /* The audio-only stream has no usable native timeline (it starts mid-file and has no duration), so
+       native controls are off and this bar replaces them. It is positioned over the video: in the inline
+       player the overlay is a 16:9 padding box with overflow hidden, which clipped a bar left in normal flow. */
+    var remuxBar = h('div', { className:'player-remux-bar', style:'display:none' }, [rbPlay, rbRange, rbTime, rbMute, rbVol, rbFull]);
     overlay.appendChild(remuxBar);
-    rbPlay.onclick = function(){ if (media.paused) { var pr = media.play(); if (pr && pr.catch) pr.catch(function(){}); } else media.pause(); };
+    function togglePlay(){ if (media.paused) { var pr = media.play(); if (pr && pr.catch) pr.catch(function(){}); } else media.pause(); }
+    rbPlay.onclick = togglePlay;
+    media.addEventListener('click', function(){ if (remux.active) togglePlay(); });
+    function paintVolume(){ rbMute.textContent = media.muted || media.volume === 0 ? '🔇' : '🔊'; rbMute.setAttribute('aria-label', media.muted ? 'Unmute' : 'Mute'); rbVol.value = String(media.muted ? 0 : media.volume); }
+    rbMute.onclick = function(){ media.muted = !media.muted; if (!media.muted && media.volume === 0) media.volume = 1; paintVolume(); };
+    rbVol.addEventListener('input', function(){ var v = Number(rbVol.value) || 0; media.volume = v; media.muted = v === 0; paintVolume(); });
+    media.addEventListener('volumechange', paintVolume);
     rbFull.onclick = function(){
-      try { if (document.fullscreenElement) document.exitFullscreen(); else (overlay.requestFullscreen || media.requestFullscreen).call(overlay.requestFullscreen ? overlay : media); } catch (eF) {}
+      try {
+        if (document.fullscreenElement || document.webkitFullscreenElement) { (document.exitFullscreen || document.webkitExitFullscreen).call(document); return; }
+        var target = overlay.requestFullscreen || overlay.webkitRequestFullscreen ? overlay : media;
+        var request = target.requestFullscreen || target.webkitRequestFullscreen || media.webkitEnterFullscreen;
+        var pr = request && request.call(request === media.webkitEnterFullscreen ? media : target);
+        if (pr && pr.catch) pr.catch(function(){});
+      } catch (eF) {}
     };
     rbRange.addEventListener('input', function(){ remux.dragging = true; rbTime.textContent = fmtT(+rbRange.value) + ' / ' + fmtT(fullDuration()); });
     rbRange.addEventListener('change', function(){ remux.dragging = false; switchViaRemux(remux.track, +rbRange.value); });
@@ -171,8 +188,9 @@
     ['timeupdate','play','pause','loadedmetadata'].forEach(function(ev){ media.addEventListener(ev, paintRemuxBar); });
     function setRemuxUi(on){
       remuxBar.style.display = on ? 'flex' : 'none';
+      overlay.classList.toggle('is-remuxing', !!on);
       media.controls = !on;
-      paintRemuxBar();
+      paintRemuxBar(); paintVolume();
       try { overlay.dispatchEvent(new CustomEvent('vc-playmode')); } catch (eEv) {}
     }
     overlay._leaveRemux=function(){remux.gen++;remux.active=false;remux.seeking=false;setRemuxUi(false);};
@@ -802,6 +820,47 @@ function confirmDialog(message, opts){
         ])
       ]);
       ((opts.host && opts.host.isConnected) ? opts.host : document.body).appendChild(overlay);
+    });
+  }
+  /* Watch & save copy chooser: which streams to convert. Quality, codec, preset, bitrates and
+     container come from the DirectPlay conversion settings. Resolves 'audio' | 'video' | 'both' or null. */
+  function saveCopyDialog(suggest, host){
+    suggest = suggest || {};
+    return new Promise(function(resolve){
+      var existing = $('#save-copy-overlay'); if (existing) existing.remove();
+      var codec = function(v){ return v ? String(v).toUpperCase() : 'unknown'; };
+      var known = suggest.video_codec || suggest.audio_codec;
+      var choices = [
+        { mode:'audio', title:'Audio only', text:'Keeps the video as is and converts the audio to AAC. Fastest and lightest on the NAS.' },
+        { mode:'video', title:'Video only', text:'Converts the video to H.264 and keeps the audio as is.' },
+        { mode:'both', title:'Both', text:'Converts video and audio. Slowest; most compatible.' }
+      ];
+      var picked = suggest.mode || 'both';
+      var buttons = {};
+      var list = h('div', { className:'save-copy-options', role:'radiogroup', 'aria-label':'What to convert' });
+      choices.forEach(function(c){
+        var b = h('button', { type:'button', className:'save-copy-option', role:'radio', 'aria-checked': String(c.mode === picked), onClick:function(){
+          picked = c.mode; Object.keys(buttons).forEach(function(k){ buttons[k].setAttribute('aria-checked', String(k === picked)); });
+        }}, [h('strong', { text:c.title + (c.mode === suggest.mode && known ? ' · suggested' : '') }), h('span', { text:c.text })]);
+        buttons[c.mode] = b; list.appendChild(b);
+      });
+      function done(value){ overlay.remove(); document.removeEventListener('keydown', onKey); resolve(value); }
+      function onKey(e){ if (e.key === 'Escape') done(null); }
+      var overlay = h('div', { id:'save-copy-overlay', className:'confirm-overlay', onClick:function(e){ if (e.target === overlay) done(null); } }, [
+        h('div', { className:'confirm-card save-copy-card', role:'dialog', 'aria-modal':'true', 'aria-label':'Watch & save copy' }, [
+          h('h3', { text:'Watch & save copy' }),
+          h('p', { className:'muted', text: known ? ('This file: video ' + codec(suggest.video_codec) + ' · audio ' + codec(suggest.audio_codec) + '. Starts from the beginning and keeps converting if you close the player.') : 'Starts from the beginning and keeps converting if you close the player.' }),
+          list,
+          h('p', { className:'muted save-copy-foot', text:'Quality and limits come from DirectPlay Settings. The original stays until you replace it in Video conversion.' }),
+          h('div', { className:'row-actions' }, [
+            h('button', { className:'btn ghost', type:'button', text:'Cancel', onClick:function(){ done(null); } }),
+            h('button', { className:'btn primary', type:'button', text:'Start', onClick:function(){ done(picked); } })
+          ])
+        ])
+      ]);
+      document.addEventListener('keydown', onKey);
+      ((host && host.isConnected && !host.classList.contains('player-inline')) ? host : document.body).appendChild(overlay);
+      try { buttons[picked].focus(); } catch (eF) {}
     });
   }
   function emptyState(title, detail, actions){
@@ -1778,7 +1837,7 @@ function confirmDialog(message, opts){
     }):null;
     var prepareButton=canTranscode&&play.transcode_save_allowed&&can('save_copy')?option('Watch & save copy','Restart from the beginning and watch while a reusable DirectPlay MP4 is saved. Keeps converting if you close the player.',function(){
       if(isBusy())return;
-      confirmDialog('Start from the beginning and save a reusable DirectPlay MP4 while you watch? It keeps converting after you close the player. The copy uses the selected audio track, and the original stays until you replace it in Settings → Video conversion.',{okText:'Watch & save copy'}).then(function(ok){if(ok)start(true,0);});
+      saveCopyDialog(play.save_copy_default,overlay).then(function(mode){if(mode)start(true,0,null,mode);});
     }):null;
     var audioButton=canAudio?option('Convert audio only','No sound or an unsupported audio track? Keep the original video and convert just the audio for this browser. Light on the NAS.',function(){
       if(isBusy()||!overlay._audioOnly)return;audioButton.disabled=true;
@@ -1896,7 +1955,7 @@ function confirmDialog(message, opts){
         timer=setTimeout(function(){monitor(g,deadline,attached);},attached?5000:1000);
       }).catch(function(e){if(active(g)){overlay._transcodePending=false;note(e.message||String(e));if(!job||!job.save){stop();available=null;}syncActions();}});
     }
-    function start(save,at,existing){
+    function start(save,at,existing,saveMode){
       if(!alive||!overlay.isConnected)return false;
       if(!job&&available)existing=existing||available;
       if(overlay._transcodePending){note('A playback worker is already starting…');return false;}
@@ -1905,7 +1964,7 @@ function confirmDialog(message, opts){
       syncActions();
       if(overlay._leaveRemux)overlay._leaveRemux();media.pause();media.removeAttribute('src');media.querySelectorAll('source').forEach(function(el){el.remove();});media.load();
       note(save?'Starting playback and the saved copy…':'Starting H.264 / AAC playback…');
-      (existing?json(existing.status_url):api('/items/'+encodeURIComponent(item.id)+'/transcode',{method:'POST',body:{t:play.token,start:Math.max(0,at||0),audio:audioIndex,save:!!save,replace:previous&&!previous.save?previous.id:null,replace_token:previous&&!previous.save?previous.token:null}})).then(function(j){
+      (existing?json(existing.status_url):api('/items/'+encodeURIComponent(item.id)+'/transcode',{method:'POST',body:{t:play.token,start:Math.max(0,at||0),audio:audioIndex,save:!!save,save_mode:save?(saveMode||'both'):undefined,replace:previous&&!previous.save?previous.id:null,replace_token:previous&&!previous.save?previous.token:null}})).then(function(j){
         if(!active(g)){if(j&&j.stop_url)fetch(streamPlayUrl(j.stop_url),{method:'POST',credentials:'same-origin'}).catch(function(){});return;}
         if(!j.ok)throw new Error(j.error||'Could not start transcoding');
         if(j.status==='failed'||j.status==='cancelled'){available=null;throw new Error(j.error||'Conversion stopped.');}
@@ -11077,16 +11136,16 @@ h('div', { className:'cv-find-bar' }, [
         });
       }
 
-      function previewConvertJob(job){
+      function previewConvertJob(job, original){
         if (!job) return;
-        api('/admin/convert/'+job.id+'/preview',{method:'POST'}).then(function(j){
+        api('/admin/convert/'+job.id+'/preview',{method:'POST',body:original?{original:true}:{}}).then(function(j){
           if(!root.isConnected)return;
-          if(!j.ok)throw new Error(j.error||'Converted preview unavailable.');
+          if(!j.ok)throw new Error(j.error||(original?'Original unavailable.':'Converted preview unavailable.'));
           closePlayer();
-          window.VaultcastHub.modal('Converted preview · '+(j.title||job.title||'Video'),function(body){
+          window.VaultcastHub.modal((original?'Original · ':'Converted preview · ')+(j.title||job.title||'Video'),function(body){
             var video=h('video',{controls:true,playsinline:true,preload:'metadata',src:streamPlayUrl(j.url),style:'width:100%;max-height:65vh;display:block'});
-            var message=h('p',{className:'muted',role:'status',text:'Previewing the converted file only. Press Play to check it; no new conversion will start.'});
-            video.addEventListener('error',function(){message.textContent='The converted file could not play. The original has not been loaded and no conversion has started.';});
+            var message=h('p',{className:'muted',role:'status',text:original?'Playing the original file directly (no transcode) so you can compare it with the converted copy.':'Previewing the converted file only. Press Play to check it; no new conversion will start.'});
+            video.addEventListener('error',function(){message.textContent=original?'This browser cannot play the original file directly. That is usually why it was converted.':'The converted file could not play. The original has not been loaded and no conversion has started.';});
             body.appendChild(video);body.appendChild(message);
             return function(){video.pause();video.removeAttribute('src');video.load();};
           });
@@ -11132,6 +11191,7 @@ h('div', { className:'cv-find-bar' }, [
         }
         if (needsAction) {
           actions.push(h('button', { className:'btn primary cv-glass-btn', text:'Preview', title:'Watch converted file in overlay', onClick: function(){ previewConvertJob(job); }}));
+          if (!job.original_removed) actions.push(h('button', { className:'btn ghost cv-glass-btn', text:'View original', title:'Play the original file directly to compare', onClick: function(){ previewConvertJob(job, true); }}));
           actions.push(h('button', { className:'btn danger cv-remove-original cv-glass-btn', text:'Replace', title:'Replace original with converted file', onClick: function(e){
             removeConvertOriginal(job, e.currentTarget);
           }}));
@@ -11146,7 +11206,8 @@ h('div', { className:'cv-find-bar' }, [
         if (job.status === 'running') stateLabel = 'Converting ' + Math.round(pct) + '%';
         if (job.status === 'queued') stateLabel = 'Queued \u2014 waiting';
         if (job.status === 'done') stateLabel = job.resolved ? 'Done' : 'Converted \u2014 choose what to keep';
-        var modeNote = job.quality_mode ? String(job.quality_mode) : '';
+        var saveModes = { audio:'Audio only', video:'Video only', both:'Video + audio' };
+        var modeNote = job.save_mode ? ('Watch & save · ' + (saveModes[job.save_mode] || job.save_mode)) : (job.quality_mode ? String(job.quality_mode) : '');
         if (job.strategy) modeNote = (modeNote ? modeNote + ' / ' : '') + job.strategy;
         var reason = [stateLabel, job.ext ? (String(job.ext).toUpperCase() + ' \u2192 ' + String(job.container || 'mp4').toUpperCase()) : null, modeNote || null, job.message || null].filter(Boolean).join(' \u00b7 ');
 

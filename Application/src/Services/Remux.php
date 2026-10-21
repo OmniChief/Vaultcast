@@ -151,10 +151,16 @@ final class Remux {
         $args = [$bin, '-hide_banner', '-loglevel', 'error', '-nostdin'];
         $config=Transcode::settings();$threads=Convert::sanitizeThreadCount($config['threads']);
         $args=array_merge($args,Convert::threadOptions($threads,'copy')['input']);
-        if ($start > 0) array_push($args, '-ss', sprintf('%.3F', $start));
+        /* Copied video always starts at the keyframe before ?ss. -noaccurate_seek keeps the converted
+           audio starting there too; with the default accurate seek the audio began at ?ss, leaving a
+           gap the browser closed by playing the audio early (out of sync by up to a GOP). */
+        if ($start > 0) array_push($args, '-noaccurate_seek', '-ss', sprintf('%.3F', $start));
         array_push($args, '-i', $path, '-map', '0:v:0?', '-map', '0:a:' . $audio, '-c:v', 'copy');
         if (in_array(strtolower((string)$audioCodec), self::BROWSER_AUDIO, true)) array_push($args, '-c:a', 'copy');
         else {
+            /* async fills timestamp gaps with silence (browsers play audio back to back, so a gap would
+               pull the audio ahead); first_pts=0 also pads a delayed audio start from the beginning. */
+            array_push($args, '-af', $start > 0 ? 'aresample=async=1' : 'aresample=async=1:first_pts=0');
             array_push($args, '-c:a', 'aac', '-b:a', $config['audio_bitrate']);
             if($config['audio_channels']==='2')array_push($args,'-ac','2');
         }

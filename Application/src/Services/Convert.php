@@ -990,10 +990,21 @@ class Convert {
         }
         return null;
     }
-    public static function preview(string $jobId): array {
+    public static function preview(string $jobId, bool $original = false): array {
         $queue=self::queue();$index=self::findJob($queue,$jobId);
         if($index<0)throw new RuntimeException('Conversion not found.');
-        $job=$queue[$index];$path=(string)($job['dest'] ?? '');
+        $job=$queue[$index];
+        if($original) {
+            // Compare with the source: the original file, served directly (no transcode).
+            $path=(string)($job['src'] ?? '');
+            if(!empty($job['original_removed'])||$path===''||!is_file($path))throw new RuntimeException('The original file is no longer available.');
+            $real=\Vaultcast\Paths::real($path);
+            if(!$real||!self::underLibraryRoot($real))throw new RuntimeException('The original file is outside the library.');
+            $user=Auth::requireAdmin();
+            $token=Stream::createToken((string)$user['id'],(string)$job['item_id'],$real,'video','library');
+            return ['ok'=>true,'title'=>$job['title'] ?? 'Original','url'=>\Vaultcast\Database::basePath().'api/stream/play?t='.$token,'original'=>true];
+        }
+        $path=(string)($job['dest'] ?? '');
         if(($job['status'] ?? '')!=='done'||!empty($job['dest_deleted'])||$path===''||!is_file($path))throw new RuntimeException('The converted file is unavailable. The original will not be used for this preview.');
         $real=\Vaultcast\Paths::real($path);
         if(!$real||!self::underLibraryRoot($real))throw new RuntimeException('The converted file is outside the library.');
@@ -1207,13 +1218,16 @@ class Convert {
     }
 
     /** A full watch-and-prepare encode joins the existing review/replacement workflow. */
-    public static function adoptCompleted(string $itemId,string $src,string $dest,string $section): array {
-        $lock=self::lockQueue();if($lock===false)throw new RuntimeException('Conversion queue is busy. The saved copy is safe beside the original; rescan to import it.');
+    public static function adoptCompleted(string $itemId,string $src,string $dest,string $section,string $mode='both'): array {
+        // Runs in the CLI worker: wait for a busy queue rather than leaving a published copy out of the review list.
+        $lock=false;for($try=0;$try<60&&$lock===false;$try++){$lock=self::lockQueue();if($lock===false)usleep(500000);}
+        if($lock===false)throw new RuntimeException('Conversion queue is busy. The saved copy is safe beside the original; rescan to import it.');
         try {
             Store::invalidate('convert_queue');$q=self::queue();
             $job=['id'=>bin2hex(random_bytes(8)),'item_id'=>$itemId,'title'=>Catalogue::item($itemId)['title'] ?? basename($src),
                 'src'=>$src,'dest'=>$dest,'section'=>$section,'status'=>'done','progress'=>100,'created_at'=>date('c'),
-                'finished_at'=>date('c'),'message'=>'Watch-and-prepare complete; selected audio track saved. Original retained.','container'=>'mp4',
+                'finished_at'=>date('c'),'message'=>'Watch & save copy complete ('.(Transcode::SAVE_MODE_LABELS[$mode] ?? 'Video and audio').' converted); selected audio track saved. Original retained.','container'=>'mp4',
+                'origin'=>'watch_save','save_mode'=>in_array($mode,Transcode::SAVE_MODES,true)?$mode:'both',
                 'source_stat'=>['size'=>(int)filesize($src),'mtime'=>(int)filemtime($src)]];
             $job=self::onComplete($job);$q[]=$job;self::saveQueue($q);return ['job_id'=>$job['id']];
         } finally {self::unlockQueue($lock);}
