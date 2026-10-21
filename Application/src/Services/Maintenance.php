@@ -7,7 +7,7 @@ final class Maintenance
     private static $checked = 0.0;
     /** Background-only tasks started by the app itself (not listed in the maintenance UI). */
     const INTERNAL = ['ingest' => 'Import reviewed download'];
-    const TASKS = ['versions'=>'Check and merge DirectPlay copies','site-artwork'=>'Optimise site and theme posters (WebP)','segments'=>'Match TV / anime intros and credits, and movie credits','browse'=>'Prepare search and show summaries','search' => 'Prepare live search index', 'views' => 'Prepare browsing pages', 'epg' => 'Refresh programme guide', 'metadata' => 'Prepare artwork and synopses', 'game-metadata' => 'Refresh game posters and synopses', 'scan' => 'Scan library folders', 'collections' => 'Match collections', 'downloads' => 'Import completed downloads', 'durations' => 'Fill Live media durations', 'facts' => 'Probe new media codecs and store show guides'];
+    const TASKS = ['versions'=>'Check and merge DirectPlay copies','site-artwork'=>'Optimise site and theme posters (WebP)','segments'=>'Match TV / anime intros and credits, and movie credits','browse'=>'Prepare search and show summaries','search' => 'Prepare live search index', 'views' => 'Prepare browsing pages', 'epg' => 'Refresh programme guide', 'metadata' => 'Prepare artwork and synopses', 'game-metadata' => 'Refresh game posters and synopses', 'scan' => 'Scan library folders', 'collections' => 'Match collections', 'downloads' => 'Import completed downloads', 'durations' => 'Fill Live media durations', 'facts' => 'Probe new media codecs and store show guides', 'drop-cleanup' => 'Delete expired Drop files', 'calendar-episodes' => 'Refresh episode release calendars'];
 
     public static function runCommand(string $task, ?string $target = null): array
     {
@@ -20,7 +20,9 @@ final class Maintenance
     public static function status(): array
     {
         $jobs = \Vaultcast\Repository::rows("SELECT payload FROM vaultcast_documents WHERE name LIKE 'maintenance-job:%' ORDER BY name DESC LIMIT 50");
-        return ['ok' => true, 'tasks' => self::TASKS, 'jobs' => $jobs, 'requirements'=>MaintenanceRequirements::status()['required']];
+        $details = [];
+        try { $r = Drop::reclaimable(); $details['drop-cleanup'] = $r['items'] ? number_format($r['items']) . ' unavailable item' . ($r['items'] === 1 ? '' : 's') . ' · ' . round($r['bytes'] / 1048576, 1) . ' MB reclaimable' : 'Nothing to reclaim right now'; } catch (Throwable $ignored) {}
+        return ['ok' => true, 'tasks' => self::TASKS, 'jobs' => $jobs, 'details' => $details, 'requirements'=>MaintenanceRequirements::status()['required']];
     }
 
     public static function start(string $task, string $actor, ?string $target = null, ?array $payload = null): array
@@ -163,6 +165,19 @@ final class Maintenance
                     $job['result'] = MediaFacts::refresh(function () { self::checkpoint(); });
                     $backup = MetadataSidecars::schedule();
                     if (empty($backup['ok'])) $job['result']['warning'] = $backup['warning'];
+                    // Fresh guides feed the episode-release calendars straight away (database only, quick).
+                    try { $job['result']['calendar'] = Calendar::refreshEpisodes(function () { self::checkpoint(); }); } catch (Throwable $e) { error_log('Vaultcast calendar episodes: ' . $e->getMessage()); }
+                    break;
+                case 'calendar-episodes':
+                    $job['result'] = Calendar::refreshEpisodes(function () { self::checkpoint(); });
+                    break;
+                case 'drop-cleanup':
+                    $lastProgress=0.0;
+                    $job['result']=Drop::cleanup(function($done,$total,$file)use(&$job,$id,&$lastProgress){
+                        if($done!==$total&&microtime(true)-$lastProgress<1)return;$lastProgress=microtime(true);self::checkpoint();
+                        $job['progress']=['phase'=>'Expired Drop files','done'=>$done,'total'=>$total,'file'=>$file,'at'=>date('c')];
+                        \Vaultcast\Repository::putDocument('maintenance-job:'.$id,$job);
+                    });
                     break;
                 case 'views':
                     Catalogue::warmBrowseViews(); Catalogue::homeLibrary(); Collections::publicList();

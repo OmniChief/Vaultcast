@@ -45,7 +45,7 @@ final class AreaAccess
         if (count(array_filter(self::permissions($user))) === count(self::AREAS)) return null;
         $area = null;
         if (preg_match('#^/(?:live)(?:/|$)#', $path)) $area = 'live';
-        elseif (preg_match('#^/(?:lobby|netplay|stream/bios)(?:/|$)#', $path)) $area = 'games';
+        elseif (preg_match('#^/(?:lobby|netplay|stream/bios|play)(?:/|$)#', $path)) $area = 'games';
         elseif (preg_match('#^/(?:shows|collections)(?:/|$)#', $path)) $area = 'library';
         elseif (preg_match('#^/items/([a-f0-9]+)(?:/|$)#', $path, $m)) {
             $item = Catalogue::item($m[1]);

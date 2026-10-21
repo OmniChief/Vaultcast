@@ -2,7 +2,14 @@
 declare(strict_types=1);
 
 final class Permissions {
-    const CAPABILITIES = ['ingest_view'=>'View the import inbox','ingest_import'=>'Import inbox downloads (includes viewing; moves files into the library)','rss_search'=>'Search RSS sources','downloads_request'=>'Request downloads','fix_match'=>'Fix movie, show and game matches','metadata_edit'=>'Edit titles, synopsis and posters','library_remove'=>'Remove entries from the library (media files kept)','timing_edit'=>'Search and edit intro / credits timings','artwork_manage'=>'Check and repair artwork integrity','iptv_manage'=>'Manage IPTV feeds and shared channels','radio_manage'=>'Manage shared radio stations'];
+    const CAPABILITIES = ['ingest_view'=>'View the import inbox','ingest_import'=>'Import inbox downloads (includes viewing; moves files into the library)','rss_search'=>'Search RSS sources','downloads_request'=>'Request downloads','fix_match'=>'Fix movie, show and game matches','metadata_edit'=>'Edit titles, synopsis and posters','library_remove'=>'Remove entries from the library (media files kept)','timing_edit'=>'Search and edit intro / credits timings','artwork_manage'=>'Check and repair artwork integrity','iptv_manage'=>'Manage IPTV feeds and shared channels','radio_manage'=>'Manage shared radio stations','drop.upload'=>'Upload to Drop (files, text and share links)','pictures.upload'=>'Upload pictures for Ambient and the Picture frame widget'];
+    /** Capabilities the built-in User role may receive: an admin default plus per-user overrides. */
+    const USER_ROLE_CAPABILITIES = ['drop.upload','pictures.upload'];
+    public static function userRoleDefaults(): array {
+        $drop=(array)(Store::settings()['drop'] ?? []);
+        $pictures=(array)(Store::settings()['pictures'] ?? []);
+        return ['drop.upload'=>!empty($drop['user_role_upload']),'pictures.upload'=>!array_key_exists('user_role_upload',$pictures)||!empty($pictures['user_role_upload'])];
+    }
     private static $roles;
     public static function roles(): array {
         if(self::$roles===null)self::$roles=\Vaultcast\Repository::document('permission_roles',['curator'=>['name'=>'Curator','permissions'=>[]]]);
@@ -10,7 +17,9 @@ final class Permissions {
     }
     public static function allowed(?array $user,string $permission): bool {
         if(!isset(self::CAPABILITIES[$permission])||!$user)return false;
-        $role=$user['role'] ?? 'user';if($role==='admin')return true;if($role==='user'||!isset(self::roles()[$role]))return false;
+        $role=$user['role'] ?? 'user';if($role==='admin')return true;
+        if($role==='user'){if(!in_array($permission,self::USER_ROLE_CAPABILITIES,true))return false;$own=$user['permissions'][$permission] ?? null;return is_bool($own)?$own:(self::userRoleDefaults()[$permission] ?? false);}
+        if(!isset(self::roles()[$role]))return false;
         if($permission==='ingest_view'&&self::allowed($user,'ingest_import'))return true;
         return ($user['permissions'][$permission] ?? self::roles()[$role]['permissions'][$permission] ?? false)===true;
     }

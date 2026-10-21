@@ -248,12 +248,13 @@ final class HomeHub {
         if (!$item || ($item['media_kind'] ?? '')!=='rom' || !self::visible($item,$user)) throw new DomainException('Choose an accessible game.');
         $session=(string)($body['session'] ?? '');
         if (!preg_match('/^[a-f0-9]{16,64}$/D',$session)) throw new DomainException('Invalid play session.');
-        $active=!empty($body['active']);$final=!empty($body['final']);
-        self::mutate(self::key($user['id']),function(array $data) use ($item,$session,$active,$final): array {
+        $active=!empty($body['active']);$final=!empty($body['final']);$delta=[0,0];
+        self::mutate(self::key($user['id']),function(array $data) use ($item,$session,$active,$final,&$delta): array {
             $now=time(); $previous=$data['play_sessions'][$session] ?? null;
             $row=$data['games'][$item['id']] ?? ['seconds'=>0,'sessions'=>0];
             if ($previous && $previous['item']!==$item['id']) throw new DomainException('Play session belongs to a different game.');
-            $row['seconds']+= $previous && !empty($previous['active']) && ($active || $final) ? min(30,max(0,$now-$previous['at'])):0;
+            $delta=[$previous && !empty($previous['active']) && ($active || $final) ? min(30,max(0,$now-$previous['at'])):0, $previous?0:1];
+            $row['seconds']+=$delta[0];
             if (!$previous) $row['sessions']++;
             $row['last_played']=$now;
             if (!$previous || empty($row['card'])) $row['card']=Catalogue::publicItem($item,false);
@@ -262,6 +263,7 @@ final class HomeHub {
             $data['play_sessions']=array_slice($data['play_sessions'],-32,null,true);
             return $data;
         });
+        if ($delta[0] || $delta[1]) Social::logEmulator((string)$user['id'],$delta[0],$delta[1]);
         return ['ok'=>true];
     }
     public static function people(array $user,string $query): array {

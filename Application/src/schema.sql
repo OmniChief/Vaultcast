@@ -137,3 +137,91 @@ CREATE TABLE IF NOT EXISTS vaultcast_show_summaries (
  payload LONGTEXT NOT NULL,
  INDEX summary_section(section_id,title(120))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS vaultcast_play_scores (
+ id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+ user_id VARCHAR(64) NOT NULL, game VARCHAR(24) CHARACTER SET ascii NOT NULL,
+ score INT NOT NULL, duration_ms INT UNSIGNED NOT NULL DEFAULT 0, meta VARCHAR(255) NOT NULL DEFAULT '',
+ created_at BIGINT NOT NULL,
+ INDEX play_board (game,created_at,score), INDEX play_board_user (game,created_at,user_id,score), INDEX play_user (user_id,game,score), INDEX play_time (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS vaultcast_play_points (
+ id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+ user_id VARCHAR(64) NOT NULL, team_id VARCHAR(32) CHARACTER SET ascii NOT NULL DEFAULT '',
+ source VARCHAR(24) CHARACTER SET ascii NOT NULL, points INT NOT NULL DEFAULT 0,
+ label VARCHAR(200) NOT NULL DEFAULT '', created_at BIGINT NOT NULL,
+ INDEX play_points_user (user_id,created_at), INDEX play_points_team (team_id,created_at), INDEX play_points_time (created_at), INDEX play_points_board (created_at,user_id,points)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS vaultcast_drop_files (
+ id CHAR(32) CHARACTER SET ascii NOT NULL PRIMARY KEY,
+ user_id VARCHAR(64) NOT NULL, kind VARCHAR(8) CHARACTER SET ascii NOT NULL,
+ name VARCHAR(255) NOT NULL DEFAULT '', mime VARCHAR(120) NOT NULL DEFAULT '',
+ bytes BIGINT UNSIGNED NOT NULL DEFAULT 0, received BIGINT UNSIGNED NOT NULL DEFAULT 0,
+ body MEDIUMTEXT NULL, complete TINYINT NOT NULL DEFAULT 0, created_at BIGINT NOT NULL, expires_at BIGINT NOT NULL DEFAULT 0,
+ max_downloads INT UNSIGNED NOT NULL DEFAULT 0, downloads INT UNSIGNED NOT NULL DEFAULT 0, purged TINYINT NOT NULL DEFAULT 0, inbox TINYINT NOT NULL DEFAULT 0,
+ origin VARCHAR(64) NOT NULL DEFAULT '',
+ INDEX drop_user (user_id,created_at), INDEX drop_expiry (expires_at), INDEX drop_pending (complete,created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS vaultcast_drop_links (
+ token CHAR(32) CHARACTER SET ascii NOT NULL PRIMARY KEY,
+ file_id CHAR(32) CHARACTER SET ascii NOT NULL, user_id VARCHAR(64) NOT NULL,
+ require_login TINYINT NOT NULL DEFAULT 1, password_hash VARCHAR(255) NOT NULL DEFAULT '',
+ expires_at BIGINT NOT NULL DEFAULT 0, max_downloads INT UNSIGNED NOT NULL DEFAULT 0, downloads INT UNSIGNED NOT NULL DEFAULT 0,
+ revoked TINYINT NOT NULL DEFAULT 0, created_at BIGINT NOT NULL,
+ INDEX drop_link_file (file_id), INDEX drop_link_user (user_id,created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS vaultcast_play_emulator (
+ user_id VARCHAR(64) NOT NULL, day CHAR(10) CHARACTER SET ascii NOT NULL,
+ seconds INT UNSIGNED NOT NULL DEFAULT 0, sessions INT UNSIGNED NOT NULL DEFAULT 0,
+ PRIMARY KEY (user_id, day), INDEX emu_day (day)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS vaultcast_cal_calendars (
+ id CHAR(16) CHARACTER SET ascii NOT NULL PRIMARY KEY,
+ owner_id VARCHAR(64) NOT NULL, name VARCHAR(80) NOT NULL, colour CHAR(7) CHARACTER SET ascii NOT NULL DEFAULT '#59e9ff',
+ kind VARCHAR(16) CHARACTER SET ascii NOT NULL DEFAULT 'local', url TEXT NULL,
+ feed_token CHAR(40) CHARACTER SET ascii NULL, episodes VARCHAR(16) CHARACTER SET ascii NOT NULL DEFAULT '',
+ show_reminders TINYINT NOT NULL DEFAULT 0, shares TEXT NULL, version INT UNSIGNED NOT NULL DEFAULT 0,
+ created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL,
+ INDEX cal_owner (owner_id), UNIQUE KEY cal_feed (feed_token)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS vaultcast_cal_events (
+ id CHAR(16) CHARACTER SET ascii NOT NULL PRIMARY KEY,
+ calendar_id CHAR(16) CHARACTER SET ascii NOT NULL, uid VARCHAR(190) NOT NULL,
+ title VARCHAR(200) NOT NULL DEFAULT '', location VARCHAR(200) NOT NULL DEFAULT '', notes TEXT NULL,
+ all_day TINYINT NOT NULL DEFAULT 0, start_at BIGINT NOT NULL, end_at BIGINT NOT NULL, tz VARCHAR(64) CHARACTER SET ascii NOT NULL DEFAULT 'UTC',
+ rrule VARCHAR(255) CHARACTER SET ascii NOT NULL DEFAULT '', until_at BIGINT NOT NULL DEFAULT 0, exdates TEXT NULL,
+ reminders VARCHAR(64) CHARACTER SET ascii NOT NULL DEFAULT '', source VARCHAR(8) CHARACTER SET ascii NOT NULL DEFAULT '',
+ created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL,
+ INDEX cal_event_range (calendar_id,start_at), INDEX cal_event_uid (calendar_id,uid)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS vaultcast_cal_reminders (
+ id CHAR(16) CHARACTER SET ascii NOT NULL PRIMARY KEY,
+ user_id VARCHAR(64) NOT NULL, title VARCHAR(120) NOT NULL, emoji VARCHAR(16) NOT NULL DEFAULT '',
+ colour CHAR(7) CHARACTER SET ascii NOT NULL DEFAULT '#59e9ff', note VARCHAR(200) NOT NULL DEFAULT '',
+ template VARCHAR(32) CHARACTER SET ascii NOT NULL DEFAULT '', schedule TEXT NOT NULL,
+ at_time CHAR(5) CHARACTER SET ascii NOT NULL DEFAULT '', lead_minutes INT NOT NULL DEFAULT 0, tz VARCHAR(64) CHARACTER SET ascii NOT NULL DEFAULT 'UTC',
+ done_through CHAR(10) CHARACTER SET ascii NOT NULL DEFAULT '', snooze_until BIGINT NOT NULL DEFAULT 0,
+ active TINYINT NOT NULL DEFAULT 1, on_calendar TINYINT NOT NULL DEFAULT 0,
+ created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL,
+ INDEX cal_rem_user (user_id,created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS vaultcast_pictures (
+ id CHAR(16) CHARACTER SET ascii NOT NULL PRIMARY KEY,
+ user_id VARCHAR(64) NOT NULL, name VARCHAR(200) NOT NULL DEFAULT '', ext VARCHAR(5) CHARACTER SET ascii NOT NULL,
+ mime VARCHAR(32) CHARACTER SET ascii NOT NULL, bytes BIGINT UNSIGNED NOT NULL DEFAULT 0,
+ width INT UNSIGNED NOT NULL DEFAULT 0, height INT UNSIGNED NOT NULL DEFAULT 0, sha1 CHAR(40) CHARACTER SET ascii NOT NULL DEFAULT '',
+ created_at BIGINT NOT NULL,
+ INDEX pictures_user (user_id,created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS vaultcast_webcams (
+ id CHAR(16) CHARACTER SET ascii NOT NULL PRIMARY KEY,
+ url_key CHAR(40) CHARACTER SET ascii NOT NULL,
+ name VARCHAR(120) NOT NULL DEFAULT '', url VARCHAR(1000) NOT NULL, kind VARCHAR(16) CHARACTER SET ascii NOT NULL DEFAULT 'auto',
+ added_by VARCHAR(64) NOT NULL DEFAULT '', created_at BIGINT NOT NULL, last_seen BIGINT NOT NULL,
+ enabled_ambient TINYINT(1) NOT NULL DEFAULT 0,
+ UNIQUE KEY webcams_url (url_key),
+ INDEX webcams_enabled (enabled_ambient,name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

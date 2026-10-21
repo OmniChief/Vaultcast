@@ -2616,3 +2616,4 @@ html[data-motion="reduced"]{scroll-behavior:auto!important}
   .directplay-settings .feature-row { flex-wrap: wrap; }
   .dp-player-actions .btn { flex: 1 1 150px; }
 }
+.vc-lazy { min-height: 40vh; }
