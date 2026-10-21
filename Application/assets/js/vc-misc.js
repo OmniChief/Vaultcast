@@ -107,7 +107,7 @@
     form:function(s){ return textForm([{ key:'style', label:'Style', type:'select', value:s.style || 'digital', options:[['digital', 'Digital'], ['analog', 'Analogue']] }, { key:'seconds', label:'Show seconds', type:'checkbox', value:!!s.seconds }, { key:'date', label:'Show the date', type:'checkbox', value:s.date !== false }, { key:'h12', label:'Clock format', type:'select', value:s.h12 || 'auto', options:[['auto', 'Device default'], ['off', '24-hour'], ['on', '12-hour']] }, { key:'tz', label:'Time zone (optional)', value:s.tz || '', placeholder:'e.g. America/New_York', hint:'Leave empty for this device\u2019s time zone.' }, { key:'label', label:'Label (optional)', value:s.label || '' }]); }
   };
 
-  W.weather = { name:'Weather', desc:'Current conditions and forecast from Open-Meteo.', icon:'🌤️', w:8, h:6,
+  W.weather = { name:'Weather', desc:'Current conditions and a forecast for any place.', icon:'🌤️', w:8, h:6,
     render:function(body, s){
       if (!s.loc) { body.appendChild(h('p', { className:'muted', text:'Open the widget settings to choose a location.' })); return; }
       function load(){ weatherData({ lat:s.loc.lat, lon:s.loc.lon, units:s.units }).then(function(j){
@@ -117,7 +117,7 @@
           h('div', { className:'vc-wx-meta muted' }, [h('span', { text:'💧 ' + deg(c.humidity) + '%' }), h('span', { text:'💨 ' + deg(c.wind) + ' ' + j.wind_units })]),
           h('div', { className:'vc-wx-hours' }, j.hours.slice(0, 8).map(function(x){ return h('div', { className:'vc-wx-h' }, [h('small', { className:'muted', text:x.time.slice(11, 16) }), h('span', { text:wx(x.code).icon }), h('strong', { text:deg(x.temp) + '°' }), x.rain ? h('small', { className:'vc-wx-rain', text:x.rain + '%' }) : null]); })),
           h('div', { className:'vc-wx-days' }, j.days.slice(0, 5).map(function(d, i){ return h('div', { className:'vc-wx-d' }, [h('small', { text:i === 0 ? 'Today' : new Date(d.date + 'T12:00').toLocaleDateString([], { weekday:'short' }) }), h('span', { text:wx(d.code).icon }), h('strong', { text:deg(d.max) + '°' }), h('small', { className:'muted', text:deg(d.min) + '°' })]); })),
-          h('small', { className:'vc-w-source muted', text:'Open-Meteo' + (j.stale ? ' · offline, showing last update' : '') })]));
+          j.stale ? h('small', { className:'vc-w-source muted', text:'Offline, showing the last update' }) : null]));
       }).catch(function(e){ wErr(body, e); }); }
       loading(body); load(); return poll(load, 600000, s);
     },
@@ -127,127 +127,25 @@
     }
   };
 
-  W.calendar = { name:'Calendar', desc:'Upcoming events from ICS / webcal calendar links.', icon:'📅', w:8, h:7,
-    render:function(body, s){
-      var urls = String(s.urls || '').split(/\s+/).filter(Boolean);
-      if (!urls.length) { body.appendChild(h('p', { className:'muted', text:'Add a calendar link (ICS or webcal) in the widget settings.' })); return; }
-      function load(){
-        Promise.all(urls.slice(0, 6).map(function(u, i){ return call('/misc/widget/ics?days=' + (s.days || 14) + '&url=' + encodeURIComponent(u)).then(function(j){ return j.events.map(function(e){ e.cal = i; return e; }); }).catch(function(){ return []; }); })).then(function(sets){
-          var events = [].concat.apply([], sets).sort(function(a, b){ return a.start - b.start; }).slice(0, 40);
-          if (!events.length) { body.replaceChildren(h('p', { className:'muted', text:'Nothing coming up.' })); return; }
-          var groups = [], last = '';
-          events.forEach(function(e){ var d = new Date(e.start * 1000), key = d.toDateString(); if (key !== last) { last = key; var today = new Date(), tom = new Date(Date.now() + 86400000); groups.push(h('li', { className:'vc-cal-day', text:key === today.toDateString() ? 'Today' : key === tom.toDateString() ? 'Tomorrow' : d.toLocaleDateString([], { weekday:'long', day:'numeric', month:'short' }) })); }
-            groups.push(h('li', { className:'vc-cal-ev cal' + (e.cal % 6) }, [h('span', { className:'vc-cal-time', text:e.all_day ? 'All day' : d.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }) }), h('span', { className:'vc-cal-title' }, [h('strong', { text:e.title || '(no title)' }), e.location ? h('small', { className:'muted', text:e.location }) : null])])); });
-          body.replaceChildren(list(groups, 'vc-cal'));
-        });
-      }
-      loading(body); load(); return poll(load, 900000, s);
-    },
-    form:function(s){ return textForm([{ key:'urls', label:'Calendar links (one per line)', type:'textarea', value:s.urls || '', placeholder:'https://…/basic.ics', hint:'Private Google/Outlook/iCloud ICS links work. Public internet addresses only.' }, { key:'days', label:'Days ahead', type:'number', min:1, max:60, value:s.days || 14 }]); }
-  };
-
-  // Bin day and other repeating reminders, computed on the device.
-  function nextOccurrence(r, from){
-    var start = r.start ? new Date(r.start + 'T00:00') : new Date(from.getFullYear(), from.getMonth(), from.getDate());
-    var day = new Date(from.getFullYear(), from.getMonth(), from.getDate());
-    if (r.repeat === 'once') return start >= day ? start : null;
-    for (var i = 0; i < 400; i++) {
-      var d = new Date(day.getFullYear(), day.getMonth(), day.getDate() + i);
-      if (d < start) continue;
-      if (r.repeat === 'monthly') { if (d.getDate() === start.getDate()) return d; continue; }
-      if (d.getDay() !== Number(r.weekday != null ? r.weekday : start.getDay())) continue;
-      var weeks = Math.max(1, Number(r.every || 1)), diff = Math.round((d - start) / 604800000);
-      if (diff % weeks === 0) return d;
-    }
-    return null;
+  // Calendar and Reminders widgets live in vc-calendar.js (loaded with the first one on a board).
+  function calMod(){ return A.loadModule('vc-calendar.js', 'VaultcastCalendar'); }
+  function lazyWidget(method){
+    return function(body, s, ctx){
+      var stop = null, gone = false; loading(body);
+      calMod().then(function(m){ if (gone || !body.isConnected) return; body.replaceChildren(); stop = m[method](body, s, ctx); }).catch(function(e){ wErr(body, e); });
+      return function(){ gone = true; if (typeof stop === 'function') stop(); };
+    };
   }
-  W.reminders = { name:'Bin day & reminders', desc:'Bin collections and repeating reminders with a heads-up the evening before.', icon:'🗑️', w:6, h:6,
-    render:function(body, s){
-      var items = (s.items || []).map(function(r){ return { r:r, next:nextOccurrence(r, new Date()) }; }).filter(function(x){ return x.next; }).sort(function(a, b){ return a.next - b.next; });
-      if (!items.length) { body.appendChild(h('p', { className:'muted', text:'Add bin collections or reminders in the widget settings.' })); return; }
-      var today = new Date(); today.setHours(0, 0, 0, 0);
-      body.appendChild(list(items.map(function(x){
-        var days = Math.round((x.next - today) / 86400000), when = days === 0 ? 'Today' : days === 1 ? 'Tomorrow' : days < 7 ? x.next.toLocaleDateString([], { weekday:'long' }) : x.next.toLocaleDateString([], { day:'numeric', month:'short' });
-        var urgent = days === 0 || (days === 1 && new Date().getHours() >= 16);
-        return h('li', { className:'vc-rem' + (urgent ? ' urgent' : '') + (days <= 1 ? ' soon' : ''), style:x.r.colour ? '--vc-rem:' + x.r.colour : null }, [h('span', { className:'vc-rem-icon', text:x.r.emoji || '🗑️' }), h('span', { className:'vc-rem-title' }, [h('strong', { text:x.r.title || 'Reminder' }), h('small', { className:'muted', text:urgent && days === 1 ? 'Put it out tonight' : (x.r.note || '') })]), h('span', { className:'vc-rem-when', text:when })]);
-      }), 'vc-rems'));
-      var t = setTimeout(function(){ if (body.isConnected) { body.replaceChildren(); W.reminders.render(body, s); } }, 3600000); return function(){ clearTimeout(t); };
-    },
-    form:function(s){
-      var items = (s.items || []).map(function(x){ return Object.assign({}, x); }), wrap = h('div', { className:'vc-rem-edit' });
-      var DAYS = [['1', 'Monday'], ['2', 'Tuesday'], ['3', 'Wednesday'], ['4', 'Thursday'], ['5', 'Friday'], ['6', 'Saturday'], ['0', 'Sunday']];
-      function draw(){
-        wrap.replaceChildren.apply(wrap, items.map(function(r, i){
-          function bind(el, k, num){ el.addEventListener('input', function(){ r[k] = num ? Number(el.value) : el.value; }); el.addEventListener('change', function(){ r[k] = num ? Number(el.value) : el.value; if (k === 'repeat') draw(); }); return el; }
-          return h('fieldset', { className:'vc-rem-row' }, [
-            bind(input('text', r.emoji || '🗑️', { maxlength:'4', className:'vc-emoji-input', 'aria-label':'Emoji' }), 'emoji'), bind(input('text', r.title || '', { placeholder:'e.g. Recycling', 'aria-label':'Title' }), 'title'),
-            bind(select([['weekly', 'Weekly'], ['monthly', 'Monthly'], ['once', 'Once']], r.repeat || 'weekly', { 'aria-label':'Repeat' }), 'repeat'),
-            (r.repeat || 'weekly') === 'weekly' ? bind(select(DAYS, String(r.weekday != null ? r.weekday : 1), { 'aria-label':'Day' }), 'weekday', true) : null,
-            (r.repeat || 'weekly') === 'weekly' ? bind(select([['1', 'every week'], ['2', 'every 2 weeks'], ['3', 'every 3 weeks'], ['4', 'every 4 weeks']], String(r.every || 1), { 'aria-label':'Interval' }), 'every', true) : null,
-            bind(input('date', r.start || '', { 'aria-label':(r.repeat || 'weekly') === 'weekly' ? 'First collection' : 'Date', title:'Start date (sets which week counts for fortnightly collections)' }), 'start'),
-            bind(input('color', r.colour || '#59e9ff', { 'aria-label':'Colour' }), 'colour'),
-            btn('×', function(){ items.splice(i, 1); draw(); }, 'ghost small', { 'aria-label':'Remove reminder' })]);
-        }).concat([btn('Add reminder', function(){ items.push({ emoji:'🗑️', title:'', repeat:'weekly', weekday:1, every:1, colour:'#59e9ff' }); draw(); }, 'ghost')]));
-      }
-      draw();
-      return { el:h('div', null, [h('p', { className:'muted', text:'For fortnightly bins, set the date of a known collection so the right week is used.' }), wrap]), read:function(){ return { items:items.filter(function(x){ return x.title || x.emoji; }) }; } };
-    }
-  };
+  function lazyForm(method){
+    return function(s){
+      var holder = h('div', { className:'vc-form' }, [h('p', { className:'muted', text:'Loading…' })]), inner = null;
+      calMod().then(function(m){ inner = m[method](s); holder.replaceChildren(inner.el); }).catch(function(e){ holder.replaceChildren(h('p', { className:'muted', text:(e && e.message) || 'Unavailable.' })); });
+      return { el:holder, read:function(){ return inner ? inner.read() : s; } };
+    };
+  }
+  W.calendar = { name:'Calendar', desc:'Upcoming events from your calendars, shared calendars, episode releases and ICS links.', icon:'📅', w:8, h:7, render:lazyWidget('calendarWidget'), form:lazyForm('calendarForm') };
+  W.reminders = { name:'Reminders', desc:'Bins, bills, medication, car, birthdays and anything that repeats, with done and snooze.', icon:'🔔', w:6, h:6, render:lazyWidget('remindersWidget'), form:lazyForm('remindersForm') };
 
-  W.recordings = { name:'Recordings', desc:'What is recording now and what is scheduled next.', icon:'⏺️', w:6, h:6,
-    render:function(body, s){
-      function load(){ call('/misc/widget/recordings').then(function(j){
-        if (j.unavailable) { body.replaceChildren(h('p', { className:'muted', text:'Live TV is turned off on this server.' })); return; }
-        var rows = j.recording.map(function(r){ return h('li', { className:'vc-rec live' }, [h('span', { className:'vc-rec-dot', 'aria-label':'Recording' }), h('span', null, [h('strong', { text:r.title }), h('small', { className:'muted', text:r.channel + ' · until ' + new Date(r.end * 1000).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }) })])]); })
-          .concat(j.upcoming.map(function(r){ var d = new Date(r.start * 1000); return h('li', { className:'vc-rec' }, [h('span', { className:'vc-rec-time', text:d.toLocaleDateString([], { weekday:'short' }) + ' ' + d.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }) }), h('span', null, [h('strong', { text:r.title }), h('small', { className:'muted', text:r.channel })])]); }));
-        body.replaceChildren(rows.length ? list(rows) : h('p', { className:'muted', text:'No recordings scheduled.' }));
-      }).catch(function(e){ wErr(body, e); }); }
-      loading(body); load(); return poll(load, 60000, s);
-    }
-  };
-  W.downloads = { name:'Downloads', desc:'Progress of downloads in the request queue.', icon:'⬇️', w:6, h:6,
-    render:function(body, s){
-      function load(){ call('/misc/widget/downloads').then(function(j){
-        if (j.unavailable) { body.replaceChildren(h('p', { className:'muted', text:'Downloads are not available for your account.' })); return; }
-        body.replaceChildren(j.items.length ? list(j.items.map(function(d){ var pct = Math.max(0, Math.min(100, Number(d.percent || 0))); return h('li', { className:'vc-dl' }, [h('span', { className:'vc-dl-name', text:d.name }), h('span', { className:'vc-progress', role:'progressbar', 'aria-valuenow':String(Math.round(pct)), 'aria-valuemin':'0', 'aria-valuemax':'100' }, [h('i', { style:'width:' + pct + '%' })]), h('small', { className:'muted', text:Math.round(pct) + '% · ' + (d.status || '') })]); })) : h('p', { className:'muted', text:'Nothing downloading.' }));
-      }).catch(function(e){ wErr(body, e); }); }
-      loading(body); load(); return poll(load, 10000, s);
-    }
-  };
-  function pick(o, keys){ for (var i = 0; i < keys.length; i++) if (o && o[keys[i]] != null) return o[keys[i]]; return null; }
-  function pct(v){ if (v == null) return null; if (typeof v === 'number') return v; if (typeof v === 'object') { var p = pick(v, ['percent', 'used_percent', 'pct']); if (p != null) return Number(p); var u = pick(v, ['used']), t = pick(v, ['total', 'size']); if (u != null && t) return 100 * u / t; } return null; }
-  W.health = { name:'NAS health', desc:'CPU, memory, disks, temperature and services.', icon:'🩺', w:6, h:6,
-    render:function(body, s){
-      function load(){ call('/misc/widget/health').then(function(j){
-        if (j.limited) { body.replaceChildren(h('div', { className:'vc-health-ok' }, [h('span', { className:'vc-rec-dot ok' }), h('strong', { text:'Server online' }), h('small', { className:'muted', text:'Detailed health is visible to administrators.' })])); return; }
-        var gauges = [['CPU', pct(pick(j, ['cpu_percent', 'cpu']))], ['Memory', pct(pick(j, ['memory', 'mem']))], ['Media disk', pct(pick(j, ['media_disk', 'disk']))], ['Data disk', pct(pick(j, ['data_disk']))]].filter(function(g){ return g[1] != null && !isNaN(g[1]); });
-        var temp = pick(j, ['temperature', 'temp']); if (temp && typeof temp === 'object') temp = pick(temp, ['cpu', 'value', 'max']);
-        body.replaceChildren(h('div', { className:'vc-health' }, [
-          h('div', { className:'vc-gauges' }, gauges.map(function(g){ var v = Math.round(g[1]); return h('div', { className:'vc-gauge' + (v > 90 ? ' bad' : v > 75 ? ' warn' : ''), style:'--vc-p:' + v }, [h('strong', { text:v + '%' }), h('small', { className:'muted', text:g[0] })]); })),
-          h('p', { className:'muted' }, [j.uptime_human ? 'Up ' + j.uptime_human : '', temp ? ' · ' + Math.round(Number(temp)) + '°C' : '', j.load ? ' · load ' + (Array.isArray(j.load) ? j.load.slice(0, 3).map(function(x){ return Number(x).toFixed(2); }).join(' ') : j.load) : '']),
-          j.services ? h('div', { className:'vc-services' }, j.services.slice(0, 8).map(function(s){ var ok = s.active === true || s.active === 'active' || s.active === 'running'; return h('span', { className:'vc-chip' + (ok ? ' ok' : ' bad'), text:(ok ? '● ' : '○ ') + s.name }); })) : null]));
-      }).catch(function(e){ wErr(body, e); }); }
-      loading(body); load(); return poll(load, 20000, s);
-    }
-  };
-  W.recent = { name:'Recently added', desc:'The newest films and shows in the library.', icon:'🆕', w:12, h:6,
-    render:function(body, s){
-      function load(){ call('/misc/widget/recent?n=' + (s.count || 12)).then(function(j){
-        if (!j.items.length) { body.replaceChildren(h('p', { className:'muted', text:'Nothing new yet.' })); return; }
-        body.replaceChildren(h('div', { className:'vc-poster-row' }, j.items.map(function(it){ return h('button', { type:'button', className:'vc-poster', title:it.title, onClick:function(){ if (it.show_key && A.openShow) A.openShow(it.show_key); else if (A.openMovie) A.openMovie(it.id); } }, [h('img', { src:url(it.poster), alt:'', loading:'lazy' }), h('span', { className:'vc-poster-cap' }, [h('strong', { text:it.title }), h('small', { className:'muted', text:it.subtitle || '' })])]); })));
-      }).catch(function(e){ wErr(body, e); }); }
-      loading(body); load(); return poll(load, 600000, s);
-    },
-    form:function(s){ return textForm([{ key:'count', label:'How many', type:'number', min:4, max:30, value:s.count || 12 }]); }
-  };
-  W.nowplaying = { name:'Now playing', desc:'What you and your friends are watching (admins see everyone).', icon:'▶️', w:8, h:5,
-    render:function(body, s){
-      function load(){ call('/misc/widget/nowplaying').then(function(j){
-        body.replaceChildren(j.sessions.length ? list(j.sessions.map(function(x){ return h('li', { className:'vc-np' }, [h('img', { src:url(x.poster), alt:'', loading:'lazy' }), h('span', { className:'vc-np-copy' }, [h('strong', { text:x.title }), h('small', { className:'muted', text:x.user.name + ' · ' + ago(x.updated_at) }), x.percent != null ? h('span', { className:'vc-progress' }, [h('i', { style:'width:' + x.percent + '%' })]) : null])]); })) : h('p', { className:'muted', text:'Nobody is watching right now.' }));
-      }).catch(function(e){ wErr(body, e); }); }
-      loading(body); load(); return poll(load, 20000, s);
-    }
-  };
   W.notes = { name:'Notes', desc:'A sticky note. Lines starting with [ ] become checkboxes.', icon:'📝', w:6, h:6,
     render:function(body, s, ctx){
       var ta = h('textarea', { className:'vc-note', placeholder:'Write something…', 'aria-label':'Note' }); ta.value = s.text || '';
@@ -269,14 +167,6 @@
       return function(){ clearTimeout(t); };
     },
     form:function(s){ return textForm([{ key:'colour', label:'Tint', type:'color', value:s.colour || '#f5dc7a' }]); }
-  };
-  W.slideshow = { name:'Slideshow', desc:'Library frames and posters, or your own image links, with a slow pan.', icon:'🖼️', w:12, h:8,
-    render:function(body, s){
-      var stage = h('div', { className:'vc-slides' }); body.appendChild(stage); body.classList.add('vc-flush');
-      var t = kenBurns(stage, function(){ return s.source === 'urls' ? Promise.resolve(String(s.urls || '').split(/\s+/).filter(function(u){ return /^https?:\/\//i.test(u); }).map(function(u){ return { url:u, title:'' }; })) : call('/misc/ambient/stills?n=30&kind=' + (s.source || 'mixed')).then(function(j){ return j.stills.map(function(x){ return { url:url(x.url), title:x.title + (x.year ? ' (' + x.year + ')' : '') }; }); }); }, { interval:(s.seconds || 12) * 1000, captions:s.captions !== false });
-      return t.stop;
-    },
-    form:function(s){ return textForm([{ key:'source', label:'Pictures', type:'select', value:s.source || 'mixed', options:[['mixed', 'Library frames and posters'], ['frames', 'Library frames'], ['posters', 'Library posters'], ['urls', 'My image links']] }, { key:'urls', label:'Image links (one per line, used with “My image links”)', type:'textarea', value:s.urls || '' }, { key:'seconds', label:'Seconds per picture', type:'number', min:4, max:300, value:s.seconds || 12 }, { key:'captions', label:'Show titles', type:'checkbox', value:s.captions !== false }]); }
   };
   W.rss = { name:'News feed', desc:'Headlines from any RSS or Atom feed.', icon:'📰', w:8, h:7,
     render:function(body, s){
@@ -310,6 +200,291 @@
       loading(body); load(); return poll(load, 120000, s);
     },
     form:function(s){ return textForm([{ key:'board', label:'Board', type:'select', value:s.board || 'points', options:[['points', 'Points'], ['teams', 'Teams'], ['blocks', 'Stackfall'], ['snake', 'Neon Snake'], ['merge', '2048 Merge'], ['breakout', 'Brickbreak'], ['quiz', 'Quiz'], ['emu-time', 'Most time played'], ['emu-sessions', 'Most games played']] }, { key:'period', label:'Period', type:'select', value:s.period || 'week', options:[['day', 'Today'], ['week', 'This week'], ['month', 'This month'], ['all', 'All time']] }]); }
+  };
+
+  // ------------------------------------------------------------------ webcams (Board widget + Ambient)
+  /** Strict YouTube video id from watch, youtu.be, live, embed and shorts links; anything else gives ''. */
+  function youtubeId(u){
+    var x; try { x = new URL(String(u || '').trim()); } catch (e) { return ''; }
+    if (x.protocol !== 'https:' && x.protocol !== 'http:') return '';
+    var host = x.hostname.toLowerCase().replace(/^(www|m|music)\./, ''), path = x.pathname, id = '';
+    if (host === 'youtu.be') id = (/^\/([A-Za-z0-9_-]{11})\/?$/.exec(path) || [])[1] || '';
+    else if (host === 'youtube.com' || host === 'youtube-nocookie.com') {
+      if (path === '/watch' || path === '/watch/') id = x.searchParams.get('v') || '';
+      else id = (/^\/(?:live|embed|shorts|v)\/([A-Za-z0-9_-]{11})\/?$/.exec(path) || [])[1] || '';
+    }
+    return /^[A-Za-z0-9_-]{11}$/.test(id) ? id : '';
+  }
+  function safeHttpUrl(u){ u = String(u || '').trim(); return /^https?:\/\/[^\s"'<>\\]+$/i.test(u) ? u : ''; }
+  /** Which player a webcam needs: an explicit choice wins, otherwise it is worked out from the address. */
+  function camKind(c){
+    var u = String(c.url || ''), k = c.kind || 'auto';
+    if (youtubeId(u)) return 'youtube';
+    if (k !== 'auto' && k !== 'youtube') return k;
+    if (/\.(m3u8|mp4|webm)(?:[?#]|$)/i.test(u)) return 'video';
+    if (/mjpe?g|\/video\.cgi|faststream|\/stream(?:[?\/#]|$)|action=stream/i.test(u)) return 'mjpeg';
+    return 'image';
+  }
+  function camLabel(c){
+    var n = String(c.name || '').trim(); if (n) return n;
+    if (youtubeId(c.url)) return 'YouTube live';
+    try { return new URL(c.url).hostname.replace(/^www\./, ''); } catch (e) { return 'Webcam'; }
+  }
+  /** Build the element for one webcam. Returns { el, stop }. Images refresh; MJPEG and video stream; YouTube embeds muted. */
+  function camView(c, alive){
+    var kind = camKind(c), url = safeHttpUrl(c.url), el, t = 0, hls = null;
+    if (kind === 'youtube') {
+      el = h('iframe', { className:'vc-cam vc-cam-yt', src:'https://www.youtube-nocookie.com/embed/' + youtubeId(c.url) + '?autoplay=1&mute=1&playsinline=1&rel=0&modestbranding=1', title:camLabel(c),
+        allow:'autoplay; encrypted-media; picture-in-picture', allowfullscreen:true, referrerpolicy:'strict-origin-when-cross-origin', loading:'lazy' });
+    } else if (!url) el = h('p', { className:'vc-kb-empty', text:'This webcam address is not valid.' });
+    else if (kind === 'embed') el = h('iframe', { src:url, className:'vc-cam', allow:'autoplay; fullscreen', referrerpolicy:'no-referrer', sandbox:'allow-scripts allow-same-origin allow-presentation', title:camLabel(c), loading:'lazy' });
+    else if (kind === 'video') { el = h('video', { className:'vc-cam', muted:true, autoplay:true, playsinline:true }); el.muted = true; playStream(el, url, alive).then(function(s){ hls = s; }).catch(function(){}); }
+    else if (kind === 'mjpeg') el = h('img', { className:'vc-cam', alt:camLabel(c), src:url, referrerpolicy:'no-referrer' });
+    else {
+      var bust = function(){ return url + (url.indexOf('?') >= 0 ? '&' : '?') + '_t=' + Date.now(); };
+      el = h('img', { className:'vc-cam', alt:camLabel(c), src:bust(), referrerpolicy:'no-referrer' });
+      t = setInterval(function(){ if (!document.hidden && el.isConnected) el.src = bust(); }, Math.max(5, Number(c.refresh) || 30) * 1000);
+    }
+    return { el:el, stop:function(){ clearInterval(t); if (hls) { try { hls.destroy(); } catch (e) {} hls = null; } if (el.tagName === 'VIDEO') { el.pause(); el.removeAttribute('src'); } if (kind === 'mjpeg' && el.tagName === 'IMG') el.removeAttribute('src'); if (el.tagName === 'IFRAME') el.src = 'about:blank'; } };
+  }
+  var CAM_KINDS = [['auto', 'Detect from the address'], ['youtube', 'YouTube live'], ['image', 'Still image (refreshes)'], ['mjpeg', 'MJPEG stream'], ['video', 'Video / HLS stream'], ['embed', 'Embedded page']];
+  /** Editable list of { name, url, kind, refresh } used by the widget settings and the Ambient admin panel. */
+  function camEditor(cams){
+    var box = h('div', { className:'vc-cam-edit' });
+    function draw(){
+      box.replaceChildren.apply(box, cams.map(function(c, i){
+        function bind(el, k, num){ ['input', 'change'].forEach(function(ev){ el.addEventListener(ev, function(){ c[k] = num ? Number(el.value) : el.value; if (k === 'url' || k === 'kind') note.textContent = hint(); }); }); return el; }
+        function hint(){ if (!c.url) return ''; if (!safeHttpUrl(c.url)) return 'Use an http(s) address.'; var k = camKind(c); return k === 'youtube' ? 'YouTube video ' + youtubeId(c.url) + ' (plays muted)' : (c.kind || 'auto') === 'auto' ? 'Detected: ' + (CAM_KINDS.filter(function(x){ return x[0] === k; })[0] || ['', k])[1] : ''; }
+        var note = h('small', { className:'muted vc-cam-note', text:'' }); note.textContent = hint();
+        return h('fieldset', { className:'vc-rem-row vc-cam-row' }, [bind(input('text', c.name || '', { placeholder:'Name (shown as the label)', 'aria-label':'Webcam name', maxlength:'60' }), 'name'), bind(input('url', c.url || '', { placeholder:'https://… or a YouTube link', 'aria-label':'Webcam address' }), 'url'), bind(select(CAM_KINDS, c.kind || 'auto', { 'aria-label':'Type' }), 'kind'), bind(input('number', c.refresh || 30, { min:'5', max:'3600', 'aria-label':'Refresh seconds', title:'Refresh every N seconds (still images)' }), 'refresh', true), btn('×', function(){ cams.splice(i, 1); draw(); }, 'ghost small', { 'aria-label':'Remove webcam' }), note]);
+      }).concat([btn('Add webcam', function(){ cams.push({ name:'', url:'', kind:'auto', refresh:30 }); draw(); }, 'ghost')]));
+    }
+    draw(); return box;
+  }
+  var camsCache = null;
+  /** The user's saved webcams (server-side, per user), shared by the Webcams and Media widgets and Ambient. */
+  function myCams(fresh){ if (!fresh && camsCache) return camsCache; camsCache = call('/misc/prefs').then(function(j){ return j.webcams || []; }).catch(function(e){ camsCache = null; throw e; }); return camsCache; }
+  function saveCams(list){ camsCache = call('/misc/prefs', { method:'POST', body:{ webcams:list } }).then(function(j){ return j.webcams || []; }); return camsCache; }
+  /**
+   * Show webcams one at a time with a crossfade and a small name label. Only one player is alive: the
+   * previous image/stream/iframe is torn down as soon as the fade to the next one finishes.
+   * opts: { seconds, pauseOnHover, fade, start (index), controls }
+   */
+  function camCycle(stage, cams, opts){
+    opts = opts || {};
+    var i = opts.start || 0, cur = null, timer = 0, stopped = false, hovering = false, fadeMs = Math.max(0, (opts.fade == null ? 0.8 : opts.fade) * 1000);
+    var label = h('div', { className:'vc-cam-label' }), wrap = h('div', { className:'vc-cam-cycle' });
+    stage.replaceChildren(wrap, label);
+    if (opts.controls !== false && cams.length > 1) stage.appendChild(btn('›', function(){ clearTimeout(timer); step(); }, 'ghost small vc-cam-next', { 'aria-label':'Next webcam' }));
+    function alive(){ return !stopped && stage.isConnected; }
+    function arm(){ clearTimeout(timer); if (cams.length > 1 && !stopped) timer = setTimeout(function(){ if (hovering || document.hidden) { arm(); return; } step(); }, Math.max(10, Math.min(600, Number(opts.seconds) || 30)) * 1000); }
+    function step(){
+      if (!alive()) return;
+      var c = cams[i % cams.length]; i++;
+      var v = camView(c, alive), layer = h('div', { className:'vc-cam-layer' }, [v.el]), old = cur, shown = false;
+      wrap.appendChild(layer);
+      function reveal(){ if (shown || stopped) return; shown = true; layer.classList.add('show'); label.textContent = camLabel(c); if (old) { old.layer.classList.remove('show'); setTimeout(function(){ old.v.stop(); old.layer.remove(); }, fadeMs + 50); } }
+      if (v.el.tagName === 'IMG') { v.el.addEventListener('load', reveal, { once:true }); v.el.addEventListener('error', reveal, { once:true }); }
+      else if (v.el.tagName === 'VIDEO') v.el.addEventListener('playing', reveal, { once:true });
+      else if (v.el.tagName === 'IFRAME') v.el.addEventListener('load', reveal, { once:true });
+      setTimeout(reveal, 4000); if (!old) reveal();
+      cur = { v:v, layer:layer };
+      arm();
+    }
+    if (opts.pauseOnHover) { stage.addEventListener('pointerenter', function(){ hovering = true; stage.classList.add('paused'); }); stage.addEventListener('pointerleave', function(){ hovering = false; stage.classList.remove('paused'); }); }
+    stage.style.setProperty('--vc-cam-fade', fadeMs + 'ms');
+    if (cams.length) step(); else stage.replaceChildren(h('p', { className:'vc-kb-empty', text:'No webcams chosen yet.' }));
+    return { stop:function(){ stopped = true; clearTimeout(timer); if (cur) { cur.v.stop(); } wrap.replaceChildren(); } };
+  }
+  /** Checklist of saved webcams (empty selection = all of them). */
+  function camChooser(cams, chosen, single){
+    var box = h('div', { className:'vc-cam-choose' });
+    if (!cams.length) { box.appendChild(h('p', { className:'muted', text:'No saved webcams yet. Add them in a Webcams widget’s settings.' })); return { el:box, read:function(){ return single ? '' : []; } }; }
+    if (single) { var sel = select(cams.map(function(c){ return [c.id, camLabel(c)]; }), chosen || cams[0].id); box.appendChild(sel); return { el:box, read:function(){ return sel.value; } }; }
+    var checks = cams.map(function(c){ var cb = input('checkbox', !chosen || !chosen.length || chosen.indexOf(c.id) >= 0); box.appendChild(h('label', { className:'vc-check' }, [cb, h('span', { text:camLabel(c) })])); return [c.id, cb]; });
+    return { el:box, read:function(){ var on = checks.filter(function(x){ return x[1].checked; }).map(function(x){ return x[0]; }); return on.length === checks.length ? [] : on; } };
+  }
+  function pickCams(all, ids){ return ids && ids.length ? all.filter(function(c){ return ids.indexOf(c.id) >= 0; }) : all; }
+  W.webcams = { name:'Webcams', desc:'Live webcams: YouTube live streams, camera snapshots, MJPEG or HLS.', icon:'📷', w:8, h:6,
+    render:function(body, s){
+      body.classList.add('vc-flush');
+      var stage = h('div', { className:'vc-cam-stage' }), cyc = null, views = [], gone = false; body.appendChild(stage);
+      (s.cams && s.cams.length && !s.ids ? Promise.resolve(s.cams) : myCams().then(function(all){ return pickCams(all, s.ids); })).then(function(cams){
+        if (gone) return;
+        cams = cams.filter(function(c){ return c && (youtubeId(c.url) || safeHttpUrl(c.url)); });
+        if (!cams.length) { body.classList.remove('vc-flush'); stage.replaceChildren(h('p', { className:'muted', text:'Add webcams (YouTube live links work) in the widget settings.' })); return; }
+        if (s.layout === 'grid' && cams.length > 1) {
+          stage.classList.add('grid', 'n' + Math.min(6, cams.length));
+          views = cams.slice(0, 6).map(function(c){ var v = camView(c, function(){ return !gone && stage.isConnected; }); stage.appendChild(h('figure', { className:'vc-cam-cell' }, [v.el, h('figcaption', { className:'vc-cam-label', text:camLabel(c) })])); return v; });
+          return;
+        }
+        cyc = camCycle(stage, cams, { seconds:s.seconds || 60, pauseOnHover:!!s.hoverPause, fade:s.fade == null ? 0.8 : s.fade });
+      }).catch(function(e){ if (!gone) wErr(body, e); });
+      return function(){ gone = true; if (cyc) cyc.stop(); views.forEach(function(v){ v.stop(); }); };
+    },
+    form:function(s){
+      var holder = h('div', { className:'vc-form' }, [h('p', { className:'muted', text:'Loading your webcams…' })]), cams = null, chooser = null;
+      var layout = select([['rotate', 'One at a time'], ['grid', 'Grid (up to 6)']], s.layout || 'rotate'), secs = input('number', s.seconds || 60, { min:'10', max:'600' }), hover = input('checkbox', !!s.hoverPause);
+      myCams(true).catch(function(){ return []; }).then(function(saved){
+        cams = saved.map(function(c){ return Object.assign({}, c); });
+        // Older widgets kept their own list: offer it as the start of the saved list.
+        if (!cams.length && s.cams && s.cams.length) cams = s.cams.map(function(c){ return { name:c.name || '', url:c.url, kind:c.kind || 'auto', refresh:c.refresh || 30 }; });
+        chooser = camChooser(saved, s.ids, false);
+        holder.replaceChildren(field('Your webcams', camEditor(cams), 'Saved to your account and shared with the Media widget. YouTube watch, youtu.be, live, embed and shorts links play muted with the privacy-enhanced player.'), field('Show on this widget', chooser.el, 'New webcams appear here after saving.'), field('Layout', layout), field('Seconds per webcam (10–600)', secs), h('label', { className:'vc-check' }, [hover, h('span', { text:'Pause while the pointer is over it' })]));
+      });
+      return { el:holder, read:function(){
+        var out = { layout:layout.value, seconds:Math.max(10, Math.min(600, Number(secs.value) || 60)), hoverPause:hover.checked, ids:chooser ? chooser.read() : (s.ids || []) };
+        if (cams) { var clean = cams.filter(function(c){ return c.url; }).map(function(c){ return { id:c.id, name:String(c.name || '').trim().slice(0, 60), url:String(c.url).trim(), kind:c.kind || 'auto', refresh:Number(c.refresh) || 30 }; }); saveCams(clean).catch(err); out.cams = null; }
+        return out;
+      } };
+    }
+  };
+
+  // ------------------------------------------------------------------ your pictures (Ambient + Picture frame)
+  var picCache = null, picAt = 0;
+  function myPictures(fresh){
+    if (!fresh && picCache && Date.now() - picAt < 60000) return picCache;
+    picAt = Date.now(); picCache = call('/misc/pictures').catch(function(e){ picCache = null; throw e; });
+    return picCache;
+  }
+  function picUrl(p){ return url(p.url); }
+  /** Upload several pictures at once with one progress bar; resolves with the server's answer. */
+  function uploadPictures(files, onProgress){
+    return new Promise(function(resolve, reject){
+      var fd = new FormData(); Array.prototype.forEach.call(files, function(f){ fd.append('files[]', f, f.name); });
+      var x = new XMLHttpRequest(); x.open('POST', A.API + '/misc/pictures'); x.withCredentials = true; x.responseType = 'json';
+      x.upload.onprogress = function(e){ if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total); };
+      x.onload = function(){ var j = x.response || {}; if (x.status >= 200 && x.status < 300 && j.ok) resolve(j); else reject(j.error ? j : { error:x.status === 413 ? 'Those pictures are larger than the server accepts in one go. Try fewer at a time.' : 'Upload failed.' }); };
+      x.onerror = function(){ reject({ error:'Upload failed: the connection dropped.' }); };
+      x.send(fd);
+    });
+  }
+  /** Manager panel: upload (button or drag and drop), grid with select / delete. */
+  function picturesManager(onChange){
+    var box = h('div', { className:'vc-pics' }), grid = h('div', { className:'vc-pics-grid', role:'list' }), info = h('small', { className:'muted' }), bar = h('div', { className:'vc-pics-bar' }), prog = h('progress', { max:'1', value:'0', hidden:true, className:'vc-pics-prog' }), picked = {};
+    var file = h('input', { type:'file', multiple:true, accept:'image/jpeg,image/png,image/webp,image/gif,.jpg,.jpeg,.png,.webp,.gif', hidden:true, onChange:function(){ if (this.files.length) send(this.files); this.value = ''; } });
+    var addBtn = btn('Upload pictures', function(){ file.click(); }, 'primary small'), delBtn = btn('Delete selected', function(){ var ids = Object.keys(picked); if (!ids.length) return; A.confirmDialog('Delete ' + ids.length + ' picture' + (ids.length === 1 ? '' : 's') + '?', { okText:'Delete', danger:true }).then(function(ok){ if (!ok) return; call('/misc/pictures/delete', { method:'POST', body:{ ids:ids } }).then(function(j){ picked = {}; draw(j); picCache = Promise.resolve(j); picAt = Date.now(); if (onChange) onChange(j); }).catch(err); }); }, 'ghost small danger');
+    function send(files){
+      var list = Array.prototype.filter.call(files, function(f){ return /^image\/(jpeg|png|webp|gif)$/.test(f.type) || /\.(jpe?g|png|webp|gif)$/i.test(f.name); });
+      if (!list.length) { A.toast('Choose JPG, PNG, WebP or GIF pictures', { kind:'bad' }); return; }
+      prog.hidden = false; prog.value = 0; addBtn.disabled = true;
+      uploadPictures(list, function(p){ prog.value = p; }).then(function(j){
+        draw(j); picCache = Promise.resolve(j); picAt = Date.now(); if (onChange) onChange(j);
+        if (j.added && j.added.length) A.toast(j.added.length + ' picture' + (j.added.length === 1 ? '' : 's') + ' added', { kind:'ok' });
+        if (j.failed && j.failed.length) A.toast(j.failed[0].error + (j.failed.length > 1 ? ' (+' + (j.failed.length - 1) + ' more)' : ''), { kind:'bad', ms:6000 });
+      }).catch(err).then(function(){ prog.hidden = true; addBtn.disabled = false; });
+    }
+    function draw(j){
+      addBtn.hidden = !j.can_upload;
+      info.textContent = j.pictures.length + ' picture' + (j.pictures.length === 1 ? '' : 's') + ' · ' + size(j.bytes) + ' · up to ' + j.limits.file_mb + ' MB each (JPG, PNG, WebP, GIF)' + (j.can_upload ? '' : ' · your account cannot upload');
+      delBtn.hidden = !Object.keys(picked).length;
+      grid.replaceChildren.apply(grid, j.pictures.length ? j.pictures.map(function(p){
+        var cb = input('checkbox', !!picked[p.id], { 'aria-label':'Select ' + p.name, onChange:function(){ if (this.checked) picked[p.id] = 1; else delete picked[p.id]; tile.classList.toggle('picked', this.checked); delBtn.hidden = !Object.keys(picked).length; } });
+        var tile = h('div', { className:'vc-pic' + (picked[p.id] ? ' picked' : ''), role:'listitem', title:p.name + ' · ' + p.width + '×' + p.height + ' · ' + size(p.bytes) }, [h('img', { src:picUrl(p), alt:p.name, loading:'lazy', decoding:'async' }), h('label', { className:'vc-pic-pick' }, [cb]),
+          btn('×', function(){ A.confirmDialog('Delete “' + p.name + '”?', { okText:'Delete', danger:true }).then(function(ok){ if (ok) call('/misc/pictures/' + p.id, { method:'DELETE' }).then(function(r){ delete picked[p.id]; draw(r); picCache = Promise.resolve(r); picAt = Date.now(); if (onChange) onChange(r); }).catch(err); }); }, 'ghost small vc-pic-del', { 'aria-label':'Delete ' + p.name })]);
+        return tile;
+      }) : [h('p', { className:'muted vc-pics-empty', text:'No pictures yet. Upload some, or drop them here.' })]);
+    }
+    ['dragenter', 'dragover'].forEach(function(ev){ box.addEventListener(ev, function(e){ e.preventDefault(); box.classList.add('drag'); }); });
+    ['dragleave', 'drop'].forEach(function(ev){ box.addEventListener(ev, function(e){ e.preventDefault(); box.classList.remove('drag'); if (ev === 'drop' && e.dataTransfer && e.dataTransfer.files.length) send(e.dataTransfer.files); }); });
+    bar.append(addBtn, delBtn, info, file);
+    box.append(bar, prog, grid);
+    myPictures(true).then(draw).catch(function(e){ grid.replaceChildren(h('p', { className:'muted', text:(e && e.error) || 'Pictures unavailable.' })); });
+    return box;
+  }
+  function shuffle(a){ for (var k = a.length - 1; k > 0; k--) { var r = Math.floor(Math.random() * (k + 1)), t = a[k]; a[k] = a[r]; a[r] = t; } return a; }
+  /**
+   * Shared picture renderer for the Slideshow and Picture frame widgets: two layers with a crossfade
+   * (or a cut, or a slow Ken Burns pan), cover/contain fit, shuffle, optional captions. loader() resolves
+   * to [{ url, title }]; it is asked again after each full pass so new pictures show up.
+   */
+  function pictureStage(body, s, loader, opts){
+    opts = opts || {};
+    body.classList.add('vc-flush');
+    var trans = s.transition || opts.transition || 'fade', reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    var stage = h('div', { className:'vc-frame fit-' + (s.fit === 'contain' ? 'contain' : 'cover') + (trans === 'none' ? ' no-fade' : '') }), layers = [h('div', { className:'vc-frame-layer' }), h('div', { className:'vc-frame-layer' })], cap = h('div', { className:'vc-kb-cap' });
+    var front = 0, list = [], i = 0, stop = null, gone = false, every = Math.max(4, Number(s.seconds) || 20) * 1000;
+    stage.style.setProperty('--vc-frame-fade', Math.max(0.3, Math.min(6, Number(s.fade) || 1.5)) + 's');
+    layers.forEach(function(l){ stage.appendChild(l); }); if (s.captions) stage.appendChild(cap); body.appendChild(stage);
+    function showPic(p, tries){
+      var img = new Image(); img.decoding = 'async'; img.alt = p.title || ''; img.className = 'vc-frame-img';
+      img.onload = function(){
+        if (gone || !stage.isConnected) return;
+        var back = layers[1 - front];
+        if (trans === 'kenburns' && !reduce) { img.className += ' vc-kb-img ' + ['zoom-in-l', 'zoom-in-r', 'zoom-out-l', 'zoom-out-r', 'pan-up', 'pan-down'][Math.floor(Math.random() * 6)]; img.style.animationDuration = every * 1.25 + 'ms'; }
+        back.replaceChildren(img);
+        if (s.fit === 'contain') back.style.setProperty('--vc-frame-bg', 'url("' + img.src.replace(/["\\()\s]/g, '') + '")');
+        back.classList.add('show'); layers[front].classList.remove('show'); front = 1 - front; cap.textContent = p.title || '';
+      };
+      img.onerror = function(){ if ((tries || 0) < 3 && list.length > 1) next((tries || 0) + 1); };
+      img.src = p.url;
+    }
+    function load(){ return loader().then(function(l){ list = (l || []).filter(function(x){ return x && x.url; }); if (s.shuffle !== false && !opts.single) shuffle(list); i = 0; return list; }); }
+    function next(tries){
+      if (gone) return;
+      if (i >= list.length) { load().then(function(){ if (list.length) showPic(list[i++], tries); }).catch(function(){}); return; }
+      showPic(list[i++], tries);
+    }
+    load().then(function(){
+      if (gone || !stage.isConnected) return;
+      if (!list.length) { stage.replaceChildren(h('p', { className:'vc-kb-empty', text:opts.empty || 'No pictures yet.' })); return; }
+      if (opts.single) { showPic(opts.single(list) || list[0]); return; }
+      next(); if (list.length > 1 || opts.reload) stop = poll(next, every);
+    }).catch(function(e){ if (!gone) wErr(body, e); });
+    return function(){ gone = true; if (stop) stop(); };
+  }
+  function libraryPictures(s, n){
+    var art = s.art || (['frames', 'posters', 'mixed'].indexOf(s.source) >= 0 ? s.source : 'posters');
+    return call('/misc/ambient/stills?n=' + (n || 30) + '&kind=' + encodeURIComponent(art) + '&type=' + encodeURIComponent(s.library || 'both') + '&order=' + (s.order === 'recent' ? 'recent' : 'random') + '&variant=medium')
+      .then(function(j){ return j.stills.map(function(x){ return { url:url(x.url), title:x.title + (x.year ? ' (' + x.year + ')' : '') }; }); });
+  }
+  function ownPictures(){ return myPictures().then(function(j){ return j.pictures.map(function(p){ return { url:picUrl(p), title:'', id:p.id }; }); }); }
+  function linkPictures(s){ return String(s.urls || '').split(/\s+/).map(safeImageUrl).filter(Boolean).map(function(u){ return { url:u, title:'' }; }); }
+  /** Common settings rows: interval, fit, shuffle, transition. */
+  function pictureOptions(s, kb){
+    var secs = input('number', s.seconds || (kb ? 12 : 20), { min:'4', max:'3600' }), fit = select([['cover', 'Fill the frame (crop)'], ['contain', 'Show the whole picture']], s.fit || 'cover'), shuf = input('checkbox', s.shuffle !== false);
+    var trans = select([['fade', 'Crossfade'], ['kenburns', 'Crossfade with a slow pan'], ['none', 'Cut']], s.transition || (kb ? 'kenburns' : 'fade')), fade = select([['0.6', 'Quick'], ['1.5', 'Gentle'], ['3', 'Slow']], String(s.fade || 1.5));
+    return { els:[field('Seconds per picture', secs), field('Fit', fit), h('label', { className:'vc-check' }, [shuf, h('span', { text:'Shuffle' })]), field('Transition', trans), field('Crossfade speed', fade)],
+      read:function(){ return { seconds:Math.max(4, Number(secs.value) || 20), fit:fit.value, shuffle:shuf.checked, transition:trans.value, fade:Number(fade.value) || 1.5 }; } };
+  }
+  W.slideshow = { name:'Slideshow', desc:'Library posters and backdrops, your own pictures, or both, with a crossfade.', icon:'🎞️', w:12, h:8,
+    render:function(body, s){
+      var src = s.source === 'mine' || s.source === 'both' || s.source === 'urls' ? s.source : 'library';
+      return pictureStage(body, Object.assign({ captions:s.captions !== false && src !== 'mine', transition:'kenburns' }, s), function(){
+        if (src === 'urls') return Promise.resolve(linkPictures(s));
+        var parts = [];
+        if (src !== 'mine') parts.push(libraryPictures(s, src === 'both' ? 20 : 30).catch(function(){ return []; }));
+        if (src !== 'library') parts.push(ownPictures().catch(function(){ return []; }));
+        return Promise.all(parts).then(function(sets){ return [].concat.apply([], sets); });
+      }, { empty:src === 'mine' ? 'No pictures yet. Upload some in this widget’s settings.' : 'No pictures available yet.', reload:src !== 'mine' });
+    },
+    form:function(s){
+      var legacy = ['frames', 'posters', 'mixed'].indexOf(s.source) >= 0;
+      var source = select([['library', 'Library artwork'], ['mine', 'My pictures'], ['both', 'Both mixed'], ['urls', 'Image links']], legacy || !s.source ? 'library' : s.source);
+      var art = select([['posters', 'Posters'], ['frames', 'Backdrops and film stills'], ['mixed', 'Posters and stills']], s.art || (legacy ? s.source : 'posters'));
+      var lib = select([['both', 'Films and TV'], ['movies', 'Films only'], ['tv', 'TV only']], s.library || 'both'), order = select([['random', 'Random'], ['recent', 'Recently added']], s.order || 'random');
+      var urls = h('textarea', { rows:'3', placeholder:'https://…/photo.jpg' }); urls.value = s.urls || '';
+      var caps = input('checkbox', s.captions !== false), o = pictureOptions(s, true);
+      var libBox = h('div', { className:'vc-form' }, [field('Artwork', art), field('From', lib), field('Order', order), h('label', { className:'vc-check' }, [caps, h('span', { text:'Show titles' })])]);
+      var mineBox = h('details', { className:'vc-frame-manage', open:s.source === 'mine' }, [h('summary', { text:'Your pictures (upload or delete)' }), picturesManager()]);
+      var urlBox = field('Image links (one per line)', urls);
+      function sync(){ var v = source.value; libBox.hidden = v === 'mine' || v === 'urls'; mineBox.hidden = v === 'library' || v === 'urls'; urlBox.hidden = v !== 'urls'; }
+      source.addEventListener('change', sync); sync();
+      return { el:h('div', { className:'vc-form' }, [field('Source', source), libBox, mineBox, urlBox].concat(o.els)),
+        read:function(){ return Object.assign({ source:source.value, art:art.value, library:lib.value, order:order.value, urls:urls.value, captions:caps.checked }, o.read()); } };
+    }
+  };
+  W.frame = { name:'Picture frame', desc:'Your own pictures: one favourite or a slideshow with a crossfade.', icon:'🖼️', w:8, h:8,
+    render:function(body, s){
+      return pictureStage(body, s, ownPictures, { empty:'No pictures yet. Add some on the Ambient page or in this widget’s settings.', single:s.mode === 'single' ? function(l){ return l.filter(function(p){ return p.id === s.picture; })[0]; } : null });
+    },
+    form:function(s){
+      var mode = select([['slideshow', 'Slideshow'], ['single', 'A single picture']], s.mode || 'slideshow'), pick = select([['', 'The newest picture']], s.picture || ''), o = pictureOptions(s, false);
+      function fill(j){ var v = pick.value || s.picture || ''; pick.replaceChildren.apply(pick, [h('option', { value:'', text:'The newest picture' })].concat(j.pictures.map(function(p){ return h('option', { value:p.id, text:p.name }); }))); pick.value = v; if (pick.value !== v) pick.value = ''; }
+      myPictures().then(fill).catch(function(){});
+      var el = h('div', { className:'vc-form' }, [field('Show', mode), field('Picture (single)', pick)].concat(o.els, [h('details', { className:'vc-frame-manage', open:true }, [h('summary', { text:'Your pictures (upload or delete)' }), picturesManager(fill)])]));
+      return { el:el, read:function(){ return Object.assign({ mode:mode.value, picture:pick.value }, o.read()); } };
+    }
   };
 
   // ------------------------------------------------------------------ Ken Burns slideshow (widget + ambient)
@@ -451,11 +626,37 @@
         cleanup.push(function(){ progress(true); clearInterval(countdown); });
         if (s.item && s.item.id) load(s.item, false); else { overlay.hidden = false; overlay.replaceChildren(h('p', { className:'muted', text:'Pick a film to play on this board.' }), btn('Browse library', browse, 'primary')); }
       }
-      function startMode(){ teardown(); if (mode === 'radio') radio(); else if (mode === 'movie') movie(); else iptv(); }
+      function webcams(){
+        var t = ++token, stage = h('div', { className:'vc-cam-stage vc-media-cams' });
+        body.replaceChildren(stage);
+        myCams().then(function(all){
+          if (!cur(t)()) return;
+          var list = s.camMode === 'single' ? all.filter(function(c){ return c.id === s.cam; }).slice(0, 1) : pickCams(all, s.camIds);
+          if (!list.length && all.length) list = all.slice(0, 1);
+          if (!list.length) { stage.replaceChildren(h('p', { className:'vc-kb-empty', text:'No saved webcams yet. Add some in a Webcams widget, then choose them in this widget’s settings.' })); return; }
+          var cyc = camCycle(stage, list, { seconds:s.camSeconds || 30, pauseOnHover:!!s.camHoverPause, fade:0.8 });
+          cleanup.push(cyc.stop);
+        }).catch(function(e){ stage.replaceChildren(h('p', { className:'vc-kb-empty', text:(e && e.error) || 'Webcams unavailable.' })); });
+      }
+      function startMode(){ teardown(); if (mode === 'radio') radio(); else if (mode === 'movie') movie(); else if (mode === 'webcams') webcams(); else iptv(); }
       startMode();
       return function(){ teardown(); };
     },
-    form:function(s){ return textForm([{ key:'mode', label:'Play', type:'select', value:s.mode || 'iptv', options:[['iptv', 'Live TV (IPTV)'], ['radio', 'Internet radio'], ['movie', 'A film from the library']] }, { key:'muted', label:'Start live TV muted', type:'checkbox', value:s.muted !== false }]); },
+    form:function(s){
+      var base = textForm([{ key:'mode', label:'Play', type:'select', value:s.mode || 'iptv', options:[['iptv', 'Live TV (IPTV)'], ['radio', 'Internet radio'], ['movie', 'A film from the library'], ['webcams', 'Webcams']] }, { key:'muted', label:'Start live TV muted', type:'checkbox', value:s.muted !== false }]);
+      var modeSel = base.el.querySelector('select'), camBox = h('div', { className:'vc-form' }, [h('p', { className:'muted', text:'Loading your webcams…' })]), single = null, multi = null;
+      var camMode = select([['cycle', 'Cycle through webcams'], ['single', 'A single webcam']], s.camMode || 'cycle'), secs = input('number', s.camSeconds || 30, { min:'10', max:'600' }), hover = input('checkbox', !!s.camHoverPause);
+      myCams(true).catch(function(){ return []; }).then(function(all){
+        single = camChooser(all, s.cam, true); multi = camChooser(all, s.camIds, false);
+        var one = field('Webcam', single.el), many = field('Webcams in the cycle', multi.el), sec = field('Seconds per webcam (10 s to 10 min)', secs), hv = h('label', { className:'vc-check' }, [hover, h('span', { text:'Pause while the pointer is over it' })]);
+        function sync(){ var c = camMode.value === 'cycle'; one.hidden = c; many.hidden = !c; sec.hidden = !c; hv.hidden = !c; }
+        camMode.addEventListener('change', sync); sync();
+        camBox.replaceChildren(field('Show', camMode), one, many, sec, hv, h('small', { className:'muted', text:'Webcams come from your saved list (edit it in any Webcams widget). One player runs at a time.' }));
+      });
+      function sync(){ camBox.hidden = modeSel.value !== 'webcams'; }
+      modeSel.addEventListener('change', sync); sync();
+      return { el:h('div', { className:'vc-form' }, [base.el, camBox]), read:function(){ var o = base.read(); o.camMode = camMode.value; o.camSeconds = Math.max(10, Math.min(600, Number(secs.value) || 30)); o.camHoverPause = hover.checked; if (single) o.cam = single.read(); if (multi) o.camIds = multi.read(); return o; } };
+    },
     merge:true
   };
 
@@ -472,7 +673,7 @@
   };
   function fromTemplate(list){ return list.map(function(w){ return Object.assign({ id:rid(8), settings:{} }, JSON.parse(JSON.stringify(w))); }); }
   // Widgets that refresh on their own get a "Refresh every" setting even when they have no other options.
-  var POLLED = ['weather', 'calendar', 'recordings', 'downloads', 'health', 'recent', 'nowplaying', 'rss', 'drop', 'leaderboard'];
+  var POLLED = ['weather', 'calendar', 'reminders', 'recordings', 'downloads', 'health', 'recent', 'nowplaying', 'rss', 'drop', 'leaderboard'];
   function hasSettings(type){ return !!((W[type] && W[type].form) || POLLED.indexOf(type) >= 0); }
   function overlaps(a, b){ return a !== b && a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h; }
   /** Push anything that collides with the moved widget further down, then float everything up (gridstack-style). */
@@ -571,9 +772,13 @@
     }
     function place(el, w){ el.style.gridColumn = (w.x + 1) + ' / span ' + w.w; el.style.gridRow = (w.y + 1) + ' / span ' + w.h; el.style.setProperty('--vc-rows', String(Math.max(4, w.h))); }
     function metrics(){ var r = grid.getBoundingClientRect(), cs = getComputedStyle(grid), gap = parseFloat(cs.columnGap) || 0, row = parseFloat(cs.gridAutoRows) || 40; return { left:r.left, top:r.top, col:(r.width + gap) / COLS, row:row + (parseFloat(cs.rowGap) || 0) }; }
+    var CHROME_CONTROLS = 'button, a, input, select, textarea, label, [role="button"], .vc-w-actions, .vc-w-resize, [data-no-drag]';
     function dragify(el, w, handle, mode){
       handle.addEventListener('pointerdown', function(e){
-        if (!editing || e.button > 0 || (window.matchMedia && matchMedia('(max-width: 760px)').matches)) return; e.preventDefault(); e.stopPropagation();
+        if (!editing || e.button > 0 || (window.matchMedia && matchMedia('(max-width: 760px)').matches)) return;
+        // Controls in the widget chrome (remove, settings, any input) must get their own click, never start a drag.
+        if (mode === 'move' && e.target && e.target.closest && e.target.closest(CHROME_CONTROLS)) return;
+        e.preventDefault(); e.stopPropagation();
         var m = metrics(), sx = e.clientX, sy = e.clientY, ox = w.x, oy = w.y, ow = w.w, oh = w.h, ghost = h('div', { className:'vc-ghost' });
         grid.appendChild(ghost); place(ghost, w); el.classList.add('dragging');
         handle.setPointerCapture(e.pointerId);
@@ -614,7 +819,7 @@
       cur.widgets.slice().sort(function(a, b){ return a.y - b.y || a.x - b.x; }).forEach(function(w){
         var d = W[w.type] || { name:w.type, icon:'?' }, body = h('div', { className:'vc-w-body' });
         var handle = h('div', { className:'vc-w-head', tabindex:editing ? '0' : null, 'aria-label':editing ? 'Move ' + d.name + ' (arrow keys; Shift to resize)' : null }, [h('span', { className:'vc-w-icon', text:d.icon, 'aria-hidden':'true' }), h('span', { className:'vc-w-name', text:(w.settings && w.settings.title) || d.name }),
-          editing ? h('span', { className:'vc-w-actions' }, [hasSettings(w.type) ? btn('⚙', function(e){ e.stopPropagation(); widgetSettings(w); }, 'ghost vc-icon-btn small', { 'aria-label':'Settings for ' + d.name }) : null, btn('×', function(e){ e.stopPropagation(); A.confirmDialog('Remove this ' + d.name + ' widget?', { okText:'Remove', danger:true }).then(function(ok){ if (!ok) return; cur.widgets = cur.widgets.filter(function(x){ return x !== w; }); save(); paint(); }); }, 'ghost vc-icon-btn small', { 'aria-label':'Remove ' + d.name })]) : (hasSettings(w.type) && !cur.locked ? btn('⚙', function(){ widgetSettings(w); }, 'ghost vc-icon-btn small vc-w-quickset', { 'aria-label':'Settings for ' + d.name }) : null)]);
+          editing ? h('span', { className:'vc-w-actions', 'data-no-drag':'', onPointerdown:function(e){ e.stopPropagation(); }, onMousedown:function(e){ e.stopPropagation(); }, onTouchstart:function(e){ e.stopPropagation(); } }, [hasSettings(w.type) ? btn('⚙', function(e){ e.stopPropagation(); widgetSettings(w); }, 'ghost vc-icon-btn small', { 'aria-label':'Settings for ' + d.name }) : null, btn('×', function(e){ e.stopPropagation(); A.confirmDialog('Remove this ' + d.name + ' widget?', { okText:'Remove', danger:true }).then(function(ok){ if (!ok) return; cur.widgets = cur.widgets.filter(function(x){ return x !== w; }); save(); paint(); }); }, 'ghost vc-icon-btn small', { 'aria-label':'Remove ' + d.name })]) : (hasSettings(w.type) && !cur.locked ? btn('⚙', function(){ widgetSettings(w); }, 'ghost vc-icon-btn small vc-w-quickset', { 'aria-label':'Settings for ' + d.name }) : null)]);
         var el = h('article', { className:'vc-widget w-' + w.type, 'data-wid':w.id, role:'listitem', 'aria-label':d.name }, [handle, body]);
         if (editing) { var rz = h('span', { className:'vc-w-resize', 'aria-hidden':'true' }); el.appendChild(rz); dragify(el, w, handle, 'move'); dragify(el, w, rz, 'resize'); }
         place(el, w); grid.appendChild(el); mountBody(w, body);
@@ -887,96 +1092,235 @@
   }
 
   // ------------------------------------------------------------------ Ambient screen
-  var MODES = [['stills', 'Film stills', 'Frames from your library with a slow pan and zoom', '🎞️'], ['posters', 'Poster wall', 'Library artwork drifting by', '🖼️'], ['webcams', 'Webcams', 'Live views from the cameras your admin picked', '📷'], ['mixed', 'Library mix', 'Film stills and posters together', '🎬'], ['links', 'Your pictures', 'Picture addresses you list below', '🌄'], ['clock', 'Clock only', 'A calm, dim clock with the weather', '🕰️']];
+  // Ambient is built from independent layers: a background, a clock, toggleable overlays and screen care
+  // (dim, a scrim behind text, burn-in drift, night mode). The old fixed modes are now one-click presets.
+  var FX_SCENES = [['aurora', 'Aurora', '🌌'], ['stars', 'Starfield', '✨'], ['waves', 'Waves', '🌊'], ['bokeh', 'Bokeh lights', '🔆'], ['rain', 'Rain on glass', '🌧️'], ['lava', 'Lava lamp', '🫧'], ['gradient', 'Colour flow', '🎨']];
+  var GRADIENTS = { dusk:'linear-gradient(160deg,#141e30,#243b55)', ocean:'linear-gradient(160deg,#0f2027,#203a43,#2c5364)', ember:'linear-gradient(160deg,#200122,#6f0000)', forest:'linear-gradient(160deg,#0b1d13,#1e3d2b)', midnight:'radial-gradient(80% 80% at 50% 40%,#1b2338,#000)', slate:'linear-gradient(160deg,#232526,#414345)' };
+  var PRESETS = [
+    ['stills', 'Film stills', 'Frames from your library with a slow pan and zoom', '🎞️', { bg:'library', library:'frames' }],
+    ['posters', 'Poster wall', 'Library artwork drifting by', '🖼️', { bg:'library', library:'posters' }],
+    ['mixed', 'Library mix', 'Film stills and posters together', '🎬', { bg:'library', library:'mixed' }],
+    ['links', 'Your pictures', 'Pictures you upload, plus any picture links', '🌄', { bg:'pictures' }],
+    ['webcams', 'Webcams', 'Live views from your saved and curated webcams', '📷', { bg:'webcam' }],
+    ['clock', 'Clock only', 'A calm, dim clock with the weather', '🕰️', { bg:'gradient', gradient:'midnight', clock:{ show:true, style:'minimal', size:'xl', pos:'center' } }]
+  ].concat(FX_SCENES.map(function(f){ return ['fx-' + f[0], f[1], 'Animated scene behind the clock', f[2], { bg:'fx', fx:f[0], clock:{ show:true, style:'minimal', size:'l', pos:'center' } }]; }));
+  var QUOTES = [['The best way out is always through.', 'Robert Frost'], ['Simplicity is the ultimate sophistication.', 'Leonardo da Vinci'], ['Well done is better than well said.', 'Benjamin Franklin'], ['What we think, we become.', 'Buddha'], ['Stay hungry, stay foolish.', 'Stewart Brand'], ['Not all those who wander are lost.', 'J. R. R. Tolkien'], ['The journey of a thousand miles begins with one step.', 'Lao Tzu'], ['Happiness depends upon ourselves.', 'Aristotle'], ['Turn your wounds into wisdom.', 'Oprah Winfrey'], ['Do what you can, with what you have, where you are.', 'Theodore Roosevelt'], ['Little by little, one travels far.', 'J. R. R. Tolkien'], ['Act as if what you do makes a difference. It does.', 'William James'], ['The only way to do great work is to love what you do.', 'Steve Jobs'], ['Dwell on the beauty of life.', 'Marcus Aurelius'], ['Be curious, not judgemental.', 'Walt Whitman'], ['Wherever you go, go with all your heart.', 'Confucius'], ['Everything you can imagine is real.', 'Pablo Picasso'], ['Nothing is impossible; the word itself says I’m possible.', 'Audrey Hepburn'], ['Keep your face always toward the sunshine.', 'Walt Whitman'], ['The secret of getting ahead is getting started.', 'Mark Twain'], ['Quality is not an act, it is a habit.', 'Aristotle'], ['Tomorrow is a new day with no mistakes in it yet.', 'L. M. Montgomery'], ['It always seems impossible until it’s done.', 'Nelson Mandela'], ['Life is really simple, but we insist on making it complicated.', 'Confucius'], ['Whatever you are, be a good one.', 'Abraham Lincoln'], ['Make each day your masterpiece.', 'John Wooden'], ['Light tomorrow with today.', 'Elizabeth Barrett Browning'], ['The best is yet to come.', 'Robert Browning'], ['Kindness is a language the deaf can hear and the blind can see.', 'Mark Twain'], ['Slow and steady wins the race.', 'Aesop']];
   function minutesOf(t){ var m = /^(\d{1,2}):(\d{2})$/.exec(t || ''); return m ? (Number(m[1]) % 24) * 60 + Math.min(59, Number(m[2])) : null; }
-  /** True while the night dim window is active; windows may cross midnight (22:00 → 07:00). */
-  function inDim(p, d){ if (!p.dim) return false; var a = minutesOf(p.dimFrom), b = minutesOf(p.dimTo); if (a == null || b == null || a === b) return false; var n = d.getHours() * 60 + d.getMinutes(); return a < b ? (n >= a && n < b) : (n >= a || n < b); }
+  /** True inside a from/until window; windows may cross midnight (22:00 → 07:00). */
+  function inWindow(from, to, d){ var a = minutesOf(from), b = minutesOf(to); if (a == null || b == null || a === b) return false; var n = d.getHours() * 60 + d.getMinutes(); return a < b ? (n >= a && n < b) : (n >= a || n < b); }
   function safeImageUrl(u){ u = String(u || '').trim(); return /^https?:\/\/[^\s"'()\\]+$/i.test(u) ? u : ''; }
-  function ambientPrefs(){ return Object.assign({ mode:'stills', clock:true, weather:true, radio:'', seconds:14, fade:1.6, dim:false, dimFrom:'22:00', dimTo:'07:00', dimLevel:60, links:[] }, store('vaultcast-ambient') || {}); }
+  function ambientDefaults(){ return { bg:'library', library:'frames', fx:'aurora', gradient:'dusk', solid:'#05070d', webcam:'', seconds:14, fade:1.6, links:[], radio:'', loc:null,
+    clock:{ show:true, style:'digital', size:'l', pos:'bl', h12:'auto', seconds:false, date:true }, overlays:{ weather:true, event:false, reminders:false, nowplaying:false, quote:false },
+    dim:0, scrim:true, shift:true, night:{ on:false, from:'22:00', to:'07:00', level:60, warm:true } }; }
+  /** Fill gaps and convert the old single-mode settings into layers. */
+  function normaliseAmbient(p){
+    var d = ambientDefaults(); p = p && typeof p === 'object' ? JSON.parse(JSON.stringify(p)) : {};
+    if (p.mode && !p.bg) {
+      var pre = PRESETS.filter(function(x){ return x[0] === p.mode; })[0]; if (pre) Object.assign(p, JSON.parse(JSON.stringify(pre[4])));
+      p.clock = Object.assign({}, p.clock || {}, { show:p.clock !== false }); p.overlays = { weather:p.weather !== false };
+      if (p.dim === true) p.night = { on:true, from:p.dimFrom || '22:00', to:p.dimTo || '07:00', level:p.dimLevel || 60, warm:false };
+      if (typeof p.dim !== 'number') p.dim = 0; delete p.mode; delete p.weather; delete p.dimFrom; delete p.dimTo; delete p.dimLevel;
+    }
+    var out = Object.assign(d, p);
+    out.clock = Object.assign(ambientDefaults().clock, p.clock && typeof p.clock === 'object' ? p.clock : {});
+    out.overlays = Object.assign(ambientDefaults().overlays, p.overlays || {});
+    out.night = Object.assign(ambientDefaults().night, p.night && typeof p.night === 'object' ? p.night : {});
+    out.dim = Math.max(0, Math.min(80, Number(out.dim) || 0)); out.links = (out.links || []).map(safeImageUrl).filter(Boolean).slice(0, 200);
+    return out;
+  }
+  function ambientPrefs(){ return normaliseAmbient(store('vaultcast-ambient')); }
+  var ambSaveT = 0;
+  function saveAmbientPrefs(p){ store('vaultcast-ambient', p); clearTimeout(ambSaveT); ambSaveT = setTimeout(function(){ if (signed()) call('/misc/prefs', { method:'POST', body:{ ambient:p } }).catch(function(){}); }, 800); }
+  /** Server copy wins (per user, follows you between screens); the local copy just makes the first paint instant. */
+  function loadAmbientPrefs(){ return signed() ? call('/misc/prefs').then(function(j){ if (j.ambient) { var p = normaliseAmbient(j.ambient); store('vaultcast-ambient', p); return p; } return ambientPrefs(); }).catch(function(){ return ambientPrefs(); }) : Promise.resolve(ambientPrefs()); }
+
+  function analogFace(){
+    var NS = 'http://www.w3.org/2000/svg', svg = document.createElementNS(NS, 'svg'); svg.setAttribute('viewBox', '0 0 100 100'); svg.setAttribute('class', 'vc-amb-analog'); svg.setAttribute('aria-hidden', 'true');
+    function el(n, a){ var e = document.createElementNS(NS, n); Object.keys(a).forEach(function(k){ e.setAttribute(k, a[k]); }); svg.appendChild(e); return e; }
+    el('circle', { cx:50, cy:50, r:47, 'class':'rim' }); for (var k = 0; k < 12; k++) { var a = k * Math.PI / 6; el('line', { x1:50 + 40 * Math.sin(a), y1:50 - 40 * Math.cos(a), x2:50 + 45 * Math.sin(a), y2:50 - 45 * Math.cos(a), 'class':'tick' }); }
+    var hh = el('line', { x1:50, y1:50, x2:50, y2:27, 'class':'hh' }), mh = el('line', { x1:50, y1:50, x2:50, y2:14, 'class':'mh' }), sh = el('line', { x1:50, y1:56, x2:50, y2:10, 'class':'sh' }); el('circle', { cx:50, cy:50, r:2.5, 'class':'pin' });
+    return { svg:svg, set:function(d, secs){ hh.setAttribute('transform', 'rotate(' + ((d.getHours() % 12) * 30 + d.getMinutes() / 2) + ' 50 50)'); mh.setAttribute('transform', 'rotate(' + (d.getMinutes() * 6 + d.getSeconds() / 10) + ' 50 50)'); sh.style.display = secs ? '' : 'none'; sh.setAttribute('transform', 'rotate(' + d.getSeconds() * 6 + ' 50 50)'); } };
+  }
+  /**
+   * Render Ambient into host (full screen or the preview box). Returns { stop }.
+   * opts.preview keeps it light: no webcam players, no radio, fewer requests.
+   */
+  function buildAmbient(host, p, opts){
+    opts = opts || {};
+    var stops = [], alive = true, stage = h('div', { className:'vc-amb-stage' }), dimEl = h('div', { className:'vc-amb-dim', 'aria-hidden':'true' }), warmEl = h('div', { className:'vc-amb-warm', 'aria-hidden':'true' });
+    var ov = h('div', { className:'vc-amb-overlay pos-' + (p.clock.pos || 'bl') + (p.scrim ? ' scrim' : '') }), clock = h('div', { className:'vc-amb-clock style-' + p.clock.style + ' size-' + p.clock.size }), info = h('div', { className:'vc-amb-info' });
+    host.classList.add('vc-amb-host'); host.replaceChildren(stage, dimEl, warmEl, ov);
+    function isAlive(){ return alive && host.isConnected; }
+    // Unit for type sizes: 1% of the host width, so the preview is a true miniature of the screen.
+    function unit(){ host.style.setProperty('--amb-u', Math.max(2, host.getBoundingClientRect().width / 100) + 'px'); }
+    unit(); var ro = window.ResizeObserver ? new ResizeObserver(unit) : null; if (ro) { ro.observe(host); stops.push(function(){ ro.disconnect(); }); } else { window.addEventListener('resize', unit); stops.push(function(){ window.removeEventListener('resize', unit); }); }
+    // ---- background
+    var bgKind = p.bg, fade = Math.max(0.2, Math.min(8, Number(p.fade) || 1.6)); host.style.setProperty('--vc-kb-fade', fade + 's');
+    if (bgKind === 'solid') stage.style.background = /^#[0-9a-f]{6}$/i.test(p.solid || '') ? p.solid : '#000';
+    else if (bgKind === 'gradient') stage.style.background = GRADIENTS[p.gradient] || GRADIENTS.dusk;
+    else if (bgKind === 'fx') A.loadModule('vc-fx.js', 'VaultcastFx').then(function(F){ if (!isAlive()) return; var f = F.start(stage, p.fx || 'aurora', { maxDpr:opts.preview ? 1 : 1.25, fps:opts.preview ? 20 : 30 }); stops.push(f.stop); }).catch(function(){ stage.style.background = GRADIENTS.dusk; });
+    else if (bgKind === 'pictures') { var own = (p.links || []).map(function(u){ return { url:u, title:'' }; }); var kp = kenBurns(stage, function(){ return ownPictures().catch(function(){ return []; }).then(function(m){ return m.concat(own); }); }, { interval:(p.seconds || 14) * 1000 }); stops.push(kp.stop); }
+    else if (bgKind === 'library') { var kl = kenBurns(stage, function(){ return call('/misc/ambient/stills?n=40&kind=' + (p.library === 'posters' || p.library === 'mixed' ? p.library : 'frames') + (opts.preview ? '&variant=medium' : '')).then(function(j){ return j.stills.map(function(x){ return { url:url(x.url), title:x.title + (x.year ? ' (' + x.year + ')' : '') }; }); }); }, { interval:(p.seconds || 14) * 1000, captions:!opts.preview }); stops.push(kl.stop); }
+    else if (bgKind === 'webcam') {
+      Promise.all([call('/misc/ambient').then(function(c){ return c.webcams || []; }).catch(function(){ return []; }), myCams().catch(function(){ return []; })]).then(function(r){
+        if (!isAlive()) return;
+        var all = r[1].concat(r[0]).filter(function(c){ return youtubeId(c.url) || safeHttpUrl(c.url); }), chosen = p.webcam ? all.filter(function(c){ return (c.id || c.url) === p.webcam; }) : all;
+        if (!chosen.length) chosen = all;
+        if (!chosen.length) { stage.appendChild(h('p', { className:'vc-kb-empty', text:'No webcams yet. Add your own in a Webcams widget, or ask an admin for curated ones.' })); return; }
+        if (opts.preview) { stage.style.background = GRADIENTS.slate; stage.appendChild(h('p', { className:'vc-kb-empty', text:'📷 ' + camLabel(chosen[0]) + (chosen.length > 1 ? ' + ' + (chosen.length - 1) + ' more' : '') })); return; }
+        var cyc = camCycle(stage, chosen, { seconds:Math.max(30, (p.seconds || 14) * 3), fade:1, controls:false }); stops.push(cyc.stop);
+      });
+    } else if (bgKind === 'nowplaying') {
+      var npBg = h('div', { className:'vc-amb-np-bg' }), npArt = h('img', { className:'vc-amb-np-art', alt:'' }); stage.append(npBg, npArt); stage.style.background = '#000';
+      var np = function(){ call('/misc/widget/nowplaying').then(function(j){ if (!isAlive()) return; var s0 = (j.sessions || [])[0]; if (!s0) { npArt.hidden = true; npBg.style.backgroundImage = ''; stage.style.background = GRADIENTS.midnight; return; } var u = url(String(s0.poster).replace('variant=thumb', 'variant=medium')); npArt.hidden = false; npArt.src = u; npBg.style.backgroundImage = 'url("' + u.replace(/["\\()\s]/g, '') + '")'; }).catch(function(){}); };
+      np(); stops.push(poll(np, 30000));
+    }
+    // ---- clock
+    if (p.clock.show) {
+      var face = p.clock.style === 'analog' ? analogFace() : null, timeEl = h('strong'), dateEl = h('span');
+      if (face) clock.appendChild(face.svg); else clock.appendChild(timeEl); if (p.clock.date) clock.appendChild(dateEl);
+      ov.appendChild(clock);
+      var tick = function(){ var d = new Date(); if (face) face.set(d, p.clock.seconds); else timeEl.textContent = clockText(d, { seconds:p.clock.seconds, h12:p.clock.h12 === 'on' ? true : p.clock.h12 === 'off' ? false : null }); if (p.clock.date) dateEl.textContent = dateText(d); night(d); };
+      tick(); var ct = setInterval(tick, 1000); stops.push(function(){ clearInterval(ct); });
+    } else { var nt = setInterval(function(){ night(new Date()); }, 30000); stops.push(function(){ clearInterval(nt); }); }
+    ov.appendChild(info);
+    // ---- overlays
+    var o = p.overlays;
+    function block(cls){ var b = h('div', { className:'vc-amb-block ' + cls }); info.appendChild(b); return b; }
+    if (o.weather && p.loc) { var wxEl = block('vc-amb-wx'); var wl = function(){ weatherData(p.loc).then(function(j){ var w = wx(j.current.code, j.current.day); wxEl.replaceChildren(h('span', { className:'vc-amb-wx-icon', text:w.icon }), h('strong', { text:deg(j.current.temp) + j.units }), h('small', { text:w.text + ' · ' + p.loc.name })); }).catch(function(){}); }; wl(); stops.push(poll(wl, 600000)); }
+    if (o.event && signed()) { var evEl = block('vc-amb-event'); var el = function(){ var now = Math.floor(Date.now() / 1000); call('/misc/cal/events?from=' + now + '&to=' + (now + 14 * 86400)).then(function(j){ var e = (j.events || []).filter(function(x){ return x.source !== 'reminder' && (x.all_day ? x.end > now : x.start >= now - 600); })[0]; evEl.hidden = !e; if (!e) return; var d = new Date(e.start * 1000), today = new Date().toDateString() === d.toDateString(); evEl.replaceChildren(h('span', { className:'vc-amb-dot', style:'--c:' + (e.colour || '#59e9ff') }), h('span', null, [h('small', { text:(today ? 'Today' : d.toLocaleDateString([], { weekday:'short', day:'numeric', month:'short' })) + (e.all_day ? '' : ' · ' + d.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' })) }), h('strong', { text:e.title })])); }).catch(function(){ evEl.hidden = true; }); }; el(); stops.push(poll(el, 300000)); }
+    if (o.reminders && signed()) { var rmEl = block('vc-amb-rems'); var rl = function(){ call('/misc/reminders').then(function(j){ var list = (j.reminders || []).filter(function(r){ return r.due && r.state !== 'later' && r.state !== 'snoozed'; }).slice(0, 3); rmEl.hidden = !list.length; rmEl.replaceChildren.apply(rmEl, list.map(function(r){ return h('div', { className:'vc-amb-rem ' + r.state }, [h('span', { text:r.emoji }), h('span', { text:r.title }), h('small', { text:r.state === 'overdue' ? 'Overdue' : r.state === 'today' ? 'Today' : r.state === 'tomorrow' ? 'Tomorrow' : 'Soon' })]); })); }).catch(function(){ rmEl.hidden = true; }); }; rl(); stops.push(poll(rl, 300000)); }
+    if (o.nowplaying) { var npEl = block('vc-amb-np'); var nl = function(){ call('/misc/widget/nowplaying').then(function(j){ var s0 = (j.sessions || [])[0]; npEl.hidden = !s0; if (s0) npEl.replaceChildren(h('small', { text:'▶ ' + (s0.user && s0.user.name ? s0.user.name + ' is watching' : 'Now playing') }), h('strong', { text:s0.title })); }).catch(function(){ npEl.hidden = true; }); }; nl(); stops.push(poll(nl, 60000)); }
+    if (o.quote) { var day = Math.floor((Date.now() - new Date().getTimezoneOffset() * 60000) / 86400000), q = QUOTES[day % QUOTES.length]; block('vc-amb-quote').append(h('q', { text:q[0] }), h('small', { text:'— ' + q[1] })); }
+    // ---- screen care
+    dimEl.style.opacity = String(p.dim / 100);
+    function night(d){ var on = p.night.on && inWindow(p.night.from, p.night.to, d); dimEl.style.opacity = String(Math.min(0.92, (p.dim + (on ? Number(p.night.level) || 60 : 0)) / 100)); warmEl.style.opacity = on && p.night.warm ? '1' : '0'; }
+    night(new Date());
+    if (p.shift && !opts.preview) { var sh = function(){ ov.style.transform = 'translate(' + Math.round((Math.random() * 2 - 1) * 1.2 * 10) / 10 + '%,' + Math.round((Math.random() * 2 - 1) * 1.2 * 10) / 10 + '%)'; }; var st = setInterval(function(){ if (!document.hidden) sh(); }, 90000); stops.push(function(){ clearInterval(st); }); }
+    return { stop:function(){ alive = false; stops.forEach(function(f){ try { f(); } catch (e) {} }); stops = []; } };
+  }
+
   var amb = null;
   function startAmbient(opts){
     opts = opts || {};
     if (amb) return;
-    var p = Object.assign(ambientPrefs(), opts.mode ? { mode:opts.mode } : {}), layer = h('div', { className:'vc-ambient mode-' + p.mode, role:'dialog', 'aria-label':'Ambient screen. Press any key to exit.' }), stage = h('div', { className:'vc-amb-stage' });
-    var fade = Math.max(0.2, Math.min(8, Number(p.fade) || 1.6)); layer.style.setProperty('--vc-kb-fade', fade + 's');
-    var dimEl = h('div', { className:'vc-amb-dim', 'aria-hidden':'true' }); dimEl.style.opacity = '0'; layer.appendChild(dimEl);
-    function applyDim(d){ dimEl.style.opacity = inDim(p, d) ? String(Math.max(10, Math.min(90, Number(p.dimLevel) || 60)) / 100) : '0'; }
-    var overlay = h('div', { className:'vc-amb-overlay' }), clock = h('div', { className:'vc-amb-clock' }), wxEl = h('div', { className:'vc-amb-wx' }), hint = h('div', { className:'vc-amb-hint', text:'Press any key or tap to return' });
-    layer.append(stage, overlay, hint); if (p.clock !== false || p.mode === 'clock') overlay.appendChild(clock); if (p.weather !== false && p.loc) overlay.appendChild(wxEl);
+    var p = ambientPrefs(); if (opts.preset) { var pre = PRESETS.filter(function(x){ return x[0] === opts.preset; })[0]; if (pre) p = normaliseAmbient(Object.assign(p, JSON.parse(JSON.stringify(pre[4])))); }
+    var layer = h('div', { className:'vc-ambient', role:'dialog', 'aria-label':'Ambient screen. Press Escape or use the Exit button to return.' }), view = h('div', { className:'vc-amb-view' });
+    var hint = h('div', { className:'vc-amb-hint', text:'Move the mouse or tap for controls · Esc to exit' });
+    var exitBtn = h('button', { type:'button', className:'vc-amb-exit', 'aria-label':'Exit ambient' }, [h('span', { text:'✕', 'aria-hidden':'true' }), h('span', { text:'Exit' })]);
+    var controls = h('div', { className:'vc-amb-controls', role:'toolbar', 'aria-label':'Ambient controls' }, [exitBtn]);
+    layer.append(view, hint, controls);
     document.body.appendChild(layer); document.body.classList.add('vc-ambient-on');
     var stops = [], since = Date.now();
     amb = { layer:layer };
-    function tickClock(){ var d = new Date(); if (d.getSeconds() === 0 || tickClock.first !== false) { applyDim(d); tickClock.first = false; } clock.replaceChildren(h('strong', { text:clockText(d, {}) }), h('span', { text:dateText(d) })); }
-    tickClock(); var ct = setInterval(tickClock, 1000); stops.push(function(){ clearInterval(ct); });
-    if (p.weather !== false && p.loc) { var wl = function(){ weatherData(p.loc).then(function(j){ var w = wx(j.current.code, j.current.day); wxEl.replaceChildren(h('span', { className:'vc-amb-wx-icon', text:w.icon }), h('strong', { text:deg(j.current.temp) + j.units }), h('small', { text:w.text + ' · ' + p.loc.name })); }).catch(function(){}); }; wl(); var wt = setInterval(wl, 600000); stops.push(function(){ clearInterval(wt); }); }
-    if (p.mode === 'links') { var own = (p.links || []).map(safeImageUrl).filter(Boolean); var kbl = kenBurns(stage, function(){ return Promise.resolve(own.map(function(u){ return { url:u, title:'' }; })); }, { interval:(p.seconds || 14) * 1000 }); stops.push(kbl.stop); }
-    else if (p.mode === 'stills' || p.mode === 'posters' || p.mode === 'mixed') { var kb = kenBurns(stage, function(){ return call('/misc/ambient/stills?n=40&kind=' + (p.mode === 'stills' ? 'frames' : p.mode === 'mixed' ? 'mixed' : 'posters')).then(function(j){ return j.stills.map(function(x){ return { url:url(x.url), title:x.title + (x.year ? ' (' + x.year + ')' : '') }; }); }); }, { interval:(p.seconds || 14) * 1000, captions:true }); stops.push(kb.stop); }
-    else if (p.mode === 'webcams') {
-      call('/misc/ambient').then(function(cfg){
-        var cams = cfg.webcams || [], i = 0, timer = 0, refresh = 0, hls = null;
-        if (!cams.length) { stage.appendChild(h('p', { className:'vc-kb-empty', text:'No webcams are set up yet. An administrator can add them on the Ambient page.' })); return; }
-        function show(){
-          clearTimeout(timer); clearInterval(refresh); if (hls) { try { hls.destroy(); } catch (e) {} hls = null; }
-          var c = cams[i % cams.length], el;
-          if (c.kind === 'embed') el = h('iframe', { src:c.url, className:'vc-cam', allow:'autoplay; fullscreen', referrerpolicy:'no-referrer', sandbox:'allow-scripts allow-same-origin allow-presentation', title:c.name });
-          else if (c.kind === 'video') { el = h('video', { className:'vc-cam', muted:true, autoplay:true, playsinline:true }); el.muted = true; playStream(el, c.url, function(){ return !!amb; }).then(function(s){ hls = s; }).catch(function(){}); }
-          else { el = h('img', { className:'vc-cam', alt:c.name, src:c.url + (c.url.indexOf('?') >= 0 ? '&' : '?') + '_t=' + Date.now(), referrerpolicy:'no-referrer' }); refresh = setInterval(function(){ el.src = c.url + (c.url.indexOf('?') >= 0 ? '&' : '?') + '_t=' + Date.now(); }, Math.max(5, c.refresh || 30) * 1000); }
-          stage.replaceChildren(el, h('div', { className:'vc-kb-cap', text:c.name }));
-          i++; if (cams.length > 1) timer = setTimeout(show, Math.max(20, p.seconds * 3) * 1000);
-        }
-        show(); stops.push(function(){ clearTimeout(timer); clearInterval(refresh); if (hls) try { hls.destroy(); } catch (e) {} });
-      }).catch(function(){});
-    }
+    var built = buildAmbient(view, p, {}); stops.push(built.stop);
+    // Pick up the server copy (another screen may have changed it) without a visible restart unless it differs.
+    loadAmbientPrefs().then(function(fresh){ if (amb && amb.layer === layer && !opts.preset && JSON.stringify(fresh) !== JSON.stringify(p)) { built.stop(); p = fresh; built = buildAmbient(view, p, {}); stops.push(built.stop); } });
     var audio = null;
     if (p.radio) {
-      (A.loadRadio ? A.loadRadio() : Promise.resolve([])).then(function(list){ var st = list.filter(function(x){ return x.id === p.radio; })[0]; if (!st || !amb) return; audio = h('audio'); audio.volume = 0.6; layer.appendChild(audio); playStream(audio, st.url, function(){ return !!amb; }).then(function(s){ if (s) stops.push(function(){ try { s.destroy(); } catch (e) {} }); }).catch(function(){}); overlay.appendChild(h('div', { className:'vc-amb-radio', text:'♪ ' + st.name })); }).catch(function(){});
+      (A.loadRadio ? A.loadRadio() : Promise.resolve([])).then(function(list){ var st = list.filter(function(x){ return x.id === p.radio; })[0]; if (!st || !amb) return; audio = h('audio'); audio.volume = 0.6; layer.appendChild(audio); playStream(audio, st.url, function(){ return !!amb; }).then(function(s){ if (s) stops.push(function(){ try { s.destroy(); } catch (e) {} }); }).catch(function(){}); controls.insertBefore(h('span', { className:'vc-amb-mode', text:'♪ ' + st.name }), exitBtn); }).catch(function(){});
       stops.push(function(){ if (audio) { audio.pause(); audio.removeAttribute('src'); } });
     }
     wantWake(1);
     if (!opts.idle && layer.requestFullscreen) layer.requestFullscreen().catch(function(){});
-    function exit(e){
+    // Exit only on purpose: Escape (or a remote's Back key), the Exit button, or leaving full screen.
+    // Mouse movement, taps and other keys just show the controls and the cursor for a few seconds.
+    var hideT = 0;
+    function hideControls(){ if (controls.contains(document.activeElement)) { hideT = setTimeout(hideControls, 3000); return; } layer.classList.remove('show-controls'); }
+    function reveal(){ layer.classList.add('show-controls'); clearTimeout(hideT); hideT = setTimeout(hideControls, 3000); }
+    function onKey(e){
       if (!amb) return;
-      if (e && e.type === 'pointermove' && Date.now() - since < 1200) return;
-      if (e && e.type === 'pointermove' && Math.abs(e.movementX || 0) + Math.abs(e.movementY || 0) < 3) return;
-      if (e && e.type !== 'pointermove') { e.preventDefault && e.preventDefault(); e.stopPropagation && e.stopPropagation(); }
-      ['keydown', 'pointerdown', 'pointermove', 'wheel', 'touchstart'].forEach(function(ev){ window.removeEventListener(ev, exit, true); });
+      if (e.key === 'Escape' || e.key === 'Esc' || e.key === 'BrowserBack' || e.key === 'GoBack') { e.preventDefault(); e.stopPropagation(); exit(); return; }
+      reveal();
+      if (e.key === 'Tab') { e.preventDefault(); exitBtn.focus(); return; }
+      if (controls.contains(document.activeElement) && (e.key === 'Enter' || e.key === ' ')) return;
+      e.preventDefault(); e.stopPropagation();
+    }
+    function onPointer(e){ if (!amb) return; if (e.type === 'pointermove' && Date.now() - since < 800) return; reveal(); if (e.type !== 'pointermove' && !controls.contains(e.target)) e.preventDefault(); }
+    function onClick(e){ if (!controls.contains(e.target)) { e.preventDefault(); e.stopPropagation(); } }
+    function exit(){
+      if (!amb) return;
+      window.removeEventListener('keydown', onKey, true);
+      ['pointermove', 'pointerdown'].forEach(function(ev){ layer.removeEventListener(ev, onPointer); });
+      clearTimeout(hideT);
       stops.forEach(function(f){ try { f(); } catch (x) {} });
       wantWake(-1); amb = null; document.body.classList.remove('vc-ambient-on');
       if (document.fullscreenElement === layer && document.exitFullscreen) document.exitFullscreen().catch(function(){});
       layer.classList.add('leaving'); setTimeout(function(){ layer.remove(); }, 350);
     }
-    setTimeout(function(){ ['keydown', 'pointerdown', 'pointermove', 'wheel', 'touchstart'].forEach(function(ev){ window.addEventListener(ev, exit, { capture:true, passive:false }); }); }, 400);
+    exitBtn.addEventListener('click', function(e){ e.preventDefault(); e.stopPropagation(); exit(); });
+    window.addEventListener('keydown', onKey, true);
+    ['pointermove', 'pointerdown'].forEach(function(ev){ layer.addEventListener(ev, onPointer); });
+    layer.addEventListener('click', onClick);
+    amb.exit = exit;
     document.addEventListener('fullscreenchange', function fsc(){ if (!document.fullscreenElement && amb && amb.layer === layer && amb.wasFull) exit(); else if (document.fullscreenElement === layer && amb) amb.wasFull = true; if (!amb) document.removeEventListener('fullscreenchange', fsc); });
   }
+
   function ambient(host){
-    host.appendChild(hero('Ambient', 'Turn any screen into a living picture frame. It can also start on its own when nobody has touched the screen for a while.', [btn('Start now', function(){ startAmbient({}); }, 'primary')], 'MISC'));
-    var p = ambientPrefs(), body = h('div', { className:'vc-ambient-page' }); host.appendChild(body);
-    function save(){ store('vaultcast-ambient', p); }
-    var modes = h('div', { className:'vc-mode-grid', role:'radiogroup', 'aria-label':'Ambient mode' }, MODES.map(function(m){ return h('button', { type:'button', role:'radio', 'aria-checked':String(p.mode === m[0]), className:'vc-mode-card' + (p.mode === m[0] ? ' active' : ''), onClick:function(){ p.mode = m[0]; save(); modes.querySelectorAll('.vc-mode-card').forEach(function(c){ c.classList.toggle('active', c === this); c.setAttribute('aria-checked', String(c === this)); }, this); }, onDblclick:function(){ startAmbient({ mode:m[0] }); } }, [h('span', { className:'vc-mode-icon', text:m[3], 'aria-hidden':'true' }), h('strong', { text:m[1] }), h('small', { className:'muted', text:m[2] })]); }));
-    var clockC = input('checkbox', p.clock !== false, { onChange:function(){ p.clock = this.checked; save(); } }), wxC = input('checkbox', p.weather !== false, { onChange:function(){ p.weather = this.checked; save(); } });
-    var secs = input('number', p.seconds || 14, { min:'5', max:'120', onChange:function(){ p.seconds = Math.max(5, Math.min(120, Number(this.value) || 14)); save(); } });
-    var fadeSel = select([['0.6', 'Quick (0.6 s)'], ['1.6', 'Gentle (1.6 s)'], ['3', 'Slow (3 s)'], ['6', 'Very slow (6 s)']], String(p.fade || 1.6), { onChange:function(){ p.fade = Number(this.value); save(); } });
-    var linksTa = h('textarea', { rows:4, placeholder:'https://example.local/photos/1.jpg', 'aria-label':'Picture addresses, one per line', onChange:function(){ p.links = this.value.split(/\s+/).map(safeImageUrl).filter(Boolean).slice(0, 200); this.value = p.links.join('\n'); save(); } }); linksTa.value = (p.links || []).join('\n');
-    var dimC = input('checkbox', !!p.dim, { onChange:function(){ p.dim = this.checked; save(); } }), dimFrom = input('time', p.dimFrom || '22:00', { onChange:function(){ p.dimFrom = this.value; save(); } }), dimTo = input('time', p.dimTo || '07:00', { onChange:function(){ p.dimTo = this.value; save(); } });
-    var dimLvl = input('range', p.dimLevel || 60, { min:'10', max:'90', step:'5', 'aria-label':'How dark at night', onInput:function(){ p.dimLevel = Number(this.value); save(); } });
-    var radioSel = select([['', 'No radio']], p.radio || '', { onChange:function(){ p.radio = this.value; save(); } });
-    (A.loadRadio ? A.loadRadio() : Promise.resolve([])).then(function(list){ list.forEach(function(st){ radioSel.appendChild(h('option', { value:st.id, text:st.name })); }); radioSel.value = p.radio || ''; }).catch(function(){});
+    host.appendChild(hero('Ambient', 'Turn any screen into a living picture frame. Mix a background, a clock and overlays; it can also start on its own when nobody has touched the screen for a while.', [btn('Start now', function(){ startAmbient({}); }, 'primary')], 'MISC'));
+    var p = ambientPrefs(), body = h('div', { className:'vc-ambient-page' }), previewBox = h('div', { className:'vc-amb-preview', 'aria-label':'Live preview' }), preview = null, pt = 0, forms = h('div', { className:'vc-amb-options' });
+    host.appendChild(body);
+    function refreshPreview(){ clearTimeout(pt); pt = setTimeout(function(){ if (preview) preview.stop(); if (previewBox.isConnected) preview = buildAmbient(previewBox, p, { preview:true }); }, 250); }
+    function changed(){ saveAmbientPrefs(p); refreshPreview(); drawPresets(); }
+    onCleanup(function(){ clearTimeout(pt); if (preview) preview.stop(); });
+    var presets = h('div', { className:'vc-mode-grid vc-amb-presets', role:'list', 'aria-label':'Presets' });
+    function matches(pre){ var x = pre[4]; return Object.keys(x).every(function(k){ return typeof x[k] === 'object' ? Object.keys(x[k]).every(function(kk){ return p[k] && p[k][kk] === x[k][kk]; }) : p[k] === x[k]; }); }
+    function drawPresets(){ presets.replaceChildren.apply(presets, PRESETS.map(function(m){ var on = matches(m); return h('button', { type:'button', role:'listitem', 'aria-pressed':String(on), className:'vc-mode-card' + (on ? ' active' : ''), title:'Double-click to start', onClick:function(){ var x = JSON.parse(JSON.stringify(m[4])); Object.keys(x).forEach(function(k){ p[k] = typeof x[k] === 'object' ? Object.assign({}, p[k], x[k]) : x[k]; }); changed(); drawForms(); }, onDblclick:function(){ startAmbient({ preset:m[0] }); } }, [h('span', { className:'vc-mode-icon', text:m[3], 'aria-hidden':'true' }), h('strong', { text:m[1] }), h('small', { className:'muted', text:m[2] })]); })); }
+    function bind(el, get, set){ el.addEventListener(el.type === 'range' ? 'input' : 'change', function(){ set(el.type === 'checkbox' ? el.checked : el.value); changed(); }); return el; }
+    function check(label, obj, key){ return h('label', { className:'vc-check' }, [bind(input('checkbox', !!obj[key]), null, function(v){ obj[key] = v; }), h('span', { text:label })]); }
+    function drawForms(){
+      // Background
+      var bg = bind(select([['library', 'Library frames and posters'], ['pictures', 'Your pictures'], ['fx', 'Animated scene'], ['gradient', 'Gradient'], ['solid', 'Solid colour'], ['webcam', 'A webcam'], ['nowplaying', 'Now-playing artwork']], p.bg), null, function(v){ p.bg = v; drawForms(); });
+      var lib = bind(select([['frames', 'Film stills'], ['posters', 'Posters'], ['mixed', 'Both']], p.library), null, function(v){ p.library = v; });
+      var fx = bind(select(FX_SCENES.map(function(f){ return [f[0], f[2] + ' ' + f[1]]; }), p.fx), null, function(v){ p.fx = v; });
+      var grad = bind(select(Object.keys(GRADIENTS).map(function(k){ return [k, k.charAt(0).toUpperCase() + k.slice(1)]; }), p.gradient), null, function(v){ p.gradient = v; });
+      var solid = bind(input('color', p.solid), null, function(v){ p.solid = v; });
+      var cam = select([['', 'Cycle through all']], p.webcam); bind(cam, null, function(v){ p.webcam = v; });
+      Promise.all([myCams().catch(function(){ return []; }), call('/misc/ambient').then(function(c){ return c.webcams || []; }).catch(function(){ return []; })]).then(function(r){ r[0].concat(r[1]).forEach(function(c){ cam.appendChild(h('option', { value:c.id || c.url, text:camLabel(c) })); }); cam.value = p.webcam || ''; });
+      var secs = bind(input('number', p.seconds, { min:'5', max:'120' }), null, function(v){ p.seconds = Math.max(5, Math.min(120, Number(v) || 14)); });
+      var fadeSel = bind(select([['0.6', 'Quick (0.6 s)'], ['1.6', 'Gentle (1.6 s)'], ['3', 'Slow (3 s)'], ['6', 'Very slow (6 s)']], String(p.fade)), null, function(v){ p.fade = Number(v); });
+      var bgRows = [field('Background', bg)];
+      if (p.bg === 'library') bgRows.push(field('Artwork', lib));
+      if (p.bg === 'fx') bgRows.push(field('Scene', fx, 'Lightweight canvas animation; pauses when hidden and stays still with reduced motion.'));
+      if (p.bg === 'gradient') bgRows.push(field('Gradient', grad));
+      if (p.bg === 'solid') bgRows.push(field('Colour', solid));
+      if (p.bg === 'webcam') bgRows.push(field('Webcam', cam, 'Only one webcam player runs at a time.'));
+      if (p.bg === 'library' || p.bg === 'pictures') bgRows.push(field('Seconds per picture', secs), field('Transition speed', fadeSel));
+      // Clock
+      var c = p.clock;
+      var style = bind(select([['digital', 'Digital'], ['minimal', 'Minimal (thin)'], ['analog', 'Analogue']], c.style), null, function(v){ c.style = v; });
+      var sizeSel = bind(select([['s', 'Small'], ['m', 'Medium'], ['l', 'Large'], ['xl', 'Huge']], c.size), null, function(v){ c.size = v; });
+      var pos = bind(select([['center', 'Centre'], ['bl', 'Bottom left'], ['bc', 'Bottom centre'], ['br', 'Bottom right'], ['tl', 'Top left'], ['tr', 'Top right']], c.pos), null, function(v){ c.pos = v; });
+      var h12 = bind(select([['auto', 'Device default'], ['off', '24-hour'], ['on', '12-hour']], c.h12), null, function(v){ c.h12 = v; });
+      // Screen care
+      var n = p.night, dim = bind(input('range', p.dim, { min:'0', max:'80', step:'5', 'aria-label':'Dim level' }), null, function(v){ p.dim = Number(v); });
+      var nFrom = bind(input('time', n.from), null, function(v){ n.from = v; }), nTo = bind(input('time', n.to), null, function(v){ n.to = v; }), nLvl = bind(input('range', n.level, { min:'10', max:'90', step:'5', 'aria-label':'How dark at night' }), null, function(v){ n.level = Number(v); });
+      var radioSel = select([['', 'No radio']], p.radio || ''); bind(radioSel, null, function(v){ p.radio = v; });
+      (A.loadRadio ? A.loadRadio() : Promise.resolve([])).then(function(list){ list.forEach(function(st){ radioSel.appendChild(h('option', { value:st.id, text:st.name })); }); radioSel.value = p.radio || ''; }).catch(function(){});
+      forms.replaceChildren(
+        panel('Background', [h('div', { className:'vc-form' }, bgRows)]),
+        panel('Clock', [h('div', { className:'vc-form' }, [check('Show the clock', c, 'show'), h('div', { className:'vc-field-row' }, [field('Style', style), field('Size', sizeSel), field('Position', pos)]), h('div', { className:'vc-field-row' }, [field('Format', h12)]), check('Seconds', c, 'seconds'), check('Date', c, 'date')])]),
+        panel('Overlays', [h('div', { className:'vc-form' }, [check('Weather', p.overlays, 'weather'), field('Weather location', locationPicker(p.loc, function(l){ p.loc = l; changed(); })), check('Next calendar event', p.overlays, 'event'), check('Upcoming reminders', p.overlays, 'reminders'), check('Now playing', p.overlays, 'nowplaying'), check('Quote of the day', p.overlays, 'quote')])]),
+        panel('Screen care', [h('div', { className:'vc-form' }, [field('Dim', dim), check('Darken and blur behind text', p, 'scrim'), check('Drift slowly to protect against burn-in', p, 'shift'), check('Night mode: dimmer and warmer at night', n, 'on'), h('div', { className:'vc-field-row' }, [field('From', nFrom), field('Until', nTo), field('Night darkness', nLvl)]), check('Warmer colours at night', n, 'warm')])]),
+        panel('Sound', [h('div', { className:'vc-form' }, [field('Radio while ambient runs', radioSel)])]));
+    }
     var own = null; try { own = localStorage.getItem('vaultcast-ambient-idle'); } catch (e) {}
     var idleSel = select([['', 'Use the server default'], ['0', 'Never on this device'], ['2', 'After 2 minutes'], ['5', 'After 5 minutes'], ['10', 'After 10 minutes'], ['15', 'After 15 minutes'], ['30', 'After 30 minutes'], ['60', 'After 1 hour']], own == null ? '' : own, { onChange:function(){ try { if (this.value === '') localStorage.removeItem('vaultcast-ambient-idle'); else localStorage.setItem('vaultcast-ambient-idle', this.value); } catch (e) {} } });
     var serverIdle = h('small', { className:'muted' });
-    body.append(panel('Mode', [modes]), panel('Overlay & sound', [h('div', { className:'vc-form' }, [h('label', { className:'vc-check' }, [clockC, h('span', { text:'Show the clock' })]), h('label', { className:'vc-check' }, [wxC, h('span', { text:'Show the weather' })]), field('Weather location', locationPicker(p.loc, function(l){ p.loc = l; save(); })), field('Seconds per picture', secs), field('Transition speed', fadeSel), field('Radio while ambient runs', radioSel)])]),
-      panel('Your pictures', [h('div', { className:'vc-form' }, [field('Picture addresses (one per line, used by the “Your pictures” mode)', linksTa, 'Pictures load straight from your browser; the server never fetches them.')])]),
-      panel('Night dimming', [h('div', { className:'vc-form' }, [h('label', { className:'vc-check' }, [dimC, h('span', { text:'Dim the screen at night' })]), h('div', { className:'vc-field-row' }, [field('From', dimFrom), field('Until', dimTo), field('Darkness', dimLvl)])])]),
-      panel('Start automatically', [h('div', { className:'vc-form' }, [field('On this device', idleSel), serverIdle, h('p', { className:'muted', text:'Ambient waits while video or audio is playing. Any key, tap or mouse movement returns you to where you were.' })])]));
+    var linksTa = h('textarea', { rows:4, placeholder:'https://example.local/photos/1.jpg', 'aria-label':'Picture addresses, one per line', onChange:function(){ p.links = this.value.split(/\s+/).map(safeImageUrl).filter(Boolean).slice(0, 200); this.value = p.links.join('\n'); changed(); } }); linksTa.value = (p.links || []).join('\n');
+    body.append(h('div', { className:'vc-amb-top' }, [h('div', { className:'vc-amb-preview-wrap' }, [previewBox, h('div', { className:'vc-amb-preview-bar' }, [h('small', { className:'muted', text:'Live preview' }), btn('Start now', function(){ startAmbient({}); }, 'primary small')])]), panel('Presets', [h('p', { className:'muted', text:'One click sets the layers below; double-click starts it.' }), presets])]),
+      forms,
+      panel('Your pictures', [h('p', { className:'muted', text:'Used by the “Your pictures” background, the Slideshow and the Picture frame. Only you can see them.' }), picturesManager(function(){ if (p.bg === 'pictures') refreshPreview(); }), h('details', { className:'vc-form vc-links-more' }, [h('summary', { text:'Picture links' }), field('Picture addresses (one per line, shown after your uploads)', linksTa, 'Pictures load straight from your browser; the server never fetches them.')])]),
+      panel('Start automatically', [h('div', { className:'vc-form' }, [field('On this device', idleSel), serverIdle, h('p', { className:'muted', text:'Ambient waits while video or audio is playing. Moving the mouse or tapping shows an Exit button; Esc also returns you to where you were.' })])]));
+    drawPresets(); drawForms(); refreshPreview();
+    loadAmbientPrefs().then(function(fresh){ if (!body.isConnected) return; p = fresh; linksTa.value = (p.links || []).join('\n'); drawPresets(); drawForms(); refreshPreview(); });
     call('/misc/ambient').then(function(cfg){
       serverIdle.textContent = cfg.idle_minutes ? 'Server default: after ' + cfg.idle_minutes + ' minutes.' : 'Server default: off.';
       if (!isAdmin()) return;
-      var idle = input('number', cfg.idle_minutes || 0, { min:'0', max:'240' }), radio = select([['', 'None']], cfg.radio || ''), cams = (cfg.webcams || []).map(function(c){ return Object.assign({}, c); }), camBox = h('div', { className:'vc-cam-edit' });
+      var idle = input('number', cfg.idle_minutes || 0, { min:'0', max:'240' }), radio = select([['', 'None']], cfg.radio || ''), cams = (cfg.webcams || []).map(function(c){ return Object.assign({}, c); });
       (A.loadRadio ? A.loadRadio() : Promise.resolve([])).then(function(list){ list.forEach(function(st){ radio.appendChild(h('option', { value:st.id, text:st.name })); }); radio.value = cfg.radio || ''; }).catch(function(){});
-      function drawCams(){ camBox.replaceChildren.apply(camBox, cams.map(function(c, i){ function bind(el, k, num){ el.addEventListener('input', function(){ c[k] = num ? Number(el.value) : el.value; }); el.addEventListener('change', function(){ c[k] = num ? Number(el.value) : el.value; }); return el; }
-        return h('fieldset', { className:'vc-rem-row' }, [bind(input('text', c.name, { placeholder:'Name', 'aria-label':'Webcam name' }), 'name'), bind(input('url', c.url, { placeholder:'https://…', 'aria-label':'Webcam address' }), 'url'), bind(select([['image', 'Still image (refreshes)'], ['video', 'Video / HLS stream'], ['embed', 'Embedded page']], c.kind || 'image', { 'aria-label':'Type' }), 'kind'), bind(input('number', c.refresh || 30, { min:'5', max:'3600', 'aria-label':'Refresh seconds', title:'Refresh every N seconds (images)' }), 'refresh', true), btn('×', function(){ cams.splice(i, 1); drawCams(); }, 'ghost small', { 'aria-label':'Remove webcam' })]); }).concat([btn('Add webcam', function(){ cams.push({ name:'', url:'', kind:'image', refresh:30 }); drawCams(); }, 'ghost')])); }
-      drawCams();
-      body.appendChild(panel('Administration', [h('form', { className:'vc-form', onSubmit:function(e){ e.preventDefault(); call('/misc/admin/ambient', { method:'POST', body:{ idle_minutes:Number(idle.value), radio:radio.value, webcams:cams.filter(function(c){ return c.url; }) } }).then(function(){ A.toast('Ambient settings saved', { kind:'ok' }); }).catch(err); } }, [field('Start after N idle minutes for everyone (0 = off)', idle), field('Suggested radio station', radio), h('div', { className:'vc-field' }, [h('span', { text:'Curated webcams' }), h('small', { className:'muted', text:'Public camera images, HLS streams or embeddable pages. Check each source allows this use.' }), camBox]), h('button', { type:'submit', className:'btn primary', text:'Save' })])]));
+      var camBox = camEditor(cams);
+      body.appendChild(panel('Administration', [h('form', { className:'vc-form', onSubmit:function(e){ e.preventDefault(); call('/misc/admin/ambient', { method:'POST', body:{ idle_minutes:Number(idle.value), radio:radio.value, webcams:cams.filter(function(c){ return c.url; }) } }).then(function(){ A.toast('Ambient settings saved', { kind:'ok' }); }).catch(err); } }, [field('Start after N idle minutes for everyone (0 = off)', idle), field('Suggested radio station', radio), h('div', { className:'vc-field' }, [h('span', { text:'Curated webcams' }), h('small', { className:'muted', text:'YouTube live links, public camera images, MJPEG or HLS streams, or embeddable pages. The name is shown as the label. Check each source allows this use.' }), camBox]), h('button', { type:'submit', className:'btn primary', text:'Save' })])]));
     }).catch(function(){});
   }
 
@@ -987,6 +1331,7 @@
       stopAll(); host.replaceChildren(); host.classList.add('vc-misc');
       if (tab === 'drop') return drop(host, sub);
       if (tab === 'ambient') return ambient(host, sub);
+      if (tab === 'calendar') { var lz = h('div', { className:'vc-lazy' }); host.appendChild(lz); return A.loadModule('vc-calendar.js', 'VaultcastCalendar').then(function(m){ if (!lz.isConnected) return; lz.className = ''; var stop = m.page(lz, sub); if (typeof stop === 'function') onCleanup(stop); }).catch(function(e){ lz.replaceChildren(empty('Calendar unavailable', (e && e.message) || '')); }); }
       return board(host, sub);
     },
     startAmbient:startAmbient,

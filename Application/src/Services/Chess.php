@@ -159,15 +159,60 @@ final class Chess {
         return $out;
     }
 
-    /** Validate and play a UCI move; returns the new state. */
-    public static function play(array $s, string $uci): array {
+    /** Validate a UCI move and return it in canonical form (a promotion sent without a piece becomes a queen). */
+    public static function normalise(array $s, string $uci): string {
         $uci = strtolower(trim($uci));
         if (!preg_match('/^([a-h][1-8])([a-h][1-8])([qrbn]?)$/', $uci, $m)) throw new DomainException('Invalid move.');
         $legal = self::legal($s);
-        // A promotion sent without a piece promotes to a queen.
-        if ($m[3] === '' && !in_array($uci, $legal, true) && in_array($uci . 'q', $legal, true)) { $uci .= 'q'; $m[3] = 'q'; }
+        if ($m[3] === '' && !in_array($uci, $legal, true) && in_array($uci . 'q', $legal, true)) $uci .= 'q';
         if (!in_array($uci, $legal, true)) throw new DomainException('That move is not legal.');
-        return self::apply($s, [self::square($m[1]), self::square($m[2]), $m[3]]);
+        return $uci;
+    }
+
+    /** Validate and play a UCI move; returns the new state. */
+    public static function play(array $s, string $uci): array {
+        $uci = self::normalise($s, $uci);
+        return self::apply($s, [self::square(substr($uci, 0, 2)), self::square(substr($uci, 2, 2)), (string)substr($uci, 4, 1)]);
+    }
+
+    /** Standard algebraic notation (e4, Nbd7, exd6, O-O, e8=Q+, Qh7#) for a legal UCI move in position $s. */
+    public static function san(array $s, string $uci): string {
+        $from = self::square(substr($uci, 0, 2)); $to = self::square(substr($uci, 2, 2)); $promo = (string)substr($uci, 4, 1);
+        if ($from < 0 || $to < 0) return $uci;
+        $b = $s['board']; $t = strtolower($b[$from]);
+        if ($t === 'k' && abs($to - $from) === 2) $out = $to > $from ? 'O-O' : 'O-O-O';
+        else {
+            $capture = $b[$to] !== '.' || ($t === 'p' && $to === $s['ep']);
+            if ($t === 'p') $out = ($capture ? chr(97 + $from % 8) . 'x' : '') . self::name($to) . ($promo !== '' ? '=' . strtoupper($promo) : '');
+            else {
+                $others = [];
+                foreach (self::legal($s) as $m) {
+                    $f = self::square(substr($m, 0, 2));
+                    if ($f !== $from && substr($m, 2, 2) === self::name($to) && $b[$f] === $b[$from]) $others[] = $f;
+                }
+                $dis = '';
+                if ($others) {
+                    $sameFile = false; $sameRank = false;
+                    foreach ($others as $f) { if ($f % 8 === $from % 8) $sameFile = true; if (intdiv($f, 8) === intdiv($from, 8)) $sameRank = true; }
+                    $dis = !$sameFile ? chr(97 + $from % 8) : (!$sameRank ? chr(49 + intdiv($from, 8)) : self::name($from));
+                }
+                $out = strtoupper($t) . $dis . ($capture ? 'x' : '') . self::name($to);
+            }
+        }
+        $n = self::apply($s, [$from, $to, $promo]);
+        if (self::inCheck($n, $n['turn'])) $out .= self::legal($n) ? '+' : '#';
+        return $out;
+    }
+
+    /** SAN for a whole game from the start position; unknown moves fall back to from-to. */
+    public static function sanList(array $moves, string $fen = self::START): array {
+        $s = self::parse($fen); $out = [];
+        foreach ($moves as $u) {
+            $u = (string)$u;
+            try { $u = self::normalise($s, $u); $out[] = self::san($s, $u); $s = self::play($s, $u); }
+            catch (DomainException $e) { $out[] = $u; }
+        }
+        return $out;
     }
 
     /** 'checkmate' | 'stalemate' | 'fifty' | 'material' | '' (game continues). */

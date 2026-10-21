@@ -4673,7 +4673,7 @@ try {
       items.push({ label: 'Teams & friends', active: tab === 'social', go: function(){ goPlayTab('social'); } });
       items.push({ label: 'Leaderboards', active: tab === 'leaderboards', go: function(){ goPlayTab('leaderboards'); } });
     } else if (mode === 'misc') {
-      [['board','Board'],['drop','Drop'],['ambient','Ambient']].forEach(function(t){ items.push({ label:t[1], active:(state.miscTab||'board')===t[0], go:function(){ state.miscTab=t[0]; state.miscSub=''; if(state.view!=='misc')navigate('misc'); else { pushNav(); render(); } } }); });
+      [['board','Board'],['calendar','Calendar'],['drop','Drop'],['ambient','Ambient']].forEach(function(t){ items.push({ label:t[1], active:(state.miscTab||'board')===t[0], go:function(){ state.miscTab=t[0]; state.miscSub=''; if(state.view!=='misc')navigate('misc'); else { pushNav(); render(); } } }); });
     } else {
       return null;
     }
@@ -14960,7 +14960,7 @@ function viewCollectionDetail(){
   function loadModule(file, globalName){
     if (globalName && window[globalName]) return Promise.resolve(window[globalName]);
     if (moduleLoads[file]) return moduleLoads[file];
-    var css = /^vc-(play|misc|games)\.js$/.test(file) ? loadExtraCss() : Promise.resolve();
+    var css = /^vc-(play|misc|games|calendar)\.js$/.test(file) ? loadExtraCss() : Promise.resolve();
     moduleLoads[file] = new Promise(function(resolve, reject){
       var sm = document.createElement('script');
       sm.src = BASE + 'index.php?asset=assets/js/' + file + '&v=' + encodeURIComponent(window.__ASSET_VERSION__ || APP_VERSION);

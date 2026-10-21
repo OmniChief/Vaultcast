@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 /** Misc → Board (dashboards and widget data) and Ambient (screensaver stills, webcams). */
 final class Misc {
-    const WIDGETS = ['clock', 'weather', 'calendar', 'reminders', 'media', 'recordings', 'downloads', 'health', 'recent', 'nowplaying', 'notes', 'slideshow', 'rss', 'drop', 'leaderboard'];
+    const WIDGETS = ['clock', 'weather', 'calendar', 'reminders', 'media', 'recordings', 'downloads', 'health', 'recent', 'nowplaying', 'notes', 'slideshow', 'rss', 'drop', 'leaderboard', 'frame', 'webcams'];
 
     // ---------------------------------------------------------------- boards
     public static function boards(array $user): array {
@@ -96,7 +96,7 @@ final class Misc {
             foreach ((array)($j['daily']['time'] ?? []) as $i => $t) $days[] = ['date' => $t, 'code' => $j['daily']['weather_code'][$i] ?? null, 'max' => $j['daily']['temperature_2m_max'][$i] ?? null, 'min' => $j['daily']['temperature_2m_min'][$i] ?? null, 'rain' => $j['daily']['precipitation_probability_max'][$i] ?? null, 'sunrise' => $j['daily']['sunrise'][$i] ?? null, 'sunset' => $j['daily']['sunset'][$i] ?? null];
             $c = $j['current'];
             return ['current' => ['temp' => $c['temperature_2m'] ?? null, 'feels' => $c['apparent_temperature'] ?? null, 'humidity' => $c['relative_humidity_2m'] ?? null, 'code' => $c['weather_code'] ?? null, 'wind' => $c['wind_speed_10m'] ?? null, 'day' => !empty($c['is_day']), 'precip' => $c['precipitation'] ?? null],
-                'hours' => $hours, 'days' => $days, 'units' => $f ? '°F' : '°C', 'wind_units' => $f ? 'mph' : 'km/h', 'source' => 'Open-Meteo'];
+                'hours' => $hours, 'days' => $days, 'units' => $f ? '°F' : '°C', 'wind_units' => $f ? 'mph' : 'km/h'];
         });
     }
     private static function external(array $user, string $url): string {
@@ -194,7 +194,7 @@ final class Misc {
             $key = (string)($card['show_key'] ?? '');
             if ($key !== '') { if (isset($shows[$key])) continue; $shows[$key] = 1; }
             $out[] = ['id' => $card['id'], 'title' => $key !== '' ? ($card['show_title'] ?? $card['show'] ?? $card['title']) : $card['title'], 'subtitle' => $key !== '' ? ($card['title'] ?? '') : (string)($card['year'] ?? ''), 'show_key' => $key ?: null,
-                'type' => $card['type'] ?? '', 'poster' => '/api/items/' . rawurlencode((string)$card['id']) . '/poster?fetch=0&variant=thumb', 'added_at' => (int)($it['added_at'] ?? $it['mtime'] ?? 0)];
+                'type' => $card['type'] ?? '', 'poster' => '/api/items/' . rawurlencode((string)$card['id']) . '/poster?fetch=0&variant=medium', 'added_at' => (int)($it['added_at'] ?? $it['mtime'] ?? 0)];
             if (count($out) >= $n) break;
         }
         return ['items' => $out];
@@ -343,10 +343,39 @@ final class Misc {
     }
 
     // ---------------------------------------------------------------- ambient
+    /** Per-user Misc preferences: the Ambient layers and the saved webcams list (shared by the Webcams and Media widgets). */
+    public static function prefs(array $user): array {
+        Arcade::signed($user);
+        $d = (array)\Vaultcast\Repository::document('misc-prefs:' . $user['id'], []);
+        return ['ok' => true, 'ambient' => is_array($d['ambient'] ?? null) ? $d['ambient'] : null, 'webcams' => array_values((array)($d['webcams'] ?? []))];
+    }
+    public static function savePrefs(array $user, array $body): array {
+        Arcade::signed($user);
+        HomeHub::mutate('misc-prefs:' . $user['id'], function (array $d) use ($body): array {
+            if (array_key_exists('ambient', $body) && is_array($body['ambient'])) {
+                $json = json_encode(self::clean($body['ambient']));
+                if (strlen((string)$json) > 20000) throw new DomainException('Ambient settings are too large.');
+                $d['ambient'] = json_decode((string)$json, true);
+            }
+            if (array_key_exists('webcams', $body)) {
+                $cams = [];
+                foreach (array_slice((array)$body['webcams'], 0, 40) as $c) {
+                    if (!is_array($c)) continue; $url = trim((string)($c['url'] ?? ''));
+                    if (!preg_match('#^https?://[^\s"<>]+$#i', $url)) continue;
+                    $id = preg_match('/^[a-z0-9]{4,16}$/', (string)($c['id'] ?? '')) ? (string)$c['id'] : bin2hex(random_bytes(4));
+                    $cams[] = ['id' => $id, 'name' => mb_substr(trim((string)($c['name'] ?? '')), 0, 60), 'url' => mb_substr($url, 0, 1000),
+                        'kind' => in_array($c['kind'] ?? '', ['auto', 'image', 'mjpeg', 'video', 'youtube', 'embed'], true) ? $c['kind'] : 'auto', 'refresh' => max(5, min(3600, (int)($c['refresh'] ?? 30)))];
+                }
+                $d['webcams'] = $cams;
+            }
+            return $d;
+        });
+        return self::prefs($user);
+    }
     public static function ambientSettings(): array {
         $m = (array)(Store::settings()['misc'] ?? []);
         $cams = [];
-        foreach ((array)($m['webcams'] ?? []) as $c) if (is_array($c) && !empty($c['url'])) $cams[] = ['name' => (string)($c['name'] ?? 'Webcam'), 'url' => (string)$c['url'], 'kind' => in_array($c['kind'] ?? '', ['image', 'video', 'embed'], true) ? $c['kind'] : 'image', 'refresh' => max(5, (int)($c['refresh'] ?? 30))];
+        foreach ((array)($m['webcams'] ?? []) as $c) if (is_array($c) && !empty($c['url'])) $cams[] = ['name' => (string)($c['name'] ?? ''), 'url' => (string)$c['url'], 'kind' => in_array($c['kind'] ?? '', ['auto', 'image', 'mjpeg', 'video', 'youtube', 'embed'], true) ? $c['kind'] : 'auto', 'refresh' => max(5, (int)($c['refresh'] ?? 30))];
         return ['idle_minutes' => max(0, min(240, (int)($m['ambient_idle_minutes'] ?? 0))), 'webcams' => $cams, 'radio' => (string)($m['ambient_radio'] ?? '')];
     }
     public static function saveAmbient(array $body): array {
@@ -354,21 +383,32 @@ final class Misc {
         foreach (array_slice((array)($body['webcams'] ?? []), 0, 40) as $c) {
             if (!is_array($c)) continue; $url = trim((string)($c['url'] ?? ''));
             if (!preg_match('#^https?://[^\s"<>]+$#i', $url)) continue;
-            $cams[] = ['name' => mb_substr(trim((string)($c['name'] ?? '')), 0, 60) ?: 'Webcam', 'url' => mb_substr($url, 0, 1000), 'kind' => in_array($c['kind'] ?? '', ['image', 'video', 'embed'], true) ? $c['kind'] : 'image', 'refresh' => max(5, min(3600, (int)($c['refresh'] ?? 30)))];
+            $cams[] = ['name' => mb_substr(trim((string)($c['name'] ?? '')), 0, 60), 'url' => mb_substr($url, 0, 1000), 'kind' => in_array($c['kind'] ?? '', ['auto', 'image', 'mjpeg', 'video', 'youtube', 'embed'], true) ? $c['kind'] : 'auto', 'refresh' => max(5, min(3600, (int)($c['refresh'] ?? 30)))];
         }
         $all['misc'] = array_merge((array)($all['misc'] ?? []), ['webcams' => $cams, 'ambient_idle_minutes' => max(0, min(240, (int)($body['idle_minutes'] ?? 0))), 'ambient_radio' => mb_substr(trim((string)($body['radio'] ?? '')), 0, 120)]);
         Store::saveSettings($all);
         return ['ok' => true, 'settings' => self::ambientSettings()];
     }
-    public static function stills(array $user, string $kind, int $n): array {
+    /**
+     * Library artwork for Ambient and the Slideshow widget. $type: both | movies | tv; $order: random | recent
+     * (newest additions first); $variant: full | medium (posters only; frames are always full size).
+     */
+    public static function stills(array $user, string $kind, int $n, string $type = 'both', string $order = 'random', string $variant = 'full'): array {
         if (!AreaAccess::allowed($user, 'library')) return ['ok' => true, 'stills' => []];
         $n = max(5, min(60, $n));
-        $rows = Arcade::query("SELECT item_id, title, year, show_key, show_name FROM vaultcast_browse_items WHERE media_kind='video' AND (show_key='' OR episode=1) ORDER BY RAND() LIMIT " . $n)->fetchAll(PDO::FETCH_ASSOC);
+        $where = "b.media_kind='video' AND (b.show_key='' OR b.episode=1)";
+        if ($type === 'movies') $where .= " AND b.show_key=''";
+        elseif ($type === 'tv') $where .= " AND b.show_key<>''";
+        $variant = $variant === 'medium' ? 'medium' : 'full';
+        $sql = $order === 'recent'
+            ? "SELECT b.item_id, b.title, b.year, b.show_key, b.show_name FROM vaultcast_browse_items b JOIN vaultcast_items i ON i.id=b.item_id WHERE $where ORDER BY i.added_at DESC LIMIT " . $n
+            : "SELECT b.item_id, b.title, b.year, b.show_key, b.show_name FROM vaultcast_browse_items b WHERE $where ORDER BY RAND() LIMIT " . $n;
+        $rows = Arcade::query($sql)->fetchAll(PDO::FETCH_ASSOC);
         $out = [];
         foreach ($rows as $r) {
             $frame = $kind === 'frames' || ($kind === 'mixed' && crc32($r['item_id']) % 2 === 0);
             $out[] = ['title' => $r['show_key'] !== '' ? $r['show_name'] : $r['title'], 'year' => $r['year'] ? (int)$r['year'] : null, 'item_id' => $r['item_id'],
-                'kind' => $frame ? 'frame' : 'poster', 'url' => $frame ? '/api/misc/ambient/frame/' . rawurlencode((string)$r['item_id']) : '/api/items/' . rawurlencode((string)$r['item_id']) . '/poster?fetch=0&variant=full'];
+                'kind' => $frame ? 'frame' : 'poster', 'url' => $frame ? '/api/misc/ambient/frame/' . rawurlencode((string)$r['item_id']) : '/api/items/' . rawurlencode((string)$r['item_id']) . '/poster?fetch=0&variant=' . $variant];
         }
         return ['ok' => true, 'stills' => $out];
     }

@@ -27,8 +27,10 @@
       api.dirty = true; // resizing clears the canvas, so loops that skip idle frames must redraw
       var box = host.getBoundingClientRect(), maxW = Math.max(160, box.width), maxH = Math.max(160, box.height || window.innerHeight * 0.7);
       if (aspect) { w = Math.min(maxW, maxH * aspect); hgt = w / aspect; } else { w = maxW; hgt = maxH; }
+      // Backing store = CSS box × device pixel ratio (capped), so lines and text stay crisp on HiDPI and TVs.
+      w = Math.floor(w); hgt = Math.floor(hgt);
       var dpr = Math.min(3, window.devicePixelRatio || 1);
-      canvas.width = Math.round(w * dpr); canvas.height = Math.round(hgt * dpr); canvas.style.width = Math.round(w) + 'px'; canvas.style.height = Math.round(hgt) + 'px';
+      canvas.width = Math.round(w * dpr); canvas.height = Math.round(hgt * dpr); canvas.style.width = w + 'px'; canvas.style.height = hgt + 'px';
       g.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
     fit();
@@ -154,12 +156,12 @@
       if (grow) grow--; else body.pop();
     }
     function draw(){
-      var sz = st.size(), g = st.g, s = Math.min(sz.w, sz.h) / N, ox = (sz.w - s * N) / 2, oy = (sz.h - s * N) / 2;
+      var sz = st.size(), g = st.g, s = Math.max(4, Math.floor(Math.min(sz.w, sz.h) / N)), ox = Math.round((sz.w - s * N) / 2), oy = Math.round((sz.h - s * N) / 2);
       g.clearRect(0, 0, sz.w, sz.h); g.fillStyle = 'rgba(0,0,0,.3)'; roundRect(g, ox, oy, s * N, s * N, 12); g.fill();
       g.fillStyle = 'rgba(255,255,255,.035)'; for (var y = 0; y < N; y++) for (var x = (y % 2); x < N; x += 2) g.fillRect(ox + x * s, oy + y * s, s, s);
-      g.shadowColor = pal.danger; g.shadowBlur = 14; g.fillStyle = pal.danger; g.beginPath(); g.arc(ox + (food[0] + .5) * s, oy + (food[1] + .5) * s, s * .36, 0, Math.PI * 2); g.fill();
+      g.shadowColor = pal.danger; g.shadowBlur = 6; g.fillStyle = pal.danger; g.beginPath(); g.arc(ox + (food[0] + .5) * s, oy + (food[1] + .5) * s, s * .36, 0, Math.PI * 2); g.fill();
       if (bonus) { g.shadowColor = pal.warn; g.fillStyle = pal.warn; g.globalAlpha = .5 + .5 * Math.sin(Date.now() / 120); g.beginPath(); g.arc(ox + (bonus.at[0] + .5) * s, oy + (bonus.at[1] + .5) * s, s * .42, 0, Math.PI * 2); g.fill(); g.globalAlpha = 1; }
-      g.shadowColor = pal.accent; g.shadowBlur = 12;
+      g.shadowColor = pal.accent; g.shadowBlur = 5;
       body.forEach(function(b, i){ var t = i / Math.max(1, body.length - 1); g.fillStyle = i === 0 ? pal.text : (t < .5 ? pal.accent : pal.accent2); roundRect(g, ox + b[0] * s + 1.5, oy + b[1] * s + 1.5, s - 3, s - 3, s * .3); g.fill(); });
       g.shadowBlur = 0;
     }
@@ -210,7 +212,7 @@
     }
     function colour(v){ var l = Math.log2(v), hue = (200 - l * 18 + 360) % 360; return 'hsl(' + hue + ',' + Math.min(90, 40 + l * 5) + '%,' + Math.max(38, 70 - l * 2.4) + '%)'; }
     function draw(){
-      var sz = st.size(), g = st.g, size = Math.min(sz.w, sz.h), pad = size * .025, s = (size - pad * (N + 1)) / N, ox = (sz.w - size) / 2, oy = (sz.h - size) / 2, now = Date.now(), k = anim ? Math.min(1, (now - anim) / 100) : 1;
+      var sz = st.size(), g = st.g, size = Math.floor(Math.min(sz.w, sz.h)), pad = Math.max(2, Math.round(size * .025)), s = Math.floor((size - pad * (N + 1)) / N), ox = Math.round((sz.w - size) / 2), oy = Math.round((sz.h - size) / 2), now = Date.now(), k = anim ? Math.min(1, (now - anim) / 100) : 1;
       g.clearRect(0, 0, sz.w, sz.h); g.fillStyle = 'rgba(0,0,0,.3)'; roundRect(g, ox, oy, size, size, 14); g.fill();
       for (var y = 0; y < N; y++) for (var x = 0; x < N; x++) { g.fillStyle = 'rgba(255,255,255,.05)'; roundRect(g, ox + pad + x * (s + pad), oy + pad + y * (s + pad), s, s, 10); g.fill(); }
       tiles.forEach(function(t){
@@ -301,7 +303,7 @@
       bricks.forEach(function(k){ var hue = (k.row * 40 + 180) % 360; var gr = g.createLinearGradient(k.x, k.y, k.x, k.y + k.h); gr.addColorStop(0, 'hsl(' + hue + ',85%,' + (k.hp > 1 ? 50 : 64) + '%)'); gr.addColorStop(1, 'hsl(' + hue + ',75%,' + (k.hp > 1 ? 36 : 48) + '%)'); g.fillStyle = gr; roundRect(g, k.x, k.y, k.w, k.h, 5); g.fill(); if (k.hp > 1) { g.strokeStyle = 'rgba(255,255,255,.6)'; g.lineWidth = 2; g.stroke(); } });
       particles.forEach(function(p){ g.globalAlpha = p.life / 30; g.fillStyle = p.c; g.fillRect(p.x, p.y, 4, 4); }); g.globalAlpha = 1;
       var pg = g.createLinearGradient(paddle.x, 0, paddle.x + paddle.w, 0); pg.addColorStop(0, pal.accent); pg.addColorStop(1, pal.accent2);
-      g.shadowColor = pal.accent; g.shadowBlur = 16; g.fillStyle = pg; roundRect(g, paddle.x, paddle.y, paddle.w, paddle.h, 7); g.fill();
+      g.shadowColor = pal.accent; g.shadowBlur = 8; g.fillStyle = pg; roundRect(g, paddle.x, paddle.y, paddle.w, paddle.h, 7); g.fill();
       g.fillStyle = '#fff'; balls.forEach(function(b){ g.beginPath(); g.arc(b.x, b.y, b.r, 0, Math.PI * 2); g.fill(); }); g.shadowBlur = 0;
       g.fillStyle = pal.text; g.font = '600 18px system-ui, sans-serif'; g.fillText('♥ '.repeat(Math.max(0, lives)).trim(), 18, 34); g.textAlign = 'right'; g.fillText('Level ' + level, W - 18, 34); g.textAlign = 'start';
       if (!launched && !over) { g.fillStyle = pal.muted; g.textAlign = 'center'; g.font = '600 20px system-ui, sans-serif'; g.fillText('Press Space or tap to launch', W / 2, H / 2 + 60); g.textAlign = 'start'; }

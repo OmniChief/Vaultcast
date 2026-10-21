@@ -343,7 +343,16 @@
       pickFriend('Play chess with…', function(f){
         window.VaultcastHub.modal('New game with ' + f.name, function(b, close){
           b.appendChild(h('p', { className:'muted', text:'Choose your colour. Your friend gets a notification.' }));
-          b.appendChild(h('div', { className:'vc-overlay-actions' }, [['White', false], ['Black', true]].map(function(c){ return btn('Play ' + c[0], function(){ close(); call('/play/chess', { method:'POST', body:{ opponent:f.id, play_black:c[1] } }).then(function(j){ go('arcade', 'chess/' + j.game.id); }).catch(err); }, c[1] ? 'ghost' : 'primary'); })));
+          var busy = false;
+          b.appendChild(h('div', { className:'vc-overlay-actions vc-chess-colours' }, [['white', '♔ White', 'primary'], ['black', '♚ Black', 'ghost'], ['random', '🪙 Coin toss', 'ghost']].map(function(c){ return btn(c[1], function(){
+            if (busy) return; busy = true;
+            call('/play/chess', { method:'POST', body:{ opponent:f.id, colour:c[0] } }).then(function(j){
+              close();
+              var col = j.colour || (j.game && j.game.colour) || 'w';
+              if (j.coin_toss) coinNote[j.game.id] = col;
+              go('arcade', 'chess/' + j.game.id);
+            }).catch(function(e){ busy = false; err(e); });
+          }, c[2], { 'aria-label':c[0] === 'random' ? 'Coin toss: pick my colour at random' : 'Play ' + c[0] }); })));
         });
       });
     }, 'primary'), btn('Play the computer', function(){ go('arcade', 'chess/ai'); }, 'ghost')]));
@@ -352,43 +361,94 @@
       list.replaceChildren();
       if (!j.games.length) { list.appendChild(empty('No games yet', 'Challenge a friend, then take turns whenever you like.')); return; }
       j.games.forEach(function(g){
-        var opp = g.players[g.colour === 'w' ? g.black : g.white] || {};
-        var status = g.status !== 'active' ? (g.winner === '' ? 'Draw · ' + g.reason : (g.winner === me().id ? 'Won · ' : 'Lost · ') + g.reason) : (g.your_turn ? 'Your move' : 'Waiting for ' + opp.name);
-        list.appendChild(h('button', { type:'button', className:'vc-chess-row' + (g.your_turn ? ' your-turn' : ''), onClick:function(){ go('arcade', 'chess/' + g.id); } }, [avatar(opp), h('span', { className:'vc-person-name' }, [h('strong', { text:'vs ' + opp.name }), h('small', { className:'muted', text:'You play ' + (g.colour === 'w' ? 'white' : 'black') + ' · ' + g.moves.length + ' moves · ' + ago(g.updated_at) })]), h('span', { className:'vc-chip' + (g.your_turn ? ' accent' : ''), text:status })]));
+        var opp = oppOf(g), n = (g.moves || []).length;
+        list.appendChild(h('button', { type:'button', className:'vc-chess-row' + (g.your_turn ? ' your-turn' : ''), onClick:function(){ go('arcade', 'chess/' + g.id); } }, [avatar(opp), h('span', { className:'vc-person-name' }, [h('strong', { text:'vs ' + pname(opp, 'your opponent') }), h('small', { className:'muted', text:'You play ' + (g.colour === 'b' ? 'black' : 'white') + (g.coin_toss ? ' (coin toss)' : '') + ' · ' + (n ? n + (n === 1 ? ' move' : ' moves') : 'no moves yet') + (g.updated_at ? ' · ' + ago(g.updated_at) : '') })]), h('span', { className:'vc-chip' + (g.your_turn ? ' accent' : ''), text:chessStatus(g, opp, true) })]));
       });
     }).catch(function(e){ list.replaceChildren(empty('Games unavailable', (e && e.error) || '')); });
   }
-  function moveList(moves){ var out = h('ol', { className:'vc-move-list' }); for (var i = 0; i < moves.length; i += 2) out.appendChild(h('li', { text:moves[i] + (moves[i + 1] ? '  ' + moves[i + 1] : '') })); setTimeout(function(){ out.scrollTop = out.scrollHeight; }); return out; }
+  var coinNote = {};
+  function txt(v, fallback){ return v == null || v === '' || v === 'null' || v === 'undefined' ? (fallback == null ? '—' : fallback) : String(v); }
+  function pname(p, fallback){ return txt(p && p.name, fallback || 'Waiting for opponent…'); }
+  function oppOf(g){ var pl = g.players || {}; return pl[g.colour === 'b' ? g.white : g.black] || {}; }
+  var REASONS = { checkmate:'checkmate', stalemate:'stalemate', fifty:'the fifty-move rule', material:'insufficient material', resignation:'resignation', agreement:'agreement' };
+  function chessStatus(g, opp, short){
+    var why = REASONS[g.reason] || txt(g.reason, '');
+    if (g.status && g.status !== 'active') {
+      if (!g.winner) return short ? 'Draw' + (why ? ' · ' + why : '') : 'Drawn' + (why ? ' by ' + why : '');
+      var won = String(g.winner) === String(me().id);
+      return short ? (won ? 'Won' : 'Lost') + (why ? ' · ' + why : '') : (won ? 'You won' : 'You lost') + (why ? ' by ' + why : '');
+    }
+    if (g.your_turn) return g.check ? 'Check! Your move' : 'Your move';
+    return 'Waiting for ' + pname(opp, 'your opponent') + (short ? '' : '…');
+  }
+  /** Moves for both sides in numbered pairs, each with a white/black pawn so it is clear who played what. */
+  function moveList(moves, san){
+    moves = moves || []; san = san || [];
+    var out = h('ol', { className:'vc-move-list', 'aria-label':'Moves' }), lastEl = null;
+    function cell(i){
+      if (i >= moves.length) return h('span', { className:'vc-mv empty', 'aria-hidden':'true' });
+      var white = i % 2 === 0, u = String(moves[i] || ''), label = txt(san[i], u.length >= 4 ? u.slice(0, 2) + '–' + u.slice(2, 4) + (u[4] ? '=' + u[4].toUpperCase() : '') : '—');
+      var el = h('span', { className:'vc-mv ' + (white ? 'w' : 'b') + (i === moves.length - 1 ? ' latest' : ''), title:(white ? 'White' : 'Black') + ': ' + u, 'aria-label':(white ? 'White ' : 'Black ') + label }, [h('span', { className:'vc-mv-pawn', 'aria-hidden':'true', text:white ? '♙' : '♟' }), h('span', { className:'vc-mv-san', text:label })]);
+      if (i === moves.length - 1) lastEl = el;
+      return el;
+    }
+    if (!moves.length) out.appendChild(h('li', { className:'vc-move-empty muted', text:'No moves yet. White moves first.' }));
+    for (var i = 0; i < moves.length; i += 2) out.appendChild(h('li', { className:'vc-move-row' }, [h('span', { className:'vc-mv-num', text:(i / 2 + 1) + '.' }), cell(i), cell(i + 1)]));
+    setTimeout(function(){ if (lastEl && out.isConnected) { var top = lastEl.parentNode.offsetTop - out.clientHeight / 2; out.scrollTop = Math.max(0, top); } });
+    return out;
+  }
   function chessGame(body, C, id){
     var board = chessBoard(C, { onMove:function(m){ send('move', { move:m }); } }), side = h('aside', { className:'vc-chess-side' }), game = null, sending = false;
     body.appendChild(h('div', { className:'vc-chess-layout' }, [h('div', { className:'vc-chess-board-wrap' }, [board.el]), side]));
     function show(g){
-      game = g; var opp = g.players[g.colour === 'w' ? g.black : g.white] || {}, mine = g.players[me().id] || me();
-      board.set(g.fen, g.legal, g.moves[g.moves.length - 1], g.colour === 'b', g.your_turn && !sending);
-      var status = g.status !== 'active' ? (g.winner === '' ? 'Drawn by ' + g.reason : (g.winner === me().id ? 'You won by ' : 'You lost by ') + g.reason) : g.your_turn ? (g.check ? 'Check! Your move' : 'Your move') : 'Waiting for ' + opp.name + '…';
+      game = g; g.moves = g.moves || []; var opp = oppOf(g), mine = (g.players || {})[me().id] || me(), oppName = pname(opp, 'Opponent');
+      board.set(g.fen, g.legal || [], g.last_move || g.moves[g.moves.length - 1] || '', g.colour === 'b', g.your_turn && !sending);
+      var coin = coinNote[g.id]; delete coinNote[g.id];
       side.replaceChildren(
-        h('div', { className:'vc-chess-player' }, [avatar(opp), h('strong', { text:opp.name }), h('span', { className:'muted', text:g.colour === 'w' ? 'Black' : 'White' })]),
-        h('p', { className:'vc-chess-status' + (g.your_turn ? ' your-turn' : ''), 'aria-live':'polite', text:status }),
-        g.draw_offer && g.draw_offer !== me().id && g.status === 'active' ? h('p', { className:'vc-chip accent', text:opp.name + ' offers a draw' }) : null,
-        moveList(g.moves),
-        h('div', { className:'vc-chess-player' }, [avatar(mine), h('strong', { text:'You' }), h('span', { className:'muted', text:g.colour === 'w' ? 'White' : 'Black' })]),
-        g.status === 'active' ? h('div', { className:'vc-overlay-actions' }, [btn(g.draw_offer && g.draw_offer !== me().id ? 'Accept draw' : g.draw_offer === me().id ? 'Draw offered' : 'Offer draw', function(){ send('draw', {}); }, 'ghost', { disabled:g.draw_offer === me().id }), btn('Resign', function(){ A.confirmDialog ? A.confirmDialog('Resign this game?', { okText:'Resign', danger:true }).then(function(ok){ if (ok) send('resign', {}); }) : send('resign', {}); }, 'ghost danger')]) : btn('Back to games', function(){ go('arcade', 'chess'); }, 'primary'));
+        coin ? h('div', { className:'vc-chess-coin', role:'status' }, [h('span', { className:'vc-coin ' + coin, 'aria-hidden':'true', text:coin === 'w' ? '♔' : '♚' }), h('span', { text:'Coin toss: you\'re ' + (coin === 'w' ? 'White' : 'Black') + (coin === 'w' ? '. You move first.' : '. ' + oppName + ' moves first.') })]) : null,
+        h('div', { className:'vc-chess-player' }, [avatar(opp), h('strong', { text:oppName }), h('span', { className:'muted', text:g.colour === 'b' ? '♔ White' : '♚ Black' })]),
+        h('p', { className:'vc-chess-status' + (g.your_turn ? ' your-turn' : ''), 'aria-live':'polite', text:chessStatus(g, opp, false) }),
+        g.draw_offer && String(g.draw_offer) !== String(me().id) && g.status === 'active' ? h('p', { className:'vc-chip accent', text:oppName + ' offers a draw' }) : null,
+        h('div', { className:'vc-move-head' }, [h('strong', { text:'Moves' }), h('small', { className:'muted', text:g.moves.length ? g.moves.length + (g.moves.length === 1 ? ' move' : ' moves') : '—' })]),
+        moveList(g.moves, g.san),
+        h('div', { className:'vc-chess-player' }, [avatar(mine), h('strong', { text:'You' }), h('span', { className:'muted', text:g.colour === 'b' ? '♚ Black' : '♔ White' })]),
+        g.status === 'active' ? h('div', { className:'vc-overlay-actions' }, [btn(g.draw_offer && String(g.draw_offer) !== String(me().id) ? 'Accept draw' : g.draw_offer && String(g.draw_offer) === String(me().id) ? 'Draw offered' : 'Offer draw', function(){ send('draw', {}); }, 'ghost', { disabled:!!g.draw_offer && String(g.draw_offer) === String(me().id) }), btn('Resign', function(){ A.confirmDialog ? A.confirmDialog('Resign this game?', { okText:'Resign', danger:true }).then(function(ok){ if (ok) send('resign', {}); }) : send('resign', {}); }, 'ghost danger')]) : btn('Back to games', function(){ go('arcade', 'chess'); }, 'primary'));
       if (g.status === 'active' && !g.your_turn) schedule();
     }
-    function schedule(){ clearTimeout(pollTimer); pollTimer = setTimeout(function(){ if (!body.isConnected) return; if (document.hidden) return schedule(); call('/play/chess/' + id).then(function(j){ if (!body.isConnected) return; if (j.game.updated_at !== game.updated_at || j.game.your_turn !== game.your_turn) show(j.game); else schedule(); }).catch(schedule); }, 5000); }
+    function schedule(){ clearTimeout(pollTimer); pollTimer = setTimeout(function(){ if (!body.isConnected) return; if (document.hidden) return schedule(); call('/play/chess/' + id).then(function(j){ if (!body.isConnected) return; if (j.game.updated_at !== game.updated_at || j.game.your_turn !== game.your_turn || (j.game.moves || []).length !== game.moves.length) show(j.game); else schedule(); }).catch(schedule); }, 5000); }
     function send(action, payload){
       if (sending) return; sending = true;
       call('/play/chess/' + id + '/' + action, { method:'POST', body:payload }).then(function(j){ sending = false; show(j.game); }).catch(function(e){ sending = false; err(e); if (game) show(game); });
     }
     call('/play/chess/' + id).then(function(j){ show(j.game); }).catch(function(e){ body.replaceChildren(empty('Game not found', (e && e.error) || '')); });
   }
+  /** SAN for a move object [from, to, promo] in the local engine's position s. */
+  function sanOf(C, s, m){
+    var b = s.b, p = b[m[0]], t = p.toLowerCase(), out;
+    if (t === 'k' && Math.abs(m[1] - m[0]) === 2) out = m[1] > m[0] ? 'O-O' : 'O-O-O';
+    else {
+      var cap = b[m[1]] !== '.' || (t === 'p' && m[1] === s.ep);
+      if (t === 'p') out = (cap ? C.name(m[0])[0] + 'x' : '') + C.name(m[1]) + (m[2] ? '=' + m[2].toUpperCase() : '');
+      else {
+        var others = C.legal(s).filter(function(x){ return x[1] === m[1] && x[0] !== m[0] && b[x[0]] === p; }), dis = '';
+        if (others.length) {
+          var sameFile = others.some(function(x){ return x[0] % 8 === m[0] % 8; }), sameRank = others.some(function(x){ return Math.floor(x[0] / 8) === Math.floor(m[0] / 8); });
+          dis = !sameFile ? C.name(m[0])[0] : !sameRank ? C.name(m[0])[1] : C.name(m[0]);
+        }
+        out = t.toUpperCase() + dis + (cap ? 'x' : '') + C.name(m[1]);
+      }
+    }
+    var n = C.apply(s, m);
+    if (C.inCheck(n, n.turn)) out += C.legal(n).length ? '+' : '#';
+    return out;
+  }
   function chessAi(body, C){
     var pref = {}; try { pref = JSON.parse(localStorage.getItem('vaultcast-chess-ai') || '{}'); } catch (e) {}
-    var level = pref.level || 2, colour = pref.colour || 'w', s, history, moves, thinking = false, over = false, reported = false;
+    var level = pref.level || 2, colour = pref.colour || 'w', s, history, moves, sans = [], thinking = false, over = false, reported = false;
     var board = chessBoard(C, { onMove:function(m){ play(m); } }), side = h('aside', { className:'vc-chess-side' });
     body.appendChild(h('div', { className:'vc-chess-layout' }, [h('div', { className:'vc-chess-board-wrap' }, [board.el]), side]));
     function key(){ return C.fen(s).split(' ').slice(0, 4).join(' '); }
-    function reset(){ s = C.parse(C.START); history = [key()]; moves = []; over = false; reported = false; draw(); if (colour === 'b') ai(); }
+    function reset(){ s = C.parse(C.START); history = [key()]; moves = []; sans = []; over = false; reported = false; draw(); if (colour === 'b') ai(); }
     function result(){ var o = C.outcome(s, history); if (!o) return ''; over = true; return o; }
     function draw(){
       var o = over ? C.outcome(s, history) : '', text;
@@ -400,16 +460,18 @@
         h('label', { className:'vc-field' }, [h('span', { text:'Difficulty' }), seg([[1, 'Casual'], [2, 'Club'], [3, 'Strong']], level, function(v){ level = v; save(); draw(); }, 'Difficulty')]),
         h('label', { className:'vc-field' }, [h('span', { text:'Your colour' }), seg([['w', 'White'], ['b', 'Black']], colour, function(v){ colour = v; save(); reset(); }, 'Colour')]),
         h('p', { className:'vc-chess-status your-turn', 'aria-live':'polite', text:text }),
-        moveList(moves),
-        h('div', { className:'vc-overlay-actions' }, [btn('New game', function(){ reset(); }, over ? 'primary' : 'ghost'), !over && moves.length >= 2 && !thinking ? btn('Undo', function(){ var back = s.turn === colour ? 2 : 1; s = C.parse(C.START); moves = moves.slice(0, moves.length - back); history = [key()]; moves.forEach(function(m){ s = apply(m); history.push(key()); }); draw(); }, 'ghost') : null]));
+        h('div', { className:'vc-move-head' }, [h('strong', { text:'Moves' }), h('small', { className:'muted', text:moves.length ? moves.length + (moves.length === 1 ? ' move' : ' moves') : '—' })]),
+        moveList(moves, sans),
+        h('div', { className:'vc-overlay-actions' }, [btn('New game', function(){ reset(); }, over ? 'primary' : 'ghost'), !over && moves.length >= 2 && !thinking ? btn('Undo', function(){ var back = s.turn === colour ? 2 : 1; s = C.parse(C.START); moves = moves.slice(0, moves.length - back); sans = sans.slice(0, moves.length); history = [key()]; moves.forEach(function(m){ s = apply(m); history.push(key()); }); draw(); }, 'ghost') : null]));
       if (over && !reported) report(o);
     }
-    function apply(u){ var m = C.legal(s).filter(function(x){ return C.uci(x) === u; })[0]; return C.apply(s, m); }
+    function find(u){ return C.legal(s).filter(function(x){ return C.uci(x) === u; })[0]; }
+    function apply(u){ return C.apply(s, find(u)); }
     function save(){ try { localStorage.setItem('vaultcast-chess-ai', JSON.stringify({ level:level, colour:colour })); } catch (e) {} }
-    function play(u){ if (over) return; s = apply(u); moves.push(u); history.push(key()); result(); draw(); if (!over) ai(); }
+    function play(u){ if (over) return; var mv = find(u); if (!mv) return; sans.push(sanOf(C, s, mv)); s = C.apply(s, mv); moves.push(u); history.push(key()); result(); draw(); if (!over) ai(); }
     function ai(){
       thinking = true; draw();
-      setTimeout(function(){ if (!body.isConnected) return; var m = C.bestMove(s, level); thinking = false; if (!m) { result(); draw(); return; } s = C.apply(s, m); moves.push(C.uci(m)); history.push(key()); result(); draw(); }, 250);
+      setTimeout(function(){ if (!body.isConnected) return; var m = C.bestMove(s, level); thinking = false; if (!m) { result(); draw(); return; } sans.push(sanOf(C, s, m)); s = C.apply(s, m); moves.push(C.uci(m)); history.push(key()); result(); draw(); }, 250);
     }
     function report(o){
       reported = true; if (!signed()) return;

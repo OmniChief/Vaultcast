@@ -258,7 +258,7 @@ final class Repository
             $pdo->prepare('DELETE FROM vaultcast_sessions WHERE user_id=?')->execute([$id]);
             $pdo->prepare('DELETE FROM vaultcast_progress WHERE user_id=?')->execute([$id]);
             $pdo->prepare("DELETE FROM vaultcast_playback_tokens WHERE JSON_UNQUOTE(JSON_EXTRACT(payload,'$.user_id'))=?")->execute([$id]);
-            $pdo->prepare('DELETE FROM vaultcast_documents WHERE name IN (?,?,?)')->execute(['home-hub:'.$id,'home-extra:'.$id,'game-saves:'.$id]);
+            $pdo->prepare('DELETE FROM vaultcast_documents WHERE name IN (?,?,?,?)')->execute(['home-hub:'.$id,'home-extra:'.$id,'game-saves:'.$id,'misc-prefs:'.$id]);
             $pdo->prepare('DELETE FROM vaultcast_documents WHERE name LIKE ?')->execute(['personal-list:'.$id.':%']);
             $pdo->prepare("DELETE FROM vaultcast_documents WHERE name LIKE 'shared-save:%' AND JSON_UNQUOTE(JSON_EXTRACT(payload,'$.owner'))=?")->execute([$id]);
             self::putDocument('users', []);
@@ -266,6 +266,11 @@ final class Repository
             return true;
         });
         if ($removed) \GameSaves::removeUser($id);
+        if ($removed) {
+            // Personal pictures, reminders and owned calendars go with the account (shares in other calendars just stop resolving).
+            try { \Pictures::purgeUser($id); } catch (\Throwable $e) { error_log('Vaultcast pictures cleanup: ' . $e->getMessage()); }
+            try { \Calendar::purgeUser($id); } catch (\Throwable $e) { error_log('Vaultcast calendar cleanup: ' . $e->getMessage()); }
+        }
         return $removed;
     }
 
