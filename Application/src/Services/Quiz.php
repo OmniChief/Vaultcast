@@ -423,6 +423,12 @@ final class Quiz {
         } elseif ((int)($q['v'] ?? 0) === (int)$r['version']) return ['ok' => true, 'same' => true, 'version' => (int)$r['version'], 'now' => microtime(true)];
         return self::view($r, $user, $host, $pid);
     }
+    /** 1-based place among players still in the room (standings are sorted by score); never false or 0. */
+    private static function rankIn(array $players, string $pid): int {
+        $live = array_values(array_filter($players, function ($p) { return empty($p['left']); }));
+        $i = array_search($pid, array_column($live, 'id'), true);
+        return $i === false ? count($live) + 1 : (int)$i + 1;
+    }
     private static function view(array $r, array $user, bool $host, ?string $pid): array {
         list($players, $teams) = self::standings($r);
         $out = ['ok' => true, 'code' => $r['code'], 'version' => (int)$r['version'], 'status' => $r['status'], 'settings' => $r['settings'], 'host_name' => $r['host_name'],
@@ -445,20 +451,29 @@ final class Quiz {
         if ($r['status'] === 'intro' && !empty($r['questions'][0]['item']) && $host) $out['prefetch'] = '/api/play/quiz/rooms/' . $r['code'] . '/image/0';
         if ($pid !== null) {
             $p = $r['players'][$pid];
-            $out['me'] = ['id' => $pid, 'name' => $p['name'], 'team' => $p['team'] ?? null, 'score' => (int)($p['score'] ?? 0), 'streak' => (int)($p['streak'] ?? 0), 'answer' => $p['answers'][$r['index']] ?? null, 'rank' => 1 + (int)array_search($pid, array_column($players, 'id'), true), 'left' => !empty($p['left']), 'kicked' => !empty($p['kicked'])];
+            $out['me'] = ['id' => $pid, 'name' => $p['name'], 'team' => $p['team'] ?? null, 'score' => (int)($p['score'] ?? 0), 'streak' => (int)($p['streak'] ?? 0), 'answer' => $p['answers'][$r['index']] ?? null, 'rank' => self::rankIn($players, (string)$pid), 'left' => !empty($p['left']), 'kicked' => !empty($p['kicked'])];
         }
         return $out;
     }
 
     // ---------------------------------------------------------------- solo: daily quiz and practice
+    /**
+     * Today's ten questions. The set is stored once per day in a document (first writer wins), so it cannot change
+     * mid-day if the file cache is cleared: library questions are not reproducible from the seed alone.
+     */
     private static function dailySet(array $user): array {
         $date = date('Y-m-d'); $hit = \Vaultcast\Repository::cacheGet('quiz-daily:' . $date);
-        if (is_array($hit['q'] ?? null)) return $hit['q'];
+        if (is_array($hit['q'] ?? null) && $hit['q']) return $hit['q'];
+        $stored = (array)\Vaultcast\Repository::document('play-quiz-daily-set', []);
+        if (($stored['date'] ?? '') === $date && is_array($stored['q'] ?? null) && $stored['q']) { \Vaultcast\Repository::cachePut('quiz-daily:' . $date, ['q' => $stored['q']], 90000); return $stored['q']; }
         $seed = crc32('daily' . $date); $qs = QuizBank::questions([], 7, $seed);
         mt_srand($seed); $lib = array_merge(self::library('lib-year', 1), self::library('lib-plot', 1), self::library('lib-frame', 1)); mt_srand();
         $qs = array_slice(array_merge($qs, $lib), 0, 10);
         if (count($qs) < 10) $qs = array_merge($qs, QuizBank::questions([], 10 - count($qs), $seed + 7));
         usort($qs, function ($a, $b) use ($seed) { return crc32($seed . $a['question'] . implode('', $a['choices'])) <=> crc32($seed . $b['question'] . implode('', $b['choices'])); });
+        $qs = array_values($qs);
+        $doc = HomeHub::mutate('play-quiz-daily-set', function (array $d) use ($date, $qs): array { return ($d['date'] ?? '') === $date && !empty($d['q']) ? $d : ['date' => $date, 'q' => $qs]; });
+        $qs = array_values((array)$doc['q']);
         \Vaultcast\Repository::cachePut('quiz-daily:' . $date, ['q' => $qs], 90000);
         return $qs;
     }
@@ -469,11 +484,12 @@ final class Quiz {
         $libraryOk = AreaAccess::allowed($user, 'library');
         $public = array_map(function ($q, $i) use ($doc, $libraryOk) {
             $p = ['n' => $i, 'question' => $q['question'], 'clue' => $q['clue'] ?? null, 'choices' => $q['choices'], 'category' => $q['category'], 'image' => !empty($q['item']) && $libraryOk ? '/api/play/quiz/daily/image/' . $i : null];
-            if (isset($doc['answers'][$i])) $p += ['chosen' => $doc['answers'][$i], 'answer' => $q['answer']];
+            if (isset($doc['answers'][$i])) $p += ['chosen' => (int)$doc['answers'][$i], 'answer' => (int)$q['answer']];
             return $p;
         }, $qs, array_keys($qs));
-        $correct = 0; foreach ($doc['answers'] as $i => $c) if ((int)$c === (int)$qs[$i]['answer']) $correct++;
-        return ['ok' => true, 'date' => $date, 'questions' => $public, 'answered' => count($doc['answers']), 'correct' => $correct, 'done' => count($doc['answers']) >= count($qs)];
+        $answers = (array)($doc['answers'] ?? []);
+        $correct = 0; foreach ($answers as $i => $c) if (isset($qs[$i]) && (int)$c === (int)$qs[$i]['answer']) $correct++;
+        return ['ok' => true, 'date' => $date, 'questions' => $public, 'total' => count($qs), 'answered' => count($answers), 'correct' => (int)$correct, 'done' => count($answers) >= count($qs)];
     }
     public static function dailyAnswer(array $user, array $body): array {
         Arcade::signed($user); $qs = self::dailySet($user); $date = date('Y-m-d');
@@ -491,7 +507,9 @@ final class Quiz {
             Arcade::query('INSERT INTO vaultcast_play_scores (user_id,game,score,duration_ms,meta,created_at) VALUES (?,?,?,?,?,?)', [$user['id'], 'quiz', $finished * 100, 0, 'daily', time()]);
             Arcade::award((string)$user['id'], 'quiz', 2 * $finished + ($finished === count($qs) ? 10 : 0), 'scored ' . $finished . '/' . count($qs) . ' in the daily quiz');
         }
-        return ['ok' => true, 'correct' => $c === (int)$qs[$i]['answer'], 'answer' => (int)$qs[$i]['answer']] + self::daily($user);
+        // 'correct' is the day's running total (an int) from daily(). The per-answer flag is 'right': it used to be sent as
+        // 'correct' on the left of the + merge, which kept the boolean and showed "false/10" on the result screen.
+        return array_merge(self::daily($user), ['right' => $c === (int)$qs[$i]['answer'], 'answer' => (int)$qs[$i]['answer']]);
     }
     public static function dailyImage(array $user, int $n): void {
         if (!AreaAccess::allowed($user, 'library')) { http_response_code(403); exit; }

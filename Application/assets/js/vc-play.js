@@ -723,15 +723,20 @@
     if (!signed()) { host.appendChild(empty('Sign in to play', '')); return; }
     var box = h('div', { className:'vc-quiz-solo' }, [A.pendingContent({ text:'Loading…' })]); host.appendChild(box);
     function result(j){
-      var text = 'Vaultcast daily quiz ' + j.date + ': ' + j.correct + '/' + j.questions.length + '\n' + j.questions.map(function(q){ return q.chosen === q.answer ? '🟩' : '🟥'; }).join('');
-      box.replaceChildren(h('div', { className:'vc-solo-result' }, [h('p', { className:'eyebrow', text:'Today\u2019s score' }), h('div', { className:'vc-final-score', text:j.correct + '/' + j.questions.length }), h('p', { className:'vc-emoji-row', text:j.questions.map(function(q){ return q.chosen === q.answer ? '🟩' : '🟥'; }).join('') }),
+      // Count from the questions themselves so a missing or non-numeric total can never render as "false/10".
+      var qs = j.questions || [], answered = qs.filter(function(q){ return typeof q.chosen === 'number'; }), right = answered.filter(function(q){ return q.chosen === q.answer; }).length;
+      var total = Number(j.total) || qs.length, score = typeof j.correct === 'number' ? j.correct : right;
+      if (!answered.length) { box.replaceChildren(empty('Not played yet', 'Today\u2019s quiz is waiting.', [btn('Back to Quiz', function(){ go('quiz'); }, 'primary')])); return; }
+      var squares = qs.map(function(q){ return typeof q.chosen !== 'number' ? '⬜' : q.chosen === q.answer ? '🟩' : '🟥'; }).join('');
+      var text = 'Vaultcast daily quiz ' + j.date + ': ' + score + '/' + total + '\n' + squares;
+      box.replaceChildren(h('div', { className:'vc-solo-result' }, [h('p', { className:'eyebrow', text:'Today\u2019s score' }), h('div', { className:'vc-final-score', text:score + '/' + total }), h('p', { className:'vc-emoji-row', text:squares }),
         h('div', { className:'vc-overlay-actions' }, [btn('Share', function(){ if (navigator.share) navigator.share({ text:text }).catch(function(){}); else if (navigator.clipboard) navigator.clipboard.writeText(text).then(function(){ A.toast('Copied', { kind:'ok' }); }); }, 'primary'), btn('Leaderboard', function(){ go('leaderboards', 'quiz'); }, 'ghost')]),
-        h('ol', { className:'vc-review' }, j.questions.map(function(q){ return h('li', { className:q.chosen === q.answer ? 'ok' : 'bad' }, [h('strong', { text:q.question }), h('span', { className:'muted', text:' ' + q.choices[q.answer] + (q.chosen !== q.answer ? ' (you: ' + (q.chosen >= 0 ? q.choices[q.chosen] : 'no answer') + ')' : '') })]); }))]));
+        h('ol', { className:'vc-review' }, answered.map(function(q){ return h('li', { className:q.chosen === q.answer ? 'ok' : 'bad' }, [h('strong', { text:q.question }), h('span', { className:'muted', text:' ' + q.choices[q.answer] + (q.chosen !== q.answer ? ' (you: ' + (q.chosen >= 0 ? q.choices[q.chosen] : 'no answer') + ')' : '') })]); }))]));
     }
     call('/play/quiz/daily').then(function(j){
       if (j.done) return result(j);
       var last = j;
-      soloRun(box, j.questions, { start:j.answered, correct:j.correct, answer:function(q, c){ return call('/play/quiz/daily/answer', { method:'POST', body:{ n:q.n, choice:c } }).then(function(r){ last = r; return r.answer; }); }, done:function(){ result(last); } });
+      soloRun(box, j.questions, { start:Number(j.answered) || 0, correct:Number(j.correct) || 0, answer:function(q, c){ return call('/play/quiz/daily/answer', { method:'POST', body:{ n:q.n, choice:c } }).then(function(r){ last = r; return r.answer; }); }, done:function(){ result(last); } });
     }).catch(function(e){ box.replaceChildren(empty('Daily quiz unavailable', (e && e.error) || '')); });
   }
   function quizPractice(host){
