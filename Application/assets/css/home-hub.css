@@ -962,3 +962,35 @@ body.radio-playing .video-mini-player{bottom:calc(var(--radio-bar-height,100px) 
 
 /* Keep channel and station logo images transparent in every placement. */
 img.chan-logo{background:transparent}
+
+/* Compact live controls stay within the video on phones and short landscape screens. */
+@media(max-width:700px),(max-height:500px){
+ .live-player:not(.player-mini) .lp-chrome{padding:8px 10px;gap:6px;box-sizing:border-box}
+ .live-player .lp-top{gap:8px;min-width:0;flex-shrink:0}
+ .live-player .lp-chan{gap:6px;min-width:0;flex:1}
+ .live-player .lp-name{font-size:.85rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+ .live-player .lp-num{font-size:1.2rem}
+ .live-player .lp-clock,.live-player .lp-top>.share-btn,.live-player .lp-epg,.live-player .lp-bottom>.eyebrow,.live-player .lp-when,.live-player .lp-next{display:none}
+ .live-player .lp-title{font-size:1rem;margin:0 0 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+ .live-player .lp-controls{gap:4px;margin-top:4px;flex-wrap:wrap}
+ .live-player.is-iptv .lp-controls{flex-wrap:nowrap}
+ .live-player .lp-controls>.lp-zap{display:none}
+ .live-player .lp-controls>.lp-spacer{display:none}
+ .live-player .lp-controls>.lp-btn{width:44px;height:44px;min-width:44px;padding:0;touch-action:manipulation}
+ .live-player .lp-controls>.lp-text>span:not(.ico){display:none}
+ .live-player .lp-fullscreen{margin-left:auto}
+ .live-player .lp-vol{display:none}
+ .live-player .lp-shift{flex-wrap:nowrap;overflow-x:auto;min-width:0}
+ .live-player .lp-shift .lp-btn{height:44px;min-width:44px;padding:0 8px}
+ .live-player .lp-shift:not([style*="none"]){order:2;flex-basis:100%}
+ .live-player .lp-progress{margin:4px 0;height:4px}
+ .live-player .lp-msg{font-size:.8rem;margin:4px 0 0;min-height:0;max-height:3em;overflow:auto}
+ .live-player .lp-msg:empty{display:none}
+ .live-player .lp-guide{width:min(390px,100%)}
+ .live-player .lp-guide-head{padding:8px 12px;align-items:center}
+ .live-player .lp-guide-item{min-height:48px}
+ .live-player .lp-epg-full-head{gap:8px;margin-bottom:8px}
+ .live-player .lp-epg-full-head .muted{display:none}
+ .live-player .detail-centre-play{width:54px;height:54px;font-size:22px}
+}
+@media(pointer:coarse){.live-player .lp-btn{touch-action:manipulation}.live-player.idle .lp-chrome{pointer-events:none}}

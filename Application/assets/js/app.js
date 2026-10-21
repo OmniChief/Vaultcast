@@ -5861,7 +5861,7 @@ try {
     var btnGoLive = h('button', { className:'lp-btn lp-text lp-golive', type:'button', title:'Jump to live (L)', 'aria-label':'Jump to live' }, [ h('span', { text:'Live' }) ]);
     var shiftCluster = h('div', { className:'lp-shift', 'aria-label':'Timeshift' }, [ btnBack15, btnFwd30, btnPrevProg, btnNextProg, btnGoLive ]);
     var guideList = h('div', { className:'lp-guide-list' });
-    var guide = h('aside', { className:'lp-guide', 'aria-label':'Channels' }, [ h('div', { className:'lp-guide-head' }, [ h('strong', { text:'Channels' }), h('span', { className:'muted', text:'\u2191 \u2193 to zap' }) ]), guideList ]);
+    var guide = h('aside', { className:'lp-guide', 'aria-label':'Channels' }, [ h('div', { className:'lp-guide-head' }, [ h('strong', { text:'Channels' }), h('button', { className:'lp-btn lp-text', type:'button', text:'Close', 'aria-label':'Close channel list', onClick:function(){toggleGuide(false);wake();} }) ]), guideList ]);
     var epgBody = h('div', { className:'lp-epg-full-body' });
     var epgFull = h('div', { className:'lp-epg-full', 'aria-label':'Full EPG', hidden: true }, [
       h('div', { className:'lp-epg-full-head' }, [
@@ -5891,12 +5891,12 @@ try {
           h('div', { className:'lp-controls' }, [
             btnPlay, btnMute, vol,
             h('div', { className:'lp-spacer' }),
-            h('button', { className:'lp-btn', type:'button', title:'Previous channel (\u2191)', 'aria-label':'Previous channel', onClick: function(){ zap(-1); } }, [ icon('chevU') ]),
-            h('button', { className:'lp-btn', type:'button', title:'Next channel (\u2193)', 'aria-label':'Next channel', onClick: function(){ zap(1); } }, [ icon('chevD') ]),
+            h('button', { className:'lp-btn lp-zap', type:'button', title:'Previous channel (\u2191)', 'aria-label':'Previous channel', onClick: function(){ zap(-1); } }, [ icon('chevU') ]),
+            h('button', { className:'lp-btn lp-zap', type:'button', title:'Next channel (\u2193)', 'aria-label':'Next channel', onClick: function(){ zap(1); } }, [ icon('chevD') ]),
             h('button', { className:'lp-btn', type:'button', title:'Channel list (G)', 'aria-label':'Channel list', onClick: function(){ toggleGuide(); } }, [ icon('guide') ]),
             h('button', { className:'lp-btn lp-text', type:'button', title:'Full EPG (E)', 'aria-label':'Full EPG', onClick: function(){ toggleFullEpg(); } }, [ icon('guide'), h('span', { text:'EPG' }) ]),
             shiftCluster,
-            h('button', { className:'lp-btn', type:'button', title:'Fullscreen (F)', 'aria-label':'Fullscreen', onClick: function(){ toggleFs(); } }, [ icon('full') ])
+            h('button', { className:'lp-btn lp-fullscreen', type:'button', title:'Fullscreen (F)', 'aria-label':'Fullscreen', onClick: function(){ toggleFs(); } }, [ icon('full') ])
           ]),
           elMsg
         ])
@@ -6009,10 +6009,14 @@ try {
       wake();
     }
     function toggleFs(){
+      function nativeFullscreen(){try{if(video.webkitEnterFullscreen)video.webkitEnterFullscreen();}catch(ignore){}}
       try {
         if (document.fullscreenElement) document.exitFullscreen();
-        else if (overlay.requestFullscreen) overlay.requestFullscreen();
-      } catch (e) {}
+        else if (document.webkitFullscreenElement && document.webkitExitFullscreen) document.webkitExitFullscreen();
+        else if (overlay.requestFullscreen) {var request=overlay.requestFullscreen();if(request&&request.catch)request.catch(nativeFullscreen);}
+        else if (overlay.webkitRequestFullscreen) overlay.webkitRequestFullscreen();
+        else nativeFullscreen();
+      } catch (e) {nativeFullscreen();}
     }
     function paintShiftPill(){
       var c = lp.ch;
@@ -6034,6 +6038,7 @@ try {
     }
     function paintHeader(){
       var c = lp.ch;
+      overlay.classList.toggle('is-iptv',c.kind==='iptv');
       elNum.textContent = String(c.number);
       elName.textContent = c.name || ('Channel ' + c.number);
       paintShiftPill();
@@ -6236,7 +6241,7 @@ try {
     function wake(){
       overlay.classList.remove('idle');
       clearTimeout(lp.idleT);
-      lp.idleT = setTimeout(function(){ if (!lp.guideOpen && !lp.epgOpen && !video.paused) overlay.classList.add('idle'); }, 3500);
+      lp.idleT = setTimeout(function(){ if (!lp.guideOpen && !lp.epgOpen && !video.paused && !overlay.contains(document.activeElement)) overlay.classList.add('idle'); }, 3500);
     }
     overlay.addEventListener('mousemove', wake);
     overlay.addEventListener('touchstart', wake, { passive:true });
