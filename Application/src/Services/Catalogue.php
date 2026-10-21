@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 class Catalogue {
+    private static $directPlayProfiles = null;
     private static $romSystems = [
         'nes' => 'nes', 'fds' => 'nes',
         'sfc' => 'snes', 'smc' => 'snes',
@@ -22,11 +23,52 @@ class Catalogue {
         return is_array($c) ? $c : ['sections' => [], 'items' => [], 'scanned_at' => null];
     }
 
-    public static function save(array $cat): bool {
+    public static function save(array $cat, bool $foldVersions = true): bool {
         $cat = LibraryEditor::filterCatalogue($cat);
-        $ok = Store::set('catalogue', $cat);
+        $aliases = [];
+        if($foldVersions)$cat = self::foldDirectPlayVersions($cat,$aliases);
+        $ok = \Vaultcast\Database::transaction(static function()use($cat,$aliases): bool {
+            $saved=Store::set('catalogue',$cat);
+            foreach($aliases as $newId=>$oldIds){\Vaultcast\Repository::migrateProgress($oldIds,(string)$newId);Convert::migrateCollections($oldIds,(string)$newId);}
+            return $saved;
+        });
         if ($ok) self::invalidateDerivedCaches();
         return $ok;
+    }
+
+    /** Keep a source and its generated copies under one library identity. */
+    private static function foldDirectPlayVersions(array $cat,array &$aliases): array {
+        $sources=[];$variants=[];
+        foreach($cat['items'] ?? [] as $id=>$it) {
+            if(($it['media_kind'] ?? '')!=='video')continue;
+            $path=str_replace('\\','/',(string)($it['path'] ?? ''));
+            $stem=pathinfo($path,PATHINFO_FILENAME);$converted=(bool)preg_match('/(?:\.directplay)+$/i',$stem);
+            $base=preg_replace('/(?:\.directplay)+$/i','',$stem);
+            $key=($it['section'] ?? '').'|'.dirname($path).'/'.$base;
+            if(PHP_OS_FAMILY==='Windows')$key=strtolower($key);
+            if($converted)$variants[$key][$id]=$path;else $sources[$key][]=$id;
+        }
+        $profiles=$variants ? Store::get('directplay_profiles',[]) : [];
+        foreach($variants as $key=>$copies) {
+            // Multiple unrelated sources with the same stem must not be silently merged.
+            if(count($sources[$key] ?? [])!==1)continue;
+            $id=$sources[$key][0];$paths=array_values($copies);
+            usort($paths,static function($a,$b){$rank=['mp4'=>0,'m4v'=>1,'mov'=>2,'mkv'=>3];return ($rank[strtolower(pathinfo($a,PATHINFO_EXTENSION))] ?? 9)<=>($rank[strtolower(pathinfo($b,PATHINFO_EXTENSION))] ?? 9);});
+            $cat['items'][$id]['directplay_path']=$paths[0];
+            $cat['items'][$id]['directplay_versions']=$paths;
+            $copyId=array_search($paths[0],$copies,true);$copy=$cat['items'][$copyId] ?? [];$profile=$profiles[$paths[0]] ?? [];
+            $cat['items'][$id]['directplay_ready']=!empty($profile['ready']) && (int)($profile['size'] ?? -1)===(int)($copy['size'] ?? 0) && (int)($profile['mtime'] ?? -1)===(int)($copy['mtime'] ?? 0);
+            if(isset($profile['source_size']) && ((int)$profile['source_size']!==(int)$cat['items'][$id]['size'] || (int)$profile['source_mtime']!==(int)$cat['items'][$id]['mtime']))$cat['items'][$id]['directplay_ready']=false;
+            foreach($copies as $oldId=>$path){unset($cat['items'][$oldId]);$aliases[$id][]=(string)$oldId;}
+        }
+        $counts=[];$shows=[];
+        foreach($cat['items'] ?? [] as $it){$sid=$it['section'];$counts[$sid]=($counts[$sid] ?? 0)+1;if(!empty($it['show']))$shows[$sid][$it['show']]=true;}
+        foreach($cat['sections'] ?? [] as $i=>$sec){$sid=$sec['id'];$cat['sections'][$i]['count']=$counts[$sid] ?? 0;if(in_array($sec['type'] ?? '',['tv','anime'],true))$cat['sections'][$i]['show_count']=count($shows[$sid] ?? []);}
+        $cat['item_count']=count($cat['items'] ?? []);return $cat;
+    }
+    public static function mergeDirectPlayVersions(): array {
+        $cat=self::get();$before=count($cat['items'] ?? []);self::save($cat);Store::invalidate('catalogue');
+        return ['ok'=>true,'merged'=>max(0,$before-count(self::get()['items'] ?? []))];
     }
 
     /** drop SHM caches derived from catalogue (home, shows, browse, facets, showcase). */
@@ -435,6 +477,7 @@ class Catalogue {
 
 
     public static function rescan(): array {
+        self::$directPlayProfiles = Store::get('directplay_profiles',[]);
         $settings = Store::settings();
         $sections = $settings['sections'] ?? [];
         $scan = $settings['scan'] ?? [];
@@ -497,6 +540,9 @@ class Catalogue {
         ];
         Maintenance::checkpoint();
         self::save($cat);
+        $savedMeta=\Vaultcast\Repository::document('catalogue',[]);
+        $cat['item_count']=$savedMeta['item_count'] ?? $cat['item_count'];
+        $sectionMeta=$savedMeta['sections'] ?? $sectionMeta;
         Store::invalidate('catalogue'); self::invalidateDerivedCaches();
         return [
             'ok' => true,
@@ -578,7 +624,12 @@ class Catalogue {
     public static function buildItem(string $full, string $rel, string $rootReal, string $sectionId, string $type, array $videoExt, array $audioExt, ?int $size = null, ?int $mtime = null): array {
         $ext = strtolower(pathinfo($full, PATHINFO_EXTENSION));
         $id = substr(sha1($sectionId . '|' . $rel), 0, 16);
-        $title = self::guessTitle($rel, $type);
+        if(preg_match('/\.directplay\.[^.]+$/i',$full)) {
+            if(self::$directPlayProfiles===null)self::$directPlayProfiles=Store::get('directplay_profiles',[]);
+            $profile=self::$directPlayProfiles[str_replace('\\','/',$full)] ?? [];
+            if(!empty($profile['original_removed']) && !is_file((string)($profile['source'] ?? '')) && preg_match('/^[a-f0-9]{16}$/D',(string)($profile['canonical_id'] ?? '')))$id=$profile['canonical_id'];
+        }
+        $title = self::guessTitle((string)preg_replace('/(?:\.directplay)+(?=\.[^.]+$)/i','',$rel), $type);
         $episodeTitle = $title['episode_title'] ?? null;
         if (($type === 'tv' || $type === 'anime') && $full) {
             $nfoTitle = self::readEpisodeNfoTitle($full);
@@ -614,6 +665,7 @@ class Catalogue {
             $item['emu_core'] = self::guessEmuCore($ext, $rel, $full);
             $item['system'] = self::guessSystemFolder($rel);
         }
+        if(!empty($profile['original_removed']) && !empty($profile['source']))$item['caption_source']=$profile['source'];
         $poster = self::findPoster(dirname($full), $full);
         if (!$poster && ($type === 'tv' || $type === 'anime') && !empty($title['show'])) {
             $parts = explode('/', $rel);
@@ -2332,9 +2384,13 @@ class Catalogue {
         return ['cue_to_bin' => $cueToBin, 'core_fixed' => $coreFixed];
     }
 
-    public static function ingestFile(string $fullPath, string $sectionId): ?array {
-        $r = self::ingestFiles([[$fullPath, $sectionId]]);
-        return $r[0] ?? null;
+    public static function ingestFile(string $fullPath, string $sectionId, bool $foldVersions = true): ?array {
+        $r = self::ingestFiles([[$fullPath, $sectionId]],$foldVersions);
+        $item=$r[0] ?? null;
+        if($foldVersions && $item && !self::item($item['id'])) {
+            return \Vaultcast\Repository::rows("SELECT payload FROM vaultcast_items WHERE section_id=? AND JSON_CONTAINS(JSON_EXTRACT(payload,'$.directplay_versions'),JSON_QUOTE(?)) LIMIT 1",[$sectionId,str_replace('\\','/',$fullPath)])[0] ?? null;
+        }
+        return $item;
     }
 
     /**
@@ -2342,7 +2398,8 @@ class Catalogue {
      * paths via one lookup map, recount sections, save and clear caches once.
      * $files: list of [fullPath, sectionId]. Returns items in the same order (null where skipped).
      */
-    public static function ingestFiles(array $files): array {
+    public static function ingestFiles(array $files, bool $foldVersions = true): array {
+        self::$directPlayProfiles=Store::get('directplay_profiles',[]);
         $settings = Store::settings();
         $sections = [];
         foreach ($settings['sections'] ?? [] as $sec) {
@@ -2378,6 +2435,8 @@ class Catalogue {
         }
         foreach ($built as $item) {
             if (!$item) continue;
+            $existing=$cat['items'][$item['id']] ?? null;
+            if($existing)foreach(['directplay_path','directplay_versions','directplay_ready'] as $field)if(isset($existing[$field]))$item[$field]=$existing[$field];
             $key = str_replace('\\', '/', (string)($item['path'] ?? ''));
             foreach ($byPath[$key] ?? [] as $oldId) {
                 if ($oldId !== $item['id']) unset($cat['items'][$oldId]);
@@ -2409,7 +2468,7 @@ class Catalogue {
         }
         unset($sec);
 
-        self::save($cat); // save() clears the derived caches
+        self::save($cat,$foldVersions); // save() clears the derived caches
         Store::invalidate('catalogue');
         return $built;
     }
@@ -2420,12 +2479,21 @@ class Catalogue {
         if ($path === '') return [];
         $cat = self::get();
         $ids = [];
+        $changed=false;
         foreach ($cat['items'] ?? [] as $id => $it) {
+            $versions=$it['directplay_versions'] ?? [];
+            if(in_array($path,$versions,true)) {
+                $versions=array_values(array_filter($versions,static function($p)use($path){return $p!==$path;}));
+                unset($cat['items'][$id]['directplay_path'],$cat['items'][$id]['directplay_versions'],$cat['items'][$id]['directplay_ready']);
+                if($versions){$cat['items'][$id]['directplay_versions']=$versions;$cat['items'][$id]['directplay_path']=$versions[0];$cat['items'][$id]['directplay_ready']=!empty(Store::get('directplay_profiles',[])[$versions[0]]['ready']);}
+                $changed=true;
+            }
             $p = (string)($it['path'] ?? '');
             if ($p === $path) { $ids[] = (string)$id; continue; }
             $pr = $p !== '' ? @\Vaultcast\Paths::real($p) : false;
             if ($pr !== false && $pr === $path) $ids[] = (string)$id;
         }
+        if($changed){self::save($cat);Store::invalidate('catalogue');}
         return $ids ? self::removeIds($ids) : [];
     }
 
@@ -2560,6 +2628,7 @@ class Catalogue {
      *              Convert UI / detail views pass true (default) for accurate H.264/AAC checks.
      */
     public static function needsConvert(array $it, bool $allowProbe = true): bool {
+        if(!empty($it['directplay_path']) && !empty($it['directplay_ready']) && (Store::settings()['convert']['prefer_directplay'] ?? true))return false;
         if (($it['media_kind'] ?? '') !== 'video') return false;
         // Codecs probed once by the background facts pass (MariaDB); no ffprobe/stat per request.
         $facts = MediaFacts::get($it);

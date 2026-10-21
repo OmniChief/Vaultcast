@@ -173,6 +173,7 @@
       media.controls = !on;
       paintRemuxBar();
     }
+    overlay._leaveRemux=function(){remux.gen++;remux.active=false;remux.seeking=false;setRemuxUi(false);};
     function switchViaRemux(index, at){
       if (!play.remux_url || !play.remux_allowed) return false;
       var target = Math.max(0, at != null ? at : absTime());
@@ -203,15 +204,17 @@
     }
     /* DirectPlay only: admins may turn remuxing on from here; others are told it is disabled. */
     function requestRemux(index, at){
+      if(overlay._transcodePending){toast('Wait for the playback worker to start before changing audio.');return Promise.resolve(false);}
+      if(overlay._transcodeActive&&overlay._transcodeAudio)return Promise.resolve(overlay._transcodeAudio(index));
       if (!play.remux_url) return Promise.resolve(false);
       if (play.remux_allowed) return Promise.resolve(switchViaRemux(index, at));
       if (!(state.user && state.user.role === 'admin')) {
         toast('Switching audio tracks is disabled by the administrator (DirectPlay only).', { kind:'bad' });
         return Promise.resolve(false);
       }
-      return confirmDialog('This browser cannot switch audio tracks in the file directly. The server can remux the video with the chosen track (video copied, audio converted when needed), but “DirectPlay only” is on in Settings → Streaming. Turn DirectPlay only off and allow remuxing?', { okText:'Allow remuxing', host: overlay }).then(function(ok){
+      return confirmDialog('This browser cannot switch audio tracks in the file directly. Audio remuxing is disabled in DirectPlay Settings. Allow it? This permits server processing during playback: video is copied and audio is converted when needed.', { okText:'Allow remuxing', host: overlay }).then(function(ok){
         if (!ok) return false;
-        return api('/admin/settings', { method:'POST', body:{ streaming:{ directplay_only:false } } }).then(function(j){
+        return api('/admin/settings', { method:'POST', body:{ streaming:{ directplay_only:false,allow_remux:true } } }).then(function(j){
           if (!j || !j.ok) { toast((j && j.error) || 'Could not change the setting', { kind:'bad' }); return false; }
           if (j.settings) state.settings = j.settings;
           play.remux_allowed = true;
@@ -262,7 +265,7 @@
       } else {
         var defaultTrack = probeTracks.filter(function(t){return t.default;})[0] || probeTracks[0];
         if (probeTracks.length > 1 && play.remux_url) {
-          var current = remux.track != null ? remux.track : (defaultTrack ? defaultTrack.relative : 0);
+          var current = overlay._transcodeActive && overlay._getTranscodeAudio ? overlay._getTranscodeAudio() : remux.track != null ? remux.track : (defaultTrack ? defaultTrack.relative : 0);
           probeTracks.forEach(function(t, k){
             var rel = t.relative != null ? t.relative : k;
             audio.appendChild(h('option',{value:String(rel),text:trackLabel(t,k,'Track') + (t.codec ? ' · ' + String(t.codec).toUpperCase() : '') + (t.channels ? ' · ' + t.channels + 'ch' : ''),selected: rel === current}));
@@ -319,7 +322,8 @@
       if(!overlay.isConnected)return;
       audioPreference=null;audioApplied=true;setAudioPref(item.id,null);
       var nativeAudio=media.audioTracks;
-      if(remux.active){var track=probeTracks.filter(function(t){return t.default;})[0]||probeTracks[0];if(track)switchViaRemux(track.relative!=null?track.relative:0);}
+      if(overlay._transcodeActive&&overlay._transcodeAudio)overlay._transcodeAudio(0);
+      else if(remux.active){var track=probeTracks.filter(function(t){return t.default;})[0]||probeTracks[0];if(track)switchViaRemux(track.relative!=null?track.relative:0);}
       else if(nativeAudio&&nativeAudio.length){audioChanging=true;applyAudioTrack(media,0);audioChanging=false;}
       media.muted=false;if(media.volume===0)media.volume=1;refresh();
       if(media.paused){var playing=media.play();if(playing&&playing.catch)playing.catch(function(){toast('Press play to resume audio.');});}
@@ -1494,14 +1498,14 @@ function confirmDialog(message, opts){
       media = h('video', { id:'player-media', controls:true, autoplay:play.autoplay !== false, playsinline:true, preload:'metadata' });
       media.setAttribute('webkit-playsinline', 'true');
       media.setAttribute('playsinline', 'true');
-      if (play.mime) {
+      if (play.mime && !(play.transcode_allowed && play.transcode_mode==='always')) {
         try {
           var source = document.createElement('source');
           source.src = src; source.type = play.mime;
           media.appendChild(source);
         } catch (eS) {}
       }
-      media.src = src;
+      if (!(play.transcode_allowed && play.transcode_mode==='always')) media.src = src;
     }
     /* resume — seek to saved progress (play.progress from /items/{id}/play, else item.progress) once metadata is ready.
        Progress saves are held until the resume seek lands so the 0:00 start can't overwrite the saved position. */
@@ -1509,6 +1513,7 @@ function confirmDialog(message, opts){
     var resumeDone = !(resumeAt > 0);
     openPlayer._lastSave = 0;
     function applyResume(){
+      if(overlay._transcodeResumeHandled){resumeDone=true;return;}
       if (resumeDone) return;
       var d = 0;
       try { d = media.duration || 0; } catch (eD) {}
@@ -1528,6 +1533,7 @@ function confirmDialog(message, opts){
       setTimeout(function(){ applyResume(); resumeDone = true; }, 8000);
     }
     media.addEventListener('timeupdate', function(){
+      if(overlay._transcodePending||overlay._closing||!overlay.isConnected)return;
       if (!resumeDone) return;
       if (!openPlayer._lastSave || Date.now()-openPlayer._lastSave > 5000) {
         openPlayer._lastSave = Date.now();
@@ -1538,12 +1544,16 @@ function confirmDialog(message, opts){
     media.addEventListener('waiting', function(){ if (openPlayer._deskPlayStarted) toast('Buffering…'); });
     var directTried = false;
     media.addEventListener('error', function(){
+      if(overlay._transcodeActive||overlay._transcodePending)return;
       /* Failed before playing: retry once with PHP delivery (nginx could not serve the file). */
       var cur = media.currentSrc || media.src || '';
       if (!openPlayer._deskPlayStarted && !directTried && cur.indexOf('/stream/play') >= 0 && cur.indexOf('direct=1') < 0) {
         directTried = true;
         try { media.src = cur + (cur.indexOf('?') >= 0 ? '&' : '?') + 'direct=1'; if (play.autoplay !== false || openPlayer._deskPlayStarted) media.play(); } catch (eD) {}
         return;
+      }
+      if(play.transcode_allowed && !overlay._transcodeAttempted && overlay._startTranscode && media.error && (media.error.code===3||media.error.code===4)) {
+        overlay._startTranscode(false,openPlayer._absTime?openPlayer._absTime():resumeAt||media.currentTime||0);return;
       }
       /* soft mid-play recover (token refresh + seek) before convert toast */
       if (openPlayer._deskPlayStarted && !openPlayer._deskRecovering && (openPlayer._deskRecoverTries||0) < 3) {
@@ -1629,7 +1639,7 @@ function confirmDialog(message, opts){
     var detailActions = detailReport && detailReport.parentNode;
     if (detailActions) {
       detailActions.querySelectorAll('[data-player-convert]').forEach(function(button){button.remove();});
-      if (needsConvertExt(item) && state.user && state.user.role === 'admin') {
+      if (needsConvertExt(item) && !play.prepared_copy && state.user && state.user.role === 'admin') {
         convertBtn = h('button', {
           className:'btn ghost', type:'button', 'data-player-convert':item.id,
           text:'Convert to DirectPlay MP4',
@@ -1666,9 +1676,85 @@ function confirmDialog(message, opts){
       }, 400);
     }
     playerTrackControls(overlay, media, item, play);
+    libraryTranscodeControls(overlay,media,item,play);
     if(nextControl){var tracks=(inlineHost?detailPlayerTools(inlineHost):overlay).querySelector('.player-tracks');if(tracks)tracks.insertAdjacentElement('afterend',nextControl);}
     mountEpisodeSkipping(overlay,media,item,play);
     if(miniStart){overlay.classList.add('player-inline');minimizeVideo();}
+  }
+  function libraryTranscodeControls(overlay,media,item,play){
+    if(media.tagName!=='VIDEO'||!play.transcode_allowed)return;
+    var gen=0,hls=null,job=null,timer=null,alive=true,offset=0,audioIndex=Number(play.preferred_audio)||0,sourceDuration=Number(play.duration)||0;
+    var tools=overlay.classList.contains('player-inline')?detailPlayerTools(overlay.closest('.detail-player')):overlay;
+    var label=h('span',{className:'muted',role:'status',text:play.prepared_copy?'DirectPlay · prepared copy':'DirectPlay · original file'});
+    var seek=h('input',{type:'range',min:'0',max:'1',step:'0.1',value:'0','aria-label':'Seek within the full source video'}),clock=h('span',{className:'muted'});
+    var timeline=h('div',{className:'dp-transcode-timeline',hidden:true},[seek,clock]);
+    var bar=h('div',{className:'dp-player-actions'},[
+      h('button',{className:'btn ghost sm',text:'Transcode for this device',onClick:function(){start(false,openPlayer._absTime?openPlayer._absTime():media.currentTime||0);}}),
+      play.transcode_save_allowed?h('button',{className:'btn ghost sm',text:'Watch & prepare copy',onClick:function(){confirmDialog('Start from the beginning and prepare a reusable MP4 while watching? It keeps running after you close the player. The copy contains the selected audio track; the original stays until you explicitly replace it. Settings → DirectPlay Settings controls quality and limits.',{okText:'Watch & prepare'}).then(function(ok){if(ok)start(true,0);});}}):null,
+      h('button',{className:'btn ghost sm',text:'Return to DirectPlay',onClick:function(){if(!overlay._transcodeActive&&!overlay._transcodePending)return;openPlayer(item,Object.assign({},play,{transcode_mode:'fallback',from_start:false,progress:{position:offset+(media.currentTime||0),duration:sourceDuration}}));}}),label
+    ]);var trackBar=tools.querySelector('.player-tracks')||tools;trackBar.appendChild(bar);trackBar.appendChild(timeline);
+    function stop(){clearTimeout(timer);timer=null;if(hls){hls.destroy();hls=null;}if(job){fetch(streamPlayUrl(job.stop_url),{method:'POST',credentials:'same-origin'}).catch(function(){});}job=null;}
+    function active(g){return alive&&g===gen&&overlay.isConnected;}
+    function note(text){label.textContent=text;}
+    function json(url){return fetch(streamPlayUrl(url),{credentials:'same-origin',cache:'no-store'}).then(function(r){return r.json();}).then(function(j){if(!j.ok)throw new Error(j.error||'Playback worker unavailable');return j;});}
+    function shiftCaptions(){
+      try{Array.from(media.textTracks||[]).forEach(function(track){Array.from(track.cues||[]).forEach(function(cue){if(cue._vaultcastSourceStart==null){cue._vaultcastSourceStart=cue.startTime;cue._vaultcastSourceEnd=cue.endTime;}var from=Math.max(0,cue._vaultcastSourceStart-offset),to=Math.max(from+.001,cue._vaultcastSourceEnd-offset);cue.endTime=Math.max(cue.endTime,to,from+.001);cue.startTime=from;cue.endTime=to;});});}catch(e){}
+    }
+    media.addEventListener('loadedmetadata',shiftCaptions);media.addEventListener('loadeddata',shiftCaptions);
+    media.querySelectorAll('track').forEach(function(track){track.addEventListener('load',shiftCaptions);});
+    function attach(g){
+      return loadHls().then(function(Hls){
+        if(!active(g))return;
+        if(Hls&&Hls.isSupported()){
+          hls=new Hls({enableWorker:true,lowLatencyMode:false,startPosition:0});
+          hls.on(Hls.Events.MANIFEST_PARSED,function(){if(active(g)&&play.autoplay!==false)media.play().catch(function(){});});
+          hls.on(Hls.Events.ERROR,function(_event,data){if(data&&data.fatal&&active(g))note('Transcode playback failed. '+(data.details||'Try DirectPlay or review the playback worker.'));});
+          hls.loadSource(streamPlayUrl(job.url));hls.attachMedia(media);
+        }else if(media.canPlayType('application/vnd.apple.mpegurl')){media.src=streamPlayUrl(job.url);media.load();if(play.autoplay!==false)media.play().catch(function(){});}
+        else throw new Error('This browser cannot play HLS. Use DirectPlay or an external player.');
+        overlay._transcodePending=false;overlay._transcodeActive=true;
+        note(job.save?'Watch & prepare · original retained · encoding continues after closing':'Temporary transcode · H.264 / AAC');
+      });
+    }
+    function monitor(g,deadline,attached){
+      if(!active(g)||!job)return;
+      json(job.status_url).then(function(j){
+        if(!active(g))return;
+        sourceDuration=Number(j.duration)||sourceDuration;play.duration=sourceDuration;
+        if(j.status==='failed'||j.status==='cancelled')throw new Error(j.error||'Transcoding stopped.');
+        if(!attached&&j.ready)return attach(g).then(function(){if(active(g))timer=setTimeout(function(){monitor(g,deadline,true);},5000);});
+        if(!attached&&Date.now()>deadline)throw new Error('Video is taking too long to prepare. The worker will stop when idle; a saved-copy job continues in the background.');
+        if(attached&&j.status==='done')note(j.save?'DirectPlay copy ready · review it in Video conversion; original retained':'Temporary transcode ready');
+        timer=setTimeout(function(){monitor(g,deadline,attached);},attached?5000:1000);
+      }).catch(function(e){if(active(g)){overlay._transcodePending=false;note(e.message||String(e));if(!job||!job.save)stop();}});
+    }
+    function start(save,at){
+      if(!alive||!overlay.isConnected)return false;
+      if(overlay._transcodePending){note('A playback worker is already starting…');return false;}
+      if(job&&job.save){note('A full DirectPlay copy is still being prepared. Use Return to DirectPlay to leave playback; the saved-copy worker continues.');return false;}
+      var previous=job;stop();var g=++gen;overlay._transcodeAttempted=true;overlay._transcodePending=true;overlay._transcodeActive=false;overlay._transcodeResumeHandled=true;
+      if(overlay._leaveRemux)overlay._leaveRemux();media.pause();media.removeAttribute('src');media.querySelectorAll('source').forEach(function(el){el.remove();});media.load();
+      note(save?'Preparing playback and a reusable MP4…':'Preparing H.264 / AAC playback…');
+      api('/items/'+encodeURIComponent(item.id)+'/transcode',{method:'POST',body:{t:play.token,start:Math.max(0,at||0),audio:audioIndex,save:!!save,replace:previous&&!previous.save?previous.id:null,replace_token:previous&&!previous.save?previous.token:null}}).then(function(j){
+        if(!active(g)){if(j&&j.stop_url)fetch(streamPlayUrl(j.stop_url),{method:'POST',credentials:'same-origin'}).catch(function(){});return;}
+        if(!j.ok)throw new Error(j.error||'Could not start transcoding');
+        job=j;offset=Number(j.offset)||0;timeline.hidden=false;
+        openPlayer._absTime=function(){return offset+(media.currentTime||0);};openPlayer._absDuration=function(){return sourceDuration;};
+        openPlayer._seekAbsolute=function(to){
+          to=Math.max(0,Math.min(sourceDuration?Math.max(0,sourceDuration-.5):to,Number(to)||0));var relative=to-offset,ready=false;
+          try{for(var n=0;n<media.seekable.length;n++)if(relative>=media.seekable.start(n)&&relative<=media.seekable.end(n)){ready=true;break;}}catch(e){}
+          if(ready)media.currentTime=relative;
+          else if(job.save)note('That point is not encoded yet. The full DirectPlay copy is still being prepared.');
+          else start(false,to);
+        };
+        monitor(g,Date.now()+Number(j.startup_seconds||90)*1000,false);
+      }).catch(function(e){if(active(g)){overlay._transcodePending=false;note(e.message||String(e));}});return true;
+    }
+    seek.addEventListener('change',function(){if(openPlayer._seekAbsolute)openPlayer._seekAbsolute(Number(seek.value));});
+    media.addEventListener('timeupdate',function(){if(!overlay._transcodeActive)return;seek.max=String(sourceDuration||1);seek.value=String(offset+(media.currentTime||0));clock.textContent=fmtResumeClock(offset+(media.currentTime||0))+' / '+fmtResumeClock(sourceDuration);});
+    overlay._startTranscode=start;overlay._getTranscodeAudio=function(){return audioIndex;};overlay._transcodeAudio=function(index){if(job&&job.save){note('Saved-copy sessions keep the audio track chosen at the start. Return to DirectPlay to choose a different track.');return false;}var at=offset+(media.currentTime||0);audioIndex=Number(index)||0;return start(false,at);};
+    overlay._transcodeCleanup=function(){alive=false;gen++;stop();};
+    if(play.transcode_mode==='always')setTimeout(function(){if(alive)start(false,resumePositionFor(item,play));},0);
   }
   var _emuSessionId = 0;
   var _emuLoading = false;
@@ -1926,6 +2012,8 @@ function confirmDialog(message, opts){
     }
     if (_liveCleanup) { try { _liveCleanup(); } catch (eLc) {} _liveCleanup = null; }
     var o = $('#player-overlay');
+    if(o)o._closing=true;
+    if(o&&o._transcodeCleanup)o._transcodeCleanup();
     if(o&&o._skipCleanup)o._skipCleanup();
     try { silenceMediaTree(o); } catch (eSil) {}
     try {
@@ -4435,7 +4523,7 @@ try {
     if (r.view === 'settings') {
       state.view = 'settings';
       state.settingsSection = r.settingsSection || 'account';
-      var adminIds = { 'site-artwork':'site-artwork',maintenance:'maintenance', players:'players', features:'features', libraries:'sections', sections:'sections', scan:'scan', library:'library', media:'media', collections:'collections', streaming:'streaming', convert:'convert', queue:'queue', acquisition:'acquisition', system:'system', general:'general', users:'users', advanced:'advanced', ingest:'ingest', matching:'matching', reports:'reports' };
+      var adminIds = { 'site-artwork':'site-artwork',maintenance:'maintenance', players:'players', features:'features', libraries:'sections', sections:'sections', scan:'scan', library:'library', media:'media', collections:'collections', streaming:'streaming', directplay:'directplay', convert:'convert', queue:'queue', acquisition:'acquisition', system:'system', general:'general', users:'users', advanced:'advanced', ingest:'ingest', matching:'matching', reports:'reports' };
       if (adminIds[state.settingsSection]) state.adminTab = adminIds[state.settingsSection];
       return Promise.resolve();
     }
@@ -7839,7 +7927,7 @@ try {
       {title:'Artwork & design',description:'Site branding, bundled posters and library artwork.',admin:true,items:[{id:'site-artwork',label:'Site & theme posters',hint:'Replace default artwork and create smaller WebP images'},{id:'posters',label:'Library artwork',hint:'Fetch missing movie, show, season and game images'},{id:'artwork-integrity',label:'Repair missing images',hint:'Find broken records and missing files'},{id:'poster-optimise',label:'Optimise library images',hint:'Generate full, grid and search WebP variants'}]},
       {title:'Live broadcasting',description:'Build channels, schedule programmes and manage public streams.',admin:true,items:[{id:'live-studio',label:'PseudoTV Studio',section:'Relay',hint:'Schedule programmes, filler and advertising'},{id:'live-channels',label:'Relay channels',section:'Relay',hint:'Create channels and manage rotations'},{id:'live-library',label:'Live media library',section:'Relay',hint:'Import programmes and prepare durations'},{id:'live-playlists',label:'Rotation playlists',section:'Relay',hint:'Reusable channel programme rotations'},{id:'live-schedule',label:'Rotation rules',section:'Relay',hint:'Legacy rotation scheduling; Studio manages weekly slots'},{id:'live-iptv',label:'IPTV & guide matching',section:'Sources',hint:'Feeds, channel mapping and EPG'},{id:'live-radio',label:'Radio stations',section:'Sources',hint:'Add stations or browse the public directory'},{id:'live-station',label:'Station & outputs',section:'Outputs',hint:'Streams, guide exports and station configuration'}]},
       {title:'People & permissions',description:'Control who can access content and administrative tools.',admin:true,items:[{id:'users',label:'Accounts, roles & permissions',hint:'Create users and roles; assign individual access'}]},
-      {title:'Playback & delivery',description:'Server delivery options and player dependencies.',admin:true,items:[{id:'streaming',label:'Streaming & codecs',hint:'Direct play, remuxing and transcoding policy'},{id:'players',label:'Player assets',hint:'Local or CDN player files and emulator cores'},{id:'video-optimise',label:'Video conversion',hint:'Convert files, review requests and manage encoding jobs'}]},
+      {title:'Playback & delivery',description:'Server delivery options and player dependencies.',admin:true,items:[{id:'directplay',label:'DirectPlay Settings',hint:'Playback policy, transcoding, threads and reusable copies'},{id:'streaming',label:'Delivery & subtitles',hint:'Seeking, playback tokens and subtitles'},{id:'players',label:'Player assets',hint:'Local or CDN player files and emulator cores'},{id:'video-optimise',label:'Video conversion',hint:'Convert files, review requests and manage encoding jobs'}]},
       {title:'Downloads',description:'Configure providers and review download activity.',admin:true,items:[{id:'acquisition',label:'Providers & integrations',hint:'RSS search, download clients and API connections'},{id:'queue',label:'Download queue',hint:'Active downloads, imports and errors'}]},
       {title:'Application & server',description:'Site defaults, updates, performance and troubleshooting.',admin:true,items:[{id:'general',label:'Site defaults & access',hint:'Branding, guest access, public URL and installable app'},{id:'features',label:'Enabled features',hint:'Turn optional services on or off'},{id:'updates',label:'Updates & branches',hint:'Manually check, install or switch update channels'},{id:'maintenance',label:'Task centre',hint:'Preparation jobs, progress, cancellation and history'},{id:'optimise-system',label:'Storage & caches',hint:'Generated files and safe cache tools'},{id:'diagnostics',label:'Diagnostics',hint:'Run selected checks and inspect failures'},{id:'system',label:'Server tools',hint:'Resource usage and service controls'},{id:'advanced',label:'Advanced & reset',hint:'PHP CLI, ffmpeg, ffprobe, tool paths, raw configuration and database reset'}]}
     ];
@@ -8026,7 +8114,7 @@ try {
       bodyKids = [
         h('h2', { text: ({
           sections: 'Libraries', scan: 'Scan', posters: 'Posters', library: 'Find / Rename', media: 'Media Manager',
-          collections: 'Collections', streaming: 'Streaming', convert: 'Video optimisation', 'video-optimise': 'Video optimisation',
+          collections: 'Collections', directplay:'DirectPlay Settings', streaming: 'Delivery & subtitles', convert: 'Video optimisation', 'video-optimise': 'Video optimisation',
           'poster-optimise': 'Poster optimisation', 'optimise-system': 'System optimisation',
           queue: 'Download queue',
           acquisition: 'Acquisition', general: 'General', users: 'Users', advanced: 'Advanced'
@@ -8424,16 +8512,17 @@ try {
         body.appendChild(renderSectionsEditor(s));
       } else if (tab === 'library') {
         body.appendChild(renderLibraryManager(s));
+      } else if (tab === 'directplay') {
+        body.appendChild(renderDirectPlaySettings(s));
       } else if (tab === 'streaming') {
         var st = s.streaming || {};
         body.appendChild(h('div', { className:'stack' }, [
-          h('label', {}, [ h('input', { id:'dp_only', type:'checkbox', checked: st.directplay_only!==false }), ' DirectPlay only (no server transcode for playback)' ]),
+          h('button',{className:'btn ghost',text:'Open DirectPlay Settings',onClick:function(){openSettings('directplay');}}),
           h('label', {}, [ h('input', { id:'range_en', type:'checkbox', checked: st.range_enabled!==false }), ' HTTP Range / seeking enabled' ]),
           fieldEl('token_ttl_seconds','Stream token TTL (sec)', st.token_ttl_seconds||14400, 'number'),
           h('div', { className:'row-actions' }, [
             h('button', { className:'btn primary', text:'Save', onClick: function(){
               saveSettings({ streaming: {
-                directplay_only: $('#dp_only').checked,
                 range_enabled: $('#range_en').checked,
                 token_ttl_seconds: +$('#token_ttl_seconds').value
               }});
@@ -10264,7 +10353,57 @@ h('div', { className:'cv-find-bar' }, [
     }
     api('/admin/updates' + (branch ? '?branch=' + encodeURIComponent(branch) : '')).then(paint).catch(function(e){ paint({ ok:false, error:String(e && e.message || e) }); });
   }
-  function renderConvertAdminPanel(s){
+  function renderDirectPlaySettings(s){
+    var st=s.streaming||{},c=Object.assign({enabled:false,mode:'fallback',threads:1,max_sessions:1,crf:20,preset:'veryfast',audio_bitrate:'192k',audio_channels:'2',max_height:0,max_bitrate:0,segment_seconds:4,startup_seconds:90,idle_seconds:120,cache_hours:6,cache_gb:10,allow_save:true},s.transcoding||{});
+    var root=h('div',{className:'stack directplay-settings'}),fields={},maxThreads=Math.max(1,Number(c.max_threads||s.convert&&s.convert.max_threads)||1);
+    function toggle(key,title,hint,value){var input=h('input',{id:'dp_'+key,type:'checkbox',role:'switch',className:'feature-switch-input',checked:!!value});fields[key]=input;return h('label',{className:'feature-row'},[h('span',{className:'feature-text'},[h('strong',{text:title}),h('span',{className:'muted',text:hint})]),h('span',{className:'feature-switch'},[input,h('span',{className:'feature-switch-track','aria-hidden':'true'})])]);}
+    function choice(key,title,options,numeric){var input=h('select',{id:'dp_'+key,'aria-label':title},options.map(function(o){return h('option',{value:String(o[0]),text:o[1],selected:String(c[key])===String(o[0])});}));fields[key]=input;input._numeric=!!numeric;return h('label',{className:'cv-field'},[h('span',{className:'cv-field-label',text:title}),input]);}
+    function range(key,title,min,max,unit){var output=h('output',{text:String(c[key])+(unit||'')}),input=h('input',{id:'dp_'+key,type:'range',min:String(min),max:String(max),step:'1',value:String(Math.min(max,Math.max(min,Number(c[key])||min))),'aria-label':title,onInput:function(e){output.textContent=e.target.value+(unit||'');summary();}});fields[key]=input;input._numeric=true;return h('label',{className:'cv-field cv-slider'},[h('div',{className:'cv-slider-head'},[h('span',{text:title}),output]),input]);}
+    function card(title,intro,children){return h('section',{className:'settings-card cv-section feature-card'},[h('h3',{text:title}),h('p',{className:'muted',text:intro})].concat(children));}
+    var status=h('p',{className:'dp-policy-summary',role:'status'});
+    root.appendChild(card('Choose how the server plays video','DirectPlay sends the file as it is. Remuxing copies video and can convert audio. Transcoding creates H.264/AAC video for this device.',[
+      toggle('directplay_only','DirectPlay only','Blocks playback remuxing and video transcoding. Manually queued library conversions remain available.',st.directplay_only!==false),
+      toggle('allow_remux','Allow audio remuxing','Copies video; converts incompatible audio when switching tracks. Uses the thread, AAC bitrate and channel controls below, even when video transcoding is off.',st.allow_remux!==false),
+      toggle('enabled','Allow video transcoding','For local library movies and episodes only. Never used for IPTV, webcams, radio, games or Relay feeds.',!!c.enabled),status
+    ]));
+    var encoding=card('Playback encoder','Software H.264 (libx264) + AAC over HLS. Each decoder, encoder and filter pool uses the selected thread limit; this is not a strict process-wide CPU cap.',[
+      choice('mode','When to transcode',[['fallback','Prefer DirectPlay; transcode after a playback failure'],['always','Transcode library video whenever it is opened']]),
+      range('threads','Threads per worker',1,maxThreads,''),range('max_sessions','Maximum simultaneous playback workers',1,4,''),
+      range('crf','Video quality (lower = higher quality / larger files)',14,28,''),
+      choice('preset','Encoder speed', ['ultrafast','superfast','veryfast','faster','fast','medium','slow','slower','veryslow'].map(function(v){return [v,v+(v==='veryfast'?' · recommended for playback':v==='veryslow'?' · highest CPU cost':'')];})),
+      choice('max_height','Maximum resolution',[[0,'Source resolution'],[480,'480p'],[720,'720p HD'],[1080,'1080p Full HD'],[1440,'1440p'],[2160,'2160p 4K']],true),
+      choice('max_bitrate','Video bitrate ceiling',[[0,'Quality based · no bitrate ceiling'],[1000,'1 Mbps'],[2000,'2 Mbps'],[4000,'4 Mbps'],[8000,'8 Mbps'],[12000,'12 Mbps'],[20000,'20 Mbps'],[40000,'40 Mbps']],true),
+      choice('audio_bitrate','AAC bitrate',['96k','128k','160k','192k','256k','320k'].map(function(v){return [v,v.replace('k',' kbps')];})),
+      choice('audio_channels','Audio channels',[['2','Stereo · widest compatibility'],['source','Preserve source channel count']]),
+      choice('segment_seconds','HLS fragment length',[[2,'2 seconds · faster startup, more requests'],[4,'4 seconds · balanced'],[6,'6 seconds · fewer requests']],true)
+    ]);root.appendChild(encoding);
+    root.appendChild(card('Temporary files & limits','Temporary HLS fragments are stored in Vaultcast data/transcode. Expired, inactive sessions are removed when starting playback or opening the session list. A worker stops if it stalls for three minutes or temporary disk space runs low.',[
+      range('startup_seconds','Time to wait for the first fragment',10,120,' seconds'),range('idle_seconds','Stop temporary encoding after inactivity',30,600,' seconds'),
+      range('cache_hours','Keep finished fragments',1,72,' hours'),range('cache_gb','Maximum temporary data per stream',1,100,' GB'), h('button',{className:'btn ghost',text:'Clear inactive playback cache',onClick:function(){api('/admin/transcode/clear-cache',{method:'POST'}).then(function(j){toast(j.ok?'Removed '+j.removed+' expired or inactive sessions. Players accessed within five minutes are kept.':j.error);}).catch(function(e){toast(String(e.message||e));});}})
+    ]));
+    root.appendChild(card('Watch while preparing a DirectPlay copy','Use “Watch & prepare copy” in the library player. It starts from the beginning, encodes once and lets you watch prepared fragments. Forward seeking is limited to what has been encoded. It continues after closing the player.',[
+      toggle('allow_save','Allow administrators to save watch-and-prepare sessions','The finished, duration-checked MP4 is saved beside the source as <name>.directplay.mp4. The saved copy contains the selected audio track; it does not embed subtitles or preserve other audio tracks.',c.allow_save!==false),
+      toggle('prefer_directplay','Prefer completed DirectPlay copies','One library title; original and converted files remain on disk. Future playback uses the completed copy when available.',(s.convert||{}).prefer_directplay!==false),
+      h('p',{className:'dp-policy-summary',text:'Originals are never replaced automatically. Review the finished job in Video conversion, then choose Replace Original to validate and remove the source. Watch history and collection links follow the retained version. Closing a temporary session stops it; closing a watch-and-prepare session leaves it running.'}),
+      h('p',{className:'muted',text:'Saving may temporarily need space for HLS fragments and the final MP4 in addition to the original. These playback settings apply to new sessions. HDR tone mapping and hardware encoding are not provided by this encoder.'}),
+      h('div',{className:'row-actions'},[
+        h('button',{className:'btn primary',text:'Save DirectPlay & playback settings',onClick:function(){var patch={};Object.keys(c).forEach(function(key){var el=fields[key];if(!el)return;patch[key]=el.type==='checkbox'?el.checked:el._numeric?Number(el.value):el.value;});delete patch.max_threads;saveSettings({streaming:{directplay_only:fields.directplay_only.checked,allow_remux:fields.allow_remux.checked},transcoding:patch,convert:{prefer_directplay:fields.prefer_directplay.checked}});}}),
+        h('button',{className:'btn ghost',text:'Merge existing duplicate copies',onClick:function(e){var button=e.currentTarget;button.disabled=true;api('/admin/convert/merge-versions',{method:'POST'}).then(function(j){toast(j.ok?'Copy checks and duplicate merging queued in Task centre; files retained.':j.error);}).catch(function(err){toast(err.message||String(err));}).then(function(){button.disabled=false;});}}),
+        h('button',{className:'btn ghost',text:'Open conversion queue',onClick:function(){openSettings('video-optimise');}}),h('button',{className:'btn ghost',text:'Configure FFmpeg / PHP CLI',onClick:function(){openSettings('advanced');}})
+      ])
+    ]));
+    var sessions=h('div',{className:'stack'});root.appendChild(card('Playback workers','Refresh to inspect active and recently finished sessions. Limits above apply to playback workers; the separate background conversion queue runs one job at a time.',[
+      h('button',{className:'btn ghost',text:'Refresh playback workers',onClick:function(){api('/admin/transcode').then(function(j){sessions.innerHTML='';(j.sessions||[]).forEach(function(job){sessions.appendChild(h('div',{className:'feature-row'},[h('strong',{text:job.title}),h('span',{text:job.status+' · '+job.threads+' threads · '+Math.round(job.prepared_seconds||0)+'s prepared'+(job.save?' · saving copy':'')+(job.error?' · '+job.error:'')}),['queued','running','saving'].indexOf(job.status)>=0?h('button',{className:'btn ghost sm',text:'Stop worker',onClick:function(){api('/admin/transcode/'+job.id+'/stop',{method:'POST'}).then(function(j){toast(j.ok?'Stop requested; original retained.':j.error);});}}):null]));});if(!(j.sessions||[]).length)sessions.textContent='No playback workers.';}).catch(function(e){sessions.textContent=String(e.message||e);});}}),sessions
+    ]));
+    function summary(){var direct=fields.directplay_only.checked;status.textContent=direct?'DirectPlay only: no server processing during playback.':fields.enabled.checked?'Playback transcoding enabled · '+(fields.threads?fields.threads.value:c.threads)+' threads per codec/filter pool · '+(fields.max_sessions?fields.max_sessions.value:c.max_sessions)+' playback slots.':fields.allow_remux.checked?'DirectPlay with audio remuxing. Video transcoding is off.':'DirectPlay only in practice: remuxing and video transcoding are both off.';encoding.querySelectorAll('input,select').forEach(function(el){el.disabled=direct||!fields.enabled.checked;});['threads','audio_bitrate','audio_channels'].forEach(function(key){fields[key].disabled=direct||(!fields.enabled.checked&&!fields.allow_remux.checked);});fields.allow_remux.disabled=direct;fields.enabled.disabled=direct;}
+    root.addEventListener('change',summary);summary();
+    var playbackGroup=h('fieldset',{className:'settings-fieldset dp-settings-group'},[h('legend',{text:'Playback policy & transcoding'})]);
+    Array.from(root.children).forEach(function(child){playbackGroup.appendChild(child);});root.appendChild(playbackGroup);
+    root.appendChild(h('h3',{text:'Background library conversion'}));
+    root.appendChild(h('p',{className:'muted',text:'These settings control manually queued full-file conversions, independently of playback transcoding. Originals stay on disk until you explicitly replace them.'}));
+    var backgroundSettings=renderConvertAdminPanel(s,true);backgroundSettings.classList.add('settings-fieldset');root.appendChild(backgroundSettings);return root;
+  }
+  function renderConvertAdminPanel(s,settingsOnly){
       var c = Object.assign({
         enabled: true, one_job_at_a_time: true, threads: 1, max_threads: 1, quality_mode: 'directplay',
         crf: 18, preset: 'medium',
@@ -10309,7 +10448,7 @@ h('div', { className:'cv-find-bar' }, [
       var lastQueue = [];
 
       var QUALITY_MODES = [
-        { id:'original', title:'Original / lossless', blurb:'Remux only (stream-copy). No re-encode \u2014 same quality & ~same size. Tiny server load. May not DirectPlay in every browser.' },
+        { id:'original', title:'Original / lossless', blurb:'Remux only (stream-copy). No re-encode \u2014 same quality & ~same size. Tiny server load. A copy is preferred only after browser-compatible codecs are verified.' },
         { id:'directplay', title:'DirectPlay smart', blurb:'Best default. Remux when already H.264+AAC; copy video + AAC audio when needed; encode only if video is not H.264.' },
         { id:'near_lossless', title:'Near-lossless', blurb:'Always encode H.264 CRF 18 \u00b7 medium. Visually transparent; larger than remux. Use when you need DirectPlay from any source.' },
         { id:'balanced', title:'Balanced', blurb:'H.264 CRF 20 \u00b7 medium. Good quality, smaller files, moderate CPU.' },
@@ -10379,7 +10518,7 @@ h('div', { className:'cv-find-bar' }, [
         var meta = QUALITY_MODES.filter(function(m){ return m.id === mode; })[0];
         if (hint && meta) hint.textContent = meta.blurb;
         var encodeBox = $('#cv_encode_controls');
-        var showEncode = (mode === 'near_lossless' || mode === 'balanced' || mode === 'efficient' || mode === 'custom');
+        var showEncode = (mode === 'directplay' || mode === 'near_lossless' || mode === 'balanced' || mode === 'efficient' || mode === 'custom');
         if (encodeBox) encodeBox.hidden = !showEncode;
         var customBox = $('#cv_custom_controls');
         if (customBox) customBox.hidden = mode !== 'custom';
@@ -11190,7 +11329,7 @@ h('div', { className:'cv-find-bar' }, [
       function collectConvertSettings(){
         return {
           enabled: !!( $('#cv_en') && $('#cv_en').checked ),
-          one_job_at_a_time: !!( $('#cv_one') && $('#cv_one').checked ),
+          one_job_at_a_time: true,
           threads: cvThreadsValue() || 1,
           quality_mode: modeState.mode || 'directplay',
           crf: $('#crf') ? +$('#crf').value : 18,
@@ -11245,7 +11384,7 @@ h('div', { className:'cv-find-bar' }, [
             { value:'veryslow', label:'veryslow (avoid on server)' }
           ]),
           selectEl('audio_bitrate', 'Audio bitrate (when re-encoding audio)', c.audio_bitrate||'320k', [
-            '128k','160k','192k','256k','320k'
+            '96k','128k','160k','192k','256k','320k'
           ]),
           h('div', { id:'cv_custom_controls', className:'cv-custom-grid' }, [
             selectEl('target_video', 'Video codec', c.target_video||'libx264', [
@@ -11261,7 +11400,7 @@ h('div', { className:'cv-find-bar' }, [
 
         h('section', { className:'cv-section settings-card' }, [
           h('h3', { className:'admin-section-title', text:'Output & server load' }),
-          h('p', { className:'muted', text:'Output is written beside the original as <name>.directplay.<container>. Jobs run niced so Live/VoD stay responsive.' }),
+          h('p', { className:'muted', text:'Output is saved beside the original as <name>.directplay.<container> and shown as an alternate under the same library title. CPU nice and disk I/O class apply on Linux; thread limits apply on every platform.' }),
           selectEl('target_container', 'Container', c.target_container||'mp4', [
             { value:'mp4', label:'MP4 (best DirectPlay)' },
             { value:'m4v', label:'M4V' },
@@ -11269,14 +11408,14 @@ h('div', { className:'cv-find-bar' }, [
             { value:'mkv', label:'MKV' }
           ]),
           h('div', { className:'feature-card cv-feature-card' }, [
-            cvToggleRow('cv_en', 'Enable ffmpeg convert queue', 'Queue and run conversions on this server.', !!c.enabled),
-            cvToggleRow('cv_one', 'One job at a time', 'Recommended. Runs queued conversions one after another.', c.one_job_at_a_time !== false),
+            cvToggleRow('cv_en', 'Enable ffmpeg convert queue', 'Start queued library conversions. Turning this off pauses new jobs; an existing job can finish.', !!c.enabled),
+            h('p',{className:'muted',text:'Background conversions run one at a time. Playback transcoding has its own slot limit above.'}),
             h('label', { className:'feature-row', 'for':'cv_threads' }, [
               h('span', { className:'feature-text' }, [
                 h('strong', { text:'Conversion threads' }),
                 h('span', { className:'muted', id:'cv_threads_hint', text:'CPU threads each conversion may use (1\u2013' + cvMaxThreads + ' on this server). 1 keeps Live and VoD responsive; more finishes sooner.' })
               ]),
-              h('input', { id:'cv_threads', type:'number', className:'feature-number', min:'1', max:String(cvMaxThreads), step:'1', inputmode:'numeric', value:String(c.threads || 1), 'aria-describedby':'cv_threads_hint' })
+              h('input', { id:'cv_threads', type:'range', className:'feature-range', min:'1', max:String(cvMaxThreads), step:'1', inputmode:'numeric', value:String(c.threads || 1), 'aria-describedby':'cv_threads_hint',onInput:function(e){var out=$('#cv_thread_value');if(out)out.textContent=e.target.value+' / '+cvMaxThreads;} }), h('output',{id:'cv_thread_value',text:String(c.threads||1)+' / '+cvMaxThreads})
             ])
           ]),
           sliderEl('nice', 'CPU nice (higher = kinder to server)', c.nice!=null?c.nice:19, 0, 19, 1),
@@ -11298,7 +11437,7 @@ h('div', { className:'cv-find-bar' }, [
               if ($('#nice')) { $('#nice').value = '19'; if ($('#nice_val')) $('#nice_val').textContent = '19'; }
               if ($('#ionice_class')) $('#ionice_class').value = '3';
               if ($('#target_container')) $('#target_container').value = 'mp4';
-              if ($('#cv_threads')) $('#cv_threads').value = '1';
+              if ($('#cv_threads')) $('#cv_threads').value = '1'; if($('#cv_thread_value')) $('#cv_thread_value').textContent='1 / '+cvMaxThreads;
               if ($('#target_video')) $('#target_video').value = 'libx264';
               if ($('#target_audio')) $('#target_audio').value = 'aac';
               if ($('#cv_en')) $('#cv_en').checked = true;
@@ -11330,10 +11469,15 @@ h('div', { className:'cv-find-bar' }, [
           h('div', { id:'cv_requests' })
         ])
       ]);
+      if(settingsOnly)Array.from(root.children).slice(3).forEach(function(child){child.remove();});
+      else {
+        Array.from(root.children).slice(0,3).forEach(function(child){child.remove();});
+        root.insertBefore(h('div',{className:'settings-card'},[h('h3',{text:'Encoding configuration'}),h('p',{className:'muted',text:'Playback policy, encoder options, threads and output configuration have moved to DirectPlay Settings.'}),h('button',{className:'btn',text:'Open DirectPlay Settings',onClick:function(){openSettings('directplay');}})]),root.firstChild);
+      }
       setTimeout(function(){
         syncModeUi();
         updateCrfHint(c.crf!=null?+c.crf:18);
-        refreshConvertAdmin();
+        if(!settingsOnly)refreshConvertAdmin();
         // Find all is manual — only runs when the user clicks Find all
       }, 0);
       if (typeof MutationObserver !== 'undefined') {
@@ -14510,7 +14654,7 @@ function viewCollectionDetail(){
   function openSettings(section){
     if(state.view==='settings'&&settingsDraftChanged()&&!confirm('Leave this page and discard unsaved form changes?'))return;
     state.settingsSection = section || 'settings-home';
-    var adminIds = { maintenance:'maintenance', players:'players', features:'features', libraries:'sections', sections:'sections', scan:'scan', library:'library', media:'media', collections:'collections', streaming:'streaming', convert:'convert', queue:'queue', acquisition:'acquisition', system:'system', general:'general', users:'users', advanced:'advanced', ingest:'ingest', matching:'matching', reports:'reports' };
+    var adminIds = { maintenance:'maintenance', players:'players', features:'features', libraries:'sections', sections:'sections', scan:'scan', library:'library', media:'media', collections:'collections', streaming:'streaming', directplay:'directplay', convert:'convert', queue:'queue', acquisition:'acquisition', system:'system', general:'general', users:'users', advanced:'advanced', ingest:'ingest', matching:'matching', reports:'reports' };
     if (adminIds[state.settingsSection]) state.adminTab = adminIds[state.settingsSection];
     var needsAdmin = !!adminIds[state.settingsSection] || state.settingsSection === 'live' || (state.settingsSection && state.settingsSection.indexOf('live-') === 0);
     if (needsAdmin) {
@@ -14780,7 +14924,7 @@ function viewCollectionDetail(){
       if (!state.settingsSection || state.settingsSection === 'account') state.settingsSection = state.adminTab || 'general';
     }
     if (state.view === 'settings') {
-      var adminOnly = { 'site-artwork':1,maintenance:1, players:1, features:1, diagnostics:1, sections:1, libraries:1, scan:1, library:1, media:1, collections:1, streaming:1, convert:1, queue:1, acquisition:1, system:1, general:1, users:1, advanced:1, ingest:1, matching:1, reports:1, live:1, 'live-channels':1, 'live-library':1, 'live-playlists':1, 'live-iptv':1, 'live-schedule':1, 'live-station':1, 'live-studio':1, 'live-radio':1 };
+      var adminOnly = { 'site-artwork':1,maintenance:1, players:1, features:1, diagnostics:1, sections:1, libraries:1, scan:1, library:1, media:1, collections:1, streaming:1, directplay:1, convert:1, queue:1, acquisition:1, system:1, general:1, users:1, advanced:1, ingest:1, matching:1, reports:1, live:1, 'live-channels':1, 'live-library':1, 'live-playlists':1, 'live-iptv':1, 'live-schedule':1, 'live-station':1, 'live-studio':1, 'live-radio':1 };
       if (adminOnly[state.settingsSection] && !canSettings(state.settingsSection)) {
         state._wantAdmin = true;
         state._settingsAfterLogin = state.settingsSection;

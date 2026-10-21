@@ -82,10 +82,12 @@ final class Subtitles {
         return $files;
     }
 
-    public static function tracks(string $media, string $token): array {
+    public static function tracks(string $media, string $token, ?string $alternateMedia = null): array {
         $tracks = [];
         $base = rtrim(\Vaultcast\Database::basePath(), '/');
-        foreach (self::files($media) as $id => $file) {
+        $files=self::files($media);
+        if($alternateMedia!==null && $alternateMedia!==$media)$files+=self::files($alternateMedia);
+        foreach ($files as $id => $file) {
             $tracks[] = ['id' => $id, 'label' => $file['label'], 'language' => $file['language'],
                 'url' => $base . '/api/stream/subtitles/' . $token . '/' . $id . '.vtt'];
         }
@@ -205,6 +207,7 @@ final class Subtitles {
         $payload = \Vaultcast\Repository::playbackToken($token);
         if ($payload === null || ($payload['media_kind'] ?? '') !== 'video') json_error('Playback token expired.', 403);
         $files = self::files((string)$payload['path']);
+        if(!empty($payload['caption_source']) && $payload['caption_source']!==$payload['path'])$files+=self::files((string)$payload['caption_source']);
         if (!isset($files[$id])) json_error('Subtitle not found.', 404);
         $file = $files[$id];
         $text = file_get_contents($file['path'], false, null, 0, self::MAX_BYTES + 1);

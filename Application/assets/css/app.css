@@ -2589,3 +2589,30 @@ input[type=checkbox],input[type=radio],input[type=range] { accent-color:var(--ac
 }
 
 html[data-motion="reduced"]{scroll-behavior:auto!important}
+/* Playback policy and encoder controls share the settings card vocabulary. */
+.directplay-settings .settings-card { padding: clamp(16px, 2vw, 26px); }
+.dp-settings-group { display: grid; gap: 16px; min-width: 0; }
+.directplay-settings .dp-policy-summary {
+  padding: 14px 16px;
+  border: 1px solid var(--line, rgba(128,128,128,.25));
+  border-left: 3px solid var(--accent);
+  border-radius: 10px;
+  background: rgba(128,128,128,.06);
+  line-height: 1.6;
+}
+.directplay-settings .cv-field { display: grid; gap: 8px; margin-block: 12px; }
+.directplay-settings .cv-field select { width: 100%; min-width: 0; }
+.directplay-settings input[type=range] { width: 100%; accent-color: var(--accent); }
+.directplay-settings output { font-variant-numeric: tabular-nums; color: var(--accent); }
+.directplay-settings .feature-range { min-width: 120px; max-width: 240px; }
+.directplay-settings .feature-row { gap: 14px; }
+.directplay-settings .feature-text .muted { line-height: 1.5; }
+.dp-player-actions { display: flex; flex-wrap: wrap; flex-basis: 100%; align-items: center; gap: 8px; }
+.dp-transcode-timeline { display: flex; flex-basis: 100%; align-items: center; gap: 12px; padding: 10px; }
+.dp-transcode-timeline[hidden] { display: none; }
+.dp-transcode-timeline input { flex: 1; min-width: 80px; accent-color: var(--accent); }
+.dp-transcode-timeline span { white-space: nowrap; font-variant-numeric: tabular-nums; }
+@media (max-width: 600px) {
+  .directplay-settings .feature-row { flex-wrap: wrap; }
+  .dp-player-actions .btn { flex: 1 1 150px; }
+}

@@ -62,6 +62,7 @@ class MediaProbe {
     public static function probeSummary(string $path, int $timeout = 3, bool $useCache = true): array {
         $data = self::inspect($path, $timeout, $useCache);
         $tracks = self::tracks($data ?? []);
+        $pixelFormat=null;foreach($data['streams'] ?? [] as $stream)if(($stream['codec_type'] ?? '')==='video'){$pixelFormat=$stream['pix_fmt'] ?? null;break;}
         return [
             'ok' => true,
             'path_exists' => is_file($path),
@@ -69,6 +70,7 @@ class MediaProbe {
             'audio_count' => count($tracks),
             'multi_audio' => count($tracks) > 1,
             'video_codec' => self::codec($data ?? []),
+            'pixel_format'=>$pixelFormat,
             'duration' => ($d = (float)($data['format']['duration'] ?? 0)) > 0 ? $d : null,
             'probed' => $data !== null,
             'cached' => $data['_cached'] ?? false,

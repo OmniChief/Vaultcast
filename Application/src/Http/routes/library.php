@@ -372,10 +372,18 @@ if (preg_match('#^/items/([a-f0-9]+)/play$#', $path, $m) && $method === 'POST') 
     json_out(Stream::issueToken(current_or_guest(), $m[1], body_json()));
 }
 
+if (preg_match('#^/items/([a-f0-9]+)/transcode$#', $path, $m) && $method === 'POST') {
+    try { json_out(Transcode::start(current_or_guest(),$m[1],body_json())); }
+    catch(InvalidArgumentException $e){json_error($e->getMessage(),422);}
+    catch(DomainException $e){json_error($e->getMessage(),403);}
+    catch(RuntimeException $e){json_error($e->getMessage(),409);}
+}
+
 if (preg_match('#^/items/([a-f0-9]+)/probe$#', $path, $m) && $method === 'GET') {
     release_request_locks();
     $item = Catalogue::item($m[1]);
     if (!$item) json_error('Not found', 404);
+    $item = Stream::playbackItem($item);
     $pathFile = (string)($item['path'] ?? '');
     $probe = MediaProbe::probeSummary($pathFile, 3, true);
     $probe['item_id'] = $m[1];

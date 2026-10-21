@@ -48,6 +48,17 @@ class Convert {
         ];
     }
 
+    public static function validateSettings(array $cv): array {
+        $choices=['quality_mode'=>self::QUALITY_MODES,'preset'=>self::PRESETS,'audio_bitrate'=>['96k','128k','160k','192k','256k','320k'],
+            'target_video'=>self::VIDEO_CODECS,'target_audio'=>self::AUDIO_CODECS,'target_container'=>array_keys(self::CONTAINERS)];
+        foreach($choices as $key=>$values)if(array_key_exists($key,$cv)&&!in_array($cv[$key],$values,true))throw new InvalidArgumentException('Choose a supported conversion '.$key.'.');
+        foreach(['crf'=>[0,28],'nice'=>[0,19],'ionice_class'=>[1,3]] as $key=>$bounds)if(array_key_exists($key,$cv)&&(!is_int($cv[$key])||$cv[$key]<$bounds[0]||$cv[$key]>$bounds[1]))throw new InvalidArgumentException('Conversion '.$key.' must be between '.implode(' and ',$bounds).'.');
+        foreach(['enabled','prefer_directplay','preserve_resolution','one_job_at_a_time'] as $key)if(array_key_exists($key,$cv)&&!is_bool($cv[$key]))throw new InvalidArgumentException('Choose on or off for conversion '.$key.'.');
+        $cv['one_job_at_a_time']=true;
+        if(isset($cv['preserve_resolution'])&&!$cv['preserve_resolution'])throw new InvalidArgumentException('Background conversion preserves source resolution. Playback transcoding has a resolution limit.');
+        return $cv;
+    }
+
     /** Upper bound for the admin "conversion threads" setting: the server's logical CPU count. */
     public static function maxCpuThreads(): int { return self::cpuCount(); }
 
@@ -119,6 +130,7 @@ class Convert {
         $container = isset(self::CONTAINERS[$container]) ? $container : 'mp4';
         $dir = dirname($src);
         $base = pathinfo($src, PATHINFO_FILENAME);
+        $base = (string)preg_replace('/(?:\.directplay)+$/i','',$base);
         return $dir . '/' . $base . '.directplay.' . $container;
     }
 
@@ -148,8 +160,10 @@ class Convert {
             }
         }
         $src = (string)$item['path'];
+        if(preg_match('/\.directplay\.[^.]+$/i',$src))json_error('This is already a DirectPlay copy. Choose its original source.',400);
         $container = self::container();
         $dest = self::destFor($src, $container);
+        if(is_file($dest))json_error('A DirectPlay copy already exists. Merge versions or review it in the conversion queue.',409);
         if ($dest === $src) {
             json_error('Source is already the DirectPlay .' . $container . ' output', 400);
         }
@@ -421,8 +435,6 @@ class Convert {
     public static function tick(): array {
         $settings = Store::settings();
         $cv = array_merge(self::defaults(), is_array($settings['convert'] ?? null) ? $settings['convert'] : []);
-        if (empty($cv['enabled'])) return ['ok' => false, 'reason' => 'Convert disabled'];
-
         $lock = self::lockQueue();
         if ($lock === false) {
             // Another request is ticking right now; report current state.
@@ -501,6 +513,10 @@ class Convert {
             return ['ok' => true, 'running' => $running, 'queue' => $q];
         }
 
+        if(empty($cv['enabled'])) {
+            self::saveQueue($q);self::unlockQueue($lock);
+            return ['ok'=>true,'enabled'=>false,'queue'=>$q];
+        }
         foreach ($q as &$job) {
             if (($job['status'] ?? '') !== 'queued') continue;
             $started = self::startJob($job, $cv);
@@ -523,6 +539,13 @@ class Convert {
         }
         try {
             if ($dest !== '' && $section !== '') {
+                $profiles=Store::get('directplay_profiles',[]);$profile=self::copyProfile($dest);
+                $source=(string)($job['src'] ?? $dest);$profile+=['source'=>$source,'source_size'=>(int)@filesize($source),'source_mtime'=>(int)@filemtime($source)];
+                if(isset($job['source_stat'])) {
+                    if($profile['source_size']!==$job['source_stat']['size'] || $profile['source_mtime']!==$job['source_stat']['mtime'])$profile['ready']=false;
+                    $profile['source_size']=$job['source_stat']['size'];$profile['source_mtime']=$job['source_stat']['mtime'];
+                }
+                $profiles[str_replace('\\','/',$dest)]=$profile;Store::set('directplay_profiles',$profiles);
                 $new = Catalogue::ingestFile($dest, $section);
                 if ($new) $job['dest_item_id'] = $new['id'];
             }
@@ -543,6 +566,33 @@ class Convert {
         if ($changed) self::saveRequests($reqs);
         self::audit('done job=' . ($job['id'] ?? '') . ' dest=' . $dest);
         return $job;
+    }
+
+    private static function copyProfile(string $path): array {
+        $probe=MediaProbe::probeSummary($path,8,true);$ready=self::isH264($probe['video_codec'] ?? null) && in_array($probe['pixel_format'] ?? '',['yuv420p','yuvj420p'],true);
+        foreach($probe['audio_tracks'] ?? [] as $track)if(!self::isAac($track['codec'] ?? null))$ready=false;
+        $ready=$ready && in_array(strtolower(pathinfo($path,PATHINFO_EXTENSION)),['mp4','m4v','mov'],true);
+        return ['ready'=>$ready,'size'=>(int)@filesize($path),'mtime'=>(int)@filemtime($path)];
+    }
+    public static function mergeExistingCopies(): array {
+        $paths=[];$profiles=Store::get('directplay_profiles',[]);
+        foreach(Catalogue::get()['items'] ?? [] as $it) {
+            if(preg_match('/(?:\.directplay)+\.[^.]+$/i',(string)($it['path'] ?? '')))$paths[$it['path']]=true;
+            foreach($it['directplay_versions'] ?? [] as $path)$paths[$path]=true;
+        }
+        foreach(array_keys($paths) as $path) {
+            Maintenance::checkpoint();$real=\Vaultcast\Paths::real($path);
+            if($real && is_file($real) && self::underLibraryRoot($real))$profiles[str_replace('\\','/',$real)]=array_replace($profiles[str_replace('\\','/',$real)] ?? [],self::copyProfile($real));
+        }
+        Store::set('directplay_profiles',$profiles);
+        $result=Catalogue::mergeDirectPlayVersions();
+        // Refresh flags on already grouped titles without reintroducing their hidden copies.
+        $cat=Catalogue::get();
+        foreach($cat['items'] ?? [] as $id=>$it)if(!empty($it['directplay_path'])) {
+            $profile=$profiles[$it['directplay_path']] ?? [];
+            $cat['items'][$id]['directplay_ready']=!empty($profile['ready']) && (!isset($profile['source_size']) || ((int)$profile['source_size']===(int)$it['size'] && (int)$profile['source_mtime']===(int)$it['mtime']));
+        }
+        Catalogue::save($cat);return $result;
     }
 
     private static function sanitizePreset(string $preset): string {
@@ -637,17 +687,17 @@ class Convert {
 
         // DirectPlay-smart: remux when already H.264(+AAC); copy video + AAC audio; else encode.
         if ($mode === 'directplay') {
-            if (self::isH264($srcVideo) && self::isAac($srcAudio)) {
-                $frag = '-map 0 -c copy' . $faststart . ' -f ' . $muxer;
+            $browserH264=self::isH264($srcVideo) && in_array($probe['pixel_format'] ?? '',['yuv420p','yuvj420p'],true);
+            $allAac=true;foreach($probe['audio_tracks'] ?? [] as $track)if(!self::isAac($track['codec'] ?? null))$allAac=false;
+            if ($browserH264 && $allAac) {
+                $frag = '-map 0:v:0 -map 0:a? -c copy' . $faststart . ' -f ' . $muxer;
                 return [$frag, 'DirectPlay remux (H.264+AAC copy)', 'remux'];
             }
-            if (self::isH264($srcVideo)) {
+            if ($browserH264) {
                 $frag = '-map 0:v:0 -map 0:a? -c:v copy -c:a aac -b:a ' . $abit . $threadArg . $faststart . ' -f ' . $muxer;
                 return [$frag, 'DirectPlay (video copy + AAC ' . $abit . ')', 'audio_reencode'];
             }
             // Non-H.264 source: must encode for browser DirectPlay
-            $crf = 18;
-            $preset = 'medium';
             $frag = sprintf(
                 '-map 0:v:0 -map 0:a? -c:v libx264 -preset %s -crf %d -c:a aac -b:a %s -pix_fmt yuv420p%s%s -f %s',
                 $preset, $crf, $abit, $x264Arg, $faststart, $muxer
@@ -694,6 +744,9 @@ class Convert {
         }
         $job['dest'] = self::destFor((string)$job['src'], $container);
         $job['container'] = $container;
+        if(is_file($job['dest'])) {
+            $job['status']='failed';$job['finished_at']=date('c');$job['message']='A DirectPlay output already exists. It was not overwritten.';return $job;
+        }
         if ($job['dest'] === $job['src']) {
             $job['status'] = 'failed';
             $job['finished_at'] = date('c');
@@ -714,6 +767,7 @@ class Convert {
         $dur = self::probeDuration((string)$job['src']);
         if ($dur !== null && $dur > 0) $job['duration_s'] = $dur;
         $job['progress'] = 0;
+        $job['source_stat']=['size'=>(int)filesize($job['src']),'mtime'=>(int)filemtime($job['src'])];
         $muxer = self::CONTAINERS[$container];
         $faststart = $muxer === 'matroska' ? '' : ' -movflags +faststart';
 
@@ -724,8 +778,8 @@ class Convert {
 
         // Wrapper: $1=src $2=part $3=dest $4=exit_file $5=progress_file. No -vf scale: preserve resolution.
         $inner = sprintf(
-            'nice -n %d ionice -c %d ffmpeg -nostdin -y %s -progress "$5" -nostats -i "$1" %s "$2" && mv -f "$2" "$3"; rc=$?; [ $rc -ne 0 ] && rm -f "$2"; echo $rc > "$4"',
-            $nice, $ionice, $inputThreads, $ffArgs
+            'nice -n %d ionice -c %d %s -nostdin -y %s -progress "$5" -nostats -i "$1" %s "$2" && mv -n "$2" "$3" && [ ! -e "$2" ]; rc=$?; [ $rc -ne 0 ] && rm -f "$2"; echo $rc > "$4"',
+            $nice, $ionice, escapeshellarg(Remux::ffmpegBin()), $inputThreads, $ffArgs
         );
         // setsid -> own process group so cancel can stop ffmpeg as well as the wrapper.
         $cmd = sprintf(
@@ -886,6 +940,7 @@ class Convert {
         if (!empty($job['original_removed'])) {
             json_error('Original was already replaced - cannot delete the only remaining file this way', 409);
         }
+        if(!is_file((string)($job['src'] ?? '')))json_error('The original is unavailable. Keep the remaining converted copy.',409);
 
         $dest = (string)($job['dest'] ?? '');
         $destReal = $dest !== '' ? \Vaultcast\Paths::real($dest) : false;
@@ -904,7 +959,7 @@ class Convert {
         }
 
         $destItemId = (string)($job['dest_item_id'] ?? '');
-        if ($destItemId !== '' && !in_array($destItemId, $removedIds, true)) {
+        if ($destItemId !== '' && $destItemId !== (string)($job['item_id'] ?? '') && !in_array($destItemId, $removedIds, true)) {
             $removedIds = array_merge($removedIds, Catalogue::removeIds([$destItemId]));
         }
         $removedIds = array_values(array_unique(array_filter($removedIds)));
@@ -960,6 +1015,7 @@ class Convert {
         $srcReal = $src !== '' ? \Vaultcast\Paths::real($src) : false;
         $srcExists = $srcReal !== false && is_file($srcReal);
         if ($srcExists) {
+            if(isset($job['source_stat']) && ((int)filesize($srcReal)!==$job['source_stat']['size'] || (int)filemtime($srcReal)!==$job['source_stat']['mtime']))json_error('The original changed after conversion. It was kept; review or regenerate the copy.',409);
             if ($srcReal === $destReal) json_error('Source and converted file are the same path', 400);
             if (dirname($srcReal) !== dirname($destReal)) json_error('Converted file is not beside the original - refusing to delete', 400);
             if (!self::underLibraryRoot($srcReal)) json_error('Original is outside the library roots', 400);
@@ -978,13 +1034,15 @@ class Convert {
         $section = (string)($job['section'] ?? '');
         $oldItem = !empty($job['item_id']) ? Catalogue::item((string)$job['item_id']) : null;
         if ($section === '' && $oldItem) $section = (string)($oldItem['section'] ?? '');
-        $newItem = $section !== '' ? Catalogue::ingestFile($destReal, $section) : null;
+        $newItem = $section !== '' ? Catalogue::ingestFile($destReal, $section, false) : null;
         if (!$newItem) json_error('Could not add converted file to the catalogue - original kept', 500);
         $newId = (string)$newItem['id'];
+        if(!Catalogue::item($newId))json_error('The converted version is hidden from the catalogue. Restore it before replacing the original.',409);
 
         if ($srcExists) {
             if (!@unlink($srcReal)) {
                 $err = error_get_last();
+                Catalogue::mergeDirectPlayVersions();
                 json_error('Could not delete original: ' . ($err['message'] ?? 'permission denied'), 500);
             }
             clearstatcache(true, $srcReal);
@@ -992,6 +1050,16 @@ class Convert {
 
         $oldIds = Catalogue::removePath($srcExists ? $srcReal : $src);
         $oldId = (string)($job['item_id'] ?? '');
+        // Retain the source identity so saved links, favourites and metadata pins survive.
+        if($oldId!=='' && $oldId!==$newId && (!Catalogue::item($oldId) || ($oldItem && (string)($oldItem['path'] ?? '')===$src))) {
+            $convertedId=$newId;$cat=Catalogue::get();$replacement=$cat['items'][$convertedId] ?? $newItem;
+            foreach(['title','year','show','season','episode','episode_title','poster','show_poster','season_poster'] as $field)if(isset($oldItem[$field]))$replacement[$field]=$oldItem[$field];
+            $replacement['id']=$oldId;$replacement['caption_source']=$src;unset($cat['items'][$convertedId]);$cat['items'][$oldId]=$replacement;
+            $profiles=Store::get('directplay_profiles',[]);
+            $profiles[$destReal]=array_replace($profiles[$destReal] ?? [],['canonical_id'=>$oldId,'original_removed'=>true,'source'=>$src]);
+            \Vaultcast\Database::transaction(static function()use($profiles,$cat){Store::set('directplay_profiles',$profiles);Catalogue::save($cat);});
+            Store::invalidate('catalogue');$oldIds[]=$convertedId;$newId=$oldId;
+        }
         if ($oldId !== '' && $oldId !== $newId && !in_array($oldId, $oldIds, true)) {
             // catalogue item for the original may carry an un-normalised path
             $old = Catalogue::item($oldId);
@@ -1041,7 +1109,7 @@ class Convert {
     }
 
     /** Repoint collection part links (auto or manual) from old item ids to the new one. */
-    private static function migrateCollections(array $oldIds, string $newId): int {
+    public static function migrateCollections(array $oldIds, string $newId): int {
         if (!$oldIds || !class_exists('Collections')) return 0;
         $list = Collections::all();
         $n = 0;
@@ -1058,6 +1126,19 @@ class Convert {
         unset($c);
         if ($n) Collections::save($list);
         return $n;
+    }
+
+    /** A full watch-and-prepare encode joins the existing review/replacement workflow. */
+    public static function adoptCompleted(string $itemId,string $src,string $dest,string $section): array {
+        $lock=self::lockQueue();if($lock===false)throw new RuntimeException('Conversion queue is busy. The saved copy is safe beside the original; rescan to import it.');
+        try {
+            Store::invalidate('convert_queue');$q=self::queue();
+            $job=['id'=>bin2hex(random_bytes(8)),'item_id'=>$itemId,'title'=>Catalogue::item($itemId)['title'] ?? basename($src),
+                'src'=>$src,'dest'=>$dest,'section'=>$section,'status'=>'done','progress'=>100,'created_at'=>date('c'),
+                'finished_at'=>date('c'),'message'=>'Watch-and-prepare complete; selected audio track saved. Original retained.','container'=>'mp4',
+                'source_stat'=>['size'=>(int)filesize($src),'mtime'=>(int)filemtime($src)]];
+            $job=self::onComplete($job);$q[]=$job;self::saveQueue($q);return ['job_id'=>$job['id']];
+        } finally {self::unlockQueue($lock);}
     }
 
 

@@ -1,5 +1,11 @@
 <?php
 declare(strict_types=1);
+if ($path==='/admin/transcode' && $method==='GET') json_out(Transcode::status());
+if ($path==='/admin/transcode/clear-cache' && $method==='POST') json_out(['ok'=>true,'removed'=>Transcode::cleanup(true)]);
+if (preg_match('#^/admin/transcode/([a-f0-9]{32})/stop$#D',$path,$match) && $method==='POST') {
+    try {json_out(Transcode::cancel($match[1]));}catch(InvalidArgumentException $e){json_error($e->getMessage(),404);}
+}
+if ($path==='/admin/convert/merge-versions' && $method==='POST') json_out(Maintenance::start('versions','DirectPlay duplicate repair'));
 if ($path === '/admin/convert/pending' && $method === 'GET') {
     release_request_locks();
     $pending = Convert::pendingRequests();

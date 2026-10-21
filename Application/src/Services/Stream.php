@@ -2,6 +2,13 @@
 declare(strict_types=1);
 
 class Stream {
+    public static function playbackItem(array $item): array {
+        if ((Store::settings()['convert']['prefer_directplay'] ?? true) && !empty($item['directplay_ready']) && !empty($item['directplay_path']) && is_file($item['directplay_path'])) {
+            $item['path']=$item['directplay_path'];$item['ext']=strtolower(pathinfo($item['path'],PATHINFO_EXTENSION));
+            $item['prepared_copy']=true;
+        }
+        return $item;
+    }
     /** Map library roots to internal nginx aliases */
     public static function accelMap(): array {
         $settings = Store::settings();
@@ -15,13 +22,14 @@ class Stream {
     }
 
     /** Shared token storage for library playback and Live channel playback. */
-    public static function createToken(string $userId, string $itemId, string $path, string $kind, ?string $area = null): string {
+    public static function createToken(string $userId, string $itemId, string $path, string $kind, ?string $area = null, ?string $captionSource = null): string {
         $ttl = max(3600, min(86400, (int)(Store::settings()['streaming']['token_ttl_seconds'] ?? 28800)));
         $token = bin2hex(random_bytes(24));
         $payload = [
             'token' => $token, 'item_id' => $itemId, 'user_id' => $userId,
             'path' => $path, 'expires' => time() + $ttl, 'media_kind' => $kind,
             'area' => $area ?? ($kind === 'rom' ? 'games' : 'library'),
+            'caption_source'=>$captionSource ?? $path,
         ];
         if ($kind === 'rom') {
             $payload['rom_dir'] = dirname($path);
@@ -35,6 +43,8 @@ class Stream {
         if (!$item) json_error('Not found', 404);
         $denied = AreaAccess::denied($user, AreaAccess::itemArea($item));
         if ($denied) json_out($denied[1], $denied[0]);
+        $libraryItem = $item;
+        if(empty($opts['original']))$item = self::playbackItem($item);
         $path = $item['path'] ?? '';
         if (!is_file($path)) json_error('File missing', 404);
 
@@ -66,7 +76,8 @@ class Stream {
             if ($core) $item['emu_core'] = $core;
         }
 
-        $token = self::createToken((string)$user['id'], $itemId, $path, (string)($item['media_kind'] ?? 'video'));
+        $captionSource=(string)($libraryItem['caption_source'] ?? $libraryItem['path'] ?? $path);
+        $token = self::createToken((string)$user['id'], $itemId, $path, (string)($item['media_kind'] ?? 'video'),null,$captionSource);
 
         $base = rtrim(\Vaultcast\Database::basePath(), '/');
         // Issue playback tokens without waiting for optional media analysis.
@@ -110,6 +121,10 @@ class Stream {
             $sidecars = self::romSidecarFiles($path, $token);
         }
         return [
+            'transcode_allowed'=>Transcode::allowed() && Transcode::eligible($libraryItem),
+            'transcode_mode'=>Transcode::settings()['mode'],
+            'transcode_save_allowed'=>Transcode::allowed() && Transcode::eligible($libraryItem) && empty($libraryItem['directplay_path']) && !preg_match('/\.directplay\.[^.]+$/i',(string)$libraryItem['path']) && !empty(Transcode::settings()['allow_save']) && ($user['role'] ?? '')==='admin',
+            'prepared_copy'=>!empty($item['prepared_copy']),
             'progress' => $progress,
             'resume_position' => $progress ? $progress['position'] : 0,
             'ok' => true,
@@ -128,7 +143,7 @@ class Stream {
             'rom_sidecars' => $sidecars,
             'mime' => self::mimeFor($item['ext'], $item['media_kind']),
             'audio_tracks' => $audioTracks,
-            'subtitles' => ($item['media_kind'] ?? '') === 'video' ? Subtitles::tracks($path, $token) : [],
+            'subtitles' => ($item['media_kind'] ?? '') === 'video' ? Subtitles::tracks($path, $token, $captionSource) : [],
             'subtitle_search' => ($item['media_kind'] ?? '') === 'video' && OpenSubtitles::allowed($user),
             'subtitle_upload' => ($item['media_kind'] ?? '') === 'video' && Subtitles::uploadAllowed($user),
             'audio_count' => count($audioTracks),

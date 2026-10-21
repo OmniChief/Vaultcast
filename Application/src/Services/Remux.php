@@ -15,7 +15,7 @@ final class Remux {
     /** Remuxing is server-side processing: allowed only when the admin turned "DirectPlay only" off. */
     public static function enabled(): bool {
         $st = Store::settings()['streaming'] ?? [];
-        return is_array($st) && array_key_exists('directplay_only', $st) && $st['directplay_only'] === false;
+        return is_array($st) && array_key_exists('directplay_only', $st) && $st['directplay_only'] === false && ($st['allow_remux'] ?? true) !== false;
     }
 
     /** Video keyframe times (seconds) between $from and $to, via ffprobe without decoding. */
@@ -149,11 +149,16 @@ final class Remux {
     /** ffmpeg argv (no shell). $audioCodec is the source codec of the chosen track. */
     public static function arguments(string $path, int $audio, float $start, ?string $audioCodec, string $bin = 'ffmpeg'): array {
         $args = [$bin, '-hide_banner', '-loglevel', 'error', '-nostdin'];
+        $config=Transcode::settings();$threads=Convert::sanitizeThreadCount($config['threads']);
+        $args=array_merge($args,Convert::threadOptions($threads,'copy')['input']);
         if ($start > 0) array_push($args, '-ss', sprintf('%.3F', $start));
         array_push($args, '-i', $path, '-map', '0:v:0?', '-map', '0:a:' . $audio, '-c:v', 'copy');
         if (in_array(strtolower((string)$audioCodec), self::BROWSER_AUDIO, true)) array_push($args, '-c:a', 'copy');
-        else array_push($args, '-c:a', 'aac', '-ac', '2', '-b:a', '192k');
-        array_push($args, '-sn', '-dn', '-map_metadata', '-1', '-f', 'mp4',
+        else {
+            array_push($args, '-c:a', 'aac', '-b:a', $config['audio_bitrate']);
+            if($config['audio_channels']==='2')array_push($args,'-ac','2');
+        }
+        array_push($args, '-threads:a',(string)$threads,'-sn', '-dn', '-map_metadata', '-1', '-f', 'mp4',
             '-movflags', 'frag_keyframe+empty_moov+default_base_moof', '-frag_duration', '1000000', 'pipe:1');
         return $args;
     }
@@ -165,7 +170,7 @@ final class Remux {
         if (!self::enabled()) {
             http_response_code(403);
             header('Content-Type: application/json');
-            echo json_encode(['ok' => false, 'error' => 'Audio track switching is disabled: the administrator has DirectPlay only turned on.', 'directplay_only' => true]);
+            echo json_encode(['ok' => false, 'error' => 'Audio remuxing is disabled in DirectPlay Settings.', 'directplay_only' => (Store::settings()['streaming']['directplay_only'] ?? true) !== false]);
             exit;
         }
         $payload = \Vaultcast\Repository::playbackToken($token);

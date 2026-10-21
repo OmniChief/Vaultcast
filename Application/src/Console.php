@@ -16,6 +16,7 @@ require __DIR__ . '/bootstrap.php';
 try {
     set_time_limit(0);
     switch ($command) {
+        case 'transcode': $result=Transcode::run($argv[2] ?? ''); break;
         case 'maintenance':
             $result = Maintenance::run($argv[2] ?? '');
             break;

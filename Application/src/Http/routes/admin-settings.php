@@ -40,11 +40,21 @@ if ($path === '/admin/settings' && $method === 'GET') {
     $cv['max_threads'] = Convert::cpuCount();
     $cv['threads'] = Convert::sanitizeThreadCount($cv['threads'] ?? 1, $cv['max_threads']);
     $out['convert'] = $cv;
+    $out['transcoding'] = Transcode::settings();
+    $out['transcoding']['max_threads'] = Convert::cpuCount();
     json_out(['ok' => true, 'settings' => OpenSubtitles::maskSettings($out)]);
 }
 
 if ($path === '/admin/settings' && $method === 'POST') {
     $b = body_json();
+    try {
+        if(isset($b['transcoding'])) {
+            if(!is_array($b['transcoding']))throw new InvalidArgumentException('Invalid transcoding settings.');
+            unset($b['transcoding']['max_threads']);
+            $b['transcoding']=Transcode::validate($b['transcoding']);
+        }
+        foreach(['directplay_only','allow_remux'] as $flag)if(isset($b['streaming']) && array_key_exists($flag,$b['streaming']) && !is_bool($b['streaming'][$flag]))throw new InvalidArgumentException('Choose on or off for '.$flag.'.');
+    } catch(InvalidArgumentException $e){json_error($e->getMessage(),422);}
     if (isset($b['app_name'])) {
         $b['app_name'] = trim((string)$b['app_name']);
         if ($b['app_name'] === '' || mb_strlen($b['app_name']) > 80) json_error('Site name must contain 1–80 characters.');
@@ -56,6 +66,7 @@ if ($path === '/admin/settings' && $method === 'POST') {
     }
     if (isset($b['convert']) && is_array($b['convert'])) {
         unset($b['convert']['max_threads']); // reported by the server, never stored
+        try {$b['convert']=Convert::validateSettings($b['convert']);}catch(InvalidArgumentException $e){json_error($e->getMessage(),422);}
         if (array_key_exists('threads', $b['convert'])) {
             $max = Convert::cpuCount();
             $t = Convert::validThreadCount($b['convert']['threads'], $max);
