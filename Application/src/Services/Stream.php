@@ -123,6 +123,7 @@ class Stream {
         return [
             'transcode_allowed'=>Transcode::allowed() && Transcode::eligible($libraryItem),
             'transcode_mode'=>Transcode::settings()['mode'],
+            'active_conversion'=>Transcode::allowed() && Transcode::eligible($libraryItem)?Transcode::activeFor((string)$libraryItem['id'],(string)$user['id']):null,
             'transcode_save_allowed'=>Transcode::allowed() && Transcode::eligible($libraryItem) && empty($libraryItem['directplay_path']) && !preg_match('/\.directplay\.[^.]+$/i',(string)$libraryItem['path']) && !empty(Transcode::settings()['allow_save']) && ($user['role'] ?? '')==='admin',
             'prepared_copy'=>!empty($item['prepared_copy']),
             'progress' => $progress,

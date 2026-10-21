@@ -110,6 +110,14 @@ final class Transcode {
             return self::publicJob($job);
         } finally {flock($lock,LOCK_UN);fclose($lock);}
     }
+    public static function activeFor(string $itemId,string $owner): ?array {
+        foreach(glob(self::root().'/*/session.json') ?: [] as $file){
+            $job=json_decode((string)@file_get_contents($file),true) ?: [];
+            if(($job['item_id'] ?? '')===$itemId && ($job['owner'] ?? '')===$owner && in_array($job['status'] ?? '',['queued','running','saving'],true)
+                && !is_file(dirname($file).'/cancel') && time()-(int)($job['updated_at'] ?? 0)<150)return self::publicJob($job);
+        }
+        return null;
+    }
     private static function publicJob(array $job): array {
         $base=\Vaultcast\Database::basePath().'api/stream/transcode?t='.rawurlencode($job['token']).'&s='.$job['id'].'&file=';
         $playlist=self::dir($job['id']).'/index.m3u8';
