@@ -35,7 +35,7 @@ final class Installer
         $account = $pdo->quote($connection['user']) . "@'localhost'";
         $pdo->exec('CREATE DATABASE IF NOT EXISTS ' . $name . ' CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci');
         $pdo->exec('CREATE USER IF NOT EXISTS ' . $account . ' IDENTIFIED BY ' . $pdo->quote($connection['password']));
-        $pdo->exec('GRANT SELECT,INSERT,UPDATE,DELETE,CREATE,INDEX ON ' . $name . '.* TO ' . $account);
+        $pdo->exec('GRANT SELECT,INSERT,UPDATE,DELETE,CREATE,INDEX,ALTER ON ' . $name . '.* TO ' . $account);
         Database::connect(['database' => $connection]);
         $file = dirname(__DIR__) . '/data/setup-database.php';
         $temporary = $file . '.tmp';
@@ -227,7 +227,7 @@ final class Installer
                     $appPassword = bin2hex(random_bytes(32));
                     $account = $pdo->quote($appUser) . "@'localhost'";
                     $pdo->exec('CREATE USER ' . $account . ' IDENTIFIED BY ' . $pdo->quote($appPassword));
-                    $pdo->exec('GRANT SELECT,INSERT,UPDATE,DELETE,CREATE,INDEX ON `' . $name . '`.* TO ' . $account);
+                    $pdo->exec('GRANT SELECT,INSERT,UPDATE,DELETE,CREATE,INDEX,ALTER ON `' . $name . '`.* TO ' . $account);
                     $config['database']['user'] = $appUser;
                     $config['database']['password'] = $appPassword;
                     $pdo = Database::connect($config);

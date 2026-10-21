@@ -82,6 +82,7 @@ Function WritePhpIni
   FileWrite $9 'extension_dir="$1"$\r$\n'
   FileWrite $9 'extension=pdo_mysql$\r$\nextension=mbstring$\r$\nextension=fileinfo$\r$\n'
   FileWrite $9 'extension=curl$\r$\nextension=openssl$\r$\nextension=gd$\r$\n'
+  FileWrite $9 'extension=zip$\r$\nzend_extension=opcache$\r$\nopcache.enable=1$\r$\nopcache.validate_timestamps=1$\r$\nopcache.revalidate_freq=2$\r$\n'
   FileWrite $9 'cgi.fix_pathinfo=0$\r$\ndisplay_errors=Off$\r$\nlog_errors=On$\r$\n'
   FileWrite $9 'error_log="$2"$\r$\n'
   FileWrite $9 'session.save_path="$3"$\r$\n'
@@ -170,6 +171,10 @@ Function PrepareDatabase
       nsExec::ExecToLog '"$SYSDIR\net.exe" start VaultcastDatabase'
       Pop $0
       StrCpy $DbDepend '  <depend>VaultcastDatabase</depend>$\r$\n'
+      ${If} ${FileExists} "$Runtime\database.ini"
+        !insertmacro RunChecked '"$Php" -c "$Runtime\php.ini" "$PLUGINSDIR\setup-helper.php" provision "$INSTDIR" "$Runtime\database.ini"' \
+          "The managed database permissions could not be repaired."
+      ${EndIf}
     ${EndIf}
     Return
   ${EndIf}

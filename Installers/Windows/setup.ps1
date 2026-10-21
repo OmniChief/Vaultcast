@@ -315,7 +315,22 @@ function Get-MariaDBBin {
 function Prepare-Database {
     $script:databaseDependency = @()
     if ((Test-Path -LiteralPath (Join-Path $installRoot 'config.php')) -or (Test-Path -LiteralPath (Join-Path $installRoot 'data/config.php'))) {
-        if (Get-Service VaultcastDatabase -ErrorAction SilentlyContinue) { Start-Service VaultcastDatabase; $script:databaseDependency = @('VaultcastDatabase') }
+        if (Get-Service VaultcastDatabase -ErrorAction SilentlyContinue) {
+            Start-Service VaultcastDatabase
+            $script:databaseDependency = @('VaultcastDatabase')
+            $managedIni = Join-Path $runtime 'database.ini'
+            $managedSecret = Join-Path $runtime 'database-secret.txt'
+            if (Test-Path -LiteralPath $managedIni) {
+                & $phpExe -c $ini (Join-Path $PSScriptRoot 'NSIS/support/setup-helper.php') provision $installRoot $managedIni
+                if ($LASTEXITCODE -ne 0) { throw 'The managed database permissions could not be repaired.' }
+            } elseif (Test-Path -LiteralPath $managedSecret) {
+                $secret = Get-Content -LiteralPath $managedSecret -Raw | ConvertTo-SecureString
+                $managed = [Net.NetworkCredential]::new('', $secret).Password
+                $provision = 'require $argv[1]; require $argv[2]; Vaultcast\Installer::prepareWindowsDatabase(json_decode(stream_get_contents(STDIN),true));'
+                $managed | & $phpExe -c $ini -r $provision (Join-Path $installRoot 'src/Database.php') (Join-Path $installRoot 'src/Installer.php')
+                if ($LASTEXITCODE -ne 0) { throw 'The managed database permissions could not be repaired.' }
+            }
+        }
         return
     }
     if ($ExternalDatabase -or (!$basic -and (Read-Host 'Database: 1 = automatic local database, 2 = enter an existing connection in the browser [1]') -eq '2')) {
@@ -513,7 +528,7 @@ foreach ($id in @('VaultcastWeb','VaultcastPHP','VaultcastNetplay','VaultcastDat
 New-Item -ItemType Directory -Path $installRoot -Force | Out-Null
 # Copy application files only. Updates never replace saved data or configuration.
 if ($sourceRoot.TrimEnd('\') -ne $installRoot) {
-    foreach ($entry in @('index.php','manifest.json','sw.js','VERSION','assets','src','deploy','docs')) {
+    foreach ($entry in @('index.php','router.php','.htaccess','manifest.json','sw.js','VERSION','assets','src','deploy')) {
         Copy-Item -LiteralPath (Join-Path $sourceRoot $entry) -Destination $installRoot -Recurse -Force
     }
     New-Item -ItemType Directory -Path (Join-Path $installRoot 'netplay') -Force | Out-Null
@@ -543,11 +558,11 @@ if (Test-Path -LiteralPath $databaseState) {
     $databaseSettings = [Net.NetworkCredential]::new('', $secret).Password | ConvertFrom-Json
     $script:reservedPorts += [int]$databaseSettings.port
 }
-$webDefault = if (!$basic -and $saved.webPort) { [int]$saved.webPort } else { $LibraryPort }
+$webDefault = if ($saved.webPort) { [int]$saved.webPort } else { $LibraryPort }
 $webPort = Choose-Port 'Library port' $webDefault -Public
-$phpPort = Choose-Port 'Private PHP port' $(if (!$Unattended -and $saved.phpPort) { [int]$saved.phpPort } else { $FastCgiPort })
-$netplayPort = Choose-Port 'Private multiplayer port' $(if (!$Unattended -and $saved.netplayPort) { [int]$saved.netplayPort } else { $RelayPort })
-$listenAddress = if (!$basic -and $saved.listenAddress) { $saved.listenAddress } else { '0.0.0.0' }
+$phpPort = Choose-Port 'Private PHP port' $(if ($saved.phpPort) { [int]$saved.phpPort } else { $FastCgiPort })
+$netplayPort = Choose-Port 'Private multiplayer port' $(if ($saved.netplayPort) { [int]$saved.netplayPort } else { $RelayPort })
+$listenAddress = if ($saved.listenAddress) { $saved.listenAddress } else { '0.0.0.0' }
 if (!$basic) { $answer=Read-Host "Listen address [$listenAddress; use 127.0.0.1 for this PC only]"; if ($answer) { $listenAddress=$answer } }
 $address=$null
 if (![Net.IPAddress]::TryParse($listenAddress,[ref]$address) -or $address.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork) { throw 'Enter an IPv4 listen address.' }
@@ -584,6 +599,11 @@ extension=fileinfo
 extension=curl
 extension=openssl
 extension=gd
+extension=zip
+zend_extension=opcache
+opcache.enable=1
+opcache.validate_timestamps=1
+opcache.revalidate_freq=2
 cgi.fix_pathinfo=0
 display_errors=Off
 log_errors=On

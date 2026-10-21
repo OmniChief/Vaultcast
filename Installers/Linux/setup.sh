@@ -33,7 +33,7 @@ node_major() { command -v node >/dev/null && node -p 'process.versions.node.spli
 node_ready() { [[ "$(node_major)" -ge 18 ]] && command -v npm >/dev/null; }
 apt_updated=false
 # Multiplayer needs Node.js 18+. Use the distribution's package when it is new enough,
-# otherwise install Node.js 20 from NodeSource (amd64 and arm64).
+# otherwise install Node.js 22 from NodeSource (amd64 and arm64).
 ensure_node() {
     node_ready && return 0
     $apt_updated || { as_root apt-get update && apt_updated=true; }
@@ -43,16 +43,16 @@ ensure_node() {
     if [[ "$candidate" =~ ^[0-9]+$ ]] && (( candidate >= 18 )); then
         as_root apt-get install -y nodejs npm && node_ready && return 0
     fi
-    echo 'The distribution Node.js is older than the multiplayer relay needs; installing Node.js 20 from NodeSource.'
+    echo 'The distribution Node.js is older than the multiplayer relay needs; installing Node.js 22 from NodeSource.'
     local script; script="$(mktemp)"
     if { ! dpkg -s npm >/dev/null 2>&1 || as_root apt-get remove -y npm; } &&   # Ubuntu's npm conflicts with NodeSource nodejs
        as_root apt-get install -y curl ca-certificates gnupg &&
-       curl -fsSL https://deb.nodesource.com/setup_20.x -o "$script" &&
+       curl -fsSL https://deb.nodesource.com/setup_22.x -o "$script" &&
        as_root bash "$script" && as_root apt-get install -y nodejs && node_ready; then
         rm -f "$script"; return 0
     fi
     rm -f "$script"
-    echo 'Node.js 20 could not be installed from NodeSource (https://deb.nodesource.com), so multiplayer cannot be set up.'
+    echo 'Node.js 22 could not be installed from NodeSource (https://deb.nodesource.com), so multiplayer cannot be set up.'
     echo 'Check the network, then rerun setup. To install without multiplayer, rerun with VAULTCAST_SKIP_MULTIPLAYER=1.'
     exit 1
 }
@@ -117,7 +117,7 @@ configure_transmission() {
 setup_relay() {
     local dir="$1"
     [[ -f "$dir/netplay/package.json" ]] || { as_root mkdir -p "$dir/netplay"; as_root cp netplay/server.js netplay/package.json netplay/package-lock.json "$dir/netplay/"; as_root chown -R www-data:www-data "$dir/netplay"; }
-    [[ -d "$dir/netplay/node_modules" ]] || (cd "$dir/netplay" && as_root npm ci --omit=dev --no-audit --no-fund)
+    [[ -d "$dir/netplay/node_modules" ]] || (cd "$dir/netplay" && as_root npm ci --omit=dev --ignore-scripts --no-audit --no-fund)
     if [[ ! -f /etc/systemd/system/vaultcast-netplay.service ]]; then
         sed "s|/srv/vaultcast|$dir|g" deploy/vaultcast-netplay.service.example | as_root tee /etc/systemd/system/vaultcast-netplay.service >/dev/null
         as_root systemctl daemon-reload
@@ -127,7 +127,7 @@ setup_relay() {
 echo 'Vaultcast — native Linux setup for Ubuntu 20.04+ (x86-64, arm64) and Debian 11+. Packages are installed only with your approval.'
 . /etc/os-release
 if [[ "${ID:-}" != ubuntu && "${ID:-}" != debian ]]; then
-    echo 'Automatic installation supports Debian and Ubuntu. For other Linux systems, install the dependencies using your package manager and follow docs/installation.md.'
+    echo 'Automatic installation supports Debian and Ubuntu. For other Linux systems, install the dependencies using your package manager and configure Application/deploy/nginx.conf.example for Application/.'
     exit 1
 fi
 architecture="$(dpkg --print-architecture)"
@@ -148,7 +148,7 @@ fi
 if [[ "$ID" == debian ]] && dpkg --compare-versions "$VERSION_ID" lt 11; then
     echo 'Use Debian 11 or newer for native dependency installation.'; exit 1
 fi
-if confirm 'Install missing nginx, PHP-FPM/CLI/extensions, and MariaDB? (Node.js 20 for multiplayer is set up automatically.)'; then
+if confirm 'Install missing nginx, PHP-FPM/CLI/extensions, and MariaDB? (Node.js 22 for multiplayer is set up automatically.)'; then
     if as_root apt-get update; then apt_updated=true; else
         echo 'Package indexes could not be downloaded. Check the network and configured APT repositories.'; exit 1
     fi
@@ -165,7 +165,7 @@ if confirm 'Install missing nginx, PHP-FPM/CLI/extensions, and MariaDB? (Node.js
             echo 'Enable the official distribution repositories in Software & Updates, then rerun setup.'; exit 1
         fi
     fi
-    as_root apt-get install -y --no-upgrade nginx php-fpm php-cli php-mysql php-mbstring php-curl php-xml php-gd mariadb-server
+    as_root apt-get install -y --no-upgrade nginx php-fpm php-cli php-mysql php-mbstring php-curl php-xml php-gd php-zip php-opcache mariadb-server
 fi
 if ! command -v transmission-daemon >/dev/null && confirm 'Install optional Transmission for download integration? (Not needed for existing media)'; then
     as_root apt-get install -y transmission-daemon curl
@@ -205,14 +205,14 @@ site="/etc/nginx/sites-available/vaultcast-$web_port"
 as_root systemctl enable --now mariadb nginx
 [[ -z "$(as_root mariadb -N -B -e "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='$db_name'")" ]] || { echo 'That database already exists; choose another name.'; exit 1; }
 as_root mkdir -p "$destination"
-for entry in index.php manifest.json sw.js VERSION assets src deploy docs; do as_root cp -R -- "$entry" "$destination/"; done
+for entry in index.php router.php .htaccess manifest.json sw.js VERSION assets src deploy; do as_root cp -R -- "$entry" "$destination/"; done
 # Vaultcast's licence and third-party notice. Distribution packages bring their own
 # licences (/usr/share/doc/<package>/copyright); the relay's npm packages keep theirs in node_modules.
 as_root cp ../LICENSE ../NOTICE "$destination/"
 as_root mkdir "$destination/netplay"
 as_root cp netplay/server.js netplay/package.json netplay/package-lock.json "$destination/netplay/"
 as_root mkdir -p "$destination/data"
-# The in-app updater replaces allowlisted files (index.php, assets/, src/, docs/, deploy/, netplay/, ...)
+# The in-app updater replaces allowlisted files (index.php, assets/, src/, deploy/, netplay/, ...)
 # and stages/backs up under data/updates, so the app tree belongs to the PHP-FPM user (www-data).
 as_root chown -R www-data:www-data "$destination"
 as_root chmod 755 "$destination"
@@ -240,4 +240,4 @@ url_host="$listen_address"
 [[ "$url_host" != 0.0.0.0 ]] || url_host=localhost
 echo "Open http://$url_host:$web_port to name the site, create the administrator and choose media folders."
 $multiplayer || echo 'Multiplayer was skipped (VAULTCAST_SKIP_MULTIPLAYER). Rerun setup without it to add the relay.'
-echo 'The installer can use the database created by setup. Keep data writable; make the application directory read-only after installation.'
+echo 'The installer can use the database created by setup. Keep data writable; keep the application directory writable by PHP so Settings can install updates.'

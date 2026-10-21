@@ -10,7 +10,7 @@
 #    admin details (or reads VAULTCAST_DB_ADMIN_CNF, a client option file).
 # Why not apt? TOS pins php-common, php7.4-* and nginx to priority -1
 # (/etc/apt/preferences.d/lock_system_packages.pref); overriding that would change NAS defaults.
-#  * Multiplayer: official Node.js 20 prebuilt under $APP/node + vaultcast-netplay.service (loopback 3100).
+#  * Multiplayer: official Node.js 22 prebuilt under $APP/node + vaultcast-netplay.service (loopback 3100).
 #  * Downloads: connects the App Center Transmission (auto-detects RPC port/auth; never edits it).
 # Safe to rerun: an existing installation only gets missing optional features.
 # Usage (as root, from this folder of a Vaultcast checkout):
@@ -32,8 +32,10 @@ export LD_LIBRARY_PATH=$PHPROOT/lib
 
 [ "$(id -u)" = 0 ] || { echo 'Run as root.'; exit 1; }
 [ -x "$FPM" ] && [ -x "$PHPBIN" ] || { echo 'Install the PHP74 app from TOS App Center first.'; exit 1; }
-[[ "$APP" =~ ^/[a-zA-Z0-9_./-]+$ ]] || { echo 'Use an absolute path without spaces.'; exit 1; }
-[[ "$PORT" =~ ^[0-9]+$ && "$PORT" -ge 1024 ]] || { echo 'Choose a port from 1024 to 65535.'; exit 1; }
+[[ "$APP" =~ ^/[a-zA-Z0-9_./-]+$ && "$APP" != / ]] || { echo 'Use an absolute path without spaces.'; exit 1; }
+[[ "$PORT" =~ ^[0-9]+$ && "$PORT" -ge 1024 && "$PORT" -le 65535 && "$PORT" -ne 3100 ]] || { echo 'Choose a port from 1024 to 65535.'; exit 1; }
+[[ "$DB" =~ ^[a-zA-Z0-9_]{1,32}$ ]] || { echo 'Use letters, digits and underscores for VAULTCAST_DB (maximum 32 characters).'; exit 1; }
+[[ "$U" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || { echo 'Use a valid service account name for VAULTCAST_USER.'; exit 1; }
 # First run creates everything fresh and refuses to reuse anything that already exists.
 # A rerun on an existing installation only completes the optional features below.
 if [ -e "$APP/etc/php/php-fpm.conf" ] && [ -e $UNITS/vaultcast-nginx.service ] && getent passwd "$U" >/dev/null; then
@@ -48,13 +50,14 @@ done
 ! ss -ltn | awk '{print $4}' | grep -q ":$PORT\$" || { echo "Port $PORT is in use."; exit 1; }
 useradd -r -U -M -d "$APP" -s /usr/sbin/nologin "$U"
 mkdir -p "$APP"/{app/data,sessions,logs,etc/php,etc/nginx}
-for e in index.php manifest.json sw.js VERSION assets src deploy docs; do cp -R "$e" "$APP/app/"; done
+for e in index.php router.php .htaccess manifest.json sw.js VERSION assets src deploy; do cp -R "$e" "$APP/app/"; done
 cp ../LICENSE ../NOTICE "$APP/app/" 2>/dev/null || true
 
 {
     echo "extension_dir=$EXT"
     for x in mysqlnd pdo xml mbstring curl gd ctype dom fileinfo iconv json mysqli pdo_mysql posix simplexml tokenizer xmlreader xmlwriter zip exif sockets; do echo "extension=$x.so"; done
     echo 'zend_extension=opcache.so'
+    echo 'opcache.enable=1'; echo 'opcache.validate_timestamps=1'; echo 'opcache.revalidate_freq=2'
     echo 'memory_limit=256M'; echo 'upload_max_filesize=16M'; echo 'post_max_size=16M'
     echo 'date.timezone=UTC'; echo 'expose_php=Off'
     echo "session.save_path=$APP/sessions"
@@ -106,7 +109,8 @@ C
 cat > $UNITS/vaultcast-php-fpm.service <<C
 [Unit]
 Description=Vaultcast PHP-FPM 7.4 (separate pool)
-After=network.target tnas-mntdata.service
+After=network.target tnas-mntdata.service mysql.service mysqld.service mariadb.service
+Wants=tnas-mntdata.service
 [Service]
 Type=simple
 RuntimeDirectory=vaultcast-php
@@ -134,7 +138,7 @@ WantedBy=multi-user.target
 C
 
 # The in-app updater (src/Services/Updater.php) rewrites every allowlisted path (index.php, assets/,
-# src/, docs/, deploy/, netplay/, ...) and stages/backs up under data/updates, so the whole app
+# src/, deploy/, netplay/, ...) and stages/backs up under data/updates, so the whole app
 # folder belongs to the PHP-FPM pool user. etc/ (PHP/nginx config, secrets) stays root-only.
 chown -R root:root "$APP/etc"; chown -R "$U:$U" "$APP/app"; chmod -R go-w "$APP/app"
 chown "$U:$U" "$APP/logs" "$APP/sessions"
@@ -193,7 +197,7 @@ SQL
     fi
 fi
 
-# ---- Multiplayer relay: official Node.js 20 prebuilt (checksum verified) under $APP/node ----
+# ---- Multiplayer relay: official Node.js 22 prebuilt (checksum verified) under $APP/node ----
 if [[ "${VAULTCAST_SKIP_MULTIPLAYER:-}" =~ ^(1|y|yes|true)$ ]]; then
     echo 'Multiplayer skipped (VAULTCAST_SKIP_MULTIPLAYER).'
 else
@@ -201,7 +205,7 @@ else
     if [ -z "$node_arch" ]; then echo 'No Node.js build for this CPU; multiplayer skipped.'
     else
         if [ ! -x "$APP/node/bin/node" ]; then
-            tmp="$(mktemp -d)"; base=https://nodejs.org/dist/latest-v20.x
+            tmp="$(mktemp -d)"; base=https://nodejs.org/dist/latest-v22.x
             curl -fsSL "$base/SHASUMS256.txt" -o "$tmp/SHASUMS256.txt"
             file="$(grep -o "node-v[0-9.]*-linux-$node_arch.tar.gz" "$tmp/SHASUMS256.txt" | head -n 1)"
             curl -fsSL "$base/$file" -o "$tmp/$file"
@@ -214,7 +218,7 @@ else
             mkdir -p "$APP/app/netplay"
             cp netplay/server.js netplay/package.json netplay/package-lock.json "$APP/app/netplay/"
             npm_cache="$(mktemp -d)"
-            (cd "$APP/app/netplay" && PATH="$APP/node/bin:$PATH" npm ci --omit=dev --no-audit --no-fund --cache "$npm_cache" >/dev/null)
+            (cd "$APP/app/netplay" && PATH="$APP/node/bin:$PATH" npm ci --omit=dev --ignore-scripts --no-audit --no-fund --cache "$npm_cache" >/dev/null)
             rm -rf "$npm_cache"; chown -R "$U:$U" "$APP/app/netplay"
         fi
         if [ ! -e $UNITS/vaultcast-netplay.service ]; then
