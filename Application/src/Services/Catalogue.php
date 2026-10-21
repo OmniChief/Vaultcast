@@ -2474,6 +2474,40 @@ class Catalogue {
     }
 
 
+    /**
+     * Attach a prepared copy to its library item as the direct-play variant. Never adds a new
+     * catalogue entry; a stray entry for the copy itself is dropped. Returns the item or null.
+     */
+    public static function attachDirectPlay(string $itemId, string $copyPath, bool $ready): ?array {
+        $copyPath=str_replace('\\','/',$copyPath);
+        if($itemId===''||$copyPath===''||!is_file($copyPath))return null;
+        $cat=self::get();$item=$cat['items'][$itemId] ?? null;
+        if(!$item||str_replace('\\','/',(string)($item['path'] ?? ''))===$copyPath)return null;
+        foreach($cat['items'] ?? [] as $id=>$it)if((string)$id!==$itemId&&str_replace('\\','/',(string)($it['path'] ?? ''))===$copyPath)unset($cat['items'][$id]);
+        $versions=array_values(array_filter($item['directplay_versions'] ?? [],static function($p)use($copyPath){return $p!==$copyPath&&is_file($p);}));
+        array_unshift($versions,$copyPath);
+        $item['directplay_versions']=$versions;$item['directplay_path']=$copyPath;$item['directplay_ready']=$ready;
+        $cat['items'][$itemId]=$item;$cat['item_count']=count($cat['items']);
+        self::save($cat,false);Store::invalidate('catalogue');
+        return $item;
+    }
+
+    /** Remove a deleted prepared copy from its item's direct-play links. Returns true when changed. */
+    public static function detachDirectPlay(string $itemId, array $copyPaths): bool {
+        $copyPaths=array_values(array_filter(array_map(static function($p){return str_replace('\\','/',(string)$p);},$copyPaths)));
+        $item=$itemId!==''?self::item($itemId):null;
+        if(!$item||!$copyPaths)return false;
+        $versions=$item['directplay_versions'] ?? [];
+        $linked=in_array((string)($item['directplay_path'] ?? ''),$copyPaths,true)||array_intersect($versions,$copyPaths);
+        if(!$linked)return false;
+        $cat=self::get();if(!isset($cat['items'][$itemId]))return false;
+        $versions=array_values(array_filter($versions,static function($p)use($copyPaths){return !in_array($p,$copyPaths,true)&&is_file($p);}));
+        unset($cat['items'][$itemId]['directplay_path'],$cat['items'][$itemId]['directplay_versions'],$cat['items'][$itemId]['directplay_ready']);
+        if($versions){$cat['items'][$itemId]['directplay_versions']=$versions;$cat['items'][$itemId]['directplay_path']=$versions[0];$cat['items'][$itemId]['directplay_ready']=!empty(Store::get('directplay_profiles',[])[$versions[0]]['ready']);}
+        self::save($cat,false);Store::invalidate('catalogue');
+        return true;
+    }
+
     /** drop catalogue entries whose path is $path (exact or realpath). Returns removed ids. */
     public static function removePath(string $path): array {
         if ($path === '') return [];

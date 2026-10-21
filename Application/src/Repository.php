@@ -384,10 +384,39 @@ final class Repository
         } finally { flock($lock, LOCK_UN); fclose($lock); }
     }
 
+    const PROGRESS_MAX_BYTES = 1048576;
+
+    /**
+     * One-time repair for progress rows whose viewing_armed flag was re-quoted on every save
+     * (it grew to tens of MB and exhausted PHP memory on play and show pages).
+     */
+    public static function healProgressOnce(): void
+    {
+        static $done = false;
+        if ($done) return;
+        $done = true;
+        if (!defined('STREAM_DATA')) return;
+        $flag = STREAM_DATA . '/runtime/progress-armed-repair-v1.done';
+        if (is_file($flag)) return;
+        $dir = dirname($flag);
+        if (!is_dir($dir) && !@mkdir($dir, 0775, true)) return;
+        $lock = @fopen($flag . '.lock', 'c');
+        if (!$lock) return;
+        try {
+            if (!flock($lock, LOCK_EX | LOCK_NB) || is_file($flag)) return;
+            $n = Database::connection()->exec("UPDATE vaultcast_progress SET payload=JSON_SET(payload,'$.viewing_armed',0) WHERE LOCATE('\"viewing_armed\": \"',payload)>0 OR LOCATE('\"viewing_armed\":\"',payload)>0");
+            @file_put_contents($flag, date('c') . ' repaired=' . (int)$n . "\n");
+        } catch (\Throwable $e) {
+            error_log('Vaultcast progress repair failed: ' . $e->getMessage());
+        } finally { flock($lock, LOCK_UN); fclose($lock); }
+    }
+
     /** One item's progress — used by play-token issue (avoid loading the whole map). */
     public static function progressItem(string $userId, string $itemId): ?array
     {
-        $s = Database::connection()->prepare('SELECT payload FROM vaultcast_progress WHERE user_id=? AND item_id=? LIMIT 1');
+        self::healProgressOnce();
+        // A progress entry is a few hundred bytes; never pull an oversized row into PHP.
+        $s = Database::connection()->prepare('SELECT payload FROM vaultcast_progress WHERE user_id=? AND item_id=? AND LENGTH(payload)<=' . self::PROGRESS_MAX_BYTES . ' LIMIT 1');
         $s->execute([$userId, $itemId]);
         $v = $s->fetchColumn();
         if ($v === false) return null;
@@ -402,6 +431,7 @@ final class Repository
      */
     public static function saveProgress(string $userId, string $itemId, array $progress): void
     {
+        self::healProgressOnce();
         // Count completion edges atomically in the existing write: no extra query per tick.
         // A fresh viewing must return to the first tenth before it can complete again.
         $duration=max(0.0,(float)($progress['duration'] ?? 0));
@@ -412,8 +442,11 @@ final class Repository
         $progress['viewings']=max(0,(int)($progress['viewings']??($finished?1:0)));
         $progress['viewing_armed']=max(0,min(1,(int)($progress['viewing_armed']??($start?1:0))));
         $previous="GREATEST(COALESCE(JSON_EXTRACT(payload,'$.viewings'),0),CASE WHEN COALESCE(JSON_EXTRACT(payload,'$.watched'),0)=1 OR (COALESCE(JSON_EXTRACT(payload,'$.duration'),0)>0 AND COALESCE(JSON_EXTRACT(payload,'$.position'),0)/NULLIF(JSON_EXTRACT(payload,'$.duration'),0)>0.92) THEN 1 ELSE 0 END)";
-        $increment=$finished?"CASE WHEN COALESCE(JSON_EXTRACT(payload,'$.viewing_armed'),0)=1 OR ($previous)=0 THEN 1 ELSE 0 END":'0';
-        $armed=$finished?'0':($start?'1':"COALESCE(JSON_EXTRACT(payload,'$.viewing_armed'),0)");
+        // MariaDB's JSON_EXTRACT returns text, so copying it into JSON_SET stored a quoted string that
+        // was re-quoted (and doubled) on every tick. Compare the unquoted value and write a plain 0/1.
+        $wasArmed="(CASE WHEN JSON_UNQUOTE(JSON_EXTRACT(payload,'$.viewing_armed'))='1' THEN 1 ELSE 0 END)";
+        $increment=$finished?"CASE WHEN $wasArmed=1 OR ($previous)=0 THEN 1 ELSE 0 END":'0';
+        $armed=$finished?'0':($start?'1':$wasArmed);
         $s = Database::connection()->prepare("INSERT INTO vaultcast_progress (user_id,item_id,updated_at,payload) VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE updated_at=VALUES(updated_at),payload=JSON_SET(VALUES(payload),'$.viewings',GREATEST(($previous)+($increment),COALESCE(JSON_EXTRACT(VALUES(payload),'$.viewings'),0)),'$.viewing_armed',$armed)");
         $s->execute([$userId, $itemId, (int)($progress['updated_at'] ?? time()), self::encode($progress)]);
         self::invalidateProgress($userId, array_key_exists('watched', $progress));

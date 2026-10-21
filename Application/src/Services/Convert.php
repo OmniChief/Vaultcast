@@ -547,8 +547,13 @@ class Convert {
                     $profile['source_size']=$job['source_stat']['size'];$profile['source_mtime']=$job['source_stat']['mtime'];
                 }
                 $profiles[str_replace('\\','/',$dest)]=$profile;Store::set('directplay_profiles',$profiles);
-                $new = Catalogue::ingestFile($dest, $section);
+                // The copy is a variant of the original item, never a library entry of its own,
+                // even when the job finishes after a timeout or an app update.
+                $itemId=(string)($job['item_id'] ?? '');$destReal=\Vaultcast\Paths::real($dest);
+                $new=$itemId!=='' && $destReal ? Catalogue::attachDirectPlay($itemId,$destReal,!empty($profile['ready'])) : null;
                 if ($new) $job['dest_item_id'] = $new['id'];
+                elseif ($itemId==='') { $new = Catalogue::ingestFile($dest, $section); if ($new) $job['dest_item_id'] = $new['id']; }
+                else $job['message'] .= ' (original is not in the library; the copy was not added as a separate title)';
             }
         } catch (\Throwable $e) {
             $job['message'] .= ' (catalogue ingest failed: ' . $e->getMessage() . ')';
@@ -1020,6 +1025,7 @@ class Convert {
             unset($profiles[str_replace('\\','/',$dest)]);
             if($destReal!==false)unset($profiles[str_replace('\\','/',$destReal)]);
             Store::set('directplay_profiles',$profiles);
+            Catalogue::detachDirectPlay((string)($job['item_id'] ?? ''),[$dest,$destReal!==false?$destReal:'',$deletedPath ?? '']);
         }
 
         $destItemId = (string)($job['dest_item_id'] ?? '');
