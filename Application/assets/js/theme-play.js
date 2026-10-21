@@ -84,27 +84,42 @@
     // hip x/y, torso angle, left hand x/y, right hand x/y, left ankle x/y, right ankle x/y.
     var rest=[132,177,-6,100,87,157,161,122,290,145,284];
     var routines=[
-      [rest,[138,174,-10,100,87,168,134,132,291,157,279],[140,170,-3,100,87,173,110,144,288,126,271],[126,175,8,100,87,153,146,126,285,145,291],rest],
-      [rest,[142,175,-12,100,87,170,133,145,291,125,279],[96,177,7,100,87,78,121,87,291,111,282],[80,180,12,100,87,59,143,67,291,101,282],rest],
-      [rest,[133,173,-8,100,87,163,130,123,291,170,255],[128,168,-13,100,87,159,112,124,291,190,210],[134,172,-9,100,87,165,132,128,291,178,250],rest],
-      [rest,[136,172,-17,100,87,174,131,130,291,173,248],[143,171,-28,100,87,172,104,140,290,194,224],[138,173,-18,100,87,170,126,132,291,174,252],rest],
-      [rest,[150,181,-25,100,87,173,144,140,291,159,284],[158,187,-34,100,87,180,140,147,291,164,287],[146,179,-18,100,87,174,126,135,291,158,281],rest]
+      [rest,[140,174,-12,100,87,168,132,131,291,151,278],[136,179,-3,100,87,170,112,138,285,150,291],[126,176,4,100,87,158,145,120,291,145,280],[130,181,-8,100,87,164,158,124,285,148,291],rest],
+      [rest,[142,176,-14,100,87,172,127,140,291,124,276],[139,180,-5,100,87,168,110,149,285,129,291],[125,176,5,100,87,153,130,122,291,145,275],[128,180,-3,100,87,159,155,121,281,147,291],rest],
+      [rest,[130,174,-10,100,87,166,128,123,291,168,258],[128,173,-15,100,87,170,107,124,291,192,217],[133,176,-9,100,87,174,119,127,291,187,250],[137,178,-4,100,87,166,151,130,291,160,280],rest],
+      [rest,[135,177,-16,100,87,174,126,130,291,170,258],[143,178,-27,100,87,174,105,139,291,195,232],[146,181,-30,100,87,180,114,143,291,192,244],[138,179,-16,100,87,171,143,134,291,167,271],rest],
+      [rest,[144,183,-24,100,87,176,142,135,291,157,285],[152,190,-32,100,87,182,127,142,291,165,286],[150,185,-22,100,87,177,105,139,291,162,283],[138,177,-10,100,87,169,122,128,291,153,279],rest]
     ];
-    function pose(v){var hip=[v[0],v[1]],a=v[2]*Math.PI/180,shoulder=[hip[0]+Math.sin(a)*74,hip[1]-Math.cos(a)*74],head=[shoulder[0]+Math.sin(a)*26,shoulder[1]-Math.cos(a)*26],hands=[[v[3],v[4]],[v[5],v[6]]],feet=[[v[7],v[8]],[v[9],v[10]]];
-      function limb(name,start,end,l1,l2,side){var dx=end[0]-start[0],dy=end[1]-start[1],dist=Math.sqrt(dx*dx+dy*dy),max=l1+l2-1;if(dist>max){end=[start[0]+dx*max/dist,start[1]+dy*max/dist];}parts[name].setAttribute('d',path([start,joint(start,end,l1,l2,side),end]));return end;}
-      var foot1=limb('backLeg',[hip[0]-7,hip[1]],feet[0],59,58,1),foot2=limb('frontLeg',[hip[0]+7,hip[1]],feet[1],59,58,-1);
-      limb('backArm',[shoulder[0]-7,shoulder[1]],hands[0],43,43,1);limb('frontArm',[shoulder[0]+7,shoulder[1]],hands[1],43,43,-1);
+    // These routines keep the same facing: lock each anatomical bend branch to avoid knee/elbow flips.
+    function pose(v,phase){var hip=[v[0],v[1]],a=v[2]*Math.PI/180,shoulder=[hip[0]+Math.sin(a)*74,hip[1]-Math.cos(a)*74],head=[shoulder[0]+Math.sin(a)*26,shoulder[1]-Math.cos(a)*26],hands=[[v[3],v[4]],[v[5],v[6]]],feet=[[v[7],v[8]],[v[9],v[10]]];
+      function limb(name,start,end,l1,l2,guide){var dx=end[0]-start[0],dy=end[1]-start[1],dist=Math.sqrt(dx*dx+dy*dy),max=l1+l2-1;if(dist>max){end=[start[0]+dx*max/dist,start[1]+dy*max/dist];}var first=joint(start,end,l1,l2,1),second=joint(start,end,l1,l2,-1);function distance(p){return Math.pow(p[0]-guide[0],2)+Math.pow(p[1]-guide[1],2);}if(parts[name]._bendSide==null)parts[name]._bendSide=distance(first)<distance(second)?1:-1;var bend=parts[name]._bendSide===1?first:second;parts[name].setAttribute('d',path([start,bend,end]));return end;}
+      var foot1=limb('backLeg',[hip[0]-7,hip[1]],feet[0],59,58,[hip[0]+25,hip[1]+55]),foot2=limb('frontLeg',[hip[0]+7,hip[1]],feet[1],59,58,[hip[0]+32,hip[1]+55]);
+      limb('backArm',[shoulder[0]-7,shoulder[1]],hands[0],43,43,[shoulder[0]-24,shoulder[1]+25]);limb('frontArm',[shoulder[0]+7,shoulder[1]],hands[1],43,43,[shoulder[0]+33,shoulder[1]+28]);
       parts.neck.setAttribute('d',path([shoulder,head]));parts.torso.setAttribute('d','M'+(shoulder[0]-12)+' '+shoulder[1]+' Q'+(hip[0]-6)+' '+(hip[1]-26)+' '+(hip[0]-15)+' '+hip[1]+' Q'+hip[0]+' '+(hip[1]+12)+' '+(hip[0]+15)+' '+hip[1]+' Q'+(hip[0]+5)+' '+(hip[1]-25)+' '+(shoulder[0]+12)+' '+shoulder[1]+' Z');
       parts.skirt.setAttribute('d','M'+(hip[0]-15)+' '+(hip[1]-6)+' Q'+hip[0]+' '+(hip[1]+1)+' '+(hip[0]+15)+' '+(hip[1]-6)+' L'+(hip[0]+22)+' '+(hip[1]+18)+' Q'+hip[0]+' '+(hip[1]+25)+' '+(hip[0]-22)+' '+(hip[1]+18)+' Z');
       [foot1,foot2].forEach(function(f,i){parts[i?'frontShoe':'backShoe'].setAttribute('d',path([[f[0],f[1]-5],[f[0],f[1]+2],[f[0]+11,f[1]+4]]));});
-      parts.head.setAttribute('cx',head[0]);parts.head.setAttribute('cy',head[1]);var sway=Math.sin(a)*12;parts.hair.setAttribute('d','M'+(head[0]-13)+' '+head[1]+' Q'+(head[0]-18)+' '+(head[1]-24)+' '+(head[0]+10)+' '+(head[1]-14)+' Q'+(head[0]+25+sway)+' '+(head[1]+5)+' '+(head[0]+14+sway)+' '+(head[1]+34)+' L'+(head[0]+4)+' '+(head[1]+16)+' Z');parts.fringe.setAttribute('d','M'+(head[0]-13)+' '+head[1]+' Q'+(head[0]-16)+' '+(head[1]-20)+' '+(head[0]+9)+' '+(head[1]-11)+' L'+(head[0]+11)+' '+(head[1]-1)+' Q'+head[0]+' '+(head[1]-12)+' '+(head[0]-13)+' '+head[1]);
+      parts.head.setAttribute('cx',head[0]);parts.head.setAttribute('cy',head[1]);var sway=Math.sin(a)*12+Math.sin((phase||0)*Math.PI*4-.7)*4;parts.hair.setAttribute('d','M'+(head[0]-13)+' '+head[1]+' Q'+(head[0]-18)+' '+(head[1]-24)+' '+(head[0]+10)+' '+(head[1]-14)+' Q'+(head[0]+25+sway)+' '+(head[1]+5)+' '+(head[0]+14+sway)+' '+(head[1]+34)+' L'+(head[0]+4)+' '+(head[1]+16)+' Z');parts.fringe.setAttribute('d','M'+(head[0]-13)+' '+head[1]+' Q'+(head[0]-16)+' '+(head[1]-20)+' '+(head[0]+9)+' '+(head[1]-11)+' L'+(head[0]+11)+' '+(head[1]-1)+' Q'+head[0]+' '+(head[1]-12)+' '+(head[0]-13)+' '+head[1]);
     }
-    function dance(){if(activeDance){activeDance();activeDance=null;}var chosen=routine++%5,frames=routines[chosen],raf=0,start=0,duration=12000;
-      b.setAttribute('aria-label',names[chosen]+'. Click for the next dance.');b.title=names[chosen]+' · click for next routine';b.setAttribute('data-routine',names[chosen]+' · '+(chosen+1)+'/5');
+    function dance(){if(activeDance){activeDance();activeDance=null;}var chosen=routine++%5,frames=routines[chosen].slice(0,-1),raf=0,lastNow=0,lastPaint=0,elapsed=0,duration=5200;
+      b.setAttribute('aria-label',names[chosen]+'. Loops until changed. Click for the next dance.');b.title=names[chosen]+' · looping · click for next routine';b.setAttribute('data-routine',names[chosen]+' · '+(chosen+1)+'/5 · loop');
       if(document.body.getAttribute('data-motion')==='reduced'){pose(frames[2]);b.title=names[chosen]+' · still pose (reduced motion)';return;}
       function stop(){cancelAnimationFrame(raf);pose(rest);b.classList.remove('dancing');if(activeDance===stop)activeDance=null;}
+      function allowed(){return b.isConnected&&document.body.getAttribute('data-theme')==='after-hours'&&document.body.getAttribute('data-motion')!=='reduced';}
+      stop.pause=function(){cancelAnimationFrame(raf);lastNow=0;};
+      stop.resume=function(){if(!allowed()){stop();return;}cancelAnimationFrame(raf);lastNow=0;raf=requestAnimationFrame(tick);};
       activeDance=stop;b.classList.add('dancing');
-      function tick(now){if(!b.isConnected||document.hidden||document.body.getAttribute('data-theme')!=='after-hours'||document.body.getAttribute('data-motion')==='reduced'){stop();return;}if(!start)start=now;var progress=(now-start)/duration;if(progress>=1){stop();return;}var pos=progress*(frames.length-1),index=Math.floor(pos),t=pos-index;t=t*t*(3-2*t);pose(frames[index].map(function(v,i){return v+(frames[index+1][i]-v)*t;}));raf=requestAnimationFrame(tick);}
+      function tick(now){
+        if(!allowed()){stop();return;}if(document.hidden){stop.pause();return;}
+        if(lastNow)elapsed+=Math.min(100,now-lastNow);lastNow=now;
+        if(now-lastPaint>=1000/30){
+          lastPaint=now;var progress=(elapsed%duration)/duration,pos=progress*frames.length,index=Math.floor(pos),t=pos-index,n=frames.length;
+          // Cyclic Catmull-Rom keeps velocity continuous at poses and the loop boundary.
+          var before=frames[(index+n-1)%n],from=frames[index],to=frames[(index+1)%n],after=frames[(index+2)%n];
+          var values=from.map(function(v,i){return .5*(2*v+(-before[i]+to[i])*t+(2*before[i]-5*v+4*to[i]-after[i])*t*t+(-before[i]+3*v-3*to[i]+after[i])*t*t*t);});
+          values[8]=Math.min(291,values[8]);values[10]=Math.min(291,values[10]);pose(values,progress);
+        }
+        raf=requestAnimationFrame(tick);
+      }
       raf=requestAnimationFrame(tick);
     }
     pose(rest);
@@ -117,6 +132,6 @@
       root.querySelectorAll('.hero-art-clock').forEach(function(art){var host=art.children[1];if(!host)return;art.classList.add('interactive-dance-art');art.removeAttribute('aria-hidden');if(art.parentElement){art.parentElement.removeAttribute('aria-hidden');art.parentElement.classList.add('interactive-dance-stage');}dancer(host);});
     }else if(clock&&titles[theme])clock.appendChild(button('✦ '+titles[theme],function(){open(theme);},'btn ghost theme-play-open'));
   }
-  document.addEventListener('visibilitychange',function(){if(document.hidden&&activeDance)activeDance();});
+  document.addEventListener('visibilitychange',function(){if(!activeDance)return;if(document.hidden){if(activeDance.pause)activeDance.pause();else activeDance();}else if(activeDance.resume)activeDance.resume();});
   window.VaultcastThemePlay={enhance:enhance};
 })();
