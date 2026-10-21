@@ -1019,8 +1019,8 @@ class Convert {
             $deletedPath = $destReal;
         }
         // Also clear stale catalogue links when the copy was already deleted on disk.
+        // Targeted updates only: the original item's link and a stray copy entry, never a full catalogue save.
         if($dest!=='') {
-            $removedIds=Catalogue::removePath($destReal!==false?$destReal:$dest);
             $profiles=Store::get('directplay_profiles',[]);
             unset($profiles[str_replace('\\','/',$dest)]);
             if($destReal!==false)unset($profiles[str_replace('\\','/',$destReal)]);
@@ -1030,7 +1030,7 @@ class Convert {
 
         $destItemId = (string)($job['dest_item_id'] ?? '');
         if ($destItemId !== '' && $destItemId !== (string)($job['item_id'] ?? '') && !in_array($destItemId, $removedIds, true)) {
-            $removedIds = array_merge($removedIds, Catalogue::removeIds([$destItemId]));
+            foreach([$dest,$destReal!==false?$destReal:'',$deletedPath ?? ''] as $p)if($p!==''&&\Vaultcast\Repository::deleteItemForPath($destItemId,$p)){$removedIds[]=$destItemId;break;}
         }
         $removedIds = array_values(array_unique(array_filter($removedIds)));
 

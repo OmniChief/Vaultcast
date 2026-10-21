@@ -2475,37 +2475,50 @@ class Catalogue {
 
 
     /**
-     * Attach a prepared copy to its library item as the direct-play variant. Never adds a new
-     * catalogue entry; a stray entry for the copy itself is dropped. Returns the item or null.
+     * Attach a prepared copy to its library item as the direct-play variant. One-row update; never
+     * adds a catalogue entry, and drops a stray entry for the copy itself. Returns the item or null.
      */
     public static function attachDirectPlay(string $itemId, string $copyPath, bool $ready): ?array {
         $copyPath=str_replace('\\','/',$copyPath);
-        if($itemId===''||$copyPath===''||!is_file($copyPath))return null;
-        $cat=self::get();$item=$cat['items'][$itemId] ?? null;
-        if(!$item||str_replace('\\','/',(string)($item['path'] ?? ''))===$copyPath)return null;
-        foreach($cat['items'] ?? [] as $id=>$it)if((string)$id!==$itemId&&str_replace('\\','/',(string)($it['path'] ?? ''))===$copyPath)unset($cat['items'][$id]);
-        $versions=array_values(array_filter($item['directplay_versions'] ?? [],static function($p)use($copyPath){return $p!==$copyPath&&is_file($p);}));
-        array_unshift($versions,$copyPath);
-        $item['directplay_versions']=$versions;$item['directplay_path']=$copyPath;$item['directplay_ready']=$ready;
-        $cat['items'][$itemId]=$item;$cat['item_count']=count($cat['items']);
-        self::save($cat,false);Store::invalidate('catalogue');
-        return $item;
+        $item=$itemId!==''?self::item($itemId):null;
+        if(!$item||$copyPath===''||!is_file($copyPath)||str_replace('\\','/',(string)($item['path'] ?? ''))===$copyPath)return null;
+        $stray=self::copyEntryId($item,$copyPath);
+        if($stray!==null&&$stray!==$itemId)\Vaultcast\Repository::deleteItemForPath($stray,$copyPath);
+        $saved=\Vaultcast\Repository::updateItem($itemId,static function(array $it)use($copyPath,$ready){
+            $versions=array_values(array_filter($it['directplay_versions'] ?? [],static function($p)use($copyPath){return $p!==$copyPath&&is_file($p);}));
+            array_unshift($versions,$copyPath);
+            $it['directplay_versions']=$versions;$it['directplay_path']=$copyPath;$it['directplay_ready']=$ready;
+            return $it;
+        });
+        self::invalidateDerivedCaches();
+        return $saved ?? self::item($itemId);
     }
 
-    /** Remove a deleted prepared copy from its item's direct-play links. Returns true when changed. */
+    /** Remove a deleted prepared copy from its item's direct-play links (one-row update). */
     public static function detachDirectPlay(string $itemId, array $copyPaths): bool {
         $copyPaths=array_values(array_filter(array_map(static function($p){return str_replace('\\','/',(string)$p);},$copyPaths)));
         $item=$itemId!==''?self::item($itemId):null;
         if(!$item||!$copyPaths)return false;
-        $versions=$item['directplay_versions'] ?? [];
-        $linked=in_array((string)($item['directplay_path'] ?? ''),$copyPaths,true)||array_intersect($versions,$copyPaths);
-        if(!$linked)return false;
-        $cat=self::get();if(!isset($cat['items'][$itemId]))return false;
-        $versions=array_values(array_filter($versions,static function($p)use($copyPaths){return !in_array($p,$copyPaths,true)&&is_file($p);}));
-        unset($cat['items'][$itemId]['directplay_path'],$cat['items'][$itemId]['directplay_versions'],$cat['items'][$itemId]['directplay_ready']);
-        if($versions){$cat['items'][$itemId]['directplay_versions']=$versions;$cat['items'][$itemId]['directplay_path']=$versions[0];$cat['items'][$itemId]['directplay_ready']=!empty(Store::get('directplay_profiles',[])[$versions[0]]['ready']);}
-        self::save($cat,false);Store::invalidate('catalogue');
-        return true;
+        foreach($copyPaths as $path){$stray=self::copyEntryId($item,$path);if($stray!==null&&$stray!==$itemId)\Vaultcast\Repository::deleteItemForPath($stray,$path);}
+        $profiles=Store::get('directplay_profiles',[]);
+        $saved=\Vaultcast\Repository::updateItem($itemId,static function(array $it)use($copyPaths,$profiles){
+            $versions=$it['directplay_versions'] ?? [];
+            if(!in_array((string)($it['directplay_path'] ?? ''),$copyPaths,true)&&!array_intersect($versions,$copyPaths))return null;
+            $versions=array_values(array_filter($versions,static function($p)use($copyPaths){return !in_array($p,$copyPaths,true)&&is_file($p);}));
+            unset($it['directplay_path'],$it['directplay_versions'],$it['directplay_ready'],$it['prepared_copy']);
+            if($versions){$it['directplay_versions']=$versions;$it['directplay_path']=$versions[0];$it['directplay_ready']=!empty($profiles[$versions[0]]['ready']);}
+            return $it;
+        });
+        if($saved!==null)self::invalidateDerivedCaches();
+        return $saved!==null;
+    }
+
+    /** Id a scan would give the copy beside $item (same section, same folder). */
+    private static function copyEntryId(array $item, string $copyPath): ?string {
+        $rel=str_replace('\\','/',(string)($item['rel'] ?? ''));$section=(string)($item['section'] ?? '');
+        if($rel===''||$section==='')return null;
+        $dir=dirname($rel);$copyRel=($dir==='.'||$dir==='')?basename($copyPath):$dir.'/'.basename($copyPath);
+        return substr(sha1($section.'|'.$copyRel),0,16);
     }
 
     /** drop catalogue entries whose path is $path (exact or realpath). Returns removed ids. */

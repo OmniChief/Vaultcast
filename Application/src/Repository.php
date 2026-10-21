@@ -196,6 +196,43 @@ final class Repository
         return self::rows('SELECT payload FROM vaultcast_items WHERE id = ?', [$id])[0] ?? null;
     }
 
+    /**
+     * Change one catalogue row in place (no full-catalogue load/save). $change gets the decoded item
+     * and returns the new item, or null to leave it unchanged. Returns the stored item or null.
+     */
+    public static function updateItem(string $id, callable $change): ?array
+    {
+        $saved = Database::transaction(function (\PDO $pdo) use ($id, $change): ?array {
+            $s = $pdo->prepare('SELECT payload FROM vaultcast_items WHERE id=? FOR UPDATE');
+            $s->execute([$id]);
+            $raw = $s->fetchColumn();
+            if ($raw === false) return null;
+            $item = json_decode((string)$raw, true);
+            if (!is_array($item)) return null;
+            $next = $change($item);
+            if (!is_array($next) || $next === $item) return null;
+            $pdo->prepare('UPDATE vaultcast_items SET payload=? WHERE id=?')->execute([self::encode($next), $id]);
+            $pdo->exec("UPDATE vaultcast_documents SET revision=revision+1 WHERE name='catalogue'");
+            return $next;
+        });
+        if ($saved !== null && class_exists('Store', false)) \Store::invalidate('catalogue');
+        return $saved;
+    }
+
+    /** Drop one catalogue row (and its browse row) by id, only if it is the given file. */
+    public static function deleteItemForPath(string $id, string $path): bool
+    {
+        $item = self::item($id);
+        if (!$item || str_replace('\\', '/', (string)($item['path'] ?? '')) !== str_replace('\\', '/', $path)) return false;
+        Database::transaction(function (\PDO $pdo) use ($id): void {
+            $pdo->prepare('DELETE FROM vaultcast_items WHERE id=?')->execute([$id]);
+            $pdo->prepare('DELETE FROM vaultcast_browse_items WHERE item_id=?')->execute([$id]);
+            $pdo->exec("UPDATE vaultcast_documents SET revision=revision+1 WHERE name='catalogue'");
+        });
+        if (class_exists('Store', false)) \Store::invalidate('catalogue');
+        return true;
+    }
+
     /** Fetch a bounded selection without one query per item; retain caller order. */
     public static function items(array $ids): array
     {
