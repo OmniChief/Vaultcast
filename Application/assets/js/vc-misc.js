@@ -72,29 +72,8 @@
   // Each widget: { name, desc, icon, w, h, render(body, settings, ctx) -> optional cleanup, form(settings) -> { el, read() } }
   var W = {};
   function list(rows, cls){ return h('ul', { className:'vc-w-list ' + (cls || '') }, rows); }
-  /**
-   * Refresh-safe update: patch the existing DOM toward the new nodes instead of rebuilding it, so unchanged
-   * images, iframes and media stay mounted (no blank-until-loaded flash) and nothing re-animates. Nodes that are
-   * identical are kept as they are; media or controls that differ are replaced (fresh listeners).
-   */
-  function morph(old, nw){
-    if (old.nodeType !== nw.nodeType || old.nodeName !== nw.nodeName) { old.parentNode.replaceChild(nw, old); return; }
-    if (old.nodeType === 3) { if (old.data !== nw.data) old.data = nw.data; return; }
-    if (old.nodeType !== 1 || old.isEqualNode(nw)) return;
-    // Changed media, or anything holding controls, is swapped whole so its click handlers match the new data.
-    if (/^(IMG|IFRAME|VIDEO|AUDIO|CANVAS|SVG|svg|BUTTON|A|INPUT|SELECT|TEXTAREA|FORM|LABEL|DETAILS)$/.test(old.nodeName) || old.querySelector('button,a,input,select,textarea,form,label,details,[tabindex]')) { old.parentNode.replaceChild(nw, old); return; }
-    var a, i;
-    for (i = old.attributes.length - 1; i >= 0; i--) { a = old.attributes[i].name; if (!nw.hasAttribute(a)) old.removeAttribute(a); }
-    for (i = 0; i < nw.attributes.length; i++) { a = nw.attributes[i]; if (old.getAttribute(a.name) !== a.value) old.setAttribute(a.name, a.value); }
-    patchKids(old, Array.prototype.slice.call(nw.childNodes));
-  }
-  function patchKids(parent, kids){
-    kids = kids.filter(function(k){ return k != null && k !== '' && k !== false; }).map(function(k){ return typeof k === 'string' ? document.createTextNode(k) : k; });
-    var cur = parent.childNodes;
-    if (cur.length !== kids.length) { parent.replaceChildren.apply(parent, kids); return; }
-    for (var i = kids.length - 1; i >= 0; i--) morph(cur[i], kids[i]);
-  }
-  function swap(el){ if (/^Last refresh failed/.test(el.title || '')) el.removeAttribute('title'); patchKids(el, Array.prototype.slice.call(arguments, 1)); }
+  /** Refresh-safe update shared with the app (A.swap): patches in place, keyed by data-key, no remounts. */
+  function swap(){ return A.swap.apply(null, arguments); }
   function loading(body){ body.replaceChildren(h('p', { className:'muted vc-w-loading', text:'Loading…' })); }
   /** A failed background refresh keeps the last good content (no blink to an error and back); only a first load shows the error. */
   function wErr(body, e, force){
@@ -200,7 +179,7 @@
     render:function(body, s){
       if (!s.url) { body.appendChild(h('p', { className:'muted', text:'Add a feed address in the widget settings.' })); return; }
       function load(){ call('/misc/widget/rss?url=' + encodeURIComponent(s.url)).then(function(j){
-        swap(body, h('p', { className:'vc-rss-title', text:j.title || s.url }), list(j.items.slice(0, s.count || 10).map(function(i){ return h('li', { className:'vc-rss-item' }, [i.link ? h('a', { href:i.link, target:'_blank', rel:'noopener noreferrer', text:i.title }) : h('span', { text:i.title }), i.date ? h('small', { className:'muted', text:ago(i.date) }) : null]); })));
+        swap(body, h('p', { className:'vc-rss-title', text:j.title || s.url }), list(j.items.slice(0, s.count || 10).map(function(i){ return h('li', { className:'vc-rss-item', 'data-key':String(i.link || i.title || '') }, [i.link ? h('a', { href:i.link, target:'_blank', rel:'noopener noreferrer', text:i.title }) : h('span', { text:i.title }), i.date ? h('small', { className:'muted', text:ago(i.date) }) : null]); })));
       }).catch(function(e){ wErr(body, e); }); }
       loading(body); load(); return poll(load, 900000, s);
     },
@@ -211,7 +190,7 @@
       var zone = h('div', { className:'vc-mini-drop', tabindex:'0', role:'button', 'aria-label':'Choose files to upload to Drop' }, [h('strong', { text:'Drop files here' }), h('small', { className:'muted', text:'Kept for 24 hours · sent to your devices' })]), items = h('div');
       body.append(zone, items);
       var picker = h('input', { type:'file', multiple:true, hidden:true }); body.appendChild(picker);
-      function refresh(){ call('/drop/state').then(function(j){ swap(items, list(j.items.filter(function(i){ return i.status === 'available'; }).slice(0, 5).map(function(i){ return h('li', { className:'vc-drop-mini' }, [h('span', { text:kindIcon(i) }), h('a', { href:i.kind === 'link' ? i.body : url('/api/drop/items/' + i.id + '/download'), target:i.kind === 'link' ? '_blank' : null, rel:'noopener', text:i.name }), h('small', { className:'muted', text:'⏳ ' + until(i.expires_at) })]); }))); }).catch(function(){}); }
+      function refresh(){ call('/drop/state').then(function(j){ swap(items, list(j.items.filter(function(i){ return i.status === 'available'; }).slice(0, 5).map(function(i){ return h('li', { className:'vc-drop-mini', 'data-key':String(i.id) }, [h('span', { text:kindIcon(i) }), h('a', { href:i.kind === 'link' ? i.body : url('/api/drop/items/' + i.id + '/download'), target:i.kind === 'link' ? '_blank' : null, rel:'noopener', text:i.name }), h('small', { className:'muted', text:'⏳ ' + until(i.expires_at) })]); }))); }).catch(function(){}); }
       function send(files){ Array.prototype.forEach.call(files, function(f){ uploadFile(f, { expires_hours:24, inbox:true }, function(p){ zone.querySelector('small').textContent = p.done ? 'Uploaded ' + f.name : Math.round(100 * p.sent / f.size) + '% · ' + f.name; if (p.done) refresh(); }).catch(err); }); }
       zone.addEventListener('click', function(){ picker.click(); }); zone.addEventListener('keydown', function(e){ if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); picker.click(); } });
       picker.addEventListener('change', function(){ send(picker.files); picker.value = ''; });
@@ -224,8 +203,8 @@
     render:function(body, s){
       function load(){ call('/misc/widget/recordings').then(function(j){
         if (j.unavailable) { swap(body, h('p', { className:'muted', text:'Live TV is turned off on this server.' })); return; }
-        var rows = j.recording.map(function(r){ return h('li', { className:'vc-rec live' }, [h('span', { className:'vc-rec-dot', 'aria-label':'Recording' }), h('span', null, [h('strong', { text:r.title }), h('small', { className:'muted', text:r.channel + ' · until ' + new Date(r.end * 1000).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }) })])]); })
-          .concat(j.upcoming.map(function(r){ var d = new Date(r.start * 1000); return h('li', { className:'vc-rec' }, [h('span', { className:'vc-rec-time', text:d.toLocaleDateString([], { weekday:'short' }) + ' ' + d.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }) }), h('span', null, [h('strong', { text:r.title }), h('small', { className:'muted', text:r.channel })])]); }));
+        var rows = j.recording.map(function(r){ return h('li', { className:'vc-rec live', 'data-key':'r' + (r.id || (r.title + r.start)) }, [h('span', { className:'vc-rec-dot', 'aria-label':'Recording' }), h('span', null, [h('strong', { text:r.title }), h('small', { className:'muted', text:r.channel + ' · until ' + new Date(r.end * 1000).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }) })])]); })
+          .concat(j.upcoming.map(function(r){ var d = new Date(r.start * 1000); return h('li', { className:'vc-rec', 'data-key':'u' + (r.id || (r.title + r.start)) }, [h('span', { className:'vc-rec-time', text:d.toLocaleDateString([], { weekday:'short' }) + ' ' + d.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }) }), h('span', null, [h('strong', { text:r.title }), h('small', { className:'muted', text:r.channel })])]); }));
         swap(body, rows.length ? list(rows) : h('p', { className:'muted', text:'No recordings scheduled.' }));
       }).catch(function(e){ wErr(body, e); }); }
       loading(body); load(); return poll(load, 60000, s);
@@ -235,7 +214,7 @@
     render:function(body, s){
       function load(){ call('/misc/widget/downloads').then(function(j){
         if (j.unavailable) { swap(body, h('p', { className:'muted', text:'Downloads are not available for your account.' })); return; }
-        swap(body, j.items.length ? list(j.items.map(function(d){ var pct = Math.max(0, Math.min(100, Number(d.percent || 0))); return h('li', { className:'vc-dl' }, [h('span', { className:'vc-dl-name', text:d.name }), h('span', { className:'vc-progress', role:'progressbar', 'aria-valuenow':String(Math.round(pct)), 'aria-valuemin':'0', 'aria-valuemax':'100' }, [h('i', { style:'width:' + pct + '%' })]), h('small', { className:'muted', text:Math.round(pct) + '% · ' + (d.status || '') })]); })) : h('p', { className:'muted', text:'Nothing downloading.' }));
+        swap(body, j.items.length ? list(j.items.map(function(d){ var pct = Math.max(0, Math.min(100, Number(d.percent || 0))); return h('li', { className:'vc-dl', 'data-key':String(d.id || d.name) }, [h('span', { className:'vc-dl-name', text:d.name }), h('span', { className:'vc-progress', role:'progressbar', 'aria-valuenow':String(Math.round(pct)), 'aria-valuemin':'0', 'aria-valuemax':'100' }, [h('i', { style:'width:' + pct + '%' })]), h('small', { className:'muted', text:Math.round(pct) + '% · ' + (d.status || '') })]); })) : h('p', { className:'muted', text:'Nothing downloading.' }));
       }).catch(function(e){ wErr(body, e); }); }
       loading(body); load(); return poll(load, 10000, s);
     }
@@ -260,7 +239,7 @@
     render:function(body, s){
       function load(){ call('/misc/widget/recent?n=' + (s.count || 12)).then(function(j){
         if (!j.items.length) { swap(body, h('p', { className:'muted', text:'Nothing new yet.' })); return; }
-        swap(body, h('div', { className:'vc-poster-row' }, j.items.map(function(it){ return h('button', { type:'button', className:'vc-poster', title:it.title, onClick:function(){ if (it.show_key && A.openShow) A.openShow(it.show_key); else if (A.openMovie) A.openMovie(it.id); } }, [h('img', { src:url(it.poster), alt:'', loading:'lazy' }), h('span', { className:'vc-poster-cap' }, [h('strong', { text:it.title }), h('small', { className:'muted', text:it.subtitle || '' })])]); })));
+        swap(body, h('div', { className:'vc-poster-row' }, j.items.map(function(it){ return h('button', { type:'button', className:'vc-poster', 'data-key':String(it.id || it.show_key || it.title), title:it.title, onClick:function(){ if (it.show_key && A.openShow) A.openShow(it.show_key); else if (A.openMovie) A.openMovie(it.id); } }, [h('img', { src:url(it.poster), alt:'', loading:'lazy' }), h('span', { className:'vc-poster-cap' }, [h('strong', { text:it.title }), h('small', { className:'muted', text:it.subtitle || '' })])]); })));
       }).catch(function(e){ wErr(body, e); }); }
       loading(body); load(); return poll(load, 600000, s);
     },
@@ -269,7 +248,7 @@
   W.nowplaying = { name:'Now playing', desc:'What you and your friends are watching (admins see everyone).', icon:'▶️', w:8, h:5,
     render:function(body, s){
       function load(){ call('/misc/widget/nowplaying').then(function(j){
-        swap(body, j.sessions.length ? list(j.sessions.map(function(x){ return h('li', { className:'vc-np' }, [h('img', { src:url(x.poster), alt:'', loading:'lazy' }), h('span', { className:'vc-np-copy' }, [h('strong', { text:x.title }), h('small', { className:'muted', text:x.user.name + ' · ' + ago(x.updated_at) }), x.percent != null ? h('span', { className:'vc-progress' }, [h('i', { style:'width:' + x.percent + '%' })]) : null])]); })) : h('p', { className:'muted', text:'Nobody is watching right now.' }));
+        swap(body, j.sessions.length ? list(j.sessions.map(function(x){ return h('li', { className:'vc-np', 'data-key':String(x.id || x.session || ((x.user && x.user.name) + '|' + x.title)) }, [h('img', { src:url(x.poster), alt:'', loading:'lazy' }), h('span', { className:'vc-np-copy' }, [h('strong', { text:x.title }), h('small', { className:'muted', text:x.user.name + ' · ' + ago(x.updated_at) }), x.percent != null ? h('span', { className:'vc-progress' }, [h('i', { style:'width:' + x.percent + '%' })]) : null])]); })) : h('p', { className:'muted', text:'Nobody is watching right now.' }));
       }).catch(function(e){ wErr(body, e); }); }
       loading(body); load(); return poll(load, 20000, s);
     }
@@ -277,7 +256,7 @@
   W.leaderboard = { name:'Leaderboard', desc:'Top players or teams this week.', icon:'🏆', w:6, h:7,
     render:function(body, s){
       function load(){ call('/play/leaderboard?board=' + (s.board || 'points') + '&period=' + (s.period || 'week')).then(function(j){
-        swap(body, j.rows.length ? h('ol', { className:'vc-w-list vc-mini-lb' }, j.rows.slice(0, 8).map(function(r, i){ var who = r.team && s.board === 'teams' ? r.team : r.user; return h('li', { className:r.me ? 'me' : '' }, [h('span', { className:'vc-lb-rank', text:String(i + 1) }), h('strong', { text:(r.team && s.board === 'teams' ? r.team.emblem + ' ' : '') + who.name }), h('span', { className:'vc-lb-value', text:j.unit === 'seconds' ? Math.round(r.value / 3600) + ' h' : Number(r.value).toLocaleString() })]); })) : h('p', { className:'muted', text:'No scores yet.' }));
+        swap(body, j.rows.length ? h('ol', { className:'vc-w-list vc-mini-lb' }, j.rows.slice(0, 8).map(function(r, i){ var who = r.team && s.board === 'teams' ? r.team : r.user; return h('li', { className:r.me ? 'me' : '', 'data-key':'lb' + ((who && (who.id || who.name)) || i) }, [h('span', { className:'vc-lb-rank', text:String(i + 1) }), h('strong', { text:(r.team && s.board === 'teams' ? r.team.emblem + ' ' : '') + who.name }), h('span', { className:'vc-lb-value', text:j.unit === 'seconds' ? Math.round(r.value / 3600) + ' h' : Number(r.value).toLocaleString() })]); })) : h('p', { className:'muted', text:'No scores yet.' }));
       }).catch(function(e){ wErr(body, e); }); }
       loading(body); load(); return poll(load, 120000, s);
     },

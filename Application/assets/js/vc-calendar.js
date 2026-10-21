@@ -158,10 +158,10 @@
       });
     });
   }
-  function whenText(r){
+  function whenText(r, now){
     if (!r.due) return r.active ? '' : 'Finished';
     if (r.state === 'snoozed') return 'Snoozed until ' + tFmt(new Date(r.snooze_until * 1000));
-    var d = parseYmd(r.due), today = day0(new Date()), n = Math.round((d - today) / 86400000), t = r.time ? ' · ' + tFmt(new Date(r.due_at * 1000)) : '';
+    var d = parseYmd(r.due), today = day0(now || new Date()), n = Math.round((d - today) / 86400000), t = r.time ? ' · ' + tFmt(new Date(r.due_at * 1000)) : '';
     if (n < 0) return 'Overdue · ' + d.toLocaleDateString([], { weekday:'short', day:'numeric', month:'short' });
     if (n === 0) return 'Today' + t; if (n === 1) return 'Tomorrow' + t;
     if (n < 7) return d.toLocaleDateString([], { weekday:'long' }) + t;
@@ -177,35 +177,41 @@
   /** Reminder rows with done / snooze / edit; used by the widget and the Calendar page. */
   function reminderRows(list, refresh, opts){
     opts = opts || {};
+    // One clock reading per render, so every row agrees on what "today" is.
+    var now = opts.now || new Date();
     return list.map(function(r){
       var soon = ['overdue', 'today', 'soon', 'tomorrow'].indexOf(r.state) >= 0;
       var sub = r.state === 'tomorrow' && r.lead >= 600 && r.note ? r.note : (r.note || describe(r.schedule));
-      return h('li', { className:'vc-rem ' + r.state + (soon ? ' due-soon' : ''), style:'--vc-rem:' + r.colour }, [
+      return h('li', { className:'vc-rem ' + r.state + (soon ? ' due-soon' : ''), style:'--vc-rem:' + r.colour, 'data-key':'rem' + r.id }, [
         h('span', { className:'vc-rem-icon', text:r.emoji, 'aria-hidden':'true' }),
         h('button', { type:'button', className:'vc-rem-title', title:'Edit', onClick:function(){ editReminder(r, false).then(refresh); } }, [h('strong', { text:r.title }), h('small', { className:'muted', text:sub })]),
-        h('span', { className:'vc-rem-when', text:whenText(r) }),
+        h('span', { className:'vc-rem-when', text:whenText(r, now) }),
         r.due ? h('span', { className:'vc-rem-actions' }, [
           btn('✓', function(){ var before = r; call('/misc/reminders/' + r.id + '/done', { method:'POST' }).then(function(j){ refresh(j); if (opts.onDone) opts.onDone(before); }).catch(err); }, 'ghost vc-icon-btn small', { 'aria-label':'Done: ' + r.title, title:'Done' }),
           btn('💤', function(){ snoozeMenu(r, refresh); }, 'ghost vc-icon-btn small', { 'aria-label':'Snooze ' + r.title, title:'Snooze' })]) : null]);
     });
   }
   function remindersWidget(body, s, ctx){
-    var listEl = h('ul', { className:'vc-w-list vc-rems' }), undoBar = h('div', { className:'vc-undo', hidden:true }), gone = false, undoT = 0, stop = null;
+    var lastSig = '', listEl = h('ul', { className:'vc-w-list vc-rems' }), undoBar = h('div', { className:'vc-undo', hidden:true }), gone = false, undoT = 0, stop = null;
     if (!signed()) { body.appendChild(h('p', { className:'muted', text:'Sign in to keep reminders.' })); return; }
     body.append(undoBar, listEl, h('div', { className:'vc-rem-foot' }, [btn('+ Reminder', function(){ chooseTemplate().then(draw); }, 'ghost small'), btn('All reminders', function(){ A.state.miscTab = 'calendar'; A.state.miscSub = 'reminders'; A.pushNav(); A.render(); }, 'ghost small')]));
     function showUndo(r){ clearTimeout(undoT); undoBar.hidden = false; undoBar.replaceChildren(h('span', { text:'Done: ' + r.title }), btn('Undo', function(){ var prev = r.due ? ymd(addDays(parseYmd(r.due), -1)) : ''; call('/misc/reminders/' + r.id + '/undo', { method:'POST', body:{ through:prev } }).then(draw).catch(err); undoBar.hidden = true; }, 'ghost small')); undoT = setTimeout(function(){ undoBar.hidden = true; }, 8000); }
     function draw(j){
       if (gone) return;
-      if (!j || !j.reminders) { call('/misc/reminders').then(draw).catch(function(e){ listEl.replaceChildren(h('li', { className:'muted', text:(e && e.error) || 'Reminders unavailable.' })); }); return; }
+      if (!j || !j.reminders) { call('/misc/reminders').then(draw).catch(function(e){ if (!listEl.querySelector('[data-key]')) listEl.replaceChildren(h('li', { className:'muted', text:(e && e.error) || 'Reminders unavailable.' })); }); return; }
       var days = Number(s.days) || 0, horizon = days ? ymd(addDays(new Date(), days)) : null;
       var list = j.reminders.filter(function(r){ return r.due && (!horizon || r.due <= horizon || r.state === 'overdue'); }).slice(0, Math.max(1, Number(s.limit) || 8));
       if (!list.length) { swap(listEl, h('li', { className:'vc-rem-empty muted', text:j.reminders.length ? 'Nothing due soon.' : 'No reminders yet. Add bins, bills, medication and more.' })); return; }
+      // A background refresh with the same data (and the same day) changes nothing on screen.
+      var sig = JSON.stringify(list) + '|' + ymd(new Date());
+      if (sig === lastSig && listEl.firstChild) return; lastSig = sig;
       swap.apply(null, [listEl].concat(reminderRows(list, draw, { onDone:showUndo })));
     }
     // Old Bin day widgets kept their reminders in the widget settings: move them to your account once.
     if (s.items && s.items.length && !s.migrated) call('/misc/reminders/import', { method:'POST', body:{ items:s.items, tz:TZ } }).then(function(j){ if (ctx && ctx.save) ctx.save(Object.assign({}, s, { items:[], migrated:true }), true); draw(j); }).catch(function(){ draw(); });
     else draw();
-    var timer = setInterval(function(){ if (!document.hidden) draw(); }, 300000);
+    // Honour the widget's Refresh setting (default 5 min); hidden tabs skip the fetch entirely.
+    var timer = setInterval(function(){ if (!document.hidden && body.isConnected) draw(); }, Number(s.refresh) > 0 ? Math.max(15, Number(s.refresh)) * 1000 : 300000);
     startAlerts();
     return function(){ gone = true; clearInterval(timer); clearTimeout(undoT); if (stop) stop(); };
   }
@@ -214,29 +220,8 @@
     return { el:h('div', { className:'vc-form' }, [field('Show up to', limit), field('Which', days), h('p', { className:'muted', text:'Reminders belong to your account, so they show on every board and on the Calendar page. Add them with “+ Reminder” on the widget.' })]), read:function(){ return { limit:Math.max(1, Number(limit.value) || 8), days:Number(days.value) || 0 }; } };
   }
 
-  /**
-   * Refresh-safe update: patch the existing DOM toward the new nodes instead of rebuilding it, so unchanged
-   * images, iframes and media stay mounted (no blank-until-loaded flash) and nothing re-animates. Nodes that are
-   * identical are kept as they are; media or controls that differ are replaced (fresh listeners).
-   */
-  function morph(old, nw){
-    if (old.nodeType !== nw.nodeType || old.nodeName !== nw.nodeName) { old.parentNode.replaceChild(nw, old); return; }
-    if (old.nodeType === 3) { if (old.data !== nw.data) old.data = nw.data; return; }
-    if (old.nodeType !== 1 || old.isEqualNode(nw)) return;
-    // Changed media, or anything holding controls, is swapped whole so its click handlers match the new data.
-    if (/^(IMG|IFRAME|VIDEO|AUDIO|CANVAS|SVG|svg|BUTTON|A|INPUT|SELECT|TEXTAREA|FORM|LABEL|DETAILS)$/.test(old.nodeName) || old.querySelector('button,a,input,select,textarea,form,label,details,[tabindex]')) { old.parentNode.replaceChild(nw, old); return; }
-    var a, i;
-    for (i = old.attributes.length - 1; i >= 0; i--) { a = old.attributes[i].name; if (!nw.hasAttribute(a)) old.removeAttribute(a); }
-    for (i = 0; i < nw.attributes.length; i++) { a = nw.attributes[i]; if (old.getAttribute(a.name) !== a.value) old.setAttribute(a.name, a.value); }
-    patchKids(old, Array.prototype.slice.call(nw.childNodes));
-  }
-  function patchKids(parent, kids){
-    kids = kids.filter(function(k){ return k != null && k !== '' && k !== false; }).map(function(k){ return typeof k === 'string' ? document.createTextNode(k) : k; });
-    var cur = parent.childNodes;
-    if (cur.length !== kids.length) { parent.replaceChildren.apply(parent, kids); return; }
-    for (var i = kids.length - 1; i >= 0; i--) morph(cur[i], kids[i]);
-  }
-  function swap(el){ if (/^Last refresh failed/.test(el.title || '')) el.removeAttribute('title'); patchKids(el, Array.prototype.slice.call(arguments, 1)); }
+  /** Refresh-safe update shared with the app (A.swap): patches in place, keyed by data-key, no remounts. */
+  function swap(){ return A.swap.apply(null, arguments); }
   // ------------------------------------------------------------------ alerts (event and reminder notifications)
   var alertState = { on:false, timers:{}, shown:{} };
   function notify(a){
@@ -272,8 +257,8 @@
         var rows = [], last = '';
         list.forEach(function(e){
           var d = new Date(Math.max(e.start, e.all_day ? 0 : e.start) * 1000), key = e.all_day && e.start < now ? new Date().toDateString() : d.toDateString();
-          if (key !== last) { last = key; var dd = new Date(key), t = new Date().toDateString(), tm = addDays(new Date(), 1).toDateString(); rows.push(h('li', { className:'vc-cal-day', text:key === t ? 'Today' : key === tm ? 'Tomorrow' : dd.toLocaleDateString([], { weekday:'long', day:'numeric', month:'short' }) })); }
-          rows.push(h('li', { className:'vc-cal-ev', style:'border-left-color:' + (e.colour || 'var(--accent)') }, [h('span', { className:'vc-cal-time', text:evTime(e) }), h('span', { className:'vc-cal-title' }, [h('strong', { text:e.title || '(no title)' }), e.location ? h('small', { className:'muted', text:e.location }) : null])]));
+          if (key !== last) { last = key; var dd = new Date(key), t = new Date().toDateString(), tm = addDays(new Date(), 1).toDateString(); rows.push(h('li', { 'data-key':'d' + key, className:'vc-cal-day', text:key === t ? 'Today' : key === tm ? 'Tomorrow' : dd.toLocaleDateString([], { weekday:'long', day:'numeric', month:'short' }) })); }
+          rows.push(h('li', { 'data-key':'e' + (e.id || '') + ':' + e.start, className:'vc-cal-ev', style:'border-left-color:' + (e.colour || 'var(--accent)') }, [h('span', { className:'vc-cal-time', text:evTime(e) }), h('span', { className:'vc-cal-title' }, [h('strong', { text:e.title || '(no title)' }), e.location ? h('small', { className:'muted', text:e.location }) : null])]));
         });
         swap(body, h('ul', { className:'vc-w-list vc-cal' }, rows), openLink());
       });

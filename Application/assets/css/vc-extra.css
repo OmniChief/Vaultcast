@@ -383,6 +383,10 @@ button.vc-choice:active:not(:disabled) { transform: scale(.98); }
 .vc-ghost { border-radius: var(--radius-xl); background: color-mix(in srgb, var(--accent) 18%, transparent); border: 2px dashed var(--accent); pointer-events: none; z-index: 1; }
 .vc-w-resize { position: absolute; right: 2px; bottom: 2px; width: 22px; height: 22px; cursor: nwse-resize; touch-action: none; background: linear-gradient(135deg, transparent 50%, var(--accent) 50%, var(--accent) 60%, transparent 60%, transparent 70%, var(--accent) 70%, var(--accent) 80%, transparent 80%); border-bottom-right-radius: var(--radius-xl); }
 .vc-w-body { flex: 1; min-height: 0; overflow: auto; padding: 8px 14px 12px; position: relative; scrollbar-width: thin; }
+/* Keep a widget's own updates inside its box: text changes in one card never re-lay-out or repaint its
+   neighbours, and the frosted card keeps its own stacking context. */
+.vc-widget { isolation: isolate; }
+.vc-w-body { contain: layout paint; }
 .vc-w-body.vc-flush { padding: 0; overflow: hidden; }
 .vc-w-loading, .vc-w-error { margin: 0; font-size: .9rem; }
 .vc-w-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }

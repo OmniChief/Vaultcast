@@ -557,13 +557,81 @@
 
   function $(sel, el){ return (el||document).querySelector(sel); }
   function $all(sel, el){ return Array.prototype.slice.call((el||document).querySelectorAll(sel)); }
+  // Handlers given to h() go through one stable listener per event type that calls el._vcOn[type], so a
+  // refresh can keep an existing node mounted and just hand it the new node's handlers (see patchDom).
+  function onHandler(el, type, fn){
+    var m = el._vcOn || (el._vcOn = {});
+    if (!(type in m)) el.addEventListener(type, function(e){ var f = el._vcOn && el._vcOn[type]; if (typeof f === 'function') return f.call(this, e); });
+    m[type] = fn;
+  }
+  function adoptHandlers(old, nw){
+    if (nw._vcOn || old._vcOn) {
+      var src = nw._vcOn || {}, m = old._vcOn || (old._vcOn = {});
+      Object.keys(m).forEach(function(t){ if (!(t in src)) m[t] = null; });
+      Object.keys(src).forEach(function(t){ if (t in m) m[t] = src[t]; else onHandler(old, t, src[t]); });
+    }
+  }
+  /**
+   * Refresh-safe DOM update: patch `old` toward `nw` in place. Identical subtrees stay untouched (only their
+   * handlers are refreshed); changed text and attributes are set where they are; images that change source are
+   * preloaded and swapped once decoded; live media/iframes/canvases and form fields are only replaced when they
+   * really differ. Children with a data-key attribute are matched by key, so a row stays the same node (with its
+   * buttons mounted) for as long as that item exists, and rows are only added or removed when the set changes.
+   */
+  function patchNode(old, nw){
+    if (old.nodeType !== nw.nodeType || old.nodeName !== nw.nodeName) { old.parentNode.replaceChild(nw, old); return nw; }
+    if (old.nodeType === 3 || old.nodeType === 8) { if (old.data !== nw.data) old.data = nw.data; return old; }
+    if (old.nodeType !== 1) return old;
+    if (old.isEqualNode(nw)) { syncHandlers(old, nw); return old; }
+    var tag = old.nodeName;
+    if (/^(IFRAME|VIDEO|AUDIO|CANVAS|OBJECT|EMBED|INPUT|SELECT|TEXTAREA)$/.test(tag)) { old.parentNode.replaceChild(nw, old); return nw; }
+    var a, i, newSrc = null;
+    for (i = old.attributes.length - 1; i >= 0; i--) { a = old.attributes[i].name; if (!nw.hasAttribute(a)) old.removeAttribute(a); }
+    for (i = 0; i < nw.attributes.length; i++) {
+      a = nw.attributes[i]; if (old.getAttribute(a.name) === a.value) continue;
+      if (tag === 'IMG' && (a.name === 'src' || a.name === 'srcset')) { newSrc = newSrc || {}; newSrc[a.name] = a.value; continue; }
+      old.setAttribute(a.name, a.value);
+    }
+    if (newSrc) {
+      var pre = new Image(), target = old; if (newSrc.srcset) pre.srcset = newSrc.srcset; pre.src = newSrc.src || old.src;
+      var go = function(){ Object.keys(newSrc).forEach(function(k){ target.setAttribute(k, newSrc[k]); }); };
+      pre.onload = function(){ if (pre.decode) pre.decode().then(go, go); else go(); }; pre.onerror = go;
+    }
+    adoptHandlers(old, nw);
+    patchChildren(old, Array.prototype.slice.call(nw.childNodes));
+    return old;
+  }
+  function syncHandlers(old, nw){
+    adoptHandlers(old, nw);
+    for (var o = old.firstElementChild, n = nw.firstElementChild; o && n; o = o.nextElementSibling, n = n.nextElementSibling) syncHandlers(o, n);
+  }
+  function keyOf(n){ return n && n.nodeType === 1 ? n.getAttribute('data-key') : null; }
+  function patchChildren(parent, kids){
+    kids = kids.filter(function(k){ return k != null && k !== '' && k !== false; }).map(function(k){ return typeof k === 'string' || typeof k === 'number' ? document.createTextNode(String(k)) : k; });
+    var cur = Array.prototype.slice.call(parent.childNodes);
+    if (kids.length && kids.every(function(k){ return keyOf(k) != null; }) && cur.every(function(c){ return keyOf(c) != null; })) {
+      var byKey = {}; cur.forEach(function(c){ byKey[keyOf(c)] = c; });
+      var keep = {};
+      kids.forEach(function(k, i){
+        var key = keyOf(k), node = byKey[key];
+        if (node && !keep[key]) { keep[key] = 1; node = patchNode(node, k); } else node = k;
+        if (parent.childNodes[i] !== node) parent.insertBefore(node, parent.childNodes[i] || null);
+      });
+      cur.forEach(function(c){ if (!keep[keyOf(c)] && c.parentNode === parent) parent.removeChild(c); });
+      return;
+    }
+    if (cur.length !== kids.length) { parent.replaceChildren.apply(parent, kids); return; }
+    for (var i = kids.length - 1; i >= 0; i--) patchNode(cur[i], kids[i]);
+  }
+  /** swapChildren(el, ...nodes): like el.replaceChildren(...nodes) but patches in place (no flash, no remount). */
+  function swapChildren(el){ if (/^Last refresh failed/.test(el.title || '')) el.removeAttribute('title'); patchChildren(el, Array.prototype.slice.call(arguments, 1)); }
   function h(tag, attrs, kids){
     var el = document.createElement(tag);
     if (attrs) Object.keys(attrs).forEach(function(k){
       if (k === 'className') el.className = attrs[k];
       else if (k === 'text') el.textContent = attrs[k];
       else if (k === 'html') el.innerHTML = attrs[k];
-      else if (k.slice(0,2) === 'on' && typeof attrs[k] === 'function') el.addEventListener(k.slice(2).toLowerCase(), attrs[k]);
+      else if (k.slice(0,2) === 'on' && typeof attrs[k] === 'function') onHandler(el, k.slice(2).toLowerCase(), attrs[k]);
       else if (attrs[k] !== false && attrs[k] != null) el.setAttribute(k, attrs[k] === true ? '' : attrs[k]);
     });
     (kids||[]).forEach(function(c){ if (c == null) return; el.appendChild(typeof c === 'string' ? document.createTextNode(c) : c); });
@@ -14948,7 +15016,7 @@ function viewCollectionDetail(){
   });
 
   /* helpers for assets/js/matching.js (Ingest inbox / Fix matching / Label reports) */
-  window.NSApp = { h: h, api: api, toast: toast, confirmDialog: confirmDialog, render: render, state: state, can:can,
+  window.NSApp = { h: h, swap: swapChildren, api: api, toast: toast, confirmDialog: confirmDialog, render: render, state: state, can:can,
     openSettings: openSettings, openShow: openShow, openMovie: openMovie, openGame:openGame, navigate:navigate, refreshArtwork:refreshArtwork, fmtSize: fmtSize, version: APP_VERSION,
     shell:shell,communityPoster:communityPoster,refreshCommunityRating:refreshCommunityRating,heroClock:heroClock,homePosterEl:homePosterEl,homeSectionPosterEl:homeSectionPosterEl,collectionsPosterEl:collectionsPosterEl,librarySummary:librarySummary,cardEl:cardEl,homeActivitySections:homeActivitySections,applyRoute:applyRoute,replaceNav:replaceNav,openPlayer:openPlayer,playItem:playItem,copyText:copyText,shareUrl:shareUrl,startLobbyHost:startLobbyHost,captureGameState:lobbyCaptureState,loadGameState:loadGameState,restoreMultiplayerState:restoreMultiplayerState,quitGame:function(){closePlayer();} };
   var moduleLoads = {};
