@@ -72,8 +72,36 @@
   // Each widget: { name, desc, icon, w, h, render(body, settings, ctx) -> optional cleanup, form(settings) -> { el, read() } }
   var W = {};
   function list(rows, cls){ return h('ul', { className:'vc-w-list ' + (cls || '') }, rows); }
+  /**
+   * Refresh-safe update: patch the existing DOM toward the new nodes instead of rebuilding it, so unchanged
+   * images, iframes and media stay mounted (no blank-until-loaded flash) and nothing re-animates. Nodes that are
+   * identical are kept as they are; media or controls that differ are replaced (fresh listeners).
+   */
+  function morph(old, nw){
+    if (old.nodeType !== nw.nodeType || old.nodeName !== nw.nodeName) { old.parentNode.replaceChild(nw, old); return; }
+    if (old.nodeType === 3) { if (old.data !== nw.data) old.data = nw.data; return; }
+    if (old.nodeType !== 1 || old.isEqualNode(nw)) return;
+    // Changed media, or anything holding controls, is swapped whole so its click handlers match the new data.
+    if (/^(IMG|IFRAME|VIDEO|AUDIO|CANVAS|SVG|svg|BUTTON|A|INPUT|SELECT|TEXTAREA|FORM|LABEL|DETAILS)$/.test(old.nodeName) || old.querySelector('button,a,input,select,textarea,form,label,details,[tabindex]')) { old.parentNode.replaceChild(nw, old); return; }
+    var a, i;
+    for (i = old.attributes.length - 1; i >= 0; i--) { a = old.attributes[i].name; if (!nw.hasAttribute(a)) old.removeAttribute(a); }
+    for (i = 0; i < nw.attributes.length; i++) { a = nw.attributes[i]; if (old.getAttribute(a.name) !== a.value) old.setAttribute(a.name, a.value); }
+    patchKids(old, Array.prototype.slice.call(nw.childNodes));
+  }
+  function patchKids(parent, kids){
+    kids = kids.filter(function(k){ return k != null && k !== '' && k !== false; }).map(function(k){ return typeof k === 'string' ? document.createTextNode(k) : k; });
+    var cur = parent.childNodes;
+    if (cur.length !== kids.length) { parent.replaceChildren.apply(parent, kids); return; }
+    for (var i = kids.length - 1; i >= 0; i--) morph(cur[i], kids[i]);
+  }
+  function swap(el){ if (/^Last refresh failed/.test(el.title || '')) el.removeAttribute('title'); patchKids(el, Array.prototype.slice.call(arguments, 1)); }
   function loading(body){ body.replaceChildren(h('p', { className:'muted vc-w-loading', text:'Loading…' })); }
-  function wErr(body, e){ body.replaceChildren(h('p', { className:'muted vc-w-error', text:(e && (e.error || e.message)) || 'Unavailable right now.' })); }
+  /** A failed background refresh keeps the last good content (no blink to an error and back); only a first load shows the error. */
+  function wErr(body, e, force){
+    var msg = (e && (e.error || e.message)) || 'Unavailable right now.';
+    if (!force && body.firstChild && !body.querySelector('.vc-w-loading, .vc-w-error')) { body.title = 'Last refresh failed: ' + msg; return; }
+    swap(body, h('p', { className:'muted vc-w-error', text:msg }));
+  }
   function textForm(fields){
     var els = {};
     var el = h('div', { className:'vc-form' }, fields.map(function(f){
@@ -112,7 +140,7 @@
       if (!s.loc) { body.appendChild(h('p', { className:'muted', text:'Open the widget settings to choose a location.' })); return; }
       function load(){ weatherData({ lat:s.loc.lat, lon:s.loc.lon, units:s.units }).then(function(j){
         var c = j.current, w = wx(c.code, c.day);
-        body.replaceChildren(h('div', { className:'vc-wx' }, [
+        swap(body, h('div', { className:'vc-wx' }, [
           h('div', { className:'vc-wx-now' }, [h('span', { className:'vc-wx-icon', text:w.icon, 'aria-hidden':'true' }), h('div', null, [h('strong', { className:'vc-wx-temp', text:deg(c.temp) + j.units }), h('span', { className:'muted', text:w.text + ' · feels ' + deg(c.feels) + '°' }), h('span', { className:'muted vc-wx-place', text:s.loc.name })])]),
           h('div', { className:'vc-wx-meta muted' }, [h('span', { text:'💧 ' + deg(c.humidity) + '%' }), h('span', { text:'💨 ' + deg(c.wind) + ' ' + j.wind_units })]),
           h('div', { className:'vc-wx-hours' }, j.hours.slice(0, 8).map(function(x){ return h('div', { className:'vc-wx-h' }, [h('small', { className:'muted', text:x.time.slice(11, 16) }), h('span', { text:wx(x.code).icon }), h('strong', { text:deg(x.temp) + '°' }), x.rain ? h('small', { className:'vc-wx-rain', text:x.rain + '%' }) : null]); })),
@@ -172,7 +200,7 @@
     render:function(body, s){
       if (!s.url) { body.appendChild(h('p', { className:'muted', text:'Add a feed address in the widget settings.' })); return; }
       function load(){ call('/misc/widget/rss?url=' + encodeURIComponent(s.url)).then(function(j){
-        body.replaceChildren(h('p', { className:'vc-rss-title', text:j.title || s.url }), list(j.items.slice(0, s.count || 10).map(function(i){ return h('li', { className:'vc-rss-item' }, [i.link ? h('a', { href:i.link, target:'_blank', rel:'noopener noreferrer', text:i.title }) : h('span', { text:i.title }), i.date ? h('small', { className:'muted', text:ago(i.date) }) : null]); })));
+        swap(body, h('p', { className:'vc-rss-title', text:j.title || s.url }), list(j.items.slice(0, s.count || 10).map(function(i){ return h('li', { className:'vc-rss-item' }, [i.link ? h('a', { href:i.link, target:'_blank', rel:'noopener noreferrer', text:i.title }) : h('span', { text:i.title }), i.date ? h('small', { className:'muted', text:ago(i.date) }) : null]); })));
       }).catch(function(e){ wErr(body, e); }); }
       loading(body); load(); return poll(load, 900000, s);
     },
@@ -183,7 +211,7 @@
       var zone = h('div', { className:'vc-mini-drop', tabindex:'0', role:'button', 'aria-label':'Choose files to upload to Drop' }, [h('strong', { text:'Drop files here' }), h('small', { className:'muted', text:'Kept for 24 hours · sent to your devices' })]), items = h('div');
       body.append(zone, items);
       var picker = h('input', { type:'file', multiple:true, hidden:true }); body.appendChild(picker);
-      function refresh(){ call('/drop/state').then(function(j){ items.replaceChildren(list(j.items.filter(function(i){ return i.status === 'available'; }).slice(0, 5).map(function(i){ return h('li', { className:'vc-drop-mini' }, [h('span', { text:kindIcon(i) }), h('a', { href:i.kind === 'link' ? i.body : url('/api/drop/items/' + i.id + '/download'), target:i.kind === 'link' ? '_blank' : null, rel:'noopener', text:i.name }), h('small', { className:'muted', text:'⏳ ' + until(i.expires_at) })]); }))); }).catch(function(){}); }
+      function refresh(){ call('/drop/state').then(function(j){ swap(items, list(j.items.filter(function(i){ return i.status === 'available'; }).slice(0, 5).map(function(i){ return h('li', { className:'vc-drop-mini' }, [h('span', { text:kindIcon(i) }), h('a', { href:i.kind === 'link' ? i.body : url('/api/drop/items/' + i.id + '/download'), target:i.kind === 'link' ? '_blank' : null, rel:'noopener', text:i.name }), h('small', { className:'muted', text:'⏳ ' + until(i.expires_at) })]); }))); }).catch(function(){}); }
       function send(files){ Array.prototype.forEach.call(files, function(f){ uploadFile(f, { expires_hours:24, inbox:true }, function(p){ zone.querySelector('small').textContent = p.done ? 'Uploaded ' + f.name : Math.round(100 * p.sent / f.size) + '% · ' + f.name; if (p.done) refresh(); }).catch(err); }); }
       zone.addEventListener('click', function(){ picker.click(); }); zone.addEventListener('keydown', function(e){ if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); picker.click(); } });
       picker.addEventListener('change', function(){ send(picker.files); picker.value = ''; });
@@ -195,10 +223,10 @@
   W.recordings = { name:'Recordings', desc:'What is recording now and what is scheduled next.', icon:'⏺️', w:6, h:6,
     render:function(body, s){
       function load(){ call('/misc/widget/recordings').then(function(j){
-        if (j.unavailable) { body.replaceChildren(h('p', { className:'muted', text:'Live TV is turned off on this server.' })); return; }
+        if (j.unavailable) { swap(body, h('p', { className:'muted', text:'Live TV is turned off on this server.' })); return; }
         var rows = j.recording.map(function(r){ return h('li', { className:'vc-rec live' }, [h('span', { className:'vc-rec-dot', 'aria-label':'Recording' }), h('span', null, [h('strong', { text:r.title }), h('small', { className:'muted', text:r.channel + ' · until ' + new Date(r.end * 1000).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }) })])]); })
           .concat(j.upcoming.map(function(r){ var d = new Date(r.start * 1000); return h('li', { className:'vc-rec' }, [h('span', { className:'vc-rec-time', text:d.toLocaleDateString([], { weekday:'short' }) + ' ' + d.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }) }), h('span', null, [h('strong', { text:r.title }), h('small', { className:'muted', text:r.channel })])]); }));
-        body.replaceChildren(rows.length ? list(rows) : h('p', { className:'muted', text:'No recordings scheduled.' }));
+        swap(body, rows.length ? list(rows) : h('p', { className:'muted', text:'No recordings scheduled.' }));
       }).catch(function(e){ wErr(body, e); }); }
       loading(body); load(); return poll(load, 60000, s);
     }
@@ -206,8 +234,8 @@
   W.downloads = { name:'Downloads', desc:'Progress of downloads in the request queue.', icon:'⬇️', w:6, h:6,
     render:function(body, s){
       function load(){ call('/misc/widget/downloads').then(function(j){
-        if (j.unavailable) { body.replaceChildren(h('p', { className:'muted', text:'Downloads are not available for your account.' })); return; }
-        body.replaceChildren(j.items.length ? list(j.items.map(function(d){ var pct = Math.max(0, Math.min(100, Number(d.percent || 0))); return h('li', { className:'vc-dl' }, [h('span', { className:'vc-dl-name', text:d.name }), h('span', { className:'vc-progress', role:'progressbar', 'aria-valuenow':String(Math.round(pct)), 'aria-valuemin':'0', 'aria-valuemax':'100' }, [h('i', { style:'width:' + pct + '%' })]), h('small', { className:'muted', text:Math.round(pct) + '% · ' + (d.status || '') })]); })) : h('p', { className:'muted', text:'Nothing downloading.' }));
+        if (j.unavailable) { swap(body, h('p', { className:'muted', text:'Downloads are not available for your account.' })); return; }
+        swap(body, j.items.length ? list(j.items.map(function(d){ var pct = Math.max(0, Math.min(100, Number(d.percent || 0))); return h('li', { className:'vc-dl' }, [h('span', { className:'vc-dl-name', text:d.name }), h('span', { className:'vc-progress', role:'progressbar', 'aria-valuenow':String(Math.round(pct)), 'aria-valuemin':'0', 'aria-valuemax':'100' }, [h('i', { style:'width:' + pct + '%' })]), h('small', { className:'muted', text:Math.round(pct) + '% · ' + (d.status || '') })]); })) : h('p', { className:'muted', text:'Nothing downloading.' }));
       }).catch(function(e){ wErr(body, e); }); }
       loading(body); load(); return poll(load, 10000, s);
     }
@@ -217,10 +245,10 @@
   W.health = { name:'NAS health', desc:'CPU, memory, disks, temperature and services.', icon:'🩺', w:6, h:6,
     render:function(body, s){
       function load(){ call('/misc/widget/health').then(function(j){
-        if (j.limited) { body.replaceChildren(h('div', { className:'vc-health-ok' }, [h('span', { className:'vc-rec-dot ok' }), h('strong', { text:'Server online' }), h('small', { className:'muted', text:'Detailed health is visible to administrators.' })])); return; }
+        if (j.limited) { swap(body, h('div', { className:'vc-health-ok' }, [h('span', { className:'vc-rec-dot ok' }), h('strong', { text:'Server online' }), h('small', { className:'muted', text:'Detailed health is visible to administrators.' })])); return; }
         var gauges = [['CPU', pct(pick(j, ['cpu_percent', 'cpu']))], ['Memory', pct(pick(j, ['memory', 'mem']))], ['Media disk', pct(pick(j, ['media_disk', 'disk']))], ['Data disk', pct(pick(j, ['data_disk']))]].filter(function(g){ return g[1] != null && !isNaN(g[1]); });
         var temp = pick(j, ['temperature', 'temp']); if (temp && typeof temp === 'object') temp = pick(temp, ['cpu', 'value', 'max']);
-        body.replaceChildren(h('div', { className:'vc-health' }, [
+        swap(body, h('div', { className:'vc-health' }, [
           h('div', { className:'vc-gauges' }, gauges.map(function(g){ var v = Math.round(g[1]); return h('div', { className:'vc-gauge' + (v > 90 ? ' bad' : v > 75 ? ' warn' : ''), style:'--vc-p:' + v }, [h('strong', { text:v + '%' }), h('small', { className:'muted', text:g[0] })]); })),
           h('p', { className:'muted' }, [j.uptime_human ? 'Up ' + j.uptime_human : '', temp ? ' · ' + Math.round(Number(temp)) + '°C' : '', j.load ? ' · load ' + (Array.isArray(j.load) ? j.load.slice(0, 3).map(function(x){ return Number(x).toFixed(2); }).join(' ') : j.load) : '']),
           j.services ? h('div', { className:'vc-services' }, j.services.slice(0, 8).map(function(s){ var ok = s.active === true || s.active === 'active' || s.active === 'running'; return h('span', { className:'vc-chip' + (ok ? ' ok' : ' bad'), text:(ok ? '● ' : '○ ') + s.name }); })) : null]));
@@ -231,8 +259,8 @@
   W.recent = { name:'Recently added', desc:'The newest films and shows in the library.', icon:'🆕', w:12, h:6,
     render:function(body, s){
       function load(){ call('/misc/widget/recent?n=' + (s.count || 12)).then(function(j){
-        if (!j.items.length) { body.replaceChildren(h('p', { className:'muted', text:'Nothing new yet.' })); return; }
-        body.replaceChildren(h('div', { className:'vc-poster-row' }, j.items.map(function(it){ return h('button', { type:'button', className:'vc-poster', title:it.title, onClick:function(){ if (it.show_key && A.openShow) A.openShow(it.show_key); else if (A.openMovie) A.openMovie(it.id); } }, [h('img', { src:url(it.poster), alt:'', loading:'lazy' }), h('span', { className:'vc-poster-cap' }, [h('strong', { text:it.title }), h('small', { className:'muted', text:it.subtitle || '' })])]); })));
+        if (!j.items.length) { swap(body, h('p', { className:'muted', text:'Nothing new yet.' })); return; }
+        swap(body, h('div', { className:'vc-poster-row' }, j.items.map(function(it){ return h('button', { type:'button', className:'vc-poster', title:it.title, onClick:function(){ if (it.show_key && A.openShow) A.openShow(it.show_key); else if (A.openMovie) A.openMovie(it.id); } }, [h('img', { src:url(it.poster), alt:'', loading:'lazy' }), h('span', { className:'vc-poster-cap' }, [h('strong', { text:it.title }), h('small', { className:'muted', text:it.subtitle || '' })])]); })));
       }).catch(function(e){ wErr(body, e); }); }
       loading(body); load(); return poll(load, 600000, s);
     },
@@ -241,7 +269,7 @@
   W.nowplaying = { name:'Now playing', desc:'What you and your friends are watching (admins see everyone).', icon:'▶️', w:8, h:5,
     render:function(body, s){
       function load(){ call('/misc/widget/nowplaying').then(function(j){
-        body.replaceChildren(j.sessions.length ? list(j.sessions.map(function(x){ return h('li', { className:'vc-np' }, [h('img', { src:url(x.poster), alt:'', loading:'lazy' }), h('span', { className:'vc-np-copy' }, [h('strong', { text:x.title }), h('small', { className:'muted', text:x.user.name + ' · ' + ago(x.updated_at) }), x.percent != null ? h('span', { className:'vc-progress' }, [h('i', { style:'width:' + x.percent + '%' })]) : null])]); })) : h('p', { className:'muted', text:'Nobody is watching right now.' }));
+        swap(body, j.sessions.length ? list(j.sessions.map(function(x){ return h('li', { className:'vc-np' }, [h('img', { src:url(x.poster), alt:'', loading:'lazy' }), h('span', { className:'vc-np-copy' }, [h('strong', { text:x.title }), h('small', { className:'muted', text:x.user.name + ' · ' + ago(x.updated_at) }), x.percent != null ? h('span', { className:'vc-progress' }, [h('i', { style:'width:' + x.percent + '%' })]) : null])]); })) : h('p', { className:'muted', text:'Nobody is watching right now.' }));
       }).catch(function(e){ wErr(body, e); }); }
       loading(body); load(); return poll(load, 20000, s);
     }
@@ -249,7 +277,7 @@
   W.leaderboard = { name:'Leaderboard', desc:'Top players or teams this week.', icon:'🏆', w:6, h:7,
     render:function(body, s){
       function load(){ call('/play/leaderboard?board=' + (s.board || 'points') + '&period=' + (s.period || 'week')).then(function(j){
-        body.replaceChildren(j.rows.length ? h('ol', { className:'vc-w-list vc-mini-lb' }, j.rows.slice(0, 8).map(function(r, i){ var who = r.team && s.board === 'teams' ? r.team : r.user; return h('li', { className:r.me ? 'me' : '' }, [h('span', { className:'vc-lb-rank', text:String(i + 1) }), h('strong', { text:(r.team && s.board === 'teams' ? r.team.emblem + ' ' : '') + who.name }), h('span', { className:'vc-lb-value', text:j.unit === 'seconds' ? Math.round(r.value / 3600) + ' h' : Number(r.value).toLocaleString() })]); })) : h('p', { className:'muted', text:'No scores yet.' }));
+        swap(body, j.rows.length ? h('ol', { className:'vc-w-list vc-mini-lb' }, j.rows.slice(0, 8).map(function(r, i){ var who = r.team && s.board === 'teams' ? r.team : r.user; return h('li', { className:r.me ? 'me' : '' }, [h('span', { className:'vc-lb-rank', text:String(i + 1) }), h('strong', { text:(r.team && s.board === 'teams' ? r.team.emblem + ' ' : '') + who.name }), h('span', { className:'vc-lb-value', text:j.unit === 'seconds' ? Math.round(r.value / 3600) + ' h' : Number(r.value).toLocaleString() })]); })) : h('p', { className:'muted', text:'No scores yet.' }));
       }).catch(function(e){ wErr(body, e); }); }
       loading(body); load(); return poll(load, 120000, s);
     },
@@ -297,7 +325,16 @@
     else {
       var bust = function(){ return url + (url.indexOf('?') >= 0 ? '&' : '?') + '_t=' + Date.now(); };
       el = h('img', { className:'vc-cam', alt:camLabel(c), src:bust(), referrerpolicy:'no-referrer' });
-      t = setInterval(function(){ if (!document.hidden && el.isConnected) el.src = bust(); }, Math.max(5, Number(c.refresh) || 30) * 1000);
+      // Fetch the next snapshot off-screen and swap only once it has decoded, so the picture never blanks
+      // (or shows a broken-image icon) between refreshes. A failed fetch keeps the last good frame.
+      var busy = false;
+      t = setInterval(function(){
+        if (document.hidden || !el.isConnected || busy) return;
+        var pre = new Image(), u = bust(); busy = true; pre.referrerPolicy = 'no-referrer';
+        pre.onload = function(){ busy = false; if (!el.isConnected) return; var go = function(){ if (el.isConnected) el.src = u; }; if (pre.decode) pre.decode().then(go, go); else go(); };
+        pre.onerror = function(){ busy = false; };
+        pre.src = u;
+      }, Math.max(5, Number(c.refresh) || 30) * 1000);
     }
     return { el:el, stop:function(){ clearInterval(t); if (hls) { try { hls.destroy(); } catch (e) {} hls = null; } if (el.tagName === 'VIDEO') { el.pause(); el.removeAttribute('src'); } if (kind === 'mjpeg' && el.tagName === 'IMG') el.removeAttribute('src'); if (el.tagName === 'IFRAME') el.src = 'about:blank'; } };
   }
@@ -340,7 +377,7 @@
       var c = cams[i % cams.length]; i++;
       var v = camView(c, alive), layer = h('div', { className:'vc-cam-layer' }, [v.el]), old = cur, shown = false;
       wrap.appendChild(layer);
-      function reveal(){ if (shown || stopped) return; shown = true; layer.classList.add('show'); label.textContent = camLabel(c); if (old) { old.layer.classList.remove('show'); setTimeout(function(){ old.v.stop(); old.layer.remove(); }, fadeMs + 50); } }
+      function reveal(){ if (shown || stopped) return; shown = true; layer.classList.add('show'); label.textContent = camLabel(c); if (old) { setTimeout(function(){ old.v.stop(); old.layer.remove(); }, fadeMs + 50); } }
       if (v.el.tagName === 'IMG') { v.el.addEventListener('load', reveal, { once:true }); v.el.addEventListener('error', reveal, { once:true }); }
       else if (v.el.tagName === 'VIDEO') v.el.addEventListener('playing', reveal, { once:true });
       else if (v.el.tagName === 'IFRAME') v.el.addEventListener('load', reveal, { once:true });
@@ -376,7 +413,7 @@
           return;
         }
         cyc = camCycle(stage, cams, { seconds:s.seconds || 60, pauseOnHover:!!s.hoverPause, fade:s.fade == null ? 0.8 : s.fade });
-      }).catch(function(e){ if (!gone) wErr(body, e); });
+      }).catch(function(e){ if (!gone) wErr(body, e, true); });
       return function(){ gone = true; if (cyc) cyc.stop(); views.forEach(function(v){ v.stop(); }); };
     },
     form:function(s){
@@ -455,13 +492,24 @@
    * (or a cut, or a slow Ken Burns pan), cover/contain fit, shuffle, optional captions. loader() resolves
    * to [{ url, title }]; it is asked again after each full pass so new pictures show up.
    */
+  /**
+   * Crossfade without a dark dip: the incoming layer fades in on top while the outgoing one stays fully
+   * opaque underneath; the old layer is only hidden once the new one is solid.
+   */
+  function fadeOver(back, front, ms){
+    var t = (back._vcFade = (back._vcFade || 0) + 1);
+    back.style.zIndex = '2'; front.style.zIndex = '1';
+    back.classList.add('show');
+    setTimeout(function(){ if (back._vcFade === t && back.classList.contains('show')) { front.style.transition = 'none'; front.classList.remove('show'); void front.offsetWidth; front.style.transition = ''; } }, (ms || 0) + 60);
+  }
   function pictureStage(body, s, loader, opts){
     opts = opts || {};
     body.classList.add('vc-flush');
     var trans = s.transition || opts.transition || 'fade', reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
     var stage = h('div', { className:'vc-frame fit-' + (s.fit === 'contain' ? 'contain' : 'cover') + (trans === 'none' ? ' no-fade' : '') }), layers = [h('div', { className:'vc-frame-layer' }), h('div', { className:'vc-frame-layer' })], cap = h('div', { className:'vc-kb-cap' });
     var front = 0, list = [], i = 0, stop = null, gone = false, every = Math.max(4, Number(s.seconds) || 20) * 1000;
-    stage.style.setProperty('--vc-frame-fade', Math.max(0.3, Math.min(6, Number(s.fade) || 1.5)) + 's');
+    var fadeMs = trans === 'none' ? 0 : Math.max(0.3, Math.min(6, Number(s.fade) || 1.5)) * 1000;
+    stage.style.setProperty('--vc-frame-fade', fadeMs / 1000 + 's');
     layers.forEach(function(l){ stage.appendChild(l); }); if (s.captions) stage.appendChild(cap); body.appendChild(stage);
     function showPic(p, tries){
       var img = new Image(); img.decoding = 'async'; img.alt = p.title || ''; img.className = 'vc-frame-img';
@@ -471,7 +519,7 @@
         if (trans === 'kenburns' && !reduce) { img.className += ' vc-kb-img ' + ['zoom-in-l', 'zoom-in-r', 'zoom-out-l', 'zoom-out-r', 'pan-up', 'pan-down'][Math.floor(Math.random() * 6)]; img.style.animationDuration = every * 1.25 + 'ms'; }
         back.replaceChildren(img);
         if (s.fit === 'contain') back.style.setProperty('--vc-frame-bg', 'url("' + img.src.replace(/["\\()\s]/g, '') + '")');
-        back.classList.add('show'); layers[front].classList.remove('show'); front = 1 - front; cap.textContent = p.title || '';
+        fadeOver(back, layers[front], fadeMs); front = 1 - front; cap.textContent = p.title || '';
       };
       img.onerror = function(){ if ((tries || 0) < 3 && list.length > 1) next((tries || 0) + 1); };
       img.src = p.url;
@@ -487,7 +535,7 @@
       if (!list.length) { stage.replaceChildren(h('p', { className:'vc-kb-empty', text:opts.empty || 'No pictures yet.' })); return; }
       if (opts.single) { showPic(opts.single(list) || list[0]); return; }
       next(); if (list.length > 1 || opts.reload) stop = poll(next, every);
-    }).catch(function(e){ if (!gone) wErr(body, e); });
+    }).catch(function(e){ if (!gone) wErr(body, e, true); });
     return function(){ gone = true; if (stop) stop(); };
   }
   function libraryPictures(s, n){
@@ -566,7 +614,7 @@
         back.replaceChildren(img);
         var fx = ['zoom-in-l', 'zoom-in-r', 'zoom-out-l', 'zoom-out-r', 'pan-up', 'pan-down'][Math.floor(Math.random() * 6)];
         img.className = 'vc-kb-img ' + (reduce ? '' : fx); img.style.animationDuration = (opts.interval || 12000) * 1.25 + 'ms';
-        back.classList.add('show'); layers[front].classList.remove('show'); front = 1 - front;
+        fadeOver(back, layers[front], parseFloat(getComputedStyle(back).transitionDuration) * 1000 || 1600); front = 1 - front;
         cap.textContent = item.title || '';
         timer = setTimeout(next, opts.interval || 12000);
       };
@@ -1269,10 +1317,10 @@
     // ---- overlays
     var o = p.overlays;
     function block(cls){ var b = h('div', { className:'vc-amb-block ' + cls }); info.appendChild(b); return b; }
-    if (o.weather && p.loc) { var wxEl = block('vc-amb-wx'); var wl = function(){ weatherData(p.loc).then(function(j){ var w = wx(j.current.code, j.current.day); wxEl.replaceChildren(h('span', { className:'vc-amb-wx-icon', text:w.icon }), h('strong', { text:deg(j.current.temp) + j.units }), h('small', { text:w.text + ' · ' + p.loc.name })); }).catch(function(){}); }; wl(); stops.push(poll(wl, 600000)); }
-    if (o.event && signed()) { var evEl = block('vc-amb-event'); var el = function(){ var now = Math.floor(Date.now() / 1000); call('/misc/cal/events?from=' + now + '&to=' + (now + 14 * 86400)).then(function(j){ var e = (j.events || []).filter(function(x){ return x.source !== 'reminder' && (x.all_day ? x.end > now : x.start >= now - 600); })[0]; evEl.hidden = !e; if (!e) return; var d = new Date(e.start * 1000), today = new Date().toDateString() === d.toDateString(); evEl.replaceChildren(h('span', { className:'vc-amb-dot', style:'--c:' + (e.colour || '#59e9ff') }), h('span', null, [h('small', { text:(today ? 'Today' : d.toLocaleDateString([], { weekday:'short', day:'numeric', month:'short' })) + (e.all_day ? '' : ' · ' + d.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' })) }), h('strong', { text:e.title })])); }).catch(function(){ evEl.hidden = true; }); }; el(); stops.push(poll(el, 300000)); }
+    if (o.weather && p.loc) { var wxEl = block('vc-amb-wx'); var wl = function(){ weatherData(p.loc).then(function(j){ var w = wx(j.current.code, j.current.day); swap(wxEl, h('span', { className:'vc-amb-wx-icon', text:w.icon }), h('strong', { text:deg(j.current.temp) + j.units }), h('small', { text:w.text + ' · ' + p.loc.name })); }).catch(function(){}); }; wl(); stops.push(poll(wl, 600000)); }
+    if (o.event && signed()) { var evEl = block('vc-amb-event'); var el = function(){ var now = Math.floor(Date.now() / 1000); call('/misc/cal/events?from=' + now + '&to=' + (now + 14 * 86400)).then(function(j){ var e = (j.events || []).filter(function(x){ return x.source !== 'reminder' && (x.all_day ? x.end > now : x.start >= now - 600); })[0]; evEl.hidden = !e; if (!e) return; var d = new Date(e.start * 1000), today = new Date().toDateString() === d.toDateString(); swap(evEl, h('span', { className:'vc-amb-dot', style:'--c:' + (e.colour || '#59e9ff') }), h('span', null, [h('small', { text:(today ? 'Today' : d.toLocaleDateString([], { weekday:'short', day:'numeric', month:'short' })) + (e.all_day ? '' : ' · ' + d.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' })) }), h('strong', { text:e.title })])); }).catch(function(){ evEl.hidden = true; }); }; el(); stops.push(poll(el, 300000)); }
     if (o.reminders && signed()) { var rmEl = block('vc-amb-rems'); var rl = function(){ call('/misc/reminders').then(function(j){ var list = (j.reminders || []).filter(function(r){ return r.due && r.state !== 'later' && r.state !== 'snoozed'; }).slice(0, 3); rmEl.hidden = !list.length; rmEl.replaceChildren.apply(rmEl, list.map(function(r){ return h('div', { className:'vc-amb-rem ' + r.state }, [h('span', { text:r.emoji }), h('span', { text:r.title }), h('small', { text:r.state === 'overdue' ? 'Overdue' : r.state === 'today' ? 'Today' : r.state === 'tomorrow' ? 'Tomorrow' : 'Soon' })]); })); }).catch(function(){ rmEl.hidden = true; }); }; rl(); stops.push(poll(rl, 300000)); }
-    if (o.nowplaying) { var npEl = block('vc-amb-np'); var nl = function(){ call('/misc/widget/nowplaying').then(function(j){ var s0 = (j.sessions || [])[0]; npEl.hidden = !s0; if (s0) npEl.replaceChildren(h('small', { text:'▶ ' + (s0.user && s0.user.name ? s0.user.name + ' is watching' : 'Now playing') }), h('strong', { text:s0.title })); }).catch(function(){ npEl.hidden = true; }); }; nl(); stops.push(poll(nl, 60000)); }
+    if (o.nowplaying) { var npEl = block('vc-amb-np'); var nl = function(){ call('/misc/widget/nowplaying').then(function(j){ var s0 = (j.sessions || [])[0]; npEl.hidden = !s0; if (s0) swap(npEl, h('small', { text:'▶ ' + (s0.user && s0.user.name ? s0.user.name + ' is watching' : 'Now playing') }), h('strong', { text:s0.title })); }).catch(function(){ npEl.hidden = true; }); }; nl(); stops.push(poll(nl, 60000)); }
     if (o.quote) { var day = Math.floor((Date.now() - new Date().getTimezoneOffset() * 60000) / 86400000), q = QUOTES[day % QUOTES.length]; block('vc-amb-quote').append(h('q', { text:q[0] }), h('small', { text:'— ' + q[1] })); }
     // ---- screen care
     dimEl.style.opacity = String(p.dim / 100);

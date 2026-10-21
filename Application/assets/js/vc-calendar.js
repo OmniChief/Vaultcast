@@ -199,8 +199,8 @@
       if (!j || !j.reminders) { call('/misc/reminders').then(draw).catch(function(e){ listEl.replaceChildren(h('li', { className:'muted', text:(e && e.error) || 'Reminders unavailable.' })); }); return; }
       var days = Number(s.days) || 0, horizon = days ? ymd(addDays(new Date(), days)) : null;
       var list = j.reminders.filter(function(r){ return r.due && (!horizon || r.due <= horizon || r.state === 'overdue'); }).slice(0, Math.max(1, Number(s.limit) || 8));
-      if (!list.length) { listEl.replaceChildren(h('li', { className:'vc-rem-empty muted', text:j.reminders.length ? 'Nothing due soon.' : 'No reminders yet. Add bins, bills, medication and more.' })); return; }
-      listEl.replaceChildren.apply(listEl, reminderRows(list, draw, { onDone:showUndo }));
+      if (!list.length) { swap(listEl, h('li', { className:'vc-rem-empty muted', text:j.reminders.length ? 'Nothing due soon.' : 'No reminders yet. Add bins, bills, medication and more.' })); return; }
+      swap.apply(null, [listEl].concat(reminderRows(list, draw, { onDone:showUndo })));
     }
     // Old Bin day widgets kept their reminders in the widget settings: move them to your account once.
     if (s.items && s.items.length && !s.migrated) call('/misc/reminders/import', { method:'POST', body:{ items:s.items, tz:TZ } }).then(function(j){ if (ctx && ctx.save) ctx.save(Object.assign({}, s, { items:[], migrated:true }), true); draw(j); }).catch(function(){ draw(); });
@@ -214,6 +214,29 @@
     return { el:h('div', { className:'vc-form' }, [field('Show up to', limit), field('Which', days), h('p', { className:'muted', text:'Reminders belong to your account, so they show on every board and on the Calendar page. Add them with “+ Reminder” on the widget.' })]), read:function(){ return { limit:Math.max(1, Number(limit.value) || 8), days:Number(days.value) || 0 }; } };
   }
 
+  /**
+   * Refresh-safe update: patch the existing DOM toward the new nodes instead of rebuilding it, so unchanged
+   * images, iframes and media stay mounted (no blank-until-loaded flash) and nothing re-animates. Nodes that are
+   * identical are kept as they are; media or controls that differ are replaced (fresh listeners).
+   */
+  function morph(old, nw){
+    if (old.nodeType !== nw.nodeType || old.nodeName !== nw.nodeName) { old.parentNode.replaceChild(nw, old); return; }
+    if (old.nodeType === 3) { if (old.data !== nw.data) old.data = nw.data; return; }
+    if (old.nodeType !== 1 || old.isEqualNode(nw)) return;
+    // Changed media, or anything holding controls, is swapped whole so its click handlers match the new data.
+    if (/^(IMG|IFRAME|VIDEO|AUDIO|CANVAS|SVG|svg|BUTTON|A|INPUT|SELECT|TEXTAREA|FORM|LABEL|DETAILS)$/.test(old.nodeName) || old.querySelector('button,a,input,select,textarea,form,label,details,[tabindex]')) { old.parentNode.replaceChild(nw, old); return; }
+    var a, i;
+    for (i = old.attributes.length - 1; i >= 0; i--) { a = old.attributes[i].name; if (!nw.hasAttribute(a)) old.removeAttribute(a); }
+    for (i = 0; i < nw.attributes.length; i++) { a = nw.attributes[i]; if (old.getAttribute(a.name) !== a.value) old.setAttribute(a.name, a.value); }
+    patchKids(old, Array.prototype.slice.call(nw.childNodes));
+  }
+  function patchKids(parent, kids){
+    kids = kids.filter(function(k){ return k != null && k !== '' && k !== false; }).map(function(k){ return typeof k === 'string' ? document.createTextNode(k) : k; });
+    var cur = parent.childNodes;
+    if (cur.length !== kids.length) { parent.replaceChildren.apply(parent, kids); return; }
+    for (var i = kids.length - 1; i >= 0; i--) morph(cur[i], kids[i]);
+  }
+  function swap(el){ if (/^Last refresh failed/.test(el.title || '')) el.removeAttribute('title'); patchKids(el, Array.prototype.slice.call(arguments, 1)); }
   // ------------------------------------------------------------------ alerts (event and reminder notifications)
   var alertState = { on:false, timers:{}, shown:{} };
   function notify(a){
@@ -252,7 +275,7 @@
           if (key !== last) { last = key; var dd = new Date(key), t = new Date().toDateString(), tm = addDays(new Date(), 1).toDateString(); rows.push(h('li', { className:'vc-cal-day', text:key === t ? 'Today' : key === tm ? 'Tomorrow' : dd.toLocaleDateString([], { weekday:'long', day:'numeric', month:'short' }) })); }
           rows.push(h('li', { className:'vc-cal-ev', style:'border-left-color:' + (e.colour || 'var(--accent)') }, [h('span', { className:'vc-cal-time', text:evTime(e) }), h('span', { className:'vc-cal-title' }, [h('strong', { text:e.title || '(no title)' }), e.location ? h('small', { className:'muted', text:e.location }) : null])]));
         });
-        body.replaceChildren(h('ul', { className:'vc-w-list vc-cal' }, rows), openLink());
+        swap(body, h('ul', { className:'vc-w-list vc-cal' }, rows), openLink());
       });
     }
     function openLink(){ return signed() ? btn('Open calendar', function(){ A.state.miscTab = 'calendar'; A.state.miscSub = ''; A.pushNav(); A.render(); }, 'ghost small vc-cal-open') : null; }

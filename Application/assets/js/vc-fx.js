@@ -126,6 +126,8 @@
       w = Math.max(16, Math.round(r.width * s)); hgt = Math.max(16, Math.round(r.height * s));
       // A very large screen gets proportionally fewer pixels for the per-pixel effect.
       if (kind === 'lava' && w * hgt > 90000) { var k = Math.sqrt(90000 / (w * hgt)); w = Math.round(w * k); hgt = Math.round(hgt * k); }
+      // Re-assigning the backing store clears the canvas, so only do it when the size really changed.
+      if (canvas.width === w && canvas.height === hgt && st.ready) return;
       canvas.width = w; canvas.height = hgt;
       if (!st.ready) { fx.init(st, w, hgt); st.ready = true; }
       fx.draw(c, w, hgt, t, st, 0);
