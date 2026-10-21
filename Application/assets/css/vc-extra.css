@@ -365,7 +365,9 @@ button.vc-choice:active:not(:disabled) { transform: scale(.98); }
 .vc-board.editing .vc-board-grid { background-image: linear-gradient(to right, color-mix(in srgb, var(--accent) 10%, transparent) 1px, transparent 1px); background-size: calc((100% + 12px) / 24) 100%; border-radius: var(--radius-lg); outline: 1px dashed color-mix(in srgb, var(--accent) 30%, transparent); outline-offset: 6px; }
 .vc-board-empty { grid-column: 1 / -1; grid-row: 1 / span 6; display: grid; place-items: center; }
 .vc-widget { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; border-radius: var(--radius-xl); overflow: hidden; border: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
-  background: color-mix(in srgb, var(--bg3) 55%, transparent); backdrop-filter: blur(18px) saturate(140%); -webkit-backdrop-filter: blur(18px) saturate(140%); box-shadow: 0 14px 40px -24px rgba(0,0,0,.8), inset 0 1px 0 color-mix(in srgb, var(--text) 8%, transparent); transition: box-shadow .2s, opacity .2s; animation: vc-fade .35s ease both; }
+  background: color-mix(in srgb, var(--bg3) 55%, transparent); backdrop-filter: blur(18px) saturate(140%); -webkit-backdrop-filter: blur(18px) saturate(140%); box-shadow: 0 14px 40px -24px rgba(0,0,0,.8), inset 0 1px 0 color-mix(in srgb, var(--text) 8%, transparent); transition: opacity .2s; animation: vc-fade .35s ease both; }
+/* Shadow transitions only while arranging (drag/hover feedback); never on periodic updates. */
+.vc-board.editing .vc-widget { transition: box-shadow .2s, opacity .2s; }
 .vc-board[data-theme="solid"] .vc-widget { background: var(--bg3); backdrop-filter: none; -webkit-backdrop-filter: none; }
 .vc-board[data-theme="clear"] .vc-widget { background: transparent; border-color: transparent; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
 .vc-board[data-theme="clear"]:not(.editing) .vc-w-head { display: none; }
@@ -419,8 +421,9 @@ button.vc-choice:active:not(:disabled) { transform: scale(.98); }
 .vc-cal-title { display: flex; flex-direction: column; min-width: 0; }
 .vc-rem { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: var(--radius-lg); background: var(--surface-1); border-left: 4px solid var(--vc-rem, var(--accent)); }
 .vc-rem.soon { background: color-mix(in srgb, var(--vc-rem, var(--accent)) 14%, var(--surface-1)); }
-.vc-rem.urgent { animation: vc-glow 2.4s ease-in-out infinite; }
-@keyframes vc-glow { 50% { box-shadow: 0 0 0 2px color-mix(in srgb, var(--vc-rem, var(--accent)) 60%, transparent); } }
+/* Due-soon highlight is a steady ring: a pulsing box-shadow on a frosted (backdrop-filter) card repaints the
+   whole widget every frame and reads as a periodic shadow flash on TVs. */
+.vc-rem.urgent { box-shadow: 0 0 0 2px color-mix(in srgb, var(--vc-rem, var(--accent)) 55%, transparent); }
 .vc-rem-icon { font-size: 1.6rem; }
 .vc-rem-title { display: flex; flex-direction: column; flex: 1; min-width: 0; }
 .vc-rem-when { font-weight: 800; white-space: nowrap; }
