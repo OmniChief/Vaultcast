@@ -5527,6 +5527,8 @@ try {
     var parts = [ libraryHero ];
     var cw = cwOnePerShow(home.continue_watching);
     if (cw.length) parts.push(rowEl('Continue watching', cw.map(function(it){ return cardEl(it, it.progress); }), { meta: String(cw.length) }));
+    /* Smart collections pinned to Home (filled in after the page draws). */
+    if (state.user && state.user.role !== 'guest') { var smartHome = h('div', { className:'smart-home-rows' }); parts.push(smartHome); loadModule('vc-smart.js','VaultcastSmart').then(function(mod){ if (smartHome.isConnected) mod.homeRows(smartHome); }).catch(function(){}); }
     vodSections().forEach(function(sec){
       var items = sec.items || [];
       if (!items.length) {
@@ -12608,8 +12610,11 @@ h('div', { className:'cv-find-bar' }, [
       h('section',{className:'collections-hero page-hero page-hero-layout'},[
         collectionsPosterEl(),h('div',{className:'hero-copy'},[h('div',{className:'eyebrow',text:'Library'}),h('h1',{text:'Collections'}),h('p',{className:'muted',text:'Film series and show groups, together in one place. Pick a poster to explore its titles.'}),h('div',{className:'row-actions'},[h('button',{className:'btn primary',text:'Browse collections',onClick:function(){var list=$('#pub_col_list');if(list)list.scrollIntoView({behavior:'smooth',block:'start'});}}),h('button',{className:'btn',text:'Surprise me',onClick:function(){var cards=$all('#pub_col_list .collection-card');if(!cards.length){toast('No collections available yet');return;}var card=cards[Math.floor(Math.random()*cards.length)];card.click();card.scrollIntoView({behavior:'smooth',block:'center'});}}),h('button',{className:'btn',text:'Explore Library',onClick:function(){navigate('library');}}),state.user&&state.user.role==='admin'?h('button',{className:'btn',text:'Manage collections',onClick:function(){openSettings('collections');}}):null])]),heroClock('Collections from your library'),heroArt('library')
       ]),
+      state.user && state.user.role !== 'guest' ? h('section', { id:'smart_col_list', className:'smart-collections' }) : null,
       h('div', { id:'pub_col_list', className:'collections-grid' }, [ pendingContent({ className:'muted', }) ])
     ]);
+    var smartHost = wrap.querySelector('#smart_col_list');
+    if (smartHost) loadModule('vc-smart.js','VaultcastSmart').then(function(mod){ if (smartHost.isConnected) mod.section(smartHost); }).catch(function(){ smartHost.remove(); });
     api('/collections').then(function(r){
       var list = $('#pub_col_list'); if (!list) return;
       var root = $('#collections-view');
@@ -15563,7 +15568,7 @@ function viewCollectionDetail(){
   });
 
   /* helpers for assets/js/matching.js (Ingest inbox / Fix matching / Label reports) */
-  window.NSApp = { h: h, swap: swapChildren, api: api, toast: toast, dialog: permissionDialog, confirmDialog: confirmDialog, render: render, state: state, can:can,
+  window.NSApp = { h: h, swap: swapChildren, api: api, toast: toast, dialog: permissionDialog, rowEl: rowEl, emptyState: emptyState, confirmDialog: confirmDialog, render: render, state: state, can:can,
     openSettings: openSettings, openShow: openShow, openMovie: openMovie, openGame:openGame, navigate:navigate, refreshArtwork:refreshArtwork, fmtSize: fmtSize, version: APP_VERSION,
     shell:shell,communityPoster:communityPoster,refreshCommunityRating:refreshCommunityRating,heroClock:heroClock,homePosterEl:homePosterEl,homeSectionPosterEl:homeSectionPosterEl,collectionsPosterEl:collectionsPosterEl,librarySummary:librarySummary,cardEl:cardEl,homeActivitySections:homeActivitySections,applyRoute:applyRoute,replaceNav:replaceNav,openPlayer:openPlayer,playItem:playItem,copyText:copyText,shareUrl:shareUrl,startLobbyHost:startLobbyHost,captureGameState:lobbyCaptureState,loadGameState:loadGameState,restoreMultiplayerState:restoreMultiplayerState,quitGame:function(){closePlayer();} };
   var moduleLoads = {};

@@ -2594,3 +2594,26 @@ body.kid-mode .parental-switch { background: linear-gradient(135deg, #ffb347, #f
 .parental-check small { display: block; }
 .parental-rating-control { display: flex; flex-direction: column; gap: 6px; }
 .parental-unlock input { font-size: 1.4rem; letter-spacing: .4em; text-align: center; }
+
+/* Smart collections */
+.smart-collections { padding: 8px 0 4px; }
+.smart-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; padding: 0 var(--gutter, 20px) 12px; }
+.smart-tile { display: flex; flex-direction: column; gap: 10px; text-align: left; padding: 12px; border-radius: 16px; border: 1px solid rgba(255,255,255,.08); background: linear-gradient(160deg, rgba(124,92,255,.16), rgba(0,200,255,.06)); color: inherit; font: inherit; cursor: pointer; transition: transform .15s ease, border-color .15s ease; }
+.smart-tile:hover, .smart-tile:focus-visible { transform: translateY(-3px); border-color: rgba(160,140,255,.55); outline: none; }
+.smart-tile-art { display: flex; gap: 6px; height: 120px; align-items: stretch; }
+.smart-tile-art img { flex: 1; min-width: 0; object-fit: cover; border-radius: 10px; }
+.smart-tile-empty { flex: 1; display: flex; align-items: center; justify-content: center; font-size: 2.2rem; border-radius: 10px; background: rgba(255,255,255,.05); }
+.smart-tile-copy { display: flex; flex-direction: column; gap: 4px; }
+.smart-tile-new { border-style: dashed; background: transparent; }
+.smart-badge { display: inline-block; align-self: flex-start; font-size: .72rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; padding: 2px 8px; border-radius: 999px; background: linear-gradient(135deg, #7c5cff, #00c8ff); color: #fff; }
+.smart-expand { margin: 4px var(--gutter, 20px) 18px; }
+.smart-editor .smart-rule { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px; border-radius: 12px; background: rgba(255,255,255,.04); }
+.smart-editor .smart-rule select, .smart-editor .smart-rule input { min-width: 120px; flex: 1 1 120px; }
+.smart-editor .smart-rule-remove { flex: 0 0 auto; }
+.smart-rules { display: grid; gap: 8px; }
+.smart-match { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.smart-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+.smart-preview { border-radius: 14px; padding: 10px; background: rgba(0,0,0,.18); }
+.smart-preview-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+.smart-preview-rail { display: flex; gap: 10px; overflow-x: auto; }
+.smart-preview-rail .card { width: 110px; flex: 0 0 auto; }

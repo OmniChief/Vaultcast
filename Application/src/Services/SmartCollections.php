@@ -68,7 +68,9 @@ final class SmartCollections
             case 'person': return [($not ? 'NOT ' : '') . "COALESCE(s.people,'') LIKE ?", ['%' . self::tag($s) . '%']];
             case 'year': return $range('COALESCE(b.year,0)');
             case 'decade': $d = (int)floor(self::num($s) / 10) * 10; return [($not ? 'NOT ' : '') . '(COALESCE(b.year,0) BETWEEN ? AND ?)', [$d, $d + 9]];
-            case 'rating': return $range('COALESCE(r.bucket,0)');
+            case 'rating':
+                if ((int)self::num($s) === 0 && $op !== 'gte') return [($not ? 'NOT ' : '') . '(r.bucket IS NULL OR r.bucket=0)', []];
+                return $range('NULLIF(r.bucket,0)'); // unrated titles never pass a numeric limit
             case 'runtime': return $range('COALESCE(f.duration,0)', 60.0);
             case 'added': return ['i.added_at >= ?', [time() - (int)max(1, self::num($s)) * 86400]];
             case 'community': return $range('COALESCE(s.community,0)');
@@ -351,7 +353,7 @@ final class SmartCollections
     {
         $stale = time() - 7 * 86400;
         $rows = self::q("SELECT b.item_id,b.section_id,b.show_key,b.type,i.modified_at,i.payload FROM vaultcast_browse_items b JOIN vaultcast_items i ON i.id=b.item_id LEFT JOIN vaultcast_smart_facts s ON s.item_id=b.item_id
-            WHERE b.media_kind='video' AND (s.item_id IS NULL OR s.sig<>CAST(i.modified_at AS CHAR) OR s.updated_at<?) LIMIT " . (int)$budget, [$stale])->fetchAll(PDO::FETCH_ASSOC);
+            WHERE b.media_kind='video' AND (s.item_id IS NULL OR CAST(s.sig AS UNSIGNED)<>i.modified_at OR s.updated_at<?) LIMIT " . (int)$budget, [$stale])->fetchAll(PDO::FETCH_ASSOC);
         $shows = []; $reviews = []; $packs = []; $done = 0;
         $community = function (string $target) use (&$reviews): float {
             if (!array_key_exists($target, $reviews)) {
