@@ -97,7 +97,9 @@ final class Transcode {
                 $previous=self::read((string)$body['replace']);
                 if(!$previous || !hash_equals((string)$previous['token'],(string)($body['replace_token'] ?? '')) || ($previous['owner'] ?? '')!==(string)$user['id'] || $previous['save'])throw new DomainException('This playback worker cannot be replaced.');
                 $previousDir=self::dir($previous['id']);@touch($previousDir.'/cancel');
-                $deadline=microtime(true)+3;
+                // A seek restarts the encode: wait for the old ffmpeg to exit (cancel is polled every 0.5 s,
+                // the 1-CPU NAS can take a few seconds) so only one session runs. The player retries a 409.
+                $deadline=microtime(true)+8;
                 do {
                     $worker=@fopen($previousDir.'/worker.lock','c');
                     $released=$worker && flock($worker,LOCK_EX|LOCK_NB);
