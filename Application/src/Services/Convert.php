@@ -982,6 +982,14 @@ class Convert {
         }
         return false;
     }
+    /** The item's queued or running library conversion (same cached queue read as automaticPlaybackBlocked). */
+    public static function activeLibraryConversion(string $itemId): ?array {
+        foreach(self::queue() as $job) {
+            if(($job['item_id'] ?? '')===$itemId && in_array($job['status'] ?? '',['queued','running'],true))
+                return ['status'=>(string)$job['status'],'progress'=>max(0,min(100,(float)($job['progress'] ?? 0)))];
+        }
+        return null;
+    }
     public static function preview(string $jobId): array {
         $queue=self::queue();$index=self::findJob($queue,$jobId);
         if($index<0)throw new RuntimeException('Conversion not found.');

@@ -125,6 +125,7 @@ class Stream {
             $sidecars = self::romSidecarFiles($path, $token);
         }
         $automaticBlocked=empty($item['prepared_copy']) && ($item['media_kind'] ?? '')==='video' && Convert::automaticPlaybackBlocked($itemId);
+        $libraryConversion=empty($item['prepared_copy']) && ($item['media_kind'] ?? '')==='video' ? Convert::activeLibraryConversion($itemId) : null;
         return [
             'transcode_allowed'=>Transcode::allowed() && Transcode::eligible($libraryItem),
             'transcode_auto_blocked'=>$automaticBlocked,
@@ -132,6 +133,7 @@ class Stream {
             'active_conversion'=>Transcode::allowed() && Transcode::eligible($libraryItem)?Transcode::activeFor((string)$libraryItem['id'],(string)$user['id']):null,
             'transcode_save_allowed'=>Transcode::allowed() && Transcode::eligible($libraryItem) && empty($item['directplay_path']) && !preg_match('/\.directplay\.[^.]+$/i',(string)$libraryItem['path']) && !empty(Transcode::settings()['allow_save']) && ($user['role'] ?? '')==='admin',
             'prepared_copy'=>!empty($item['prepared_copy']),
+            'library_conversion'=>$libraryConversion,
             'progress' => $progress,
             'resume_position' => $progress ? $progress['position'] : 0,
             'ok' => true,
