@@ -1030,15 +1030,18 @@ body[data-theme="after-hours"] .hero-art-clock>span.has-theme-dancer{background:
 .billboard .billboard-poster{transition:opacity 160ms ease}
 .billboard.billboard-fading .billboard-copy,.billboard.billboard-fading .billboard-poster{opacity:0;pointer-events:none}
 .billboard-preload{position:absolute;width:1px;height:1px;overflow:hidden;opacity:0;pointer-events:none;contain:strict}
-.billboard.page-hero .billboard-copy>h1{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;height:2.16em;line-height:1.08}
+.billboard.page-hero .billboard-copy>h1{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;height:1.08em;line-height:1.08}
 .billboard .billboard-copy>.eyebrow{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.billboard .featured-synopsis{height:6.6em;max-height:6.6em;-webkit-line-clamp:4;line-height:1.65}
+.billboard .featured-synopsis{height:4.95em;max-height:4.95em;-webkit-line-clamp:3;line-height:1.65;margin-bottom:10px}
 .billboard .featured-synopsis[hidden]{display:-webkit-box;visibility:hidden}
-.billboard .billboard-meta{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;height:2.9em;line-height:1.45;overflow:hidden}
-.billboard .billboard-meta[hidden]{display:-webkit-box;visibility:hidden}
+.billboard .billboard-meta{display:block;height:1.45em;line-height:1.45;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;margin-bottom:6px}
+.billboard .billboard-meta[hidden]{display:block;visibility:hidden}
+.billboard .billboard-progress{margin:0 0 8px;height:4px}
 .billboard .billboard-progress[hidden]{display:block;visibility:hidden}
 .billboard .billboard-copy>.row-actions{min-height:52px}
 @media(max-width:540px){.billboard .featured-synopsis{height:4.95em;max-height:4.95em;-webkit-line-clamp:3}}
 body[data-motion="reduced"] .billboard .billboard-copy,body[data-motion="reduced"] .billboard .billboard-poster{transition:none}
 
-.billboard .billboard-copy>.row-actions>.btn{flex:0 1 144px;width:144px;max-width:100%;box-sizing:border-box}
+.billboard .billboard-copy>.row-actions>.btn{flex:0 0 auto;width:auto;min-width:144px;max-width:100%;box-sizing:border-box;white-space:nowrap}
+.billboard .billboard-copy>.row-actions>.btn .ico{flex-shrink:0}
+.billboard .billboard-copy>.row-actions>.btn>span{white-space:nowrap}
