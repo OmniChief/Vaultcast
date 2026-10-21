@@ -539,10 +539,8 @@ body.vc-kiosk .topnav, body.vc-kiosk .subnav, body.vc-kiosk .maintenance-advisor
 /* Only the root scrolls (no second scroll box on body); body has no 100vh floor of its own in kiosk. */
 html.vc-kiosk-root { margin: 0; padding: 0; overflow-x: hidden; overflow-y: auto; scroll-padding-top: 0; }
 body.vc-kiosk { margin: 0; padding: 0; min-height: 0; overflow: visible; }
-/* The boot-time "Compatibility mode" link sits after #app in normal flow (about 50px with its padding and
-   paragraph margins). In kiosk it becomes a small fixed corner link that only shows with the exit control. */
-body.vc-kiosk #browser-recovery { position: fixed; left: 14px; bottom: 14px; z-index: 9000; margin: 0; padding: 6px 12px !important; font-size: 12px !important; border-radius: 999px; background: var(--glass, rgba(0,0,0,.6)); border: 1px solid var(--border-strong, rgba(255,255,255,.2)); opacity: 0; pointer-events: none; transition: opacity .25s; }
-body.vc-kiosk:not(.vc-cursor-hidden) #browser-recovery, body.vc-kiosk #browser-recovery:focus-within { opacity: 1; pointer-events: auto; }
+/* The boot-time "Compatibility mode" link has no place in kiosk: remove it entirely. */
+body.vc-kiosk #browser-recovery { display: none !important; }
 body.vc-kiosk .mode-switch { display: none !important; }
 body.vc-kiosk .app-shell, body.vc-kiosk .app-shell.xshell { min-height: 0; padding: 0 !important; }
 body.vc-kiosk main.view { animation: none; margin: 0; padding: 0; }
