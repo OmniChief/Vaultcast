@@ -46,6 +46,7 @@ final class Arcade {
         $team = Social::teamOf($uid);
         self::query('INSERT INTO vaultcast_play_points (user_id,team_id,source,points,label,created_at) VALUES (?,?,?,?,?,?)',
             [$uid, $team ? $team['id'] : '', substr($source, 0, 24), $points, mb_substr($label, 0, 200), time()]);
+        Achievements::points($uid, $points);
     }
 
     private static function limit(string $key, int $seconds, int $daily): void {
@@ -97,6 +98,7 @@ final class Arcade {
         $previous = self::best((string)$user['id'], $game);
         $meta = mb_substr(preg_replace('/[^\w:,. -]/u', '', (string)($body['meta'] ?? '')), 0, 200);
         self::query('INSERT INTO vaultcast_play_scores (user_id,game,score,duration_ms,meta,created_at) VALUES (?,?,?,?,?,?)', [$user['id'], $game, $score, (int)round(min($claimed ?: $seconds, $seconds) * 1000), $meta, time()]);
+        Achievements::arcade((string)$user['id'], $game, $score, $meta);
         $points = min(self::POINTS_CAP, $cfg['div'] ? intdiv($score, $cfg['div']) : 0);
         $pb = $score > $previous && $score > 0;
         if ($pb) $points += 10;
@@ -170,6 +172,7 @@ final class Arcade {
             $score = $finish['won'] ? (7 - $finish['guesses']) * 100 : 0;
             self::query('INSERT INTO vaultcast_play_scores (user_id,game,score,duration_ms,meta,created_at) VALUES (?,?,?,?,?,?)', [$user['id'], 'word', $score, 0, 'guesses:' . $finish['guesses'], time()]);
             if ($finish['won']) self::award((string)$user['id'], 'word', 5 + 5 * (7 - $finish['guesses']), 'solved Daily Five in ' . $finish['guesses'] . ($finish['guesses'] === 1 ? ' guess' : ' guesses'));
+            Achievements::word((string)$user['id'], (bool)$finish['won'], (int)$finish['guesses'], self::wordStreak((array)\Vaultcast\Repository::document('play-word:' . $user['id'], [])));
         }
         return self::word($user);
     }
@@ -279,6 +282,7 @@ final class Arcade {
                 $loser = $done['winner'] === $g['white'] ? $g['black'] : $g['white'];
                 self::award($done['winner'], 'chess', 30, 'won at chess against ' . ($p[$loser]['name'] ?? 'a friend'));
                 self::query('INSERT INTO vaultcast_play_scores (user_id,game,score,duration_ms,meta,created_at) VALUES (?,?,?,?,?,?)', [$done['winner'], 'chess', 1, 0, 'win', time()]);
+                Achievements::chessWin((string)$done['winner'], count((array)($g['moves'] ?? [])), (string)$done['reason']);
             } else foreach ([$g['white'], $g['black']] as $who) self::award($who, 'chess', 10, 'drew a chess game');
         }
         return ['ok' => true, 'game' => self::chessPublic($g, $uid)];
@@ -293,6 +297,7 @@ final class Arcade {
         self::limit('chess-ai:' . $user['id'], 60, 30);
         $pts = $result === 'win' ? 4 * $level : ($result === 'draw' ? 2 : 0);
         if ($pts) self::award((string)$user['id'], 'chess', $pts, ($result === 'win' ? 'beat' : 'drew with') . ' the level ' . $level . ' chess computer');
+        Achievements::chessAi((string)$user['id'], $result, $level);
         return ['ok' => true, 'points' => $pts];
     }
 }

@@ -9,7 +9,7 @@ declare(strict_types=1);
  */
 final class Inbox
 {
-    const GROUPS = ['message' => 'Messages', 'invite' => 'Invites', 'library' => 'Library', 'request' => 'Requests', 'system' => 'System'];
+    const GROUPS = ['message' => 'Messages', 'invite' => 'Invites', 'library' => 'Library', 'request' => 'Requests', 'achievement' => 'Achievements', 'system' => 'System'];
     const SYNC_SECONDS = 60;
 
     private static function q(string $sql, array $args = []): PDOStatement { $s = \Vaultcast\Database::connection()->prepare($sql); $s->execute($args); return $s; }
@@ -48,6 +48,7 @@ final class Inbox
         // Requests: everyone hears back about their own media requests; convert and new-request items are for managers (subtypeAllowed).
         $types = ['message', 'invite', 'request', 'system'];
         if ($admin || Permissions::allowed($user, 'ingest_view')) $types[] = 'library';
+        if (Achievements::enabled() && ($user['role'] ?? 'guest') !== 'guest') $types[] = 'achievement';
         if (class_exists('Parental') && Parental::restricted($user)) {
             $st = Parental::settingsFor($user);
             if (!empty($st['kid'])) $types = array_values(array_diff($types, ['library']));
@@ -120,7 +121,8 @@ final class Inbox
         try {
             $latest = (int)self::q('SELECT MAX(created_at) FROM vaultcast_inbox WHERE user_id=? AND deleted=0 AND type IN (' . implode(',', array_fill(0, count($types), '?')) . ")" . (($user['role'] ?? '') === 'admin' ? '' : " AND subtype NOT IN ('maintenance','convert')" . (MediaRequests::canManage($user) ? '' : " AND subtype<>'media'")), array_merge([$uid], $types))->fetchColumn();
         } catch (Throwable $e) { $latest = 0; }
-        return ['new' => $latest > self::lastSeen($uid), 'latest' => $latest];
+        // achievement: something was unlocked and has not been celebrated yet (the app shows its own toast).
+        return ['new' => $latest > self::lastSeen($uid), 'latest' => $latest, 'achievement' => Achievements::hasPending($uid)];
     }
 
     public static function list(array $user, string $group = 'all', int $before = 0, int $beforeId = 0): array

@@ -18,6 +18,18 @@ if ($path === '/admin/extras/settings') {
     } catch (InvalidArgumentException $error) { json_error($error->getMessage(), 422); }
     catch (RuntimeException $error) { json_error($error->getMessage(), 409); }
 }
+if ($path === '/admin/achievements/settings') {
+    $admin = Auth::requireAdmin();
+    try {
+        if ($method === 'GET') json_out(Achievements::settingsView());
+        if ($method === 'POST') {
+            $body = body_json();
+            if (($body['action'] ?? '') === 'backfill') json_out(Maintenance::start('achievements', 'Administrator (' . ($admin['username'] ?? 'admin') . ')'));
+            json_out(Achievements::saveSettings($body));
+        }
+    } catch (InvalidArgumentException $error) { json_error($error->getMessage(), 422); }
+    catch (RuntimeException $error) { json_error($error->getMessage(), 409); }
+}
 if ($path === '/admin/factory-reset' && $method === 'POST') {
     try { json_out(FactoryReset::run(body_json())); }
     catch (RuntimeException $error) { json_error($error->getMessage(), 409); }

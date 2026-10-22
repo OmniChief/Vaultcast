@@ -15,7 +15,9 @@ final class Chat
         $other=Auth::findById($id);if (!$other) throw new DomainException('Account no longer exists.');
         $d=\Vaultcast\Repository::document('home-hub:'.$user['id'],[]);$relation=$id===$user['id']?'self':($d['friends'][$id] ?? 'none');
         $out=['ok'=>true,'profile'=>self::identity($other),'relationship'=>$relation,'full'=>$relation==='friend'||$relation==='self'];
-        if ($out['full']) {$their=\Vaultcast\Repository::document('home-hub:'.$id,[]);$games=array_values($their['games'] ?? []);$out['stats']=['games'=>count($games),'seconds'=>array_sum(array_column($games,'seconds'))];$out['highlights']=array_merge(FriendHighlights::build($user,$other,$their),FriendHighlights::favourites($user,$their));}
+        if ($out['full']) {$their=\Vaultcast\Repository::document('home-hub:'.$id,[]);$games=array_values($their['games'] ?? []);$out['stats']=['games'=>count($games),'seconds'=>array_sum(array_column($games,'seconds'))];$out['highlights']=array_merge(FriendHighlights::build($user,$other,$their),FriendHighlights::favourites($user,$their));
+            // Showcase badges follow the Play profile privacy setting (friends may still be shut out by "private").
+            try {$out['showcase']=($relation==='self' || (Social::privacy($id)['profile'] ?? 'everyone')!=='private') ? Achievements::showcaseFor($other) : [];} catch (Throwable $e) {$out['showcase']=[];}}
         return $out;
     }
     private static function general(): void {

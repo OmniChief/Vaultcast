@@ -302,6 +302,7 @@ final class Quiz {
             $win = count($real) > 1 && ($teams ? $p['team'] === $winTeam : $place === 0);
             $pts = min(80, 5 + 2 * $p['correct'] + (count($real) > 1 && !$teams ? ($bonus[$place] ?? 0) : ($win ? 20 : 0)));
             Arcade::query('INSERT INTO vaultcast_play_scores (user_id,game,score,duration_ms,meta,created_at) VALUES (?,?,?,?,?,?)', [$uid, 'quiz', $p['score'], 0, $win ? 'win' : 'played', time()]);
+            Achievements::quiz($uid, $win);
             Arcade::award($uid, 'quiz', $pts, $win ? 'won the quiz “' . $r['settings']['title'] . '”' : 'finished #' . ($place + 1) . ' in the quiz “' . $r['settings']['title'] . '”');
         }
         return $r;
@@ -505,6 +506,7 @@ final class Quiz {
         });
         if ($finished !== null) {
             Arcade::query('INSERT INTO vaultcast_play_scores (user_id,game,score,duration_ms,meta,created_at) VALUES (?,?,?,?,?,?)', [$user['id'], 'quiz', $finished * 100, 0, 'daily', time()]);
+            Achievements::quizDaily((string)$user['id']);
             Arcade::award((string)$user['id'], 'quiz', 2 * $finished + ($finished === count($qs) ? 10 : 0), 'scored ' . $finished . '/' . count($qs) . ' in the daily quiz');
         }
         // 'correct' is the day's running total (an int) from daily(). The per-answer flag is 'right': it used to be sent as

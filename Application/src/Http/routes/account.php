@@ -103,6 +103,7 @@ if ($path === '/me' && $method === 'GET') {
     $user['parental'] = Parental::status($user);
     try { $user['offline'] = Offline::status($user); } catch (Throwable $e) { $user['offline'] = ['enabled' => false, 'allowed' => false]; }
     $user['requests'] = MediaRequests::userStatus($user);
+    $user['achievements'] = Achievements::userStatus($user);
     $pendingConvert = 0;
     if (($user['role'] ?? '') === 'admin') {
         $pendingConvert = count(Convert::pendingRequests());
@@ -212,6 +213,8 @@ if ($path === '/progress' && $method === 'POST') {
         'updated_at' => time(),
     ];
     \Vaultcast\Repository::saveProgress((string)$user['id'], $itemId, $progress);
+    // Achievements: only the tick that crosses the finish line does any work (one INSERT IGNORE after that).
+    if ($progress['duration'] > 60 && $progress['position'] / $progress['duration'] > 0.92) Achievements::watched($user, $itemId, $progress['duration']);
     // 204: browsers / sendBeacon need no body; avoids json_encode on the hot path.
     release_request_locks();
     http_response_code(204);

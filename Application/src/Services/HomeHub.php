@@ -233,6 +233,7 @@ final class HomeHub {
             }
             return $rows;
         });
+        if (empty($body['delete'])) Achievements::review((string)$user['id'],(string)$card['hub_key']);
         return ['ok'=>true];
     }
     public static function watched(array $user,array $body): array {
@@ -264,6 +265,7 @@ final class HomeHub {
             return $data;
         });
         if ($delta[0] || $delta[1]) Social::logEmulator((string)$user['id'],$delta[0],$delta[1]);
+        if ($delta[1]) Achievements::emulator((string)$user['id']);
         return ['ok'=>true];
     }
     public static function people(array $user,string $query): array {
@@ -332,6 +334,7 @@ final class HomeHub {
         $act=$body['action'] ?? 'request';
         if ($act==='request') Inbox::fromNotice((string)$other['id'],self::profile($user),'friend-request','friend',(self::profile($user)['name'] ?? 'Someone').' sent you a friend request','Accept it on your Friends page.','home/friends');
         if ($act==='accept') Inbox::fromNotice((string)$other['id'],self::profile($user),'friend-accepted','friend',(self::profile($user)['name'] ?? 'Someone').' accepted your friend request','You are now friends.','home/friends');
+        if ($act==='accept') {Achievements::friends((string)$user['id']);Achievements::friends((string)$other['id']);}
         return ['ok'=>true];
     }
     public static function friendProfile(array $user,string $id): array {
@@ -392,6 +395,7 @@ final class HomeHub {
             \Vaultcast\Repository::putDocument('hub-cinema:'.$id,$room);
             $all[$id]=array_intersect_key($room,array_flip(['id','item_id','title','host','expires_at']));return $all;
         });
+        Achievements::cinema((string)$user['id'],$id);
         return ['ok'=>true,'room'=>$room];
     }
     public static function room(string $id,array $user): array {
@@ -405,12 +409,13 @@ final class HomeHub {
     }
     public static function roomUpdate(string $id,array $user,array $body): array {
         self::room($id,$user);
-        $host=false;$publish=false;
-        $room=self::mutate('hub-cinema:'.$id,function(array $room) use ($user,$body,&$host,&$publish): array {
+        $host=false;$publish=false;$joined=false;
+        $room=self::mutate('hub-cinema:'.$id,function(array $room) use ($user,$body,&$host,&$publish,&$joined): array {
             if (($room['expires_at'] ?? 0)<time()) throw new DomainException('This cinema has ended.');
             $host=$room['host_id']===$user['id'];$now=microtime(true);
             $room['members']=array_filter($room['members'] ?? [],static function(array $m): bool {return $m['at']>time()-50;});
             if (count($room['members'])>=32 && !isset($room['members'][$user['id']])) throw new DomainException('This cinema already has 32 viewers.');
+            $joined=!isset($room['members'][$user['id']]);
             $room['members'][$user['id']]=array_merge(self::profile($user),['at'=>time()]);
             $room['members']=array_filter($room['members'],static function(array $m): bool {return $m['at']>time()-50;});
             // Messages and membership heartbeats must never change playback,
@@ -437,6 +442,7 @@ final class HomeHub {
             if ($room['expires_at']<time()) unset($all[$id]);
             else $all[$id]=array_intersect_key($room,array_flip(['id','item_id','title','host','expires_at']));return $all;
         });
+        if ($joined) Achievements::cinema((string)$user['id'],$id);
         return ['ok'=>true];
     }
 }

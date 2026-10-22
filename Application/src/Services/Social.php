@@ -247,6 +247,7 @@ final class Social {
         });
         foreach ($notify as $n) self::notify($n[0], $user, 'team:' . $n[2], $n[1], $n[2], 'play/social/teams');
         if ($teamName !== null) Arcade::award($uid, 'social', 0, ($action === 'create' ? 'founded team ' : 'joined team ') . $teamName);
+        if (in_array($action, ['create', 'accept', 'join-link', 'approve'], true) && ($t = self::teamOf($action === 'approve' ? $other : $uid))) Achievements::teamMembers($action === 'approve' ? $other : $uid, array_map('strval', array_keys((array)$t['members'])));
         return self::teamsState($user);
     }
     public static function moderate(array $admin, array $body): array {
@@ -374,7 +375,7 @@ final class Social {
         if ($uid !== $vid && ($viewer['role'] ?? '') !== 'admin') {
             if (self::blockedEither($uid, $vid)) throw new DomainException('Player not found.');
             $vis = self::privacy($uid)['profile'];
-            if ($vis === 'private' || ($vis === 'friends' && !in_array($vid, self::friends($uid), true))) return ['ok' => true, 'person' => Arcade::person($target), 'me' => false, 'friend' => in_array($uid, self::friends($vid), true), 'private' => true, 'stats' => null, 'bests' => [], 'badges' => [], 'team' => null, 'activity' => []];
+            if ($vis === 'private' || ($vis === 'friends' && !in_array($vid, self::friends($uid), true))) return ['ok' => true, 'person' => Arcade::person($target), 'me' => false, 'friend' => in_array($uid, self::friends($vid), true), 'private' => true, 'stats' => null, 'bests' => [], 'badges' => [], 'showcase' => [], 'achievements' => Achievements::enabled(), 'team' => null, 'activity' => []];
         }
         $games = Arcade::query('SELECT game, COUNT(*) plays, MAX(score) best, MAX(created_at) last FROM vaultcast_play_scores WHERE user_id=? GROUP BY game', [$uid])->fetchAll(PDO::FETCH_ASSOC);
         $bests = []; $plays = 0;
@@ -399,10 +400,13 @@ final class Social {
             'team-player' => $team !== null || (bool)Arcade::query("SELECT 1 FROM vaultcast_play_points WHERE user_id=? AND source='social' LIMIT 1", [$uid])->fetchColumn(),
             'social' => count($friends) >= 5, 'all-rounder' => count(array_intersect(array_keys($bests), Arcade::RUN_GAMES)) === count(Arcade::RUN_GAMES)];
         $badges = []; foreach (self::BADGES as $k => $info) $badges[] = ['id' => $k, 'name' => $info[0], 'detail' => $info[1], 'icon' => $info[2], 'earned' => !empty($earned[$k])];
+        // With achievements on, the profile shows the full set (same shape, plus tier) and the person's chosen showcase.
+        $showcase = [];
+        if (Achievements::enabled()) { try { $badges = Achievements::profileBadges($target); $showcase = Achievements::showcaseFor($target); } catch (Throwable $e) { error_log('Vaultcast achievements profile: ' . $e->getMessage()); } }
         $isFriend = in_array($uid, self::friends((string)($viewer['id'] ?? '')), true);
         return ['ok' => true, 'person' => Arcade::person($target), 'me' => $uid === ($viewer['id'] ?? ''), 'friend' => $isFriend,
             'stats' => ['games_played' => $plays, 'points' => $points, 'points_week' => $week, 'rank' => $rank, 'quiz_wins' => $quizWins, 'chess_wins' => $chessWins, 'word_streak' => $streak, 'friends' => count($friends)],
-            'bests' => $bests, 'badges' => $badges, 'team' => $team ? ['id' => $team['id'], 'name' => $team['name'], 'colour' => $team['colour'], 'emblem' => $team['emblem'], 'role' => $team['members'][$uid]] : null,
+            'bests' => $bests, 'badges' => $badges, 'showcase' => $showcase, 'achievements' => Achievements::enabled(), 'team' => $team ? ['id' => $team['id'], 'name' => $team['name'], 'colour' => $team['colour'], 'emblem' => $team['emblem'], 'role' => $team['members'][$uid]] : null,
             'activity' => self::activityFor([$uid], 15)];
     }
     private static function activityFor(array $ids, int $limit): array {

@@ -57,7 +57,7 @@ if ($path === '/requests' || strpos($path, '/requests/') === 0) {
         require __DIR__ . '/routes/' . $handler . '.php';
     }
 } else {
-    foreach (['account','hub','library','diagnostics','downloads','collections','lobby'] as $handler) {
+    foreach (['account','hub','library','diagnostics','downloads','collections','lobby','achievements'] as $handler) {
         require __DIR__ . '/routes/' . $handler . '.php';
     }
 }

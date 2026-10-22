@@ -52,6 +52,7 @@ final class Misc {
         $rotate = (int)($body['rotate'] ?? 0); $rotate = $rotate <= 0 ? 0 : max(15, min(3600, $rotate));
         \Vaultcast\Repository::putDocument('misc-boards:' . $user['id'], ['boards' => $boards, 'default' => $default, 'rotate' => $rotate, 'updated_at' => time()]);
         if ($legacy = Webcams::fromBoards($boards)) Webcams::record((string)$user['id'], $legacy);
+        Achievements::boards((string)$user['id'], $boards);
         return ['ok' => true, 'boards' => $boards, 'default' => $default, 'rotate' => $rotate];
     }
     /** Board backgrounds end up inside CSS url(): only plain http(s) or same-site paths without quotes, parentheses or escapes. */

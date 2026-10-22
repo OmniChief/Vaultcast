@@ -994,6 +994,7 @@ final class MediaRequests
                 // One item per request: a newer status replaces the older one.
                 foreach (array_keys($titles) as $old) if ($old !== $event) Inbox::resolve($uid, 'mreq-u:' . $id . ':' . $old);
                 Inbox::add($uid, 'request', 'media_update', 'mreq-u:' . $id . ':' . $event, null, $titles[$event] . self::describe($r), $bodies[$event], ['kind' => 'path', 'path' => 'requests/mine'], ['request_id' => $id, 'status' => $event]);
+                if ($event === 'available') Achievements::requestAvailable($uid, $id);
             }
         } catch (Throwable $e) { error_log('Vaultcast request inbox: ' . $e->getMessage()); }
     }
