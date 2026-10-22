@@ -91,29 +91,33 @@
   function run(t){
     var ctrl = root.AbortController ? new AbortController() : null;
     active = { key:t.key, ctrl:ctrl, title:t };
+    var me = active;
     t.status = 'downloading'; putTitle(t); emit();
     var retried = false;
-    function finish(status, error){ t.status = status; t.error = error || ''; return putTitle(t).then(function(){ active = null; emit(); report(); pump(); }); }
+    /* A pause or delete can land while a chunk is being written; keep it paused (or gone) and leave the next download alone. */
+    function save(){ if (me.removed) return Promise.resolve(); if (me.stopped && t.status === 'downloading') t.status = 'paused'; return putTitle(t); }
+    function finish(status, error){ t.status = status; t.error = error || ''; return save().then(function(){ if (active === me) active = null; emit(); report(); pump(); }); }
     function next(){
+      if (me.stopped) return save().then(emit);
       if (t.size && t.received >= t.size) return finish('done').then(function(){ toast('\u201c' + t.title + '\u201d is ready to watch offline.', 'ok'); });
       var end = t.size ? Math.min(t.size, t.received + CHUNK) - 1 : t.received + CHUNK - 1;
       return fetch(t.url, { credentials:'same-origin', headers:{ Range:'bytes=' + t.received + '-' + end }, signal:ctrl ? ctrl.signal : undefined }).then(function(r){
         if ((r.status === 401 || r.status === 403 || r.status === 404 || r.status === 410) && !retried) {
           // Playback tickets expire; ask for a fresh one once and carry on where we stopped.
-          retried = true; return ticket(t.item_id).then(function(j){ if (!j || !j.ok) throw new Error((j && j.error) || 'The server refused the download.'); t.url = j.url; return putTitle(t).then(next); });
+          retried = true; return ticket(t.item_id).then(function(j){ if (!j || !j.ok) throw new Error((j && j.error) || 'The server refused the download.'); t.url = j.url; return save().then(next); });
         }
         if (r.status === 200 && t.received > 0) throw new Error('The server can\u2019t resume this download. Delete it and start again.');
         if (!r.ok) throw new Error('Download stopped (server said ' + r.status + ').');
         if (r.status === 200) return whole(r);
         retried = false;
-        return r.blob().then(function(b){ return putChunk(t.key, t.chunks, b).then(function(){ t.chunks++; t.received += b.size; if (!t.size) { var m = /\/(\d+)$/.exec(r.headers.get('Content-Range') || ''); if (m) t.size = +m[1]; } return putTitle(t); }).then(function(){ emit(); return b.size ? next() : finish('done'); }); });
+        return r.blob().then(function(b){ if (me.removed) return; return putChunk(t.key, t.chunks, b).then(function(){ t.chunks++; t.received += b.size; if (!t.size) { var m = /\/(\d+)$/.exec(r.headers.get('Content-Range') || ''); if (m) t.size = +m[1]; } return save(); }).then(function(){ emit(); return b.size ? next() : finish('done'); }); });
       });
     }
     /* No range support: stream the body and store it in pieces as it arrives (pausing restarts). */
     function whole(r){
-      if (!r.body || !r.body.getReader) return r.blob().then(function(b){ return putChunk(t.key, 0, b).then(function(){ t.chunks = 1; t.received = t.size = b.size; return finish('done'); }); });
+      if (!r.body || !r.body.getReader) return r.blob().then(function(b){ if (me.removed) return; return putChunk(t.key, 0, b).then(function(){ t.chunks = 1; t.received = t.size = b.size; return finish('done'); }); });
       var reader = r.body.getReader(), parts = [], size = 0;
-      function flush(){ if (!size) return Promise.resolve(); var b = new Blob(parts, { type:t.mime }); parts = []; size = 0; return putChunk(t.key, t.chunks, b).then(function(){ t.chunks++; t.received += b.size; return putTitle(t); }).then(emit); }
+      function flush(){ if (!size) return Promise.resolve(); if (me.removed) return Promise.resolve(); var b = new Blob(parts, { type:t.mime }); parts = []; size = 0; return putChunk(t.key, t.chunks, b).then(function(){ t.chunks++; t.received += b.size; return save(); }).then(emit); }
       function pull(){ return reader.read().then(function(x){ if (x.done) return flush().then(function(){ t.size = t.received; return finish('done'); }); parts.push(x.value); size += x.value.byteLength; return (size >= CHUNK ? flush() : Promise.resolve()).then(pull); }); }
       return pull();
     }
@@ -122,9 +126,9 @@
       finish('error', (e && e.message) || 'Download failed.');
     });
   }
-  function pause(key){ if (active && active.key === key && active.ctrl) { active.ctrl.abort(); var t = active.title; active = null; getTitle(key).then(function(cur){ cur.status = 'paused'; return putTitle(cur); }).then(function(){ emit(); pump(); }); } else getTitle(key).then(function(t){ if (t) { t.status = 'paused'; queue = queue.filter(function(k){ return k !== key; }); putTitle(t).then(emit); } }); }
+  function pause(key){ if (active && active.key === key && active.ctrl) { active.stopped = true; active.ctrl.abort(); var t = active.title; active = null; getTitle(key).then(function(cur){ cur.status = 'paused'; return putTitle(cur); }).then(function(){ emit(); pump(); }); } else getTitle(key).then(function(t){ if (t) { t.status = 'paused'; queue = queue.filter(function(k){ return k !== key; }); putTitle(t).then(emit); } }); }
   function resume(key){ getTitle(key).then(function(t){ if (!t) return; if (t.received > 0 && t.status === 'error' && /resume/.test(t.error)) { t.received = 0; t.chunks = 0; } t.status = 'queued'; t.error = ''; putTitle(t).then(function(){ enqueue(key); }); }); }
-  function remove(t){ if (active && active.key === t.key && active.ctrl) { active.ctrl.abort(); active = null; } queue = queue.filter(function(k){ return k !== t.key; }); return removeTitle(t).then(function(){ emit(); report(); pump(); }); }
+  function remove(t){ if (active && active.key === t.key && active.ctrl) { active.stopped = active.removed = true; active.ctrl.abort(); active = null; } queue = queue.filter(function(k){ return k !== t.key; }); return removeTitle(t).then(function(){ emit(); report(); pump(); }); }
   function estimate(){ return navigator.storage && navigator.storage.estimate ? navigator.storage.estimate().catch(function(){ return null; }) : Promise.resolve(null); }
 
   /* ---------- offline progress ---------- */
