@@ -25,7 +25,8 @@
     var g = canvas.getContext('2d'), w = 0, hgt = 0, api = { dirty:true };
     function fit(){
       api.dirty = true; // resizing clears the canvas, so loops that skip idle frames must redraw
-      var box = host.getBoundingClientRect(), maxW = Math.max(160, box.width), maxH = Math.max(160, box.height || window.innerHeight * 0.7);
+      // clientWidth/Height exclude the stage border, so the canvas never overhangs it and stays truly centred.
+      var bw = host.clientWidth, bh = host.clientHeight, maxW = Math.max(160, bw), maxH = Math.max(160, bh || window.innerHeight * 0.7);
       if (aspect) { w = Math.min(maxW, maxH * aspect); hgt = w / aspect; } else { w = maxW; hgt = maxH; }
       // Backing store = CSS box × device pixel ratio (capped), so lines and text stay crisp on HiDPI and TVs.
       w = Math.floor(w); hgt = Math.floor(hgt);

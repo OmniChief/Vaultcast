@@ -649,7 +649,7 @@
             ]));
           });
           if (!(r.items||[]).length) list.appendChild(h('p', { className:'muted', text:'No RSS results. Check Admin → Acquisition feeds/filters.' }));
-        }).catch(function(e){ status.textContent = String(e); });
+        }).catch(function(e){ status.textContent = friendlyMessage(e); });
       }}),
       h('button', { className:'btn ghost', text:'Close', onClick: function(){ overlay.remove(); } })
     ]));
@@ -747,11 +747,21 @@
     attrs.role = 'status';
     return h('p', attrs);
   }
+  /* Turn raw errors into something a person can act on: no "TypeError:" prefixes, "[object Object]" or "null". */
+  function friendlyMessage(msg){
+    if (msg && typeof msg === 'object') msg = msg.error || msg.message || '';
+    msg = String(msg == null ? '' : msg).replace(/^(?:Uncaught\s+)?(?:[A-Z][A-Za-z]*Error|Error):\s*/, '').trim();
+    if (!msg || msg === 'null' || msg === 'undefined' || msg === '[object Object]') return 'Something went wrong. Please try again.';
+    if (/^(?:Failed to fetch|NetworkError when attempting to fetch resource\.?|Load failed|Network request failed)$/i.test(msg)) return 'Can\u2019t reach the server right now. Check your connection and try again.';
+    if (/^(?:Bad JSON$|Unexpected token|Unexpected end of JSON|JSON\.parse|The string did not match the expected pattern)/i.test(msg)) return 'The server sent an unexpected reply. Please try again in a moment.';
+    return msg;
+  }
   function toast(msg, opts){
     opts = opts || {};
     var t = $('#toast');
     if (!t) return;
-    t.hidden = false; t.textContent = msg;
+    t.setAttribute('role', opts.kind === 'bad' ? 'alert' : 'status');
+    t.hidden = false; t.textContent = friendlyMessage(msg);
     t.className = 'toast' + (opts.kind ? (' toast-' + opts.kind) : '');
     clearTimeout(toast._t); toast._t = setTimeout(function(){ t.hidden = true; }, opts.ms || 2800);
   }
@@ -1009,6 +1019,7 @@ function confirmDialog(message, opts){
           }
           if (!r.ok && !j.error) j.error = 'HTTP ' + r.status;
           j._status = r.status;
+          if (sameUser && r.headers && r.headers.get('X-Vaultcast-Achievement')) setTimeout(function(){ document.dispatchEvent(new Event('vaultcast-achievement')); }, 0);
           if (j.maintenance_job) {
             toast('Task started. Manage or cancel it in Settings > Background tasks.');
             function waitForTask(){
@@ -1146,6 +1157,10 @@ function confirmDialog(message, opts){
   function canSettings(section){if(state.user&&state.user.role==='admin')return true;var permission={matching:'fix_match',ingest:'ingest_view','live-iptv':'iptv_manage','live-radio':'radio_manage','artwork-integrity':'artwork_manage'}[section];return !!permission&&can(permission)&&(['ingest','matching'].indexOf(section)<0||userAreaAllowed('library'));}
   function canSearchRss(){return can('rss_search')&&!!(state.home&&state.home.features&&state.home.features.downloads);}
   function canManageDownloads(){return can('downloads_request')&&!!(state.home&&state.home.features&&state.home.features.downloads);}
+  /* Media requests (Library → Requests). The flags come from /me because custom roles and the User role are resolved server-side. */
+  function canRequestMedia(){var r=state.user&&state.user.role!=='guest'&&state.user.requests;return !!(r&&(r.create||r.manage));}
+  function canCreateMediaRequest(){var r=state.user&&state.user.role!=='guest'&&state.user.requests;return !!(r&&r.create);}
+  function openRequests(tab,prefill){state.requestsTab=tab||'discover';state.requestsPrefill=prefill&&prefill.q?{type:prefill.type==='tv'?'tv':'movie',q:String(prefill.q)}:null;navigate('requests');}
   function loadDownloadStatus(force){
     if (!canManageDownloads()) { _dlStatus = null; return Promise.resolve({ok:true,downloading:[]}); }
     var now = Date.now();
@@ -1677,7 +1692,8 @@ function confirmDialog(message, opts){
     openPlayer._deskPlayStarted = false;
     openPlayer._deskRecoverTries = 0;
     openPlayer._deskRecovering = false;
-    var inlineHost = miniStart||play.media_kind === 'audio' ? null : document.getElementById('detail-player');
+    /* Trailers and extras (item._extra) always open in the overlay: no resume, no mini player, no skipping. */
+    var inlineHost = miniStart||play.media_kind === 'audio'||item._extra ? null : document.getElementById('detail-player');
     if (play && play.media_kind === 'rom' && item && item.game_path) state.gamePath = item.game_path;
     if (!inlineHost&&!miniStart) pushNav({ player:true, itemId: item.id });
     var overlay = h('div', { className:'player-overlay player-simple' + (inlineHost ? ' player-inline' : ''), id:'player-overlay' });
@@ -1744,7 +1760,7 @@ function confirmDialog(message, opts){
       setTimeout(function(){ applyResume(); resumeDone = true; }, 8000);
     }
     media.addEventListener('timeupdate', function(){
-      if(overlay._transcodePending||overlay._closing||!overlay.isConnected)return;
+      if(overlay._transcodePending||overlay._closing||!overlay.isConnected||item._extra)return;
       if (!resumeDone) return;
       if (!openPlayer._lastSave || Date.now()-openPlayer._lastSave > 5000) {
         openPlayer._lastSave = Date.now();
@@ -1806,7 +1822,7 @@ function confirmDialog(message, opts){
     }
 
     overlay.appendChild(media);
-    if(media.tagName==='VIDEO'&&typeof play.hub_cinema_guest==='undefined'){
+    if(media.tagName==='VIDEO'&&typeof play.hub_cinema_guest==='undefined'&&!item._extra){
       overlay._miniKey='item:'+item.id;overlay._miniItem=item;overlay._miniTitle=item.show?(item.show+' · '+item.title):item.title;
       overlay._miniReturn=function(){if(item.show_key){state._pendingEpisode=item;openShow(item.show_key,item.season,item.episode);}else openMovie(item.id);};
     }
@@ -1892,7 +1908,7 @@ function confirmDialog(message, opts){
     playerTrackControls(overlay, media, item, play);
     libraryTranscodeControls(overlay,media,item,play);
     if(nextControl){var tracks=(inlineHost?detailPlayerTools(inlineHost):overlay).querySelector('.player-tracks');if(tracks)tracks.insertAdjacentElement('afterend',nextControl);}
-    mountEpisodeSkipping(overlay,media,item,play);
+    if(!item._extra)mountEpisodeSkipping(overlay,media,item,play);
     if(miniStart){overlay.classList.add('player-inline');minimizeVideo();}
   }
   function libraryTranscodeControls(overlay,media,item,play){
@@ -2506,7 +2522,7 @@ function confirmDialog(message, opts){
         try { row[k] = data[k]; } catch (eC) {}
       }
     }
-    try { console.log('[lobby]', JSON.stringify(row)); } catch (eL) { try { console.log('[lobby]', event, data); } catch (e2) {} }
+    try { console.debug('[lobby]', JSON.stringify(row)); } catch (eL) {}
     try {
       if (!window.__STREAM_LOBBY_LOG_Q) window.__STREAM_LOBBY_LOG_Q = [];
       window.__STREAM_LOBBY_LOG_Q.push(row);
@@ -3944,7 +3960,7 @@ function confirmDialog(message, opts){
   }
   function goPlayTab(tab){
 
-    state.playTab = ['lobby','arcade','quiz','social','leaderboards'].indexOf(tab) >= 0 ? tab : 'games';
+    state.playTab = ['lobby','arcade','quiz','social','leaderboards','achievements'].indexOf(tab) >= 0 ? tab : 'games';
     state.playSub = '';
     if (state.playTab !== 'lobby') lobbyStopPoll();
     if (state.view !== 'play') navigate('play');
@@ -4139,7 +4155,7 @@ function confirmDialog(message, opts){
         if (append) toast(String(e), { kind:'bad' });
         else {
           grid.innerHTML = '';
-          grid.appendChild(h('p', { className:'muted', text: String(e) }));
+          grid.appendChild(h('p', { className:'muted', text: friendlyMessage(e) }));
         }
       });
     }
@@ -4310,7 +4326,7 @@ function confirmDialog(message, opts){
       var list = wrap.querySelector('#lobby-session-list');
       if (list) {
         list.innerHTML = '';
-        list.appendChild(emptyState('Lobby unavailable', String(e), [
+        list.appendChild(emptyState('Lobby unavailable', friendlyMessage(e), [
           h('button', { className:'btn', type:'button', text:'Retry', onClick: function(){ fetchLobbySessions().then(paintLobbySessions); } })
         ]));
       }
@@ -4811,7 +4827,7 @@ try {
     return R.build({ systemSlug: state.view === 'play' && state.sectionSystem ? (state.sectionSystemSlug || null) : null, view: state.view, movieSlug: state.movieSlug, movieId: state.movieId, showSlug: state.showSlug, showKey: state.showKey,
       season: state.showSeason, episode: state.showEpisode, liveCh: extra.live || state.liveChannel || null, liveTab:state.liveTab, playTab: state.playTab, playSub: state.playSub, miscTab: state.miscTab, miscSub: state.miscSub, section: state.section,
       collectionId: state.collectionId, searchQuery: state.searchQuery, settingsSection: state.settingsSection, adminTab: state.adminTab,
-      sectionLetter:state.sectionLetter, collectionsLetter:state.collectionsLetter, hubTab:state.hubTab, cinemaId:state.cinemaId });
+      sectionLetter:state.sectionLetter, collectionsLetter:state.collectionsLetter, hubTab:state.hubTab, cinemaId:state.cinemaId, requestsTab:state.requestsTab });
   }
   function navUrl(extra){ return BASE + routePath(extra); }
   function shareUrl(path){
@@ -4876,6 +4892,9 @@ try {
       if (sec) { state.section = sec.id; state.sectionType = sec.type; state.sectionLabel = sec.label; state.view = sec.type === 'roms' ? 'play' : 'section'; return Promise.resolve(); }
     }
     if (r.view === 'collections') { state.view = 'collections'; return Promise.resolve(); }
+    if (r.view === 'offline') { state.view = 'offline'; return Promise.resolve(); }
+    if (r.view === 'requests') { state.view = 'requests'; state.requestsTab = r.requestsTab || 'discover'; return Promise.resolve(); }
+    if (r.view === 'inbox') { state.view = 'inbox'; state.inboxPane = r.inboxPane || null; return Promise.resolve(); }
     if (r.view === 'library') { state.view = 'library'; return Promise.resolve(); }
     if (r.view === 'collection') { state.view = 'collection'; state.collectionId = r.collectionId; return Promise.resolve(); }
     if (r.view === 'search') { state.view = 'search'; state.searchQuery = r.searchQuery || ''; return Promise.resolve(); }
@@ -4942,14 +4961,16 @@ try {
   var accountDrawerClose = null;
   function accountHasUnread(){
     var owner=state.user&&state.user.role!=='guest'&&state.user.id;
-    return !!(owner && ((state.chatUnreadOwner===owner && state.chatUnread && (state.chatUnread.mail||state.chatUnread.dm)) || (state.inviteOwner===owner && state.inviteCount>0)));
+    /* One dot for everything: something newer than the last Inbox visit. Read/unread per item never drives it. */
+    return !!(owner && state.inboxOwner===owner && state.inboxNew && state.view!=='inbox');
   }
   function updateAccountIndicators(){
     $all('[data-account-dot]').forEach(function(el){el.hidden=!accountHasUnread();});
     $all('[data-account-notice]').forEach(function(el){
       var kind=el.getAttribute('data-account-notice'),owner=state.user&&state.user.id;
-      var count=kind==='invites'?(state.inviteOwner===owner?state.inviteCount:0):(state.chatUnreadOwner===owner&&state.chatUnread&&state.chatUnread[kind]?1:0);
-      el.hidden=!count;el.textContent=kind==='invites'?String(count||''):'New';
+      if(kind==='inbox'){el.hidden=!accountHasUnread();el.textContent='';el.classList.add('is-dot');el.setAttribute('aria-label','New in your inbox');return;}
+      var count=state.chatUnreadOwner===owner&&state.chatUnread&&state.chatUnread[kind]?1:0;
+      el.hidden=!count;el.textContent='New';
     });
   }
   document.addEventListener('vaultcast-notices-changed',updateAccountIndicators);
@@ -4987,9 +5008,13 @@ try {
     drawer.appendChild(h('div',{className:'account-drawer-head'},[h('h2',{id:'account-drawer-title',text:'Your space'}),h('button',{className:'icon-btn',type:'button','aria-label':'Close account menu',text:'×',onClick:function(){close();}})]));
     drawer.appendChild(h('div',{className:'account-drawer-profile'},[user?profileAvatar(user):icon('user'),h('div',{},[h('strong',{text:user?(user.display_name||user.username):'Welcome to Vaultcast'}),h('small',{text:signed?(user.role==='admin'?'Administrator':'Your personal space'):'Sign in for your own lists and messages'})])]));
     if(signed){
+      var topItems=[action('Inbox',function(){state.inboxPane=null;navigate('inbox');},'inbox')];
+      if(user.offline&&(user.offline.allowed||user.offline.held))topItems.push(action('Downloads on this device',function(){navigate('offline');}));
+      drawer.appendChild(h('section',{className:'account-drawer-group account-drawer-top'},topItems));
       group('Your collection',[action('My profile',function(){return window.VaultcastChat.profile(owner);}),action('Favourites',function(){hub('favourites');}),action('Watchlist',function(){hub('watchlist');}),action('My collections',function(){hub('lists');}),action('History',function(){hub('history');}),action('Release calendar',function(){hub('calendar');}),action('New episodes',function(){hub('arrivals');})]);
-      group('Stay connected',[action('Private inbox',function(){hub('inbox');},'mail'),action('Chat & direct messages',function(){hub('chat');},'dm'),action('Invitations',function(){hub('inbox');},'invites'),action('Friends',function(){hub('friends');}),action('Watch together',function(){hub('cinema');})]);
-      if(userAreaAllowed('games'))group('Your games',[action('Cloud saves',function(){openSettings('cloud-saves');}),action('Game statistics',function(){hub('stats');})]);
+      group('Stay connected',[action('Chat & direct messages',function(){hub('chat');}),action('Friends',function(){hub('friends');}),action('Watch together',function(){hub('cinema');})]);
+      if(userAreaAllowed('games'))group('Your games',[action('Cloud saves',function(){openSettings('cloud-saves');}),action('Game statistics',function(){hub('stats');})].concat(achievementsOn()?[action('Achievements',function(){goPlayTab('achievements');})]:[]));
+      else if(achievementsOn())group('Your achievements',[action('Achievements',function(){goPlayTab('achievements');})]);
     }else group('Get started',[action('Sign in',function(){navigate('login');})]);
     var themeSelect=signed?h('select',{id:'account-quick-theme','aria-label':'Theme',onChange:function(){
       var selected=themeSelect.value;themeSelect.disabled=true;
@@ -5014,6 +5039,8 @@ try {
       }).then(function(){themeSelect.disabled=false;});
     }},themeOptions(user.prefs&&user.prefs.theme)):null;
     group('Preferences',[themeSelect?h('label',{className:'account-drawer-theme'},[h('span',{text:'Theme'}),themeSelect]):null,action('For you',function(){hub('overview');}),action('Profile & security',function(){openSettings('account');}),action('Playback preferences',function(){openSettings('playback');}),signed&&user.role==='admin'?action('Check for updates',function(){openSettings('updates');}):null,action('Settings',function(){openSettings('settings-home');})]);
+    var parentalStatus=signed&&user.parental;
+    if(parentalStatus&&(parentalStatus.kid||(parentalStatus.settings&&parentalStatus.settings.enabled)))drawer.appendChild(action(kidLocked()?'Grown-up mode (PIN)':(parentalStatus.unlocked_for>0?(parentalStatus.kid?'Back to kid mode':'Lock parental controls'):'Parental controls'),function(){close();loadModule('vc-parental.js','VaultcastParental').then(function(mod){if(kidLocked())mod.unlockPrompt(null);else if(parentalStatus.unlocked_for>0)mod.lock();else openSettings('parental');});}));
     if(signed)drawer.appendChild(action('Sign out',function(){
       api('/logout',{method:'POST'}).then(function(result){
         if(!result.ok)throw new Error(result.error||'Could not sign out');
@@ -5027,7 +5054,7 @@ try {
     document.body.classList.add('account-drawer-open');if(trigger)trigger.setAttribute('aria-expanded','true');
     accountDrawerClose=close;document.addEventListener('keydown',keys,true);document.addEventListener('vaultcast-account-ready',accountChanged);
     updateAccountIndicators();requestAnimationFrame(function(){if(!closing){overlay.classList.add('is-open');drawer.querySelector('button').focus();}});
-    if(signed)api('/hub/inbox').then(function(j){if(!j.ok||owner!==(state.user&&state.user.id))return;state.inviteOwner=owner;state.inviteCount=(j.notifications||[]).length;updateAccountIndicators();}).catch(function(){});
+    if(signed)api('/inbox/badge').then(function(j){if(!j.ok||owner!==(state.user&&state.user.id))return;state.inboxOwner=owner;state.inboxNew=!!j.new;updateAccountIndicators();}).catch(function(){});
   }
   function accountMenu(){
     var user = state.user;
@@ -5077,13 +5104,14 @@ try {
   function subnavEl(mode){
     var items = [];
     if (mode === 'home') {
-      [['overview','For you'],['watchlist','Watchlist'],['favourites','Favourites'],['calendar','Release calendar'],['arrivals','New episodes'],['lists','My collections'],['friends','Friends'],['cinema','Watch together'],['history','History'],['stats','Game stats'],['chat','Chat'],['inbox','Inbox']].forEach(function(t){items.push({label:t[1],chatKind:t[0]==='inbox'?'mail':t[0]==='chat'?'dm':null,active:(state.hubTab||'overview')===t[0],go:function(){window.VaultcastHub.go(t[0]);}});});
+      [['overview','For you'],['watchlist','Watchlist'],['favourites','Favourites'],['calendar','Release calendar'],['arrivals','New episodes'],['lists','My collections'],['friends','Friends'],['cinema','Watch together'],['history','History'],['stats','Game stats'],['chat','Chat'],['inbox','Inbox']].forEach(function(t){items.push({label:t[1],chatKind:t[0]==='chat'?'dm':null,active:t[0]!=='inbox'&&(state.hubTab||'overview')===t[0],go:function(){if(t[0]==='inbox'){state.inboxPane=null;navigate('inbox');}else window.VaultcastHub.go(t[0]);}});});
     } else if (mode === 'vod') {
       items.push({ label:'Discover', active: state.view === 'library', go: function(){ navigate('library'); } });
       vodSections().forEach(function(s){
         items.push({ label: s.label, active: (state.view === 'section' && state.section === s.id), go: function(){ navigate('section', s.id); } });
       });
       items.push({ label:'Collections', active: state.view === 'collections' || state.view === 'collection', go: function(){ navigate('collections'); } });
+      if (canRequestMedia()) items.push({ label:'Requests', active: state.view === 'requests', go: function(){ openRequests('discover'); } });
     } else if (mode === 'live') {
       [['On now','now'],['Relay','relay'],['IPTV','iptv'],['Radio','radio']].forEach(function(page){
         items.push({label:page[0],active:(state.liveTab||'now')===page[1],go:function(){goLiveTab(page[1]);}});
@@ -5097,6 +5125,7 @@ try {
       items.push({ label: 'Quiz', active: tab === 'quiz', go: function(){ goPlayTab('quiz'); } });
       items.push({ label: 'Teams & friends', active: tab === 'social', go: function(){ goPlayTab('social'); } });
       items.push({ label: 'Leaderboards', active: tab === 'leaderboards', go: function(){ goPlayTab('leaderboards'); } });
+      if (achievementsOn()) items.push({ label: 'Achievements', active: tab === 'achievements', go: function(){ goPlayTab('achievements'); } });
     } else if (mode === 'misc') {
       [['board','Board'],['calendar','Calendar'],['drop','Drop'],['ambient','Ambient']].forEach(function(t){ items.push({ label:t[1], active:(state.miscTab||'board')===t[0], go:function(){ state.miscTab=t[0]; state.miscSub=''; if(state.view!=='misc')navigate('misc'); else { pushNav(); render(); } } }); });
     } else {
@@ -5240,29 +5269,7 @@ try {
     return Math.max(1,Math.floor((width-gutter*2-48+14)/(card+14)));
   }
 
-  var maintenanceNoticeCache=null,maintenanceNoticeAt=0,maintenanceNoticePending=null;
-  function maintenanceNoticeEl(){
-    if(!state.user||state.user.role!=='admin')return null;
-    var owner=state.user.id,host=h('div',{className:'maintenance-advisory-host'});
-    function paint(result){
-      if(!host.isConnected||!state.user||state.user.id!==owner||state.user.role!=='admin')return;
-      host.replaceChildren();
-      var needed=result.required||[];
-      if(!needed.length)return;
-      host.appendChild(h('div',{className:'maintenance-advisory',role:'status'},[
-        h('div',{},[h('strong',{text:'Maintenance needs your attention'}),h('p',{text:needed.map(function(item){return item.label;}).join(' · ')+'. Updates do not start these tasks automatically.'})]),
-        h('button',{className:'btn',type:'button',text:'Review required tasks',onClick:function(){openSettings('maintenance');}})
-      ]));
-    }
-    host._paintMaintenance=paint;
-    setTimeout(function(){
-      if(!host.isConnected)return;
-      if(maintenanceNoticeCache&&maintenanceNoticeCache.owner===owner&&Date.now()-maintenanceNoticeAt<30000){paint(maintenanceNoticeCache.result);return;}
-      if(!maintenanceNoticePending)maintenanceNoticePending=api('/admin/maintenance/requirements').finally(function(){maintenanceNoticePending=null;});
-      maintenanceNoticePending.then(function(result){if(result.ok&&state.user&&state.user.id===owner){maintenanceNoticeCache={owner:owner,result:result};maintenanceNoticeAt=Date.now();paint(result);}}).catch(function(){});
-    },0);
-    return host;
-  }
+  /* The old maintenance banner lives on as an Inbox item (System) with a Run task button. */
 
   function shell(content){
     var mode = currentMode();
@@ -5300,7 +5307,6 @@ try {
     return h('div', { className:'app-shell xshell' }, [
       header,
       subnavEl(mode),
-      maintenanceNoticeEl(),
       h('main', { className:'view view-enter', id:'main' }, [ content ])
     ]);
   }
@@ -5515,6 +5521,8 @@ try {
     var parts = [ libraryHero ];
     var cw = cwOnePerShow(home.continue_watching);
     if (cw.length) parts.push(rowEl('Continue watching', cw.map(function(it){ return cardEl(it, it.progress); }), { meta: String(cw.length) }));
+    /* Smart collections pinned to Home (filled in after the page draws). */
+    if (state.user && state.user.role !== 'guest') { var smartHome = h('div', { className:'smart-home-rows' }); parts.push(smartHome); loadModule('vc-smart.js','VaultcastSmart').then(function(mod){ if (smartHome.isConnected) mod.homeRows(smartHome); }).catch(function(){}); }
     vodSections().forEach(function(sec){
       var items = sec.items || [];
       if (!items.length) {
@@ -5600,6 +5608,7 @@ try {
     lobbyStopPoll();
     var rs = romsSection();
     if ((state.playTab || 'games') === 'games' && !rs) state.playTab = 'arcade';
+    if (state.playTab === 'achievements') return shell(lazyView('vc-achievements.js', 'VaultcastAchievements', 'play-extra-view', function(mod, host){ mod.render(host); }));
     if (['arcade','quiz','social','leaderboards'].indexOf(state.playTab) >= 0) return shell(lazyView('vc-play.js', 'VaultcastPlay', 'play-extra-view', function(mod, host){ mod.render(host, state.playTab, state.playSub || ''); }));
     if (!rs) return shell(h('div', { className:'panel' }, [ emptyState('No games library', 'Add a ROMs library under Admin → Libraries, then scan.') ]));
     state.section = rs.id; state.sectionType = 'roms'; state.sectionLabel = rs.label;
@@ -6042,7 +6051,7 @@ try {
       var root = $('#live-view');
       if (!root) return;
       root.innerHTML = '';
-      root.appendChild(emptyState('Live is unavailable', 'Could not reach the Live API (' + String(e && e.message || e) + ').', [
+      root.appendChild(emptyState('Live is unavailable', friendlyMessage(e), [
         h('button', { className:'btn', text:'Retry', onClick: function(){ loadLive(true); } })
       ]));
     });
@@ -6457,6 +6466,14 @@ try {
     addCentrePlay(overlay,video,safePlay);
     if(inlineHost)overlay.setAttribute('tabindex','0');
     (inlineHost||document.body).appendChild(overlay);
+    // Achievements: one beacon a minute while a channel is really playing (IPTV counts as Live TV, the rest is PseudoTV Relay).
+    var achTimer = setInterval(function(){
+      if (!overlay.isConnected) { clearInterval(achTimer); return; }
+      if (video.paused || video.readyState < 2 || document.hidden) return;
+      var c = liveChannels()[lp.idx] || list[lp.idx]; var cid = String((c && c.id) || '');
+      if (!cid || cid.indexOf('radio:') === 0) return;
+      achievementTick(cid.indexOf('iptv:') === 0 ? 'live' : 'relay');
+    }, 60000);
 
     function msg(t){ elMsg.textContent = t || ''; }
     function setTuning(on){ overlay.classList.toggle('tuning', !!on); }
@@ -6702,7 +6719,7 @@ try {
         video.oncanplay = function(){ if (tok !== lp.token) return; seekLive(); };
         video.src = streamPlayUrl(liveUrl(b.url));
         safePlay();
-      }).catch(function(e){ if (tok === lp.token) { setTuning(false); msg('Tune failed: ' + String(e && e.message || e)); } });
+      }).catch(function(e){ if (tok === lp.token) { setTuning(false); msg('Couldn\u2019t tune this channel: ' + friendlyMessage(e)); } });
     }
     function tuneIptv(){
       var tok = lp.token;
@@ -7004,9 +7021,30 @@ try {
     if (can('metadata_edit')||can('library_remove')) buttons.push(h('button', {className:'btn ghost', type:'button', text:'Manual edit', onClick:function(){
       withTools(function(tools){ if (can('metadata_edit')||can('library_remove')) tools.editDialog(item, showKey); });
     }}));
+    if(!showKey&&item.media_kind==='video'){var offlineBtn=offlineButton(item);if(offlineBtn)buttons.push(offlineBtn);}
+    if(can('age_ratings')&&(showKey||(item.media_kind==='video'&&!item.show_key)))buttons.push(h('button',{className:'btn ghost',type:'button',text:'Age rating',onClick:function(){
+      loadModule('vc-parental.js','VaultcastParental').then(function(mod){permissionDialog('Age rating · '+(item.show||item.title||'Title'),h('div',{className:'stack'},[h('p',{className:'muted',text:'Kids profiles hide titles above their age limit. Choose Automatic to use the rating found in NFO files, OMDb or TMDB.'}),mod.ratingControl(showKey?'show:'+showKey:'item:'+item.id)]));}).catch(function(){toast('Could not open age ratings',{kind:'bad'});});
+    }}));
     if(can('timing_edit')&&!showKey&&!item.show&&item.media_kind==='video')buttons.push(h('button',{className:'btn ghost',text:'Edit credits',onClick:function(){editEpisodeSegments(item);}}));
     if (state.user && state.user.role === 'admin' && (item.type === 'roms' || item.media_kind === 'rom')) buttons.push(h('button', {className:'btn ghost', type:'button', text:'Refresh poster and synopsis', onClick:function(){ queueGameMetadata(item.id); }}));
     return buttons;
+  }
+
+  /* Offline downloads (PWA): only when the server allows it for this person and the browser can store video. */
+  function offlineButton(item){
+    var o=state.user&&state.user.offline;
+    if(!o||!o.allowed||!window.indexedDB||!item||!item.id)return null;
+    var b=h('button',{className:'btn ghost offline-download-btn',type:'button',text:'⬇ Download',title:'Save to this device to watch offline',onClick:function(e){e.stopPropagation();loadModule('vc-offline.js','VaultcastOffline').then(function(mod){mod.download(item,b);}).catch(function(){toast('Downloads could not load',{kind:'bad'});});}});
+    loadModule('vc-offline.js','VaultcastOffline').then(function(mod){return mod.onDevice(item.id);}).then(function(st){if(st==='done')b.textContent='✓ On this device';else if(st)b.textContent='⬇ Downloading…';}).catch(function(){});
+    return b;
+  }
+  function offlineSettingsCard(){
+    var max=h('input',{type:'number',min:0,max:500,value:0,'aria-label':'Most titles per person'}),role=h('input',{type:'checkbox'}),note=h('p',{className:'muted',role:'status',text:''});role.checked=true;
+    api('/admin/settings').then(function(s){var o=(s&&s.offline)||{};max.value=String(Number(o.max_items)||0);role.checked=!('user_role' in o)||!!o.user_role;}).catch(function(){});
+    var save=h('button',{className:'btn',type:'button',text:'Save download limits',onClick:function(){save.disabled=true;api('/admin/settings',{method:'POST',body:{offline:{max_items:Math.max(0,Math.min(500,Number(max.value)||0)),user_role:role.checked}}}).then(function(r){save.disabled=false;note.textContent=r&&r.ok?'Saved.':((r&&r.error)||'Could not save.');},function(){save.disabled=false;note.textContent='Could not reach the server.';});}});
+    return h('div',{className:'settings-card'},[h('h3',{text:'Offline downloads'}),h('p',{className:'muted',text:'Roles need the “Download titles to watch offline” permission (Accounts → roles). Kids profiles only ever get titles inside their age limit.'}),
+      h('label',{className:'check-label'},[role,' Standard users may download (you can still override per person)']),h('label',{},['Most titles one person can keep downloaded (0 = no limit) ',max]),
+      h('p',{className:'muted',text:'Browsers decide how much space a site gets. Safari on iPhone and iPad is the strictest and may clear downloads that haven’t been opened for a few weeks.'}),h('div',{className:'row-actions'},[save]),note]);
   }
 
   function queueGameMetadata(itemId){
@@ -7127,22 +7165,25 @@ try {
       root.appendChild(playerHost);
       var multiplayer = isGame ? state.gameLobby : null;
       if (multiplayer) mountLobbyBoard(root, multiplayer);
-      root.appendChild(h('div', { className:'hero detail-hero', 'data-backdrop-host':'1', style:'display:flex;gap:20px;align-items:flex-end;flex-wrap:wrap' }, [
+      var movieActions = h('div', { className:'row-actions', style:'margin-bottom:8px' }, actions);
+      var movieHero = h('div', { className:'hero detail-hero', 'data-backdrop-host':'1', style:'display:flex;gap:20px;align-items:flex-end;flex-wrap:wrap' }, [
         poster,
         h('div', { style:'flex:1;min-width:200px' }, [
-          h('div', { className:'row-actions', style:'margin-bottom:8px' }, actions),
+          movieActions,
           h('h1', { text: item.title || 'Untitled' }),
           h('p', { className:'muted', text: meta.join(' · ') }),
           synopsisEl,
           h('div', { id:'movie-audio-box', className:'row-actions', style:'margin-top:8px' })
         ])
-      ]));
+      ]);
+      root.appendChild(movieHero);
       if (item.id) {
         poster.setAttribute('data-poster-fetch', '1');
         observePoster(poster, item.id, 'item');
         loadPosterNow(poster, item.id, 'item');
       }
       window.VaultcastHub.details(item,root);
+      if (!isGame) mountExtras({ kind:'item', id:item.id, title:item.title, hero:movieHero, actions:movieActions, root:root, restoreInline:function(){ if (stillHere()) playItem(item, { inline:true, autoplay:false }); } });
       if (!isGame) {
         root.appendChild(h('div', { id:'movie-collections' }));
         mountMovieCollections(item.id);
@@ -7151,6 +7192,28 @@ try {
     }).catch(function(e){
       paintError(String(e && e.message || e || 'Could not load movie'));
     });
+  }
+
+  /* Achievements (vc-achievements.js): the server sets X-Vaultcast-Achievement on the request that earned one,
+     and the Inbox badge poll reports any not yet celebrated; either way the module shows the toast once. */
+  function achievementsOn(){ return !!(state.user && state.user.role !== 'guest' && state.user.achievements && state.user.achievements.enabled); }
+  var achievementNudgeAt = 0;
+  function achievementNudge(){
+    if (!achievementsOn() || Date.now() - achievementNudgeAt < 1500) return;
+    achievementNudgeAt = Date.now();
+    loadModule('vc-achievements.js', 'VaultcastAchievements').then(function(mod){ if (mod.celebrate) mod.celebrate(); }).catch(function(){});
+  }
+  document.addEventListener('vaultcast-achievement', achievementNudge);
+  /* Time-based achievements (Live TV, Relay, Ambient): at most one small beacon a minute while it is really playing. */
+  function achievementTick(kind, start){
+    if (!achievementsOn()) return;
+    api('/achievements/tick', { method:'POST', body:{ kind:kind, start:!!start } }).catch(function(){});
+  }
+
+  /* Trailers and extras (vc-extras.js): Play trailer button, Extras row, optional muted hero trailer. Never blocks the page. */
+  function mountExtras(opts){
+    if (!opts || !opts.id || !userAreaAllowed('library')) return;
+    loadModule('vc-extras.js', 'VaultcastExtras').then(function(mod){ if (opts.root && opts.root.isConnected) mod.mount(opts); }).catch(function(){});
   }
 
   function mountMovieCollections(itemId){
@@ -7967,6 +8030,9 @@ try {
         ];
         if (!canSearchRss()) heroActions = heroActions.filter(function(button){ return button.textContent !== 'Find alternate'; });
         heroActions = heroActions.concat(detailMatchButtons(show, show.show_key || showKey));
+        if (!canManageDownloads() && canCreateMediaRequest() && show.title) {
+          heroActions.push(h('button', { className:'btn', text:'Request seasons', title:'Ask for seasons the library doesn’t have yet', onClick: function(){ openRequests('discover', { type:'tv', q: show.title }); } }));
+        }
         if (missTotal > 0 && canManageDownloads()) {
           heroActions.push(h('button', {
             className:'btn',
@@ -7974,17 +8040,20 @@ try {
             onClick: function(){ fetchMissingShow(show.show_key || show.id, null); }
           }));
         }
+        var showActions = h('div', { className:'row-actions', style:'margin-bottom:8px' }, heroActions);
         var heroKids = [
           heroPoster,
           h('div', { style:'flex:1;min-width:200px' }, [
-            h('div', { className:'row-actions', style:'margin-bottom:8px' }, heroActions),
+            showActions,
             h('h1', { text: show.title }),
             h('p', { className:'muted', text: metaBits.join(' · ') }),
             show.synopsis ? h('p', { className:'synopsis', text: show.synopsis }) : null
           ].filter(Boolean))
         ];
-        root.appendChild(h('div', { className:'hero detail-hero', 'data-backdrop-host':'1', style:'display:flex;gap:20px;align-items:flex-end;flex-wrap:wrap' }, heroKids));
+        var showHero = h('div', { className:'hero detail-hero', 'data-backdrop-host':'1', style:'display:flex;gap:20px;align-items:flex-end;flex-wrap:wrap' }, heroKids);
+        root.appendChild(showHero);
         window.VaultcastHub.details(show,root);
+        mountExtras({ kind:'show', id:show.show_key || showKey, title:show.title, season:sel, hero:showHero, actions:showActions, root:root });
         // Mount first, then load — otherwise pumpPosterQueue drops the detached job
         if (posterId) {
           heroPoster.setAttribute('data-poster-fetch', '1');
@@ -8077,6 +8146,7 @@ try {
           var epPath = showPath + '/season-' + ep.season + (ep.episode != null && ep.episode !== '' ? '/episode-' + ep.episode : (ep.id ? '/' + encodeURIComponent(ep.id) : ''));
           actions.push(shareButton(epPath, 'Copy link to ' + (code || 'this episode')));
           if(isAvail)actions.push(vlcLinkButton(ep));
+          if(isAvail)actions.push(offlineButton(ep));
           var isTarget = (state.showEpisode != null && +ep.episode === +state.showEpisode && +ep.season === +cur.season) || (wantEpItem && ep.id === wantEpItem);
           return h('div', {
             className: 'panel episode-row' + (((state.user||{}).prefs||{}).hide_spoilers?' episode-spoiler-hidden':'') + (isAvail ? '' : ' episode-missing') + (isTarget ? ' episode-target' : ''),
@@ -8220,9 +8290,12 @@ try {
       kids.push(emptyState(
         q ? 'No catalogue matches' : 'Type a title to search',
         q ? 'Try a different title or check your library filters.' : 'Press / then type. Catalogue results appear first.',
-        canSearchRss() && q && res.rss_fallback_enabled !== false ? [
-          h('button', { className:'btn primary', text: state.searchBusy?'Searching RSS…':'Search RSS / downloads', onClick: function(){ runRssSearch(q); } })
-        ] : null
+        (function(){
+          var acts = [];
+          if (q && canCreateMediaRequest()) acts.push(h('button', { className:'btn primary', type:'button', text:'Request “'+(q.length > 40 ? q.slice(0, 40)+'…' : q)+'”', onClick: function(){ openRequests('discover', { type:'movie', q:q }); } }));
+          if (canSearchRss() && q && res.rss_fallback_enabled !== false) acts.push(h('button', { className:'btn' + (acts.length ? '' : ' primary'), text: state.searchBusy?'Searching RSS…':'Search RSS / downloads', onClick: function(){ runRssSearch(q); } }));
+          return acts.length ? acts : null;
+        })()
       ));
     } else {
       kids.push(h('section', { className:'row' }, [
@@ -8237,6 +8310,12 @@ try {
         h('span',{className:'muted',text:'Page '+(res.page||1)+' · '+(res.total||0)+' matches'}),
         h('button',{className:'btn primary',type:'button',text:'Next',disabled:!!state.searchBusy||!res.has_more,onClick:function(){runGlobalSearch(q,(res.page||1)+1);}})
       ]));
+      if (q && res.weak && canCreateMediaRequest()) {
+        kids.push(h('div', { className:'panel mreq-cta', style:'margin:8px 20px' }, [
+          h('p', { className:'muted', text:'Not what you were after? Ask for it and you’ll hear back in your inbox.' }),
+          h('div', { className:'row-actions' }, [h('button', { className:'btn', type:'button', text:'Request a film or show', onClick: function(){ openRequests('discover', { type:'movie', q:q }); } })])
+        ]));
+      }
       if (canSearchRss() && (res.weak || res.rss_fallback_enabled)) {
         kids.push(h('div', { className:'panel', style:'margin:8px 20px' }, [
           h('p', { className:'muted', text:'Catalogue results are limited. Optionally search RSS for preferred qualities (admin: min seeds, qualities, languages).' }),
@@ -8310,8 +8389,7 @@ try {
   }
   window.addEventListener('beforeunload',function(e){if(state.view==='settings'&&(settingsDraftChanged()||(state.settingsSection==='live-studio'&&tvs.dirty))){e.preventDefault();e.returnValue='';}});
   function renderTaskCentre(host){
-    var info={browse:['Browsing','Build the search index and show summaries together. Useful after importing a large library.'],search:['Browsing','Rebuild fast search suggestions without rescanning folders.'],views:['Browsing','Prepare cached library rows, collections and the live guide.'],scan:['Library','Discover files in configured folders. Does not download artwork.'],metadata:['Library','Fetch missing artwork and descriptions, then preserve sidecars. Network requests may take time.'],'game-metadata':['Library','Refresh game posters and descriptions using the current game matching rules.'],facts:['Library','Probe file codecs and durations and store show guides. Reads media files.'],collections:['Library','Match media to public collections.'],segments:['Playback','Match episode intro/credit timings and available movie credits.'],epg:['Live','Refresh the programme guide from configured sources.'],durations:['Live','Read missing Live media durations.'],downloads:['Downloads','Import completed downloads using the configured rules.'],'site-artwork':['Artwork','Create WebP copies of bundled theme posters and custom site uploads. Originals remain unchanged.'],'drop-cleanup':['Storage','Delete the stored bytes of Drop items that expired, used their last download or were abandoned mid-upload. They are already unavailable; this frees the space. Schedule with: php src/Console.php drop-cleanup']};
-    info['conversion-repair']=['Library','Restore original catalogue entries from deleted-conversion job records and clear missing copy links. Media files are not modified.'];
+    var info={'age-ratings':['Library','Look up age ratings (NFO, OMDb, TMDB) for films and shows so kids profiles can hide what’s above their limit.'],'smart-index':['Library','Gather genres, cast and resolution so smart collections can match on them.'],browse:['Browsing','Build the search index and show summaries together. Useful after importing a large library.'],search:['Browsing','Rebuild fast search suggestions without rescanning folders.'],views:['Browsing','Prepare cached library rows, collections and the live guide.'],scan:['Library','Discover files in configured folders. Does not download artwork.'],metadata:['Library','Fetch missing artwork and descriptions, then preserve sidecars. Network requests may take time.'],'game-metadata':['Library','Refresh game posters and descriptions using the current game matching rules.'],facts:['Library','Probe file codecs and durations and store show guides. Reads media files.'],collections:['Library','Match media to public collections.'],segments:['Playback','Match episode intro/credit timings and available movie credits.'],epg:['Live','Refresh the programme guide from configured sources.'],durations:['Live','Read missing Live media durations.'],downloads:['Downloads','Import completed downloads using the configured rules.'],'site-artwork':['Artwork','Create WebP copies of bundled theme posters and custom site uploads. Originals remain unchanged.'],'drop-cleanup':['Storage','Delete the stored bytes of Drop items that expired, used their last download or were abandoned mid-upload. They are already unavailable; this frees the space. Schedule with: php src/Console.php drop-cleanup']};
     var filter='All',busy=false,timer=null,sequence=0,lastData=null;
     function requestAction(url,body,button){button.disabled=true;return api(url,{method:'POST',body:body}).then(function(j){if(!j.ok)throw new Error(j.error||'Task request failed');if(host.isConnected)refresh();}).catch(function(e){toast(e.message,{kind:'bad'});if(button.isConnected)button.disabled=false;});}
     function refresh(useCache){
@@ -8327,10 +8405,6 @@ try {
           if(progress.total>0)row.appendChild(h('progress',{value:progress.done||0,max:progress.total,'aria-label':'Task progress'}));
           if(progress.phase||progress.file)row.appendChild(h('p',{className:'muted',text:[progress.phase,progress.total>0?(progress.done||0)+' / '+progress.total:'',progress.file].filter(Boolean).join(' · ')}));
           if(job.result&&job.result.warning)row.appendChild(h('p',{className:'bad',text:String(job.result.warning)}));
-          if(job.result&&job.task==='conversion-repair'){
-            row.appendChild(h('p',{text:(job.result.restored||0)+' original entries restored · '+(job.result.skipped||0)+' intentionally hidden entries skipped · '+(job.result.issues||[]).length+' issues'}));
-            (job.result.issues||[]).forEach(function(issue){row.appendChild(h('p',{className:'bad',text:issue.item_id+': '+issue.error}));});
-          }
           if(job.result&&job.task==='site-artwork')row.appendChild(h('p',{text:(job.result.optimised||0)+' images optimised · '+(job.result.already_ready||0)+' already prepared · '+(job.result.failed||0)+' failed · '+fmtBytes(job.result.bytes_saved||0)+' saved'}));
           if(job.error)row.appendChild(h('p',{className:'bad',text:job.error}));
           if(job.result)row.appendChild(h('details',{className:'settings-job-result','data-job-id':job.id,open:openResults.has(job.id)},[h('summary',{text:job.result.continuation?'Pass complete · continuing in another job':'View result details'}),h('pre',{text:JSON.stringify(job.result,null,2)})]));
@@ -8350,19 +8424,21 @@ try {
     var prefs = u.prefs || {};
     var isAdmin = !!(u && u.role === 'admin');
     var groups = [
-      {title:'Your account',description:'Your identity, personal preferences and saved games.',items:[{id:'settings-home',label:'Settings overview',hint:'Find a setting or choose a task'},{id:'account',label:'Profile & security',hint:'Display name, avatar, password and sign out'},{id:'appearance',label:'Appearance & motion',hint:'Themes, animation and reduced motion'},{id:'playback',label:'Playback & skipping',hint:'Autoplay, mini player, intros and credits'},{id:'home-preferences',label:'Home & spoilers',hint:'Start page, compact layout and unwatched episode details'},{id:'cloud-saves',label:'Cloud saves',hint:'Save slots, backups, uploads and sharing'}]},
+      {title:'Your account',description:'Your identity, personal preferences and saved games.',items:[{id:'inbox',label:'Inbox',hint:'Messages, invitations and anything that needs you'},{id:'settings-home',label:'Settings overview',hint:'Find a setting or choose a task'},{id:'account',label:'Profile & security',hint:'Display name, avatar, password and sign out'},{id:'parental',label:'Parental controls',hint:'Kids profile, age limits and PIN'},{id:'appearance',label:'Appearance & motion',hint:'Themes, animation and reduced motion'},{id:'playback',label:'Playback & skipping',hint:'Autoplay, mini player, intros and credits'},{id:'home-preferences',label:'Home & spoilers',hint:'Start page, compact layout and unwatched episode details'},{id:'cloud-saves',label:'Cloud saves',hint:'Save slots, backups, uploads and sharing'}]},
       {title:'Library & metadata',description:'Connect folders, organise titles and correct missing information.',admin:true,items:[{id:'sections',label:'Libraries & folders',section:'Sources',hint:'Media types, paths and enabled libraries'},{id:'scan',label:'Scan for media',section:'Sources',hint:'Discover new or removed files'},{id:'ingest',label:'Import inbox',section:'Sources',hint:'Review incoming downloads before importing'},{id:'media',label:'Media manager',section:'Organise',hint:'Search and edit library records'},{id:'collections',label:'Collections',section:'Organise',hint:'Film sets and series groups'},{id:'library',label:'Find & rename',section:'Organise',hint:'Match names and organise files'},{id:'matching',label:'Metadata matching',section:'Metadata',hint:'Fix titles, posters and descriptions'},{id:'reports',label:'User reports',section:'Metadata',hint:'Review incorrect labels reported by users'}]},
       {title:'Artwork & design',description:'Site branding, bundled posters and library artwork.',admin:true,items:[{id:'site-artwork',label:'Site & theme posters',hint:'Replace default artwork and create smaller WebP images'},{id:'posters',label:'Library artwork',hint:'Fetch missing movie, show, season and game images'},{id:'artwork-integrity',label:'Repair missing images',hint:'Find broken records and missing files'},{id:'poster-optimise',label:'Optimise library images',hint:'Generate full, grid and search WebP variants'}]},
       {title:'Live broadcasting',description:'Build channels, schedule programmes and manage public streams.',admin:true,items:[{id:'live-studio',label:'PseudoTV Studio',section:'Relay',hint:'Schedule programmes, filler and advertising'},{id:'live-channels',label:'Relay channels',section:'Relay',hint:'Create channels and manage rotations'},{id:'live-library',label:'Live media library',section:'Relay',hint:'Import programmes and prepare durations'},{id:'live-playlists',label:'Rotation playlists',section:'Relay',hint:'Reusable channel programme rotations'},{id:'live-schedule',label:'Rotation rules',section:'Relay',hint:'Legacy rotation scheduling; Studio manages weekly slots'},{id:'live-iptv',label:'IPTV & guide matching',section:'Sources',hint:'Feeds, channel mapping and EPG'},{id:'live-radio',label:'Radio stations',section:'Sources',hint:'Add stations or browse the public directory'},{id:'live-station',label:'Station & outputs',section:'Outputs',hint:'Streams, guide exports and station configuration'}]},
       {title:'People & permissions',description:'Control who can access content and administrative tools.',admin:true,items:[{id:'users',label:'Accounts, roles & permissions',hint:'Create users and roles; assign individual access'}]},
-      {title:'Playback & delivery',description:'Server delivery options and player dependencies.',admin:true,items:[{id:'directplay',label:'DirectPlay Settings',hint:'Playback policy, transcoding, threads and reusable copies'},{id:'streaming',label:'Delivery & subtitles',hint:'Seeking, playback tokens and subtitles'},{id:'players',label:'Player assets',hint:'Local or CDN player files and emulator cores'},{id:'video-optimise',label:'Video conversion',hint:'Convert files, review requests and manage encoding jobs'}]},
+      {title:'Playback & delivery',description:'Server delivery options and player dependencies.',admin:true,items:[{id:'directplay',label:'DirectPlay Settings',hint:'Playback policy, transcoding, threads and reusable copies'},{id:'trailers',label:'Trailers & extras',hint:'Online trailers, the muted hero trailer and extras thumbnails'},{id:'streaming',label:'Delivery & subtitles',hint:'Seeking, playback tokens and subtitles'},{id:'players',label:'Player assets',hint:'Local or CDN player files and emulator cores'},{id:'video-optimise',label:'Video conversion',hint:'Convert files, review requests and manage encoding jobs'}]},
       {title:'Downloads',description:'Configure providers and review download activity.',admin:true,items:[{id:'acquisition',label:'Providers & integrations',hint:'RSS search, download clients and API connections'},{id:'queue',label:'Download queue',hint:'Active downloads, imports and errors'}]},
-      {title:'Application & server',description:'Site defaults, updates, performance and troubleshooting.',admin:true,items:[{id:'general',label:'Site defaults & access',hint:'Branding, guest access, public URL and installable app'},{id:'features',label:'Enabled features',hint:'Turn optional services on or off'},{id:'ambient',label:'Ambient & webcams',hint:'Webcams from boards and which ones Ambient offers'},{id:'updates',label:'Updates & branches',hint:'Manually check, install or switch update channels'},{id:'maintenance',label:'Task centre',hint:'Preparation jobs, progress, cancellation and history'},{id:'optimise-system',label:'Storage & caches',hint:'Generated files and safe cache tools'},{id:'diagnostics',label:'Diagnostics',hint:'Run selected checks and inspect failures'},{id:'system',label:'Server tools',hint:'Resource usage and service controls'},{id:'advanced',label:'Advanced & reset',hint:'PHP CLI, ffmpeg, ffprobe, tool paths, raw configuration and database reset'}]}
+      {title:'Application & server',description:'Site defaults, updates, performance and troubleshooting.',admin:true,items:[{id:'general',label:'Site defaults & access',hint:'Branding, guest access, public URL and installable app'},{id:'features',label:'Enabled features',hint:'Turn optional services on or off'},{id:'achievements',label:'Achievements',hint:'Turn achievements on or off and count past activity'},{id:'ambient',label:'Ambient & webcams',hint:'Webcams from boards and which ones Ambient offers'},{id:'updates',label:'Updates & branches',hint:'Manually check, install or switch update channels'},{id:'maintenance',label:'Task centre',hint:'Preparation jobs, progress, cancellation and history'},{id:'optimise-system',label:'Storage & caches',hint:'Generated files and safe cache tools'},{id:'diagnostics',label:'Diagnostics',hint:'Run selected checks and inspect failures'},{id:'system',label:'Server tools',hint:'Resource usage and service controls'},{id:'advanced',label:'Advanced & reset',hint:'PHP CLI, ffmpeg, ffprobe, tool paths, raw configuration and database reset'}]}
     ];
     var features = (state.home && state.home.features) || {};
     groups = groups.map(function(g){
       g.items = g.items.filter(function(it){
         if(g.admin&&!canSettings(it.id))return false;
+        if (it.id === 'parental') return !isAdmin && !!u.username;
+        if (it.id === 'inbox') return !!u.username && u.role !== 'guest';
         if (it.id.indexOf('live-') === 0) return !!features.live;
         if (it.id === 'acquisition' || it.id === 'queue') return !!features.downloads;
         if (it.id === 'system') return !!features.server_tools;
@@ -8378,6 +8454,7 @@ try {
     var sec = state.settingsSection;
 
     function goSec(id){
+      if(id==='inbox'){state.inboxPane=null;navigate('inbox');return;}
       if(id===sec)return;
       if(tvs.dirty&&sec==='live-studio'&&!confirm('Leave Studio with unsaved changes? Your draft stays here until you save or discard it.'))return;
       if(settingsDraftChanged()&&!confirm('Leave this page and discard unsaved form changes?'))return;
@@ -8455,6 +8532,14 @@ try {
       setTimeout(function(){ renderUpdatesPanel(updHost); }, 0);
     } else if (sec === 'maintenance' && isAdmin) {
       var jobsHost=h('div',{className:'task-centre'});bodyKids=[h('h2',{text:'Task centre'}),h('p',{className:'muted',text:'Run preparation when it suits you. Nothing here starts automatically on an update or page visit. The worker runs one maintenance task at a time, at lower CPU priority.'}),jobsHost];setTimeout(function(){renderTaskCentre(jobsHost);},0);
+    } else if (sec === 'achievements' && isAdmin) {
+      var achHost = h('div', { className:'stack vca-admin' }, [ pendingContent({ text:'Loading achievement settings…' }) ]);
+      bodyKids = [ h('h2', { text:'Achievements' }), achHost ];
+      setTimeout(function(){ loadModule('vc-achievements.js', 'VaultcastAchievements').then(function(mod){ if (achHost.isConnected) mod.adminPanel(achHost); }).catch(function(){ achHost.replaceChildren(h('p', { className:'bad', text:'Could not load achievement settings. Reload the page and try again.' })); }); }, 0);
+    } else if (sec === 'trailers' && isAdmin) {
+      var trailerHost = h('div', { className:'stack vcx-admin' }, [ pendingContent({ text:'Loading trailer settings…' }) ]);
+      bodyKids = [ h('h2', { text:'Trailers & extras' }), trailerHost ];
+      setTimeout(function(){ loadModule('vc-extras.js', 'VaultcastExtras').then(function(mod){ if (trailerHost.isConnected) mod.adminPanel(trailerHost); }).catch(function(){ trailerHost.replaceChildren(h('p', { className:'bad', text:'Could not load trailer settings. Reload the page and try again.' })); }); }, 0);
     } else if (sec === 'ambient' && isAdmin) {
       var camHost = h('div', { className:'vc-webcam-admin' }, [ pendingContent({ text:'Loading webcams…' }) ]);
       bodyKids = [
@@ -8467,7 +8552,8 @@ try {
       var featureOptions = [
         ['live','Live channels & IPTV','TV Studio schedules, IPTV sources (iptv-org is preinstalled) and the programme guide.'],
         ['downloads','Download integrations','Connect download services you already operate.'],
-        ['server_tools','Server administration tools','Optional Linux process and service controls. Configure permissions before use.']
+        ['server_tools','Server administration tools','Optional Linux process and service controls. Configure permissions before use.'],
+        ['offline','Offline downloads to devices','People can save browser-ready copies inside their browser and watch with no connection. Only titles that already play directly (or have a DirectPlay copy) can be downloaded; nothing new is encoded.']
       ];
       var featureRows = featureOptions.map(function(option){
         var id = 'feature-' + option[0];
@@ -8493,7 +8579,8 @@ try {
       bodyKids = [
         h('h2',{text:'Optional features'}),
         h('p',{className:'muted',text:'Keep your library light. Enable only the services you use. Media types and folders are managed under Libraries.'}),
-        h('div',{className:'settings-card feature-card'}, featureRows.concat([ h('div',{className:'feature-card-foot'},[saveFeatures]) ]))
+        h('div',{className:'settings-card feature-card'}, featureRows.concat([ h('div',{className:'feature-card-foot'},[saveFeatures]) ])),
+        offlineSettingsCard()
       ];
     } else if (sec === 'system') {
       bodyKids = [
@@ -8568,6 +8655,11 @@ try {
         if(child.classList.contains('row-actions')){if(sec!=='account')Array.from(child.children).slice(1).forEach(function(button){button.remove();});return;}
         if(!ids.some(function(id){return child.id===id||child.querySelector('#'+id);}))child.remove();
       });bodyKids[0].textContent=activeItem.label;
+    }
+    if(sec==='parental'){
+      var parentalHost=h('div',{className:'parental-host'},[h('p',{className:'muted',text:'Loading…'})]);
+      bodyKids=[h('h2',{text:'Parental controls'}),h('p',{className:'muted',text:'Age limits, a kids profile and which areas this account can use. A PIN protects changes.'}),parentalHost];
+      loadModule('vc-parental.js','VaultcastParental').then(function(mod){mod.selfPanel(parentalHost);}).catch(function(){parentalHost.replaceChildren(h('p',{className:'muted',text:'Parental controls could not be loaded.'}));});
     }
     if(sec==='settings-home'){
       bodyKids=[h('div',{className:'settings-overview-intro'},[h('span',{className:'eyebrow',text:isAdmin?'CONTROL ROOM':'MAKE IT YOURS'}),h('h2',{text:isAdmin?'Your server. In order.':'Your Vaultcast, your way.'}),h('p',{className:'muted',text:'Choose a task below or search settings. Opening a page never starts a scan, update check or optimisation job.'})]),h('div',{className:'settings-overview-grid'},groups.map(function(g){return h('section',{className:'settings-overview-card'},[h('h3',{text:g.title}),h('p',{text:g.description}),h('div',{className:'settings-overview-links'},g.items.filter(function(it){return it.id!=='settings-home';}).map(function(it){return h('button',{type:'button',onClick:function(){goSec(it.id);}},[h('strong',{text:it.label}),h('small',{text:it.hint})]);}))]);}))];
@@ -10019,6 +10111,8 @@ try {
     if(!admin)Object.keys(state.userRoles||{}).forEach(function(id){role.appendChild(h('option',{value:id,text:state.userRoles[id].name}));});role.value=user.role;
     var body=h('div',{className:'stack'},[status,h('label',{},['Role',role]),h('h4',{text:'Media areas'})]);
     [['library','Library'],['live','Live'],['games','Games']].forEach(function(entry){var checkbox=h('input',{type:'checkbox',checked:admin||areas[entry[0]]===true,disabled:admin});inputs[entry[0]]=checkbox;body.appendChild(h('label',{className:'check-label'},[checkbox,entry[1]]));});
+    if(!admin)body.appendChild(h('div',{className:'parental-admin-entry'},[h('h4',{text:'Parental controls'}),h('p',{className:'muted',text:user.parental?'':'Off'},[]),h('button',{className:'btn',type:'button',text:'Kids profile & age limits…',onClick:function(){loadModule('vc-parental.js','VaultcastParental').then(function(mod){mod.adminEditor(user,function(p){user.parental=p;loadUsers();});}).catch(function(){toast('Could not open parental controls',{kind:'bad'});});}})]));
+    if(!admin&&user.parental)loadModule('vc-parental.js','VaultcastParental').then(function(mod){var p=body.querySelector('.parental-admin-entry p');if(p)p.textContent=mod.summary(user.parental);}).catch(function(){});
     body.appendChild(h('h4',{text:'Permission overrides'}));
     Object.keys(state.permissionChoices||{}).forEach(function(key){var select=h('select',{'aria-label':state.permissionChoices[key]},[h('option',{value:'inherit',text:'Use role default'}),h('option',{value:'allow',text:'Allow'}),h('option',{value:'deny',text:'Deny'})]);select.value=user.permissions&&typeof user.permissions[key]==='boolean'?(user.permissions[key]?'allow':'deny'):'inherit';overrides[key]=select;body.appendChild(h('label',{},[state.permissionChoices[key],select]));});
     function defaults(){Object.keys(overrides).forEach(function(key){var select=overrides[key];var userCap=(state.userRoleCapabilities||[]).indexOf(key)>=0;select.disabled=admin||(role.value==='user'&&!userCap);var grants=role.value==='user'?(state.userRoleDefaults||{}):(state.userRoles[role.value]&&state.userRoles[role.value].permissions||{});var inherited=admin||!!grants[key]||(key==='ingest_view'&&grants.ingest_import===true);select.options[0].textContent='Use role default ('+(inherited?'allowed':'denied')+')';});}role.onchange=defaults;defaults();
@@ -10693,7 +10787,7 @@ h('div', { className:'cv-find-bar' }, [
     function reload(){
       api('/admin/system/optimise-status').then(paint).catch(function(e){
         host.innerHTML = '';
-        host.appendChild(h('p', { className:'bad', text: String(e) }));
+        host.appendChild(h('p', { className:'bad', text: friendlyMessage(e) }));
       });
     }
     reload();
@@ -11895,13 +11989,6 @@ h('div', { className:'cv-find-bar' }, [
           h('div', { id:'cv_batch_list', className:'cv-batch-list cv-glass-wrap' }, [ pendingContent({ className:'muted', }) ]),
           h('div', { className:'row-actions' }, [
             h('button', { className:'btn', text:'Refresh queue', onClick: function(){ refreshConvertAdmin(); } }),
-            h('button',{className:'btn ghost',text:'Repair deleted-conversion entries',onClick:function(e){
-              var button=e.currentTarget;button.disabled=true;
-              api('/admin/maintenance',{method:'POST',body:{task:'conversion-repair'}}).then(function(j){
-                if(!j.ok)throw new Error(j.error||'Could not start repair.');
-                toast('Repair queued. Existing original files will be re-indexed; media files are not changed. Progress and results are in Maintenance.');
-              }).catch(function(e){toast(e.message||String(e),{kind:'bad'});}).then(function(){button.disabled=false;});
-            }}),
             h('button', { className:'btn ghost', text:'Clear finished', onClick: function(){
               api('/admin/convert/clear-finished', { method:'POST' }).then(function(r){
                 toast(r.ok ? 'Cleared finished jobs' : (r.error||'Failed'), { kind: r.ok?'ok':'bad' });
@@ -11992,20 +12079,6 @@ h('div', { className:'cv-find-bar' }, [
 
   function fieldEl(id, label, value, type){
     return h('label', {}, [ label, h('input', { id:id, value: value==null?'':String(value), type: type||'text' }) ]);
-  }
-  function formBlock(fields, onSave){
-    return h('div', { className:'stack' }, fields.map(function(f){
-      return fieldEl(f.id, f.label, f.value, f.type);
-    }).concat([
-      h('button', { className:'btn primary', text:'Save', onClick: function(){
-        var data = {};
-        fields.forEach(function(f){
-          var v = $('#'+f.id).value;
-          data[f.id] = f.type==='number' ? +v : v;
-        });
-        onSave(data);
-      }})
-    ]));
   }
   function saveSettings(patch){
     var focus=document.activeElement,scope=state.adminTab==='general'?null:focus&&focus.closest('.settings-fieldset'),savedFields=captureSettingsDraft(scope);
@@ -12223,7 +12296,7 @@ h('div', { className:'cv-find-bar' }, [
       if ((r.page||1) > 1) nav.appendChild(h('button', { className:'btn', text:'Prev', onClick: function(){ state.mm.page--; mmLoadCatalogue(); } }));
       if (((r.page||1)*(r.per||40)) < (r.total||0)) nav.appendChild(h('button', { className:'btn', text:'Next', onClick: function(){ state.mm.page++; mmLoadCatalogue(); } }));
       list.appendChild(nav);
-    }).catch(function(e){ if(status) status.textContent = String(e); });
+    }).catch(function(e){ if(status) status.textContent = friendlyMessage(e); });
   }
 
   function mmOpenItemEditor(it){
@@ -12599,8 +12672,11 @@ h('div', { className:'cv-find-bar' }, [
       h('section',{className:'collections-hero page-hero page-hero-layout'},[
         collectionsPosterEl(),h('div',{className:'hero-copy'},[h('div',{className:'eyebrow',text:'Library'}),h('h1',{text:'Collections'}),h('p',{className:'muted',text:'Film series and show groups, together in one place. Pick a poster to explore its titles.'}),h('div',{className:'row-actions'},[h('button',{className:'btn primary',text:'Browse collections',onClick:function(){var list=$('#pub_col_list');if(list)list.scrollIntoView({behavior:'smooth',block:'start'});}}),h('button',{className:'btn',text:'Surprise me',onClick:function(){var cards=$all('#pub_col_list .collection-card');if(!cards.length){toast('No collections available yet');return;}var card=cards[Math.floor(Math.random()*cards.length)];card.click();card.scrollIntoView({behavior:'smooth',block:'center'});}}),h('button',{className:'btn',text:'Explore Library',onClick:function(){navigate('library');}}),state.user&&state.user.role==='admin'?h('button',{className:'btn',text:'Manage collections',onClick:function(){openSettings('collections');}}):null])]),heroClock('Collections from your library'),heroArt('library')
       ]),
+      state.user && state.user.role !== 'guest' ? h('section', { id:'smart_col_list', className:'smart-collections' }) : null,
       h('div', { id:'pub_col_list', className:'collections-grid' }, [ pendingContent({ className:'muted', }) ])
     ]);
+    var smartHost = wrap.querySelector('#smart_col_list');
+    if (smartHost) loadModule('vc-smart.js','VaultcastSmart').then(function(mod){ if (smartHost.isConnected) mod.section(smartHost); }).catch(function(){ smartHost.remove(); });
     api('/collections').then(function(r){
       var list = $('#pub_col_list'); if (!list) return;
       var root = $('#collections-view');
@@ -14740,9 +14816,6 @@ function viewCollectionDetail(){
       h('div', { className: 'row-actions player-actions' }, actions)
     ]);
   }
-  /* programmatic entry kept for stale callers: never navigates; copies the URL instead */
-  function openInPlayer(url){ return copyStreamUrl(url); }
-  function openInVlc(url){ return copyStreamUrl(url); }
   /* ---------------- IPTV ---------------- */
   function paintLiveIptv(host){
     if(!host||!host.isConnected)return;
@@ -15145,7 +15218,9 @@ function viewCollectionDetail(){
     if(br.loaded){paintIptvBrowseResults();}else runIptvBrowse(false,false);
     if(previousScroll!==null&&br.channels.length<=150)requestAnimationFrame(function(){if(host.isConnected&&previousScroll!==null)window.scrollTo(0,previousScroll);});
   }
+  function kidLocked(){var p=state.user&&state.user.parental;return !!(p&&p.kid&&!(p.unlocked_for>0));}
   function openSettings(section){
+    if(kidLocked()){loadModule('vc-parental.js','VaultcastParental').then(function(mod){mod.unlockPrompt(function(){openSettings(section);});}).catch(function(){toast('Settings are locked on this profile.',{kind:'bad'});});return;}
     if(state.view==='settings'&&settingsDraftChanged()&&!confirm('Leave this page and discard unsaved form changes?'))return;
     state.settingsSection = section || 'settings-home';
     var adminIds = { maintenance:'maintenance', players:'players', features:'features', libraries:'sections', sections:'sections', scan:'scan', library:'library', media:'media', collections:'collections', streaming:'streaming', directplay:'directplay', convert:'convert', queue:'queue', acquisition:'acquisition', system:'system', general:'general', users:'users', advanced:'advanced', ingest:'ingest', matching:'matching', reports:'reports' };
@@ -15450,6 +15525,9 @@ function viewCollectionDetail(){
     else if (state.view === 'colmember') root.appendChild(viewCollectionMember());
     else if (state.view === 'live') { root.appendChild(viewLive()); setTimeout(consumePendingLiveChannel, 0); }
     else if (state.view === 'play') root.appendChild(viewPlay());
+    else if (state.view === 'offline') root.appendChild(shell(lazyView('vc-offline.js', 'VaultcastOffline', 'offline-view', function(mod, host){ mod.render(host); })));
+    else if (state.view === 'requests') root.appendChild(shell(lazyView('vc-requests.js', 'VaultcastRequests', 'requests-view', function(mod, host){ mod.render(host); })));
+    else if (state.view === 'inbox') { root.appendChild(shell(lazyView('vc-inbox.js', 'VaultcastInbox', 'inbox-view', function(mod, host){ mod.render(host); }))); updateAccountIndicators(); }
     else if (state.view === 'misc') root.appendChild(shell(lazyView('vc-misc.js', 'VaultcastMisc', 'misc-view', function(mod, host){ mod.render(host, state.miscTab || 'board', state.miscSub || ''); })));
     else root.appendChild(viewHome());
   }
@@ -15555,10 +15633,19 @@ function viewCollectionDetail(){
   });
 
   /* helpers for assets/js/matching.js (Ingest inbox / Fix matching / Label reports) */
-  window.NSApp = { h: h, swap: swapChildren, api: api, toast: toast, confirmDialog: confirmDialog, render: render, state: state, can:can,
+  window.NSApp = { h: h, swap: swapChildren, api: api, toast: toast, dialog: permissionDialog, base: BASE, rowEl: rowEl, emptyState: emptyState, confirmDialog: confirmDialog, render: render, state: state, can:can,
     openSettings: openSettings, openShow: openShow, openMovie: openMovie, openGame:openGame, navigate:navigate, refreshArtwork:refreshArtwork, fmtSize: fmtSize, version: APP_VERSION,
     shell:shell,communityPoster:communityPoster,refreshCommunityRating:refreshCommunityRating,heroClock:heroClock,homePosterEl:homePosterEl,homeSectionPosterEl:homeSectionPosterEl,collectionsPosterEl:collectionsPosterEl,librarySummary:librarySummary,cardEl:cardEl,homeActivitySections:homeActivitySections,applyRoute:applyRoute,replaceNav:replaceNav,openPlayer:openPlayer,playItem:playItem,copyText:copyText,shareUrl:shareUrl,startLobbyHost:startLobbyHost,captureGameState:lobbyCaptureState,loadGameState:loadGameState,restoreMultiplayerState:restoreMultiplayerState,quitGame:function(){closePlayer();} };
   var moduleLoads = {};
+  /* Parental controls: kid mode styling and the grown-up switch follow the signed-in profile. */
+  function applyParental(){
+    var p=state.user&&state.user.parental;
+    if(!p||!(p.kid||(p.settings&&p.settings.enabled))){document.body.classList.remove('kid-mode','parental-unlocked');var pill=document.getElementById('parental-switch');if(pill)pill.remove();return;}
+    if(p.kid&&!(p.unlocked_for>0))document.body.classList.add('kid-mode');
+    loadModule('vc-parental.js','VaultcastParental').then(function(mod){mod.apply();}).catch(function(){});
+  }
+  document.addEventListener('vaultcast-account-ready',applyParental);
+  document.addEventListener('vaultcast-account-ready',function(){var o=state.user&&state.user.offline;if(o&&(o.allowed||o.held)&&window.indexedDB)setTimeout(function(){loadModule('vc-offline.js','VaultcastOffline').catch(function(){});},4000);});
   /** The feature modules' stylesheet is fetched with the first module, so pages that never open them skip it. */
   var extraCss = null;
   function loadExtraCss(){
@@ -15633,54 +15720,6 @@ function viewCollectionDetail(){
     };
     document.head.appendChild(sm);
   };
-
-  // Initial HTML images also need bounded scheduling; native lazy loading can
-  // enqueue whole horizontal rails and consume all HTTP/1.1 connections.
-  function enhanceFirstPosters(){
-    var first = document.getElementById('first-home');
-    if (!first) return;
-    var queue = [], active = 0, observer;
-    function pump(){
-      while (active < 2 && queue.length) {
-        var img = queue.shift();
-        if (img.isConnected === false) continue;
-        var url = img.getAttribute('data-first-src');
-        if (!url) continue;
-        img.removeAttribute('data-first-src'); active++;
-        (function(image){
-          var finished = false;
-          function done(){ if (finished) return; finished = true; active--; pump(); }
-          image.addEventListener('load', done, {once:true});
-          image.addEventListener('error', done, {once:true});
-          image.src = url;
-        })(img);
-      }
-    }
-    var images = first.querySelectorAll('img[data-first-src]');
-    if (typeof IntersectionObserver === 'undefined') {
-      Array.prototype.forEach.call(images, function(img){ queue.push(img); }); pump(); return;
-    }
-    observer = new IntersectionObserver(function(entries){
-      entries.forEach(function(entry){
-        if (!entry.isIntersecting) return;
-        observer.unobserve(entry.target); queue.push(entry.target);
-      });
-      pump();
-    }, {root:null, rootMargin:'80px 0px', threshold:0.01});
-    Array.prototype.forEach.call(images, function(img){ observer.observe(img); });
-  }
-
-  // Reuse the same interactive navigation as in-app transitions, retaining the
-  // first-response cards and avoiding another Home request or full repaint.
-  function enhanceHomeNavigation(){
-    var first = document.getElementById('first-home');
-    if (!first) return;
-    var enhanced = shell(null);
-    var header = first.querySelector('header');
-    var sections = first.querySelector('.first-sections');
-    if (header) first.replaceChild(enhanced.querySelector('header'), header);
-    if (sections) first.replaceChild(enhanced.querySelector('.subnav'), sections);
-  }
 
   // Enhance actual first-response content without clearing it or waiting for /home.
   function enhanceFirstPage(){

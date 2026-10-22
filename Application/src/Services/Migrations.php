@@ -6,7 +6,7 @@
  */
 final class Migrations
 {
-    const VERSION = 11; // 11: site-wide webcam registry (Ambient); 10: calendars, events, reminders and personal pictures (Misc); 9: leaderboard covering indexes, Drop anonymous origin column and MEDIUMTEXT notes; 8: play scores/points and drop storage; 2: library folder access pass for nginx (step 5); 3: re-run it, recording results; 4: media facts table; 5: arrival timestamps and indexed running times; 6: chat storage; 7: prepared browsing
+    const VERSION = 17; // 17: achievements and badges; 16: trailers and extras index; 15: media requests (and requests.create for existing custom roles); 14: unified inbox; 13: smart collections and their facts index; 12: age ratings and parental controls / kids profiles; 11: site-wide webcam registry (Ambient); 10: calendars, events, reminders and personal pictures (Misc); 9: leaderboard covering indexes, Drop anonymous origin column and MEDIUMTEXT notes; 8: play scores/points and drop storage; 2: library folder access pass for nginx (step 5); 3: re-run it, recording results; 4: media facts table; 5: arrival timestamps and indexed running times; 6: chat storage; 7: prepared browsing
 
     public static function stampFile(): string
     {
@@ -88,14 +88,55 @@ final class Migrations
         return $done;
     }
 
+    /**
+     * v15: give existing custom roles the new requests.create permission once (they previously had no way to ask
+     * for titles; admins can switch it off per role). A marker document keeps a lost stamp file from re-granting it.
+     */
+    private static function requestRoleDefaults(): int
+    {
+        try {
+            if (\Vaultcast\Repository::document('migration-request-roles', false)) return 0;
+            $n = \Vaultcast\Database::transaction(static function (PDO $pdo): int {
+                Permissions::lock($pdo);
+                $roles = \Vaultcast\Repository::document('permission_roles', []);
+                $n = 0;
+                if (is_array($roles)) {
+                    foreach ($roles as $id => $role) {
+                        if (!is_array($role)) continue;
+                        $perms = is_array($role['permissions'] ?? null) ? $role['permissions'] : [];
+                        if (array_key_exists('requests.create', $perms)) continue;
+                        $perms['requests.create'] = true; $roles[$id]['permissions'] = $perms; $n++;
+                    }
+                    if ($n) \Vaultcast\Repository::putDocument('permission_roles', $roles);
+                }
+                \Vaultcast\Repository::putDocument('migration-request-roles', true);
+                return $n;
+            });
+            return (int)$n;
+        } catch (\Throwable $e) { error_log('Vaultcast request role defaults: ' . $e->getMessage()); return 0; }
+    }
+
     public static function run(PDO $pdo): array
     {
         $log = [];
         foreach (explode(';', (string)file_get_contents(dirname(__DIR__) . '/schema.sql')) as $sql) {
-            if (preg_match('/CREATE TABLE IF NOT EXISTS vaultcast_(chat_|browse_items|show_summaries|play_|drop_|cal_|pictures\b|webcams\b)/i',$sql)) $pdo->exec($sql);
+            if (preg_match('/CREATE TABLE IF NOT EXISTS vaultcast_(chat_|browse_items|show_summaries|play_|drop_|cal_|pictures\b|webcams\b|content_ratings\b|parental\b|smart_|inbox|media_request|extras\b|achievement)/i',$sql)) $pdo->exec($sql);
         }
         $upgrade = self::playDropUpgrade($pdo);
+        $roles = self::requestRoleDefaults();
         // v11: the registry table only; existing webcams are imported lazily (Webcams::ensureBackfill) on first use.
+        // v17: the achievement tables above; progress is filled in by the achievements maintenance task (or per user on first use).
+        if (is_file(STREAM_DATA.'/runtime/migrations-v16.done')) return ['achievements'=>true, 'request_roles'=>$roles, 'play_drop_upgrade'=>$upgrade];
+        // v16: the extras table above; extras already imported as library items move across on the next scan.
+        if (is_file(STREAM_DATA.'/runtime/migrations-v15.done')) return ['extras'=>true, 'request_roles'=>$roles, 'play_drop_upgrade'=>$upgrade];
+        // v15: media request tables above; existing custom roles may request titles (as the User role does by default).
+        if (is_file(STREAM_DATA.'/runtime/migrations-v14.done')) return ['media_requests'=>true, 'request_roles'=>$roles, 'play_drop_upgrade'=>$upgrade];
+        // v14: unified inbox tables above; nothing to convert.
+        if (is_file(STREAM_DATA.'/runtime/migrations-v13.done')) return ['unified_inbox'=>true, 'play_drop_upgrade'=>$upgrade];
+        // v13: smart collection tables above; nothing to convert.
+        if (is_file(STREAM_DATA.'/runtime/migrations-v12.done')) return ['smart_collections'=>true, 'play_drop_upgrade'=>$upgrade];
+        // v12: the two new tables above (age ratings, parental settings); nothing to convert.
+        if (is_file(STREAM_DATA.'/runtime/migrations-v11.done')) return ['parental_controls'=>true, 'play_drop_upgrade'=>$upgrade];
         if (is_file(STREAM_DATA.'/runtime/migrations-v10.done')) return ['webcam_registry'=>true, 'play_drop_upgrade'=>$upgrade];
         if (is_file(STREAM_DATA.'/runtime/migrations-v9.done')) return ['calendar_reminders_pictures'=>true, 'play_drop_upgrade'=>$upgrade];
         if (is_file(STREAM_DATA.'/runtime/migrations-v8.done')) return ['play_drop_upgrade'=>$upgrade];

@@ -372,6 +372,19 @@ if (preg_match('#^/items/([a-f0-9]+)/play$#', $path, $m) && $method === 'POST') 
     json_out(Stream::issueToken(current_or_guest(), $m[1], body_json()));
 }
 
+// Trailers and extras: local extras for a film or show, the online trailer when there is no local one.
+if (preg_match('#^/(items|shows)/([a-f0-9]{8,64})/(extras|trailer)$#D', $path, $m) && $method === 'GET') {
+    release_request_locks();
+    $viewer = current_or_guest();
+    try {
+        if ($m[3] === 'extras') json_out($m[1] === 'items' ? Extras::forItem($viewer, $m[2]) : Extras::forShow($viewer, $m[2]));
+        json_out($m[1] === 'items' ? Extras::trailerForItem($viewer, $m[2]) : Extras::trailerForShow($viewer, $m[2]));
+    } catch (DomainException $e) { json_error($e->getMessage(), $e->getMessage() === 'Not found' ? 404 : 403); }
+}
+if (preg_match('#^/extras/([a-f0-9]{24})/thumb$#D', $path, $m) && in_array($method, ['GET', 'HEAD'], true)) {
+    Extras::serveThumb(current_or_guest(), $m[1]);
+}
+
 if (preg_match('#^/items/([a-f0-9]+)/transcode$#', $path, $m) && $method === 'POST') {
     try { json_out(Transcode::start(current_or_guest(),$m[1],body_json())); }
     catch(InvalidArgumentException $e){json_error($e->getMessage(),422);}

@@ -102,15 +102,15 @@ button.vc-person-row:hover, .vc-person-row:hover { border-color: var(--border); 
 .vc-hud-status { color: var(--muted); font-size: .85rem; }
 .vc-game-tools { display: flex; gap: 6px; }
 .vc-game-body { position: relative; }
-.vc-game-stage { position: relative; height: min(72vh, 760px); min-height: 320px; border-radius: var(--radius-xl); border: 1px solid var(--border); background: radial-gradient(100% 80% at 50% 0%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 70%), var(--bg2); overflow: hidden; touch-action: none; outline: none; }
+/* One shared stage rule: every engine's canvas is sized to its own aspect ratio, so the stage centres it both ways. */
+.vc-game-stage { position: relative; display: grid; place-content: center; place-items: center; height: min(72vh, 760px); min-height: 320px; border-radius: var(--radius-xl); border: 1px solid var(--border); background: radial-gradient(100% 80% at 50% 0%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 70%), var(--bg2); overflow: hidden; touch-action: none; outline: none; }
 .vc-game-stage:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
 .vc-game-wrap:fullscreen .vc-game-stage { height: calc(100vh - 170px); }
-.vc-game-canvas { display: block; width: 100%; height: 100%; }
+.vc-game-canvas { display: block; flex: none; max-width: none; image-rendering: auto; filter: none; }
 .vc-game-overlay { position: absolute; inset: 0; display: grid; place-items: center; background: color-mix(in srgb, var(--bg) 70%, transparent); border-radius: var(--radius-xl); z-index: 2; animation: vc-fade .2s ease; }
 /* Only a visible overlay softens the game behind it; a hidden one must not exist on screen at all. */
 .vc-game-overlay:not([hidden]) { -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); }
 .vc-game-overlay[hidden] { display: none !important; }
-.vc-game-canvas { image-rendering: auto; filter: none; }
 .vc-overlay-card { display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; padding: 26px 30px; border-radius: var(--radius-xl); background: var(--glass); border: 1px solid var(--border-strong); box-shadow: var(--shadow); max-width: min(92%, 420px); }
 .vc-overlay-card h2 { margin: 0; }
 .vc-final-score { font-size: clamp(2.4rem, 7vw, 4rem); font-weight: 800; letter-spacing: -.03em; background: linear-gradient(135deg, var(--accent), var(--accent-2)); -webkit-background-clip: text; background-clip: text; color: transparent; font-variant-numeric: tabular-nums; }
@@ -430,11 +430,10 @@ button.vc-choice:active:not(:disabled) { transform: scale(.98); }
 .vc-rem.soon { background: color-mix(in srgb, var(--vc-rem, var(--accent)) 14%, var(--surface-1)); }
 /* Due-soon highlight is a steady ring: a pulsing box-shadow on a frosted (backdrop-filter) card repaints the
    whole widget every frame and reads as a periodic shadow flash on TVs. */
-.vc-rem.urgent { box-shadow: 0 0 0 2px color-mix(in srgb, var(--vc-rem, var(--accent)) 55%, transparent); }
+
 .vc-rem-icon { font-size: 1.6rem; }
 .vc-rem-title { display: flex; flex-direction: column; flex: 1; min-width: 0; }
 .vc-rem-when { font-weight: 800; white-space: nowrap; }
-.vc-rem-edit { display: flex; flex-direction: column; gap: 8px; }
 .vc-rem-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; border: 1px solid var(--border); border-radius: var(--radius-md); padding: 8px; margin: 0; }
 .vc-rem-row input[type="text"]:not(.vc-emoji-input), .vc-rem-row input[type="url"] { flex: 1 1 140px; }
 .vc-emoji-input { width: 3.2em; text-align: center; }
@@ -475,7 +474,7 @@ button.vc-choice:active:not(:disabled) { transform: scale(.98); }
 .vc-note-check input { accent-color: var(--accent); margin-top: 5px; }
 .vc-note-check.done span { text-decoration: line-through; color: var(--muted); }
 /* slideshow + ambient pan */
-.vc-slides, .vc-amb-stage { position: absolute; inset: 0; overflow: hidden; background: #000; }
+.vc-amb-stage { position: absolute; inset: 0; overflow: hidden; background: #000; }
 .vc-kb-layer { position: absolute; inset: 0; opacity: 0; transition: opacity 1.6s ease; }
 .vc-kb-layer.show { opacity: 1; }
 .vc-kb-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; animation-timing-function: linear; animation-fill-mode: both; will-change: transform; }
@@ -540,7 +539,7 @@ button.vc-choice:active:not(:disabled) { transform: scale(.98); }
 }
 
 /* Kiosk */
-body.vc-kiosk .topnav, body.vc-kiosk .subnav, body.vc-kiosk .maintenance-advisory-host, body.vc-kiosk .maintenance-advisory, body.vc-kiosk .radio-player-bar { display: none !important; }
+body.vc-kiosk .topnav, body.vc-kiosk .subnav, body.vc-kiosk .radio-player-bar { display: none !important; }
 /* Kiosk: the page is exactly the viewport unless the widgets reach further down. No app-shell bottom padding,
    no animation transform and no fixed extra height, so there is nothing to scroll into. */
 /* Only the root scrolls (no second scroll box on body); body has no 100vh floor of its own in kiosk. */
@@ -619,7 +618,6 @@ body.vc-cursor-hidden, body.vc-cursor-hidden * { cursor: none !important; }
 .vc-amb-wx { display: flex; align-items: center; gap: 10px; font-size: clamp(1rem, 2vw, 1.6rem); text-shadow: 0 2px 14px rgba(0,0,0,.6); }
 .vc-amb-wx small { opacity: .8; font-size: .7em; }
 .vc-amb-wx-icon { font-size: 1.6em; }
-.vc-amb-radio { position: absolute; top: clamp(16px, 3vw, 40px); left: clamp(18px, 4vw, 54px); font-weight: 650; opacity: .85; text-shadow: 0 2px 10px #000; }
 .vc-amb-hint { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); padding: 10px 18px; border-radius: 999px; background: rgba(0,0,0,.45); font-size: .95rem; animation: vc-hint 4s ease forwards; pointer-events: none; }
 @keyframes vc-hint { 0%, 60% { opacity: 1; } 100% { opacity: 0; } }
 .vc-ambient .vc-kb-cap { left: auto; right: clamp(18px, 4vw, 54px); bottom: clamp(18px, 4vw, 54px); font-size: clamp(.9rem, 1.4vw, 1.2rem); opacity: .85; }

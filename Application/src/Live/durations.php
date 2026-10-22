@@ -95,12 +95,3 @@ function relay_run_duration_backfill(): void {
     foreach ($saved['media'] as $m) if ((int) (isset($m['durationMs']) ? $m['durationMs'] : 0) <= 0) $left++;
     echo date('c') . ' saved station; still without duration: ' . $left . ' (' . round(microtime(true) - $t, 1) . "s)\n";
 }
-
-function relay_duration_running(string $lock): bool {
-    $handle = fopen($lock, 'c+');
-    if (!$handle) return true;
-    $free = flock($handle, LOCK_EX | LOCK_NB);
-    if ($free) flock($handle, LOCK_UN);
-    fclose($handle);
-    return !$free;
-}

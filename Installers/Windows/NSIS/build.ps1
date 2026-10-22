@@ -158,7 +158,7 @@ $bundled['Transmission']=@{version=$trTag; url=$package.browser_download_url
 $msiOut=Join-Path $build ('msi-'+[IO.Path]::GetRandomFileName())
 New-Item -ItemType Directory -Path $msiOut -Force | Out-Null
 if ($onWindows) {
-    $process=Start-Process msiexec.exe -ArgumentList @('/a',('"'+$msi+'"'),'/qn',('TARGETDIR="'+$msiOut+'"')) -Wait -PassThru
+    $process=Start-Process msiexec.exe -WindowStyle Hidden -ArgumentList @('/a',('"'+$msi+'"'),'/qn',('TARGETDIR="'+$msiOut+'"')) -Wait -PassThru
     if ($process.ExitCode -ne 0) { throw "Could not unpack the Transmission MSI ($($process.ExitCode))." }
 } else {
     Copy-Item -LiteralPath $msi -Destination (Join-Path $msiOut 'transmission.msi')

@@ -15,7 +15,9 @@ final class Chat
         $other=Auth::findById($id);if (!$other) throw new DomainException('Account no longer exists.');
         $d=\Vaultcast\Repository::document('home-hub:'.$user['id'],[]);$relation=$id===$user['id']?'self':($d['friends'][$id] ?? 'none');
         $out=['ok'=>true,'profile'=>self::identity($other),'relationship'=>$relation,'full'=>$relation==='friend'||$relation==='self'];
-        if ($out['full']) {$their=\Vaultcast\Repository::document('home-hub:'.$id,[]);$games=array_values($their['games'] ?? []);$out['stats']=['games'=>count($games),'seconds'=>array_sum(array_column($games,'seconds'))];$out['highlights']=array_merge(FriendHighlights::build($user,$other,$their),FriendHighlights::favourites($user,$their));}
+        if ($out['full']) {$their=\Vaultcast\Repository::document('home-hub:'.$id,[]);$games=array_values($their['games'] ?? []);$out['stats']=['games'=>count($games),'seconds'=>array_sum(array_column($games,'seconds'))];$out['highlights']=array_merge(FriendHighlights::build($user,$other,$their),FriendHighlights::favourites($user,$their));
+            // Showcase badges follow the Play profile privacy setting (friends may still be shut out by "private").
+            try {$out['showcase']=($relation==='self' || (Social::privacy($id)['profile'] ?? 'everyone')!=='private') ? Achievements::showcaseFor($other) : [];} catch (Throwable $e) {$out['showcase']=[];}}
         return $out;
     }
     private static function general(): void {
@@ -33,7 +35,9 @@ final class Chat
     }
     public static function pulse(array $user): array {
         self::cleanup();
-        self::query('INSERT INTO vaultcast_chat_presence (user_id,seen_at) VALUES (?,?) ON DUPLICATE KEY UPDATE seen_at=VALUES(seen_at)',[$user['id'],time()]);return self::summary($user);
+        self::query('INSERT INTO vaultcast_chat_presence (user_id,seen_at) VALUES (?,?) ON DUPLICATE KEY UPDATE seen_at=VALUES(seen_at)',[$user['id'],time()]);
+        // The existing 30-second presence poll also carries the Inbox dot, so no extra polling is needed.
+        return self::summary($user)+['inbox'=>Inbox::badge($user)];
     }
     public static function summary(array $user): array {
         $friends=self::friends($user);if (!$friends) return ['ok'=>true,'updates'=>[]];
@@ -122,6 +126,8 @@ final class Chat
                 if ($attachment!=='') self::query('UPDATE vaultcast_chat_files SET message_id=? WHERE id=?',[$mid,$attachment]);
                 self::query('UPDATE vaultcast_chat_rooms SET revision=revision+1,updated_at=? WHERE id=?',[time(),$id]);
                 if (in_array($r['kind'],['dm','mail'],true)) foreach ([$r['owner_id'],$r['peer_id']] as $participant) self::query('INSERT IGNORE INTO vaultcast_chat_members (room_id,user_id) VALUES (?,?)',[$id,$participant]);
+                // Unified inbox: one item per conversation for the other person, refreshed by each new message.
+                if (in_array($r['kind'],['dm','mail'],true)) {$peer=$r['owner_id']===$user['id']?$r['peer_id']:$r['owner_id'];if ($peer!=='' && $peer!==$user['id']) Inbox::message((string)$peer,self::identity($user),$id,(string)$r['kind'],$text,$attachment!=='');}
                 $cutoff=self::query('SELECT id FROM vaultcast_chat_messages WHERE room_id=? ORDER BY id DESC LIMIT 1 OFFSET 1999',[$id])->fetchColumn();
                 if ($cutoff) self::query('DELETE FROM vaultcast_chat_messages WHERE room_id=? AND id<? LIMIT 100',[$id,$cutoff]);
                 return ['ok'=>true,'id'=>$mid];
@@ -212,6 +218,7 @@ final class Chat
         $lock=@fopen(STREAM_DATA.'/chat-gc.lock','c');if (!$lock) return;
         try {
             if (!flock($lock,LOCK_EX|LOCK_NB) || \Vaultcast\Repository::cacheGet('chat-gc')) return;
+            Inbox::cleanup();
             \Vaultcast\Repository::cachePut('chat-gc',['at'=>time()],60);
             self::query('DELETE FROM vaultcast_chat_messages WHERE expires_at>0 AND expires_at<=? LIMIT 200',[time()]);
             // Rotate through a bounded primary-key window instead of scanning all stored images.

@@ -100,6 +100,10 @@ if ($path === '/me' && $method === 'GET') {
     $user['_session'] = $sess;
     $user['access_state'] = Access::state($user);
     $user = Permissions::publicUser($user);
+    $user['parental'] = Parental::status($user);
+    try { $user['offline'] = Offline::status($user); } catch (Throwable $e) { $user['offline'] = ['enabled' => false, 'allowed' => false]; }
+    $user['requests'] = MediaRequests::userStatus($user);
+    $user['achievements'] = Achievements::userStatus($user);
     $pendingConvert = 0;
     if (($user['role'] ?? '') === 'admin') {
         $pendingConvert = count(Convert::pendingRequests());
@@ -113,6 +117,48 @@ if ($path === '/me' && $method === 'GET') {
 }
 
 
+
+// Offline downloads (PWA): a ticket for a browser-ready file, the device inventory and offline progress.
+if (strpos($path, '/offline/') === 0) {
+    $user = Auth::requireUser();
+    try {
+        if ($path === '/offline/status' && $method === 'GET') json_out(Offline::status($user));
+        $b = body_json();
+        if ($path === '/offline/prepare' && $method === 'POST') json_out(Offline::prepare($user, (string)($b['item_id'] ?? ''), (string)($b['device'] ?? '')));
+        if ($path === '/offline/inventory' && $method === 'POST') json_out(Offline::inventory($user, (string)($b['device'] ?? ''), (array)($b['items'] ?? [])));
+        if ($path === '/offline/progress' && $method === 'POST') json_out(Offline::syncProgress($user, (array)($b['entries'] ?? [])));
+    } catch (InvalidArgumentException $e) { json_error($e->getMessage(), 422); }
+    catch (DomainException $e) { json_error($e->getMessage(), 403); }
+    json_error('Not found', 404);
+}
+
+// Unified inbox: messages, invitations, library imports, requests and maintenance in one list.
+if ($path === '/inbox' || strpos($path, '/inbox/') === 0) {
+    $user = Auth::requireUser();
+    if (($user['role'] ?? '') === 'guest') json_error('Sign in to use your inbox.', 403);
+    if ($path === '/inbox' && $method === 'GET') json_out(Inbox::list($user, preg_replace('/[^a-z]/', '', (string)($_GET['type'] ?? 'all')) ?: 'all', max(0, (int)($_GET['before'] ?? 0)), max(0, (int)($_GET['before_id'] ?? 0))));
+    if ($path === '/inbox/badge' && $method === 'GET') json_out(['ok' => true] + Inbox::badge($user));
+    $b = body_json();
+    if ($path === '/inbox/seen' && $method === 'POST') json_out(Inbox::seen($user));
+    if ($path === '/inbox/read' && $method === 'POST') json_out(Inbox::markRead($user, (array)($b['ids'] ?? []), !array_key_exists('read', $b) || !empty($b['read'])));
+    if ($path === '/inbox/delete' && $method === 'POST') json_out(Inbox::delete($user, (array)($b['ids'] ?? [])));
+    json_error('Not found', 404);
+}
+
+// Parental controls for the signed-in profile. The PIN hash never leaves the server.
+if ($path === '/me/parental' && $method === 'GET') json_out(Parental::status(Auth::requireUser()));
+if ($path === '/me/parental' && $method === 'POST') {
+    $user = Auth::requireUser();
+    try { json_out(Parental::selfSave($user, body_json())); }
+    catch (InvalidArgumentException $e) { json_error($e->getMessage(), 422); }
+    catch (DomainException $e) { json_error($e->getMessage(), 403); }
+}
+if ($path === '/me/parental/unlock' && $method === 'POST') {
+    $user = Auth::requireUser();
+    try { json_out(Parental::unlock($user, trim((string)(body_json()['pin'] ?? '')))); }
+    catch (DomainException $e) { json_error($e->getMessage(), 403); }
+}
+if ($path === '/me/parental/lock' && $method === 'POST') json_out(Parental::lock(Auth::requireUser()));
 
 // Prefs require a real logged-in user
 if ($path === '/me/prefs' && $method === 'POST') {
@@ -159,12 +205,16 @@ if ($path === '/progress' && $method === 'POST') {
     $b = body_json();
     $itemId = is_string($b['item_id'] ?? null) ? (string)$b['item_id'] : '';
     if ($itemId === '' || !preg_match('/^[a-f0-9]{8,64}$/', $itemId)) json_error('item_id required');
+    // Trailers and extras keep no resume position or watch history.
+    if (strlen($itemId) === 24) { http_response_code(204); exit; }
     $progress = [
         'position' => (float)($b['position'] ?? 0),
         'duration' => (float)($b['duration'] ?? 0),
         'updated_at' => time(),
     ];
     \Vaultcast\Repository::saveProgress((string)$user['id'], $itemId, $progress);
+    // Achievements: only the tick that crosses the finish line does any work (one INSERT IGNORE after that).
+    if ($progress['duration'] > 60 && $progress['position'] / $progress['duration'] > 0.92) Achievements::watched($user, $itemId, $progress['duration']);
     // 204: browsers / sendBeacon need no body; avoids json_encode on the hot path.
     release_request_locks();
     http_response_code(204);

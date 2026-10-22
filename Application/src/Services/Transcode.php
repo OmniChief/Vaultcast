@@ -75,7 +75,9 @@ final class Transcode {
     }
     public static function start(array $user,string $itemId,array $body): array {
         if(!self::allowed())throw new DomainException('Playback transcoding is disabled in DirectPlay Settings.');
-        $item=Catalogue::item($itemId);
+        $item=Catalogue::item($itemId);$extra=false;
+        if(!$item && Extras::isId($itemId)){$item=Extras::playable($user,$itemId);$extra=true;}
+        if($extra && !empty($body['save']))throw new DomainException('Trailers and extras play without saving a copy.');
         if(!$item || !self::eligible($item))throw new DomainException('Only local library movies and episodes can be transcoded.');
         if(!AreaAccess::allowed($user,'library'))throw new DomainException('Library access is required.');
         $config=self::settings(); $save=!empty($body['save']);
@@ -84,7 +86,7 @@ final class Transcode {
         if($save && empty($config['allow_save']))throw new DomainException('Watch & save copy is turned off in DirectPlay Settings.');
         $saveMode=$save?($body['save_mode'] ?? 'both'):'both';
         if(!is_string($saveMode)||!in_array($saveMode,self::SAVE_MODES,true))throw new InvalidArgumentException('Choose Audio only, Video only or Both for the saved copy.');
-        if(!$save)$item=Stream::playbackItem($item);
+        if(!$save && !$extra)$item=Stream::playbackItem($item);
         $src=\Vaultcast\Paths::real((string)$item['path']);
         if(!$src || !is_file($src))throw new DomainException('The source file is unavailable.');
         if(!LibraryDelete::rootFor($src))throw new DomainException('Choose a file inside an enabled library folder.');

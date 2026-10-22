@@ -170,6 +170,22 @@ Section "${PRODUCT_NAME}" SEC_CORE
   ${If} $Operation == "reset"
     Return
   ${EndIf}
+  ; Validate command-line ports before stopping services or replacing any files.
+  StrCpy $R0 $WebPort
+  Call ValidatePort
+  ${If} $0 != ""
+    !insertmacro Fail "$0"
+  ${EndIf}
+  StrCpy $R0 $PhpPort
+  Call ValidatePort
+  ${If} $0 != ""
+    !insertmacro Fail "$0"
+  ${EndIf}
+  StrCpy $R0 $RelayPort
+  Call ValidatePort
+  ${If} $0 != ""
+    !insertmacro Fail "$0"
+  ${EndIf}
   StrCpy $Runtime "$INSTDIR\data\runtime"
   StrCpy $Php "$Runtime\${RT_PHP}\php.exe"
 

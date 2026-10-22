@@ -44,6 +44,25 @@ class Posters {
         $p = $s['posters'] ?? [];
         return $on = !(isset($p['enabled']) && !$p['enabled']);
     }
+    /** OMDb API key, for other services (age ratings). */
+    public static function omdbKey(): string { return self::omdbApiKey(); }
+    /** Throttled JSON GET inside the current remote budget; null on any failure. */
+    public static function remoteJson(string $url, array $headers = [], int $timeout = 8): ?array {
+        self::throttle();
+        $body = self::httpGet($url, false, $timeout, $headers);
+        $j = $body === null ? null : json_decode($body, true);
+        return is_array($j) ? $j : null;
+    }
+    /** OMDb record by IMDb id, or by title/year when no id is known. */
+    public static function omdbById(string $imdb, string $title, ?int $year): ?array {
+        $key = self::omdbApiKey();
+        if ($key === '') return null;
+        if (preg_match('/^tt\d{5,10}$/D', $imdb)) {
+            $d = self::remoteJson('https://www.omdbapi.com/?' . http_build_query(['apikey' => $key, 'i' => $imdb, 'plot' => 'short']));
+            return is_array($d) && strtolower((string)($d['Response'] ?? '')) === 'true' ? $d : null;
+        }
+        return $title !== '' ? self::omdbLookup($title, $year, $key) : null;
+    }
     /** OMDb API key from settings (empty string when not configured). */
     private static function omdbApiKey(): string {
         $s = Store::settings();
@@ -810,10 +829,6 @@ class Posters {
         ];
     }
 
-    /** Prefetch posters for up to $limit shows missing cache. Time-budgeted to avoid nginx/php 502. */
-    public static function prefetchShows(int $limit = 5): array {
-        return self::prefetchMissing($limit, ['shows']);
-    }
     /**
      * Resolve TVMaze show id + official episode list (cached under data/tvmaze/).
      * No API key. Returns null on failure.
@@ -974,6 +989,8 @@ class Posters {
         $apiKey = self::omdbApiKey();
         if ($apiKey !== '') {
             $omdb = self::omdbLookup($title, $year, $apiKey);
+            if (is_array($omdb) && isset($omdb['Rated']) && class_exists('ContentRatings')) ContentRatings::capture('item:' . $itemId, $omdb['Rated'], 'omdb');
+            if (is_array($omdb) && class_exists('SmartCollections')) SmartCollections::captureOmdb($itemId, $omdb);
             if (is_array($omdb) && !empty($omdb['Plot']) && strtolower((string)$omdb['Plot']) !== 'n/a') {
                 $summary = trim((string)$omdb['Plot']);
                 $source = 'omdb:' . ($omdb['imdbID'] ?? '');
@@ -1060,7 +1077,7 @@ class Posters {
         // 1) OMDb
         $apiKey = self::omdbApiKey();
         if ($apiKey !== '') {
-            $saved = self::fetchOmdbMoviePoster($dest, $title, $year, $apiKey);
+            $saved = self::fetchOmdbMoviePoster($dest, $title, $year, $apiKey, $itemId);
             if ($saved) return $saved;
         }
 
@@ -1084,9 +1101,10 @@ class Posters {
     /**
      * Look up a movie on OMDb and download its Poster into $dest.
      */
-    private static function fetchOmdbMoviePoster(string $dest, string $title, ?int $year, string $apiKey): ?string {
+    private static function fetchOmdbMoviePoster(string $dest, string $title, ?int $year, string $apiKey, string $itemId = ''): ?string {
         $hit = self::omdbLookup($title, $year, $apiKey);
         if (!is_array($hit)) return null;
+        if ($itemId !== '' && class_exists('ContentRatings') && isset($hit['Rated'])) ContentRatings::capture('item:' . $itemId, $hit['Rated'], 'omdb');
         $poster = trim((string)($hit['Poster'] ?? ''));
         if ($poster === '' || strtolower($poster) === 'n/a') return null;
         return self::downloadToCache($dest, $poster);
@@ -1396,7 +1414,7 @@ class Posters {
         }
         return (is_file($dest) && filesize($dest) > 100) ? $dest : null;
     }
-    private static function httpGet(string $url, bool $binary = false, int $timeout = 12): ?string {
+    private static function httpGet(string $url, bool $binary = false, int $timeout = 12, array $headers = []): ?string {
         if (self::remoteBudgetExpired()) return null;
         $timeout = max(1, min(20, $timeout));
         if (self::$remoteDeadline !== null) {
@@ -1412,7 +1430,7 @@ class Posters {
                 CURLOPT_CONNECTTIMEOUT => min(4, $timeout),
                 CURLOPT_TIMEOUT => $timeout,
                 CURLOPT_USERAGENT => 'Vaultcast/' . STREAM_VERSION . ' (+posters)',
-                CURLOPT_HTTPHEADER => ['Accept: application/json,image/*,*/*'],
+                CURLOPT_HTTPHEADER => array_merge(['Accept: application/json,image/*,*/*'], $headers),
             ]);
             $body = curl_exec($ch);
             $status = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -1422,7 +1440,7 @@ class Posters {
         $ctx = stream_context_create([
             'http' => [
                 'timeout' => $timeout,
-                'header' => "User-Agent: Vaultcast/" . STREAM_VERSION . "\r\nAccept: application/json,image/*,*/*\r\n",
+                'header' => "User-Agent: Vaultcast/" . STREAM_VERSION . "\r\nAccept: application/json,image/*,*/*\r\n" . ($headers ? implode("\r\n", $headers) . "\r\n" : ''),
                 'follow_location' => 1,
             ],
         ]);

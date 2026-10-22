@@ -144,4 +144,48 @@ Function ValidateInstallDir
       IntOp $3 $3 + 1
     ${Loop}
   ${EndIf}
+  ${If} $0 != ""
+    Return
+  ${EndIf}
+  ; This check also runs for /S, which never visits DirectoryLeave.
+  ${If} ${FileExists} "$INSTDIR\*.*"
+  ${AndIfNot} ${FileExists} "$INSTDIR\src\Database.php"
+  ${AndIfNot} ${FileExists} "$INSTDIR\data\runtime\setup-owner.txt"
+    FindFirst $1 $2 "$INSTDIR\*.*"
+    ${DoWhile} $2 != ""
+      ${If} $2 != "."
+      ${AndIf} $2 != ".."
+        StrCpy $0 "Choose an empty folder or an existing Vaultcast installation."
+        ${Break}
+      ${EndIf}
+      FindNext $1 $2
+    ${Loop}
+    FindClose $1
+  ${EndIf}
+FunctionEnd
+
+; In: $R0 port text. Out: $0 empty when valid, otherwise an error.
+Function ValidatePort
+  StrCpy $0 ""
+  StrLen $1 $R0
+  ${If} $1 < 1
+  ${OrIf} $1 > 5
+    StrCpy $0 "Ports must be whole numbers from 1 to 65535."
+    Return
+  ${EndIf}
+  StrCpy $2 0
+  ${DoWhile} $2 < $1
+    StrCpy $3 $R0 1 $2
+    ClearErrors
+    ${WordFind} "0123456789" "$3" "E+1{" $4
+    ${If} ${Errors}
+      StrCpy $0 "Ports must be whole numbers from 1 to 65535."
+      Return
+    ${EndIf}
+    IntOp $2 $2 + 1
+  ${Loop}
+  ${If} $R0 < 1
+  ${OrIf} $R0 > 65535
+    StrCpy $0 "Ports must be whole numbers from 1 to 65535."
+  ${EndIf}
 FunctionEnd

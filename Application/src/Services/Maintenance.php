@@ -7,7 +7,7 @@ final class Maintenance
     private static $checked = 0.0;
     /** Background-only tasks started by the app itself (not listed in the maintenance UI). */
     const INTERNAL = ['ingest' => 'Import reviewed download'];
-    const TASKS = ['conversion-repair'=>'Restore original entries after deleted conversions','versions'=>'Check and merge DirectPlay copies','site-artwork'=>'Optimise site and theme posters (WebP)','segments'=>'Match TV / anime intros and credits, and movie credits','browse'=>'Prepare search and show summaries','search' => 'Prepare live search index', 'views' => 'Prepare browsing pages', 'epg' => 'Refresh programme guide', 'metadata' => 'Prepare artwork and synopses', 'game-metadata' => 'Refresh game posters and synopses', 'scan' => 'Scan library folders', 'collections' => 'Match collections', 'downloads' => 'Import completed downloads', 'durations' => 'Fill Live media durations', 'facts' => 'Probe new media codecs and store show guides', 'drop-cleanup' => 'Delete expired Drop files', 'calendar-episodes' => 'Refresh episode release calendars'];
+    const TASKS = ['versions'=>'Check and merge DirectPlay copies','site-artwork'=>'Optimise site and theme posters (WebP)','segments'=>'Match TV / anime intros and credits, and movie credits','browse'=>'Prepare search and show summaries','search' => 'Prepare live search index', 'views' => 'Prepare browsing pages', 'epg' => 'Refresh programme guide', 'metadata' => 'Prepare artwork and synopses', 'game-metadata' => 'Refresh game posters and synopses', 'scan' => 'Scan library folders', 'collections' => 'Match collections', 'downloads' => 'Import completed downloads', 'durations' => 'Fill Live media durations', 'facts' => 'Probe new media codecs and store show guides', 'drop-cleanup' => 'Delete expired Drop files', 'calendar-episodes' => 'Refresh episode release calendars', 'age-ratings' => 'Look up age ratings for films and shows', 'smart-index' => 'Index genres, cast and resolution for smart collections', 'extras' => 'Probe trailers and extras (running times and thumbnails)', 'achievements' => 'Count achievements from past activity'];
 
     public static function runCommand(string $task, ?string $target = null): array
     {
@@ -108,7 +108,6 @@ final class Maintenance
             $job['status'] = 'running'; $job['started_at'] = date('c');
             \Vaultcast\Repository::putDocument('maintenance-job:' . $id, $job);
             switch ($job['task']) {
-                case 'conversion-repair': $job['result']=Convert::repairDeletedEntries(); break;
                 case 'versions': $job['result']=Convert::mergeExistingCopies(); break;
                 case 'browse': BrowseIndex::warm(); $job['result']=['ok'=>true]; break;
                 case 'search': SearchIndex::warm(); $job['result']=['ok'=>true]; break;
@@ -168,9 +167,30 @@ final class Maintenance
                     if (empty($backup['ok'])) $job['result']['warning'] = $backup['warning'];
                     // Fresh guides feed the episode-release calendars straight away (database only, quick).
                     try { $job['result']['calendar'] = Calendar::refreshEpisodes(function () { self::checkpoint(); }); } catch (Throwable $e) { error_log('Vaultcast calendar episodes: ' . $e->getMessage()); }
+                    // Age ratings for new titles (parental controls); queued so it waits for this lock.
+                    try { self::start('age-ratings', 'facts'); } catch (Throwable $ignored) {}
+                    try { self::start('smart-index', 'facts'); } catch (Throwable $ignored) {}
+                    try { if (Extras::waiting()) self::start('extras', 'facts'); } catch (Throwable $ignored) {}
+                    break;
+                case 'extras':
+                    $job['result'] = Extras::probe(function () { self::checkpoint(); }, 150);
+                    if (!empty($job['result']['deferred'])) { $next = self::start('extras', 'Continuation of ' . $id); $job['result']['continuation'] = $next['job']['id'] ?? null; }
+                    break;
+                case 'achievements':
+                    $job['result'] = Achievements::backfill(function () { self::checkpoint(); }, 600);
+                    if (!empty($job['result']['deferred'])) { $next = self::start('achievements', 'Continuation of ' . $id); $job['result']['continuation'] = $next['job']['id'] ?? null; }
                     break;
                 case 'calendar-episodes':
                     $job['result'] = Calendar::refreshEpisodes(function () { self::checkpoint(); });
+                    break;
+                case 'smart-index':
+                    $job['result'] = SmartCollections::index(function () { self::checkpoint(); }, 3000);
+                    if (!empty($job['result']['deferred'])) { $next = self::start('smart-index', 'Continuation of ' . $id); $job['result']['continuation'] = $next['job']['id'] ?? null; }
+                    break;
+                case 'age-ratings':
+                    $job['result'] = ContentRatings::warm(function () { self::checkpoint(); }, 120);
+                    // Bounded passes: hand the lock back and carry on in a fresh job.
+                    if (!empty($job['result']['deferred'])) { $next = self::start('age-ratings', 'Continuation of ' . $id); $job['result']['continuation'] = $next['job']['id'] ?? null; }
                     break;
                 case 'drop-cleanup':
                     $lastProgress=0.0;

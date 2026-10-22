@@ -257,13 +257,19 @@
   };
   W.recent = { name:'Recently added', desc:'The newest films and shows in the library.', icon:'🆕', w:12, h:6,
     render:function(body, s){
-      function load(){ call('/misc/widget/recent?n=' + (s.count || 12)).then(function(j){
-        if (!j.items.length) { swap(body, h('p', { className:'muted', text:'Nothing new yet.' })); return; }
+      function load(){ call('/misc/widget/recent?n=' + (s.count || 12) + (s.source ? '&source=' + encodeURIComponent(s.source) : '')).then(function(j){
+        if (!j.items.length) { swap(body, h('p', { className:'muted', text: j.missing ? 'That smart collection is no longer available. Edit this widget to pick another.' : (s.source ? 'Nothing matches this smart collection right now.' : 'Nothing new yet.') })); return; }
         swap(body, h('div', { className:'vc-poster-row' }, j.items.map(function(it){ return h('button', { type:'button', className:'vc-poster', 'data-key':String(it.id || it.show_key || it.title), title:it.title, onClick:function(){ if (it.show_key && A.openShow) A.openShow(it.show_key); else if (A.openMovie) A.openMovie(it.id); } }, [h('img', { src:url(it.poster), alt:'', loading:'lazy' }), h('span', { className:'vc-poster-cap' }, [h('strong', { text:it.title }), h('small', { className:'muted', text:it.subtitle || '' })])]); })));
       }).catch(function(e){ wErr(body, e); }); }
       loading(body); load(); return poll(load, 600000, s);
     },
-    form:function(s){ return textForm([{ key:'count', label:'How many', type:'number', min:4, max:30, value:s.count || 12 }]); }
+    form:function(s){
+      var f = textForm([{ key:'source', label:'Show', type:'select', value:s.source || '', options:[['', 'Recently added (whole library)']].concat(s.source ? [[s.source, 'Saved smart collection']] : []) }, { key:'count', label:'How many', type:'number', min:4, max:30, value:s.count || 12 }]);
+      var pick = f.el.querySelector('select');
+      // Smart collections can feed this widget instead of the newest titles.
+      api('/smart-collections').then(function(j){ if (!pick || !j || !j.ok) return; var keep = pick.value; Array.from(pick.options).slice(1).forEach(function(o){ o.remove(); }); (j.collections || []).forEach(function(c){ pick.appendChild(h('option', { value:'smart:' + c.id, text:'Smart: ' + c.name })); }); pick.value = keep; if (pick.selectedIndex < 0) pick.selectedIndex = 0; }).catch(function(){});
+      return f;
+    }
   };
   W.nowplaying = { name:'Now playing', desc:'What you and your friends are watching (admins see everyone).', icon:'▶️', w:8, h:5,
     render:function(body, s){
@@ -1385,6 +1391,14 @@
       stops.push(function(){ if (audio) { audio.pause(); audio.removeAttribute('src'); } });
     }
     wantWake(1);
+    // Achievements: starting Ambient, then a beacon a minute while it stays on screen.
+    var achUser = A.state.user;
+    if (achUser && achUser.role !== 'guest' && achUser.achievements && achUser.achievements.enabled) {
+      var achTick = function(start){ A.api('/achievements/tick', { method:'POST', body:{ kind:'ambient', start:!!start } }).catch(function(){}); };
+      achTick(true);
+      var achT = setInterval(function(){ if (amb && amb.layer === layer && !document.hidden) achTick(false); }, 60000);
+      stops.push(function(){ clearInterval(achT); });
+    }
     if (!opts.idle && layer.requestFullscreen) layer.requestFullscreen().catch(function(){});
     // Exit only on purpose: Escape (or a remote's Back key), the Exit button, or leaving full screen.
     // Mouse movement, taps and other keys just show the controls and the cursor for a few seconds.

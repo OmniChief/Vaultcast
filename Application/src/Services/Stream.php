@@ -55,11 +55,17 @@ class Stream {
     }
     public static function issueToken(array $user, string $itemId, array $opts = []): array {
         $item = Catalogue::item($itemId);
+        $extra = false;
+        if (!$item && Extras::isId($itemId)) {
+            // Trailers and extras: same player and access rules as the title they belong to.
+            try { $item = Extras::playable($user, $itemId); $extra = true; }
+            catch (DomainException $e) { json_error($e->getMessage(), $e->getMessage() === 'Not found' ? 404 : 403); }
+        }
         if (!$item) json_error('Not found', 404);
         $denied = AreaAccess::denied($user, AreaAccess::itemArea($item));
         if ($denied) json_out($denied[1], $denied[0]);
         $libraryItem = $item;
-        if(empty($opts['original']))$item = self::playbackItem($item);
+        if(empty($opts['original']) && !$extra)$item = self::playbackItem($item);
         $path = $item['path'] ?? '';
         if (!is_file($path)) json_error('File missing', 404);
 
@@ -117,7 +123,7 @@ class Stream {
         /* saved resume position for this user/item so the player seeks on start */
         $progress = null;
         $uid = (string)($user['id'] ?? '');
-        $pp = $uid !== '' ? \Vaultcast\Repository::progressItem($uid, $itemId) : null;
+        $pp = $uid !== '' && !$extra ? \Vaultcast\Repository::progressItem($uid, $itemId) : null;
         if (is_array($pp)) {
             $pos = (float)($pp['position'] ?? 0);
             $dur = (float)($pp['duration'] ?? 0);
@@ -136,7 +142,7 @@ class Stream {
             $sidecars = self::romSidecarFiles($path, $token);
         }
         $automaticBlocked=empty($item['prepared_copy']) && ($item['media_kind'] ?? '')==='video' && Convert::automaticPlaybackBlocked($itemId);
-        $saveAllowed=Transcode::allowed() && Transcode::eligible($libraryItem) && empty($item['directplay_path']) && !preg_match('/\.directplay\.[^.]+$/i',(string)$libraryItem['path']) && !empty(Transcode::settings()['allow_save']) && Permissions::allowed($user,'save_copy');
+        $saveAllowed=!$extra && Transcode::allowed() && Transcode::eligible($libraryItem) && empty($item['directplay_path']) && !preg_match('/\.directplay\.[^.]+$/i',(string)$libraryItem['path']) && !empty(Transcode::settings()['allow_save']) && Permissions::allowed($user,'save_copy');
         $libraryConversion=empty($item['prepared_copy']) && ($item['media_kind'] ?? '')==='video' ? Convert::activeLibraryConversion($itemId) : null;
         return [
             'transcode_allowed'=>Transcode::allowed() && Transcode::eligible($libraryItem),
@@ -181,6 +187,7 @@ class Stream {
                 ? 'Multiple audio tracks detected. The player switches tracks with the browser when it can, otherwise through /stream/remux at the current position.'
                 : null,
             'file_missing' => !is_file($path),
+            'extra' => $extra,
         ];
     }
 

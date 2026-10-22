@@ -214,26 +214,6 @@ Function DirectoryLeave
     MessageBox MB_ICONEXCLAMATION "$0"
     Abort
   ${EndIf}
-  ; New installs need an empty folder (or one a previous Vaultcast setup started).
-  ${If} ${FileExists} "$INSTDIR\*.*"
-  ${AndIfNot} ${FileExists} "$INSTDIR\src\Database.php"
-  ${AndIfNot} ${FileExists} "$INSTDIR\data\runtime\setup-owner.txt"
-    FindFirst $1 $2 "$INSTDIR\*.*"
-    StrCpy $3 0
-    ${DoWhile} $2 != ""
-      ${If} $2 != "."
-      ${AndIf} $2 != ".."
-        StrCpy $3 1
-        ${Break}
-      ${EndIf}
-      FindNext $1 $2
-    ${Loop}
-    FindClose $1
-    ${If} $3 == 1
-      MessageBox MB_ICONEXCLAMATION "Choose an empty folder or an existing Vaultcast installation."
-      Abort
-    ${EndIf}
-  ${EndIf}
 FunctionEnd
 
 Function FinishPre

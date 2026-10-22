@@ -24,6 +24,8 @@ class Catalogue {
     }
 
     public static function save(array $cat, bool $foldVersions = true): bool {
+        // Trailers and extras never become films or episodes: they move to their own index.
+        try { $cat = Extras::extract($cat); } catch (Throwable $e) { error_log('Vaultcast extras: ' . $e->getMessage()); }
         $cat = LibraryEditor::filterCatalogue($cat);
         $aliases = [];
         if($foldVersions)$cat = self::foldDirectPlayVersions($cat,$aliases);
@@ -33,6 +35,8 @@ class Catalogue {
             return $saved;
         });
         if ($ok) self::invalidateDerivedCaches();
+        // Media requests that just landed in the library become Available (cheap when nothing is open).
+        if ($ok) MediaRequests::catalogueChanged();
         return $ok;
     }
 
@@ -539,6 +543,9 @@ class Catalogue {
             'item_count' => count($items),
         ];
         Maintenance::checkpoint();
+        $walked = [];
+        foreach ($sectionMeta as $meta) if (empty($meta['error'])) $walked[] = (string)$meta['id'];
+        Extras::beginFullScan($walked);
         self::save($cat);
         $savedMeta=\Vaultcast\Repository::document('catalogue',[]);
         $cat['item_count']=$savedMeta['item_count'] ?? $cat['item_count'];
@@ -1110,15 +1117,6 @@ class Catalogue {
         return $text;
     }
 
-    public static function movieGenreList(): array {
-        return [
-            'Action', 'Adventure', 'Animation', 'Biography', 'Comedy', 'Crime',
-            'Documentary', 'Drama', 'Family', 'Fantasy', 'History', 'Horror',
-            'Music', 'Musical', 'Mystery', 'Romance', 'Sci-Fi', 'Sport',
-            'Thriller', 'War', 'Western',
-        ];
-    }
-
     public static function guessMovieGenres(string $itemId, string $title = ''): array {
         $blob = strtolower(self::movieSynopsisText($itemId) . ' ' . $title);
         if (trim($blob) === '') return [];
@@ -1139,36 +1137,6 @@ class Catalogue {
         if (preg_match('/\bmusic\b/', $blob) && empty($found['Musical'])) $found['Music'] = true;
         if (isset($found['Musical'])) unset($found['Music']);
         return array_keys($found);
-    }
-
-    /** Facet tallies for movie/Disney item lists. */
-    public static function movieFacets(array $items): array {
-        $years = [];
-        $decades = [];
-        $genres = [];
-        foreach ($items as $it) {
-            if (!is_array($it)) continue;
-            $y = isset($it['year']) ? (int)$it['year'] : 0;
-            if ($y >= 1900 && $y <= 2100) {
-                $years[(string)$y] = ($years[(string)$y] ?? 0) + 1;
-                $d = (int)(floor($y / 10) * 10);
-                $dk = $d . 's';
-                $decades[$dk] = ($decades[$dk] ?? 0) + 1;
-            }
-            foreach (self::guessMovieGenres((string)($it['id'] ?? ''), (string)($it['title'] ?? '')) as $g) {
-                $genres[$g] = ($genres[$g] ?? 0) + 1;
-            }
-        }
-        krsort($years, SORT_NATURAL);
-        uksort($decades, function ($a, $b) {
-            return (int)$b <=> (int)$a;
-        });
-        arsort($genres);
-        return [
-            'years' => $years,
-            'decades' => $decades,
-            'genres' => $genres,
-        ];
     }
 
     /** Facet tallies for TV/Anime show lists (uses TVMaze cache). */
@@ -1725,12 +1693,6 @@ class Catalogue {
         return 'S' . $season . 'E' . $episode;
     }
 
-    /** Locate a show meta + detail by key (shared by fetch routes). */
-    public static function showMeta(string $showKey): ?array {
-        $detail = self::show($showKey);
-        return $detail;
-    }
-
     public static function publicShow(array $s): array {
         $s = self::enrichShowMeta($s);
         return [
@@ -1810,15 +1772,6 @@ class Catalogue {
         // Capture dependencies before building; no age check or file per revision.
         \Vaultcast\Repository::cachePut($slot, ['revision'=>$revision, 'payload'=>$out], 0);
         return $out;
-    }
-
-    /** Prepare the standard Films/Discover row during existing background work. */
-    public static function warmRandomShowcases(): void {
-        foreach (\Vaultcast\Repository::document('catalogue', ['sections'=>[]])['sections'] ?? [] as $section) {
-            if (!in_array($section['type'] ?? '', ['movies','disney'], true)) continue;
-            Maintenance::checkpoint();
-            self::randomPublic((string)$section['id'], 16);
-        }
     }
 
     public static function warmShowViews(string $id): void {
@@ -2163,25 +2116,6 @@ class Catalogue {
         return null;
     }
 
-    /**
-     * Build Continue Watching rows from a user's progress map.
-     * - Movies / non-episode items: one entry each (unchanged), hidden when finished.
-     * - TV/anime: collapsed to ONE entry per show, based on the most recently updated episode:
-     *   unfinished -> that episode (cw_state=resume); finished -> next episode (cw_state=next),
-     *   walking past already-finished episodes; show dropped when caught up.
-     */
-    public static function continueWatching(array $userProg, int $cwLimit): array {
-        uasort($userProg, function ($a, $b) {
-            return ($b['updated_at'] ?? 0) <=> ($a['updated_at'] ?? 0);
-        });
-        $rows = (static function () use ($userProg) {
-            foreach ($userProg as $id => $p) yield ['id' => $id, 'item' => self::item((string)$id), 'progress' => $p];
-        })();
-        return self::continueWatchingRows($rows, $cwLimit, static function (array $it) use ($userProg) {
-            return $userProg[$it['id']] ?? null;
-        });
-    }
-
     public static function continueWatchingForUser(string $userId, int $limit): array {
         $progress = [];
         $loaded = [];
@@ -2332,58 +2266,11 @@ class Catalogue {
         ];
     }
 
+
     /**
      * Incrementally add/update a single media file in the RAM catalogue
      * without a full library rescan.
      */
-    /**
-     * rewrite catalogue ROM entries from .cue → sibling .bin (keep item id).
-     * Also refresh emu_core from folder so Mega Drive .bin stays segaMD and PS1 → psx.
-     */
-    public static function repairRomCueToBin(): array {
-        $cat = self::get();
-        $items = $cat['items'] ?? [];
-        if (!is_array($items)) $items = [];
-        $cueToBin = 0;
-        $coreFixed = 0;
-        foreach ($items as $i => $it) {
-            if (!is_array($it)) continue;
-            if (($it['media_kind'] ?? '') !== 'rom') continue;
-            $path = (string)($it['path'] ?? '');
-            $rel = (string)($it['rel'] ?? '');
-            $ext = strtolower((string)($it['ext'] ?? pathinfo($path, PATHINFO_EXTENSION)));
-            if ($ext === 'cue' && $path !== '') {
-                $bin = preg_replace('/\.cue$/i', '.bin', $path);
-                if (is_string($bin) && $bin !== '' && is_file($bin)) {
-                    $it['path'] = $bin;
-                    $it['rel'] = is_string($rel) && $rel !== '' ? (preg_replace('/\.cue$/i', '.bin', $rel) ?: $rel) : $rel;
-                    $it['ext'] = 'bin';
-                    $it['size'] = @filesize($bin) ?: (int)($it['size'] ?? 0);
-                    $ext = 'bin';
-                    $path = $bin;
-                    $rel = (string)($it['rel'] ?? $rel);
-                    $cueToBin++;
-                }
-            }
-            $core = self::guessEmuCore($ext, $rel !== '' ? $rel : $path, $path);
-            if ($core && ($it['emu_core'] ?? null) !== $core) {
-                $it['emu_core'] = $core;
-                $coreFixed++;
-            } elseif ($core) {
-                $it['emu_core'] = $core;
-            }
-            if ($rel !== '' || $path !== '') {
-                $it['system'] = self::guessSystemFolder($rel !== '' ? $rel : $path);
-            }
-            $items[$i] = $it;
-        }
-        $cat['items'] = $items;
-        if ($cueToBin || $coreFixed) {
-            self::save($cat);
-        }
-        return ['cue_to_bin' => $cueToBin, 'core_fixed' => $coreFixed];
-    }
-
     public static function ingestFile(string $fullPath, string $sectionId, bool $foldVersions = true): ?array {
         $r = self::ingestFiles([[$fullPath, $sectionId]],$foldVersions);
         $item=$r[0] ?? null;

@@ -857,15 +857,6 @@ function iptv_status_key($url) {
     return substr(sha1($url), 0, 24);
 }
 
-function iptv_status_lookup($url) {
-    $state = iptv_status_load();
-    $key = iptv_status_key($url);
-    if (!isset($state['entries'][$key])) return null;
-    $e = $state['entries'][$key];
-    $e['key'] = $key;
-    return $e;
-}
-
 /**
  * On-demand probe of a single stream URL. HEAD first; GET Range fallback.
  * Runs only when an administrator requests a stream check.
