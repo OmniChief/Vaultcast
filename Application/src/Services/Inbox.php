@@ -120,19 +120,22 @@ final class Inbox
         return ['new' => $latest > self::lastSeen($uid), 'latest' => $latest];
     }
 
-    public static function list(array $user, string $group = 'all', int $before = 0): array
+    public static function list(array $user, string $group = 'all', int $before = 0, int $beforeId = 0): array
     {
         $uid = (string)$user['id'];
         self::sync($user, $before === 0);
         $types = self::visibleTypes($user);
         if ($group !== 'all') $types = in_array($group, $types, true) ? [$group] : [];
         $seen = self::lastSeen($uid);
-        $items = [];
+        $items = []; $fetched = 0;
         if ($types) {
             $args = array_merge([$uid], $types);
             $sql = 'SELECT id,type,subtype,dedupe,actor,title,body,action,payload,created_at,read_at FROM vaultcast_inbox WHERE user_id=? AND deleted=0 AND type IN (' . implode(',', array_fill(0, count($types), '?')) . ')';
-            if ($before > 0) { $sql .= ' AND created_at<?'; $args[] = $before; }
+            // Page by (created_at, id) so items sharing a second are not skipped between pages.
+            if ($before > 0 && $beforeId > 0) { $sql .= ' AND (created_at<? OR (created_at=? AND id<?))'; array_push($args, $before, $before, $beforeId); }
+            elseif ($before > 0) { $sql .= ' AND created_at<?'; $args[] = $before; }
             foreach (self::q($sql . ' ORDER BY created_at DESC, id DESC LIMIT 60', $args) as $r) {
+                $fetched++;
                 if (!self::subtypeAllowed($user, $r)) continue;
                 $actor = $r['actor'] !== '' ? json_decode((string)$r['actor'], true) : null;
                 $items[] = ['id' => (int)$r['id'], 'type' => (string)$r['type'], 'subtype' => (string)$r['subtype'], 'actor' => is_array($actor) ? $actor : null, 'title' => (string)$r['title'], 'body' => (string)$r['body'],
@@ -141,7 +144,7 @@ final class Inbox
         }
         $counts = [];
         try { foreach (self::q('SELECT type, COUNT(*) n FROM vaultcast_inbox WHERE user_id=? AND deleted=0 AND read_at=0 GROUP BY type', [$uid]) as $r) if (in_array($r['type'], self::visibleTypes($user), true)) $counts[(string)$r['type']] = (int)$r['n']; } catch (Throwable $e) {}
-        return ['ok' => true, 'items' => $items, 'groups' => array_intersect_key(self::GROUPS, array_flip(self::visibleTypes($user))), 'unread' => (object)$counts, 'last_seen' => $seen, 'has_more' => count($items) >= 60, 'admin' => ($user['role'] ?? '') === 'admin'];
+        return ['ok' => true, 'items' => $items, 'groups' => array_intersect_key(self::GROUPS, array_flip(self::visibleTypes($user))), 'unread' => (object)$counts, 'last_seen' => $seen, 'has_more' => $fetched >= 60, 'admin' => ($user['role'] ?? '') === 'admin'];
     }
 
     /** Visiting the Inbox clears the dot; individual items keep their own read state. */
@@ -173,10 +176,14 @@ final class Inbox
         try { self::q('DELETE FROM vaultcast_inbox WHERE user_id=?', [$uid]); self::q('DELETE FROM vaultcast_inbox_seen WHERE user_id=?', [$uid]); } catch (Throwable $e) {}
     }
 
-    /** Trim old deleted rows now and then (called by the drop/cleanup cycle). */
+    /**
+     * Trim old deleted rows now and then (called by the drop/cleanup cycle). Deleted library, request and
+     * system rows stay while they are still true: their producers re-add them with the original time,
+     * so removing the row would bring a dismissed item back as new. resolve() removes them once they end.
+     */
     public static function cleanup(): void
     {
-        try { self::q('DELETE FROM vaultcast_inbox WHERE (deleted=1 AND created_at<?) OR created_at<? LIMIT 2000', [time() - 30 * 86400, time() - 365 * 86400]); } catch (Throwable $e) {}
+        try { self::q("DELETE FROM vaultcast_inbox WHERE (deleted=1 AND created_at<? AND type IN ('message','invite')) OR created_at<? LIMIT 2000", [time() - 30 * 86400, time() - 365 * 86400]); } catch (Throwable $e) {}
     }
 
     // ------------------------------------------------------------------ helpers for producers

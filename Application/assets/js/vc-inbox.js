@@ -175,7 +175,7 @@
   }
   function more(){
     var last = items[items.length - 1]; if (!last) return;
-    api('/inbox?type=' + encodeURIComponent(filter) + '&before=' + last.created_at).then(function(j){ if (j && j.ok) { var have = {}; items.forEach(function(x){ have[x.id] = 1; }); items = items.concat((j.items || []).filter(function(x){ return !have[x.id]; })); hasMore = !!j.has_more; paint(); } }).catch(function(){});
+    api('/inbox?type=' + encodeURIComponent(filter) + '&before=' + last.created_at + '&before_id=' + last.id).then(function(j){ if (j && j.ok) { var have = {}; items.forEach(function(x){ have[x.id] = 1; }); items = items.concat((j.items || []).filter(function(x){ return !have[x.id]; })); hasMore = !!j.has_more; paint(); } }).catch(function(){});
   }
 
   function render(host){

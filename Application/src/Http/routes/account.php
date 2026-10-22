@@ -134,7 +134,7 @@ if (strpos($path, '/offline/') === 0) {
 if ($path === '/inbox' || strpos($path, '/inbox/') === 0) {
     $user = Auth::requireUser();
     if (($user['role'] ?? '') === 'guest') json_error('Sign in to use your inbox.', 403);
-    if ($path === '/inbox' && $method === 'GET') json_out(Inbox::list($user, preg_replace('/[^a-z]/', '', (string)($_GET['type'] ?? 'all')) ?: 'all', max(0, (int)($_GET['before'] ?? 0))));
+    if ($path === '/inbox' && $method === 'GET') json_out(Inbox::list($user, preg_replace('/[^a-z]/', '', (string)($_GET['type'] ?? 'all')) ?: 'all', max(0, (int)($_GET['before'] ?? 0)), max(0, (int)($_GET['before_id'] ?? 0))));
     if ($path === '/inbox/badge' && $method === 'GET') json_out(['ok' => true] + Inbox::badge($user));
     $b = body_json();
     if ($path === '/inbox/seen' && $method === 'POST') json_out(Inbox::seen($user));
