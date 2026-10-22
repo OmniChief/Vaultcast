@@ -9,7 +9,8 @@ declare(strict_types=1);
  * vaultcast_achievement_counters, and one-off facts (this film was finished, this room was joined)
  * are deduplicated with INSERT IGNORE into vaultcast_achievement_marks, so no request ever has to
  * scan a user's history. History from before 1.3.0 is filled in once per user: by the
- * "achievements" maintenance task, or automatically the first time that user is evaluated.
+ * "achievements" maintenance task, or automatically the first time that person's achievements
+ * (page or profile) are opened. Activity hooks never do that work themselves.
  *
  * An achievement is earned once, when its counter reaches the goal. New ones become an Inbox item
  * (Achievements group) and a celebratory toast the next time the person's app checks in.
@@ -184,18 +185,19 @@ final class Achievements
         }
         return (string)self::$sessionUid;
     }
-    /** Hooks must never break the activity they observe. */
-    private static function guard(string $uid, callable $fn, bool $historical = false): void
+    /**
+     * Hooks must never break the activity they observe, and stay cheap: they never fill in history.
+     * Counters only rise to recorded totals when history is filled in (GREATEST), so activity counted
+     * here first is never counted twice.
+     */
+    private static function guard(string $uid, callable $fn): void
     {
         if (!self::validUid($uid) || !self::enabled()) return;
         try {
-            // When this is the person's first evaluation, history already includes an activity that is
-            // recorded in the database before the hook runs; counting it again would double it.
             self::$dirty = false;
-            $fresh = self::ensureBackfilled($uid);
-            if (!$fresh || !$historical) $fn();
+            $fn();
             // Nothing changed (a repeated mark, a score below the best): no need to look at the list.
-            if ($fresh || self::$dirty) self::evaluate($uid);
+            if (self::$dirty) self::evaluate($uid);
         }
         catch (Throwable $e) { error_log('Vaultcast achievements: ' . $e->getMessage()); }
     }
@@ -346,12 +348,12 @@ final class Achievements
                 self::raise($uid, 'best_' . $game, $score);
             }
             if ($game === 'merge' && preg_match_all('/tile:(\d{1,7})/', $meta, $m)) self::raise($uid, 'tile', max(array_map('intval', $m[1])));
-        }, true);
+        });
     }
     public static function points(string $uid, int $points): void
     {
         if ($points <= 0) return;
-        self::guard($uid, function () use ($uid, $points) { self::bump($uid, 'points', $points); }, true);
+        self::guard($uid, function () use ($uid, $points) { self::bump($uid, 'points', $points); });
     }
     public static function word(string $uid, bool $won, int $guesses, int $streak): void
     {
@@ -361,7 +363,7 @@ final class Achievements
             self::bump($uid, 'word_wins');
             self::raise($uid, 'word_quality', max(0, 7 - $guesses));
             self::raise($uid, 'word_streak', $streak);
-        }, true);
+        });
     }
     /** $plies: half-moves in the finished game. */
     public static function chessWin(string $uid, int $plies, string $reason): void
@@ -369,7 +371,7 @@ final class Achievements
         self::guard($uid, function () use ($uid, $plies, $reason) {
             self::bump($uid, 'games'); self::bump($uid, 'chess_wins');
             if ($reason === 'checkmate' && $plies > 0 && (int)ceil($plies / 2) < 20) self::raise($uid, 'chess_quick', 1);
-        }, true);
+        });
     }
     public static function chessAi(string $uid, string $result, int $level): void
     {
@@ -378,15 +380,15 @@ final class Achievements
     }
     public static function quiz(string $uid, bool $win): void
     {
-        self::guard($uid, function () use ($uid, $win) { self::bump($uid, 'games'); if ($win) self::bump($uid, 'quiz_wins'); }, true);
+        self::guard($uid, function () use ($uid, $win) { self::bump($uid, 'games'); if ($win) self::bump($uid, 'quiz_wins'); });
     }
     public static function quizDaily(string $uid): void
     {
-        self::guard($uid, function () use ($uid) { self::bump($uid, 'games'); self::bump($uid, 'quiz_daily'); }, true);
+        self::guard($uid, function () use ($uid) { self::bump($uid, 'games'); self::bump($uid, 'quiz_daily'); });
     }
     public static function friends(string $uid): void
     {
-        self::guard($uid, function () use ($uid) { self::raise($uid, 'friends', count(Social::friends($uid))); }, true);
+        self::guard($uid, function () use ($uid) { self::raise($uid, 'friends', count(Social::friends($uid))); });
     }
     public static function review(string $uid, string $key): void
     {
@@ -406,7 +408,7 @@ final class Achievements
         self::guard($uid, function () use ($uid, $boards) {
             $w = 0; foreach ($boards as $b) $w += count((array)($b['widgets'] ?? []));
             self::raise($uid, 'widgets', $w); self::raise($uid, 'boards', count($boards));
-        }, true);
+        });
     }
     public static function team(string $uid): void
     {
@@ -415,19 +417,16 @@ final class Achievements
             self::raise($uid, 'team', 1); self::raise($uid, 'team_size', count((array)($t['members'] ?? [])));
         });
     }
-    /** Teammates also benefit when someone joins their team (those not yet evaluated catch up on their own). */
+    /** Teammates also benefit when someone joins their team (teams hold up to 30 players). */
     public static function teamMembers(string $joiner, array $uids): void
     {
         if (!self::enabled()) return;
         self::team($joiner);
-        foreach (array_slice(array_values(array_unique(array_map('strval', $uids))), 0, 40) as $uid) {
-            if ($uid === $joiner || !self::validUid($uid)) continue;
-            try { if ((self::counters($uid)['backfilled'] ?? 0) >= self::BACKFILL_VERSION) self::team($uid); } catch (Throwable $e) {}
-        }
+        foreach (array_slice(array_values(array_unique(array_map('strval', $uids))), 0, 40) as $uid) if ($uid !== $joiner) self::team($uid);
     }
     public static function emulator(string $uid): void
     {
-        self::guard($uid, function () use ($uid) { self::bump($uid, 'emu_sessions'); }, true);
+        self::guard($uid, function () use ($uid) { self::bump($uid, 'emu_sessions'); });
     }
     /**
      * Time-based progress (Live TV, PseudoTV Relay, Ambient). The app reports once a minute while it
@@ -455,13 +454,12 @@ final class Achievements
     }
 
     // ---------------------------------------------------------------- history (one-off per person)
-    /** True when history was filled in just now. */
-    private static function ensureBackfilled(string $uid): bool
+    /** Fill in history the first time someone opens their achievements (or a profile shows them). */
+    private static function ensureBackfilled(string $uid): void
     {
-        if (isset(self::$backfilling[$uid])) return false;
-        if ((self::counters($uid)['backfilled'] ?? 0) >= self::BACKFILL_VERSION) return false;
+        if (isset(self::$backfilling[$uid])) return;
+        if ((self::counters($uid)['backfilled'] ?? 0) >= self::BACKFILL_VERSION) return;
         self::backfillUser($uid);
-        return true;
     }
     /** Rebuild counters from recorded history. Counters only ever go up, so live activity is never lost. */
     public static function backfillUser(string $uid, ?callable $checkpoint = null): array
