@@ -120,11 +120,25 @@ final class SmartCollections
         return array_column(self::q($sql, $args)->fetchAll(PDO::FETCH_ASSOC), 'unit');
     }
 
-    private static function viewerAllows(?array $user, string $unit): bool
+    private static function viewerAllows(?array $user, string $unit, array $kinds = []): bool
     {
         if (!$user || !class_exists('Parental') || !Parental::restricted($user)) return true;
         [$kind, $id] = explode(':', $unit, 2);
-        return Parental::allows($user, $kind === 'show' ? ['id' => $id, 'kind' => 'show', 'media_kind' => 'show', 'show_key' => $id, 'title' => ''] : (Catalogue::item($id) ?: ['id' => $id, 'media_kind' => 'video']));
+        if ($kind === 'show') return Parental::allows($user, ['id' => $id, 'kind' => 'show', 'media_kind' => 'show', 'show_key' => $id, 'title' => '']);
+        // Item units are stand-alone titles (no show), so id and media kind are all the rating check needs.
+        return Parental::allows($user, ['id' => $id, 'media_kind' => $kinds[$id] ?? 'video']);
+    }
+
+    /** media_kind per stand-alone item unit, in batches, instead of loading every catalogue item. */
+    private static function unitKinds(array $units): array
+    {
+        $ids = [];
+        foreach ($units as $u) { [$k, $id] = explode(':', $u, 2); if ($k !== 'show') $ids[] = $id; }
+        $out = [];
+        foreach (array_chunk($ids, 500) as $chunk) {
+            foreach (self::q('SELECT item_id,media_kind FROM vaultcast_browse_items WHERE item_id IN (' . implode(',', array_fill(0, count($chunk), '?')) . ')', $chunk) as $r) $out[(string)$r['item_id']] = (string)$r['media_kind'];
+        }
+        return $out;
     }
 
     /** Cards for title keys, in order. */
@@ -164,7 +178,7 @@ final class SmartCollections
             if (is_array($hit) && ($hit['rev'] ?? '') === $rev) return $hit['data'];
         }
         try { $units = self::units($rules, $uid); } catch (Throwable $e) { error_log('Vaultcast smart collection: ' . $e->getMessage()); $units = []; }
-        if ($restricted) $units = array_values(array_filter($units, static function ($u) use ($user) { return self::viewerAllows($user, $u); }));
+        if ($restricted) { $kinds = self::unitKinds($units); $units = array_values(array_filter($units, static function ($u) use ($user, $kinds) { return self::viewerAllows($user, $u, $kinds); })); }
         $count = min(count($units), $rules['limit']);
         $data = ['count' => $count, 'cards' => self::cards(array_slice($units, 0, min($take, $rules['limit'])))];
         if ($key !== '') \Vaultcast\Repository::cachePut($key, ['rev' => $rev, 'data' => $data], 900);
