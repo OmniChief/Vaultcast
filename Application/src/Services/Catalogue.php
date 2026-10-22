@@ -33,6 +33,8 @@ class Catalogue {
             return $saved;
         });
         if ($ok) self::invalidateDerivedCaches();
+        // Media requests that just landed in the library become Available (cheap when nothing is open).
+        if ($ok) MediaRequests::catalogueChanged();
         return $ok;
     }
 

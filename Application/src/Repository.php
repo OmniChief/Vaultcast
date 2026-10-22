@@ -354,6 +354,7 @@ final class Repository
             try { \Inbox::purgeUser($id); } catch (\Throwable $e) { error_log('Vaultcast inbox cleanup: ' . $e->getMessage()); }
             try { \Offline::purgeUser($id); } catch (\Throwable $e) { error_log('Vaultcast offline cleanup: ' . $e->getMessage()); }
             try { \SmartCollections::purgeUser($id); } catch (\Throwable $e) { error_log('Vaultcast smart collections cleanup: ' . $e->getMessage()); }
+            try { \MediaRequests::purgeUser($id); } catch (\Throwable $e) { error_log('Vaultcast request cleanup: ' . $e->getMessage()); }
             try { \Parental::purgeUser($id); } catch (\Throwable $e) { error_log('Vaultcast parental cleanup: ' . $e->getMessage()); }
         }
         return $removed;

@@ -265,3 +265,23 @@ CREATE TABLE IF NOT EXISTS vaultcast_parental (
  pin_failures INT NOT NULL DEFAULT 0, pin_locked_until BIGINT NOT NULL DEFAULT 0,
  updated_at BIGINT NOT NULL DEFAULT 0
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS vaultcast_media_requests (
+ id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+ ident VARCHAR(120) CHARACTER SET ascii NOT NULL, title_key VARCHAR(100) CHARACTER SET ascii NOT NULL, match_key VARCHAR(190) NOT NULL DEFAULT '',
+ media_type VARCHAR(8) CHARACTER SET ascii NOT NULL, source VARCHAR(16) CHARACTER SET ascii NOT NULL, ext_id VARCHAR(40) CHARACTER SET ascii NOT NULL,
+ scope VARCHAR(8) CHARACTER SET ascii NOT NULL DEFAULT '', season INT NOT NULL DEFAULT -1,
+ title VARCHAR(255) NOT NULL, year SMALLINT NOT NULL DEFAULT 0, overview TEXT NULL, poster VARCHAR(600) NOT NULL DEFAULT '',
+ imdb_id VARCHAR(16) CHARACTER SET ascii NOT NULL DEFAULT '', rating_bucket TINYINT NOT NULL DEFAULT 0, rating_raw VARCHAR(40) NOT NULL DEFAULT '',
+ status VARCHAR(16) CHARACTER SET ascii NOT NULL DEFAULT 'pending', reason VARCHAR(400) NOT NULL DEFAULT '', note VARCHAR(255) NOT NULL DEFAULT '',
+ decided_by VARCHAR(120) NOT NULL DEFAULT '', decided_at BIGINT NOT NULL DEFAULT 0,
+ acq TEXT NULL, progress DECIMAL(5,1) NOT NULL DEFAULT 0, library_ref VARCHAR(100) CHARACTER SET ascii NOT NULL DEFAULT '',
+ created_at BIGINT NOT NULL DEFAULT 0, updated_at BIGINT NOT NULL DEFAULT 0, available_at BIGINT NOT NULL DEFAULT 0,
+ UNIQUE KEY mreq_ident (ident), INDEX mreq_status (status, updated_at), INDEX mreq_title (title_key), INDEX mreq_match (match_key)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS vaultcast_media_request_users (
+ request_id BIGINT UNSIGNED NOT NULL, user_id VARCHAR(64) NOT NULL, note VARCHAR(300) NOT NULL DEFAULT '',
+ restricted TINYINT NOT NULL DEFAULT 0, created_at BIGINT NOT NULL DEFAULT 0,
+ PRIMARY KEY (request_id, user_id), INDEX mreq_user (user_id, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
