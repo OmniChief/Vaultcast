@@ -43,7 +43,9 @@ if (preg_match('#^/admin/system/(kill|processes|service|reboot)(/|$)#', $path) &
 if (preg_match('#^/(search/(rss|get)|admin/(acquisition|transmission|downloads))(/|$)#', $path) && empty($features['downloads'])) json_error('Download integrations are disabled in Settings → Integrations.', 404);
 if (strpos($path, '/diagnostics') === 0) Auth::requireAdmin();
 
-if (strpos($path, '/play/') === 0) {
+if ($path === '/requests' || strpos($path, '/requests/') === 0) {
+    require __DIR__ . '/routes/requests.php';
+} elseif (strpos($path, '/play/') === 0) {
     require __DIR__ . '/routes/play.php';
 } elseif (strpos($path, '/misc/') === 0 || strpos($path, '/drop/') === 0) {
     require __DIR__ . '/routes/misc.php';

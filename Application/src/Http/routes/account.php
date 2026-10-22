@@ -102,6 +102,7 @@ if ($path === '/me' && $method === 'GET') {
     $user = Permissions::publicUser($user);
     $user['parental'] = Parental::status($user);
     try { $user['offline'] = Offline::status($user); } catch (Throwable $e) { $user['offline'] = ['enabled' => false, 'allowed' => false]; }
+    $user['requests'] = MediaRequests::userStatus($user);
     $pendingConvert = 0;
     if (($user['role'] ?? '') === 'admin') {
         $pendingConvert = count(Convert::pendingRequests());

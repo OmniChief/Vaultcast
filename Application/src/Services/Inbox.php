@@ -45,12 +45,12 @@ final class Inbox
     public static function visibleTypes(array $user): array
     {
         $admin = ($user['role'] ?? '') === 'admin';
-        $types = ['message', 'invite', 'system'];
+        // Requests: everyone hears back about their own media requests; convert and new-request items are for managers (subtypeAllowed).
+        $types = ['message', 'invite', 'request', 'system'];
         if ($admin || Permissions::allowed($user, 'ingest_view')) $types[] = 'library';
-        if ($admin) $types[] = 'request';
         if (class_exists('Parental') && Parental::restricted($user)) {
             $st = Parental::settingsFor($user);
-            if (!empty($st['kid'])) $types = array_values(array_diff($types, ['library', 'request']));
+            if (!empty($st['kid'])) $types = array_values(array_diff($types, ['library']));
             if (empty($st['social'])) $types = array_values(array_diff($types, ['message', 'invite']));
         }
         return $types;
@@ -61,6 +61,9 @@ final class Inbox
         // Maintenance items are admin-only even if one was written earlier for someone who is no longer an admin.
         if ($row['subtype'] === 'maintenance' && ($user['role'] ?? '') !== 'admin') return false;
         if ($row['subtype'] === 'maintenance' && class_exists('Parental') && Parental::restricted($user)) return false;
+        if ($row['subtype'] === 'convert' && ($user['role'] ?? '') !== 'admin') return false;
+        if ($row['subtype'] === 'media' && !MediaRequests::canManage($user)) return false;
+        if ($row['type'] === 'request' && !in_array($row['subtype'], ['convert', 'media', 'media_update'], true) && ($user['role'] ?? '') !== 'admin') return false;
         return true;
     }
 
@@ -115,7 +118,7 @@ final class Inbox
         self::sync($user);
         $types = self::visibleTypes($user);
         try {
-            $latest = (int)self::q('SELECT MAX(created_at) FROM vaultcast_inbox WHERE user_id=? AND deleted=0 AND type IN (' . implode(',', array_fill(0, count($types), '?')) . ")" . (($user['role'] ?? '') === 'admin' ? '' : " AND subtype<>'maintenance'"), array_merge([$uid], $types))->fetchColumn();
+            $latest = (int)self::q('SELECT MAX(created_at) FROM vaultcast_inbox WHERE user_id=? AND deleted=0 AND type IN (' . implode(',', array_fill(0, count($types), '?')) . ")" . (($user['role'] ?? '') === 'admin' ? '' : " AND subtype NOT IN ('maintenance','convert')" . (MediaRequests::canManage($user) ? '' : " AND subtype<>'media'")), array_merge([$uid], $types))->fetchColumn();
         } catch (Throwable $e) { $latest = 0; }
         return ['new' => $latest > self::lastSeen($uid), 'latest' => $latest];
     }
