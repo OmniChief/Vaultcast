@@ -1156,6 +1156,10 @@ function confirmDialog(message, opts){
   function canSettings(section){if(state.user&&state.user.role==='admin')return true;var permission={matching:'fix_match',ingest:'ingest_view','live-iptv':'iptv_manage','live-radio':'radio_manage','artwork-integrity':'artwork_manage'}[section];return !!permission&&can(permission)&&(['ingest','matching'].indexOf(section)<0||userAreaAllowed('library'));}
   function canSearchRss(){return can('rss_search')&&!!(state.home&&state.home.features&&state.home.features.downloads);}
   function canManageDownloads(){return can('downloads_request')&&!!(state.home&&state.home.features&&state.home.features.downloads);}
+  /* Media requests (Library → Requests). The flags come from /me because custom roles and the User role are resolved server-side. */
+  function canRequestMedia(){var r=state.user&&state.user.role!=='guest'&&state.user.requests;return !!(r&&(r.create||r.manage));}
+  function canCreateMediaRequest(){var r=state.user&&state.user.role!=='guest'&&state.user.requests;return !!(r&&r.create);}
+  function openRequests(tab,prefill){state.requestsTab=tab||'discover';state.requestsPrefill=prefill&&prefill.q?{type:prefill.type==='tv'?'tv':'movie',q:String(prefill.q)}:null;navigate('requests');}
   function loadDownloadStatus(force){
     if (!canManageDownloads()) { _dlStatus = null; return Promise.resolve({ok:true,downloading:[]}); }
     var now = Date.now();
@@ -4821,7 +4825,7 @@ try {
     return R.build({ systemSlug: state.view === 'play' && state.sectionSystem ? (state.sectionSystemSlug || null) : null, view: state.view, movieSlug: state.movieSlug, movieId: state.movieId, showSlug: state.showSlug, showKey: state.showKey,
       season: state.showSeason, episode: state.showEpisode, liveCh: extra.live || state.liveChannel || null, liveTab:state.liveTab, playTab: state.playTab, playSub: state.playSub, miscTab: state.miscTab, miscSub: state.miscSub, section: state.section,
       collectionId: state.collectionId, searchQuery: state.searchQuery, settingsSection: state.settingsSection, adminTab: state.adminTab,
-      sectionLetter:state.sectionLetter, collectionsLetter:state.collectionsLetter, hubTab:state.hubTab, cinemaId:state.cinemaId });
+      sectionLetter:state.sectionLetter, collectionsLetter:state.collectionsLetter, hubTab:state.hubTab, cinemaId:state.cinemaId, requestsTab:state.requestsTab });
   }
   function navUrl(extra){ return BASE + routePath(extra); }
   function shareUrl(path){
@@ -4887,6 +4891,7 @@ try {
     }
     if (r.view === 'collections') { state.view = 'collections'; return Promise.resolve(); }
     if (r.view === 'offline') { state.view = 'offline'; return Promise.resolve(); }
+    if (r.view === 'requests') { state.view = 'requests'; state.requestsTab = r.requestsTab || 'discover'; return Promise.resolve(); }
     if (r.view === 'inbox') { state.view = 'inbox'; state.inboxPane = r.inboxPane || null; return Promise.resolve(); }
     if (r.view === 'library') { state.view = 'library'; return Promise.resolve(); }
     if (r.view === 'collection') { state.view = 'collection'; state.collectionId = r.collectionId; return Promise.resolve(); }
@@ -5103,6 +5108,7 @@ try {
         items.push({ label: s.label, active: (state.view === 'section' && state.section === s.id), go: function(){ navigate('section', s.id); } });
       });
       items.push({ label:'Collections', active: state.view === 'collections' || state.view === 'collection', go: function(){ navigate('collections'); } });
+      if (canRequestMedia()) items.push({ label:'Requests', active: state.view === 'requests', go: function(){ openRequests('discover'); } });
     } else if (mode === 'live') {
       [['On now','now'],['Relay','relay'],['IPTV','iptv'],['Radio','radio']].forEach(function(page){
         items.push({label:page[0],active:(state.liveTab||'now')===page[1],go:function(){goLiveTab(page[1]);}});
@@ -7986,6 +7992,9 @@ try {
         ];
         if (!canSearchRss()) heroActions = heroActions.filter(function(button){ return button.textContent !== 'Find alternate'; });
         heroActions = heroActions.concat(detailMatchButtons(show, show.show_key || showKey));
+        if (!canManageDownloads() && canCreateMediaRequest() && show.title) {
+          heroActions.push(h('button', { className:'btn', text:'Request seasons', title:'Ask for seasons the library doesn’t have yet', onClick: function(){ openRequests('discover', { type:'tv', q: show.title }); } }));
+        }
         if (missTotal > 0 && canManageDownloads()) {
           heroActions.push(h('button', {
             className:'btn',
@@ -8240,9 +8249,12 @@ try {
       kids.push(emptyState(
         q ? 'No catalogue matches' : 'Type a title to search',
         q ? 'Try a different title or check your library filters.' : 'Press / then type. Catalogue results appear first.',
-        canSearchRss() && q && res.rss_fallback_enabled !== false ? [
-          h('button', { className:'btn primary', text: state.searchBusy?'Searching RSS…':'Search RSS / downloads', onClick: function(){ runRssSearch(q); } })
-        ] : null
+        (function(){
+          var acts = [];
+          if (q && canCreateMediaRequest()) acts.push(h('button', { className:'btn primary', type:'button', text:'Request “'+(q.length > 40 ? q.slice(0, 40)+'…' : q)+'”', onClick: function(){ openRequests('discover', { type:'movie', q:q }); } }));
+          if (canSearchRss() && q && res.rss_fallback_enabled !== false) acts.push(h('button', { className:'btn' + (acts.length ? '' : ' primary'), text: state.searchBusy?'Searching RSS…':'Search RSS / downloads', onClick: function(){ runRssSearch(q); } }));
+          return acts.length ? acts : null;
+        })()
       ));
     } else {
       kids.push(h('section', { className:'row' }, [
@@ -8257,6 +8269,12 @@ try {
         h('span',{className:'muted',text:'Page '+(res.page||1)+' · '+(res.total||0)+' matches'}),
         h('button',{className:'btn primary',type:'button',text:'Next',disabled:!!state.searchBusy||!res.has_more,onClick:function(){runGlobalSearch(q,(res.page||1)+1);}})
       ]));
+      if (q && res.weak && canCreateMediaRequest()) {
+        kids.push(h('div', { className:'panel mreq-cta', style:'margin:8px 20px' }, [
+          h('p', { className:'muted', text:'Not what you were after? Ask for it and you’ll hear back in your inbox.' }),
+          h('div', { className:'row-actions' }, [h('button', { className:'btn', type:'button', text:'Request a film or show', onClick: function(){ openRequests('discover', { type:'movie', q:q }); } })])
+        ]));
+      }
       if (canSearchRss() && (res.weak || res.rss_fallback_enabled)) {
         kids.push(h('div', { className:'panel', style:'margin:8px 20px' }, [
           h('p', { className:'muted', text:'Catalogue results are limited. Optionally search RSS for preferred qualities (admin: min seeds, qualities, languages).' }),
@@ -15459,6 +15477,7 @@ function viewCollectionDetail(){
     else if (state.view === 'live') { root.appendChild(viewLive()); setTimeout(consumePendingLiveChannel, 0); }
     else if (state.view === 'play') root.appendChild(viewPlay());
     else if (state.view === 'offline') root.appendChild(shell(lazyView('vc-offline.js', 'VaultcastOffline', 'offline-view', function(mod, host){ mod.render(host); })));
+    else if (state.view === 'requests') root.appendChild(shell(lazyView('vc-requests.js', 'VaultcastRequests', 'requests-view', function(mod, host){ mod.render(host); })));
     else if (state.view === 'inbox') { root.appendChild(shell(lazyView('vc-inbox.js', 'VaultcastInbox', 'inbox-view', function(mod, host){ mod.render(host); }))); updateAccountIndicators(); }
     else if (state.view === 'misc') root.appendChild(shell(lazyView('vc-misc.js', 'VaultcastMisc', 'misc-view', function(mod, host){ mod.render(host, state.miscTab || 'board', state.miscSub || ''); })));
     else root.appendChild(viewHome());

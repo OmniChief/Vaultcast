@@ -42,6 +42,7 @@
     }
     if (v === 'misc') return 'misc' + (st.miscTab ? '/' + enc(st.miscTab) + (st.miscSub ? '/' + enc(st.miscSub) : '') : '');
     if (v === 'offline') return 'offline';
+    if (v === 'requests') return st.requestsTab === 'manage' ? 'requests/manage' : (st.requestsTab === 'mine' ? 'requests/mine' : 'requests');
     if (v === 'inbox') return st.inboxPane === 'mail' ? 'inbox/private' : 'inbox';
     if (v === 'welcome') return 'welcome';
     if (v === 'login') return 'login';
@@ -62,6 +63,8 @@
     /* Unified inbox; the old Home → Inbox and Settings → Inbox addresses land here too. */
     if (head === 'inbox') return { view:'inbox', inboxPane: parts[1] === 'private' ? 'mail' : null };
     if ((head === 'home' || head === 'settings') && parts[1] === 'inbox') return { view:'inbox' };
+    /* Media requests (Library → Requests): discover, my requests, and the managers' queue. */
+    if (head === 'requests') return (!parts[1] || parts[1] === 'mine' || parts[1] === 'manage') && !parts[2] ? { view:'requests', requestsTab: parts[1] || 'discover' } : { view:'notfound', path:path };
     if (head === 'home') {
       var tab = parts[1] || 'overview';
       if (['overview','favourites','watchlist','calendar','friends','history','stats','inbox','cinema','arrivals','lists','chat'].indexOf(tab) < 0) return {view:'notfound'};

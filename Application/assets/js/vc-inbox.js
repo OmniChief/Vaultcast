@@ -34,7 +34,7 @@
   }
   function iconFor(it){ return it.subtype === 'friend' ? 'friend' : it.subtype === 'maintenance' ? 'maintenance' : it.subtype === 'drop' ? 'drop' : it.type; }
   function kindLabel(it){
-    return { dm:'Direct message', mail:'Private message', friend:'Friend request', cinema:'Watch together', game:'Game invite', play:'Play', maintenance:'Maintenance', convert:'Convert request', ingest:'Ready to import', drop:'Drop' }[it.subtype] || (groups[it.type] || '');
+    return { dm:'Direct message', mail:'Private message', friend:'Friend request', cinema:'Watch together', game:'Game invite', play:'Play', maintenance:'Maintenance', convert:'Convert request', media:'Media request', media_update:'Your request', ingest:'Ready to import', drop:'Drop' }[it.subtype] || (groups[it.type] || '');
   }
 
   /* ---------- the dot ---------- */
@@ -60,7 +60,8 @@
     if (a.kind === 'chat') return 'Open conversation';
     if (it.subtype === 'friend') return 'View request';
     if (it.subtype === 'cinema' || it.subtype === 'game') return 'Join';
-    if (it.subtype === 'convert') return 'Review';
+    if (it.subtype === 'convert' || it.subtype === 'media') return 'Review';
+    if (it.subtype === 'media_update') return 'View request';
     if (it.subtype === 'ingest') return 'Open import inbox';
     return 'Open';
   }
