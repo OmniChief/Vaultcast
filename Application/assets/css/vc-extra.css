@@ -539,7 +539,7 @@ button.vc-choice:active:not(:disabled) { transform: scale(.98); }
 }
 
 /* Kiosk */
-body.vc-kiosk .topnav, body.vc-kiosk .subnav, body.vc-kiosk .maintenance-advisory-host, body.vc-kiosk .maintenance-advisory, body.vc-kiosk .radio-player-bar { display: none !important; }
+body.vc-kiosk .topnav, body.vc-kiosk .subnav, body.vc-kiosk .radio-player-bar { display: none !important; }
 /* Kiosk: the page is exactly the viewport unless the widgets reach further down. No app-shell bottom padding,
    no animation transform and no fixed extra height, so there is nothing to scroll into. */
 /* Only the root scrolls (no second scroll box on body); body has no 100vh floor of its own in kiosk. */
