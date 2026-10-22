@@ -934,10 +934,24 @@
         h('div', { className:'vc-profile-head' }, [avatar(p.person, 72), h('div', { className:'vc-grow' }, [h('h2', { text:p.person.name }), h('p', { className:'muted', text:(p.team ? p.team.emblem + ' ' + p.team.name + (p.team.role === 'captain' ? ' · captain' : '') + ' · ' : '') + fmt(s.points) + ' points' + (s.rank ? ' · #' + s.rank + ' overall' : '') })]),
           !p.me && !p.friend ? btn('Add friend', function(e){ e.currentTarget.disabled = true; call('/play/friends', { method:'POST', body:{ action:'request', user_id:p.person.id } }).then(function(){ A.toast('Request sent', { kind:'ok' }); }).catch(err); }, 'primary') : null, blockBtn, p.me ? btn('Privacy', function(){ go('social', 'privacy'); }, 'ghost') : null]),
         h('div', { className:'vc-stat-row' }, [['Games played', s.games_played], ['Points this week', s.points_week], ['Quiz wins', s.quiz_wins], ['Chess wins', s.chess_wins], ['Daily Five streak', s.word_streak], ['Friends', s.friends]].map(function(x){ return h('div', { className:'vc-stat' }, [h('strong', { text:fmt(x[1]) }), h('span', { className:'muted', text:x[0] })]); })),
-        panel('Achievements', [h('div', { className:'vc-badges' }, p.badges.map(function(b){ return h('div', { className:'vc-badge' + (b.earned ? ' earned' : ''), title:b.detail }, [h('span', { className:'vc-badge-icon', text:b.icon, 'aria-hidden':'true' }), h('strong', { text:b.name }), h('small', { className:'muted', text:b.detail }), h('span', { className:'sr-only', text:b.earned ? 'Earned' : 'Not earned yet' })]); }))]),
+        achievementsPanel(p),
         panel('Personal bests', [Object.keys(p.bests).length ? h('div', { className:'vc-bests' }, Object.keys(p.bests).map(function(g){ var b = p.bests[g]; return h('button', { type:'button', className:'vc-best-row', onClick:function(){ go('leaderboards', g); } }, [h('strong', { text:b.name }), h('span', { text:g === 'chess' ? 'Played ' + b.plays : fmt(b.best) }), h('span', { className:'muted', text:b.plays + ' plays' + (b.rank ? ' · #' + b.rank : '') })]); })) : h('p', { className:'muted', text:'No games yet.' })]),
         panel('Recent activity', [activityList(p.activity)]));
     }).catch(function(e){ box.replaceChildren(empty('Profile unavailable', (e && e.error) || '')); });
+  }
+  /* With achievements on, the profile shows the chosen showcase and what has been earned; the full list lives on Play → Achievements. */
+  function badgeEl(b){ return h('div', { className:'vc-badge' + (b.earned ? ' earned' : '') + (b.tier ? ' vca-tier-' + String(b.tier).replace(/[^a-z]/g, '') : ''), title:b.detail || '' }, [h('span', { className:'vc-badge-icon', text:b.icon || '🏅', 'aria-hidden':'true' }), h('strong', { text:b.name || '' }), h('small', { className:'muted', text:b.detail || '' }), h('span', { className:'sr-only', text:b.earned ? 'Earned' : 'Not earned yet' })]); }
+  function achievementsPanel(p){
+    var badges = Array.isArray(p.badges) ? p.badges : [];
+    if (!p.achievements) return panel('Achievements', [h('div', { className:'vc-badges' }, badges.map(badgeEl))]);
+    var earned = badges.filter(function(b){ return b.earned; });
+    var more = p.me && A.goPlayTab ? btn('All achievements', function(){ A.goPlayTab('achievements'); }, 'ghost') : null;
+    var kids = [];
+    if (Array.isArray(p.showcase) && p.showcase.length) kids.push(h('div', { className:'vca-showcase' }, [h('h3', { className:'vca-showcase-title', text:'Showcase' }), h('div', { className:'vca-showcase-row' }, p.showcase.map(function(b){ return h('span', { className:'vca-chip vca-tier-' + String(b.tier || 'bronze').replace(/[^a-z]/g, ''), title:(b.detail || '') + (b.tier_label ? ' · ' + b.tier_label : '') }, [h('span', { className:'vca-chip-icon', 'aria-hidden':'true', text:b.icon || '🏅' }), h('span', { text:b.name || 'Achievement' })]); }))]));
+    else if (p.me) kids.push(h('p', { className:'muted', text:'Pick up to three badges to show here from Play → Achievements.' }));
+    kids.push(h('p', { className:'muted vca-profile-count', text:earned.length + ' of ' + badges.length + ' achievements earned' }));
+    kids.push(earned.length ? h('div', { className:'vc-badges' }, earned.slice(-12).reverse().map(badgeEl)) : h('p', { className:'muted', text:p.me ? 'Watch, play and join in to start earning achievements.' : 'No achievements yet.' }));
+    return panel('Achievements', kids, more);
   }
   function privacyView(body){
     var box = h('div', { className:'vc-privacy' }, [A.pendingContent({ text:'Loading…' })]); body.appendChild(box);

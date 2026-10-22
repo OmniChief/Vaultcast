@@ -16,9 +16,10 @@
     request: 'M12 3v12m0 0l-4-4m4 4l4-4M5 19h14',
     system: 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm0-5v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6l2.1 2.1M5.6 18.4l2.1-2.1m8.6-8.6l2.1-2.1',
     drop: 'M12 3v12m0 0l-4-4m4 4l4-4M4 17v3h16v-3',
+    achievement: 'M8 21h8m-4-4v4M7 4h10v5a5 5 0 0 1-10 0zM7 6H4a3 3 0 0 0 3 4m10-4h3a3 3 0 0 1-3 4',
     maintenance: 'M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.5 2.5-2.4-.6-.6-2.4z'
   };
-  var FILTERS = [['all', 'All'], ['message', 'Messages'], ['invite', 'Invites'], ['library', 'Library'], ['request', 'Requests'], ['system', 'System']];
+  var FILTERS = [['all', 'All'], ['message', 'Messages'], ['invite', 'Invites'], ['library', 'Library'], ['request', 'Requests'], ['achievement', 'Achievements'], ['system', 'System']];
 
   function svg(name, cls){
     var ns = 'http://www.w3.org/2000/svg', s = document.createElementNS(ns, 'svg'), p = document.createElementNS(ns, 'path');
@@ -34,7 +35,7 @@
   }
   function iconFor(it){ return it.subtype === 'friend' ? 'friend' : it.subtype === 'maintenance' ? 'maintenance' : it.subtype === 'drop' ? 'drop' : it.type; }
   function kindLabel(it){
-    return { dm:'Direct message', mail:'Private message', friend:'Friend request', cinema:'Watch together', game:'Game invite', play:'Play', maintenance:'Maintenance', convert:'Convert request', media:'Media request', media_update:'Your request', ingest:'Ready to import', drop:'Drop' }[it.subtype] || (groups[it.type] || '');
+    return { dm:'Direct message', mail:'Private message', friend:'Friend request', cinema:'Watch together', game:'Game invite', play:'Play', maintenance:'Maintenance', convert:'Convert request', media:'Media request', media_update:'Your request', ingest:'Ready to import', drop:'Drop' }[it.subtype] || (it.type === 'achievement' ? 'Achievement' : '') || (groups[it.type] || '');
   }
 
   /* ---------- the dot ---------- */

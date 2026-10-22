@@ -1391,6 +1391,14 @@
       stops.push(function(){ if (audio) { audio.pause(); audio.removeAttribute('src'); } });
     }
     wantWake(1);
+    // Achievements: starting Ambient, then a beacon a minute while it stays on screen.
+    var achUser = A.state.user;
+    if (achUser && achUser.role !== 'guest' && achUser.achievements && achUser.achievements.enabled) {
+      var achTick = function(start){ A.api('/achievements/tick', { method:'POST', body:{ kind:'ambient', start:!!start } }).catch(function(){}); };
+      achTick(true);
+      var achT = setInterval(function(){ if (amb && amb.layer === layer && !document.hidden) achTick(false); }, 60000);
+      stops.push(function(){ clearInterval(achT); });
+    }
     if (!opts.idle && layer.requestFullscreen) layer.requestFullscreen().catch(function(){});
     // Exit only on purpose: Escape (or a remote's Back key), the Exit button, or leaving full screen.
     // Mouse movement, taps and other keys just show the controls and the cursor for a few seconds.

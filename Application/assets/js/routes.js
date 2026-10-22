@@ -27,7 +27,7 @@
     if (v === 'play') {
       if (st.playTab === 'lobby') return 'games/lobby';
       if (st.playTab === 'leaderboards') return 'games/leaderboards' + (st.playSub ? '/' + enc(st.playSub) : '');
-      if (st.playTab === 'arcade' || st.playTab === 'quiz' || st.playTab === 'social') return 'play/' + st.playTab + (st.playSub ? '/' + String(st.playSub).split('/').map(enc).join('/') : '');
+      if (st.playTab === 'arcade' || st.playTab === 'quiz' || st.playTab === 'social' || st.playTab === 'achievements') return 'play/' + st.playTab + (st.playSub ? '/' + String(st.playSub).split('/').map(enc).join('/') : '');
       if (st.gamePath) return 'games/' + String(st.gamePath).split('/').map(enc).join('/') + (/^[a-f0-9]{16}$/.test(st.roomId || '') ? '?room=' + enc(st.roomId) : '');
       if (st.systemSlug) return withLetter('games/' + enc(st.systemSlug), st.sectionLetter);
       return withLetter('games', st.sectionLetter);
@@ -78,7 +78,7 @@
     if (head === 'live') return ['now','relay','iptv','radio','guide'].indexOf(parts[1])>=0 ? {view:'live',liveTab:parts[1]==='guide'?'now':parts[1],liveCh:parts[1]==='radio'&&parts[2]?'radio:'+parts[2]:null} : {view:'live',liveTab:'now',liveCh:parts[1]||null};
     if (head === 'play') {
       var pt = parts[1] || 'arcade';
-      if (['arcade','quiz','social'].indexOf(pt) < 0) return { view:'notfound', path:path };
+      if (['arcade','quiz','social','achievements'].indexOf(pt) < 0) return { view:'notfound', path:path };
       return { view:'play', playTab:pt, playSub:parts.slice(2, 4).join('/') };
     }
     if (head === 'offline' && !parts[1]) return { view:'offline' };

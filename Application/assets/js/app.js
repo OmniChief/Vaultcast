@@ -1019,6 +1019,7 @@ function confirmDialog(message, opts){
           }
           if (!r.ok && !j.error) j.error = 'HTTP ' + r.status;
           j._status = r.status;
+          if (sameUser && r.headers && r.headers.get('X-Vaultcast-Achievement')) setTimeout(function(){ document.dispatchEvent(new Event('vaultcast-achievement')); }, 0);
           if (j.maintenance_job) {
             toast('Task started. Manage or cancel it in Settings > Background tasks.');
             function waitForTask(){
@@ -3959,7 +3960,7 @@ function confirmDialog(message, opts){
   }
   function goPlayTab(tab){
 
-    state.playTab = ['lobby','arcade','quiz','social','leaderboards'].indexOf(tab) >= 0 ? tab : 'games';
+    state.playTab = ['lobby','arcade','quiz','social','leaderboards','achievements'].indexOf(tab) >= 0 ? tab : 'games';
     state.playSub = '';
     if (state.playTab !== 'lobby') lobbyStopPoll();
     if (state.view !== 'play') navigate('play');
@@ -5012,7 +5013,8 @@ try {
       drawer.appendChild(h('section',{className:'account-drawer-group account-drawer-top'},topItems));
       group('Your collection',[action('My profile',function(){return window.VaultcastChat.profile(owner);}),action('Favourites',function(){hub('favourites');}),action('Watchlist',function(){hub('watchlist');}),action('My collections',function(){hub('lists');}),action('History',function(){hub('history');}),action('Release calendar',function(){hub('calendar');}),action('New episodes',function(){hub('arrivals');})]);
       group('Stay connected',[action('Chat & direct messages',function(){hub('chat');}),action('Friends',function(){hub('friends');}),action('Watch together',function(){hub('cinema');})]);
-      if(userAreaAllowed('games'))group('Your games',[action('Cloud saves',function(){openSettings('cloud-saves');}),action('Game statistics',function(){hub('stats');})]);
+      if(userAreaAllowed('games'))group('Your games',[action('Cloud saves',function(){openSettings('cloud-saves');}),action('Game statistics',function(){hub('stats');})].concat(achievementsOn()?[action('Achievements',function(){goPlayTab('achievements');})]:[]));
+      else if(achievementsOn())group('Your achievements',[action('Achievements',function(){goPlayTab('achievements');})]);
     }else group('Get started',[action('Sign in',function(){navigate('login');})]);
     var themeSelect=signed?h('select',{id:'account-quick-theme','aria-label':'Theme',onChange:function(){
       var selected=themeSelect.value;themeSelect.disabled=true;
@@ -5123,6 +5125,7 @@ try {
       items.push({ label: 'Quiz', active: tab === 'quiz', go: function(){ goPlayTab('quiz'); } });
       items.push({ label: 'Teams & friends', active: tab === 'social', go: function(){ goPlayTab('social'); } });
       items.push({ label: 'Leaderboards', active: tab === 'leaderboards', go: function(){ goPlayTab('leaderboards'); } });
+      if (achievementsOn()) items.push({ label: 'Achievements', active: tab === 'achievements', go: function(){ goPlayTab('achievements'); } });
     } else if (mode === 'misc') {
       [['board','Board'],['calendar','Calendar'],['drop','Drop'],['ambient','Ambient']].forEach(function(t){ items.push({ label:t[1], active:(state.miscTab||'board')===t[0], go:function(){ state.miscTab=t[0]; state.miscSub=''; if(state.view!=='misc')navigate('misc'); else { pushNav(); render(); } } }); });
     } else {
@@ -5605,6 +5608,7 @@ try {
     lobbyStopPoll();
     var rs = romsSection();
     if ((state.playTab || 'games') === 'games' && !rs) state.playTab = 'arcade';
+    if (state.playTab === 'achievements') return shell(lazyView('vc-achievements.js', 'VaultcastAchievements', 'play-extra-view', function(mod, host){ mod.render(host); }));
     if (['arcade','quiz','social','leaderboards'].indexOf(state.playTab) >= 0) return shell(lazyView('vc-play.js', 'VaultcastPlay', 'play-extra-view', function(mod, host){ mod.render(host, state.playTab, state.playSub || ''); }));
     if (!rs) return shell(h('div', { className:'panel' }, [ emptyState('No games library', 'Add a ROMs library under Admin → Libraries, then scan.') ]));
     state.section = rs.id; state.sectionType = 'roms'; state.sectionLabel = rs.label;
@@ -6462,6 +6466,14 @@ try {
     addCentrePlay(overlay,video,safePlay);
     if(inlineHost)overlay.setAttribute('tabindex','0');
     (inlineHost||document.body).appendChild(overlay);
+    // Achievements: one beacon a minute while a channel is really playing (IPTV counts as Live TV, the rest is PseudoTV Relay).
+    var achTimer = setInterval(function(){
+      if (!overlay.isConnected) { clearInterval(achTimer); return; }
+      if (video.paused || video.readyState < 2 || document.hidden) return;
+      var c = liveChannels()[lp.idx] || list[lp.idx]; var cid = String((c && c.id) || '');
+      if (!cid || cid.indexOf('radio:') === 0) return;
+      achievementTick(cid.indexOf('iptv:') === 0 ? 'live' : 'relay');
+    }, 60000);
 
     function msg(t){ elMsg.textContent = t || ''; }
     function setTuning(on){ overlay.classList.toggle('tuning', !!on); }
@@ -7180,6 +7192,22 @@ try {
     }).catch(function(e){
       paintError(String(e && e.message || e || 'Could not load movie'));
     });
+  }
+
+  /* Achievements (vc-achievements.js): the server sets X-Vaultcast-Achievement on the request that earned one,
+     and the Inbox badge poll reports any not yet celebrated; either way the module shows the toast once. */
+  function achievementsOn(){ return !!(state.user && state.user.role !== 'guest' && state.user.achievements && state.user.achievements.enabled); }
+  var achievementNudgeAt = 0;
+  function achievementNudge(){
+    if (!achievementsOn() || Date.now() - achievementNudgeAt < 1500) return;
+    achievementNudgeAt = Date.now();
+    loadModule('vc-achievements.js', 'VaultcastAchievements').then(function(mod){ if (mod.celebrate) mod.celebrate(); }).catch(function(){});
+  }
+  document.addEventListener('vaultcast-achievement', achievementNudge);
+  /* Time-based achievements (Live TV, Relay, Ambient): at most one small beacon a minute while it is really playing. */
+  function achievementTick(kind, start){
+    if (!achievementsOn()) return;
+    api('/achievements/tick', { method:'POST', body:{ kind:kind, start:!!start } }).catch(function(){});
   }
 
   /* Trailers and extras (vc-extras.js): Play trailer button, Extras row, optional muted hero trailer. Never blocks the page. */
@@ -8403,7 +8431,7 @@ try {
       {title:'People & permissions',description:'Control who can access content and administrative tools.',admin:true,items:[{id:'users',label:'Accounts, roles & permissions',hint:'Create users and roles; assign individual access'}]},
       {title:'Playback & delivery',description:'Server delivery options and player dependencies.',admin:true,items:[{id:'directplay',label:'DirectPlay Settings',hint:'Playback policy, transcoding, threads and reusable copies'},{id:'trailers',label:'Trailers & extras',hint:'Online trailers, the muted hero trailer and extras thumbnails'},{id:'streaming',label:'Delivery & subtitles',hint:'Seeking, playback tokens and subtitles'},{id:'players',label:'Player assets',hint:'Local or CDN player files and emulator cores'},{id:'video-optimise',label:'Video conversion',hint:'Convert files, review requests and manage encoding jobs'}]},
       {title:'Downloads',description:'Configure providers and review download activity.',admin:true,items:[{id:'acquisition',label:'Providers & integrations',hint:'RSS search, download clients and API connections'},{id:'queue',label:'Download queue',hint:'Active downloads, imports and errors'}]},
-      {title:'Application & server',description:'Site defaults, updates, performance and troubleshooting.',admin:true,items:[{id:'general',label:'Site defaults & access',hint:'Branding, guest access, public URL and installable app'},{id:'features',label:'Enabled features',hint:'Turn optional services on or off'},{id:'ambient',label:'Ambient & webcams',hint:'Webcams from boards and which ones Ambient offers'},{id:'updates',label:'Updates & branches',hint:'Manually check, install or switch update channels'},{id:'maintenance',label:'Task centre',hint:'Preparation jobs, progress, cancellation and history'},{id:'optimise-system',label:'Storage & caches',hint:'Generated files and safe cache tools'},{id:'diagnostics',label:'Diagnostics',hint:'Run selected checks and inspect failures'},{id:'system',label:'Server tools',hint:'Resource usage and service controls'},{id:'advanced',label:'Advanced & reset',hint:'PHP CLI, ffmpeg, ffprobe, tool paths, raw configuration and database reset'}]}
+      {title:'Application & server',description:'Site defaults, updates, performance and troubleshooting.',admin:true,items:[{id:'general',label:'Site defaults & access',hint:'Branding, guest access, public URL and installable app'},{id:'features',label:'Enabled features',hint:'Turn optional services on or off'},{id:'achievements',label:'Achievements',hint:'Turn achievements on or off and count past activity'},{id:'ambient',label:'Ambient & webcams',hint:'Webcams from boards and which ones Ambient offers'},{id:'updates',label:'Updates & branches',hint:'Manually check, install or switch update channels'},{id:'maintenance',label:'Task centre',hint:'Preparation jobs, progress, cancellation and history'},{id:'optimise-system',label:'Storage & caches',hint:'Generated files and safe cache tools'},{id:'diagnostics',label:'Diagnostics',hint:'Run selected checks and inspect failures'},{id:'system',label:'Server tools',hint:'Resource usage and service controls'},{id:'advanced',label:'Advanced & reset',hint:'PHP CLI, ffmpeg, ffprobe, tool paths, raw configuration and database reset'}]}
     ];
     var features = (state.home && state.home.features) || {};
     groups = groups.map(function(g){
@@ -8504,6 +8532,10 @@ try {
       setTimeout(function(){ renderUpdatesPanel(updHost); }, 0);
     } else if (sec === 'maintenance' && isAdmin) {
       var jobsHost=h('div',{className:'task-centre'});bodyKids=[h('h2',{text:'Task centre'}),h('p',{className:'muted',text:'Run preparation when it suits you. Nothing here starts automatically on an update or page visit. The worker runs one maintenance task at a time, at lower CPU priority.'}),jobsHost];setTimeout(function(){renderTaskCentre(jobsHost);},0);
+    } else if (sec === 'achievements' && isAdmin) {
+      var achHost = h('div', { className:'stack vca-admin' }, [ pendingContent({ text:'Loading achievement settings…' }) ]);
+      bodyKids = [ h('h2', { text:'Achievements' }), achHost ];
+      setTimeout(function(){ loadModule('vc-achievements.js', 'VaultcastAchievements').then(function(mod){ if (achHost.isConnected) mod.adminPanel(achHost); }).catch(function(){ achHost.replaceChildren(h('p', { className:'bad', text:'Could not load achievement settings. Reload the page and try again.' })); }); }, 0);
     } else if (sec === 'trailers' && isAdmin) {
       var trailerHost = h('div', { className:'stack vcx-admin' }, [ pendingContent({ text:'Loading trailer settings…' }) ]);
       bodyKids = [ h('h2', { text:'Trailers & extras' }), trailerHost ];
