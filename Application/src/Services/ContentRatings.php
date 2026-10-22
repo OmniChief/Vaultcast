@@ -24,11 +24,12 @@ final class ContentRatings
         $r = trim(str_replace(["\u{2013}", "\u{2014}", '_'], '-', (string)$r));
         if ($r === '' || in_array($r, ['N/A', 'NA', 'NOT RATED', 'UNRATED', 'NR', 'APPROVED', 'PASSED', 'E', 'EXEMPT', '-', 'TBC', 'TBA', 'NONE'], true)) return 0;
         $known = [
-            'G' => 1, 'U' => 1, 'UC' => 1, 'TV-Y' => 1, 'TV-Y7' => 1, 'TV-Y7-FV' => 1, 'TV-G' => 1, 'ALL' => 1, 'AL' => 1, 'L' => 1, 'TP' => 1, 'A' => 1,
+            'G' => 1, 'U' => 1, 'UC' => 1, 'TV-Y' => 1, 'TV-Y7' => 1, 'TV-Y7-FV' => 1, 'TV-G' => 1, 'ALL' => 1, 'AL' => 1, 'L' => 1, 'TP' => 1,
             'PG' => 2, 'TV-PG' => 2, 'GP' => 2, 'M/PG' => 2,
-            'PG-13' => 3, '12' => 3, '12A' => 3,
-            'TV-14' => 4, '15' => 4, 'M' => 4, 'MA15+' => 4, 'MA 15+' => 4,
-            'R' => 5, 'NC-17' => 5, 'X' => 5, '18' => 5, 'R18' => 5, 'R18+' => 5, 'TV-MA' => 5, 'R-RATED' => 5,
+            'PG-13' => 3, '12' => 3, '12A' => 3, 'UA' => 3, 'U/A' => 3,
+            'TV-14' => 4, 'AA' => 4, '15' => 4, 'M' => 4, 'MA15+' => 4, 'MA 15+' => 4,
+            // 'A' is adults-only (India and others), never all ages.
+            'R' => 5, 'NC-17' => 5, 'A' => 5, 'X' => 5, '18' => 5, 'R18' => 5, 'R18+' => 5, 'TV-MA' => 5, 'R-RATED' => 5,
         ];
         if (isset($known[$r])) return $known[$r];
         if (preg_match('/(\d{1,2})/', $r, $m)) {
@@ -46,7 +47,14 @@ final class ContentRatings
         if (self::$map !== null) return self::$map;
         self::$map = [];
         try {
-            foreach (\Vaultcast\Database::connection()->query('SELECT target,bucket FROM vaultcast_content_ratings WHERE bucket>0') as $r) self::$map[(string)$r['target']] = (int)$r['bucket'];
+            // Fetched ratings are re-read from their raw text so mapping fixes apply to stored rows; manual ratings stay as set.
+            $pdo = \Vaultcast\Database::connection(); $stale = [];
+            foreach ($pdo->query('SELECT target,bucket,raw,source FROM vaultcast_content_ratings WHERE bucket>0') as $r) {
+                $b = $r['source'] === 'manual' ? (int)$r['bucket'] : self::normalise($r['raw']);
+                if ($b !== (int)$r['bucket']) $stale[(string)$r['target']] = $b;
+                if ($b > 0) self::$map[(string)$r['target']] = $b;
+            }
+            if ($stale) { $u = $pdo->prepare('UPDATE vaultcast_content_ratings SET bucket=? WHERE target=? AND source<>\'manual\''); foreach (array_slice($stale, 0, 500, true) as $t => $b) $u->execute([$b, $t]); }
         } catch (Throwable $e) { /* table not created yet: everything counts as unrated */ }
         return self::$map;
     }
