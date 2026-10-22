@@ -24,6 +24,7 @@ final class Parental
     private static $viewerChecked = false;
     private static $viewerFiltering = false;
     private static $sessionUser = null;
+    private static $unlocks = [];
 
     // ------------------------------------------------------------------ storage
     public static function row(string $userId): ?array
@@ -86,16 +87,29 @@ final class Parental
     {
         $row = self::row($userId);
         if (!$row || $row['pin_hash'] === '') throw new DomainException('No PIN is set for this profile yet.');
-        if ($row['pin_locked_until'] > time()) throw new DomainException('Too many wrong PINs. Try again in ' . max(1, (int)ceil(($row['pin_locked_until'] - time()) / 60)) . ' min.');
         $pdo = \Vaultcast\Database::connection();
-        if (!password_verify($pin, $row['pin_hash'])) {
-            $fails = $row['pin_failures'] + 1;
-            $pdo->prepare('UPDATE vaultcast_parental SET pin_failures=?, pin_locked_until=? WHERE user_id=?')->execute([$fails >= 5 ? 0 : $fails, $fails >= 5 ? time() + 300 : 0, $userId]);
+        // Serialise attempts per profile so parallel requests cannot each read the same failure count.
+        $lockName = 'vc-pin-' . substr(hash('sha256', $userId), 0, 32);
+        $held = false;
+        try { $g = $pdo->prepare('SELECT GET_LOCK(?, 5)'); $g->execute([$lockName]); $held = (int)$g->fetchColumn() === 1; } catch (Throwable $e) {}
+        if (!$held) throw new DomainException('Another PIN check is in progress. Try again in a moment.');
+        try {
             unset(self::$rows[$userId]);
-            throw new DomainException($fails >= 5 ? 'Too many wrong PINs. Try again in 5 min.' : 'That PIN is not right. Try again.');
+            $row = self::row($userId);
+            if (!$row || $row['pin_hash'] === '') throw new DomainException('No PIN is set for this profile yet.');
+            if ($row['pin_locked_until'] > time()) throw new DomainException('Too many wrong PINs. Try again in ' . max(1, (int)ceil(($row['pin_locked_until'] - time()) / 60)) . ' min.');
+            if (!password_verify($pin, $row['pin_hash'])) {
+                // Failures stay cumulative until a correct PIN; every 5th wrong PIN locks for longer (5 min, 10, 20 ... up to 24 h).
+                $fails = $row['pin_failures'] + 1;
+                $wait = $fails % 5 === 0 ? (int)min(86400, 300 * (2 ** min(9, intdiv($fails, 5) - 1))) : 0;
+                $pdo->prepare('UPDATE vaultcast_parental SET pin_failures=?, pin_locked_until=? WHERE user_id=?')->execute([min($fails, 1000000), $wait ? time() + $wait : 0, $userId]);
+                throw new DomainException($wait ? 'Too many wrong PINs. Try again in ' . (int)ceil($wait / 60) . ' min.' : 'That PIN is not right. Try again.');
+            }
+            if ($row['pin_failures'] || $row['pin_locked_until']) $pdo->prepare('UPDATE vaultcast_parental SET pin_failures=0, pin_locked_until=0 WHERE user_id=?')->execute([$userId]);
+        } finally {
+            unset(self::$rows[$userId]);
+            try { $pdo->prepare('SELECT RELEASE_LOCK(?)')->execute([$lockName]); } catch (Throwable $e) {}
         }
-        if ($row['pin_failures']) $pdo->prepare('UPDATE vaultcast_parental SET pin_failures=0 WHERE user_id=?')->execute([$userId]);
-        unset(self::$rows[$userId]);
     }
 
     private static function sessionKey(): ?string
@@ -109,7 +123,9 @@ final class Parental
     {
         $key = self::sessionKey();
         if ($key === null) return 0;
-        $u = \Vaultcast\Repository::cacheGet($key);
+        // restricted() runs for every area check, so read this device's unlock once per request.
+        if (!array_key_exists($key, self::$unlocks)) self::$unlocks[$key] = \Vaultcast\Repository::cacheGet($key);
+        $u = self::$unlocks[$key];
         return is_array($u) && ($u['user_id'] ?? '') === $userId ? max(0, (int)($u['until'] ?? 0) - time()) : 0;
     }
 
@@ -119,6 +135,7 @@ final class Parental
         $key = self::sessionKey();
         if ($key === null) throw new DomainException('Sign in again to unlock.');
         \Vaultcast\Repository::cachePut($key, ['user_id' => (string)$user['id'], 'until' => time() + self::UNLOCK_SECONDS], self::UNLOCK_SECONDS);
+        self::$unlocks = [];
         self::$viewerChecked = false;
         return self::status($user);
     }
@@ -127,6 +144,7 @@ final class Parental
     {
         $key = self::sessionKey();
         if ($key !== null) \Vaultcast\Repository::cachePut($key, ['user_id' => '', 'until' => 0], 60);
+        self::$unlocks = [];
         self::$viewerChecked = false;
         return self::status($user);
     }
@@ -188,7 +206,7 @@ final class Parental
 
     private static function blockedResponse(): array
     {
-        return [403, ['ok' => false, 'code' => 'parental_blocked', 'error' => 'This title isn\u{2019}t available on this profile.']];
+        return [403, ['ok' => false, 'code' => 'parental_blocked', 'error' => "This title isn\u{2019}t available on this profile."]];
     }
 
     /** Refuse direct requests for blocked titles and, when social is off, social surfaces. */
