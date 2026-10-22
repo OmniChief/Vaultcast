@@ -8,6 +8,7 @@ final class MaintenanceRequirements
     // Future updates can declare an explicit one-time requirement without bumping the app version.
     const RELEASE_TASKS = [
         '1.3.0-extras' => ['task' => 'scan', 'reason' => 'Version 1.3.0 recognises trailers and extras (Trailers, Featurettes, Deleted Scenes and similar folders, or -trailer style file names). Scan library folders once so they move out of the film and episode lists and appear on their title pages.'],
+        '1.3.0-achievements' => ['task' => 'achievements', 'reason' => 'Version 1.3.0 adds achievements and badges. Run this once so everyone\'s past films, episodes, games, friends and requests count straight away (otherwise each person catches up the first time they open Achievements).'],
     ];
     private static function state(callable $change): array {
         $dir=STREAM_DATA.'/runtime';

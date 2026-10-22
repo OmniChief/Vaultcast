@@ -310,3 +310,22 @@ CREATE TABLE IF NOT EXISTS vaultcast_extras (
  INDEX extras_section (section_id, seen_gen),
  INDEX extras_probe (probed)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- v17: achievements and badges. Earned achievements, incremental counters and one-off marks
+-- (a finished film, a Watch together room, a review) so progress never needs a heavy scan.
+CREATE TABLE IF NOT EXISTS vaultcast_achievements (
+ user_id VARCHAR(64) NOT NULL, ach_id VARCHAR(40) CHARACTER SET ascii NOT NULL,
+ earned_at BIGINT NOT NULL DEFAULT 0, toasted TINYINT NOT NULL DEFAULT 0, showcase TINYINT NOT NULL DEFAULT 0,
+ PRIMARY KEY (user_id, ach_id), INDEX ach_rarity (ach_id), INDEX ach_toast (user_id, toasted)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS vaultcast_achievement_counters (
+ user_id VARCHAR(64) NOT NULL, counter VARCHAR(32) CHARACTER SET ascii NOT NULL,
+ value BIGINT NOT NULL DEFAULT 0, updated_at BIGINT NOT NULL DEFAULT 0,
+ PRIMARY KEY (user_id, counter)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS vaultcast_achievement_marks (
+ user_id VARCHAR(64) NOT NULL, mark VARCHAR(96) CHARACTER SET ascii NOT NULL, created_at BIGINT NOT NULL DEFAULT 0,
+ PRIMARY KEY (user_id, mark), INDEX ach_mark_time (user_id, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
