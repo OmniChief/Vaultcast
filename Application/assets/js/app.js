@@ -1691,7 +1691,8 @@ function confirmDialog(message, opts){
     openPlayer._deskPlayStarted = false;
     openPlayer._deskRecoverTries = 0;
     openPlayer._deskRecovering = false;
-    var inlineHost = miniStart||play.media_kind === 'audio' ? null : document.getElementById('detail-player');
+    /* Trailers and extras (item._extra) always open in the overlay: no resume, no mini player, no skipping. */
+    var inlineHost = miniStart||play.media_kind === 'audio'||item._extra ? null : document.getElementById('detail-player');
     if (play && play.media_kind === 'rom' && item && item.game_path) state.gamePath = item.game_path;
     if (!inlineHost&&!miniStart) pushNav({ player:true, itemId: item.id });
     var overlay = h('div', { className:'player-overlay player-simple' + (inlineHost ? ' player-inline' : ''), id:'player-overlay' });
@@ -1758,7 +1759,7 @@ function confirmDialog(message, opts){
       setTimeout(function(){ applyResume(); resumeDone = true; }, 8000);
     }
     media.addEventListener('timeupdate', function(){
-      if(overlay._transcodePending||overlay._closing||!overlay.isConnected)return;
+      if(overlay._transcodePending||overlay._closing||!overlay.isConnected||item._extra)return;
       if (!resumeDone) return;
       if (!openPlayer._lastSave || Date.now()-openPlayer._lastSave > 5000) {
         openPlayer._lastSave = Date.now();
@@ -1820,7 +1821,7 @@ function confirmDialog(message, opts){
     }
 
     overlay.appendChild(media);
-    if(media.tagName==='VIDEO'&&typeof play.hub_cinema_guest==='undefined'){
+    if(media.tagName==='VIDEO'&&typeof play.hub_cinema_guest==='undefined'&&!item._extra){
       overlay._miniKey='item:'+item.id;overlay._miniItem=item;overlay._miniTitle=item.show?(item.show+' · '+item.title):item.title;
       overlay._miniReturn=function(){if(item.show_key){state._pendingEpisode=item;openShow(item.show_key,item.season,item.episode);}else openMovie(item.id);};
     }
@@ -1906,7 +1907,7 @@ function confirmDialog(message, opts){
     playerTrackControls(overlay, media, item, play);
     libraryTranscodeControls(overlay,media,item,play);
     if(nextControl){var tracks=(inlineHost?detailPlayerTools(inlineHost):overlay).querySelector('.player-tracks');if(tracks)tracks.insertAdjacentElement('afterend',nextControl);}
-    mountEpisodeSkipping(overlay,media,item,play);
+    if(!item._extra)mountEpisodeSkipping(overlay,media,item,play);
     if(miniStart){overlay.classList.add('player-inline');minimizeVideo();}
   }
   function libraryTranscodeControls(overlay,media,item,play){
@@ -7152,22 +7153,25 @@ try {
       root.appendChild(playerHost);
       var multiplayer = isGame ? state.gameLobby : null;
       if (multiplayer) mountLobbyBoard(root, multiplayer);
-      root.appendChild(h('div', { className:'hero detail-hero', 'data-backdrop-host':'1', style:'display:flex;gap:20px;align-items:flex-end;flex-wrap:wrap' }, [
+      var movieActions = h('div', { className:'row-actions', style:'margin-bottom:8px' }, actions);
+      var movieHero = h('div', { className:'hero detail-hero', 'data-backdrop-host':'1', style:'display:flex;gap:20px;align-items:flex-end;flex-wrap:wrap' }, [
         poster,
         h('div', { style:'flex:1;min-width:200px' }, [
-          h('div', { className:'row-actions', style:'margin-bottom:8px' }, actions),
+          movieActions,
           h('h1', { text: item.title || 'Untitled' }),
           h('p', { className:'muted', text: meta.join(' · ') }),
           synopsisEl,
           h('div', { id:'movie-audio-box', className:'row-actions', style:'margin-top:8px' })
         ])
-      ]));
+      ]);
+      root.appendChild(movieHero);
       if (item.id) {
         poster.setAttribute('data-poster-fetch', '1');
         observePoster(poster, item.id, 'item');
         loadPosterNow(poster, item.id, 'item');
       }
       window.VaultcastHub.details(item,root);
+      if (!isGame) mountExtras({ kind:'item', id:item.id, title:item.title, hero:movieHero, actions:movieActions, root:root, restoreInline:function(){ if (stillHere()) playItem(item, { inline:true, autoplay:false }); } });
       if (!isGame) {
         root.appendChild(h('div', { id:'movie-collections' }));
         mountMovieCollections(item.id);
@@ -7176,6 +7180,12 @@ try {
     }).catch(function(e){
       paintError(String(e && e.message || e || 'Could not load movie'));
     });
+  }
+
+  /* Trailers and extras (vc-extras.js): Play trailer button, Extras row, optional muted hero trailer. Never blocks the page. */
+  function mountExtras(opts){
+    if (!opts || !opts.id || !userAreaAllowed('library')) return;
+    loadModule('vc-extras.js', 'VaultcastExtras').then(function(mod){ if (opts.root && opts.root.isConnected) mod.mount(opts); }).catch(function(){});
   }
 
   function mountMovieCollections(itemId){
@@ -8002,17 +8012,20 @@ try {
             onClick: function(){ fetchMissingShow(show.show_key || show.id, null); }
           }));
         }
+        var showActions = h('div', { className:'row-actions', style:'margin-bottom:8px' }, heroActions);
         var heroKids = [
           heroPoster,
           h('div', { style:'flex:1;min-width:200px' }, [
-            h('div', { className:'row-actions', style:'margin-bottom:8px' }, heroActions),
+            showActions,
             h('h1', { text: show.title }),
             h('p', { className:'muted', text: metaBits.join(' · ') }),
             show.synopsis ? h('p', { className:'synopsis', text: show.synopsis }) : null
           ].filter(Boolean))
         ];
-        root.appendChild(h('div', { className:'hero detail-hero', 'data-backdrop-host':'1', style:'display:flex;gap:20px;align-items:flex-end;flex-wrap:wrap' }, heroKids));
+        var showHero = h('div', { className:'hero detail-hero', 'data-backdrop-host':'1', style:'display:flex;gap:20px;align-items:flex-end;flex-wrap:wrap' }, heroKids);
+        root.appendChild(showHero);
         window.VaultcastHub.details(show,root);
+        mountExtras({ kind:'show', id:show.show_key || showKey, title:show.title, season:sel, hero:showHero, actions:showActions, root:root });
         // Mount first, then load — otherwise pumpPosterQueue drops the detached job
         if (posterId) {
           heroPoster.setAttribute('data-poster-fetch', '1');
@@ -8388,7 +8401,7 @@ try {
       {title:'Artwork & design',description:'Site branding, bundled posters and library artwork.',admin:true,items:[{id:'site-artwork',label:'Site & theme posters',hint:'Replace default artwork and create smaller WebP images'},{id:'posters',label:'Library artwork',hint:'Fetch missing movie, show, season and game images'},{id:'artwork-integrity',label:'Repair missing images',hint:'Find broken records and missing files'},{id:'poster-optimise',label:'Optimise library images',hint:'Generate full, grid and search WebP variants'}]},
       {title:'Live broadcasting',description:'Build channels, schedule programmes and manage public streams.',admin:true,items:[{id:'live-studio',label:'PseudoTV Studio',section:'Relay',hint:'Schedule programmes, filler and advertising'},{id:'live-channels',label:'Relay channels',section:'Relay',hint:'Create channels and manage rotations'},{id:'live-library',label:'Live media library',section:'Relay',hint:'Import programmes and prepare durations'},{id:'live-playlists',label:'Rotation playlists',section:'Relay',hint:'Reusable channel programme rotations'},{id:'live-schedule',label:'Rotation rules',section:'Relay',hint:'Legacy rotation scheduling; Studio manages weekly slots'},{id:'live-iptv',label:'IPTV & guide matching',section:'Sources',hint:'Feeds, channel mapping and EPG'},{id:'live-radio',label:'Radio stations',section:'Sources',hint:'Add stations or browse the public directory'},{id:'live-station',label:'Station & outputs',section:'Outputs',hint:'Streams, guide exports and station configuration'}]},
       {title:'People & permissions',description:'Control who can access content and administrative tools.',admin:true,items:[{id:'users',label:'Accounts, roles & permissions',hint:'Create users and roles; assign individual access'}]},
-      {title:'Playback & delivery',description:'Server delivery options and player dependencies.',admin:true,items:[{id:'directplay',label:'DirectPlay Settings',hint:'Playback policy, transcoding, threads and reusable copies'},{id:'streaming',label:'Delivery & subtitles',hint:'Seeking, playback tokens and subtitles'},{id:'players',label:'Player assets',hint:'Local or CDN player files and emulator cores'},{id:'video-optimise',label:'Video conversion',hint:'Convert files, review requests and manage encoding jobs'}]},
+      {title:'Playback & delivery',description:'Server delivery options and player dependencies.',admin:true,items:[{id:'directplay',label:'DirectPlay Settings',hint:'Playback policy, transcoding, threads and reusable copies'},{id:'trailers',label:'Trailers & extras',hint:'Online trailers, the muted hero trailer and extras thumbnails'},{id:'streaming',label:'Delivery & subtitles',hint:'Seeking, playback tokens and subtitles'},{id:'players',label:'Player assets',hint:'Local or CDN player files and emulator cores'},{id:'video-optimise',label:'Video conversion',hint:'Convert files, review requests and manage encoding jobs'}]},
       {title:'Downloads',description:'Configure providers and review download activity.',admin:true,items:[{id:'acquisition',label:'Providers & integrations',hint:'RSS search, download clients and API connections'},{id:'queue',label:'Download queue',hint:'Active downloads, imports and errors'}]},
       {title:'Application & server',description:'Site defaults, updates, performance and troubleshooting.',admin:true,items:[{id:'general',label:'Site defaults & access',hint:'Branding, guest access, public URL and installable app'},{id:'features',label:'Enabled features',hint:'Turn optional services on or off'},{id:'ambient',label:'Ambient & webcams',hint:'Webcams from boards and which ones Ambient offers'},{id:'updates',label:'Updates & branches',hint:'Manually check, install or switch update channels'},{id:'maintenance',label:'Task centre',hint:'Preparation jobs, progress, cancellation and history'},{id:'optimise-system',label:'Storage & caches',hint:'Generated files and safe cache tools'},{id:'diagnostics',label:'Diagnostics',hint:'Run selected checks and inspect failures'},{id:'system',label:'Server tools',hint:'Resource usage and service controls'},{id:'advanced',label:'Advanced & reset',hint:'PHP CLI, ffmpeg, ffprobe, tool paths, raw configuration and database reset'}]}
     ];
@@ -8491,6 +8504,10 @@ try {
       setTimeout(function(){ renderUpdatesPanel(updHost); }, 0);
     } else if (sec === 'maintenance' && isAdmin) {
       var jobsHost=h('div',{className:'task-centre'});bodyKids=[h('h2',{text:'Task centre'}),h('p',{className:'muted',text:'Run preparation when it suits you. Nothing here starts automatically on an update or page visit. The worker runs one maintenance task at a time, at lower CPU priority.'}),jobsHost];setTimeout(function(){renderTaskCentre(jobsHost);},0);
+    } else if (sec === 'trailers' && isAdmin) {
+      var trailerHost = h('div', { className:'stack vcx-admin' }, [ pendingContent({ text:'Loading trailer settings…' }) ]);
+      bodyKids = [ h('h2', { text:'Trailers & extras' }), trailerHost ];
+      setTimeout(function(){ loadModule('vc-extras.js', 'VaultcastExtras').then(function(mod){ if (trailerHost.isConnected) mod.adminPanel(trailerHost); }).catch(function(){ trailerHost.replaceChildren(h('p', { className:'bad', text:'Could not load trailer settings. Reload the page and try again.' })); }); }, 0);
     } else if (sec === 'ambient' && isAdmin) {
       var camHost = h('div', { className:'vc-webcam-admin' }, [ pendingContent({ text:'Loading webcams…' }) ]);
       bodyKids = [
