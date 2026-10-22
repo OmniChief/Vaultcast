@@ -32,6 +32,11 @@ RequestExecutionLevel admin   ; services, firewall and HKLM need elevation
 
 !include "include\Config.nsh"
 
+!ifndef ALLOW_UNSIGNED_DEVELOPMENT_BUILD
+  !include "${STAGE_DIR}\signing.nsh"
+  !addplugindir /x86-unicode "${STAGE_DIR}\nsis-plugins"
+!endif
+
 ; Solid LZMA is one stream: reading a file that sits behind the current position
 ; restarts decompression from the beginning. .onInit needs setup-helper.php, so
 ; reserve it at the front instead of making launch decompress ~800 MB to find it.
@@ -169,6 +174,22 @@ Section "${PRODUCT_NAME}" SEC_CORE
   SectionIn RO
   ${If} $Operation == "reset"
     Return
+  ${EndIf}
+  ; Validate command-line ports before stopping services or replacing any files.
+  StrCpy $R0 $WebPort
+  Call ValidatePort
+  ${If} $0 != ""
+    !insertmacro Fail "$0"
+  ${EndIf}
+  StrCpy $R0 $PhpPort
+  Call ValidatePort
+  ${If} $0 != ""
+    !insertmacro Fail "$0"
+  ${EndIf}
+  StrCpy $R0 $RelayPort
+  Call ValidatePort
+  ${If} $0 != ""
+    !insertmacro Fail "$0"
   ${EndIf}
   StrCpy $Runtime "$INSTDIR\data\runtime"
   StrCpy $Php "$Runtime\${RT_PHP}\php.exe"

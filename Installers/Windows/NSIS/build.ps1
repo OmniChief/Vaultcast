@@ -18,12 +18,21 @@
 #>
 param(
     [string]$OutputDirectory=(Join-Path $(if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }) 'Downloads'),
-    [string]$Compiler=''
+    [string]$Compiler='',
+    [string]$SigningScript=$env:VAULTCAST_SIGNING_SCRIPT,
+    [switch]$UnsignedDevelopmentBuild
 )
 $ErrorActionPreference='Stop'
 # Windows PowerShell 5.1 has no $IsWindows; PowerShell 7 on Linux/macOS can also build.
 $onWindows=($PSVersionTable.PSEdition -ne 'Core') -or $IsWindows
 $curl=if ($onWindows) { 'curl.exe' } else { 'curl' }
+if (!$UnsignedDevelopmentBuild) {
+    if (!$onWindows) { throw 'Signed release builds require Windows Authenticode verification.' }
+    if (!$SigningScript -or !(Test-Path -LiteralPath $SigningScript -PathType Leaf)) {
+        throw 'Release installers require a trusted signing provider. Pass -SigningScript <provider.ps1> (accepting -FilePath), or explicitly use -UnsignedDevelopmentBuild for local development only. Unsigned EXEs may be blocked by Application Control.'
+    }
+    $SigningScript=(Resolve-Path -LiteralPath $SigningScript).Path
+}
 [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12
 $repo=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../..'))
 $build=Join-Path $PSScriptRoot 'build'
@@ -279,11 +288,41 @@ Remove-Item -LiteralPath $trLicences -Recurse -Force -ErrorAction SilentlyContin
 
 # ---- Compile ----
 $version=(Get-Content -LiteralPath (Join-Path $repo 'Application/VERSION') -Raw).Trim()
-$output=Join-Path ([IO.Path]::GetFullPath($OutputDirectory)) "Vaultcast-$version-Setup-x64.exe"
+$outputName=if ($UnsignedDevelopmentBuild) { "Vaultcast-$version-UNSIGNED-Development-x64.exe" } else { "Vaultcast-$version-Setup-x64.exe" }
+$output=Join-Path ([IO.Path]::GetFullPath($OutputDirectory)) $outputName
+$previousSigner=$env:VAULTCAST_SIGNING_SCRIPT
+$env:VAULTCAST_SIGNING_SCRIPT=$SigningScript
+$signHost=if ($onWindows) { Join-Path $env:SystemRoot 'System32/WindowsPowerShell/v1.0/powershell.exe' } else { '' }
+$signWrapper=Join-Path $PSScriptRoot 'support/sign-file.ps1'
+if (!$UnsignedDevelopmentBuild) {
+    # Plugins execute from the installer's temporary folder and also need trusted signatures.
+    $plugins=Join-Path $stage 'nsis-plugins'
+    New-Item -ItemType Directory -Path $plugins -Force | Out-Null
+    $compilerRoot=Split-Path $Compiler -Parent
+    if ((Split-Path $compilerRoot -Leaf) -eq 'Bin') { $compilerRoot=Split-Path $compilerRoot -Parent }
+    foreach ($name in @('System.dll','nsDialogs.dll','nsExec.dll')) {
+        $plugin=Join-Path $compilerRoot "Plugins/x86-unicode/$name"
+        if (!(Test-Path -LiteralPath $plugin)) { throw "NSIS Unicode plugin not found: $plugin. Use the actual NSIS installation's makensis.exe, not a launcher shim." }
+        Copy-Item -LiteralPath $plugin -Destination $plugins
+    }
+    foreach ($file in Get-ChildItem -LiteralPath $stage -Recurse -File | Where-Object { $_.Extension -in '.exe','.dll','.pyd','.node' }) {
+        & $signHost -NoProfile -NonInteractive -File $signWrapper -FilePath $file.FullName
+        if ($LASTEXITCODE -ne 0) { throw "Release signing/verification failed: $($file.FullName)" }
+    }
+    $signCommand='"'+$signHost+'" -NoProfile -NonInteractive -File "'+$signWrapper+'" -FilePath "%1"'
+    $directives="!uninstfinalize '$signCommand' = 0`n!finalize '$signCommand' = 0`n"
+    [IO.File]::WriteAllText((Join-Path $stage 'signing.nsh'),$directives,[Text.UTF8Encoding]::new($false))
+}
 Push-Location $PSScriptRoot
 try {
     # '-' switches work for makensis on every platform ('/' is a path on Linux).
-    & $Compiler -INPUTCHARSET UTF8 -V3 -WX "-DAPP_VERSION=$version" "-DSTAGE_DIR=$stage" "-DOUTPUT_FILE=$output" Vaultcast.nsi
+    $buildFlags=@('-INPUTCHARSET','UTF8','-V3','-WX',"-DAPP_VERSION=$version","-DSTAGE_DIR=$stage","-DOUTPUT_FILE=$output")
+    if ($UnsignedDevelopmentBuild) { $buildFlags+='-DALLOW_UNSIGNED_DEVELOPMENT_BUILD' }
+    & $Compiler @buildFlags Vaultcast.nsi
     if ($LASTEXITCODE -ne 0) { throw 'NSIS compilation failed.' }
-} finally { Pop-Location }
+} finally { Pop-Location; $env:VAULTCAST_SIGNING_SCRIPT=$previousSigner }
+if (!$UnsignedDevelopmentBuild) {
+    $signature=Get-AuthenticodeSignature -LiteralPath $output
+    if ($signature.Status -ne 'Valid') { throw 'The compiled installer does not have a valid signature.' }
+} else { Write-Warning 'UNSIGNED DEVELOPMENT BUILD: not a release artifact; Application Control may block it.' }
 Write-Host "Created $output"

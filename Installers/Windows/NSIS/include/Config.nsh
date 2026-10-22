@@ -30,7 +30,11 @@
 !getdllversion "${STAGE_DIR}\redist\vc_redist.x64.exe" VCREDIST_
 
 !ifndef OUTPUT_FILE
-  !define OUTPUT_FILE "${PRODUCT_NAME}-${APP_VERSION}-Setup-x64.exe"
+  !ifdef ALLOW_UNSIGNED_DEVELOPMENT_BUILD
+    !define OUTPUT_FILE "${PRODUCT_NAME}-${APP_VERSION}-UNSIGNED-Development-x64.exe"
+  !else
+    !define OUTPUT_FILE "${PRODUCT_NAME}-${APP_VERSION}-Setup-x64.exe"
+  !endif
 !endif
 
 ; Bundled runtime folder names under <install>\data\runtime.
