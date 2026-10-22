@@ -32,11 +32,6 @@ RequestExecutionLevel admin   ; services, firewall and HKLM need elevation
 
 !include "include\Config.nsh"
 
-!ifndef ALLOW_UNSIGNED_DEVELOPMENT_BUILD
-  !include "${STAGE_DIR}\signing.nsh"
-  !addplugindir /x86-unicode "${STAGE_DIR}\nsis-plugins"
-!endif
-
 ; Solid LZMA is one stream: reading a file that sits behind the current position
 ; restarts decompression from the beginning. .onInit needs setup-helper.php, so
 ; reserve it at the front instead of making launch decompress ~800 MB to find it.
