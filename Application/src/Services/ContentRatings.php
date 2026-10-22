@@ -159,7 +159,7 @@ final class ContentRatings
         return '';
     }
 
-    private static function imdbIdForMovie(array $it): string
+    public static function imdbIdForMovie(array $it): string
     {
         foreach ([(string)($it['imdb_id'] ?? ''), (string)((MetadataPins::get('movie_synopsis', (string)$it['id']) ?? [])['provider_id'] ?? '')] as $id) if (preg_match('/^tt\d{5,10}$/D', $id)) return $id;
         $cache = Posters::movieSynopsisCachePath((string)$it['id']);

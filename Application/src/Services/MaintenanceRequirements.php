@@ -6,7 +6,9 @@ final class MaintenanceRequirements
 {
     private static $seen = [];
     // Future updates can declare an explicit one-time requirement without bumping the app version.
-    const RELEASE_TASKS = [];
+    const RELEASE_TASKS = [
+        '1.3.0-extras' => ['task' => 'scan', 'reason' => 'Version 1.3.0 recognises trailers and extras (Trailers, Featurettes, Deleted Scenes and similar folders, or -trailer style file names). Scan library folders once so they move out of the film and episode lists and appear on their title pages.'],
+    ];
     private static function state(callable $change): array {
         $dir=STREAM_DATA.'/runtime';
         if (!is_dir($dir) && !@mkdir($dir,0775,true)) return [];

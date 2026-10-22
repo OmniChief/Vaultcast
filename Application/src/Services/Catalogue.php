@@ -24,6 +24,8 @@ class Catalogue {
     }
 
     public static function save(array $cat, bool $foldVersions = true): bool {
+        // Trailers and extras never become films or episodes: they move to their own index.
+        try { $cat = Extras::extract($cat); } catch (Throwable $e) { error_log('Vaultcast extras: ' . $e->getMessage()); }
         $cat = LibraryEditor::filterCatalogue($cat);
         $aliases = [];
         if($foldVersions)$cat = self::foldDirectPlayVersions($cat,$aliases);
@@ -541,6 +543,9 @@ class Catalogue {
             'item_count' => count($items),
         ];
         Maintenance::checkpoint();
+        $walked = [];
+        foreach ($sectionMeta as $meta) if (empty($meta['error'])) $walked[] = (string)$meta['id'];
+        Extras::beginFullScan($walked);
         self::save($cat);
         $savedMeta=\Vaultcast\Repository::document('catalogue',[]);
         $cat['item_count']=$savedMeta['item_count'] ?? $cat['item_count'];

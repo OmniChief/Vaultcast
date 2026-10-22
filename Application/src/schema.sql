@@ -285,3 +285,28 @@ CREATE TABLE IF NOT EXISTS vaultcast_media_request_users (
  restricted TINYINT NOT NULL DEFAULT 0, created_at BIGINT NOT NULL DEFAULT 0,
  PRIMARY KEY (request_id, user_id), INDEX mreq_user (user_id, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- v16: trailers and extras found next to films and shows (Plex / Jellyfin folder and suffix names).
+-- Extras are not library items: they only play from their parent title page.
+CREATE TABLE IF NOT EXISTS vaultcast_extras (
+ id CHAR(24) CHARACTER SET ascii NOT NULL PRIMARY KEY,
+ section_id VARCHAR(120) NOT NULL,
+ parent_kind VARCHAR(8) CHARACTER SET ascii NOT NULL,
+ parent_id VARCHAR(64) CHARACTER SET ascii NOT NULL,
+ season INT NULL,
+ extra_type VARCHAR(24) CHARACTER SET ascii NOT NULL,
+ title VARCHAR(255) NOT NULL,
+ path TEXT NOT NULL,
+ rel TEXT NOT NULL,
+ ext VARCHAR(16) CHARACTER SET ascii NOT NULL DEFAULT '',
+ size BIGINT NOT NULL DEFAULT 0,
+ mtime BIGINT NOT NULL DEFAULT 0,
+ duration INT NOT NULL DEFAULT 0,
+ probed TINYINT NOT NULL DEFAULT 0,
+ seen_gen CHAR(16) CHARACTER SET ascii NOT NULL DEFAULT '',
+ created_at BIGINT NOT NULL DEFAULT 0,
+ updated_at BIGINT NOT NULL DEFAULT 0,
+ INDEX extras_parent (parent_kind, parent_id),
+ INDEX extras_section (section_id, seen_gen),
+ INDEX extras_probe (probed)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
