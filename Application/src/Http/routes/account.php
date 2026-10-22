@@ -204,6 +204,8 @@ if ($path === '/progress' && $method === 'POST') {
     $b = body_json();
     $itemId = is_string($b['item_id'] ?? null) ? (string)$b['item_id'] : '';
     if ($itemId === '' || !preg_match('/^[a-f0-9]{8,64}$/', $itemId)) json_error('item_id required');
+    // Trailers and extras keep no resume position or watch history.
+    if (strlen($itemId) === 24) { http_response_code(204); exit; }
     $progress = [
         'position' => (float)($b['position'] ?? 0),
         'duration' => (float)($b['duration'] ?? 0),

@@ -238,7 +238,9 @@ final class Parental
             $owner = AreaAccess::viewer();
         } else $owner = Auth::findById((string)$token['user_id']);
         if (!$owner || !self::restricted($owner)) return null;
-        $item = Catalogue::item((string)($token['item_id'] ?? ''));
+        $itemId = (string)($token['item_id'] ?? '');
+        $item = Catalogue::item($itemId);
+        if (!$item && Extras::isId($itemId)) return Extras::tokenAllowed($owner, $itemId) ? null : self::blockedResponse();
         return $item && !self::allows($owner, $item) ? self::blockedResponse() : null;
     }
 

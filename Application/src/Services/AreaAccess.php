@@ -52,10 +52,11 @@ final class AreaAccess
         $area = null;
         if (preg_match('#^/(?:live)(?:/|$)#', $path)) $area = 'live';
         elseif (preg_match('#^/(?:lobby|netplay|stream/bios|play)(?:/|$)#', $path)) $area = 'games';
-        elseif (preg_match('#^/(?:shows|collections)(?:/|$)#', $path)) $area = 'library';
+        elseif (preg_match('#^/(?:shows|collections|extras)(?:/|$)#', $path)) $area = 'library';
         elseif (preg_match('#^/items/([a-f0-9]+)(?:/|$)#', $path, $m)) {
             $item = Catalogue::item($m[1]);
             if ($item) $area = self::itemArea($item);
+            elseif (Extras::isId($m[1])) $area = 'library'; // trailers and extras of films and shows
             else return [404, ['ok'=>false, 'error'=>'Item not found']];
         } elseif (preg_match('#^/sections/([^/]+)(?:/|$)#', $path, $m)) {
             foreach (Store::settings()['sections'] ?? [] as $section) if (($section['id'] ?? '') === $m[1]) { $area = ($section['type'] ?? '') === 'roms' ? 'games' : 'library'; break; }
