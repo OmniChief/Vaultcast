@@ -78,6 +78,10 @@ if (preg_match('#^/shows/([a-f0-9]+)/episodes/(\\d+)/(\\d+)/fetch$#', $path, $m)
 
 
 
+if ($path === '/downloads/tick' && $method === 'POST') {
+    json_out(Acquisition::triggerDueSearches());
+}
+
 if ($path === '/downloads/status' && $method === 'GET') {
     // Public: minimal downloading badges only (full queue is admin-only)
     json_out(Acquisition::publicDownloadBadges());
