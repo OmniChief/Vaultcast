@@ -650,6 +650,7 @@ class Acquisition {
             'eligible_at' => $eligible,
             'next_attempt_at' => $eligible !== null ? max($eligible, time()) : time(),
             'search_attempts' => 0,
+            'error_attempts' => 0,
             'season' => $item['season'] ?? null,
             'episode' => $item['episode'] ?? null,
             'kind' => $item['kind'] ?? 'manual',
@@ -1302,6 +1303,9 @@ class Acquisition {
     public static function cancelEpisodeSearch(string $showTitle, int $season, int $episode): array {
         $code = sprintf('S%02dE%02d', $season, $episode);
         $cancelled = [];
+        $lock = self::acquireLock();
+        if (!$lock) return ['ok' => false, 'error' => 'Acquisition queue busy; retry shortly'];
+        try {
         $q = Store::get('acquire_queue', []);
         if (!is_array($q)) $q = [];
         $showL = strtolower(trim($showTitle));
@@ -1320,6 +1324,10 @@ class Acquisition {
         }
         unset($e);
         Store::set('acquire_queue', $q);
+        } finally {
+            flock($lock, LOCK_UN);
+            fclose($lock);
+        }
 
         $tr = Store::settings()['acquisition']['transmission'] ?? [];
         $st = self::transmissionStatus($tr);
@@ -1359,7 +1367,8 @@ class Acquisition {
 
         $sectionId = $opts['section_id'] ?? null;
         $premiere = self::episodeEligibleAt($opts['airdate'] ?? null);
-        if (!empty($opts['defer_search']) || ($premiere !== null && $premiere > time())) {
+        // All episode requests use the same bounded queue; no network calls inside the web request.
+        if (empty($opts['search_immediately'])) {
             $queued = self::enqueue([
                 'title' => 'SEARCH: ' . $query, 'query' => $query,
                 'show' => $showTitle,
@@ -1622,13 +1631,14 @@ class Acquisition {
         if (!is_array($q)) $q = [];
         $processed = [];
         $considered = 0;
+        $deadline = microtime(true) + 20;
         $skipped = 0;
         $failed = [];
         $rateLimited = false;
         $retryIn = null;
 
         foreach ($q as $i => $entry) {
-            if (count($processed) >= $limit) break;
+            if (microtime(true) >= $deadline || count($processed) >= $limit) break;
             if (!is_array($entry)) continue;
             $status = (string)($entry['status'] ?? '');
             if (!in_array($status, ['queued', 'queued_local', 'scheduled', 'retry_wait'], true)) continue;
@@ -1717,6 +1727,7 @@ class Acquisition {
             }
 
             $entry['error_attempts'] = 0;
+            $entry['next_attempt_at'] = null;
             $entry['title'] = $picked['title'] ?: $entry['title'];
             $entry['magnet'] = $picked['magnet'] ?? '';
             $entry['url'] = ($picked['enclosure'] ?? '') ?: ($picked['link'] ?? '');
@@ -1810,9 +1821,7 @@ class Acquisition {
             'sent_transmission' => $sentNow,
             'pending_searches' => $drained,
             'errors' => $errors,
-            'note' => !empty($drained['rate_limited'])
-                ? 'Some episodes are queued as SEARCH intents; they will be searched and sent to Transmission as rate limits allow (every min_interval_seconds). Call processPendingSearches or wait for cron.'
-                : null,
+            'note' => 'Episodes have been scheduled. Due searches are processed by the existing downloads worker.',
         ];
     }
 
