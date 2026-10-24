@@ -1366,8 +1366,7 @@ class Acquisition {
                 'show_key' => $opts['show_key'] ?? null,
                 'airdate' => $opts['airdate'] ?? null, 'season' => $season, 'episode' => $episode,
                 'kind' => $opts['kind'] ?? 'episode_search',
-                'section_id' => $sectionId, 'show_key' => $opts['show_key'] ?? null,
-                'airdate' => $opts['airdate'] ?? null,
+                'section_id' => $sectionId,
             ]);
             return ['ok' => !empty($queued['ok']), 'queued' => !empty($queued['ok']),
                 'searched' => false, 'entry' => $queued['entry'] ?? null,
@@ -1622,6 +1621,7 @@ class Acquisition {
         $q = Store::get('acquire_queue', []);
         if (!is_array($q)) $q = [];
         $processed = [];
+        $considered = 0;
         $skipped = 0;
         $failed = [];
         $rateLimited = false;
@@ -1661,6 +1661,7 @@ class Acquisition {
                 $skipped++;
                 continue;
             }
+            if (++$considered > $limit) break;
 
             $gate = self::canFetchNow();
             if (!($gate['ok'] ?? false)) {
@@ -1670,15 +1671,18 @@ class Acquisition {
             }
 
             $search = self::searchQuery($query);
-            // Cached results and provider failures do not consume the no-result search budget.
-            $actualSearch = (int)($search['feeds_searched'] ?? 0) > 0 && empty($search['retry_in']);
-            if ($actualSearch) $entry['search_attempts'] = (int)($entry['search_attempts'] ?? 0) + 1;
+            // Count completed queries that obtained feed responses, including cached results.
+            // Empty/unavailable feeds are operational failures, not evidence of no release.
+            $validAnswer = !empty($search['ok']) && (int)($search['feeds_searched'] ?? 0) > (int)($search['feed_errors'] ?? 0);
+            if ($validAnswer) $entry['search_attempts'] = (int)($entry['search_attempts'] ?? 0) + 1;
             if (!($search['ok'] ?? false) && empty($search['items'])) {
                 $rateLimited = !empty($search['retry_in']);
                 $retryIn = $search['retry_in'] ?? $retryIn;
                 if ($rateLimited) break;
-                self::postponeNoHit($entry);
-                $entry['message'] = $search['reason'] ?? 'No RSS hit for query';
+                $entry['error_attempts'] = (int)($entry['error_attempts'] ?? 0) + 1;
+                $entry['status'] = $entry['error_attempts'] >= 5 ? 'paused' : 'retry_wait';
+                $entry['next_attempt_at'] = $entry['error_attempts'] >= 5 ? null : time() + min(21600, 600 * (1 << min(5, $entry['error_attempts'] - 1)));
+                $entry['message'] = $search['reason'] ?? 'Search provider unavailable';
                 $entry['updated_at'] = date('c');
                 $q[$i] = $entry;
                 Store::set('acquire_queue', $q);
@@ -1697,7 +1701,13 @@ class Acquisition {
                 if (!$banned) break;
             }
             if (!$picked) {
-                self::postponeNoHit($entry);
+                if ($validAnswer) {
+                    self::postponeNoHit($entry);
+                } else {
+                    $entry['error_attempts'] = (int)($entry['error_attempts'] ?? 0) + 1;
+                    $entry['status'] = $entry['error_attempts'] >= 5 ? 'paused' : 'retry_wait';
+                    $entry['next_attempt_at'] = $entry['error_attempts'] >= 5 ? null : time() + min(21600, 600 * (1 << min(5, $entry['error_attempts'] - 1)));
+                }
                 $entry['message'] = 'No usable magnet/link in search results';
                 $entry['updated_at'] = date('c');
                 $q[$i] = $entry;
@@ -1706,6 +1716,7 @@ class Acquisition {
                 continue;
             }
 
+            $entry['error_attempts'] = 0;
             $entry['title'] = $picked['title'] ?: $entry['title'];
             $entry['magnet'] = $picked['magnet'] ?? '';
             $entry['url'] = ($picked['enclosure'] ?? '') ?: ($picked['link'] ?? '');
