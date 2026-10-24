@@ -13,7 +13,7 @@
         if (!pending.has(key)) fetchInto(key, fetcher).catch(function(){});
         return Promise.resolve(JSON.parse(hit.json));
       }
-      if (pending.has(key)) return pending.get(key).then(function(j){ return JSON.parse(JSON.stringify(j)); });
+      if (pending.has(key)) return pending.get(key).then(function(j){ return JSON.parse(JSON.stringify(j)); },function(error){if(error&&error.name==='AbortError')return read(key,fetcher);throw error;});
       return fetchInto(key, fetcher).then(function(j){ return JSON.parse(JSON.stringify(j)); });
     }
     function fetchInto(key, fetcher){

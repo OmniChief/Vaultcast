@@ -1305,6 +1305,14 @@ class Acquisition {
 
     /** Minimal public badge list (no full Transmission dump). */
     public static function publicDownloadBadges(): array {
+        $cached=\Vaultcast\Repository::cacheGet('download-badges-v1');
+        if(is_array($cached))return $cached;
+        $lock=@fopen(STREAM_DATA.'/download_badges.lock','c');
+        if(!$lock)return ['ok'=>true,'downloading'=>[]];
+        if(!flock($lock,LOCK_EX|LOCK_NB)){fclose($lock);return \Vaultcast\Repository::cacheGet('download-badges-last-v1') ?? ['ok'=>true,'downloading'=>[]];}
+        try {
+        $cached=\Vaultcast\Repository::cacheGet('download-badges-v1');
+        if(is_array($cached))return $cached;
         $full = self::downloadStatus();
         $badges = [];
         foreach (($full['transmission']['torrents'] ?? []) as $t) {
@@ -1334,11 +1342,15 @@ class Acquisition {
                 ];
             }
         }
-        return [
+        $result = [
             'ok' => true,
             'downloading' => $badges,
             'transmission_reachable' => !empty($full['transmission']['reachable']),
         ];
+        \Vaultcast\Repository::cachePut('download-badges-v1',$result,5);
+        \Vaultcast\Repository::cachePut('download-badges-last-v1',$result,60);
+        return $result;
+        } finally {flock($lock,LOCK_UN);fclose($lock);}
     }
 
     public static function cancelTransmission(int $torrentId, bool $deleteLocal = false): array {

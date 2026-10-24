@@ -974,10 +974,14 @@ function confirmDialog(message, opts){
     } catch (eF) {}
   }
   var navigationCache = window.createRequestCache();
+  var pageReads=[], pageReadKey=null;
+  function cancelPageReads(){pageReads.splice(0).forEach(function(ctrl){ctrl.abort();});if(typeof _posterControllers!=='undefined')_posterControllers.splice(0).forEach(function(ctrl){ctrl.abort();});if(typeof _posterQueue!=='undefined')_posterQueue.splice(0).forEach(function(job){if(job.el)job.el.removeAttribute('data-poster-queued');});}
+
   function api(path, opts){
     opts = opts || {};
     var method = String(opts.method || 'GET').toUpperCase();
     if (method !== 'GET') {
+      if (path === '/hub/ratings' || path === '/downloads/tick' || /^\/me\/api-keys(?:\/|$)/.test(path)) return apiRequest(path,opts);
       if (/^\/hub\/(?:game|rooms|shelf|review|friend|invite|dismiss|saves|lists|chat)(?:\/|$)/.test(path)) return apiRequest(path,opts);
       if (/^\/items\/[a-f0-9]+\/play$/.test(path) || path === '/admin/posters/audit' || path === '/live/iptv_preview') return apiRequest(path, opts);
       navigationCache.clear();
@@ -997,8 +1001,14 @@ function confirmDialog(message, opts){
       opts.body = JSON.stringify(opts.body);
     }
     var fetchOpts = Object.assign({ credentials:'same-origin' }, opts, { headers: headers });
+    var pageRead, method=String(opts.method||'GET').toUpperCase();
+    if(method==='GET'&&!opts.signal&&typeof AbortController!=='undefined'&&/^\/(?:sections\/|shows\/[a-f0-9]+$|items\/[a-f0-9]+(?:\?|$)|search(?:\?|$))/.test(path)){
+      pageRead=new AbortController();pageReads.push(pageRead);fetchOpts.signal=pageRead.signal;
+    }
+    function releaseRead(){var i=pageReads.indexOf(pageRead);if(i>=0)pageReads.splice(i,1);}
+
     if (opts.signal) fetchOpts.signal = opts.signal;
-    return fetch(API + path, fetchOpts)
+    return fetch(API + path, fetchOpts).then(function(r){releaseRead();return r;},function(e){releaseRead();throw e;})
       .then(function(r){
         return r.json().catch(function(){ return { ok:false, error:'Bad JSON' }; }).then(function(j){
           var sameUser=requestUser===(state.user && state.user.id);
@@ -1020,7 +1030,7 @@ function confirmDialog(message, opts){
           if (!r.ok && !j.error) j.error = 'HTTP ' + r.status;
           j._status = r.status;
           if (sameUser && r.headers && r.headers.get('X-Vaultcast-Achievement')) setTimeout(function(){ document.dispatchEvent(new Event('vaultcast-achievement')); }, 0);
-          if (j.maintenance_job) {
+          if (j.maintenance_job && opts.waitForTask) {
             toast('Task started. Manage or cancel it in Settings > Background tasks.');
             function waitForTask(){
               return api('/admin/maintenance/' + encodeURIComponent(j.maintenance_job)).then(function(status){
@@ -1146,7 +1156,7 @@ function confirmDialog(message, opts){
   }
 
   var _dlStatus = null;
-  var _dlStatusAt = 0;
+  var _dlStatusAt = 0, _dlStatusPending=null;
   function userAreaAllowed(area){
     if (state.user && state.user.role === 'admin') return true;
     var areas = state.user && state.user.areas;
@@ -1165,11 +1175,15 @@ function confirmDialog(message, opts){
     if (!canManageDownloads()) { _dlStatus = null; return Promise.resolve({ok:true,downloading:[]}); }
     var now = Date.now();
     if (!force && _dlStatus && (now - _dlStatusAt) < 8000) return Promise.resolve(_dlStatus);
-    return api('/downloads/status').then(function(r){
+    if(_dlStatusPending)return _dlStatusPending;
+    var owner=state.user&&state.user.id;
+    _dlStatusPending=api('/downloads/status').then(function(r){
+      if(owner!==(state.user&&state.user.id))return {ok:true,downloading:[]};
       _dlStatus = r;
       _dlStatusAt = Date.now();
       return r;
-    }).catch(function(){ return _dlStatus || { ok:false, downloading:[] }; });
+    }).catch(function(){ return _dlStatus || { ok:false, downloading:[] }; }).then(function(r){_dlStatusPending=null;return r;});
+    return _dlStatusPending;
   }
 
   function matchDownload(showTitle, season, episode, dl){
@@ -1211,7 +1225,7 @@ function confirmDialog(message, opts){
   var POSTER_PARALLEL = 2;
   var _posterRequests = Object.create(null);
   var _posterQueue = [];
-  var _posterActive = 0;
+  var _posterActive = 0, _posterControllers=[];
 
   function posterInDom(el){
     if (!el || !el.parentNode) return false;
@@ -1240,16 +1254,18 @@ function confirmDialog(message, opts){
   }
   function fetchPosterServer(url, timeoutMs){
     var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    if(ctrl)_posterControllers.push(ctrl);
+    function release(){clearTimeout(timer);var i=_posterControllers.indexOf(ctrl);if(i>=0)_posterControllers.splice(i,1);}
     var timer = setTimeout(function(){ if (ctrl) ctrl.abort(); }, timeoutMs || 7000);
     return fetch(url, {
       credentials: 'same-origin',
       cache: 'default',
       signal: ctrl ? ctrl.signal : undefined
     }).then(function(res){
-      clearTimeout(timer);
+      release();
       return res;
     }, function(err){
-      clearTimeout(timer);
+      release();
       throw err;
     });
   }
@@ -5670,14 +5686,14 @@ try {
      added, removed, toggled, reordered, feeds or station saved) bumps live.rev so the next read
      refetches, and tells other open tabs through localStorage so they refresh too. */
   function ensureLiveData(force){
-    if (!force && live.guide && live.iptv && live.loadedRev === live.rev && Date.now() - live.loadedAt < 90000) return Promise.resolve();
+    if (!force && live.guide && live.loadedRev === live.rev && Date.now() - live.loadedAt < 90000) return Promise.resolve();
     if (live.busy && live.busyRev === live.rev) return live.busy;
     var rev = live.rev;
-    var req = Promise.all([ liveApi('guide', '&hours=3'), liveApi('iptv') ]).then(function(pair){
+    liveApi('iptv').then(function(j){if(rev!==live.rev)return;if(j&&j.ok){live.iptv=j;if(state.view==='live'&&!state.liveChannel&&live.guide)paintLive();}}).catch(function(){});
+    var req = liveApi('guide', '&hours=3').then(function(guide){
       if (live.busy === req) live.busy = null;
       if (rev !== live.rev) return ensureLiveData(true); // a write landed while this read was in flight
-      if (pair[0] && pair[0].channels) live.guide = pair[0];
-      if (pair[1] && pair[1].ok) live.iptv = pair[1];
+      if (guide && guide.channels) live.guide = guide;
       live.loadedAt = Date.now();
       live.loadedRev = rev;
     }, function(e){ if (live.busy === req) live.busy = null; throw e; });
@@ -6047,7 +6063,9 @@ try {
   }
   function loadLive(force){
     stopLiveTimers();
-    ensureLiveData(force).then(paintLive).catch(function(e){
+    var liveHost=$('#live-view');
+    ensureLiveData(force).then(function(){if(liveHost&&liveHost.isConnected&&state.view==='live'&&!state.liveChannel)paintLive();}).catch(function(e){
+      if(!liveHost||!liveHost.isConnected||state.view!=='live'||state.liveChannel)return;
       var root = $('#live-view');
       if (!root) return;
       root.innerHTML = '';
@@ -7805,6 +7823,7 @@ try {
       if (opts.onReady) opts.onReady();
       paintSectionPayload(j);
     }).catch(function(e){
+      if (e && e.name === 'AbortError') return;
       if (!stillHere()) return;
       state.sectionLoadingMore = false;
       if (opts.onReady) opts.onReady();
@@ -7969,7 +7988,7 @@ try {
       if (onReady) onReady();
       var dl = _dlStatus || {};
       var activeSeason;
-      var firstPaint = true;
+      var firstPaint = true, downloadUpdates=[];
       var root = (destination || $('#show-view'));
       if (!root) return;
       if (!j || !j.ok || !j.show) {
@@ -7995,6 +8014,7 @@ try {
       else if (wantEpItem) seasons.forEach(function(s){ (s.episodes || []).forEach(function(ep){ if (ep.id === wantEpItem) selected = s.season; }); });
       var openSeasons=new Set();if(state.showSeason!=null||wantEpItem)openSeasons.add(selected);
       function paint(sel, fromTab){
+        downloadUpdates=[];
         activeSeason = sel;
         if (fromTab) { state.showSeason = sel; state.showEpisode = null; syncUrl(); }
         var playerHost = root.querySelector('#detail-player');
@@ -8103,11 +8123,12 @@ try {
               text: isAvail ? 'Available' : 'Missing'
             })
           ];
+          var downloadBadge=h('span',{});badges.push(downloadBadge);
           if (dlMatch) {
             var dlText = dlMatch.percent != null
               ? ('↓ '+dlMatch.percent+'%'+(dlMatch.eta_label ? ' · '+dlMatch.eta_label : ''))
               : ('↓ '+(dlMatch.status || 'queued'));
-            badges.push(h('span', { className:'badge badge-downloading', text: dlText, title: dlMatch.name || '' }));
+            downloadBadge.appendChild(h('span', { className:'badge badge-downloading', text: dlText, title: dlMatch.name || '' }));
           }
           if (isAvail && needsConvertExt(ep)) {
             badges.push(h('span', { className:'badge badge-convert', text: String(ep.ext||'').toUpperCase() }));
@@ -8121,26 +8142,15 @@ try {
             if (window.NSMatch) { var nsmRb = window.NSMatch.episodeButton(ep, show); if (nsmRb) actions.push(nsmRb); }
             /* Convert removed from show detail ? use Settings ? Convert */
           } else if (canManageDownloads()) {
-            if (dlMatch) {
-              actions.push(h('button', {
-                className:'btn ghost',
-                text:'Cancel',
-                onClick: function(e){
-                  e.stopPropagation();
-                  cancelEpisodeFetch(show.show_key || show.id, ep.season, ep.episode, show.title, e.currentTarget);
-                }
-              }));
-            } else {
-              actions.push(h('button', {
-                className:'btn',
-                text:'Get',
-                onClick: function(e){
-                  e.stopPropagation();
-                  fetchEpisode(show.show_key || show.id, ep.season, ep.episode, e.currentTarget);
-                }
-              }));
-            }
+            var downloadAction=h('button',{className:'btn',text:dlMatch?'Cancel':'Get',onClick:function(e){e.stopPropagation();if(dlMatch)cancelEpisodeFetch(show.show_key||show.id,ep.season,ep.episode,show.title,e.currentTarget);else fetchEpisode(show.show_key||show.id,ep.season,ep.episode,e.currentTarget);}});
+            actions.push(downloadAction);
           }
+          downloadUpdates.push(function(){
+            dlMatch=canManageDownloads()?matchDownload(show.title,ep.season,ep.episode,dl):null;
+            downloadBadge.replaceChildren();
+            if(dlMatch)downloadBadge.appendChild(h('span',{className:'badge badge-downloading',text:'↓ '+(dlMatch.percent!=null?dlMatch.percent+'%':dlMatch.status||'queued'),title:dlMatch.name||''}));
+            if(downloadAction)downloadAction.textContent=dlMatch?'Cancel':'Get';
+          });
           if(isAvail&&can('timing_edit'))actions.push(h('button',{className:'btn ghost',type:'button',text:'Edit intro / credits',onClick:function(e){e.stopPropagation();editEpisodeSegments(ep);}}));
           var epPoster=h('button',{className:'episode-play-button',type:'button',disabled:!isAvail,'aria-label':isAvail?'Play '+(code||title):'Episode unavailable',title:isAvail?'Play '+(code||title):'Episode unavailable',text:'▶',onClick:function(e){e.stopPropagation();if(isAvail)playItem(ep);}});
           var epPath = showPath + '/season-' + ep.season + (ep.episode != null && ep.episode !== '' ? '/episode-' + ep.episode : (ep.id ? '/' + encodeURIComponent(ep.id) : ''));
@@ -8182,9 +8192,10 @@ try {
       loadDownloadStatus(false).then(function(fresh){
         if (!stillHere() || !fresh || JSON.stringify(fresh.downloading || []) === JSON.stringify(dl.downloading || [])) return;
         dl = fresh;
-        paint(activeSeason);
+        downloadUpdates.forEach(function(update){update();});
       });
     }).catch(function(e){
+      if (e && e.name === 'AbortError') return;
       if (!stillHere()) return;
       if (onReady) onReady();
       var root = (destination || $('#show-view'));
@@ -8654,9 +8665,9 @@ try {
       Array.from(personalCard.children).forEach(function(child){
         if(child.classList.contains('row-actions')){if(sec!=='account')Array.from(child.children).slice(1).forEach(function(button){button.remove();});return;}
         if(!ids.some(function(id){return child.id===id||child.querySelector('#'+id);}))child.remove();
-      });bodyKids[0].textContent=activeItem.label    if(sec==='account'&&u.username&&(u.role||'user')!=='guest')bodyKids.push(apiKeysPanel());
-;
+      });bodyKids[0].textContent=activeItem.label;
     }
+    if(sec==='account'&&u.username&&(u.role||'user')!=='guest')bodyKids.push(apiKeysPanel());
     if(sec==='parental'){
       var parentalHost=h('div',{className:'parental-host'},[h('p',{className:'muted',text:'Loading…'})]);
       bodyKids=[h('h2',{text:'Parental controls'}),h('p',{className:'muted',text:'Age limits, a kids profile and which areas this account can use. A PIN protects changes.'}),parentalHost];
@@ -8731,21 +8742,13 @@ try {
     if (!host) return;
     host.innerHTML = '';
     host.appendChild(pendingContent({ className:'muted', }));
-    Promise.all([
-      api('/admin/system/status'),
-      api('/admin/system/processes?limit=60'),
-      api('/admin/system/logs?lines=30')
-    ]).then(function(rows){
-      var st = rows[0] || {};
-      var pr = rows[1] || {};
-      var lg = rows[2] || {};
-      host = $('#system-panel');
-      if (!host) return;
-      host.innerHTML = '';
-      if (!st.ok) {
-        host.appendChild(h('p', { className:'bad', text: st.error || 'Could not load system status' }));
-        return;
-      }
+    var expectedHost=host,statusHost=h('div',{});host.replaceChildren(statusHost);
+    var processes=api('/admin/system/processes?limit=60').catch(function(e){return {ok:false,error:friendlyMessage(e)};});
+    var logs=api('/admin/system/logs?lines=30').catch(function(e){return {ok:false,error:friendlyMessage(e)};});
+    api('/admin/system/status').then(function(st){
+      if(!expectedHost.isConnected||$('#system-panel')!==expectedHost)return;
+      host=statusHost;host.innerHTML='';
+      if(!st.ok){host.appendChild(h('p',{className:'bad',text:st.error||'Could not load system status.'}));return;}
       var mem = st.memory || {};
       var disk = st.disk || {};
       var media = st.media_disk || {};
@@ -8829,6 +8832,10 @@ try {
         }})
       ]));
 
+    }).catch(function(e){if(statusHost.isConnected)statusHost.textContent=friendlyMessage(e);});
+      var processHost=h('div',{});expectedHost.appendChild(processHost);
+      processes.then(function(pr){if(!processHost.isConnected)return;var host=processHost;
+      if(pr.error)host.appendChild(h('p',{className:'bad',text:pr.error}));
       // Processes
       host.appendChild(h('h3', { className:'admin-section-title', text:'Processes' }));
       var procTable = h('table', { className:'table sys-table sys-proc' }, [
@@ -8873,6 +8880,10 @@ try {
       });
       host.appendChild(procTable);
 
+      });
+      var logHost=h('div',{});expectedHost.appendChild(logHost);
+      logs.then(function(lg){if(!logHost.isConnected)return;var host=logHost;
+      if(lg.error)host.appendChild(h('p',{className:'bad',text:lg.error}));
       // Logs
       if (lg.ok && (lg.logs || []).length) {
         host.appendChild(h('h3', { className:'admin-section-title', text:'Recent logs' }));
@@ -8883,10 +8894,8 @@ try {
           ]));
         });
       }
-    }).catch(function(e){
-      host = $('#system-panel');
-      if (host) host.textContent = String(e);
-    });
+      });
+
   }
 
   function loadDiagList(){
@@ -9362,6 +9371,7 @@ try {
                   toast('Scanning…');
                   api('/admin/rescan',{method:'POST'}).then(function(r){
                     if (!r.ok) return toast(r.error||'Scan failed', { kind:'bad' });
+                    if(r.maintenance_job){toast('Scan queued. Follow progress in Task centre.',{kind:'ok'});return;}
                     toast('Scanned '+r.item_count+' items', { kind:'ok' });
                     var meta = $('#scan_meta');
                     if (meta) meta.textContent = 'scanned_at: '+(r.scanned_at || (state.home&&state.home.scanned_at) || 'just now')+' · items '+(r.item_count||'?');
@@ -10816,7 +10826,8 @@ h('div', { className:'cv-find-bar' }, [
     reload();
   }
 
-  /* ---------------- Settings → Check for updates (admin) ------------  function apiKeysPanel(){
+  /* ---------------- Settings → Check for updates (admin) ---------------- */
+  function apiKeysPanel(){
     var list=h('div',{className:'stack'}),secret=h('div',{className:'stack'}),status=h('p',{className:'muted','aria-live':'polite'});
     var label=h('input',{type:'text',maxlength:80,placeholder:'My phone',autocomplete:'off','aria-label':'Device name'});
     var days=h('select',{'aria-label':'API key expiry'},[h('option',{value:'30',text:'30 days'}),h('option',{value:'90',text:'90 days'}),h('option',{value:'365',text:'1 year',selected:true})]);
@@ -10854,7 +10865,6 @@ h('div', { className:'cv-find-bar' }, [
     load();return panel;
   }
 
----- */
   function renderUpdatesPanel(host, branch, check){
     if (!host.isConnected) return;
     if (!check) {
@@ -10915,6 +10925,7 @@ h('div', { className:'cv-find-bar' }, [
         var kb = Math.max(1, Math.round((latest.bytes || 0) / 1024));
         rows.push(h('p', { text: latest.count + ' file' + (latest.count === 1 ? '' : 's') + ' to update (about ' + kb + ' KB to download). Only these files change; settings, the database and media are never touched.' }));
         [ fileList('Changed', latest.changed), fileList('New', latest.added), fileList('Removed upstream', latest.removed, 'bad') ].forEach(function(n){ if (n) rows.push(n); });
+      }
       if (r.update_available) {
         var changesBox = h('div', { className:'stack', 'aria-live':'polite' });
         var changesLoaded = false;
@@ -10950,7 +10961,6 @@ h('div', { className:'cv-find-bar' }, [
           });
         } });
         rows.push(changesButton, changesBox);
-      }
       }
       if (latest.url) rows.push(h('a', { href:latest.url, target:'_blank', rel:'noopener', className:'linkish', text:'Recent changes on GitHub' }));
       var status = h('p', { className:'muted', 'aria-live':'polite' });
@@ -15335,13 +15345,7 @@ function viewCollectionDetail(){
     state.view = 'settings';
     pushNav();
     render();
-    /* pull matching.js when Settings opens (deferred from boot). */
-    if (window.__nsEnsureMatching) {
-      window.__nsEnsureMatching(function(){
-        try { if (window.NSMatch && window.NSMatch.refreshCounts) window.NSMatch.refreshCounts(); } catch (e) {}
-        if (state.view === 'settings') render();
-      });
-    }
+
   }
   function openAdmin(tab){
     openSettings(tab || state.adminTab || 'general');
@@ -15510,6 +15514,7 @@ function viewCollectionDetail(){
   }
 
   function navigate(view, sectionId){
+    if(view==='play'||view==='misc')loadExtraCss();
     if(state.view==='settings'&&settingsDraftChanged()&&!confirm('Leave settings and discard unsaved form changes?'))return;
     /* Closing Play / leaving the page while a game is open must stop audio. */
     if (document.getElementById('player-overlay')) {
@@ -15549,6 +15554,8 @@ function viewCollectionDetail(){
 
   function render(){ renderView(); syncUrl(); }
   function renderView(){
+    var readKey=[state.view,state.section,state.showKey,state.movieId,state.searchQuery].join(':');
+    if(readKey!==pageReadKey){cancelPageReads();pageReadKey=readKey;}
     if(accountDrawerClose)accountDrawerClose(false);
     applyTheme();
     var root = $('#app');
@@ -15583,7 +15590,8 @@ function viewCollectionDetail(){
         while (root.firstChild) root.removeChild(root.firstChild);
         root.appendChild(nextView);
       };
-      nextView = state.view === 'section' ? viewSection(publish) : viewShow(publish);
+      nextView = state.view === 'section' ? viewSection() : viewShow();
+      publish();
       return;
     }
     stopBillboardCycle();
@@ -15764,7 +15772,7 @@ function viewCollectionDetail(){
       var sm = document.createElement('script');
       sm.src = BASE + 'index.php?asset=assets/js/' + file + '&v=' + encodeURIComponent(window.__ASSET_VERSION__ || APP_VERSION);
       sm.async = true;
-      sm.onload = function(){ var mod = globalName ? window[globalName] : true; if (mod) { if (mod.init) mod.init(window.NSApp); css.then(function(){ resolve(mod); }); } else { moduleLoads[file] = null; reject(new Error('Module missing')); } };
+      sm.onload = function(){ var mod = globalName ? window[globalName] : true; if (mod) { if (mod.init) mod.init(window.NSApp); resolve(mod); } else { moduleLoads[file] = null; reject(new Error('Module missing')); } };
       sm.onerror = function(){ moduleLoads[file] = null; reject(new Error('Could not load ' + file)); };
       document.head.appendChild(sm);
     });
