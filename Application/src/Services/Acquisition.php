@@ -1696,23 +1696,27 @@ class Acquisition {
             $q = Store::get('acquire_queue', []);
             if (!is_array($q)) $q = [];
             $seen = [];
-            $keyFor = static function (array $e): string {
+            $keyFor = static function (array $e, bool $byTitle = false): string {
                 $section = strtolower(trim((string)($e['section_id'] ?? '')));
-                $show = strtolower(trim((string)($e['show_key'] ?? '')));
+                $show = $byTitle ? '' : strtolower(trim((string)($e['show_key'] ?? '')));
                 if ($show === '') $show = strtolower(trim((string)($e['show'] ?? '')));
                 return $section . '|' . $show . '|' . (int)($e['season'] ?? -1) . '|' . (int)($e['episode'] ?? -1);
             };
             foreach ($q as $existing) {
                 if (!is_array($existing) || in_array((string)($existing['status'] ?? ''), ['cancelled', 'removed', 'done', 'failed', 'exhausted'], true)) continue;
                 $seen[$keyFor($existing)] = $existing;
+                // Older installations stored the show title without a canonical key.
+                if (empty($existing['show_key'])) $seen[$keyFor($existing, true)] = $existing;
             }
             $entries = [];
             $added = 0;
             $truncated = false;
             foreach ($requests as $item) {
                 $key = $keyFor($item);
-                if (isset($seen[$key])) {
-                    $entries[] = $seen[$key];
+                $legacyKey = $keyFor($item, true);
+                $previous = $seen[$key] ?? ($seen[$legacyKey] ?? null);
+                if ($previous !== null) {
+                    $entries[] = $previous;
                     continue;
                 }
                 if ($added >= 400) { $truncated = true; continue; }
@@ -1734,6 +1738,7 @@ class Acquisition {
                 ];
                 $q[] = $entry;
                 $seen[$key] = $entry;
+                $seen[$legacyKey] = $entry;
                 $entries[] = $entry;
                 $added++;
             }
