@@ -1,0 +1,29 @@
+name: Type and syntax checks
+on:
+  push:
+    branches: ['1.3.1']
+  pull_request:
+    branches: ['main', '1.3.1']
+  workflow_dispatch:
+jobs:
+  php-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '7.4'
+          tools: none
+          coverage: none
+      - name: Check PHP syntax
+        run: find Application -type f -name '*.php' -print0 | xargs -0 -n1 php -l
+  javascript-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check JavaScript syntax
+        run: |
+          find Application/assets/js Application/netplay -type f -name '*.js' ! -path '*/node_modules/*' -print0 | xargs -0 -n1 node --check

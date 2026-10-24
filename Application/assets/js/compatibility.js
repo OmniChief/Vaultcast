@@ -52,25 +52,84 @@
     for(var inputIndex=0;inputIndex<inputs.length;inputIndex++)if(inputs[inputIndex].type!=='hidden'){inputs[inputIndex].onchange=markDirty;inputs[inputIndex].onkeyup=markDirty;}
     setTimeout(function refreshChat(){for(var draftIndex=0;draftIndex<fields.length;draftIndex++)if(fields[draftIndex].value)dirty=true;for(var fileIndex=0;fileIndex<inputs.length;fileIndex++)if(inputs[fileIndex].type==='file'&&inputs[fileIndex].value)dirty=true;if(dirty){markDirty();return;}if(document.hidden){setTimeout(refreshChat,20000);return;}window.location.href=refreshNode.getAttribute('data-url');},20000);
   }
-  function remoteNavigation(event){
-    event=event||window.event;var code=event.keyCode||event.which;if(code<37||code>40)return;
-    var from=document.activeElement,tag=from&&from.tagName?from.tagName.toLowerCase():'';
-    if(tag==='input'||tag==='select'||tag==='option'||tag==='textarea'||tag==='video'||tag==='audio'||from&&from.isContentEditable)return;
-    if(!document.documentElement.getBoundingClientRect)return;
-    var anchors=document.getElementsByTagName('a'),buttons=document.getElementsByTagName('button'),nodes=[],node,rect,i;
-    for(i=0;i<anchors.length;i++)nodes[nodes.length]=anchors[i];for(i=0;i<buttons.length;i++)nodes[nodes.length]=buttons[i];
-    var origin=from&&from.getBoundingClientRect?from.getBoundingClientRect():null,best=null,bestScore=Infinity;
-    for(i=0;i<nodes.length;i++){
-      node=nodes[i];if(node===from||node.disabled||!node.getBoundingClientRect)continue;rect=node.getBoundingClientRect();
-      if(rect.right<=rect.left||rect.bottom<=rect.top||rect.right<0||rect.left<0)continue;
-      if(!origin||tag==='body'||tag==='html'){best=node;break;}
-      var dx=(rect.left+rect.right-origin.left-origin.right)/2,dy=(rect.top+rect.bottom-origin.top-origin.bottom)/2;
-      var forward=code===37?-dx:code===39?dx:code===38?-dy:dy,side=code===37||code===39?Math.abs(dy):Math.abs(dx);
-      if(forward<=1)continue;var score=forward+side*3;if(score<bestScore){best=node;bestScore=score;}
+  // ES3 spatial navigation for keyboards and browser-based TV remotes.
+  var remoteField=null,remoteEditing=null,remoteOKDown=false;
+  function remoteTag(node){return node&&node.tagName?node.tagName.toLowerCase():'';}
+  function remoteStop(event){if(event.preventDefault)event.preventDefault();event.returnValue=false;}
+  function remoteUsable(node){
+    var tag=remoteTag(node),type=String(node.type||'').toLowerCase(),parent=node,style,rect;
+    if(!node.focus||!node.getBoundingClientRect||node.disabled||type==='hidden'||node.getAttribute('aria-disabled')==='true')return false;
+    if(node.getAttribute('tabindex')!==null&&node.tabIndex<0)return false;
+    if(tag==='a'&&!node.getAttribute('href'))return false;
+    while(parent&&parent.nodeType===1){
+      style=window.getComputedStyle?window.getComputedStyle(parent,null):parent.currentStyle;
+      if(parent.hidden||parent.getAttribute('hidden')!==null||parent.getAttribute('inert')!==null||(remoteTag(parent)==='fieldset'&&parent.disabled)||style&&(style.display==='none'||style.visibility==='hidden'||style.visibility==='collapse'))return false;
+      parent=parent.parentNode;
     }
-    if(best){best.focus();if(event.preventDefault)event.preventDefault();event.returnValue=false;}
+    rect=node.getBoundingClientRect();return rect.right>rect.left&&rect.bottom>rect.top;
   }
-  if(document.addEventListener)document.addEventListener('keydown',remoteNavigation,false);else if(document.attachEvent)document.attachEvent('onkeydown',remoteNavigation);
+  function remoteNative(node){
+    var tag=remoteTag(node),type=String(node&&node.type||'').toLowerCase();
+    return tag==='textarea'||tag==='select'||tag==='video'||tag==='audio'||node&&node.isContentEditable||tag==='input'&&!/^(button|submit|reset|checkbox|radio|image)$/.test(type);
+  }
+  function remoteFocus(node){
+    node.focus();if(document.activeElement!==node)return false;
+    remoteField=remoteNative(node)?node:null;remoteEditing=null;
+    var rect=node.getBoundingClientRect(),height=document.documentElement.clientHeight||document.body.clientHeight,width=document.documentElement.clientWidth||document.body.clientWidth;
+    if(node.scrollIntoView&&(rect.top<0||rect.bottom>height||rect.left<0||rect.right>width))node.scrollIntoView(rect.top<0);
+    return true;
+  }
+  function remoteNavigation(event){
+    event=event||window.event;
+    if(event.defaultPrevented||event.returnValue===false||event.altKey||event.ctrlKey||event.metaKey||event.shiftKey||event.isComposing)return;
+    var key=event.key,code=event.keyCode||event.which;
+    if(key==='ArrowLeft'||key==='Left')code=37;else if(key==='ArrowUp'||key==='Up')code=38;else if(key==='ArrowRight'||key==='Right')code=39;else if(key==='ArrowDown'||key==='Down')code=40;
+    else if(key==='Enter'||key==='Accept'||key==='Select'||key==='OK'||code===23)code=13;
+    var from=document.activeElement,tag=remoteTag(from),nativeControl=remoteNative(from),ok=code===13;
+    if((code===27||key==='Escape')&&remoteEditing===from){remoteEditing=null;remoteField=from;remoteStop(event);return;}
+    if(ok){
+      if(nativeControl){
+        if(remoteField===from){remoteField=null;remoteEditing=from;if(tag==='textarea'||tag==='input'&&String(from.type||'').toLowerCase()!=='file')remoteStop(event);}
+        return;
+      }
+      if(from&&remoteUsable(from)&&typeof from.click==='function'){
+        remoteStop(event);
+        if(!remoteOKDown&&!event.repeat){remoteOKDown=true;from.click();}
+      }
+      return;
+    }
+    if(code<37||code>40)return;
+    if(nativeControl&&remoteField!==from)return;
+    if(!document.documentElement.getBoundingClientRect)return;
+    var tags=['a','button','input','select','textarea','video','audio'],nodes=[],node,rect,i,j;
+    // Collect afresh so live suggestions and changing player controls participate.
+    for(i=0;i<tags.length;i++){var matches=document.getElementsByTagName(tags[i]);for(j=0;j<matches.length;j++)nodes[nodes.length]=matches[j];}
+    var origin=from&&remoteUsable(from)?from.getBoundingClientRect():null,best=null,bestScore=Infinity,visibleBest=null,visibleScore=Infinity;
+    var horizontal=code===37||code===39,height=document.documentElement.clientHeight||document.body.clientHeight,width=document.documentElement.clientWidth||document.body.clientWidth;
+    for(i=0;i<nodes.length;i++){
+      node=nodes[i];if(node===from||!remoteUsable(node))continue;rect=node.getBoundingClientRect();
+      if(!origin||tag==='body'||tag==='html'){
+        // Start at the top-left visible control, rather than an offscreen skip link.
+        var initialScore=rect.top*width+rect.left;
+        if(rect.bottom>0&&rect.top<height&&rect.right>0&&rect.left<width&&initialScore<visibleScore){visibleBest=node;visibleScore=initialScore;}
+        if(initialScore<bestScore){best=node;bestScore=initialScore;}continue;
+      }
+      var dx=(rect.left+rect.right-origin.left-origin.right)/2,dy=(rect.top+rect.bottom-origin.top-origin.bottom)/2;
+      var forward=code===37?-dx:code===39?dx:code===38?-dy:dy;
+      if(forward<=1)continue;
+      var gap=horizontal?Math.max(0,rect.top-origin.bottom,origin.top-rect.bottom):Math.max(0,rect.left-origin.right,origin.left-rect.right);
+      var side=horizontal?Math.abs(dy):Math.abs(dx),score=forward+gap*4+side*.25;
+      if(score<bestScore){best=node;bestScore=score;}
+    }
+    if(visibleBest)best=visibleBest;
+    if(best)remoteFocus(best);
+    // Suppress browser scrolling even at the edge of the focusable layout.
+    remoteStop(event);
+  }
+  compatListen(document,'keydown',remoteNavigation);
+  compatListen(document,'keyup',function(){remoteOKDown=false;});
+  compatListen(window,'blur',function(){remoteOKDown=false;});
+  compatListen(document,'mousedown',function(){remoteField=null;remoteEditing=null;});
   var config=window.__VC_COMPAT_PLAYER__,media=document.getElementById('compat-media');
   if(!config||!media){var openPlay=document.getElementById('compat-open-play');if(openPlay)openPlay.submit();return;}
   var message=document.getElementById('compat-player-message'),base=config.base||'/',alive=true,hls=null,roll=null,progressTimer=null,requests=[],resume=Number((config.progress||{}).position)||0,resumed=false,remux=false,loadingHls=false,recovered=false,tuning=false,hlsTimer=null,cinemaTimer=null,cinemaBusy=false,cinemaSending=false,cinemaLastPulse=0,cinemaPending=false,cinemaBuffering=false;

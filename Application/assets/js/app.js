@@ -7869,7 +7869,7 @@ try {
   }
 
   function fetchEpisode(showKey, season, episode, btn){
-    if (btn) { btn.disabled = true; btn.textContent = 'Searching…'; }
+    if (btn) { btn.disabled = true; btn.textContent = 'Scheduling…'; }
     var path = '/shows/'+encodeURIComponent(showKey)+'/episodes/'+season+'/'+episode+'/fetch';
     var key = 'ep:'+showKey+':'+season+':'+episode;
     state.abortControllers[key] = true;
@@ -7878,9 +7878,9 @@ try {
       if (btn) { btn.disabled = false; btn.textContent = 'Get'; }
       if (!r.ok) return toast(r.reason || r.error || 'Fetch failed', { kind:'bad' });
       if (r.skipped) return toast('Already available');
-      var msg = r.matched
-        ? ('Queued: ' + r.matched)
-        : ('Queued search: ' + (r.query || epCode(season, episode)));
+      var msg = r.entry && r.entry.status === 'scheduled'
+        ? ('Scheduled for ' + (r.entry.airdate || 'release date'))
+        : ('Queued for acquisition: ' + (r.query || epCode(season, episode)));
       if (r.reason && !r.matched) msg += ' — ' + r.reason;
       toast(msg, { kind:'ok' });
       loadDownloadStatus(true);
@@ -7905,7 +7905,7 @@ try {
   }
 
   function fetchMissingShow(showKey, season){
-    confirmDialog('Queue RSS search for all missing episodes'+(season!=null?(' in season '+season):'')+'?', { okText:'Fetch missing' }).then(function(ok){
+    confirmDialog('Schedule acquisition of all missing episodes'+(season!=null?(' in season '+season):'')+'? Future episodes will wait for their release date.', { okText:'Schedule missing' }).then(function(ok){
       if (!ok) return;
       var body = {};
       if (season != null) body.season = season;
@@ -9166,14 +9166,36 @@ try {
             var lq = r.local_queue || [];
             if (!lq.length) el.appendChild(h('p', { className:'muted', text:'Empty.' }));
             lq.forEach(function(e){
+              var stateLabels = { scheduled:'Scheduled', queued:'Waiting to search', retry_wait:'Retry scheduled', exhausted:'Not found — retries exhausted', paused:'Paused — search service unavailable', queued_local:'Waiting for Transmission', sent_transmission:'Sent to Transmission' };
+              var stateText = stateLabels[e.status] || e.status || '';
+              if (e.status === 'scheduled' && e.airdate) stateText += ' · airs ' + e.airdate;
+              if (e.status === 'retry_wait' && e.next_attempt_at) stateText += ' · next ' + new Date(e.next_attempt_at * 1000).toLocaleString();
+              if (e.search_attempts) stateText += ' · attempt ' + e.search_attempts + '/8';
               el.appendChild(h('div', { className:'tx-row' }, [
                 h('div', { style:'flex:1;min-width:0' }, [
                   h('div', { text: e.title || e.query || e.id }),
-                  h('div', { className:'muted', text: (e.status||'') + (e.show ? (' · '+e.show) : '') + (e.season!=null ? (' '+('S'+e.season+'E'+e.episode)) : '') })
+                  h('div', { className:'muted', text: stateText + (e.show ? (' · '+e.show) : '') + (e.season!=null ? (' '+('S'+e.season+'E'+e.episode)) : '') })
                 ]),
                 (e.status === 'cancelled' || e.status === 'removed' || e.status === 'done')
                   ? h('span', { className:'muted', text: e.status })
                   : h('span', { className:'row-actions' }, [
+                      (e.status === 'exhausted' || e.status === 'paused' || e.status === 'failed') ? h('button', {
+                        className:'btn ghost',
+                        text:'Retry',
+                        title:'Reset search attempts and schedule another bounded search',
+                        onClick: function(ev){
+                          var btn = ev.currentTarget;
+                          btn.disabled = true;
+                          api('/admin/downloads/retry', {method:'POST', body:{id:e.id}})
+                            .then(function(r){
+                              if (!r.ok) return toast(r.error || 'Could not retry acquisition', {kind:'bad'});
+                              toast('Episode queued for retry', {kind:'ok'});
+                              loadDownloadStatus(true);
+                              if (typeof render === 'function') render();
+                            }).catch(function(err){ toast(String(err), {kind:'bad'}); })
+                            .finally(function(){ btn.disabled = false; });
+                        }
+                      }) : null,
                       h('button', {
                         className:'btn ghost danger-outline',
                         text:'Remove',
@@ -15782,6 +15804,12 @@ function viewCollectionDetail(){
     return j;
   }).catch(function(){ return null; });
   meP.then(enhanceFirstPage);
+  // One non-blocking check per app load; the server enforces one global
+  // five-minute cooldown across all viewers before reading the queue.
+  meP.then(function(me){
+    if (!me || !me.ok || !me.user || state._guest) return;
+    api('/downloads/tick', { method:'POST', body:{} }).catch(function(){ /* Acquisition is optional. */ });
+  });
   meP.then(function(){ startConvertNotifPoll(); });
   registerSW();
 })();

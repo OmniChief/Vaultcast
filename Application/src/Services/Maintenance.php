@@ -6,7 +6,7 @@ final class Maintenance
     private static $active;
     private static $checked = 0.0;
     /** Background-only tasks started by the app itself (not listed in the maintenance UI). */
-    const INTERNAL = ['ingest' => 'Import reviewed download'];
+    const INTERNAL = ['ingest' => 'Import reviewed download', 'acquisition-tick' => 'Process due acquisition searches'];
     const TASKS = ['versions'=>'Check and merge DirectPlay copies','site-artwork'=>'Optimise site and theme posters (WebP)','segments'=>'Match TV / anime intros and credits, and movie credits','browse'=>'Prepare search and show summaries','search' => 'Prepare live search index', 'views' => 'Prepare browsing pages', 'epg' => 'Refresh programme guide', 'metadata' => 'Prepare artwork and synopses', 'game-metadata' => 'Refresh game posters and synopses', 'scan' => 'Scan library folders', 'collections' => 'Match collections', 'downloads' => 'Import completed downloads', 'durations' => 'Fill Live media durations', 'facts' => 'Probe new media codecs and store show guides', 'drop-cleanup' => 'Delete expired Drop files', 'calendar-episodes' => 'Refresh episode release calendars', 'age-ratings' => 'Look up age ratings for films and shows', 'smart-index' => 'Index genres, cast and resolution for smart collections', 'extras' => 'Probe trailers and extras (running times and thumbnails)', 'achievements' => 'Count achievements from past activity'];
 
     public static function runCommand(string $task, ?string $target = null): array
@@ -103,6 +103,13 @@ final class Maintenance
             } catch (Throwable $ignored) {}
         });
         try {
+            // Opportunistic acquisition must never accumulate CLI workers waiting
+            // behind long-running maintenance on a low-memory NAS.
+            if ($job['task'] === 'acquisition-tick' && !flock($lock, LOCK_EX | LOCK_NB)) {
+                $job['result'] = ['ok' => true, 'skipped' => true, 'reason' => 'Maintenance worker busy'];
+                $job['status'] = 'complete';
+                return ['ok' => true, 'job' => $job];
+            }
             while (!flock($lock, LOCK_EX | LOCK_NB)) { self::checkpoint(); usleep(250000); }
             self::checkpoint();
             $job['status'] = 'running'; $job['started_at'] = date('c');
@@ -208,6 +215,8 @@ final class Maintenance
                     require_once STREAM_ROOT . '/src/Live/epg.php';
                     $job['result'] = epg_refresh(($job['target'] ?? '') === 'force'); break;
                 case 'collections': $job['result'] = Collections::refresh($job['target'] ?? null); break;
+                case 'acquisition-tick':
+                    $job['result'] = Acquisition::processPendingSearches(['limit' => 2]); break;
                 case 'downloads':
                     if (empty(Store::settings()['features']['downloads'])) throw new RuntimeException('Downloads are disabled.');
                     $job['result'] = Acquisition::processCompletedDownloads(['source' => 'admin', 'limit' => 3]); break;

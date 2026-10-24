@@ -53,22 +53,34 @@ if (preg_match('#^/shows/([a-f0-9]+)/episodes/(\\d+)/(\\d+)/fetch$#', $path, $m)
     // Verify it is considered missing (or allow re-fetch)
     $force = !empty(body_json()['force']);
     $isMissing = true;
+    $airdate = null;
     foreach ($detail['seasons'] ?? [] as $sb) {
         if ((int)$sb['season'] !== $season) continue;
         foreach ($sb['episodes'] ?? [] as $ep) {
             if ((int)($ep['episode'] ?? -1) !== $episode) continue;
             $isMissing = empty($ep['available']);
+            $airdate = $ep['airdate'] ?? null;
             break 2;
         }
     }
     if (!$isMissing && !$force) {
         json_out(['ok' => true, 'skipped' => true, 'reason' => 'Episode already available']);
     }
-    json_out(Acquisition::requestEpisode($showTitle, $season, $episode));
+    json_out(Acquisition::requestEpisode($showTitle, $season, $episode, [
+        'kind' => (($detail['show']['section'] ?? '') === 'anime' || ($detail['show']['type'] ?? '') === 'anime') ? 'anime' : 'tv',
+        'section_id' => $detail['show']['section'] ?? null,
+        'show_key' => $detail['show']['show_key'] ?? $m[1],
+        'airdate' => $airdate,
+        'defer_search' => true,
+    ]));
 }
 
 
 
+
+if ($path === '/downloads/tick' && $method === 'POST') {
+    json_out(Acquisition::triggerDueSearches());
+}
 
 if ($path === '/downloads/status' && $method === 'GET') {
     // Public: minimal downloading badges only (full queue is admin-only)
@@ -125,6 +137,12 @@ if ($path === '/admin/downloads/process-completed' && $method === 'POST') {
 
 if ($path === '/admin/downloads/process-completed/cancel' && $method === 'POST') {
     json_out(Acquisition::requestCancelProcessCompleted());
+}
+
+if ($path === '/admin/downloads/retry' && $method === 'POST') {
+    Auth::requireAdmin();
+    $body = body_json();
+    json_out(Acquisition::retryEpisodeQueueEntry((string)($body['id'] ?? '')));
 }
 
 if ($path === '/admin/downloads/remove' && $method === 'POST') {

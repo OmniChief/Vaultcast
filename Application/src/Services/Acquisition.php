@@ -97,6 +97,60 @@ class Acquisition {
         ];
     }
 
+    /**
+     * One installation-wide, inexpensive on-access acquisition probe.
+     * The cooldown check happens before querying the queue. No feed requests
+     * run inside HTTP, and simultaneous viewers cannot start extra workers.
+     */
+    public static function triggerDueSearches(): array {
+        $file = STREAM_DATA . '/acquire_tick.lock';
+        $lock = @fopen($file, 'c+');
+        if (!$lock) return ['ok' => false, 'reason' => 'Trigger unavailable'];
+        if (!flock($lock, LOCK_EX | LOCK_NB)) {
+            fclose($lock);
+            return ['ok' => true, 'started' => false, 'reason' => 'Another request is checking'];
+        }
+        try {
+            $now = time();
+            rewind($lock);
+            $last = (int)trim((string)stream_get_contents($lock));
+            if ($last > $now - 300) return ['ok' => true, 'started' => false, 'reason' => 'Cooldown'];
+            // This timestamp is shared by all clients and survives PHP worker restarts.
+            // Reserve the next five minutes even if the queue or CLI is unavailable.
+            rewind($lock);
+            ftruncate($lock, 0);
+            fwrite($lock, (string)$now);
+            fflush($lock);
+
+            $settings = Store::settings();
+            if (empty($settings['features']['downloads']) || empty($settings['acquisition']['enabled'])) {
+                return ['ok' => true, 'started' => false, 'reason' => 'Acquisition disabled'];
+            }
+            $queue = Store::get('acquire_queue', []);
+            if (!is_array($queue)) return ['ok' => true, 'started' => false, 'reason' => 'No queue'];
+            $due = false;
+            foreach ($queue as $entry) {
+                if (!is_array($entry)) continue;
+                if (!in_array((string)($entry['status'] ?? ''), ['queued', 'queued_local', 'scheduled', 'retry_wait'], true)) continue;
+                if (trim((string)($entry['query'] ?? '')) === '' && empty($entry['magnet']) && empty($entry['url'])) continue;
+                if ((int)($entry['eligible_at'] ?? 0) > $now || (int)($entry['next_attempt_at'] ?? 0) > $now) continue;
+                $due = true;
+                break;
+            }
+            if (!$due) return ['ok' => true, 'started' => false, 'reason' => 'Nothing due'];
+            try {
+                Maintenance::start('acquisition-tick', 'automatic');
+                return ['ok' => true, 'started' => true];
+            } catch (\Throwable $e) {
+                error_log('Vaultcast acquisition tick: ' . $e->getMessage());
+                return ['ok' => false, 'started' => false, 'reason' => 'Worker launch failed'];
+            }
+        } finally {
+            flock($lock, LOCK_UN);
+            fclose($lock);
+        }
+    }
+
     public static function transmissionStatus(array $tr): array {
         $url = $tr['url'] ?? '';
         $enabled = !empty($tr['enabled']);
@@ -589,19 +643,73 @@ class Acquisition {
         return $out;
     }
 
+    /** A date-only premiere becomes search-eligible the following UTC calendar day. */
+    private static function episodeEligibleAt($airdate): ?int {
+        if (!is_string($airdate) || !preg_match('/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/D', $airdate)) return null;
+        $date = \DateTimeImmutable::createFromFormat('!Y-m-d', $airdate, new \DateTimeZone('UTC'));
+        if (!$date || $date->format('Y-m-d') !== $airdate) return null;
+        return $date->modify('+1 day')->getTimestamp();
+    }
+
+    /** Coordinate acquisition jobs across HTTP and CLI workers without a new daemon. */
+    private static function acquireLock(bool $wait = false) {
+        $fh = @fopen(STREAM_DATA . '/acquire_search.lock', 'c');
+        if (!$fh) return false;
+        $until = microtime(true) + ($wait ? 10 : 0);
+        do {
+            if (flock($fh, LOCK_EX | LOCK_NB)) return $fh;
+            if (!$wait || microtime(true) >= $until) break;
+            usleep(50000);
+        } while (true);
+        fclose($fh);
+        return false;
+    }
+
+    /** Search retries never spin indefinitely for absent releases. */
+    private static function postponeNoHit(array &$entry): void {
+        $attempt = (int)($entry['search_attempts'] ?? 0);
+        $delays = [3600, 14400, 43200, 86400, 172800, 259200, 604800];
+        $entry['status'] = $attempt >= 8 ? 'exhausted' : 'retry_wait';
+        $entry['next_attempt_at'] = $attempt >= 8 ? null : time() + $delays[max(0, min(6, $attempt - 1))];
+        $entry['updated_at'] = date('c');
+    }
+
     public static function enqueue(array $item): array {
+        $lock = self::acquireLock();
+        if (!$lock) return ['ok' => false, 'error' => 'Acquisition queue busy; retry shortly'];
+        try {
         $q = Store::get('acquire_queue', []);
         if (!is_array($q)) $q = [];
+        $show = trim((string)($item['show'] ?? ''));
+        if ($show !== '' && isset($item['season'], $item['episode'])) {
+            foreach ($q as $existing) {
+                if (!is_array($existing) || in_array((string)($existing['status'] ?? ''), ['cancelled', 'done', 'removed', 'failed', 'exhausted'], true)) continue;
+                if ((int)($existing['season'] ?? -1) !== (int)$item['season'] || (int)($existing['episode'] ?? -1) !== (int)$item['episode']) continue;
+                if ((string)($existing['section_id'] ?? '') !== (string)($item['section_id'] ?? '')) continue;
+                $same = !empty($item['show_key']) && !empty($existing['show_key'])
+                    ? (string)$item['show_key'] === (string)$existing['show_key']
+                    : strcasecmp(trim((string)($existing['show'] ?? '')), $show) === 0;
+                if ($same) return ['ok' => true, 'deduplicated' => true, 'entry' => $existing];
+            }
+        }
+        if (count($q) >= 2000) return ['ok' => false, 'error' => 'Acquisition queue full (2000 entries); remove old requests before adding more'];
+        $eligible = self::episodeEligibleAt($item['airdate'] ?? null);
         $entry = [
             'id' => bin2hex(random_bytes(8)),
             'title' => $item['title'] ?? 'Unknown',
             'magnet' => $item['magnet'] ?? '',
             'url' => ($item['enclosure'] ?? '') ?: ($item['link'] ?? ''),
-            'status' => 'queued',
+            'status' => $eligible !== null && $eligible > time() ? 'scheduled' : 'queued',
             'created_at' => date('c'),
             'message' => '',
             'query' => $item['query'] ?? null,
             'show' => $item['show'] ?? null,
+            'show_key' => $item['show_key'] ?? null,
+            'airdate' => $item['airdate'] ?? null,
+            'eligible_at' => $eligible,
+            'next_attempt_at' => $eligible !== null ? max($eligible, time()) : time(),
+            'search_attempts' => 0,
+            'error_attempts' => 0,
             'season' => $item['season'] ?? null,
             'episode' => $item['episode'] ?? null,
             'kind' => $item['kind'] ?? 'manual',
@@ -611,11 +719,11 @@ class Acquisition {
             $entry['torrent_hash'] = strtolower($hm[1]);
         }
         $q[] = $entry;
-        Store::set('acquire_queue', $q);
+        if (!Store::set('acquire_queue', $q)) return ['ok' => false, 'error' => 'Could not persist acquisition request'];
 
         $settings = Store::settings();
         $tr = $settings['acquisition']['transmission'] ?? [];
-        if (!empty($tr['enabled']) && ($entry['magnet'] || $entry['url'])) {
+        if ($entry['status'] !== 'scheduled' && !empty($tr['enabled']) && ($entry['magnet'] || $entry['url'])) {
             $res = self::sendToTransmission((string)$entry['magnet'], (string)$entry['url'], $tr);
             $entry['status'] = $res['ok'] ? 'sent_transmission' : 'queued_local';
             $entry['message'] = $res['message'] ?? '';
@@ -626,6 +734,10 @@ class Acquisition {
             Store::set('acquire_queue', $q);
         }
         return ['ok' => true, 'entry' => $entry];
+        } finally {
+            flock($lock, LOCK_UN);
+            fclose($lock);
+        }
     }
 
     public static function transmissionReachable(array $tr): bool {
@@ -1210,7 +1322,7 @@ class Acquisition {
         foreach ($full['local_queue'] ?? [] as $e) {
             if (!empty($e['season']) && !empty($e['episode'])) {
                 $st = $e['status'] ?? 'queued';
-                if (in_array($st, ['cancelled','done','failed'], true)) continue;
+                if (in_array($st, ['cancelled','done','failed','exhausted','paused','removed'], true)) continue;
                 $badges[] = [
                     'show_guess' => $e['show'] ?? null,
                     'season' => $e['season'],
@@ -1250,6 +1362,9 @@ class Acquisition {
     public static function cancelEpisodeSearch(string $showTitle, int $season, int $episode): array {
         $code = sprintf('S%02dE%02d', $season, $episode);
         $cancelled = [];
+        $lock = self::acquireLock();
+        if (!$lock) return ['ok' => false, 'error' => 'Acquisition queue busy; retry shortly'];
+        try {
         $q = Store::get('acquire_queue', []);
         if (!is_array($q)) $q = [];
         $showL = strtolower(trim($showTitle));
@@ -1268,6 +1383,10 @@ class Acquisition {
         }
         unset($e);
         Store::set('acquire_queue', $q);
+        } finally {
+            flock($lock, LOCK_UN);
+            fclose($lock);
+        }
 
         $tr = Store::settings()['acquisition']['transmission'] ?? [];
         $st = self::transmissionStatus($tr);
@@ -1300,147 +1419,35 @@ class Acquisition {
      */
     public static function requestEpisode(string $showTitle, int $season, int $episode, array $opts = []): array {
         $showTitle = trim($showTitle);
-        if ($showTitle === '') return ['ok' => false, 'error' => 'show title required'];
-        $code = sprintf('S%02dE%02d', $season, $episode);
-        $query = trim($showTitle . ' ' . $code);
-        if (!empty($opts['query'])) $query = trim((string)$opts['query']);
-
-        $sectionId = $opts['section_id'] ?? null;
-        $optKind = strtolower(trim((string)($opts['kind'] ?? '')));
-        if (in_array($optKind, ['anime', 'tv', 'movie', 'disney'], true)) {
-            $kindIntent = $optKind;
-            $kindHit = $optKind;
-        } else {
-            $kindIntent = 'episode_search';
-            $kindHit = 'episode_hit';
+        if ($showTitle === '' || $season < 0 || $episode < 1) {
+            return ['ok' => false, 'error' => 'Valid show, season and episode required'];
         }
-
-        $settings = Store::settings();
-        $acq = $settings['acquisition'] ?? [];
-        if (empty($acq['enabled'])) {
-            // Still allow queueing a request so admin can process later
-            $res = self::enqueue([
-                'title' => 'SEARCH: ' . $query,
-                'magnet' => '',
-                'link' => '',
-                'enclosure' => '',
-                'query' => $query,
-                'section_id' => $sectionId,
-                'show' => $showTitle,
-                'season' => $season,
-                'episode' => $episode,
-                'kind' => $kindIntent,
-            ]);
-            return [
-                'ok' => true,
-                'queued' => true,
-                'searched' => false,
-                'reason' => 'Acquisition disabled — queued search request locally',
-                'query' => $query,
-                'section_id' => $sectionId,
-                'entry' => $res['entry'] ?? null,
-            ];
-        }
-
-        $hasSearchFeed = false;
-        foreach (FeedCatalogue::active($acq['feeds'] ?? []) as $feed) {
-            $url = is_array($feed) ? ($feed['url'] ?? '') : (string)$feed;
-            if ($url === '') continue;
-            if ((is_array($feed) && (($feed['type'] ?? '') === 'search'))
-                || strpos($url, '{query}') !== false
-                || strpos($url, '{q}') !== false) {
-                $hasSearchFeed = true;
-                break;
-            }
-        }
-
-        $picked = null;
-        $search = null;
-        if ($hasSearchFeed) {
-            $search = self::searchQuery($query);
-            if (!empty($search['items'])) {
-                // Prefer magnet, then enclosure, then link
-                foreach ($search['items'] as $item) {
-                    if (!empty($item['magnet']) || !empty($item['enclosure']) || !empty($item['link'])) {
-                        $picked = $item;
-                        break;
-                    }
-                }
-            } elseif (!($search['ok'] ?? false)) {
-                // Rate limited — queue search intent without remote fetch
-                $res = self::enqueue([
-                    'title' => 'SEARCH: ' . $query,
-                    'magnet' => '',
-                    'link' => '',
-                    'enclosure' => '',
-                    'query' => $query,
-                'section_id' => $sectionId,
-                    'show' => $showTitle,
-                    'season' => $season,
-                    'episode' => $episode,
-                    'kind' => $kindIntent,
-                ]);
-                return [
-                    'ok' => true,
-                    'queued' => true,
-                    'searched' => false,
-                    'reason' => $search['reason'] ?? 'Rate limited',
-                    'retry_in' => $search['retry_in'] ?? null,
-                    'query' => $query,
-                'section_id' => $sectionId,
-                    'entry' => $res['entry'] ?? null,
-                ];
-            }
-        }
-
-        if ($picked) {
-            $res = self::enqueue([
-                'title' => $picked['title'] ?: ('SEARCH: ' . $query),
-                'magnet' => $picked['magnet'] ?? '',
-                'link' => $picked['link'] ?? '',
-                'enclosure' => $picked['enclosure'] ?? '',
-                'query' => $query,
-                'section_id' => $sectionId,
-                'show' => $showTitle,
-                'season' => $season,
-                'episode' => $episode,
-                'kind' => $kindHit,
-            ]);
-            return [
-                'ok' => true,
-                'queued' => true,
-                'searched' => true,
-                'matched' => $picked['title'] ?? null,
-                'query' => $query,
-                'section_id' => $sectionId,
-                'entry' => $res['entry'] ?? null,
-                'search_count' => $search['count'] ?? 0,
-            ];
-        }
-
-        // No hit (or no search feeds) — queue the search intent
-        $res = self::enqueue([
+        $query = trim((string)($opts['query'] ?? ''));
+        if ($query === '') $query = trim($showTitle . ' ' . sprintf('S%02dE%02d', $season, $episode));
+        $kind = strtolower(trim((string)($opts['kind'] ?? 'episode_search')));
+        $queued = self::enqueue([
             'title' => 'SEARCH: ' . $query,
-            'magnet' => '',
-            'link' => '',
-            'enclosure' => '',
             'query' => $query,
-                'section_id' => $sectionId,
             'show' => $showTitle,
+            'show_key' => $opts['show_key'] ?? null,
+            'section_id' => $opts['section_id'] ?? null,
             'season' => $season,
             'episode' => $episode,
-            'kind' => $kindIntent,
+            'kind' => $kind,
+            'airdate' => $opts['airdate'] ?? null,
         ]);
+        if (empty($queued['ok'])) return ['ok' => false, 'error' => $queued['error'] ?? 'Could not queue episode'];
+        $entry = $queued['entry'];
         return [
             'ok' => true,
             'queued' => true,
-            'searched' => $hasSearchFeed,
-            'matched' => null,
-            'reason' => $hasSearchFeed ? 'No RSS hit for query' : 'No search feeds configured (use {query} in feed URL)',
+            'searched' => false,
+            'deduplicated' => !empty($queued['deduplicated']),
             'query' => $query,
-                'section_id' => $sectionId,
-            'entry' => $res['entry'] ?? null,
-            'search_count' => $search['count'] ?? 0,
+            'entry' => $entry,
+            'reason' => ($entry['status'] ?? '') === 'scheduled'
+                ? 'Scheduled for the day after the listed air date'
+                : 'Queued for bounded background search',
         ];
     }
 
@@ -1475,6 +1482,9 @@ class Acquisition {
     private static function handleStalledTorrents(array $raw, array $tr): array {
         $cfg = self::stallSettings();
         if (!$cfg['enabled']) return [];
+        $lock = self::acquireLock();
+        if (!$lock) return [];
+        try {
         $watch = Store::get('stall_watch', []);
         if (!is_array($watch)) $watch = [];
         $q = Store::get('acquire_queue', []);
@@ -1531,56 +1541,76 @@ class Acquisition {
         }
         foreach (array_keys($watch) as $h) if (!isset($seen[$h])) unset($watch[$h]);
         Store::set('stall_watch', $watch);
-        if ($acted) {
-            Store::set('acquire_queue', $q);
-            self::processPendingSearches(['limit' => count($acted)]);
+        if ($acted) Store::set('acquire_queue', $q);
+        } finally {
+            flock($lock, LOCK_UN);
+            fclose($lock);
         }
+        // Never recursively acquire the search lock while holding the queue lock.
+        if ($acted) self::processPendingSearches(['limit' => count($acted)]);
         return $acted;
     }
 
     public static function processPendingSearches(array $opts = []): array {
-        $limit = max(1, min(20, (int)($opts['limit'] ?? 3)));
+        $lock = self::acquireLock();
+        if (!$lock) return ['ok' => true, 'skipped' => true, 'reason' => 'search already running', 'processed' => 0];
+        try {
+        $limit = max(1, min(2, (int)($opts['limit'] ?? 2)));
         $q = Store::get('acquire_queue', []);
         if (!is_array($q)) $q = [];
         $processed = [];
+        $considered = 0;
+        $deadline = microtime(true) + 20;
         $skipped = 0;
         $failed = [];
         $rateLimited = false;
         $retryIn = null;
 
-        foreach ($q as $i => $entry) {
-            if (count($processed) >= $limit) break;
+        // Oldest due work goes first, including after a failed payload's cooldown.
+        $order = array_keys($q);
+        usort($order, static function ($a, $b) use ($q): int {
+            $left = is_array($q[$a]) ? max((int)($q[$a]['eligible_at'] ?? 0), (int)($q[$a]['next_attempt_at'] ?? 0)) : 0;
+            $right = is_array($q[$b]) ? max((int)($q[$b]['eligible_at'] ?? 0), (int)($q[$b]['next_attempt_at'] ?? 0)) : 0;
+            return ($left <=> $right) ?: ($a <=> $b);
+        });
+        foreach ($order as $i) {
+            $entry = $q[$i];
+            if (microtime(true) >= $deadline || count($processed) >= $limit) break;
             if (!is_array($entry)) continue;
             $status = (string)($entry['status'] ?? '');
-            if (!in_array($status, ['queued', 'queued_local'], true)) continue;
+            if (!in_array($status, ['queued', 'queued_local', 'scheduled', 'retry_wait'], true)) continue;
+            $eligible = (int)($entry['eligible_at'] ?? 0);
+            if ($eligible > time() || (int)($entry['next_attempt_at'] ?? 0) > time()) continue;
             $magnet = trim((string)($entry['magnet'] ?? ''));
             $url = trim((string)($entry['url'] ?? ''));
             $query = trim((string)($entry['query'] ?? ''));
-            // Already has a torrent payload — try Transmission if not yet sent
+            // Eligibility was checked above, so scheduled payloads may now be sent.
             if ($magnet !== '' || $url !== '') {
-                if ($status === 'queued_local' || $status === 'queued') {
-                    $tr = Store::settings()['acquisition']['transmission'] ?? [];
-                    if (!empty($tr['enabled'])) {
-                        $res = self::sendToTransmission($magnet, $url, $tr);
-                        if (!empty($res['ok'])) {
-                            $entry['status'] = 'sent_transmission';
-                            $entry['message'] = $res['message'] ?? '';
-                            if (!empty($res['id'])) $entry['torrent_id'] = (int)$res['id'];
-                            if (!empty($res['hash'])) $entry['torrent_hash'] = strtolower((string)$res['hash']);
-                            $q[$i] = $entry;
-                            Store::set('acquire_queue', $q);
-                            $processed[] = ['id' => $entry['id'] ?? null, 'title' => $entry['title'] ?? '', 'action' => 'sent_transmission'];
-                        }
-                    }
+                $tr = Store::settings()['acquisition']['transmission'] ?? [];
+                // Disabled integrations must not consume the bounded work budget.
+                if (empty($tr['enabled'])) continue;
+                if (++$considered > $limit) break;
+                $res = self::sendToTransmission($magnet, $url, $tr);
+                $entry['status'] = !empty($res['ok']) ? 'sent_transmission' : 'queued_local';
+                $entry['message'] = $res['message'] ?? '';
+                $entry['updated_at'] = date('c');
+                // Failed payloads yield to later queue entries on subsequent ticks.
+                $entry['next_attempt_at'] = !empty($res['ok']) ? null : time() + 300;
+                if (!empty($res['ok'])) {
+                    if (!empty($res['id'])) $entry['torrent_id'] = (int)$res['id'];
+                    if (!empty($res['hash'])) $entry['torrent_hash'] = strtolower((string)$res['hash']);
+                    $processed[] = ['id' => $entry['id'] ?? null, 'title' => $entry['title'] ?? '', 'action' => 'sent_transmission'];
                 }
+                $q[$i] = $entry;
+                Store::set('acquire_queue', $q);
                 continue;
             }
-            // Need a search query
+            // Entries without actionable work must not consume the search budget.
             if ($query === '') {
                 $skipped++;
                 continue;
             }
-
+            if (++$considered > $limit) break;
             $gate = self::canFetchNow();
             if (!($gate['ok'] ?? false)) {
                 $rateLimited = true;
@@ -1589,12 +1619,18 @@ class Acquisition {
             }
 
             $search = self::searchQuery($query);
+            // Count completed queries that obtained feed responses, including cached results.
+            // Empty/unavailable feeds are operational failures, not evidence of no release.
+            $validAnswer = !empty($search['ok']) && (int)($search['feeds_searched'] ?? 0) > (int)($search['feed_errors'] ?? 0);
+            if ($validAnswer) $entry['search_attempts'] = (int)($entry['search_attempts'] ?? 0) + 1;
             if (!($search['ok'] ?? false) && empty($search['items'])) {
                 $rateLimited = !empty($search['retry_in']);
                 $retryIn = $search['retry_in'] ?? $retryIn;
                 if ($rateLimited) break;
-                $entry['status'] = 'no_hit';
-                $entry['message'] = $search['reason'] ?? 'No RSS hit for query';
+                $entry['error_attempts'] = (int)($entry['error_attempts'] ?? 0) + 1;
+                $entry['status'] = $entry['error_attempts'] >= 5 ? 'paused' : 'retry_wait';
+                $entry['next_attempt_at'] = $entry['error_attempts'] >= 5 ? null : time() + min(21600, 600 * (1 << min(5, $entry['error_attempts'] - 1)));
+                $entry['message'] = $search['reason'] ?? 'Search provider unavailable';
                 $entry['updated_at'] = date('c');
                 $q[$i] = $entry;
                 Store::set('acquire_queue', $q);
@@ -1613,7 +1649,13 @@ class Acquisition {
                 if (!$banned) break;
             }
             if (!$picked) {
-                $entry['status'] = 'no_hit';
+                if ($validAnswer) {
+                    self::postponeNoHit($entry);
+                } else {
+                    $entry['error_attempts'] = (int)($entry['error_attempts'] ?? 0) + 1;
+                    $entry['status'] = $entry['error_attempts'] >= 5 ? 'paused' : 'retry_wait';
+                    $entry['next_attempt_at'] = $entry['error_attempts'] >= 5 ? null : time() + min(21600, 600 * (1 << min(5, $entry['error_attempts'] - 1)));
+                }
                 $entry['message'] = 'No usable magnet/link in search results';
                 $entry['updated_at'] = date('c');
                 $q[$i] = $entry;
@@ -1622,6 +1664,8 @@ class Acquisition {
                 continue;
             }
 
+            $entry['error_attempts'] = 0;
+            $entry['next_attempt_at'] = null;
             $entry['title'] = $picked['title'] ?: $entry['title'];
             $entry['magnet'] = $picked['magnet'] ?? '';
             $entry['url'] = ($picked['enclosure'] ?? '') ?: ($picked['link'] ?? '');
@@ -1662,6 +1706,110 @@ class Acquisition {
             'rate_limited' => $rateLimited,
             'retry_in' => $retryIn,
         ];
+        } finally {
+            flock($lock, LOCK_UN);
+            fclose($lock);
+        }
+    }
+
+    /** Store bulk episode intentions in one bounded, locked queue update. */
+    private static function enqueueEpisodeBatch(array $requests): array {
+        $lock = self::acquireLock();
+        if (!$lock) return ['ok' => false, 'error' => 'Acquisition queue busy; retry shortly', 'entries' => []];
+        try {
+            $q = Store::get('acquire_queue', []);
+            if (!is_array($q)) $q = [];
+            $seen = [];
+            $keyFor = static function (array $e, bool $byTitle = false): string {
+                $section = strtolower(trim((string)($e['section_id'] ?? '')));
+                $show = $byTitle ? '' : strtolower(trim((string)($e['show_key'] ?? '')));
+                if ($show === '') $show = strtolower(trim((string)($e['show'] ?? '')));
+                return $section . '|' . $show . '|' . (int)($e['season'] ?? -1) . '|' . (int)($e['episode'] ?? -1);
+            };
+            foreach ($q as $existing) {
+                if (!is_array($existing) || in_array((string)($existing['status'] ?? ''), ['cancelled', 'removed', 'done', 'failed', 'exhausted'], true)) continue;
+                $seen[$keyFor($existing)] = $existing;
+                // Older installations stored the show title without a canonical key.
+                if (empty($existing['show_key'])) $seen[$keyFor($existing, true)] = $existing;
+            }
+            $entries = [];
+            $added = 0;
+            $truncated = false;
+            foreach ($requests as $item) {
+                $key = $keyFor($item);
+                $legacyKey = $keyFor($item, true);
+                $previous = $seen[$key] ?? ($seen[$legacyKey] ?? null);
+                if ($previous !== null) {
+                    $entries[] = $previous;
+                    continue;
+                }
+                if ($added >= 400 || count($q) >= 2000) { $truncated = true; continue; }
+                $date = $item['airdate'] ?? null;
+                $eligible = self::episodeEligibleAt($date);
+                $entry = [
+                    'id' => bin2hex(random_bytes(8)),
+                    'title' => 'SEARCH: ' . $item['query'],
+                    'magnet' => '', 'url' => '',
+                    'status' => $eligible !== null && $eligible > time() ? 'scheduled' : 'queued',
+                    'created_at' => date('c'), 'message' => '',
+                    'query' => $item['query'], 'show' => $item['show'],
+                    'show_key' => $item['show_key'] ?? null,
+                    'airdate' => $date, 'eligible_at' => $eligible,
+                    'next_attempt_at' => $eligible !== null ? max($eligible, time()) : time(),
+                    'search_attempts' => 0, 'error_attempts' => 0,
+                    'season' => $item['season'], 'episode' => $item['episode'],
+                    'kind' => $item['kind'], 'section_id' => $item['section_id'],
+                ];
+                $q[] = $entry;
+                $seen[$key] = $entry;
+                $seen[$legacyKey] = $entry;
+                $entries[] = $entry;
+                $added++;
+            }
+            if ($added && !Store::set('acquire_queue', $q)) {
+                return ['ok' => false, 'error' => 'Could not persist acquisition queue', 'entries' => []];
+            }
+            return ['ok' => true, 'entries' => $entries, 'added' => $added, 'truncated' => $truncated];
+        } finally {
+            flock($lock, LOCK_UN);
+            fclose($lock);
+        }
+    }
+
+    /** Restart a terminal/paused episode search without bypassing release eligibility. */
+    public static function retryEpisodeQueueEntry(string $id): array {
+        if (!preg_match('/^[a-f0-9]{16}$/D', $id)) return ['ok' => false, 'error' => 'Invalid queue ID'];
+        $lock = self::acquireLock(true);
+        if (!$lock) return ['ok' => false, 'error' => 'Acquisition queue busy; retry shortly'];
+        try {
+            $q = Store::get('acquire_queue', []);
+            if (!is_array($q)) return ['ok' => false, 'error' => 'Queue unavailable'];
+            foreach ($q as $i => $entry) {
+                if (!is_array($entry) || (string)($entry['id'] ?? '') !== $id) continue;
+                if (!in_array((string)($entry['status'] ?? ''), ['exhausted', 'paused', 'failed'], true)) {
+                    return ['ok' => false, 'error' => 'Only paused, failed or exhausted searches may be retried'];
+                }
+                if (trim((string)($entry['query'] ?? '')) === '') return ['ok' => false, 'error' => 'This entry has no search query'];
+                $eligible = self::episodeEligibleAt($entry['airdate'] ?? null);
+                $entry['eligible_at'] = $eligible;
+                $entry['next_attempt_at'] = $eligible !== null ? max($eligible, time()) : time();
+                $entry['status'] = $eligible !== null && $eligible > time() ? 'scheduled' : 'queued';
+                $entry['search_attempts'] = 0;
+                $entry['error_attempts'] = 0;
+                $entry['magnet'] = '';
+                $entry['url'] = '';
+                $entry['message'] = 'Search reset by administrator';
+                $entry['updated_at'] = date('c');
+                unset($entry['torrent_id'], $entry['torrent_hash']);
+                $q[$i] = $entry;
+                if (!Store::set('acquire_queue', $q)) return ['ok' => false, 'error' => 'Unable to persist retry'];
+                return ['ok' => true, 'entry' => $entry];
+            }
+            return ['ok' => false, 'error' => 'Queue entry not found'];
+        } finally {
+            flock($lock, LOCK_UN);
+            fclose($lock);
+        }
     }
 
     /** Queue fetch for every missing episode in a show detail payload. */
@@ -1671,6 +1819,7 @@ class Acquisition {
         $queued = [];
         $errors = [];
         $sentNow = 0;
+        $requests = [];
         foreach ($detail['seasons'] ?? [] as $seasonBlock) {
             $sNum = (int)($seasonBlock['season'] ?? 0);
             if ($onlySeason !== null && $sNum !== $onlySeason) continue;
@@ -1684,39 +1833,38 @@ class Acquisition {
                 if ($sNum <= 0 && $onlySeason === null) continue;
                 $showSection = (string)($show['section'] ?? '');
                 $typeKind = ($showSection === 'anime' || ($show['type'] ?? '') === 'anime') ? 'anime' : 'tv';
-                $res = self::requestEpisode($title, $sNum, $eNum, [
+                $requests[] = [
+                    'show' => $title,
+                    'query' => trim($title . ' ' . sprintf('S%02dE%02d', $sNum, $eNum)),
                     'kind' => $typeKind,
+                    'show_key' => $show['show_key'] ?? null,
+                    'airdate' => $ep['airdate'] ?? null,
                     'section_id' => $showSection !== '' ? $showSection : null,
-                ]);
-                if (!empty($res['entry'])) {
-                    $queued[] = $res['entry'];
-                    if (($res['entry']['status'] ?? '') === 'sent_transmission') $sentNow++;
-                } elseif (!($res['ok'] ?? false)) {
-                    $errors[] = $res;
-                }
+                    'season' => $sNum,
+                    'episode' => $eNum,
+                ];
             }
         }
 
-        // Drain as many pending SEARCH intents as rate limits allow (same request).
-        // Remaining stay queued and are picked up by cron / next processPendingSearches.
-        $drained = self::processPendingSearches(['limit' => 5]);
-        foreach ($drained['items'] ?? [] as $item) {
-            if (($item['status'] ?? '') === 'sent_transmission' || ($item['action'] ?? '') === 'sent_transmission') {
-                $sentNow++;
-            }
-        }
+        $batch = self::enqueueEpisodeBatch($requests);
+        $queued = $batch['entries'] ?? [];
+        if (empty($batch['ok'])) $errors[] = ['error' => $batch['error'] ?? 'Queue write failed'];
+        if (!empty($batch['truncated'])) $errors[] = ['error' => 'Only first 400 missing episodes scheduled; repeat for remaining episodes.'];
+
+        // Bulk requests only register intentions; search occurs in bounded worker ticks.
+        $drained = ['ok' => true, 'processed' => 0, 'items' => [], 'rate_limited' => false];
 
         return [
-            'ok' => true,
+            'ok' => !empty($batch['ok']) && empty($batch['truncated']),
             'show' => $title,
             'queued' => $queued,
             'count' => count($queued),
+            'new_requests' => (int)($batch['added'] ?? 0),
+            'reason' => !empty($batch['truncated']) ? 'Queue capacity reached; repeat after removing old requests' : ($batch['error'] ?? null),
             'sent_transmission' => $sentNow,
             'pending_searches' => $drained,
             'errors' => $errors,
-            'note' => !empty($drained['rate_limited'])
-                ? 'Some episodes are queued as SEARCH intents; they will be searched and sent to Transmission as rate limits allow (every min_interval_seconds). Call processPendingSearches or wait for cron.'
-                : null,
+            'note' => 'Episodes have been scheduled. Due searches are processed by the existing downloads worker.',
         ];
     }
 
@@ -2570,6 +2718,9 @@ class Acquisition {
     }
 
     private static function markQueueRemovedById(string $id, bool $delete): array {
+        $lock = self::acquireLock(true);
+        if (!$lock) throw new RuntimeException('Acquisition queue busy; cannot safely update download status');
+        try {
         $q = Store::get('acquire_queue', []);
         if (!is_array($q)) return [];
         $hit = [];
@@ -2583,9 +2734,16 @@ class Acquisition {
         unset($e);
         if ($hit) Store::set('acquire_queue', $q);
         return $hit;
+        } finally {
+            flock($lock, LOCK_UN);
+            fclose($lock);
+        }
     }
 
     private static function markQueueRemovedForTorrent(array $tor, bool $delete): array {
+        $lock = self::acquireLock(true);
+        if (!$lock) throw new RuntimeException('Acquisition queue busy; cannot safely update download status');
+        try {
         $q = Store::get('acquire_queue', []);
         if (!is_array($q)) return [];
         $hit = [];
@@ -2602,9 +2760,16 @@ class Acquisition {
         unset($e);
         if ($hit) Store::set('acquire_queue', $q);
         return $hit;
+        } finally {
+            flock($lock, LOCK_UN);
+            fclose($lock);
+        }
     }
 
     private static function markQueueDoneForTorrent(array $tor, array $dests): void {
+        $lock = self::acquireLock(true);
+        if (!$lock) throw new RuntimeException('Acquisition queue busy; cannot safely update download status');
+        try {
         $q = Store::get('acquire_queue', []);
         if (!is_array($q)) return;
         $changed = false;
@@ -2620,6 +2785,10 @@ class Acquisition {
         }
         unset($e);
         if ($changed) Store::set('acquire_queue', $q);
+        } finally {
+            flock($lock, LOCK_UN);
+            fclose($lock);
+        }
     }
 
     private static function importRecords(): array {
