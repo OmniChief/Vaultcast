@@ -9176,9 +9176,26 @@ try {
                   h('div', { text: e.title || e.query || e.id }),
                   h('div', { className:'muted', text: stateText + (e.show ? (' · '+e.show) : '') + (e.season!=null ? (' '+('S'+e.season+'E'+e.episode)) : '') })
                 ]),
-                (e.status === 'cancelled' || e.status === 'removed' || e.status === 'done' || e.status === 'exhausted' || e.status === 'paused')
+                (e.status === 'cancelled' || e.status === 'removed' || e.status === 'done')
                   ? h('span', { className:'muted', text: e.status })
                   : h('span', { className:'row-actions' }, [
+                      (e.status === 'exhausted' || e.status === 'paused' || e.status === 'failed') ? h('button', {
+                        className:'btn ghost',
+                        text:'Retry',
+                        title:'Reset search attempts and schedule another bounded search',
+                        onClick: function(ev){
+                          var btn = ev.currentTarget;
+                          btn.disabled = true;
+                          api('/admin/downloads/retry', {method:'POST', body:{id:e.id}})
+                            .then(function(r){
+                              if (!r.ok) return toast(r.error || 'Could not retry acquisition', {kind:'bad'});
+                              toast('Episode queued for retry', {kind:'ok'});
+                              loadDownloadStatus(true);
+                              if (typeof render === 'function') render();
+                            }).catch(function(err){ toast(String(err), {kind:'bad'}); })
+                            .finally(function(){ btn.disabled = false; });
+                        }
+                      }) : null,
                       h('button', {
                         className:'btn ghost danger-outline',
                         text:'Remove',
