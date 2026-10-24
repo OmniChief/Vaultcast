@@ -1267,7 +1267,7 @@ class Acquisition {
         foreach ($full['local_queue'] ?? [] as $e) {
             if (!empty($e['season']) && !empty($e['episode'])) {
                 $st = $e['status'] ?? 'queued';
-                if (in_array($st, ['cancelled','done','failed'], true)) continue;
+                if (in_array($st, ['cancelled','done','failed','exhausted','paused','removed'], true)) continue;
                 $badges[] = [
                     'show_guess' => $e['show'] ?? null,
                     'season' => $e['season'],
