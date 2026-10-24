@@ -88,6 +88,26 @@ if (preg_match('#^/stream/bios/psx/(.+)$#', $path, $m) && ($method === 'GET' || 
     Stream::playBios($m[1]);
 }
 
+// Device API keys: raw credentials are returned once and never cached or listed.
+if ($path === '/me/api-keys' || $path === '/me/api-keys/revoke') {
+    header('Cache-Control: no-store');
+    $user = Auth::requireKeyManager();
+    if ($path === '/me/api-keys' && $method === 'GET') json_out(['ok' => true, 'keys' => Auth::apiKeys($user)]);
+    $b = body_json();
+    try {
+        if ($path === '/me/api-keys' && $method === 'POST') {
+            if (!is_string($b['label'] ?? null) || (isset($b['days']) && !is_int($b['days']))) json_error('A device name and valid expiry are required.', 422);
+            json_out(Auth::createApiKey($user, $b['label'], $b['days'] ?? 365));
+        }
+        if ($path === '/me/api-keys/revoke' && $method === 'POST') {
+            if (!is_string($b['id'] ?? null)) json_error('Invalid key ID.', 422);
+            json_out(Auth::revokeApiKey($user, $b['id']));
+        }
+    } catch (InvalidArgumentException $e) { json_error($e->getMessage(), 422); }
+    catch (DomainException $e) { json_error($e->getMessage(), 403); }
+    json_error('Method not allowed.', 405);
+}
+
 if ($path === '/me' && $method === 'GET') {
     $sess = Auth::currentSession();
     $guestBrowsing = NetworkAccess::guestAllowed();
@@ -166,6 +186,7 @@ if ($path === '/me/prefs' && $method === 'POST') {
     $user = Auth::requireUser();
     $b = body_json();
     if(array_key_exists('motion_mode',$b)&&!in_array($b['motion_mode'],['system','full','reduced'],true))json_error('Choose a valid motion setting.',422);
+    if (!empty($b['password']) && !empty($user['_session']['api_key'])) json_error('Sign in through your browser to change your password.', 403);
     if (!empty($b['password']) && (strlen($b['password']) < 12 || strlen($b['password']) > 72)) json_error('Use a password between 12 and 72 bytes.');
     try { $avatar = Profiles::saveAvatar($user, $b); } catch (InvalidArgumentException $error) { json_error($error->getMessage(), 422); }
     $saved = \Vaultcast\Repository::updateUser($user['id'], function (array $u) use ($b, $avatar): array {

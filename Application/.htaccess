@@ -3,6 +3,7 @@
 Options -Indexes
 <IfModule mod_rewrite.c>
     RewriteEngine On
+    RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
     RewriteRule ^(src|data|deploy|docs|netplay|tests)(/|$) - [F,L]
     RewriteRule (^|/)\. - [F,L]
     RewriteRule \.(sql|md|log|sh|ps1|cmd|ya?ml|lock|bak)$ - [F,L]

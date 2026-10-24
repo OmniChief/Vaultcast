@@ -8654,7 +8654,8 @@ try {
       Array.from(personalCard.children).forEach(function(child){
         if(child.classList.contains('row-actions')){if(sec!=='account')Array.from(child.children).slice(1).forEach(function(button){button.remove();});return;}
         if(!ids.some(function(id){return child.id===id||child.querySelector('#'+id);}))child.remove();
-      });bodyKids[0].textContent=activeItem.label;
+      });bodyKids[0].textContent=activeItem.label    if(sec==='account'&&u.username&&(u.role||'user')!=='guest')bodyKids.push(apiKeysPanel());
+;
     }
     if(sec==='parental'){
       var parentalHost=h('div',{className:'parental-host'},[h('p',{className:'muted',text:'Loading…'})]);
@@ -10815,7 +10816,45 @@ h('div', { className:'cv-find-bar' }, [
     reload();
   }
 
-  /* ---------------- Settings → Check for updates (admin) ---------------- */
+  /* ---------------- Settings → Check for updates (admin) ------------  function apiKeysPanel(){
+    var list=h('div',{className:'stack'}),secret=h('div',{className:'stack'}),status=h('p',{className:'muted','aria-live':'polite'});
+    var label=h('input',{type:'text',maxlength:80,placeholder:'My phone',autocomplete:'off','aria-label':'Device name'});
+    var days=h('select',{'aria-label':'API key expiry'},[h('option',{value:'30',text:'30 days'}),h('option',{value:'90',text:'90 days'}),h('option',{value:'365',text:'1 year',selected:true})]);
+    function load(){
+      return api('/me/api-keys').then(function(r){
+        if(!r.ok)throw new Error(r.error||'Could not load API keys.');
+        list.replaceChildren();
+        if(!(r.keys||[]).length)list.appendChild(h('p',{className:'muted',text:'No active API keys.'}));
+        (r.keys||[]).forEach(function(key){
+          var revoke=h('button',{className:'btn danger-outline',type:'button',text:'Revoke',onClick:function(){
+            confirmDialog('Revoke '+key.label+'? The app using this key will lose access.',{okText:'Revoke key'}).then(function(ok){
+              if(!ok)return;revoke.disabled=true;
+              api('/me/api-keys/revoke',{method:'POST',body:{id:key.id}}).then(function(r){if(!r.ok)throw new Error(r.error||'Could not revoke key.');if(secret._keyId===key.id)secret.replaceChildren();return load();}).catch(function(e){status.textContent=friendlyMessage(e);revoke.disabled=false;});
+            });
+          }});
+          list.appendChild(h('div',{className:'row-actions'},[h('span',{text:key.label+' · expires '+new Date(key.expires_at*1000).toLocaleDateString()}),revoke]));
+        });
+      }).catch(function(e){status.textContent=friendlyMessage(e);});
+    }
+    var generate=h('button',{className:'btn',type:'button',text:'Generate API key',onClick:function(){
+      if(!label.value.trim()){status.textContent='Enter a device name.';return;}
+      generate.disabled=true;status.textContent='Generating…';secret.replaceChildren();
+      api('/me/api-keys',{method:'POST',body:{label:label.value.trim(),days:Number(days.value)}}).then(function(r){
+        if(!r.ok)throw new Error(r.error||'Could not generate key.');
+        secret._keyId=r.entry.id;
+        var value=h('input',{type:'text',value:r.key,readOnly:true,autocomplete:'off',spellcheck:false,'aria-label':'New API key',onClick:function(e){e.target.select();}});
+        secret.replaceChildren(h('p',{text:'Copy this key now. It is shown only once. Treat it like your password.'}),value,h('button',{className:'btn',type:'button',text:'Copy key',onClick:function(){
+          if(navigator.clipboard&&window.isSecureContext)navigator.clipboard.writeText(value.value).then(function(){status.textContent='Key copied.';}).catch(function(){value.focus();value.select();status.textContent='Select and copy the key.';});
+          else{value.focus();value.select();status.textContent='Select and copy the key.';}
+        }}));
+        label.value='';status.textContent='Key created.';return load();
+      }).catch(function(e){status.textContent=friendlyMessage(e);}).finally(function(){generate.disabled=false;});
+    }});
+    var panel=h('section',{className:'settings-card stack'},[h('h3',{text:'Mobile app API keys'}),h('p',{className:'muted',text:'Connect an app without signing in each time. Each key uses your current account permissions and expires automatically. Revoke it here to disconnect a device.'}),h('p',{className:'muted',text:'API address: '+new URL(BASE+'api',location.origin).href}),h('p',{className:'muted',text:'Send the key in the Authorization: Bearer <key> header. Keys are accepted in headers only.'}),h('label',{},['Device name',label]),h('label',{},['Expires after',days]),generate,secret,status,list]);
+    load();return panel;
+  }
+
+---- */
   function renderUpdatesPanel(host, branch, check){
     if (!host.isConnected) return;
     if (!check) {
