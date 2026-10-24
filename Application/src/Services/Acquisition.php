@@ -1364,171 +1364,35 @@ class Acquisition {
      */
     public static function requestEpisode(string $showTitle, int $season, int $episode, array $opts = []): array {
         $showTitle = trim($showTitle);
-        if ($showTitle === '') return ['ok' => false, 'error' => 'show title required'];
-        $code = sprintf('S%02dE%02d', $season, $episode);
-        $query = trim($showTitle . ' ' . $code);
-        if (!empty($opts['query'])) $query = trim((string)$opts['query']);
-
-        $sectionId = $opts['section_id'] ?? null;
-        $premiere = self::episodeEligibleAt($opts['airdate'] ?? null);
-        // All episode requests use the same bounded queue; no network calls inside the web request.
-        if (empty($opts['search_immediately'])) {
-            $queued = self::enqueue([
-                'title' => 'SEARCH: ' . $query, 'query' => $query,
-                'show' => $showTitle,
-                'show_key' => $opts['show_key'] ?? null,
-                'airdate' => $opts['airdate'] ?? null, 'season' => $season, 'episode' => $episode,
-                'kind' => $opts['kind'] ?? 'episode_search',
-                'section_id' => $sectionId,
-            ]);
-            return ['ok' => !empty($queued['ok']), 'queued' => !empty($queued['ok']),
-                'searched' => false, 'entry' => $queued['entry'] ?? null,
-                'reason' => ($premiere !== null && $premiere > time()) ? 'Waiting for episode release' : 'Queued for background search',
-                'error' => $queued['error'] ?? null];
+        if ($showTitle === '' || $season < 0 || $episode < 1) {
+            return ['ok' => false, 'error' => 'Valid show, season and episode required'];
         }
-        $optKind = strtolower(trim((string)($opts['kind'] ?? '')));
-        if (in_array($optKind, ['anime', 'tv', 'movie', 'disney'], true)) {
-            $kindIntent = $optKind;
-            $kindHit = $optKind;
-        } else {
-            $kindIntent = 'episode_search';
-            $kindHit = 'episode_hit';
-        }
-
-        $settings = Store::settings();
-        $acq = $settings['acquisition'] ?? [];
-        if (empty($acq['enabled'])) {
-            // Still allow queueing a request so admin can process later
-            $res = self::enqueue([
-                'title' => 'SEARCH: ' . $query,
-                'magnet' => '',
-                'link' => '',
-                'enclosure' => '',
-                'query' => $query,
-                'section_id' => $sectionId,
-                'show' => $showTitle,
-                'show_key' => $opts['show_key'] ?? null,
-                'airdate' => $opts['airdate'] ?? null,
-                'season' => $season,
-                'episode' => $episode,
-                'kind' => $kindIntent,
-            ]);
-            return [
-                'ok' => true,
-                'queued' => true,
-                'searched' => false,
-                'reason' => 'Acquisition disabled — queued search request locally',
-                'query' => $query,
-                'section_id' => $sectionId,
-                'entry' => $res['entry'] ?? null,
-            ];
-        }
-
-        $hasSearchFeed = false;
-        foreach (FeedCatalogue::active($acq['feeds'] ?? []) as $feed) {
-            $url = is_array($feed) ? ($feed['url'] ?? '') : (string)$feed;
-            if ($url === '') continue;
-            if ((is_array($feed) && (($feed['type'] ?? '') === 'search'))
-                || strpos($url, '{query}') !== false
-                || strpos($url, '{q}') !== false) {
-                $hasSearchFeed = true;
-                break;
-            }
-        }
-
-        $picked = null;
-        $search = null;
-        if ($hasSearchFeed) {
-            $search = self::searchQuery($query);
-            if (!empty($search['items'])) {
-                // Prefer magnet, then enclosure, then link
-                foreach ($search['items'] as $item) {
-                    if (!empty($item['magnet']) || !empty($item['enclosure']) || !empty($item['link'])) {
-                        $picked = $item;
-                        break;
-                    }
-                }
-            } elseif (!($search['ok'] ?? false)) {
-                // Rate limited — queue search intent without remote fetch
-                $res = self::enqueue([
-                    'title' => 'SEARCH: ' . $query,
-                    'magnet' => '',
-                    'link' => '',
-                    'enclosure' => '',
-                    'query' => $query,
-                'section_id' => $sectionId,
-                    'show' => $showTitle,
-                'show_key' => $opts['show_key'] ?? null,
-                'airdate' => $opts['airdate'] ?? null,
-                    'season' => $season,
-                    'episode' => $episode,
-                    'kind' => $kindIntent,
-                ]);
-                return [
-                    'ok' => true,
-                    'queued' => true,
-                    'searched' => false,
-                    'reason' => $search['reason'] ?? 'Rate limited',
-                    'retry_in' => $search['retry_in'] ?? null,
-                    'query' => $query,
-                'section_id' => $sectionId,
-                    'entry' => $res['entry'] ?? null,
-                ];
-            }
-        }
-
-        if ($picked) {
-            $res = self::enqueue([
-                'title' => $picked['title'] ?: ('SEARCH: ' . $query),
-                'magnet' => $picked['magnet'] ?? '',
-                'link' => $picked['link'] ?? '',
-                'enclosure' => $picked['enclosure'] ?? '',
-                'query' => $query,
-                'section_id' => $sectionId,
-                'show' => $showTitle,
-                'show_key' => $opts['show_key'] ?? null,
-                'airdate' => $opts['airdate'] ?? null,
-                'season' => $season,
-                'episode' => $episode,
-                'kind' => $kindHit,
-            ]);
-            return [
-                'ok' => true,
-                'queued' => true,
-                'searched' => true,
-                'matched' => $picked['title'] ?? null,
-                'query' => $query,
-                'section_id' => $sectionId,
-                'entry' => $res['entry'] ?? null,
-                'search_count' => $search['count'] ?? 0,
-            ];
-        }
-
-        // No hit (or no search feeds) — queue the search intent
-        $res = self::enqueue([
+        $query = trim((string)($opts['query'] ?? ''));
+        if ($query === '') $query = trim($showTitle . ' ' . sprintf('S%02dE%02d', $season, $episode));
+        $kind = strtolower(trim((string)($opts['kind'] ?? 'episode_search')));
+        $queued = self::enqueue([
             'title' => 'SEARCH: ' . $query,
-            'magnet' => '',
-            'link' => '',
-            'enclosure' => '',
             'query' => $query,
-                'section_id' => $sectionId,
             'show' => $showTitle,
-                'show_key' => $opts['show_key'] ?? null,
-                'airdate' => $opts['airdate'] ?? null,
+            'show_key' => $opts['show_key'] ?? null,
+            'section_id' => $opts['section_id'] ?? null,
             'season' => $season,
             'episode' => $episode,
-            'kind' => $kindIntent,
+            'kind' => $kind,
+            'airdate' => $opts['airdate'] ?? null,
         ]);
+        if (empty($queued['ok'])) return ['ok' => false, 'error' => $queued['error'] ?? 'Could not queue episode'];
+        $entry = $queued['entry'];
         return [
             'ok' => true,
             'queued' => true,
-            'searched' => $hasSearchFeed,
-            'matched' => null,
-            'reason' => $hasSearchFeed ? 'No RSS hit for query' : 'No search feeds configured (use {query} in feed URL)',
+            'searched' => false,
+            'deduplicated' => !empty($queued['deduplicated']),
             'query' => $query,
-                'section_id' => $sectionId,
-            'entry' => $res['entry'] ?? null,
-            'search_count' => $search['count'] ?? 0,
+            'entry' => $entry,
+            'reason' => ($entry['status'] ?? '') === 'scheduled'
+                ? 'Scheduled for the day after the listed air date'
+                : 'Queued for bounded background search',
         ];
     }
 
