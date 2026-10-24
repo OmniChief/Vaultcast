@@ -598,13 +598,17 @@ class Acquisition {
     }
 
     /** Coordinate acquisition jobs across HTTP and CLI workers without a new daemon. */
-    private static function acquireLock() {
+    private static function acquireLock(bool $wait = false) {
         $fh = @fopen(STREAM_DATA . '/acquire_search.lock', 'c');
-        if (!$fh || !flock($fh, LOCK_EX | LOCK_NB)) {
-            if ($fh) fclose($fh);
-            return false;
-        }
-        return $fh;
+        if (!$fh) return false;
+        $until = microtime(true) + ($wait ? 25 : 0);
+        do {
+            if (flock($fh, LOCK_EX | LOCK_NB)) return $fh;
+            if (!$wait || microtime(true) >= $until) break;
+            usleep(50000);
+        } while (true);
+        fclose($fh);
+        return false;
     }
 
     /** Search retries never spin indefinitely for absent releases. */
@@ -2675,8 +2679,8 @@ class Acquisition {
     }
 
     private static function markQueueRemovedById(string $id, bool $delete): array {
-        $lock = self::acquireLock();
-        if (!$lock) return [];
+        $lock = self::acquireLock(true);
+        if (!$lock) throw new RuntimeException('Acquisition queue busy; cannot safely update download status');
         try {
         $q = Store::get('acquire_queue', []);
         if (!is_array($q)) return [];
@@ -2698,8 +2702,8 @@ class Acquisition {
     }
 
     private static function markQueueRemovedForTorrent(array $tor, bool $delete): array {
-        $lock = self::acquireLock();
-        if (!$lock) return [];
+        $lock = self::acquireLock(true);
+        if (!$lock) throw new RuntimeException('Acquisition queue busy; cannot safely update download status');
         try {
         $q = Store::get('acquire_queue', []);
         if (!is_array($q)) return [];
@@ -2724,8 +2728,8 @@ class Acquisition {
     }
 
     private static function markQueueDoneForTorrent(array $tor, array $dests): void {
-        $lock = self::acquireLock();
-        if (!$lock) return ;
+        $lock = self::acquireLock(true);
+        if (!$lock) throw new RuntimeException('Acquisition queue busy; cannot safely update download status');
         try {
         $q = Store::get('acquire_queue', []);
         if (!is_array($q)) return;
