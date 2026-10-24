@@ -88,6 +88,10 @@ class Acquisition {
         $tr = self::transmissionStatus($acq['transmission'] ?? []);
         $q = Store::get('acquire_queue', []);
         if (!is_array($q)) $q = [];
+        // Start a short-lived background tick only when an eligible request exists.
+        // This is an updater-only fallback; the CLI downloads command remains usable
+        // by an existing OS scheduler for truly unattended operation.
+        self::maybeStartDueSearches($q);
         // Keep last 40 local queue entries, newest first
         $local = array_slice(array_reverse($q), 0, 40);
         return [
@@ -95,6 +99,43 @@ class Acquisition {
             'transmission' => $tr,
             'local_queue' => $local,
         ];
+    }
+
+    /** Opportunistic, non-blocking acquisition tick; does no RSS work in the HTTP request. */
+    private static function maybeStartDueSearches(array $queue): void {
+        $settings = Store::settings();
+        if (empty($settings['features']['downloads']) || empty($settings['acquisition']['enabled'])) return;
+        $due = false;
+        $now = time();
+        foreach ($queue as $entry) {
+            if (!is_array($entry)) continue;
+            if (!in_array((string)($entry['status'] ?? ''), ['queued', 'queued_local', 'scheduled', 'retry_wait'], true)) continue;
+            if (trim((string)($entry['query'] ?? '')) === '' || !empty($entry['magnet']) || !empty($entry['url'])) continue;
+            if ((int)($entry['eligible_at'] ?? 0) > $now || (int)($entry['next_attempt_at'] ?? 0) > $now) continue;
+            $due = true;
+            break;
+        }
+        if (!$due) return;
+        $file = STREAM_DATA . '/acquire_tick.lock';
+        $lock = @fopen($file, 'c+');
+        if (!$lock) return;
+        if (!flock($lock, LOCK_EX | LOCK_NB)) { fclose($lock); return; }
+        try {
+            $last = (int)trim((string)stream_get_contents($lock));
+            if ($last > $now - 300) return;
+            rewind($lock);
+            ftruncate($lock, 0);
+            fwrite($lock, (string)$now);
+            fflush($lock);
+            try {
+                Maintenance::start('acquisition-tick', 'automatic');
+            } catch (\Throwable $ignored) {
+                // Remain throttled: repeated requests must never spawn worker storms.
+            }
+        } finally {
+            flock($lock, LOCK_UN);
+            fclose($lock);
+        }
     }
 
     public static function transmissionStatus(array $tr): array {
