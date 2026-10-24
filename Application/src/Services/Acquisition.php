@@ -642,7 +642,7 @@ class Acquisition {
     private static function acquireLock(bool $wait = false) {
         $fh = @fopen(STREAM_DATA . '/acquire_search.lock', 'c');
         if (!$fh) return false;
-        $until = microtime(true) + ($wait ? 25 : 0);
+        $until = microtime(true) + ($wait ? 10 : 0);
         do {
             if (flock($fh, LOCK_EX | LOCK_NB)) return $fh;
             if (!$wait || microtime(true) >= $until) break;
