@@ -1563,6 +1563,9 @@ class Acquisition {
     private static function handleStalledTorrents(array $raw, array $tr): array {
         $cfg = self::stallSettings();
         if (!$cfg['enabled']) return [];
+        $lock = self::acquireLock();
+        if (!$lock) return [];
+        try {
         $watch = Store::get('stall_watch', []);
         if (!is_array($watch)) $watch = [];
         $q = Store::get('acquire_queue', []);
@@ -1619,10 +1622,13 @@ class Acquisition {
         }
         foreach (array_keys($watch) as $h) if (!isset($seen[$h])) unset($watch[$h]);
         Store::set('stall_watch', $watch);
-        if ($acted) {
-            Store::set('acquire_queue', $q);
-            self::processPendingSearches(['limit' => count($acted)]);
+        if ($acted) Store::set('acquire_queue', $q);
+        } finally {
+            flock($lock, LOCK_UN);
+            fclose($lock);
         }
+        // Never recursively acquire the search lock while holding the queue lock.
+        if ($acted) self::processPendingSearches(['limit' => count($acted)]);
         return $acted;
     }
 
@@ -1880,7 +1886,7 @@ class Acquisition {
         $drained = ['ok' => true, 'processed' => 0, 'items' => [], 'rate_limited' => false];
 
         return [
-            'ok' => true,
+            'ok' => !empty($batch['ok']) && empty($batch['truncated']),
             'show' => $title,
             'queued' => $queued,
             'count' => count($queued),
