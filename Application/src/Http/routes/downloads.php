@@ -135,6 +135,12 @@ if ($path === '/admin/downloads/process-completed/cancel' && $method === 'POST')
     json_out(Acquisition::requestCancelProcessCompleted());
 }
 
+if ($path === '/admin/downloads/retry' && $method === 'POST') {
+    Auth::requireAdmin();
+    $body = body_json();
+    json_out(Acquisition::retryEpisodeQueueEntry((string)($body['id'] ?? '')));
+}
+
 if ($path === '/admin/downloads/remove' && $method === 'POST') {
     json_out(Acquisition::removeFromDownloads(body_json()));
 }
