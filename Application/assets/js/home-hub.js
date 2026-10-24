@@ -269,6 +269,8 @@
         request('rooms').then(function(j){if(!rooms.isConnected)return;rooms.replaceChildren();j.rooms.forEach(function(r){rooms.appendChild(h('div',{className:'hub-game-row'},[h('div',{},[h('strong',{text:r.title}),h('small',{text:'Hosted by '+r.host.name})]),button('Join room',function(){go('cinema',r.id);},'primary')]));});if(!j.rooms.length)rooms.appendChild(empty('No rooms yet. Be the one who starts film night.'));}).catch(error);
       }
     }
+    if(tab==='arrivals'||tab==='lists'){paint();return A.shell(root);}
+    if(data&&owner===(A.state.user&&A.state.user.id||'guest'))paint();
     setTimeout(function(){refresh().then(paint).catch(function(e){if(body.isConnected)body.replaceChildren(empty(e.message),button('Try again',function(){refresh(true).then(paint).catch(error);}));});},0);
     return A.shell(root);
   }
