@@ -91,7 +91,7 @@ final class LibraryEditor
             MetadataSidecars::invalidateMovie($items[0]);
         }
         Catalogue::invalidateDerivedCaches();
-        $backup = MetadataSidecars::schedule();
+        $backup = MetadataSidecars::schedule([$showKey!==''?'show:'.$target:'item:'.$id]);
         return ['ok'=>true, 'id'=>$id, 'show_key'=>$showKey !== '' ? $target : null, 'warning'=>$backup['warning'] ?? null];
     }
 }

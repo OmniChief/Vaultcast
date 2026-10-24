@@ -173,7 +173,7 @@ final class ArtworkAudit
         } finally { Posters::endRemoteBudget(); }
         if ($haveArtwork) {
             Catalogue::invalidateDerivedCaches();
-            MetadataSidecars::schedule();
+            MetadataSidecars::schedule([in_array($target['kind'],['shows','seasons'],true)?'show:'.$target['key']:'item:'.$target['item']['id']]);
         }
         $remaining = self::inspect($key, $target);
         return ['ok'=>true, 'resolved'=>$remaining === null, 'item'=>$remaining, 'message'=>$remaining ? 'Still needs attention. Use Fix match or Manual edit to choose or upload artwork.' : 'Artwork repaired'];

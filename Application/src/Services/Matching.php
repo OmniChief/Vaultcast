@@ -156,7 +156,7 @@ class Matching {
             $cat['updated_at'] = date('c');
             Catalogue::save($cat);
             Store::invalidate('catalogue');
-            $backup = $scheduleBackup ? MetadataSidecars::schedule() : ['ok'=>true];
+            $backup = $scheduleBackup ? MetadataSidecars::schedule(array_map(static function($id){return 'item:'.$id;},$updated)) : ['ok'=>true];
         }
         return ['ok' => true, 'changed' => $changed, 'skipped' => $skipped, 'ids' => $updated] + (!empty($backup) && empty($backup['ok']) ? ['warning'=>$backup['warning']] : []);
     }
@@ -734,7 +734,7 @@ class Matching {
         }
         if ($id > 0) self::tvmazeGuideById($id, true);
         self::log('PIN ' . $targetKey . ' provider=' . $provider . ' id=' . $id . ($renameTo !== '' ? ' rename=' . $renameTo : ''));
-        $backup = MetadataSidecars::schedule();
+        $backup = MetadataSidecars::schedule(['show:'.$targetKey]);
         return ['ok' => true, 'show_key' => $targetKey, 'pin' => $o['shows'][$targetKey] ?? null, 'meta_only' => $metaOnly, 'tvmaze_id' => $id ?: null] + (empty($backup['ok']) ? ['warning'=>$backup['warning']] : []);
     }
 
@@ -900,7 +900,7 @@ class Matching {
             }
         }
         self::log('MOVIE ' . $id . ' => ' . $title . ' (' . ($b['year'] ?? '') . ')');
-        $backup = MetadataSidecars::schedule();
+        $backup = MetadataSidecars::schedule(['item:'.$id]);
         if (empty($backup['ok'])) $res['warning'] = $backup['warning'];
         return $res;
     }

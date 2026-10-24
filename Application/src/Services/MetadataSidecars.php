@@ -58,7 +58,7 @@ final class MetadataSidecars
 
     public static function invalidateShow(string $key): void
     {
-        foreach (ArtworkLibrary::targets() as $target) {
+        foreach (ArtworkLibrary::scopedTargets(['show:'.$key]) as $target) {
             if (($target['kind'] ?? '') !== 'shows' || ($target['key'] ?? '') !== $key) continue;
             $dir = self::showDirectory($target['item']);
             if ($dir) self::invalidate($dir, '/^(?:poster|thumb|banner|fanart|season\d+-(?:poster|thumb))\.(?:jpe?g|png|webp)$/D');
@@ -72,7 +72,7 @@ final class MetadataSidecars
         $stem = preg_quote(pathinfo((string)realpath((string)$it['path']), PATHINFO_FILENAME), '/');
         self::invalidate($dir, '/^' . $stem . '-(?:poster|thumb|banner|fanart)\.(?:jpe?g|png|webp)$/D');
     }
-    public static function schedule(): array
+    public static function schedule(?array $scope = null): array
     {
         $dir = STREAM_DATA . '/runtime';
         if (!is_dir($dir)) @mkdir($dir, 0775, true);
@@ -80,6 +80,24 @@ final class MetadataSidecars
         if (!$lock) return ['ok'=>false, 'warning'=>'Could not queue metadata backup; check library/server permissions.'];
         try {
             if (!flock($lock, LOCK_EX)) return ['ok'=>false, 'warning'=>'Could not lock metadata backup scheduling.'];
+            if($scope!==null){
+                $scope=array_values(array_unique($scope));
+                if(!$scope)return ['ok'=>true,'skipped'=>true];
+                foreach($scope as $ref)if(!is_string($ref)||!preg_match('/^(item|show):[a-f0-9]{8,64}$/D',$ref))throw new InvalidArgumentException('Invalid metadata target.');
+                $pending=\Vaultcast\Repository::document('sidecar-scoped-job',[]);
+                $job=!empty($pending['id'])?\Vaultcast\Repository::document('maintenance-job:'.$pending['id'],[]):[];
+                if(($job['status']??'')==='queued'){
+                    $name='metadata-items-request:'.$job['id'];
+                    $request=\Vaultcast\Repository::document($name,[]);
+                    // Only merge jobs that have not acquired a continuation cursor yet.
+                    if(empty($request['cursor'])){
+                        $request['scope']=array_values(array_unique(array_merge($request['scope']??[],$scope)));
+                        \Vaultcast\Repository::putDocument($name,$request);return ['ok'=>true,'job'=>$job];
+                    }
+                }
+                $result=Maintenance::start('metadata-items','Changed metadata',null,['scope'=>$scope]);
+                \Vaultcast\Repository::putDocument('sidecar-scoped-job',['id'=>$result['job']['id']]);return $result;
+            }
             $pending = \Vaultcast\Repository::document('sidecar-preparation-job', []);
             $job = !empty($pending['id']) ? \Vaultcast\Repository::document('maintenance-job:' . $pending['id'], []) : [];
             // Coalesce repeated matches into one waiting pass. If one is already
@@ -254,17 +272,18 @@ final class MetadataSidecars
         } finally { flock($lock, LOCK_UN); fclose($lock); }
     }
 
-    public static function run(?callable $progress = null, float $budget = 120, bool $resume = false): array
+    public static function run(?callable $progress = null, float $budget = 120, bool $resume = false, ?array $scope = null, string $cursor = ''): array
     {
         if (PHP_SAPI !== 'cli') throw new RuntimeException('Sidecar export requires the maintenance worker.');
-        $revision = \Vaultcast\Repository::revision('catalogue');
+        $revision = $scope!==null?$cursor:\Vaultcast\Repository::revision('catalogue');
+        $cursorName=$scope!==null?'sidecar-scoped-cursor:'.$cursor:'sidecar-export-cursor';
         $tasks = [];
         self::$guides = []; self::$roots = null; self::$manifests = [];
-        foreach (ArtworkLibrary::targets() as $target) if ($target['kind'] !== 'games') $tasks[] = [$target['item'], $target];
-        $items = Catalogue::get()['items'] ?? [];
+        foreach (($scope!==null?ArtworkLibrary::scopedTargets($scope):ArtworkLibrary::targets()) as $target) if ($target['kind'] !== 'games') $tasks[] = [$target['item'], $target];
+        $items = $scope!==null?ArtworkLibrary::scopedItems($scope):(Catalogue::get()['items'] ?? []);
         MediaFacts::preload(array_filter($items, static function ($it) { return ($it['media_kind'] ?? '') === 'video'; }));
         foreach ($items as $it) if (in_array($it['type'] ?? '', ['tv','anime'], true) && !empty($it['show'])) $tasks[] = [$it, null];
-        $state = \Vaultcast\Repository::document('sidecar-export-cursor', []);
+        $state = \Vaultcast\Repository::document($cursorName, []);
         $offset = ($state['revision'] ?? null) === $revision && ($resume || empty($state['done'])) ? (int)($state['offset'] ?? 0) : 0;
         $offset = max(0, min(count($tasks), $offset));
         $out = ['written'=>0, 'unchanged'=>0, 'preserved'=>0, 'failed'=>0, 'skipped'=>0, 'deferred'=>0];
@@ -277,11 +296,11 @@ final class MetadataSidecars
             try { self::export($tasks[$i][0], $tasks[$i][1], $out); }
             catch (Throwable $e) { $out['failed']++; error_log('Vaultcast sidecar: ' . $e->getMessage()); }
             if (microtime(true) - $lastSave >= 5) {
-                \Vaultcast\Repository::putDocument('sidecar-export-cursor', ['revision'=>$revision, 'offset'=>$i+1]);
+                \Vaultcast\Repository::putDocument($cursorName, ['revision'=>$revision, 'offset'=>$i+1]);
                 $lastSave = microtime(true);
             }
         }
-        } finally { \Vaultcast\Repository::putDocument('sidecar-export-cursor', ['revision'=>$revision, 'offset'=>$i, 'done'=>$i >= count($tasks)]); }
+        } finally { \Vaultcast\Repository::putDocument($cursorName, ['revision'=>$revision, 'offset'=>$i, 'done'=>$i >= count($tasks)]); }
         $out['deferred'] = count($tasks) - $i;
         return $out;
     }

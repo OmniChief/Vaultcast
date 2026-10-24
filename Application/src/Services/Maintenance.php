@@ -6,7 +6,7 @@ final class Maintenance
     private static $active;
     private static $checked = 0.0;
     /** Background-only tasks started by the app itself (not listed in the maintenance UI). */
-    const INTERNAL = ['ingest' => 'Import reviewed download', 'acquisition-tick' => 'Process due acquisition searches'];
+    const INTERNAL = ['ingest' => 'Import reviewed download', 'acquisition-tick' => 'Process due acquisition searches', 'metadata-items' => 'Prepare changed artwork and synopses'];
     const TASKS = ['versions'=>'Check and merge DirectPlay copies','site-artwork'=>'Optimise site and theme posters (WebP)','segments'=>'Match TV / anime intros and credits, and movie credits','browse'=>'Prepare search and show summaries','search' => 'Prepare live search index', 'views' => 'Prepare browsing pages', 'epg' => 'Refresh programme guide', 'metadata' => 'Prepare artwork and synopses', 'game-metadata' => 'Refresh game posters and synopses', 'scan' => 'Scan library folders', 'collections' => 'Match collections', 'downloads' => 'Import completed downloads', 'durations' => 'Fill Live media durations', 'facts' => 'Probe new media codecs and store show guides', 'drop-cleanup' => 'Delete expired Drop files', 'calendar-episodes' => 'Refresh episode release calendars', 'age-ratings' => 'Look up age ratings for films and shows', 'smart-index' => 'Index genres, cast and resolution for smart collections', 'extras' => 'Probe trailers and extras (running times and thumbnails)', 'achievements' => 'Count achievements from past activity'];
 
     public static function runCommand(string $task, ?string $target = null): array
@@ -133,14 +133,25 @@ final class Maintenance
                         \Vaultcast\Repository::putDocument('maintenance-job:' . $id, $job);
                     });
                     break;
+                case 'metadata-items':
                 case 'metadata':
+                    $scoped=$job['task']==='metadata-items';
+                    $request=[];
+                    if($scoped){
+                        $scheduleLock=fopen(STREAM_DATA.'/runtime/sidecar-schedule.lock','c');
+                        if(!$scheduleLock||!flock($scheduleLock,LOCK_EX))throw new RuntimeException('Cannot read the targeted metadata request safely.');
+                        try{$request=\Vaultcast\Repository::document('metadata-items-request:'.$id,[]);}
+                        finally{flock($scheduleLock,LOCK_UN);fclose($scheduleLock);}
+                    }
+                    $scope=$scoped?(array)($request['scope']??[]):null;
+                    $cursor=$scoped?(string)($request['cursor']??$id):'';
                     $lastProgress = 0.0;
                     $job['result'] = MetadataWarmup::run(function ($phase, $done, $total, $file) use (&$job, $id, &$lastProgress) {
                         if ($done !== $total && microtime(true) - $lastProgress < 1) return;
                         $lastProgress = microtime(true);
                         $job['progress'] = ['phase'=>$phase, 'done'=>$done, 'total'=>$total, 'file'=>$file, 'at'=>date('c')];
                         \Vaultcast\Repository::putDocument('maintenance-job:' . $id, $job);
-                    }, 120, 120, ($job['target'] ?? '') === 'resume' || strpos((string)($job['requested_by'] ?? ''), 'Continuation of ') === 0);
+                    }, 120, 120, ($job['target'] ?? '') === 'resume' || strpos((string)($job['requested_by'] ?? ''), 'Continuation of ') === 0, $scope, $cursor);
                     self::checkpoint();
                     // Do not let checkpoint throttling miss a cancellation at
                     // the boundary where a fast pass schedules its successor.
@@ -148,7 +159,7 @@ final class Maintenance
                     // Yield the global maintenance lock between bounded passes.
                     // Persisted attempts and existing WebP files make the next pass resume.
                     if ($job['result']['deferred'] || $job['result']['artwork_deferred'] || !empty($job['result']['sidecars']['deferred'])) {
-                        $next = self::start('metadata', 'Continuation of ' . $id, 'resume');
+                        $next = self::start($scoped?'metadata-items':'metadata', 'Continuation of ' . $id, 'resume', $scoped?['scope'=>$scope,'cursor'=>$cursor]:null);
                         $job['result']['continuation'] = $next['job']['id'];
                     }
                     break;

@@ -4,6 +4,38 @@ declare(strict_types=1);
 /** Shared library inventory for maintenance and Settings, independent of cache contents. */
 final class ArtworkLibrary
 {
+    /** Resolve only explicitly changed items/shows, without loading the catalogue. */
+    public static function scopedItems(array $scope): array {
+        $items=[];
+        foreach(array_unique($scope) as $ref){
+            if(!is_string($ref)||!preg_match('/^(item|show):([a-f0-9]{8,64})$/D',$ref,$m))throw new InvalidArgumentException('Invalid metadata target.');
+            $rows=$m[1]==='show'?BrowseIndex::items($m[2]):[Catalogue::item($m[2])];
+            foreach($rows as $it)if(is_array($it)&&!empty($it['id']))$items[$it['id']]=$it;
+        }
+        return $items;
+    }
+
+    public static function scopedTargets(array $scope): array {
+        return self::inventory(self::scopedItems($scope));
+    }
+
+    private static function inventory(array $items): array {
+        $out=[];
+        foreach($items as $it){
+            if(empty($it['id']))continue;
+            $type=$it['type']??'';
+            if(in_array($type,['tv','anime'],true)&&!empty($it['show'])){
+                $key=Catalogue::showKey((string)$it['section'],(string)$it['show']);
+                $out['show_'.$key]=['kind'=>'shows','key'=>$key,'item'=>$it,'path'=>Posters::showCachePath($key)];
+                $season=$it['season']??null;
+                if($season===null||$season==='')$season=Catalogue::seasonEpisodeFromRel((string)($it['rel']??''))['season'];
+                if($season!==null)$out['season_'.$key.'_s'.(int)$season]=['kind'=>'seasons','key'=>$key,'season'=>(int)$season,'item'=>$it,'path'=>Posters::seasonCachePath($key,(int)$season)];
+            } elseif($type==='roms'||($it['media_kind']??'')==='rom')$out['game_'.$it['id']]=['kind'=>'games','item'=>$it,'path'=>Posters::gameCachePath($it['id'])];
+            elseif(in_array($type,['movies','disney'],true)||(($it['media_kind']??'')==='video'&&empty($it['show'])))$out['movie_'.$it['id']]=['kind'=>'movies','item'=>$it,'path'=>Posters::movieCachePath($it['id'])];
+        }
+        ksort($out,SORT_STRING);return $out;
+    }
+
     public static function targets(): array
     {
         $revision = \Vaultcast\Repository::revision('catalogue');

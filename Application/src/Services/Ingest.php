@@ -492,7 +492,7 @@ class Ingest {
         $next = null;
         if ($dests) { try { $next = Acquisition::processPendingSearches(['limit' => 1]); } catch (Throwable $e) { $next = null; } }
         if ($progress) $progress($total, $total, '');
-        $backup = $dests ? MetadataSidecars::schedule() : ['ok'=>true];
+        $backup = $dests ? MetadataSidecars::schedule(array_map(static function($row){return 'item:'.$row['id'];},$overrideRows)) : ['ok'=>true];
         $errors = array_values(array_filter($results, function ($r) { return empty($r['ok']); }));
         Matching::log('INGEST ' . ($tor['name'] ?? '') . ' kind=' . $kind . ' section=' . $sectionId . ' ok=' . count($dests) . ' errors=' . count($errors));
         return ['ok' => count($errors) === 0, 'imported' => count($dests), 'errors' => $errors, 'results' => $results, 'finish' => $fin, 'next' => $next, 'warning'=>empty($backup['ok']) ? $backup['warning'] : null, 'error' => $errors ? ($errors[0]['error'] ?? 'Some files failed') : null];
