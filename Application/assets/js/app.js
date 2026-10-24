@@ -10876,6 +10876,42 @@ h('div', { className:'cv-find-bar' }, [
         var kb = Math.max(1, Math.round((latest.bytes || 0) / 1024));
         rows.push(h('p', { text: latest.count + ' file' + (latest.count === 1 ? '' : 's') + ' to update (about ' + kb + ' KB to download). Only these files change; settings, the database and media are never touched.' }));
         [ fileList('Changed', latest.changed), fileList('New', latest.added), fileList('Removed upstream', latest.removed, 'bad') ].forEach(function(n){ if (n) rows.push(n); });
+      if (r.update_available) {
+        var changesBox = h('div', { className:'stack', 'aria-live':'polite' });
+        var changesLoaded = false;
+        var changesButton = h('button', { className:'btn', type:'button', text:'View changes since your version', onClick:function(){
+          if (changesLoaded) return;
+          changesButton.disabled = true;
+          changesBox.replaceChildren(h('p', { className:'muted', text:'Loading changes…' }));
+          api('/admin/updates/changes?branch=' + encodeURIComponent(latest.branch) + '&tree=' + encodeURIComponent(latest.tree)).then(function(changes){
+            if (!changesBox.isConnected) return;
+            changesBox.textContent = '';
+            if (!changes || !changes.ok) {
+              changesBox.appendChild(h('p', { className:'bad', text:changes && changes.error || 'Could not load changes.' }));
+              if (changes && changes.url) changesBox.appendChild(h('a', { href:changes.url, target:'_blank', rel:'noopener', text:'View comparison on GitHub' }));
+              changesButton.disabled = false;
+              return;
+            }
+            changesLoaded = true;
+            changesButton.textContent = 'Changes loaded';
+            changesBox.appendChild(h('h4', { text:'Changes since your version' }));
+            if (changes.note) changesBox.appendChild(h('p', { className:'muted', text:changes.note }));
+            var commits = changes.commits || [];
+            if (commits.length) {
+              changesBox.appendChild(h('p', { className:'muted', text:changes.limited ? 'Showing the first ' + commits.length + ' of ' + changes.total + ' commits. Open GitHub for the full list.' : commits.length + ' commit' + (commits.length === 1 ? '' : 's') + ' on the selected branch.' }));
+              changesBox.appendChild(h('ul', {}, commits.map(function(commit){
+                return h('li', {}, [h('a', { href:commit.url, target:'_blank', rel:'noopener', text:commit.title || commit.sha.slice(0, 7) })]);
+              })));
+            } else if (!changes.note) changesBox.appendChild(h('p', { className:'muted', text:'No additional commits on the selected branch.' }));
+            if (changes.url) changesBox.appendChild(h('a', { href:changes.url, target:'_blank', rel:'noopener', text:'View full history and comparison on GitHub' }));
+          }).catch(function(e){
+            if (!changesBox.isConnected) return;
+            changesBox.replaceChildren(h('p', { className:'bad', text:friendlyMessage(e) }));
+            changesButton.disabled = false;
+          });
+        } });
+        rows.push(changesButton, changesBox);
+      }
       }
       if (latest.url) rows.push(h('a', { href:latest.url, target:'_blank', rel:'noopener', className:'linkish', text:'Recent changes on GitHub' }));
       var status = h('p', { className:'muted', 'aria-live':'polite' });

@@ -10,6 +10,13 @@ if ($path === '/admin/updates' && $method === 'GET') {
     json_out($r);
 }
 
+if ($path === '/admin/updates/changes' && $method === 'GET') {
+    $branch = $_GET['branch'] ?? null;
+    $tree = $_GET['tree'] ?? null;
+    if (!is_string($branch) || !Updater::validBranch($branch) || !is_string($tree) || !preg_match('/^[0-9a-f]{40}$/D', $tree)) json_error('Check the selected branch before viewing changes.', 400);
+    json_out(Updater::changes($branch, $tree));
+}
+
 if ($path === '/admin/updates/apply' && $method === 'POST') {
     $b = body_json();
     $branch = $b['branch'] ?? null;

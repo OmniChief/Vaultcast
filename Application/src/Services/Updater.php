@@ -98,6 +98,76 @@ final class Updater
         return $branch;
     }
 
+    /** Resolve the checked tree to a commit; never label different files as installed. */
+    private static function checkedCommit(string $branch, string $tree): array
+    {
+        $r = self::request(self::API . '/branches/' . rawurlencode($branch), ['Accept: application/vnd.github+json'], 15, 2 * 1024 * 1024);
+        $j = is_string($r['body']) ? json_decode($r['body'], true) : null;
+        if ($r['status'] !== 200 || !is_array($j) || !preg_match('/^[0-9a-f]{40}$/D', (string)($j['commit']['sha'] ?? ''))) {
+            return ['ok' => false, 'error' => 'Could not read the update commit from GitHub. Try again later.'];
+        }
+        if (($j['commit']['commit']['tree']['sha'] ?? '') !== $tree) return ['ok' => false, 'code' => 'changed', 'error' => 'The branch changed since you checked. Check for updates again.'];
+        return ['ok' => true, 'commit' => $j['commit']['sha']];
+    }
+
+    /** On-demand summaries only: one bounded compare page, shared cache and no polling. */
+    public static function changes(string $branch, string $tree): array
+    {
+        if (!self::validBranch($branch) || !preg_match('/^[0-9a-f]{40}$/D', $tree)) return ['ok' => false, 'error' => 'Check the selected branch before viewing changes.'];
+        $state = json_decode((string)@file_get_contents(self::workDir() . '/channel.json'), true);
+        $base = (string)($state['commit'] ?? '');
+        $approximate = !preg_match('/^[0-9a-f]{40}$/D', $base);
+        if ($approximate) {
+            // Older installers/updates did not record their exact commit.
+            $known = ['1.3.0' => 'baf4699d6fd70c1e35a57158a62852eb5dfc7601', '1.3.1' => '5c69c12392874e8eff35d67a32c2737a8875bcd0'];
+            $base = $known[self::currentVersion()] ?? '';
+        }
+        $history = 'https://github.com/' . self::REPO . '/commits/' . rawurlencode($branch);
+        if ($base === '') return ['ok' => true, 'commits' => [], 'url' => $history, 'note' => 'This installation has no recorded commit. Browse the branch history; exact comparisons will be available after your next successful update.'];
+        if (!is_dir(self::workDir()) && !@mkdir(self::workDir(), 0770, true)) return ['ok' => false, 'error' => 'Cannot create the update cache.'];
+        $cacheFile = self::workDir() . '/changes-' . hash('sha256', $base . ':' . $tree . ':' . $branch . ':' . ($approximate ? 'estimated' : 'exact') . ':' . (self::token() !== null ? 'token' : 'public')) . '.json';
+        $read = static function () use ($cacheFile): ?array {
+            $cache = json_decode((string)@file_get_contents($cacheFile), true);
+            return is_array($cache) && (int)($cache['expires'] ?? 0) > time() && is_array($cache['result'] ?? null) ? $cache['result'] : null;
+        };
+        $cached = $read();
+        if ($cached !== null) return $cached;
+        $lock = @fopen(self::workDir() . '/changes.lock', 'c');
+        if (!$lock) return ['ok' => false, 'error' => 'Cannot open the update cache.'];
+        if (!flock($lock, LOCK_EX | LOCK_NB)) { fclose($lock); return ['ok' => false, 'error' => 'Changes are being fetched. Try again shortly.']; }
+        try {
+            $cached = $read();
+            if ($cached !== null) return $cached;
+            $head = self::checkedCommit($branch, $tree);
+            $result = $head;
+            if (!empty($head['ok'])) {
+                $url = 'https://github.com/' . self::REPO . '/compare/' . $base . '...' . $head['commit'];
+                $result = ['ok' => false, 'url' => $url, 'error' => 'Could not load the change summary. GitHub may be unavailable or rate limited; open the comparison on GitHub or try again shortly.'];
+                $r = self::request(self::API . '/compare/' . $base . '...' . $head['commit'] . '?per_page=50&page=1', ['Accept: application/vnd.github+json'], 15, 2 * 1024 * 1024);
+                $j = is_string($r['body']) ? json_decode($r['body'], true) : null;
+                if ($r['status'] === 200 && is_array($j) && is_array($j['commits'] ?? null) && in_array($j['status'] ?? '', ['ahead', 'behind', 'diverged', 'identical'], true)) {
+                    $commits = [];
+                    foreach (array_slice($j['commits'], 0, 50) as $row) {
+                        $sha = (string)($row['sha'] ?? '');
+                        if (!preg_match('/^[0-9a-f]{40}$/D', $sha)) continue;
+                        $title = preg_split('/[\r\n]/', (string)($row['commit']['message'] ?? ''))[0];
+                        $commits[] = ['sha' => $sha, 'title' => function_exists('mb_substr') ? mb_substr($title, 0, 240, 'UTF-8') : substr($title, 0, 240), 'url' => 'https://github.com/' . self::REPO . '/commit/' . $sha];
+                    }
+                    $total = max(count($commits), (int)($j['ahead_by'] ?? 0));
+                    $note = $approximate ? 'Estimated from the standard ' . self::currentVersion() . ' build. This older installation did not record its exact commit; changes from intermediate builds may differ.' : null;
+                    if (in_array($j['status'], ['behind', 'diverged'], true)) $note = trim(($note ?? '') . ' The selected branch is behind or differs from the installed history. This list shows commits on the selected branch; the GitHub comparison has full details.');
+                    $result = ['ok' => true, 'base' => $base, 'head' => $head['commit'], 'commits' => $commits, 'total' => $total, 'limited' => $total > count($commits), 'url' => $url, 'note' => $note];
+                }
+            }
+            // Cache failures briefly too; repeated clicks must not hammer GitHub.
+            @file_put_contents($cacheFile, json_encode(['expires' => time() + (!empty($result['ok']) ? 86400 : 60), 'result' => $result], JSON_INVALID_UTF8_SUBSTITUTE), LOCK_EX);
+            $files = glob(self::workDir() . '/changes-*.json') ?: [];
+            usort($files, static function ($a, $b) { return filemtime($b) <=> filemtime($a); });
+            foreach (array_slice($files, 20) as $old) @unlink($old);
+            return $result;
+        } finally { flock($lock, LOCK_UN); fclose($lock); }
+    }
+
     /** Discover every branch, with per-page ETags. A failed listing never changes the pin. */
     public static function branches(): array
     {
@@ -352,6 +422,8 @@ final class Updater
             if (($l['branch'] ?? '') !== $branch) return ['ok' => false, 'error' => 'The checked branch does not match the requested branch. Check again.', 'code' => 'changed'];
             if ($expectTree !== null && $expectTree !== '' && $expectTree !== $l['tree']) return ['ok' => false, 'error' => 'Vaultcast changed on GitHub since you checked. Check again before updating.', 'code' => 'changed'];
             if (empty($c['update_available'])) return ['ok' => false, 'error' => 'Vaultcast ' . $from . ' is already up to date.'];
+            $head = self::checkedCommit($branch, $l['tree']);
+            if (empty($head['ok'])) return $head;
             $files = $c['_files'];
 
             // 1. Download every changed/new file into staging and verify its blob SHA. Nothing on
@@ -386,7 +458,7 @@ final class Updater
             // Only this internally generated state may enter data/: remote files remain denylisted.
             $channel = $staging . '/channel.json';
             if (!is_dir($staging) && !@mkdir($staging, 0770, true)) throw new RuntimeException('Cannot create staging folder.');
-            $channelBody = json_encode(['branch' => $branch, 'tree' => $l['tree']], JSON_UNESCAPED_SLASHES);
+            $channelBody = json_encode(['branch' => $branch, 'tree' => $l['tree'], 'commit' => $head['commit']], JSON_UNESCAPED_SLASHES);
             if (@file_put_contents($channel, $channelBody) !== strlen($channelBody)) throw new RuntimeException('Cannot stage the update branch.');
             $write['data/updates/channel.json'] = $channel;
             $to = $l['version'] !== '?' ? $l['version'] : $from;
@@ -586,7 +658,7 @@ final class Updater
     }
 
     /** GET over HTTPS. @return array{status:int, body:?string, headers:array<string,string>} */
-    public static function request(string $url, array $headers): array
+    public static function request(string $url, array $headers, int $timeout = 120, int $maxBytes = self::MAX_FILE_BYTES): array
     {
         self::$lastStatus = 0; self::$lastHeaders = [];
         if (self::$http) {
@@ -602,7 +674,7 @@ final class Updater
         $resp = [];
         if (function_exists('curl_init')) {
             $ch = curl_init($url);
-            $opts = [CURLOPT_RETURNTRANSFER => true, CURLOPT_CONNECTTIMEOUT => 15, CURLOPT_TIMEOUT => 120, CURLOPT_HTTPHEADER => $headers,
+            $opts = [CURLOPT_RETURNTRANSFER => true, CURLOPT_CONNECTTIMEOUT => 15, CURLOPT_TIMEOUT => $timeout, CURLOPT_HTTPHEADER => $headers,
                 // Never follow redirects with a token attached (it must not reach another host).
                 CURLOPT_FOLLOWLOCATION => !$token, CURLOPT_MAXREDIRS => 3, CURLOPT_SSL_VERIFYPEER => true,
                 CURLOPT_PROTOCOLS => CURLPROTO_HTTPS, CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTPS,
@@ -611,16 +683,16 @@ final class Updater
                     if (strpos($line, ':') !== false) { [$k, $v] = explode(':', $line, 2); $resp[strtolower(trim($k))] = trim($v); }
                     return strlen($line);
                 },
-                CURLOPT_NOPROGRESS => false, CURLOPT_PROGRESSFUNCTION => function ($c, $dlTotal, $dl) { return $dl > self::MAX_FILE_BYTES ? 1 : 0; }];
+                CURLOPT_NOPROGRESS => false, CURLOPT_PROGRESSFUNCTION => function ($c, $dlTotal, $dl) use ($maxBytes) { return $dl > $maxBytes ? 1 : 0; }];
             $ca = self::caBundle(); if ($ca) $opts[CURLOPT_CAINFO] = $ca;
             curl_setopt_array($ch, $opts);
             $body = curl_exec($ch);
             $status = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
             curl_close($ch);
-            $body = $body === false ? null : (string)$body;
+            $body = $body === false || strlen($body) > $maxBytes ? null : (string)$body;
         } else {
             if (!ini_get('allow_url_fopen')) return ['status' => 0, 'body' => null, 'headers' => []];
-            $ctx = stream_context_create(['http' => ['header' => implode("\r\n", $headers), 'follow_location' => $token ? 0 : 1, 'max_redirects' => 3, 'timeout' => 60, 'ignore_errors' => true],
+            $ctx = stream_context_create(['http' => ['header' => implode("\r\n", $headers), 'follow_location' => $token ? 0 : 1, 'max_redirects' => 3, 'timeout' => min(60, $timeout), 'ignore_errors' => true],
                 'ssl' => array_filter(['verify_peer' => true, 'verify_peer_name' => true, 'cafile' => self::caBundle()])]);
             $in = @fopen($url, 'rb', false, $ctx);
             $status = 0; $body = null;
@@ -628,7 +700,7 @@ final class Updater
                 if (preg_match('#^HTTP/\S+\s+(\d{3})#', $hl, $m)) { $status = (int)$m[1]; $resp = []; }
                 elseif (strpos($hl, ':') !== false) { [$k, $v] = explode(':', $hl, 2); $resp[strtolower(trim($k))] = trim($v); }
             }
-            if ($in) { $b = stream_get_contents($in, self::MAX_FILE_BYTES + 1); fclose($in); $body = $b === false || strlen($b) > self::MAX_FILE_BYTES ? null : $b; }
+            if ($in) { $b = stream_get_contents($in, $maxBytes + 1); fclose($in); $body = $b === false || strlen($b) > $maxBytes ? null : $b; }
         }
         self::$lastStatus = $status; self::$lastHeaders = $resp;
         return ['status' => $status, 'body' => $status >= 200 && $status < 300 ? $body : null, 'headers' => $resp];
