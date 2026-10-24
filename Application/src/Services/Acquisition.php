@@ -1566,41 +1566,51 @@ class Acquisition {
         $rateLimited = false;
         $retryIn = null;
 
-        foreach ($q as $i => $entry) {
+        // Oldest due work goes first, including after a failed payload's cooldown.
+        $order = array_keys($q);
+        usort($order, static function ($a, $b) use ($q): int {
+            $left = is_array($q[$a]) ? max((int)($q[$a]['eligible_at'] ?? 0), (int)($q[$a]['next_attempt_at'] ?? 0)) : 0;
+            $right = is_array($q[$b]) ? max((int)($q[$b]['eligible_at'] ?? 0), (int)($q[$b]['next_attempt_at'] ?? 0)) : 0;
+            return ($left <=> $right) ?: ($a <=> $b);
+        });
+        foreach ($order as $i) {
+            $entry = $q[$i];
             if (microtime(true) >= $deadline || count($processed) >= $limit) break;
             if (!is_array($entry)) continue;
             $status = (string)($entry['status'] ?? '');
             if (!in_array($status, ['queued', 'queued_local', 'scheduled', 'retry_wait'], true)) continue;
             $eligible = (int)($entry['eligible_at'] ?? 0);
             if ($eligible > time() || (int)($entry['next_attempt_at'] ?? 0) > time()) continue;
-            if (++$considered > $limit) break;
             $magnet = trim((string)($entry['magnet'] ?? ''));
             $url = trim((string)($entry['url'] ?? ''));
             $query = trim((string)($entry['query'] ?? ''));
-            // Already has a torrent payload — try Transmission if not yet sent
+            // Eligibility was checked above, so scheduled payloads may now be sent.
             if ($magnet !== '' || $url !== '') {
-                if ($status === 'queued_local' || $status === 'queued') {
-                    $tr = Store::settings()['acquisition']['transmission'] ?? [];
-                    if (!empty($tr['enabled'])) {
-                        $res = self::sendToTransmission($magnet, $url, $tr);
-                        if (!empty($res['ok'])) {
-                            $entry['status'] = 'sent_transmission';
-                            $entry['message'] = $res['message'] ?? '';
-                            if (!empty($res['id'])) $entry['torrent_id'] = (int)$res['id'];
-                            if (!empty($res['hash'])) $entry['torrent_hash'] = strtolower((string)$res['hash']);
-                            $q[$i] = $entry;
-                            Store::set('acquire_queue', $q);
-                            $processed[] = ['id' => $entry['id'] ?? null, 'title' => $entry['title'] ?? '', 'action' => 'sent_transmission'];
-                        }
-                    }
+                $tr = Store::settings()['acquisition']['transmission'] ?? [];
+                // Disabled integrations must not consume the bounded work budget.
+                if (empty($tr['enabled'])) continue;
+                if (++$considered > $limit) break;
+                $res = self::sendToTransmission($magnet, $url, $tr);
+                $entry['status'] = !empty($res['ok']) ? 'sent_transmission' : 'queued_local';
+                $entry['message'] = $res['message'] ?? '';
+                $entry['updated_at'] = date('c');
+                // Failed payloads yield to later queue entries on subsequent ticks.
+                $entry['next_attempt_at'] = !empty($res['ok']) ? null : time() + 300;
+                if (!empty($res['ok'])) {
+                    if (!empty($res['id'])) $entry['torrent_id'] = (int)$res['id'];
+                    if (!empty($res['hash'])) $entry['torrent_hash'] = strtolower((string)$res['hash']);
+                    $processed[] = ['id' => $entry['id'] ?? null, 'title' => $entry['title'] ?? '', 'action' => 'sent_transmission'];
                 }
+                $q[$i] = $entry;
+                Store::set('acquire_queue', $q);
                 continue;
             }
-            // Need a search query
+            // Entries without actionable work must not consume the search budget.
             if ($query === '') {
                 $skipped++;
                 continue;
             }
+            if (++$considered > $limit) break;
             $gate = self::canFetchNow();
             if (!($gate['ok'] ?? false)) {
                 $rateLimited = true;
