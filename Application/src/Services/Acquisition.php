@@ -1778,6 +1778,63 @@ class Acquisition {
         }
     }
 
+    /** Store bulk episode intentions in one bounded, locked queue update. */
+    private static function enqueueEpisodeBatch(array $requests): array {
+        $lock = self::acquireLock();
+        if (!$lock) return ['ok' => false, 'error' => 'Acquisition queue busy; retry shortly', 'entries' => []];
+        try {
+            $q = Store::get('acquire_queue', []);
+            if (!is_array($q)) $q = [];
+            $seen = [];
+            $keyFor = static function (array $e): string {
+                $section = strtolower(trim((string)($e['section_id'] ?? '')));
+                $show = strtolower(trim((string)($e['show_key'] ?? '')));
+                if ($show === '') $show = strtolower(trim((string)($e['show'] ?? '')));
+                return $section . '|' . $show . '|' . (int)($e['season'] ?? -1) . '|' . (int)($e['episode'] ?? -1);
+            };
+            foreach ($q as $existing) {
+                if (!is_array($existing) || in_array((string)($existing['status'] ?? ''), ['cancelled', 'removed', 'done', 'failed', 'exhausted'], true)) continue;
+                $seen[$keyFor($existing)] = $existing;
+            }
+            $entries = [];
+            $added = 0;
+            foreach (array_slice($requests, 0, 400) as $item) {
+                $key = $keyFor($item);
+                if (isset($seen[$key])) {
+                    $entries[] = $seen[$key];
+                    continue;
+                }
+                $date = $item['airdate'] ?? null;
+                $eligible = self::episodeEligibleAt($date);
+                $entry = [
+                    'id' => bin2hex(random_bytes(8)),
+                    'title' => 'SEARCH: ' . $item['query'],
+                    'magnet' => '', 'url' => '',
+                    'status' => $eligible !== null && $eligible > time() ? 'scheduled' : 'queued',
+                    'created_at' => date('c'), 'message' => '',
+                    'query' => $item['query'], 'show' => $item['show'],
+                    'show_key' => $item['show_key'] ?? null,
+                    'airdate' => $date, 'eligible_at' => $eligible,
+                    'next_attempt_at' => $eligible !== null ? max($eligible, time()) : time(),
+                    'search_attempts' => 0, 'error_attempts' => 0,
+                    'season' => $item['season'], 'episode' => $item['episode'],
+                    'kind' => $item['kind'], 'section_id' => $item['section_id'],
+                ];
+                $q[] = $entry;
+                $seen[$key] = $entry;
+                $entries[] = $entry;
+                $added++;
+            }
+            if ($added && !Store::set('acquire_queue', $q)) {
+                return ['ok' => false, 'error' => 'Could not persist acquisition queue', 'entries' => []];
+            }
+            return ['ok' => true, 'entries' => $entries, 'added' => $added, 'truncated' => count($requests) > 400];
+        } finally {
+            flock($lock, LOCK_UN);
+            fclose($lock);
+        }
+    }
+
     /** Queue fetch for every missing episode in a show detail payload. */
     public static function fetchMissingForShow(array $detail, ?int $onlySeason = null, ?int $onlyEpisode = null): array {
         $show = $detail['show'] ?? [];
@@ -1785,6 +1842,7 @@ class Acquisition {
         $queued = [];
         $errors = [];
         $sentNow = 0;
+        $requests = [];
         foreach ($detail['seasons'] ?? [] as $seasonBlock) {
             $sNum = (int)($seasonBlock['season'] ?? 0);
             if ($onlySeason !== null && $sNum !== $onlySeason) continue;
@@ -1798,21 +1856,23 @@ class Acquisition {
                 if ($sNum <= 0 && $onlySeason === null) continue;
                 $showSection = (string)($show['section'] ?? '');
                 $typeKind = ($showSection === 'anime' || ($show['type'] ?? '') === 'anime') ? 'anime' : 'tv';
-                $res = self::requestEpisode($title, $sNum, $eNum, [
+                $requests[] = [
+                    'show' => $title,
+                    'query' => trim($title . ' ' . sprintf('S%02dE%02d', $sNum, $eNum)),
                     'kind' => $typeKind,
                     'show_key' => $show['show_key'] ?? null,
                     'airdate' => $ep['airdate'] ?? null,
-                    'defer_search' => true,
                     'section_id' => $showSection !== '' ? $showSection : null,
-                ]);
-                if (!empty($res['entry'])) {
-                    $queued[] = $res['entry'];
-                    if (($res['entry']['status'] ?? '') === 'sent_transmission') $sentNow++;
-                } elseif (!($res['ok'] ?? false)) {
-                    $errors[] = $res;
-                }
+                    'season' => $sNum,
+                    'episode' => $eNum,
+                ];
             }
         }
+
+        $batch = self::enqueueEpisodeBatch($requests);
+        $queued = $batch['entries'] ?? [];
+        if (empty($batch['ok'])) $errors[] = ['error' => $batch['error'] ?? 'Queue write failed'];
+        if (!empty($batch['truncated'])) $errors[] = ['error' => 'Only first 400 missing episodes scheduled; repeat for remaining episodes.'];
 
         // Bulk requests only register intentions; search occurs in bounded worker ticks.
         $drained = ['ok' => true, 'processed' => 0, 'items' => [], 'rate_limited' => false];
@@ -1822,6 +1882,7 @@ class Acquisition {
             'show' => $title,
             'queued' => $queued,
             'count' => count($queued),
+            'new_requests' => (int)($batch['added'] ?? 0),
             'sent_transmission' => $sentNow,
             'pending_searches' => $drained,
             'errors' => $errors,
