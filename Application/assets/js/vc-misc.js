@@ -659,6 +659,42 @@
         function choose(){ iptvChannels().then(function(chs){ modal('Choose a channel', function(b, close){ var q = input('search', '', { placeholder:'Filter channels', 'aria-label':'Filter channels' }), l = h('div', { className:'vc-pick-list' }); function draw(){ var f = q.value.toLowerCase(); l.replaceChildren.apply(l, chs.filter(function(c){ return !f || String(c.name || '').toLowerCase().indexOf(f) >= 0; }).slice(0, 200).map(function(c){ return h('button', { type:'button', className:'vc-pick', onClick:function(){ close(); ctx.save(Object.assign({}, s, { channel:c.id }), true); teardown(); s.channel = c.id; iptv(); } }, [c.logo ? h('img', { src:c.logo, alt:'', loading:'lazy' }) : null, h('span', { text:c.name })]); })); } q.addEventListener('input', draw); draw(); b.append(q, l); if (!chs.length) l.appendChild(h('p', { className:'muted', text:'No IPTV channels are set up.' })); }); }).catch(err); }
         iptvChannels().then(function(chs){ if (!cur(t)()) return; start(chs.filter(function(c){ return c.id === s.channel; })[0] || null); if (!s.channel) choose(); }).catch(function(){ note.textContent = 'Live TV is unavailable.'; });
       }
+      function pseudotv(){
+        var t=++token, sequence=0, timer=null, channel=null;
+        var video=h('video',{playsinline:true,controls:true,muted:true,autoplay:true,className:'vc-media-video'}),name=h('strong',{text:'PseudoTV'}),note=h('p',{className:'vc-media-note muted','aria-live':'polite'});
+        video.muted=s.muted!==false;
+        body.replaceChildren(video,note,bar([name,btn('Channel',choose,'ghost small'),btn('Retune',tune,'ghost small')]));
+        function later(ms){clearTimeout(timer);timer=setTimeout(tune,Math.min(Math.max(1000,ms),2147483647));}
+        function tune(){
+          if(!cur(t)()||!channel)return;
+          var mine=++sequence,asked=Date.now();clearTimeout(timer);
+          A.liveApi('now','channel='+encodeURIComponent(channel.id)).then(function(b){
+            if(!cur(t)()||mine!==sequence)return;
+            if(!b||!b.url){note.textContent='This channel is off air.';video.pause();video.removeAttribute('src');video.load();later(30000);return;}
+            note.textContent=b.title||'Live';
+            var got=Date.now(),seek=Math.max(0,Number(b.seekMs!=null?b.seekMs:(Number(b.mediaOffsetMs)||0)+Math.max(0,Number(b.serverNow||got)-Number(b.startUnix||got))))/1000;
+            video.onloadedmetadata=function(){if(!cur(t)()||mine!==sequence)return;try{video.currentTime=Math.min(seek+(Date.now()-got+(got-asked)/2)/1000,isFinite(video.duration)?Math.max(0,video.duration-.1):Infinity);}catch(ignore){}};
+            if(hls){hls.destroy();hls=null;}
+            var url=String(b.url),m=url.match(/(?:^|\/)api\.php\?action=([a-z_]+)&?(.*)$/);
+            if(m)url=A.base+'api/live/'+m[1]+(m[2]?'?'+m[2]:'');
+            else if(!/^(https?:\/\/|\/)/i.test(url))url=A.base+'live/'+url;
+            if(A.streamPlayUrl)url=A.streamPlayUrl(url);
+            playStream(video,url,function(){return cur(t)()&&mine===sequence;}).then(function(stream){if(!cur(t)()||mine!==sequence){if(stream)stream.destroy();return;}hls=stream;}).catch(function(e){if(cur(t)()&&mine===sequence){note.textContent=e.message||'Could not play this channel.';later(30000);}});
+            if(Number(b.endUnix)>0)later(Number(b.endUnix)-Number(b.serverNow||got)-(got-asked)/2+250);
+          }).catch(function(){if(cur(t)()&&mine===sequence){note.textContent='PseudoTV is unavailable. Retrying…';later(30000);}});
+        }
+        function channels(){return A.ensureLiveData(false).then(function(){return ((A.liveData().guide||{}).channels||[]).filter(function(ch){return ch.kind==='relay';});});}
+        function choose(){
+          channels().then(function(list){if(!cur(t)())return;modal('Choose a PseudoTV channel',function(b,close){
+            if(!list.length){b.appendChild(h('p',{className:'muted',text:'No PseudoTV channels are available. Set them up in PseudoTV Studio.'}));return;}
+            list.forEach(function(ch){b.appendChild(btn((ch.number!=null?ch.number+' · ':'')+ch.name,function(){if(!cur(t)()){close();return;}close();s.channel=ch.id;ctx.save(Object.assign({},s,{mode:'pseudotv',channel:ch.id}),true);channel=ch;name.textContent=ch.name;tune();},'ghost'));});
+          });}).catch(function(){if(cur(t)())note.textContent='Could not load PseudoTV channels.';});
+        }
+        if((A.userAreaAllowed&&!A.userAreaAllowed('live'))||!(A.state.home&&A.state.home.features&&A.state.home.features.live)){note.textContent='Live access is required for PseudoTV.';return;}
+        video.addEventListener('ended',tune);video.addEventListener('error',function(){if(cur(t)())later(5000);});
+        cleanup.push(function(){sequence++;clearTimeout(timer);video.onloadedmetadata=null;video.removeEventListener('ended',tune);});
+        channels().then(function(list){if(!cur(t)())return;channel=list.filter(function(ch){return ch.id===s.channel;})[0]||null;if(channel){name.textContent=channel.name;tune();}else note.textContent=s.channel?'The saved channel is unavailable. Choose another channel.':'Choose a PseudoTV channel to watch.';}).catch(function(){if(cur(t)())note.textContent='Could not load PseudoTV channels.';});
+      }
       function radio(){
         var t = ++token, audio = h('audio', { preload:'none' }), title = h('strong', { text:'Radio' }), now = h('p', { className:'vc-radio-now', 'aria-live':'polite' }), art = h('div', { className:'vc-radio-art', 'aria-hidden':'true' }, [h('span'), h('span'), h('span'), h('span'), h('span')]);
         var play = btn('▶', function(){ if (audio.paused) begin(); else audio.pause(); }, 'primary vc-icon-btn', { 'aria-label':'Play' });
@@ -748,12 +784,12 @@
           cleanup.push(cyc.stop);
         }).catch(function(e){ stage.replaceChildren(h('p', { className:'vc-kb-empty', text:(e && e.error) || 'Webcams unavailable.' })); });
       }
-      function startMode(){ teardown(); if (mode === 'radio') radio(); else if (mode === 'movie') movie(); else if (mode === 'webcams') webcams(); else iptv(); }
+      function startMode(){ teardown(); if (mode === 'radio') radio(); else if (mode === 'movie') movie(); else if (mode === 'webcams') webcams(); else if(mode==='pseudotv')pseudotv(); else iptv(); }
       startMode();
       return function(){ teardown(); };
     },
     form:function(s){
-      var base = textForm([{ key:'mode', label:'Play', type:'select', value:s.mode || 'iptv', options:[['iptv', 'Live TV (IPTV)'], ['radio', 'Internet radio'], ['movie', 'A film from the library'], ['webcams', 'Webcams']] }, { key:'muted', label:'Start live TV muted', type:'checkbox', value:s.muted !== false }]);
+      var base = textForm([{ key:'mode', label:'Play', type:'select', value:s.mode || 'iptv', options:[['pseudotv','PseudoTV channel'],['iptv', 'Live TV (IPTV)'], ['radio', 'Internet radio'], ['movie', 'A film from the library'], ['webcams', 'Webcams']] }, { key:'muted', label:'Start live TV muted', type:'checkbox', value:s.muted !== false }]);
       var modeSel = base.el.querySelector('select'), camBox = h('div', { className:'vc-form' }, [h('p', { className:'muted', text:'Loading your webcams…' })]), single = null, multi = null;
       var camMode = select([['cycle', 'Cycle through webcams'], ['single', 'A single webcam']], s.camMode || 'cycle'), secs = input('number', s.camSeconds || 30, { min:'10', max:'600' }), hover = input('checkbox', !!s.camHoverPause);
       myCams(true).catch(function(){ return []; }).then(function(all){
@@ -769,6 +805,10 @@
     },
     merge:true
   };
+
+  W.pseudotv = {name:'PseudoTV',desc:'Watch one of your scheduled PseudoTV channels on this board.',icon:'📺',w:12,h:8,
+    render:function(body,s,ctx){return W.media.render(body,Object.assign({},s,{mode:'pseudotv'}),ctx);},
+    form:function(s){return textForm([{key:'muted',label:'Start muted',type:'checkbox',value:s.muted!==false}]);},merge:true};
 
   // ------------------------------------------------------------------ Board (dashboard grid)
   var COLS = 24;

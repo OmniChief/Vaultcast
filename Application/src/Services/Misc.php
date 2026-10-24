@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 /** Misc → Board (dashboards and widget data) and Ambient (screensaver stills, webcams). */
 final class Misc {
-    const WIDGETS = ['clock', 'weather', 'calendar', 'reminders', 'media', 'recordings', 'downloads', 'health', 'recent', 'nowplaying', 'notes', 'slideshow', 'rss', 'drop', 'leaderboard', 'frame', 'webcams'];
+    const WIDGETS = ['clock', 'weather', 'calendar', 'reminders', 'media', 'pseudotv', 'recordings', 'downloads', 'health', 'recent', 'nowplaying', 'notes', 'slideshow', 'rss', 'drop', 'leaderboard', 'frame', 'webcams'];
     /** Older or alternative spellings of widget types; saved boards using them keep working and are stored under the current key. */
     const WIDGET_ALIASES = ['recently_added' => 'recent', 'recentlyadded' => 'recent', 'recently-added' => 'recent', 'now_playing' => 'nowplaying', 'now-playing' => 'nowplaying',
         'bins' => 'reminders', 'binday' => 'reminders', 'bin_day' => 'reminders', 'bin-day' => 'reminders', 'picture_frame' => 'frame', 'pictureframe' => 'frame', 'webcam' => 'webcams',
