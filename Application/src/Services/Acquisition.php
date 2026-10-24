@@ -1798,12 +1798,14 @@ class Acquisition {
             }
             $entries = [];
             $added = 0;
-            foreach (array_slice($requests, 0, 400) as $item) {
+            $truncated = false;
+            foreach ($requests as $item) {
                 $key = $keyFor($item);
                 if (isset($seen[$key])) {
                     $entries[] = $seen[$key];
                     continue;
                 }
+                if ($added >= 400) { $truncated = true; continue; }
                 $date = $item['airdate'] ?? null;
                 $eligible = self::episodeEligibleAt($date);
                 $entry = [
@@ -1828,7 +1830,7 @@ class Acquisition {
             if ($added && !Store::set('acquire_queue', $q)) {
                 return ['ok' => false, 'error' => 'Could not persist acquisition queue', 'entries' => []];
             }
-            return ['ok' => true, 'entries' => $entries, 'added' => $added, 'truncated' => count($requests) > 400];
+            return ['ok' => true, 'entries' => $entries, 'added' => $added, 'truncated' => $truncated];
         } finally {
             flock($lock, LOCK_UN);
             fclose($lock);
