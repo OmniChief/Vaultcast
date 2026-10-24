@@ -110,7 +110,7 @@ class Acquisition {
         foreach ($queue as $entry) {
             if (!is_array($entry)) continue;
             if (!in_array((string)($entry['status'] ?? ''), ['queued', 'queued_local', 'scheduled', 'retry_wait'], true)) continue;
-            if (trim((string)($entry['query'] ?? '')) === '' || !empty($entry['magnet']) || !empty($entry['url'])) continue;
+            if (trim((string)($entry['query'] ?? '')) === '' && empty($entry['magnet']) && empty($entry['url'])) continue;
             if ((int)($entry['eligible_at'] ?? 0) > $now || (int)($entry['next_attempt_at'] ?? 0) > $now) continue;
             $due = true;
             break;
@@ -1559,6 +1559,7 @@ class Acquisition {
             if (!in_array($status, ['queued', 'queued_local', 'scheduled', 'retry_wait'], true)) continue;
             $eligible = (int)($entry['eligible_at'] ?? 0);
             if ($eligible > time() || (int)($entry['next_attempt_at'] ?? 0) > time()) continue;
+            if (++$considered > $limit) break;
             $magnet = trim((string)($entry['magnet'] ?? ''));
             $url = trim((string)($entry['url'] ?? ''));
             $query = trim((string)($entry['query'] ?? ''));
@@ -1586,8 +1587,6 @@ class Acquisition {
                 $skipped++;
                 continue;
             }
-            if (++$considered > $limit) break;
-
             $gate = self::canFetchNow();
             if (!($gate['ok'] ?? false)) {
                 $rateLimited = true;
