@@ -1753,6 +1753,42 @@ class Acquisition {
         }
     }
 
+    /** Restart a terminal/paused episode search without bypassing release eligibility. */
+    public static function retryEpisodeQueueEntry(string $id): array {
+        if (!preg_match('/^[a-f0-9]{16}$/D', $id)) return ['ok' => false, 'error' => 'Invalid queue ID'];
+        $lock = self::acquireLock(true);
+        if (!$lock) return ['ok' => false, 'error' => 'Acquisition queue busy; retry shortly'];
+        try {
+            $q = Store::get('acquire_queue', []);
+            if (!is_array($q)) return ['ok' => false, 'error' => 'Queue unavailable'];
+            foreach ($q as $i => $entry) {
+                if (!is_array($entry) || (string)($entry['id'] ?? '') !== $id) continue;
+                if (!in_array((string)($entry['status'] ?? ''), ['exhausted', 'paused', 'failed'], true)) {
+                    return ['ok' => false, 'error' => 'Only paused, failed or exhausted searches may be retried'];
+                }
+                if (trim((string)($entry['query'] ?? '')) === '') return ['ok' => false, 'error' => 'This entry has no search query'];
+                $eligible = self::episodeEligibleAt($entry['airdate'] ?? null);
+                $entry['eligible_at'] = $eligible;
+                $entry['next_attempt_at'] = $eligible !== null ? max($eligible, time()) : time();
+                $entry['status'] = $eligible !== null && $eligible > time() ? 'scheduled' : 'queued';
+                $entry['search_attempts'] = 0;
+                $entry['error_attempts'] = 0;
+                $entry['magnet'] = '';
+                $entry['url'] = '';
+                $entry['message'] = 'Search reset by administrator';
+                $entry['updated_at'] = date('c');
+                unset($entry['torrent_id'], $entry['torrent_hash']);
+                $q[$i] = $entry;
+                if (!Store::set('acquire_queue', $q)) return ['ok' => false, 'error' => 'Unable to persist retry'];
+                return ['ok' => true, 'entry' => $entry];
+            }
+            return ['ok' => false, 'error' => 'Queue entry not found'];
+        } finally {
+            flock($lock, LOCK_UN);
+            fclose($lock);
+        }
+    }
+
     /** Queue fetch for every missing episode in a show detail payload. */
     public static function fetchMissingForShow(array $detail, ?int $onlySeason = null, ?int $onlyEpisode = null): array {
         $show = $detail['show'] ?? [];
@@ -1801,6 +1837,7 @@ class Acquisition {
             'queued' => $queued,
             'count' => count($queued),
             'new_requests' => (int)($batch['added'] ?? 0),
+            'reason' => !empty($batch['truncated']) ? 'Queue capacity reached; repeat after removing old requests' : ($batch['error'] ?? null),
             'sent_transmission' => $sentNow,
             'pending_searches' => $drained,
             'errors' => $errors,
