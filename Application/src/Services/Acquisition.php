@@ -679,6 +679,7 @@ class Acquisition {
                 if ($same) return ['ok' => true, 'deduplicated' => true, 'entry' => $existing];
             }
         }
+        if (count($q) >= 2000) return ['ok' => false, 'error' => 'Acquisition queue full (2000 entries); remove old requests before adding more'];
         $eligible = self::episodeEligibleAt($item['airdate'] ?? null);
         $entry = [
             'id' => bin2hex(random_bytes(8)),
@@ -705,7 +706,7 @@ class Acquisition {
             $entry['torrent_hash'] = strtolower($hm[1]);
         }
         $q[] = $entry;
-        Store::set('acquire_queue', $q);
+        if (!Store::set('acquire_queue', $q)) return ['ok' => false, 'error' => 'Could not persist acquisition request'];
 
         $settings = Store::settings();
         $tr = $settings['acquisition']['transmission'] ?? [];
@@ -1719,7 +1720,7 @@ class Acquisition {
                     $entries[] = $previous;
                     continue;
                 }
-                if ($added >= 400) { $truncated = true; continue; }
+                if ($added >= 400 || count($q) >= 2000) { $truncated = true; continue; }
                 $date = $item['airdate'] ?? null;
                 $eligible = self::episodeEligibleAt($date);
                 $entry = [
