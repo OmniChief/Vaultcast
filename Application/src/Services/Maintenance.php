@@ -103,6 +103,13 @@ final class Maintenance
             } catch (Throwable $ignored) {}
         });
         try {
+            // Opportunistic acquisition must never accumulate CLI workers waiting
+            // behind long-running maintenance on a low-memory NAS.
+            if ($job['task'] === 'acquisition-tick' && !flock($lock, LOCK_EX | LOCK_NB)) {
+                $job['result'] = ['ok' => true, 'skipped' => true, 'reason' => 'Maintenance worker busy'];
+                $job['status'] = 'complete';
+                return ['ok' => true, 'job' => $job];
+            }
             while (!flock($lock, LOCK_EX | LOCK_NB)) { self::checkpoint(); usleep(250000); }
             self::checkpoint();
             $job['status'] = 'running'; $job['started_at'] = date('c');
