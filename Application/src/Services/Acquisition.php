@@ -2675,6 +2675,9 @@ class Acquisition {
     }
 
     private static function markQueueRemovedById(string $id, bool $delete): array {
+        $lock = self::acquireLock();
+        if (!$lock) return [];
+        try {
         $q = Store::get('acquire_queue', []);
         if (!is_array($q)) return [];
         $hit = [];
@@ -2688,9 +2691,16 @@ class Acquisition {
         unset($e);
         if ($hit) Store::set('acquire_queue', $q);
         return $hit;
+        } finally {
+            flock($lock, LOCK_UN);
+            fclose($lock);
+        }
     }
 
     private static function markQueueRemovedForTorrent(array $tor, bool $delete): array {
+        $lock = self::acquireLock();
+        if (!$lock) return [];
+        try {
         $q = Store::get('acquire_queue', []);
         if (!is_array($q)) return [];
         $hit = [];
@@ -2707,9 +2717,16 @@ class Acquisition {
         unset($e);
         if ($hit) Store::set('acquire_queue', $q);
         return $hit;
+        } finally {
+            flock($lock, LOCK_UN);
+            fclose($lock);
+        }
     }
 
     private static function markQueueDoneForTorrent(array $tor, array $dests): void {
+        $lock = self::acquireLock();
+        if (!$lock) return ;
+        try {
         $q = Store::get('acquire_queue', []);
         if (!is_array($q)) return;
         $changed = false;
@@ -2725,6 +2742,10 @@ class Acquisition {
         }
         unset($e);
         if ($changed) Store::set('acquire_queue', $q);
+        } finally {
+            flock($lock, LOCK_UN);
+            fclose($lock);
+        }
     }
 
     private static function importRecords(): array {
