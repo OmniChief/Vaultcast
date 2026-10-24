@@ -15804,6 +15804,12 @@ function viewCollectionDetail(){
     return j;
   }).catch(function(){ return null; });
   meP.then(enhanceFirstPage);
+  // One non-blocking check per app load; the server enforces one global
+  // five-minute cooldown across all viewers before reading the queue.
+  meP.then(function(me){
+    if (!me || !me.ok || !me.user || state._guest) return;
+    api('/downloads/tick', { method:'POST', body:{} }).catch(function(){ /* Acquisition is optional. */ });
+  });
   meP.then(function(){ startConvertNotifPoll(); });
   registerSW();
 })();
