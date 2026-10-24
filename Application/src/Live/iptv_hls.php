@@ -145,7 +145,7 @@ function iptv_hls_proxy_request() {
             http_response_code($status >= 200 && $status < 300 ? $status : 200);
             header('Content-Type: ' . ($responseHeaders['content-type'] ?? 'application/octet-stream'));
             header('Cache-Control: private, no-store');
-            header('Access-Control-Allow-Origin: *');
+            if (class_exists('Cors')) Cors::media(); else header('Access-Control-Allow-Origin: *');
             header('Access-Control-Expose-Headers: Content-Length, Content-Range, Accept-Ranges');
             foreach (array('content-range', 'content-length', 'accept-ranges') as $name) {
                 if ($name === 'content-length' && !empty($responseHeaders['content-encoding']) && strtolower($responseHeaders['content-encoding']) !== 'identity') continue;
@@ -253,7 +253,7 @@ function iptv_hls_proxy_request() {
         || strpos(ltrim($body), '#EXTM3U') === 0;
 
     header('Cache-Control: no-store');
-    header('Access-Control-Allow-Origin: *');
+    if (class_exists('Cors')) Cors::media(); else header('Access-Control-Allow-Origin: *');
 
     if ($isPlaylist) {
         $rewritten = iptv_hls_rewrite_playlist(

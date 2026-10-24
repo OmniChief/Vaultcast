@@ -19,14 +19,14 @@ app.use(cors({
   origin: '*',
   methods: ['GET', 'POST'],
   allowedHeaders: ['Content-Type'],
-  credentials: true,
+  credentials: false,
 }));
 
 const io = socketIo(server, {
   cors: {
     origin: '*',
     methods: ['GET', 'POST'],
-    credentials: true,
+    credentials: false,
   },
   path: '/socket.io',
   // savestate transfer on guest join can exceed default 1MB buffer

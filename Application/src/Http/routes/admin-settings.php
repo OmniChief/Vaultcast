@@ -73,6 +73,7 @@ if ($path === '/admin/settings' && $method === 'GET') {
 if ($path === '/admin/settings' && $method === 'POST') {
     $b = body_json();
     try {
+        if(array_key_exists('cors_allowed_origins',$b))$b['cors_allowed_origins']=Cors::validate($b['cors_allowed_origins']);
         if(isset($b['transcoding'])) {
             if(!is_array($b['transcoding']))throw new InvalidArgumentException('Invalid transcoding settings.');
             unset($b['transcoding']['max_threads']);
@@ -140,8 +141,8 @@ if ($path === '/admin/settings' && $method === 'POST') {
         if (is_string($k) && strlen($k) > 0 && $k[0] === '_') {
             continue; // client-only flags
         }
-        if ($k === 'sections' && is_array($v)) {
-            $cur['sections'] = $v;
+        if (in_array($k, ['sections','cors_allowed_origins'], true) && is_array($v)) {
+            $cur[$k] = $v;
         } elseif (is_array($v) && isset($cur[$k]) && is_array($cur[$k])) {
             $cur[$k] = array_replace_recursive($cur[$k], $v);
         } else {

@@ -34,20 +34,6 @@ header('X-Content-Type-Options: nosniff');
 header('X-Frame-Options: SAMEORIGIN');
 header('Referrer-Policy: same-origin');
 
-// Browsers send Origin for state-changing fetch requests. Reject cross-site writes
-// before any route handler can process them.
-if (PHP_SAPI !== 'cli' && !in_array($_SERVER['REQUEST_METHOD'] ?? 'GET', ['GET','HEAD','OPTIONS'], true)) {
-    $origin = $_SERVER['HTTP_ORIGIN'] ?? '';
-    $originHost = $origin !== '' ? parse_url($origin, PHP_URL_HOST) : null;
-    $originPort = $origin !== '' ? parse_url($origin, PHP_URL_PORT) : null;
-    $authority = $originHost ? strtolower($originHost . ($originPort ? ':' . $originPort : '')) : '';
-    if (($origin !== '' && $authority !== strtolower($_SERVER['HTTP_HOST'] ?? '')) || ($_SERVER['HTTP_SEC_FETCH_SITE'] ?? '') === 'cross-site') {
-        http_response_code(403);
-        header('Content-Type: application/json');
-        exit('{"ok":false,"error":"Cross-site write rejected."}');
-    }
-}
-
 // Load a service only when a request uses it; no dependency manager required.
 spl_autoload_register(function (string $class): void {
     if (!preg_match('/^[A-Za-z][A-Za-z0-9_]*$/D', $class)) return;
@@ -56,6 +42,8 @@ spl_autoload_register(function (string $class): void {
 });
 
 require_once __DIR__ . '/Http/helpers.php';
+
+if (PHP_SAPI !== 'cli') Cors::handle();
 
 // Apply pending storage migrations once per schema version (durable stamp check).
 Migrations::runIfNeeded();

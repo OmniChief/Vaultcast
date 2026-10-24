@@ -120,7 +120,7 @@ if ($path === '/lobby/capability' && $method === 'GET') {
 
 /* EmulatorJS netplay room list mirror (presence only — signaling needs a Socket.IO netplay server) */
 if ($path === '/netplay/list' && $method === 'GET') {
-    header('Access-Control-Allow-Origin: *');
+    if (class_exists('Cors')) Cors::media(); else header('Access-Control-Allow-Origin: *');
     $gid = $_GET['game_id'] ?? '';
     json_out(Lobby::netplayListForGameId($gid));
 }

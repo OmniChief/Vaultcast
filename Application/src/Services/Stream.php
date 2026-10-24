@@ -238,7 +238,7 @@ class Stream {
             header('Content-Type: ' . $mime);
             header('Accept-Ranges: bytes');
             header('Content-Length: ' . $size);
-            header('Access-Control-Allow-Origin: *');
+            if (class_exists('Cors')) Cors::media(); else header('Access-Control-Allow-Origin: *');
             header('Access-Control-Expose-Headers: Content-Type, Content-Length, Content-Range, Accept-Ranges');
             header('Cache-Control: private, no-store');
             exit;
@@ -307,7 +307,7 @@ class Stream {
             header('Content-Type: ' . $mime);
             header('Accept-Ranges: bytes');
             header('Content-Length: ' . $size);
-            header('Access-Control-Allow-Origin: *');
+            if (class_exists('Cors')) Cors::media(); else header('Access-Control-Allow-Origin: *');
             header('Access-Control-Expose-Headers: Content-Type, Content-Length, Content-Range, Accept-Ranges');
             header('Cache-Control: private, no-store');
             exit;
@@ -510,7 +510,7 @@ class Stream {
         }
         header('Content-Type: ' . $mime);
         header('Accept-Ranges: bytes');
-        header('Access-Control-Allow-Origin: *');
+        if (class_exists('Cors')) Cors::media(); else header('Access-Control-Allow-Origin: *');
         header('Access-Control-Expose-Headers: Content-Type, Content-Length, Content-Range, Accept-Ranges');
         header('X-Accel-Redirect: ' . $accel);
         header('Cache-Control: private, no-store');

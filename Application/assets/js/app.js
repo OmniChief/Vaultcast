@@ -9003,6 +9003,7 @@ try {
       setTimeout(function(){if(body.isConnected)organiseSettingsSections(body);},0);
       var tab = state.adminTab;
       if (tab === 'general') {
+        body.appendChild(corsSettingsPanel(s));
         var auth = s.auth || {};
         var home = s.home || {};
         var pwa = s.pwa || {};
@@ -10827,6 +10828,16 @@ h('div', { className:'cv-find-bar' }, [
   }
 
   /* ---------------- Settings → Check for updates (admin) ---------------- */
+  function corsSettingsPanel(settings){
+    var origins=h('textarea',{rows:4,'aria-label':'Allowed app origins',placeholder:'https://app.example.com\ncapacitor://localhost'}),status=h('p',{className:'muted','aria-live':'polite'});
+    var save=h('button',{className:'btn',type:'button',text:'Save app origins',disabled:true,onClick:function(){
+      save.disabled=true;status.textContent='Saving…';
+      api('/admin/settings',{method:'POST',body:{cors_allowed_origins:origins.value.split(/\r?\n/).map(function(s){return s.trim();}).filter(Boolean)}}).then(function(j){status.textContent=j.ok?'App origins saved.':j.error||'Could not save origins.';}).catch(function(e){status.textContent=friendlyMessage(e);}).finally(function(){save.disabled=false;});
+    }});
+    origins.value=(settings.cors_allowed_origins||[]).join('\n');save.disabled=false;
+    return h('section',{className:'settings-card stack'},[h('h3',{text:'Browser and mobile app access (CORS)'}),h('p',{className:'muted',text:'Allow a separate web app or WebView to call this server using a mobile API key. Enter one exact origin per line, including its scheme and port if needed. Leave empty for normal Vaultcast browsing only. Cross-origin browser cookies are not enabled.'}),origins,save,status]);
+  }
+
   function apiKeysPanel(){
     var list=h('div',{className:'stack'}),secret=h('div',{className:'stack'}),status=h('p',{className:'muted','aria-live':'polite'});
     var label=h('input',{type:'text',maxlength:80,placeholder:'My phone',autocomplete:'off','aria-label':'Device name'});
