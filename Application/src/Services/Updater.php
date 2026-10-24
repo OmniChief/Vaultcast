@@ -106,7 +106,7 @@ final class Updater
         if ($r['status'] !== 200 || !is_array($j) || !preg_match('/^[0-9a-f]{40}$/D', (string)($j['commit']['sha'] ?? ''))) {
             return ['ok' => false, 'error' => 'Could not read the update commit from GitHub. Try again later.'];
         }
-        if (($j['commit']['commit']['tree']['sha'] ?? '') !== $tree) return ['ok' => false, 'code' => 'changed', 'error' => 'The branch changed since you checked. Check for updates again.'];
+        if (($j['commit']['sha'] ?? '') !== $tree && ($j['commit']['commit']['tree']['sha'] ?? '') !== $tree) return ['ok' => false, 'code' => 'changed', 'error' => 'The branch changed since you checked. Check for updates again.'];
         return ['ok' => true, 'commit' => $j['commit']['sha']];
     }
 
