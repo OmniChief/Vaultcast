@@ -194,7 +194,7 @@ function live_bridge_tv_export(string $kind): void {
 $__liveAction = live_bridge_action();
 if ($__liveAction !== null) {
     if (empty(Store::settings()['features']['live'])) live_bridge_deny(404, 'Live channels are disabled in Settings → Integrations.');
-    $readActions = ['guide', 'now', 'iptv', 'iptv_status', 'file', 'iptv_hls', 'logo', 'station', 'catalogue', 'iptv_browse', 'epg_refresh', 'm3u', 'tv_studio', 'tv_preview', 'tv_health', 'xmltv', 'playlist', 'channels', 'radio', 'radio_search', 'epg_channels'];
+    $readActions = ['guide', 'now', 'iptv', 'iptv_status', 'file', 'iptv_hls', 'logo', 'station', 'catalogue', 'duration', 'iptv_browse', 'epg_refresh', 'm3u', 'tv_studio', 'tv_preview', 'tv_health', 'xmltv', 'playlist', 'channels', 'radio', 'radio_search', 'epg_channels'];
     $writeActions = ['iptv_preview','station', 'iptv_add', 'iptv_remove', 'iptv_toggle', 'iptv_probe', 'iptv_save', 'epg_refresh', 'tv_studio', 'tv_channels', 'radio_save', 'epg_map'];
     $m = $_SERVER['REQUEST_METHOD'] ?? 'GET';
     $isWrite = ($m === 'POST' || $m === 'PUT' || $m === 'PATCH' || $m === 'DELETE');
@@ -207,7 +207,7 @@ if ($__liveAction !== null) {
         if (!in_array($__liveAction, $readActions, true)) live_bridge_deny(404, 'Unknown live action');
     }
 
-    if (in_array($__liveAction, ['tv_studio', 'tv_preview', 'tv_health'], true)) live_bridge_require_admin();
+    if (in_array($__liveAction, ['tv_studio', 'tv_preview', 'tv_health', 'duration'], true)) live_bridge_require_admin();
     if ($__liveAction === 'epg_refresh') live_bridge_require_admin();
     if ($__liveAction === 'xmltv' || $__liveAction === 'playlist') live_bridge_tv_export($__liveAction);
     if ($__liveAction === 'logo') live_bridge_logo();
@@ -275,6 +275,29 @@ require_once STREAM_ROOT . '/src/Live/store.php';
 $action = isset($_GET['action']) ? $_GET['action'] : 'station';
 
 try {
+    if ($action === 'duration' && $_SERVER['REQUEST_METHOD'] === 'GET') {
+        // Admin-only lookup for local server paths; never expose the file over HTTP.
+        $raw = $_GET['path'] ?? '';
+        if (!is_string($raw) || $raw === '' || strlen($raw) > 4096 ||
+            strpos($raw, "\\0") !== false || preg_match('#^[a-z][a-z0-9+.-]*://#i', $raw) ||
+            !(isset($raw[0]) && $raw[0] === '/' || preg_match('#^[a-z]:[/\\\\]#i', $raw))) {
+            json_error('Enter an absolute local file path.', 422);
+        }
+        $path = realpath($raw);
+        if ($path === false || !is_file($path)) {
+            // An absolute site URL can also begin with /; let the browser handle it.
+            json_out(['ok' => false, 'local' => false]);
+        }
+        if (!preg_match('/\\.(?:mp4|m4v|mov|mkv|webm|avi|mpeg|mpg|ts|m2ts|wmv|flv)$/i', $path)) {
+            json_error('Not a supported video file.', 422);
+        }
+        if (!is_readable($path)) json_error('Vaultcast cannot read that local file.', 403);
+        $seconds = MediaProbe::duration($path, 25);
+        if ($seconds === null || !is_finite($seconds) || $seconds <= 0) {
+            json_error('Could not read duration from the local file.', 422);
+        }
+        json_out(['ok' => true, 'local' => true, 'durationMs' => (int) round($seconds * 1000)]);
+    }
     if ($action === 'file' && ($_SERVER['REQUEST_METHOD'] === 'GET' || $_SERVER['REQUEST_METHOD'] === 'HEAD')) {
         require_once STREAM_ROOT . '/src/Live/library.php';
         relay_catalogue_file();
