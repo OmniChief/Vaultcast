@@ -30,11 +30,16 @@
   listen(window,'pageshow',function(event){if(event.persisted)location.reload();});
   window.VaultcastHub={modal:modal};window.__STREAM_BASE__=config.base;
   var app={h:h,api:api,request:request,BASE:config.base,state:{user:config.user,playTab:config.tab,playSub:config.sub||''},toast:function(text){say(text);},confirmDialog:function(text){return Promise.resolve(window.confirm(text));},pendingContent:function(o){return h('p',{text:o&&o.text||'Loading…',role:'status'});},emptyState:function(t,d,actions){return h('div',{},[h('h3',{text:t}),h('p',{text:d||''})].concat(actions||[]));},loadModule:module,apiUrl:function(url){return url.indexOf('/api/')===0?config.base+url.slice(1):url;},navigate:function(view){location.href=config.base+'?compat=on&view='+encodeURIComponent(view);},copyText:function(text){if(navigator.clipboard)return navigator.clipboard.writeText(text);window.prompt('Copy this link',text);return Promise.resolve();},shareUrl:function(path){return location.origin+config.base+path;}};
-  if(config.mode==='emulator'||config.mode==='genesis-legacy'){
+  if(config.mode==='emulator'||config.mode==='genesis-legacy'||config.mode==='nes-legacy'||config.mode==='snes-legacy'){
     say('Press Start game to try the emulator on this device.');
     // The emulator has a separate page and lifetime, so leaving it releases all game resources.
     var emuScript=config.emulatorScript;
-    load(emuScript,function(err){if(err){say(err.message);return;}try{var host=config.mode==='genesis-legacy'?window.VaultcastCompatibilityGenesis:window.VaultcastCompatibilityEmulator;if(typeof host!=='function')throw new Error('The emulator host could not be executed by this browser.');host(config,app,load,say);}catch(error){say('Emulator startup failed: '+(error.message||String(error)));}});return;
+    function hostReady(err){
+      if(err){say(err.message);return;}
+      try{var host=config.mode==='genesis-legacy'?window.VaultcastCompatibilityGenesis:config.mode==='nes-legacy'||config.mode==='snes-legacy'?window.VaultcastCompatibilityNintendo:window.VaultcastCompatibilityEmulator;if(typeof host!=='function')throw new Error('The emulator host could not be executed by this browser.');host(config,app,load,say);}catch(error){say('Emulator startup failed: '+(error.message||String(error)));}
+    }
+    if(config.legacyRuntime)load(config.legacyRuntime,function(error){if(error){say(error.message);return;}load(emuScript,hostReady);});else load(emuScript,hostReady);
+    return;
   }
   if(!enhance)return;enhance.style.display='';
   var interactive=document.getElementById('compat-play-interactive'),baseline=document.getElementById('compat-play-baseline');

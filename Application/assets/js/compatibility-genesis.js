@@ -1,35 +1,5 @@
 /* ES3 host for the separately downloaded, pinned JavaScript-only PicoDrive engine. */
 (function(){
-  if(typeof window.globalThis==='undefined')window.globalThis=window;
-  // Small ES3 shims for the downloaded engine; no browser capability gate.
-  if(!window.Promise){
-    var LegacyPromise=function(executor){
-      var self=this;self.state=0;self.value=null;self.queue=[];
-      function settle(state,value){if(self.state)return;if(state===1&&value===self){settle(2,new TypeError('Promise cycle'));return;}
-        if(state===1&&value&&(typeof value==='object'||typeof value==='function')){var then;try{then=value.then;}catch(error){settle(2,error);return;}if(typeof then==='function'){var done=false;try{then.call(value,function(v){if(!done){done=true;settle(1,v);}},function(e){if(!done){done=true;settle(2,e);}});}catch(error2){if(!done){done=true;settle(2,error2);}}return;}}
-        self.state=state;self.value=value;flush();
-      }
-      function flush(){if(!self.state)return;setTimeout(function(){var rows=self.queue;self.queue=[];for(var i=0;i<rows.length;i++)rows[i]();},0);}
-      self.then=function(success,failure){return new LegacyPromise(function(resolve,reject){self.queue.push(function(){var fn=self.state===1?success:failure;if(typeof fn!=='function'){(self.state===1?resolve:reject)(self.value);return;}try{resolve(fn(self.value));}catch(error){reject(error);}});flush();});};
-      self['catch']=function(fn){return self.then(null,fn);};
-      var called=false;try{executor(function(value){if(!called){called=true;settle(1,value);}},function(error){if(!called){called=true;settle(2,error);}});}catch(error){if(!called){called=true;settle(2,error);}}
-    };
-    LegacyPromise.resolve=function(value){return new LegacyPromise(function(resolve){resolve(value);});};
-    LegacyPromise.reject=function(error){return new LegacyPromise(function(resolve,reject){reject(error);});};
-    window.Promise=LegacyPromise;
-  }
-  if(!Object.assign)Object.assign=function(target){if(target==null)throw new TypeError('Object.assign target');target=Object(target);for(var i=1;i<arguments.length;i++){var source=arguments[i];if(source!=null)for(var key in source)if(Object.prototype.hasOwnProperty.call(source,key))target[key]=source[key];}return target;};
-  if(!Array.from)Array.from=function(source){var result=[];for(var i=0;i<source.length;i++)result.push(source[i]);return result;};
-  if(!Array.prototype.includes)Array.prototype.includes=function(value,from){var length=this.length>>>0,i=Number(from)||0;if(i<0)i=Math.max(0,length+i);for(;i<length;i++)if(this[i]===value||(this[i]!==this[i]&&value!==value))return true;return false;};
-  if(!Array.prototype.fill)Array.prototype.fill=function(value,start,end){var length=this.length>>>0,i=Number(start)||0,until=end===undefined?length:Number(end)||0;i=i<0?Math.max(0,length+i):Math.min(length,i);until=until<0?Math.max(0,length+until):Math.min(length,until);for(;i<until;i++)this[i]=value;return this;};
-  if(!String.prototype.startsWith)String.prototype.startsWith=function(value,start){start=Math.max(0,Number(start)||0);return this.substr(start,String(value).length)===String(value);};
-  if(!String.prototype.endsWith)String.prototype.endsWith=function(value,end){value=String(value);end=end===undefined?this.length:Math.min(this.length,Math.max(0,Number(end)||0));return end>=value.length&&this.substring(end-value.length,end)===value;};
-  if(!String.prototype.includes)String.prototype.includes=function(value,start){return this.indexOf(String(value),Math.max(0,Number(start)||0))>=0;};
-  if(!Math.imul)Math.imul=function(a,b){var ah=(a>>>16)&65535,al=a&65535,bh=(b>>>16)&65535,bl=b&65535;return (al*bl+((ah*bl+al*bh)<<16))|0;};
-  if(!Math.fround)Math.fround=function(n){var value=new Float32Array(1);value[0]=n;return value[0];};
-  if(!Math.clz32)Math.clz32=function(n){n=n>>>0;if(!n)return 32;var count=0;while(!(n&2147483648)){n=n<<1;count++;}return count;};
-  if(!window.performance)window.performance={};if(!window.performance.now)window.performance.now=function(){return new Date().getTime();};
-  if(!window.requestAnimationFrame)window.requestAnimationFrame=function(fn){return setTimeout(function(){fn(window.performance.now());},16);};
   window.VaultcastCompatibilityGenesis=function(config,A,load,say){
     var start=document.getElementById('compat-game-start'),stage=document.getElementById('compat-emulator-stage'),tools=document.getElementById('compat-game-tools'),timer=null,busy=false,started=false,session='',heartbeat=null,romName='game.md';
     function listen(node,event,fn){if(node.addEventListener)node.addEventListener(event,fn,false);else if(node.attachEvent)node.attachEvent('on'+event,fn);else node['on'+event]=fn;}
