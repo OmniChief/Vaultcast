@@ -219,7 +219,12 @@ function relay_enrich_station_episodes($station) {
     return $station;
 }
 
-function relay_resolve_url($url, $base) {
+function relay_resolve_url($url, $base, $mediaId = '') {
+    // An existing server-side media file is not a browser URL. Route it through
+    // the same token-backed streamer used for catalogue video playback.
+    if ($mediaId !== '' && is_string($url) && (substr($url, 0, 1) === '/' || preg_match('#^[A-Za-z]:[/\\\\]#', $url)) && is_file($url)) {
+        return rtrim(\Vaultcast\Database::basePath(), '/') . '/api/live/local_file?id=' . rawurlencode((string)$mediaId);
+    }
     if (preg_match('#^https?://#i', $url) || strpos($url, 'blob:') === 0) return $url;
     $base = rtrim($base, '/');
     $path = $url[0] === '/' ? $url : '/' . $url;
@@ -285,7 +290,7 @@ function relay_build_cycle($station, $channel) {
             'title' => relay_guide_title($item),
             'subtitle' => isset($item['subtitle']) ? $item['subtitle'] : '',
             'kind' => $item['kind'],
-            'url' => relay_resolve_url($item['url'], isset($station['mediaBaseUrl']) ? $station['mediaBaseUrl'] : ''),
+            'url' => relay_resolve_url($item['url'], isset($station['mediaBaseUrl']) ? $station['mediaBaseUrl'] : '', $item['id']),
             'generated' => $generated,
             'showTitle' => $meta['showTitle'],
             'episodeTitle' => $meta['episodeTitle'],

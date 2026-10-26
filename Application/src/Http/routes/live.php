@@ -194,7 +194,7 @@ function live_bridge_tv_export(string $kind): void {
 $__liveAction = live_bridge_action();
 if ($__liveAction !== null) {
     if (empty(Store::settings()['features']['live'])) live_bridge_deny(404, 'Live channels are disabled in Settings → Integrations.');
-    $readActions = ['guide', 'now', 'iptv', 'iptv_status', 'file', 'iptv_hls', 'logo', 'station', 'catalogue', 'duration', 'iptv_browse', 'epg_refresh', 'm3u', 'tv_studio', 'tv_preview', 'tv_health', 'xmltv', 'playlist', 'channels', 'radio', 'radio_search', 'epg_channels'];
+    $readActions = ['guide', 'now', 'iptv', 'iptv_status', 'file', 'iptv_hls', 'logo', 'local_file', 'station', 'catalogue', 'duration', 'iptv_browse', 'epg_refresh', 'm3u', 'tv_studio', 'tv_preview', 'tv_health', 'xmltv', 'playlist', 'channels', 'radio', 'radio_search', 'epg_channels'];
     $writeActions = ['iptv_preview','station', 'iptv_add', 'iptv_remove', 'iptv_toggle', 'iptv_probe', 'iptv_save', 'epg_refresh', 'tv_studio', 'tv_channels', 'radio_save', 'epg_map'];
     $m = $_SERVER['REQUEST_METHOD'] ?? 'GET';
     $isWrite = ($m === 'POST' || $m === 'PUT' || $m === 'PATCH' || $m === 'DELETE');
@@ -297,6 +297,27 @@ try {
             json_error('Could not read duration from the local file.', 422);
         }
         json_out(['ok' => true, 'local' => true, 'durationMs' => (int) round($seconds * 1000)]);
+    }
+    if ($action === 'local_file' && in_array($_SERVER['REQUEST_METHOD'], ['GET', 'HEAD'], true)) {
+        // Resolve IDs only against saved station media. Never accept a path in this URL.
+        $id = $_GET['id'] ?? '';
+        if (!is_string($id) || $id === '' || strlen($id) > 128) live_bridge_deny(404, 'Media unavailable');
+        $station = relay_load_station();
+        $path = '';
+        foreach ((array)($station['media'] ?? []) as $media) {
+            if (!is_array($media) || (string)($media['id'] ?? '') !== $id) continue;
+            $candidate = (string)($media['url'] ?? '');
+            if (($candidate[0] ?? '') !== '/' && !preg_match('#^[A-Za-z]:[/\\\\]#', $candidate)) break;
+            $real = realpath($candidate);
+            if ($real !== false && is_file($real) && is_readable($real)) $path = $real;
+            break;
+        }
+        if ($path === '') live_bridge_deny(404, 'Media unavailable');
+        $viewer = AreaAccess::viewer();
+        $token = Stream::createToken($viewer ? (string)$viewer['id'] : 'live', $id, $path, 'video', 'live');
+        header('Cache-Control: no-store');
+        header('Location: ' . rtrim(\Vaultcast\Database::basePath(), '/') . '/api/stream/play?t=' . $token, true, 302);
+        exit;
     }
     if ($action === 'file' && ($_SERVER['REQUEST_METHOD'] === 'GET' || $_SERVER['REQUEST_METHOD'] === 'HEAD')) {
         require_once STREAM_ROOT . '/src/Live/library.php';
