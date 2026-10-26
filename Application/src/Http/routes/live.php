@@ -157,6 +157,9 @@ function live_bridge_m3u(): void {
     $host = preg_replace('/[^A-Za-z0-9.:\\[\\]-]/', '', (string)($_SERVER['HTTP_HOST'] ?? 'localhost'));
     $origin = ($https ? 'https://' : 'http://') . $host . rtrim(\Vaultcast\Database::basePath(), '/') . '/live';
     $body = relay_build_m3u($station, $id, $origin);
+    if (Access::liveFeedValid()) {
+        $body = preg_replace_callback('#^(https?://[^\\r\\n]+/api/live/(?:file|local_file)\\?[^\\r\\n]+)$#m', function ($m) { return $m[1] . '&feed=' . rawurlencode(Access::liveFeedKey()); }, $body);
+    }
     $dl = isset($_GET['dl']) && $_GET['dl'] !== '' && $_GET['dl'] !== '0';
     $fname = 'channel-' . preg_replace('/[^A-Za-z0-9_-]/', '', (string)($channel['number'] ?? $id)) . '.m3u';
     header('Content-Type: audio/x-mpegurl; charset=utf-8');
@@ -187,6 +190,7 @@ function live_bridge_tv_export(string $kind): void {
         header('Content-Type: audio/x-mpegurl; charset=utf-8');
         header('Content-Disposition: ' . ($dl ? 'attachment' : 'inline') . '; filename="vaultcast-lineup.m3u"');
         $body = tvs_playlist_m3u($station, ($https ? 'https://' : 'http://') . $host . $prefix);
+        if (Access::liveFeedValid()) $body = str_replace('api/live/m3u?channel=', 'api/live/m3u?feed=' . rawurlencode(Access::liveFeedKey()) . '&channel=', $body);
     }
     if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'HEAD') echo $body;
     exit;
@@ -350,7 +354,7 @@ try {
         }
         if ($path === '') live_bridge_deny(404, 'Media unavailable');
         $viewer = AreaAccess::viewer();
-        $token = Stream::createToken($viewer ? (string)$viewer['id'] : 'live', $id, $path, 'video', 'live');
+        $token = Stream::createToken(Access::liveFeedValid() ? 'live-feed' : ($viewer ? (string)$viewer['id'] : 'live'), $id, $path, 'video', 'live');
         header('Cache-Control: no-store');
         header('Location: ' . rtrim(\Vaultcast\Database::basePath(), '/') . '/api/stream/play?t=' . $token, true, 302);
         exit;
