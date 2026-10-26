@@ -720,7 +720,8 @@ function relay_build_m3u($station, $channelId, $origin) {
     $ahead = max((int)$station['lookaheadHours'], 6) * 3600 * 1000;
     $from = $current ? $current['startUnix'] : $now;
     $blocks = relay_materialize($station, $channelId, $from, $now + $ahead);
-    $lines = array('#EXTM3U', '#EXTINF:-1,Relay — ' . $channel['number'] . ' ' . $channel['name']);
+    // Entries below are individual scheduled programmes, not a single live transport stream.
+    $lines = array('#EXTM3U');
     foreach ($blocks as $i => $block) {
         $url = $block['url'];
         if (!preg_match('#^https?://#i', $url)) {
