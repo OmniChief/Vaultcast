@@ -37,6 +37,7 @@ if ($downloadRoute) {
     if (empty($features['downloads'])) json_error('Enable download integrations in Settings first.', 404);
 }
 if (strpos($path, '/player-assets/') === 0 && in_array($method, ['GET','HEAD'], true)) {
+    if($path==='/player-assets/genesis-legacy/'.LegacyGenesis::REVISION.'/Genesis.min.js')LegacyGenesis::serve();
     PlayerAssets::serve(substr($path, strlen('/player-assets/')));
 }
 if (preg_match('#^/admin/system/(kill|processes|service|reboot)(/|$)#', $path) && empty($features['server_tools'])) json_error('Server administration tools are disabled in Settings → Integrations.', 404);
