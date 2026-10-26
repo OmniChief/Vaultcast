@@ -151,11 +151,12 @@ function live_bridge_m3u(): void {
     // Relative media URLs use the hostname chosen by the viewer.
     $path = (string) parse_url((string)($_SERVER['REQUEST_URI'] ?? ''), PHP_URL_PATH);
     $prefix = rtrim(\Vaultcast\Database::basePath(), '/');
-    /* relay_build_m3u() only treats a scheme+host origin correctly; use a placeholder host and strip it below */
-    $origin = 'http://vaultcast.invalid' . $prefix . '/live';
+    // Emit playable absolute HTTP URLs: VLC does not resolve root-relative
+    // paths against the site's origin the way a browser does.
+    $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https');
+    $host = preg_replace('/[^A-Za-z0-9.:\\[\\]-]/', '', (string)($_SERVER['HTTP_HOST'] ?? 'localhost'));
+    $origin = ($https ? 'https://' : 'http://') . $host . rtrim(\Vaultcast\Database::basePath(), '/') . '/live';
     $body = relay_build_m3u($station, $id, $origin);
-    /* strip any leftover scheme+host (paranoia) so every media line is path-absolute */
-    $body = preg_replace('#^https?://[^/\s]+(/[^\s]*)$#m', '$1', $body);
     $dl = isset($_GET['dl']) && $_GET['dl'] !== '' && $_GET['dl'] !== '0';
     $fname = 'channel-' . preg_replace('/[^A-Za-z0-9_-]/', '', (string)($channel['number'] ?? $id)) . '.m3u';
     header('Content-Type: audio/x-mpegurl; charset=utf-8');
