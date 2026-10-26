@@ -37,6 +37,8 @@ if ($downloadRoute) {
     if (empty($features['downloads'])) json_error('Enable download integrations in Settings first.', 404);
 }
 if (strpos($path, '/player-assets/') === 0 && in_array($method, ['GET','HEAD'], true)) {
+    if($path==='/player-assets/genesis-legacy/'.LegacyGenesis::REVISION.'/Genesis.min.js')LegacyGenesis::serve();
+    if(preg_match('#^/player-assets/(nes|snes)-legacy/([a-f0-9]{40})/([A-Za-z]+[.]min[.]js)$#D',$path,$legacyNintendo))LegacyNintendo::serve($legacyNintendo[1],$legacyNintendo[2],$legacyNintendo[3]);
     PlayerAssets::serve(substr($path, strlen('/player-assets/')));
 }
 if (preg_match('#^/admin/system/(kill|processes|service|reboot)(/|$)#', $path) && empty($features['server_tools'])) json_error('Server administration tools are disabled in Settings → Integrations.', 404);

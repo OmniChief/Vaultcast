@@ -82,6 +82,9 @@
   function remoteNavigation(event){
     event=event||window.event;
     if(event.defaultPrevented||event.returnValue===false||event.altKey||event.ctrlKey||event.metaKey||event.shiftKey||event.isComposing)return;
+    // Game engines own arrows and Enter while their play surface has focus.
+    var gameFocus=document.activeElement,gameStage=document.getElementById('compat-emulator-stage'),arcadeStage=document.querySelector&&document.querySelector('#compat-play-interactive .vc-game-stage');
+    if(gameStage&&gameStage.contains(gameFocus)||arcadeStage&&arcadeStage.contains(gameFocus))return;
     var key=event.key,code=event.keyCode||event.which;
     if(key==='ArrowLeft'||key==='Left')code=37;else if(key==='ArrowUp'||key==='Up')code=38;else if(key==='ArrowRight'||key==='Right')code=39;else if(key==='ArrowDown'||key==='Down')code=40;
     else if(key==='Enter'||key==='Accept'||key==='Select'||key==='OK'||code===23)code=13;
