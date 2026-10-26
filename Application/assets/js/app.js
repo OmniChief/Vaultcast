@@ -6451,7 +6451,7 @@ try {
       h('div', { className:'lp-tuning' }, [ h('div', { className:'spinner' }) ]),
       h('div', { className:'lp-chrome' }, [
         h('div', { className:'lp-top' }, [
-          h('button', { className:'lp-btn lp-back', type:'button', title:'Back (Esc)', 'aria-label':'Close player', onClick: function(e){ e.currentTarget.blur(); if (document.fullscreenElement === overlay || document.webkitFullscreenElement === overlay) { overlay.classList.toggle('idle'); if (!overlay.classList.contains('idle')) wake(); return; } closePlayer(); } }, [ icon('close') ]),
+          h('button', { className:'lp-btn lp-back', type:'button', title:'Hide player controls', 'aria-label':'Hide player controls', onClick: function(e){ e.currentTarget.blur(); clearTimeout(lp.idleT); overlay.classList.add('idle'); } }, [ icon('close') ]),
           h('div', { className:'lp-chan' }, [ elNum, elName, elPill ]),
           h('div', { className:'lp-spacer' }),
           shareButton(function(){ var c = liveChannels()[lp.idx] || list[lp.idx]; return 'live/' + encodeURIComponent(c ? c.id : ''); }, 'Copy link to this channel'),
