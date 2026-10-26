@@ -6451,7 +6451,7 @@ try {
       h('div', { className:'lp-tuning' }, [ h('div', { className:'spinner' }) ]),
       h('div', { className:'lp-chrome' }, [
         h('div', { className:'lp-top' }, [
-          h('button', { className:'lp-btn lp-back', type:'button', title:'Back (Esc)', 'aria-label':'Close player', onClick: function(){ try { history.back(); } catch (e) { closePlayer(); } } }, [ icon('close') ]),
+          h('button', { className:'lp-btn lp-back', type:'button', title:'Back (Esc)', 'aria-label':'Close player', onClick: function(e){ e.currentTarget.blur(); if (document.fullscreenElement === overlay || document.webkitFullscreenElement === overlay) { overlay.classList.toggle('idle'); if (!overlay.classList.contains('idle')) wake(); return; } closePlayer(); } }, [ icon('close') ]),
           h('div', { className:'lp-chan' }, [ elNum, elName, elPill ]),
           h('div', { className:'lp-spacer' }),
           shareButton(function(){ var c = liveChannels()[lp.idx] || list[lp.idx]; return 'live/' + encodeURIComponent(c ? c.id : ''); }, 'Copy link to this channel'),
@@ -6816,6 +6816,7 @@ try {
     overlay.addEventListener('click', function(e){
       if(overlay.classList.contains('player-mini'))return;
       if (e.target === video || e.target.classList.contains('lp-chrome')) {
+        if (overlay.classList.contains('idle')) { wake(); return; }
         if (overlay.classList.contains('needs-tap') || video.paused) safePlay();
         if (lp.guideOpen) toggleGuide(false);
         if (lp.epgOpen) toggleFullEpg(false);
@@ -6825,7 +6826,12 @@ try {
     function wake(){
       overlay.classList.remove('idle');
       clearTimeout(lp.idleT);
-      lp.idleT = setTimeout(function(){ if (!lp.guideOpen && !lp.epgOpen && !video.paused && !overlay.contains(document.activeElement)) overlay.classList.add('idle'); }, 3500);
+      lp.idleT = setTimeout(function(){
+        if (!overlay.isConnected || lp.guideOpen || lp.epgOpen || video.paused) return;
+        // Fullscreen controls should disappear even after a button was clicked.
+        if (overlay.contains(document.activeElement) && document.activeElement.blur) document.activeElement.blur();
+        overlay.classList.add('idle');
+      }, 3500);
     }
     overlay.addEventListener('mousemove', wake);
     overlay.addEventListener('touchstart', wake, { passive:true });
