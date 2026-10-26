@@ -223,7 +223,7 @@ function relay_resolve_url($url, $base, $mediaId = '') {
     // An existing server-side media file is not a browser URL. Route it through
     // the same token-backed streamer used for catalogue video playback.
     if ($mediaId !== '' && is_string($url) && (substr($url, 0, 1) === '/' || preg_match('#^[A-Za-z]:[/\\\\]#', $url)) && is_file($url)) {
-        return rtrim(\\Vaultcast\\Database::basePath(), '/') . '/api/live/local_file?id=' . rawurlencode((string)$mediaId);
+        return rtrim(\Vaultcast\Database::basePath(), '/') . '/api/live/local_file?id=' . rawurlencode((string)$mediaId);
     }
     if (preg_match('#^https?://#i', $url) || strpos($url, 'blob:') === 0) return $url;
     $base = rtrim($base, '/');
