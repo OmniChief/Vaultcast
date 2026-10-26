@@ -85,27 +85,11 @@ final class Access
      * @param callable   $findUser fn(string $id): ?array
      * @param callable   $token    fn(): ?array  playback-token payload for /stream/* paths
      */
-    /** Explicit secret for external M3U clients that cannot send browser session cookies. */
-    public static function liveFeedKey(): string
-    {
-        $key = (string)(\Vaultcast\Repository::document('live_external_feed_key', '') ?? '');
-        if (!preg_match('/^[a-f0-9]{64}$/D', $key)) {
-            $key = bin2hex(random_bytes(32));
-            \Vaultcast\Repository::putDocument('live_external_feed_key', $key);
-        }
-        return $key;
-    }
-
-    public static function liveFeedValid(): bool
-    {
-        $provided = $_GET['feed'] ?? '';
-        return is_string($provided) && preg_match('/^[a-f0-9]{64}$/D', $provided) && hash_equals(self::liveFeedKey(), $provided);
-    }
-
     public static function gate(string $path, ?array $session, callable $findUser, bool $requireLogin, callable $token, ?int $now = null): ?array
     {
         if (in_array($path, self::OPEN_PATHS, true) || strpos($path, '/player-assets/') === 0) return null;
-        if (preg_match('#^/live/(playlist|m3u|xmltv|file|local_file)$#D', $path) && self::liveFeedValid()) return null;
+        // External-player M3U/EPG and their media bridges do not carry a browser session.
+        if (in_array($path, ['/live/playlist', '/live/m3u', '/live/xmltv', '/live/file', '/live/local_file'], true)) return null;
         // Drop share links decide for themselves whether a sign-in is needed (per-link setting).
         if (preg_match('#^/drop/s/[a-f0-9]{32}(?:/download)?$#D', $path)) return null;
         // Secret-token calendar feeds (webcal/https subscriptions from other apps) carry no cookie; the token is the key.
@@ -120,10 +104,8 @@ final class Access
             // Live/Relay channel files (api/live/file) issue tokens owned by 'live': Live is readable
             // signed out (external IPTV players), so treat them like a /live/ request instead of a
             // deleted account. A signed-in viewer is still checked below.
-            // Playback tokens minted by authenticated external Live feeds are independently scoped.
-            if ($uid === 'live-feed' && ($p['area'] ?? '') === 'live') return null;
-            if ($uid === 'live') {
-                if ($session === null) return $requireLogin ? [401, ['ok'=>false, 'error'=>'Sign in to watch live.', 'code'=>'login_required']] : null;
+            if ($uid === 'live' && ($p['area'] ?? '') === 'live') {
+                if ($session === null) return null;
                 $user = $findUser((string)($session['user_id'] ?? ''));
                 if (!$user) return [401, ['ok'=>false, 'error'=>'Sign in to continue.', 'code'=>'login_required']];
                 $st = self::state($user, $now);
