@@ -194,8 +194,8 @@ function live_bridge_tv_export(string $kind): void {
 $__liveAction = live_bridge_action();
 if ($__liveAction !== null) {
     if (empty(Store::settings()['features']['live'])) live_bridge_deny(404, 'Live channels are disabled in Settings → Integrations.');
-    $readActions = ['guide', 'now', 'iptv', 'iptv_status', 'file', 'iptv_hls', 'logo', 'local_file', 'station', 'catalogue', 'duration', 'iptv_browse', 'epg_refresh', 'm3u', 'tv_studio', 'tv_preview', 'tv_health', 'xmltv', 'playlist', 'channels', 'radio', 'radio_search', 'epg_channels'];
-    $writeActions = ['iptv_preview','station', 'iptv_add', 'iptv_remove', 'iptv_toggle', 'iptv_probe', 'iptv_save', 'epg_refresh', 'tv_studio', 'tv_channels', 'radio_save', 'epg_map'];
+    $readActions = ['guide', 'now', 'iptv', 'iptv_status', 'file', 'iptv_hls', 'logo', 'local_file', 'station', 'catalogue', 'duration', 'channel_logo', 'iptv_browse', 'epg_refresh', 'm3u', 'tv_studio', 'tv_preview', 'tv_health', 'xmltv', 'playlist', 'channels', 'radio', 'radio_search', 'epg_channels'];
+    $writeActions = ['iptv_preview','station', 'iptv_add', 'iptv_remove', 'iptv_toggle', 'iptv_probe', 'iptv_save', 'epg_refresh', 'tv_studio', 'tv_channels', 'channel_logo', 'radio_save', 'epg_map'];
     $m = $_SERVER['REQUEST_METHOD'] ?? 'GET';
     $isWrite = ($m === 'POST' || $m === 'PUT' || $m === 'PATCH' || $m === 'DELETE');
 
@@ -275,6 +275,41 @@ require_once STREAM_ROOT . '/src/Live/store.php';
 $action = isset($_GET['action']) ? $_GET['action'] : 'station';
 
 try {
+    if ($action === 'channel_logo' && $_SERVER['REQUEST_METHOD'] === 'GET') {
+        $name = (string)($_GET['name'] ?? '');
+        if (!preg_match('/^[a-f0-9]{32}\\.(png|jpg|webp)$/D', $name)) live_bridge_deny(404, 'Image unavailable');
+        $file = STREAM_DATA . '/live/channel_logos/' . $name;
+        if (!is_file($file)) live_bridge_deny(404, 'Image unavailable');
+        header('Content-Type: ' . (substr($name, -4) === '.png' ? 'image/png' : (substr($name, -4) === '.jpg' ? 'image/jpeg' : 'image/webp')));
+        header('X-Content-Type-Options: nosniff');
+        header('Cache-Control: public, max-age=86400');
+        readfile($file);
+        exit;
+    }
+    if ($action === 'channel_logo' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        $body = body_json();
+        $image = $body['image'] ?? '';
+        $channel = $body['channel'] ?? '';
+        if (!is_string($image) || strlen($image) > 3000000 || !preg_match('#^data:image/(png|jpeg|webp);base64,([A-Za-z0-9+/=]+)$#D', $image, $parts)) live_bridge_deny(422, 'Choose a PNG, JPEG or WebP image up to 1 MB.');
+        $bytes = base64_decode($parts[2], true);
+        $info = $bytes === false ? false : @getimagesizefromstring($bytes);
+        if ($bytes === false || strlen($bytes) > 1048576 || !$info || $info[0] > 3000 || $info[1] > 3000 || !in_array($info[2], [IMAGETYPE_PNG, IMAGETYPE_JPEG, IMAGETYPE_WEBP], true)) live_bridge_deny(422, 'Invalid logo. Use PNG, JPEG or WebP up to 1 MB and 3000 pixels.');
+        require_once STREAM_ROOT . '/src/Live/tvstudio.php';
+        $station = relay_load_station();
+        $ids = array_column((array)($station['channels'] ?? []), 'id');
+        if (!is_string($channel) || !in_array($channel, $ids, true)) live_bridge_deny(404, 'Channel unavailable');
+        $extension = [IMAGETYPE_PNG => 'png', IMAGETYPE_JPEG => 'jpg', IMAGETYPE_WEBP => 'webp'][$info[2]];
+        $dir = STREAM_DATA . '/live/channel_logos';
+        if (!is_dir($dir) && !@mkdir($dir, 0750, true)) live_bridge_deny(500, 'Could not create logo storage');
+        $name = bin2hex(random_bytes(16)) . '.' . $extension;
+        if (@file_put_contents($dir . '/' . $name, $bytes, LOCK_EX) === false) live_bridge_deny(500, 'Could not store logo');
+        $url = rtrim(\Vaultcast\Database::basePath(), '/') . '/api/live/channel_logo?name=' . $name;
+        // Persist immediately, so the uploaded logo does not depend on Save studio.
+        $studio = tvs_load();
+        $studio['channels'][$channel]['logo'] = $url;
+        tvs_save($studio);
+        json_out(['ok' => true, 'logo' => $url]);
+    }
     if ($action === 'duration' && $_SERVER['REQUEST_METHOD'] === 'GET') {
         // Admin-only lookup for local server paths; never expose the file over HTTP.
         $raw = $_GET['path'] ?? '';
