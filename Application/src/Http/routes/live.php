@@ -167,6 +167,34 @@ function live_bridge_m3u(): void {
     exit;
 }
 
+/** One playable media URL for the programme on air, not a nested playlist. */
+function live_bridge_tune(): void {
+    require_once STREAM_ROOT . '/src/Live/store.php';
+    require_once STREAM_ROOT . '/src/Live/schedule.php';
+    require_once STREAM_ROOT . '/src/Live/channel_slugs.php';
+    $station = relay_load_station();
+    list($slugs, $aliases) = live_channel_slugs_current($station);
+    $hit = live_channel_resolve((string)($_GET['channel'] ?? ''), $slugs, $aliases);
+    if (!$hit || $hit['kind'] !== 'relay') live_bridge_deny(404, 'Unknown Relay channel');
+    $enabled = false;
+    foreach ((array)($station['channels'] ?? []) as $ch) {
+        if (($ch['id'] ?? '') === $hit['id'] && !empty($ch['enabled'])) { $enabled = true; break; }
+    }
+    if (!$enabled) live_bridge_deny(404, 'Channel is off air');
+    $now = (int)round(microtime(true) * 1000);
+    $block = relay_air_block($station, $hit['id'], $now);
+    if (!$block || empty($block['url'])) live_bridge_deny(404, 'No programme on air');
+    $url = (string)$block['url'];
+    if (!preg_match('#^https?://#i', $url)) {
+        if (($url[0] ?? '') !== '/') $url = rtrim(\Vaultcast\Database::basePath(), '/') . '/' . ltrim($url, '/');
+        // A root-relative path is served on this Vaultcast host.
+    }
+    if (preg_match('/[\\r\\n]/', $url)) live_bridge_deny(500, 'Invalid media URL');
+    header('Cache-Control: no-store');
+    header('Location: ' . $url, true, 302);
+    exit;
+}
+
 /** XMLTV guide and whole-lineup M3U (Tvheadend-style outputs). */
 function live_bridge_tv_export(string $kind): void {
     require_once STREAM_ROOT . '/src/Live/store.php';
@@ -195,7 +223,7 @@ function live_bridge_tv_export(string $kind): void {
 $__liveAction = live_bridge_action();
 if ($__liveAction !== null) {
     if (empty(Store::settings()['features']['live'])) live_bridge_deny(404, 'Live channels are disabled in Settings → Integrations.');
-    $readActions = ['guide', 'now', 'iptv', 'iptv_status', 'file', 'iptv_hls', 'logo', 'local_file', 'station', 'catalogue', 'programme_source', 'duration', 'channel_logo', 'iptv_browse', 'epg_refresh', 'm3u', 'tv_studio', 'tv_preview', 'tv_health', 'xmltv', 'playlist', 'channels', 'radio', 'radio_search', 'epg_channels'];
+    $readActions = ['guide', 'now', 'iptv', 'iptv_status', 'file', 'iptv_hls', 'logo', 'local_file', 'station', 'catalogue', 'programme_source', 'duration', 'channel_logo', 'iptv_browse', 'epg_refresh', 'm3u', 'tune', 'tv_studio', 'tv_preview', 'tv_health', 'xmltv', 'playlist', 'channels', 'radio', 'radio_search', 'epg_channels'];
     $writeActions = ['iptv_preview','station', 'iptv_add', 'iptv_remove', 'iptv_toggle', 'iptv_probe', 'iptv_save', 'epg_refresh', 'tv_studio', 'tv_channels', 'channel_logo', 'radio_save', 'epg_map'];
     $m = $_SERVER['REQUEST_METHOD'] ?? 'GET';
     $isWrite = ($m === 'POST' || $m === 'PUT' || $m === 'PATCH' || $m === 'DELETE');
@@ -213,6 +241,7 @@ if ($__liveAction !== null) {
     if ($__liveAction === 'xmltv' || $__liveAction === 'playlist') live_bridge_tv_export($__liveAction);
     if ($__liveAction === 'logo') live_bridge_logo();
     if ($__liveAction === 'm3u') live_bridge_m3u();
+    if ($__liveAction === 'tune') live_bridge_tune();
     if ($__liveAction === 'channels') {
         require_once STREAM_ROOT . '/src/Live/channel_slugs.php';
         list($slugs) = live_channel_slugs_current();

@@ -540,7 +540,7 @@ function tvs_playlist_m3u($station, $base) {
         $slug = $sidx['relay'][$ch['id']] ?? $ch['id'];
         // tvg-id stays the permanent relay.<id> so guide mappings survive renumbering; only the URL is numbered
         $lines[] = '#EXTINF:-1 tvg-id="relay.' . $ch['id'] . '" tvg-chno="' . (int)$ch['number'] . '"' . ($c['logo'] ? ' tvg-logo="' . str_replace('"', '', $c['logo']) . '"' : '') . ' group-title="' . str_replace('"', '', $c['group'] ?: 'Relay') . '",' . str_replace(',', ' ', $ch['name']);
-        $lines[] = $base . 'api/live/m3u?channel=' . rawurlencode($slug);
+        $lines[] = $base . 'api/live/tune?channel=' . rawurlencode($slug);
     }
     require_once __DIR__ . '/iptv.php';
     foreach (iptv_lineup_channels() as $c) {

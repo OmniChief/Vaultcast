@@ -89,7 +89,7 @@ final class Access
     {
         if (in_array($path, self::OPEN_PATHS, true) || strpos($path, '/player-assets/') === 0) return null;
         // External-player M3U/EPG and their media bridges do not carry a browser session.
-        if (in_array($path, ['/live/playlist', '/live/m3u', '/live/xmltv', '/live/file', '/live/local_file'], true)) return null;
+        if (in_array($path, ['/live/playlist', '/live/m3u', '/live/tune', '/live/xmltv', '/live/file', '/live/local_file'], true)) return null;
         // Drop share links decide for themselves whether a sign-in is needed (per-link setting).
         if (preg_match('#^/drop/s/[a-f0-9]{32}(?:/download)?$#D', $path)) return null;
         // Secret-token calendar feeds (webcal/https subscriptions from other apps) carry no cookie; the token is the key.
