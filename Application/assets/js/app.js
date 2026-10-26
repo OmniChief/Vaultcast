@@ -14463,7 +14463,7 @@ function viewCollectionDetail(){
                 vid.src = url;
               }
               // Local absolute paths belong to the server, not the browser's URL space.
-              if (/^(?:\\/|[A-Za-z]:[\\\\/])/.test(raw) && !/^\\/\\//.test(raw)) {
+              if ((raw.charAt(0) === '/' && raw.charAt(1) !== '/') || (/^[A-Za-z]:/.test(raw) && (raw.charAt(2) === '/' || raw.charCodeAt(2) === 92))) {
                 liveApi('duration', 'path=' + encodeURIComponent(raw)).then(function(result){
                   if (result && result.local === false) { browserProbe(); return; }
                   if (!result || !result.ok) { liveSetMsg((result && result.error) || 'Could not read local file duration.', true); return; }
