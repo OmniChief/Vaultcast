@@ -649,7 +649,20 @@ function relay_materialize($station, $channelId, $from, $to) {
     $out = relay_apply_rolling_schedule($station, $channelId, $out, $from, $to);
     // TV Studio weekly calendar, filler and advert rules (no-op for unconfigured channels)
     require_once __DIR__ . '/tvstudio.php';
-    return tvs_apply($station, $channelId, $out, $from, $to);
+    $out = tvs_apply($station, $channelId, $out, $from, $to);
+    // Cached cycle blocks may contain URLs baked before local-file playback
+    // routing was introduced. Resolve from the saved media entry on every read.
+    $media = relay_media_map($station);
+    foreach ($out as &$block) {
+        $id = (string)($block['mediaId'] ?? '');
+        if ($id === '' || !isset($media[$id])) continue;
+        $source = (string)($media[$id]['url'] ?? '');
+        if ($source === '') continue;
+        $resolved = relay_resolve_url($source, $station['mediaBaseUrl'] ?? '', $id);
+        if (strpos($resolved, '/api/live/local_file?id=') !== false) $block['url'] = $resolved;
+    }
+    unset($block);
+    return $out;
 }
 
 /** Cycle-only materialize (no rolling overlay). */
