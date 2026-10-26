@@ -396,7 +396,7 @@ function relay_catalogue_file() {
         return;
     }
     $viewer = AreaAccess::viewer();
-    $token = Stream::createToken($viewer ? (string)$viewer['id'] : 'live', $id, $path, 'video', 'live');
+    $token = Stream::createToken(Access::liveFeedValid() ? 'live-feed' : ($viewer ? (string)$viewer['id'] : 'live'), $id, $path, 'video', 'live');
     header('Cache-Control: no-store');
     header('Location: ' . \Vaultcast\Database::basePath() . 'api/stream/play?t=' . $token, true, 302);
 }
