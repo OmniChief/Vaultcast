@@ -88,6 +88,8 @@ final class Access
     public static function gate(string $path, ?array $session, callable $findUser, bool $requireLogin, callable $token, ?int $now = null): ?array
     {
         if (in_array($path, self::OPEN_PATHS, true) || strpos($path, '/player-assets/') === 0) return null;
+        // External-player M3U/EPG and their media bridges do not carry a browser session.
+        if (in_array($path, ['/live/playlist', '/live/m3u', '/live/tune', '/live/xmltv', '/live/file', '/live/local_file'], true)) return null;
         // Drop share links decide for themselves whether a sign-in is needed (per-link setting).
         if (preg_match('#^/drop/s/[a-f0-9]{32}(?:/download)?$#D', $path)) return null;
         // Secret-token calendar feeds (webcal/https subscriptions from other apps) carry no cookie; the token is the key.
@@ -102,8 +104,8 @@ final class Access
             // Live/Relay channel files (api/live/file) issue tokens owned by 'live': Live is readable
             // signed out (external IPTV players), so treat them like a /live/ request instead of a
             // deleted account. A signed-in viewer is still checked below.
-            if ($uid === 'live') {
-                if ($session === null) return $requireLogin ? [401, ['ok'=>false, 'error'=>'Sign in to watch live.', 'code'=>'login_required']] : null;
+            if ($uid === 'live' && ($p['area'] ?? '') === 'live') {
+                if ($session === null) return null;
                 $user = $findUser((string)($session['user_id'] ?? ''));
                 if (!$user) return [401, ['ok'=>false, 'error'=>'Sign in to continue.', 'code'=>'login_required']];
                 $st = self::state($user, $now);
