@@ -8,12 +8,12 @@
     else {player.a='KeyW';player.b='KeyQ';player.x='KeyS';player.y='KeyA';player.l='KeyZ';player.r='KeyX';other.a='KeyU';other.b='KeyH';other.x='KeyO';other.y='KeyN';other.l='KeyP';other.r='KeyM';other.start='KeyB';}
     var spec=nes?{label:'NES',embed:'embedNintendo',save:'downloadStateNintendo',restore:'uploadStateNintendo',extensions:/^nes$/i}:{label:'SNES',embed:'embedSuperNintendo',save:'downloadStateSuperNintendo',restore:'uploadStateSuperNintendo',extensions:/^(sfc|smc)$/i};
     var start=document.getElementById('compat-game-start'),stage=document.getElementById('compat-emulator-stage'),tools=document.getElementById('compat-game-tools');
-    var timer=null,heartbeat=null,busy=false,started=false,session='',stopped=false;
+    var timer=null,heartbeat=null,busy=false,started=false,session='',stopped=false,controller=null,configPaused=false,wasPaused=false,wasAudioRunning=false;
     function listen(node,event,fn){if(node.addEventListener)node.addEventListener(event,fn,false);else if(node.attachEvent)node.attachEvent('on'+event,fn);else node['on'+event]=fn;}
     function text(node,value){while(node.firstChild)node.removeChild(node.firstChild);node.appendChild(document.createTextNode(value));}
-    function report(isFinal){if(config.user.role==='guest'||!session)return;A.request('/hub/game',{item_id:config.item.id,session:session,active:!isFinal&&!document.hidden,'final':!!isFinal},function(){});}
+    function report(isFinal){if(config.user.role==='guest'||!session)return;A.request('/hub/game',{item_id:config.item.id,session:session,active:!isFinal&&!document.hidden&&!configPaused,'final':!!isFinal},function(){});}
     function stop(){
-      clearTimeout(timer);clearInterval(heartbeat);busy=false;
+      if(controller)controller.release();started=false;clearTimeout(timer);clearInterval(heartbeat);busy=false;
       if(nes){window.NINTENDO_RUNNING=false;window.NINTENDO_PAUSED=true;window.NINTENDO_KEYSTATE1={};window.NINTENDO_KEYSTATE2={};if(window.stopLoopNintendo)window.stopLoopNintendo();}
       else {window.SUPERNINTENDO_GAME_RUNNING=false;window.SUPERNINTENDO_KEY_INPUT_1=0;window.SUPERNINTENDO_KEY_INPUT_2=0;}
       if(!stopped){stopped=true;report(true);}
@@ -26,14 +26,33 @@
       if(nes){var map=window.NINTENDO_KEYMAP1||{},key=map[code];if(key!==undefined)window.NINTENDO_KEYSTATE1[key]=down;}
       else if(window.updateInputSuperNintendo)window.updateInputSuperNintendo(code,down);
     }
+    var actions=[['up','Up'],['down','Down'],['left','Left'],['right','Right'],['start','Start'],['select','Select'],['a','A'],['b','B']];
+    if(!nes)actions=actions.concat([['x','X'],['y','Y'],['l','L'],['r','R']]);
+    for(var actionIndex=0;actionIndex<actions.length;actionIndex++)player[actions[actionIndex][0]]='Vaultcast_'+actions[actionIndex][0];
+    function pauseForSettings(paused){
+      if(!started)return;var audio=nes?window.NINTENDO_AUDIO_CONTEXT:window.SUPERNINTENDO_AUDIO_CONTEXT;
+      if(paused){
+        if(!configPaused){wasPaused=nes?!!window.NINTENDO_PAUSED:!window.SUPERNINTENDO_GAME_RUNNING;wasAudioRunning=!!(audio&&audio.state==='running');}
+        configPaused=true;
+        if(nes){window.NINTENDO_PAUSED=true;if(window.stopLoopNintendo)window.stopLoopNintendo();}else window.SUPERNINTENDO_GAME_RUNNING=false;
+      }else {
+        if(!configPaused)return;configPaused=false;
+        if(nes){window.NINTENDO_PAUSED=wasPaused;if(!wasPaused&&window.startLoopNintendo)window.startLoopNintendo(window.NINTENDO_TARGET_FPS);}
+        else if(!wasPaused){window.SUPERNINTENDO_GAME_RUNNING=true;window.SUPERNINTENDO_LAST_FRAME_TIME=0;if(!window.SUPERNINTENDO_LOOP_ACTIVE&&window.requestFrameSuperNintendo){window.SUPERNINTENDO_LOOP_ACTIVE=true;window.requestAnimationFrame(window.requestFrameSuperNintendo);}}
+      }
+      if(nes){window.NINTENDO_KEYSTATE1={};window.NINTENDO_KEYSTATE2={};}else {window.SUPERNINTENDO_KEY_INPUT_1=0;window.SUPERNINTENDO_KEY_INPUT_2=0;}
+      try{var pending=audio&&(paused?audio.suspend&&audio.suspend():wasAudioRunning&&audio.resume&&audio.resume());if(pending&&pending.then)pending.then(function(){},function(){});}catch(ignore){}
+      report(false);
+    }
+    controller=window.VaultcastLegacyControls({system:nes?'nes':'snes',label:spec.label,userId:config.user.id,stage:stage,actions:actions,isRunning:function(){return started;},send:function(action,down){input('Vaultcast_'+action,down);},pause:pauseForSettings});
     function gameStarted(){
       if(nes&&!window.NINTENDO_RUNNING){fail(new Error('The NES engine could not start this ROM.'));return;}
       if(!nes&&!window.SUPERNINTENDO_GAME_BOOTED){fail(new Error('The SNES engine could not start this ROM.'));return;}
       started=true;busy=false;stopped=false;clearTimeout(timer);start.style.display='none';tools.style.display='';
       text(document.getElementById('compat-game-save'),'Download save state');text(document.getElementById('compat-game-load'),'Load save file');text(document.getElementById('compat-game-quit'),'Quit game');
-      stage.focus();session='';for(var i=0;i<16;i++)session+=('0'+Math.floor(Math.random()*256).toString(16)).slice(-2);
+      controller.ready();if(!controller.isOpen())stage.focus();session='';for(var i=0;i<16;i++)session+=('0'+Math.floor(Math.random()*256).toString(16)).slice(-2);
       report(false);heartbeat=setInterval(function(){report(false);},15000);
-      say(spec.label+' is running. Arrows move; Enter starts; Shift selects. '+(nes?'X is A; Z is B. TV remote: red=A, green=B, yellow=Select.':'W/Q are A/B; S/A are X/Y; Z/X are L/R. TV remote: red=B, green=A, yellow=Y, blue=X.'));
+      say(spec.label+' is running. Use Controller settings to map keys, numbers and TV-remote buttons.');
     }
     function boot(buffer,name){
       try{
@@ -62,7 +81,7 @@
       xhr.onerror=function(){if(busy)fail(new Error('The game download failed.'));};xhr.ontimeout=function(){if(busy)fail(new Error('The game download timed out.'));};xhr.send(null);
     }
     start.style.display='';start.onclick=function(){
-      if(busy||started)return;busy=true;stopped=false;start.disabled=true;say('Loading the legacy '+spec.label+' engine…');
+      if(busy||started)return;controller.close();busy=true;stopped=false;start.disabled=true;say('Loading the legacy '+spec.label+' engine…');
       timer=setTimeout(function(){if(!started)fail(new Error('Startup timed out. Reload this page to retry.'));},120000);
       A.request('/items/'+encodeURIComponent(config.item.id)+'/play',{},function(error,play){
         if(!busy)return;if(error){fail(error);return;}
@@ -73,16 +92,9 @@
     document.getElementById('compat-game-save').onclick=function(){if(started&&window[spec.save])window[spec.save]();};
     document.getElementById('compat-game-load').onclick=function(){if(started&&window[spec.restore])window[spec.restore]();};
     document.getElementById('compat-game-quit').onclick=function(){stop();location.href=config.base+'?compat=on&view=game&id='+encodeURIComponent(config.item.id);};
-    var controls=document.createElement('div'),buttons=nes?[['Start','Enter'],['Select','ShiftRight'],['A','KeyX'],['B','KeyZ']]:[['Start','Enter'],['Select','ShiftRight'],['A','KeyW'],['B','KeyQ'],['X','KeyS'],['Y','KeyA'],['L','KeyZ'],['R','KeyX']];
-    for(var b=0;b<buttons.length;b++)(function(label,code){var button=document.createElement('button');button.type='button';text(button,label);button.onclick=function(){input(code,true);setTimeout(function(){input(code,false);},100);};controls.appendChild(button);})(buttons[b][0],buttons[b][1]);tools.appendChild(controls);
-    var codes={13:'Enter',16:'ShiftRight',37:'ArrowLeft',38:'ArrowUp',39:'ArrowRight',40:'ArrowDown',65:'KeyA',81:'KeyQ',83:'KeyS',87:'KeyW',88:'KeyX',90:'KeyZ'};
-    codes[403]=nes?'KeyX':'KeyQ';codes[404]=nes?'KeyZ':'KeyW';codes[405]=nes?'ShiftRight':'KeyA';codes[406]=nes?'Enter':'KeyS';
-    function legacyKey(event,down){
-      event=event||window.event;if(!started)return;
-      var target=event.target||event.srcElement,tag=target&&target.tagName;if(tag==='INPUT'||tag==='SELECT'||tag==='TEXTAREA')return;
-      var keyCode=event.keyCode||event.which,code=event.code==='ShiftLeft'?'ShiftRight':!event.code||(keyCode>=403&&keyCode<=406)?codes[keyCode]:null;if(code){input(code,down);if(event.preventDefault)event.preventDefault();event.returnValue=false;}
-    }
-    listen(document,'keydown',function(event){legacyKey(event,true);});listen(document,'keyup',function(event){legacyKey(event,false);});listen(window,'pagehide',stop);
+    var controls=document.createElement('div'),buttons=nes?[['Start','start'],['Select','select'],['A','a'],['B','b']]:[['Start','start'],['Select','select'],['A','a'],['B','b'],['X','x'],['Y','y'],['L','l'],['R','r']];
+    for(var b=0;b<buttons.length;b++)(function(label,code){var button=document.createElement('button');button.type='button';text(button,label);button.onclick=function(){controller.pulse(code);};controls.appendChild(button);})(buttons[b][0],buttons[b][1]);tools.appendChild(controls);
+    listen(window,'pagehide',stop);
     listen(window,'error',function(event){if(busy)fail(new Error((event.message||'Engine error')+(event.filename?' in '+event.filename:'')));});
     listen(window,'unhandledrejection',function(event){if(busy)fail(new Error(event.reason&&event.reason.message||String(event.reason)));});
     say('Press Start game to try the JavaScript-only '+spec.label+' player.');
