@@ -316,7 +316,7 @@ try {
         $viewer = AreaAccess::viewer();
         $token = Stream::createToken($viewer ? (string)$viewer['id'] : 'live', $id, $path, 'video', 'live');
         header('Cache-Control: no-store');
-        header('Location: ' . rtrim(\\Vaultcast\\Database::basePath(), '/') . '/api/stream/play?t=' . $token, true, 302);
+        header('Location: ' . rtrim(\Vaultcast\Database::basePath(), '/') . '/api/stream/play?t=' . $token, true, 302);
         exit;
     }
     if ($action === 'file' && ($_SERVER['REQUEST_METHOD'] === 'GET' || $_SERVER['REQUEST_METHOD'] === 'HEAD')) {
