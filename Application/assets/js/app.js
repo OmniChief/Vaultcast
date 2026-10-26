@@ -14440,21 +14440,38 @@ function viewCollectionDetail(){
           fld('Duration (seconds)', h('div', { className: 'row-actions' }, [ durIn,
             h('button', { className: 'btn ghost', type: 'button', text: 'Read from file', onClick: function(){
               readEditor();
-              var url = liveResolveMediaUrl(item.url);
+              var raw = String(item.url || '').trim();
+              var url = liveResolveMediaUrl(raw);
               if (!url) { liveSetMsg('Enter a file URL first.', true); return; }
               liveSetMsg('Reading duration\u2026');
-              var vid = document.createElement('video');
-              vid.preload = 'metadata';
-              vid.muted = true;
-              vid.onloadedmetadata = function(){
-                if (!isFinite(vid.duration) || vid.duration <= 0) { liveSetMsg('Could not read duration.', true); return; }
-                item.durationMs = Math.round(vid.duration * 1000);
-                durIn.value = Math.round(vid.duration);
+              function applyDuration(ms){
+                if (!(ms > 0) || !isFinite(ms)) { liveSetMsg('Could not read duration.', true); return; }
+                item.durationMs = Math.round(ms);
+                durIn.value = Math.round(ms / 1000);
                 liveSetMsg('Duration ' + liveFmtDur(item.durationMs));
-                vid.removeAttribute('src'); try { vid.load(); } catch (eL) {}
-              };
-              vid.onerror = function(){ liveSetMsg('Could not read duration from ' + url, true); };
-              vid.src = url;
+              }
+              function browserProbe(){
+                var vid = document.createElement('video');
+                vid.preload = 'metadata';
+                vid.muted = true;
+                vid.onloadedmetadata = function(){
+                  var ms = vid.duration * 1000;
+                  vid.removeAttribute('src'); try { vid.load(); } catch (eL) {}
+                  applyDuration(ms);
+                };
+                vid.onerror = function(){ liveSetMsg('Could not read duration from ' + url, true); };
+                vid.src = url;
+              }
+              // Local absolute paths belong to the server, not the browser's URL space.
+              if (/^(?:\\/|[A-Za-z]:[\\\\/])/.test(raw) && !/^\\/\\//.test(raw)) {
+                liveApi('duration', 'path=' + encodeURIComponent(raw)).then(function(result){
+                  if (result && result.local === false) { browserProbe(); return; }
+                  if (!result || !result.ok) { liveSetMsg((result && result.error) || 'Could not read local file duration.', true); return; }
+                  applyDuration(result.durationMs);
+                }).catch(function(e){ liveSetMsg('Could not read local file duration: ' + String(e.message || e), true); });
+              } else {
+                browserProbe();
+              }
             }})
           ])),
           fld('Notes', h('textarea', { id: 'le-notes', rows: 2, text: item.notes || '' }))
