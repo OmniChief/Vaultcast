@@ -13856,7 +13856,30 @@ function viewCollectionDetail(){
         h('td', {}, [ h('input', { type:'number', min:'1', max:'9999', className:'tvs-num', value:String(c.number), onChange:function(ev){ e.number = Number(ev.target.value); } }) ]),
         h('td', {}, [ h('div', { className:'tvs-logo' }, [ cfg.logo ? h('img', { src:cfg.logo, alt:'' }) : h('span', { text:(c.name || '?').slice(0, 2) }) ]) ]),
         h('td', {}, [ h('input', { type:'text', value:c.name, onChange:function(ev){ e.name = ev.target.value; } }) ]),
-        h('td', {}, [ h('input', { type:'url', value:cfg.logo, placeholder:'https://\u2026/logo.png', onChange:function(ev){ cfg.logo = ev.target.value.trim(); tvsMark(); } }) ]),
+        h('td', {}, [ h('input', { type:'url', value:cfg.logo, placeholder:'https://\\u2026/logo.png', onChange:function(ev){ cfg.logo = ev.target.value.trim(); tvsMark(); } }),
+          h('button', { className:'btn ghost', type:'button', text:'Upload image', onClick:function(){
+            var picker = document.createElement('input');
+            picker.type = 'file'; picker.accept = 'image/png,image/jpeg,image/webp';
+            picker.onchange = function(){
+              var file = picker.files && picker.files[0];
+              if (!file) return;
+              if (file.size > 1048576) { toast('Logo must be 1 MB or smaller', {kind:'bad'}); return; }
+              var reader = new FileReader();
+              reader.onerror = function(){ toast('Could not read image', {kind:'bad'}); };
+              reader.onload = function(){
+                tvsApi('channel_logo', { method:'POST', body:{ channel:c.id, image:reader.result } }).then(function(j){
+                  if (!j || !j.ok) throw new Error((j && j.error) || 'Upload failed');
+                  cfg.logo = j.logo;
+                  if (tvs.data && tvs.data.studio && tvs.data.studio.channels[c.id]) tvs.data.studio.channels[c.id].logo = j.logo;
+                  toast('Channel logo uploaded and saved', {kind:'ok'});
+                  tvsPaint();
+                }).catch(function(e){ toast(String(e.message || e), {kind:'bad'}); });
+              };
+              reader.readAsDataURL(file);
+            };
+            picker.click();
+          } })
+        ]),
         h('td', {}, [ h('input', { type:'text', value:cfg.group, placeholder:'Relay', onChange:function(ev){ cfg.group = ev.target.value; tvsMark(); } }) ]),
         h('td', {}, [ h('select', { onChange:function(ev){ cfg.access.visibility = ev.target.value; tvsMark(); tvsPaint(); } }, [['everyone','Everyone'],['signed-in','Signed-in users'],['users','Chosen users'],['admins','Admins only']].map(function(o){ return h('option', { value:o[0], selected:cfg.access.visibility === o[0], text:o[1] }); })),
           cfg.access.visibility === 'users' ? h('select', { multiple:true, size:'3', onChange:function(ev){ cfg.access.users = Array.prototype.filter.call(ev.target.options, function(o){ return o.selected; }).map(function(o){ return o.value; }); tvsMark(); } }, users.map(function(u){ return h('option', { value:u.username, selected:cfg.access.users.indexOf(u.username) >= 0, text:u.username }); })) : null ]),
