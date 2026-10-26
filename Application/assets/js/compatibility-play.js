@@ -38,7 +38,8 @@
       if(err){say(err.message);return;}
       try{var host=config.mode==='genesis-legacy'?window.VaultcastCompatibilityGenesis:config.mode==='nes-legacy'||config.mode==='snes-legacy'?window.VaultcastCompatibilityNintendo:window.VaultcastCompatibilityEmulator;if(typeof host!=='function')throw new Error('The emulator host could not be executed by this browser.');host(config,app,load,say);}catch(error){say('Emulator startup failed: '+(error.message||String(error)));}
     }
-    if(config.legacyRuntime)load(config.legacyRuntime,function(error){if(error){say(error.message);return;}load(emuScript,hostReady);});else load(emuScript,hostReady);
+    function controllerReady(error){if(error){say(error.message);return;}if(config.legacyController)load(config.legacyController,function(controllerError){if(controllerError){say(controllerError.message);return;}load(emuScript,hostReady);});else load(emuScript,hostReady);}
+    if(config.legacyRuntime)load(config.legacyRuntime,controllerReady);else controllerReady(null);
     return;
   }
   if(!enhance)return;enhance.style.display='';
