@@ -14094,6 +14094,69 @@ function viewCollectionDetail(){
           paintLiveChannels(host);
         }})
       ]));
+      var srcType = h('select', {}, [
+        h('option', { value:'rules', text:'Library movie rules' }),
+        h('option', { value:'collection', text:'Existing collection' }),
+        h('option', { value:'smart', text:'Existing smart collection' })
+      ]);
+      var srcChoice = h('select', { 'aria-label':'Choose collection' });
+      var sourceYears = h('div', { className:'row-actions' });
+      var yearFrom = h('input', { type:'number', min:1888, max:9999, placeholder:'From year', className:'narrow' });
+      var yearTo = h('input', { type:'number', min:1888, max:9999, placeholder:'To year', className:'narrow' });
+      var genre = h('input', { type:'text', placeholder:'Genre (e.g. comedy)', maxlength:100 });
+      sourceYears.appendChild(yearFrom); sourceYears.appendChild(yearTo); sourceYears.appendChild(genre);
+      var sourceMsg = h('span', { className:'muted', text:'Choose rules or an existing collection.' });
+      var sourceOptions = h('div', { className:'row-actions' }, [srcChoice]);
+      function changeSource(){ sourceOptions.hidden = srcType.value === 'rules'; }
+      srcType.addEventListener('change', function(){
+        changeSource();
+        if (srcType.value === 'rules') return;
+        sourceMsg.textContent = 'Loading collections…';
+        var endpoint = srcType.value === 'smart' ? '/smart-collections' : '/collections';
+        api(endpoint).then(function(j){
+          srcChoice.innerHTML = '';
+          (j.collections || []).forEach(function(c){ srcChoice.appendChild(h('option', { value:c.id, text:c.name || c.title || c.id })); });
+          sourceMsg.textContent = srcChoice.options.length ? 'Select a collection, then add its library movies.' : 'No collections available.';
+        }).catch(function(e){ sourceMsg.textContent = String(e.message || e); });
+      });
+      changeSource();
+      card.appendChild(h('details', { className:'live-acc' }, [
+        h('summary', { text:'Add programming from library, collections or rules' }),
+        h('div', { className:'live-acc-body stack' }, [
+          h('p', { className:'muted', text:'Add matching library movies to this Relay channel. Existing choices stay selected; Save station to apply scheduling.' }),
+          h('div', { className:'row-actions' }, [srcType, sourceOptions]),
+          sourceYears,
+          h('div', { className:'row-actions' }, [
+            h('button', { className:'btn', type:'button', text:'Add matches to channel', onClick:function(e){
+              if (srcType.value !== 'rules' && !srcChoice.value) { sourceMsg.textContent='Choose a collection first.'; return; }
+              var button = e.currentTarget; button.disabled = true;
+              sourceMsg.textContent = 'Finding matching library movies…';
+              var params = 'source=' + encodeURIComponent(srcType.value) +
+                '&id=' + encodeURIComponent(srcChoice.value || '') +
+                '&from=' + encodeURIComponent(yearFrom.value) +
+                '&to=' + encodeURIComponent(yearTo.value) +
+                '&genre=' + encodeURIComponent(genre.value);
+              liveApi('programme_source', params).then(function(result){
+                if (!result || !result.ok) throw new Error((result && result.error) || 'Import failed');
+                var added = 0, selected = 0, missing = [];
+                (result.items || []).forEach(function(x){
+                  var media = liveMediaByCatalogue(x.id);
+                  if (!media) {
+                    media = liveCatalogueToMedia(x);
+                    st.media.push(media); added++;
+                    if (!(media.durationMs > 0)) missing.push(x.id);
+                  }
+                  if (ch.libraryIds.movie.indexOf(media.id) < 0) { ch.libraryIds.movie.push(media.id); selected++; }
+                });
+                if (added || selected) { liveMediaChanged(); liveDirty(); }
+                sourceMsg.textContent = (result.items || []).length + ' matched, ' + added + ' imported and ' + selected + ' newly selected.' + (result.limited ? ' First 300 results only.' : '') + ' Save station to apply.';
+                if (missing.length) liveFillDurations(missing);
+              }).catch(function(err){ sourceMsg.textContent = String(err.message || err); }).then(function(){ button.disabled = false; });
+            } }),
+            sourceMsg
+          ])
+        ])
+      ]));
       LIVE_KINDS.forEach(function(k){ card.appendChild(section(k)); });
       host.appendChild(card);
     });
