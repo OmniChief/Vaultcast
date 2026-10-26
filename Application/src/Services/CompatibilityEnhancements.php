@@ -27,6 +27,7 @@ trait CompatibilityEnhancements {
     }
     private static function enhancedPost(string $view,array $body): array {
         $action=(string)($body['compat_action'] ?? '');$user=self::$viewer;$id=(string)($_GET['id'] ?? '');
+        $play=self::playPost($body);if($play!==null)return $play;
         $viewing=self::viewingPost($view,$body);if($viewing!==null)return $viewing;
         $admin=self::administrationPost($view,$body);if($admin!==null)return $admin;
         $tool=self::toolPost($view,$body);if($tool!==null)return $tool;

@@ -393,10 +393,11 @@ final class Quiz {
         return ['ok' => true, 'player' => $pid, 'player_token' => $token] + self::view($r, $user, false, $pid);
     }
     public static function answer(array $user, string $code, array $body): array {
-        $pidIn = (string)($body['player'] ?? ''); $token = (string)($body['player_token'] ?? ''); $choice = (int)($body['choice'] ?? -1); $pid = null;
-        $r = self::mutate($code, function (array $r) use ($user, $pidIn, $token, $choice, &$pid): array {
+        $pidIn = (string)($body['player'] ?? ''); $token = (string)($body['player_token'] ?? ''); $choice = (int)($body['choice'] ?? -1); $question = isset($body['question']) ? (int)$body['question'] : null; $pid = null;
+        $r = self::mutate($code, function (array $r) use ($user, $pidIn, $token, $choice, $question, &$pid): array {
             $pid = self::playerFor($r, $user, $pidIn, $token);
             if ($pid === null) throw new DomainException('Join the room first.');
+            if ($question !== null && $question !== (int)$r['index']) throw new DomainException('The question changed. Refresh the room before answering.');
             if ($r['status'] !== 'question' || time() > (int)$r['ends_at'] + 1) throw new DomainException('Too late — answers are locked.');
             if (!empty($r['players'][$pid]['left'])) throw new DomainException(!empty($r['players'][$pid]['kicked']) ? 'The host removed you from this room.' : 'Rejoin the room first.');
             if (isset($r['players'][$pid]['answers'][$r['index']])) throw new DomainException('You already answered.');
