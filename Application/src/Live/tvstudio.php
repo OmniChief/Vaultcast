@@ -591,7 +591,7 @@ function tvs_admin_payload() {
         foreach ((class_exists('Auth') ? Auth::users() : array()) as $u) if (is_array($u) && !empty($u['username'])) $users[] = array('username' => $u['username'], 'role' => $u['role'] ?? 'user');
     } catch (Throwable $e) {}
     return array(
-        'ok' => true, 'externalFeedKey' => Access::liveFeedKey(), 'studio' => $st, 'channels' => $chs, 'media' => $media,
+        'ok' => true, 'studio' => $st, 'channels' => $chs, 'media' => $media,
         'feeds' => $iptv['feeds'] ?? array(), 'epgUrls' => $iptv['epgUrls'] ?? array(),
         'historyDays' => isset($station['historyDays']) ? (int)$station['historyDays'] : 7,
         'warnings' => tvs_lint($st, $station), 'timezones' => timezone_identifiers_list(), 'users' => $users,
