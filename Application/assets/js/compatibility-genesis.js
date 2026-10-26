@@ -1,5 +1,6 @@
 /* ES3 host for the separately downloaded, pinned JavaScript-only PicoDrive engine. */
 (function(){
+  if(typeof window.globalThis==='undefined')window.globalThis=window;
   // Small ES3 shims for the downloaded engine; no browser capability gate.
   if(!window.Promise){
     var LegacyPromise=function(executor){
