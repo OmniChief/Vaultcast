@@ -279,7 +279,7 @@ try {
         // Admin-only lookup for local server paths; never expose the file over HTTP.
         $raw = $_GET['path'] ?? '';
         if (!is_string($raw) || $raw === '' || strlen($raw) > 4096 ||
-            strpos($raw, "\\0") !== false || preg_match('#^[a-z][a-z0-9+.-]*://#i', $raw) ||
+            strpos($raw, chr(0)) !== false || preg_match('#^[a-z][a-z0-9+.-]*://#i', $raw) ||
             !(isset($raw[0]) && $raw[0] === '/' || preg_match('#^[a-z]:[/\\\\]#i', $raw))) {
             json_error('Enter an absolute local file path.', 422);
         }
