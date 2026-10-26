@@ -194,7 +194,7 @@ function live_bridge_tv_export(string $kind): void {
 $__liveAction = live_bridge_action();
 if ($__liveAction !== null) {
     if (empty(Store::settings()['features']['live'])) live_bridge_deny(404, 'Live channels are disabled in Settings → Integrations.');
-    $readActions = ['guide', 'now', 'iptv', 'iptv_status', 'file', 'iptv_hls', 'logo', 'local_file', 'station', 'catalogue', 'duration', 'channel_logo', 'iptv_browse', 'epg_refresh', 'm3u', 'tv_studio', 'tv_preview', 'tv_health', 'xmltv', 'playlist', 'channels', 'radio', 'radio_search', 'epg_channels'];
+    $readActions = ['guide', 'now', 'iptv', 'iptv_status', 'file', 'iptv_hls', 'logo', 'local_file', 'station', 'catalogue', 'programme_source', 'duration', 'channel_logo', 'iptv_browse', 'epg_refresh', 'm3u', 'tv_studio', 'tv_preview', 'tv_health', 'xmltv', 'playlist', 'channels', 'radio', 'radio_search', 'epg_channels'];
     $writeActions = ['iptv_preview','station', 'iptv_add', 'iptv_remove', 'iptv_toggle', 'iptv_probe', 'iptv_save', 'epg_refresh', 'tv_studio', 'tv_channels', 'channel_logo', 'radio_save', 'epg_map'];
     $m = $_SERVER['REQUEST_METHOD'] ?? 'GET';
     $isWrite = ($m === 'POST' || $m === 'PUT' || $m === 'PATCH' || $m === 'DELETE');
@@ -207,7 +207,7 @@ if ($__liveAction !== null) {
         if (!in_array($__liveAction, $readActions, true)) live_bridge_deny(404, 'Unknown live action');
     }
 
-    if (in_array($__liveAction, ['tv_studio', 'tv_preview', 'tv_health', 'duration'], true)) live_bridge_require_admin();
+    if (in_array($__liveAction, ['tv_studio', 'tv_preview', 'tv_health', 'duration', 'programme_source'], true)) live_bridge_require_admin();
     if ($__liveAction === 'epg_refresh') live_bridge_require_admin();
     if ($__liveAction === 'xmltv' || $__liveAction === 'playlist') live_bridge_tv_export($__liveAction);
     if ($__liveAction === 'logo') live_bridge_logo();
@@ -366,6 +366,46 @@ try {
         exit;
     }
     header('Content-Type: application/json; charset=utf-8');
+    if ($action === 'programme_source' && $_SERVER['REQUEST_METHOD'] === 'GET') {
+        require_once STREAM_ROOT . '/src/Live/library.php';
+        $source = (string)($_GET['source'] ?? 'rules');
+        $id = (string)($_GET['id'] ?? '');
+        $selected = [];
+        if ($source === 'collection') {
+            if (!preg_match('/^[a-f0-9]{8,64}$/D', $id)) json_error('Invalid collection', 422);
+            $col = Collections::status($id);
+            foreach (($col['parts'] ?? []) as $part) {
+                if (!empty($part['present']) && !empty($part['item_id'])) $selected[(string)$part['item_id']] = true;
+            }
+        } elseif ($source === 'smart') {
+            if (!preg_match('/^[a-f0-9]{16}$/D', $id)) json_error('Invalid smart collection', 422);
+            $result = SmartCollections::items($id, Auth::requireAdmin());
+            foreach (($result['items'] ?? []) as $card) {
+                if (!empty($card['id'])) $selected[(string)$card['id']] = true;
+            }
+        } elseif ($source !== 'rules') {
+            json_error('Unknown source type', 422);
+        }
+        $yearFrom = isset($_GET['from']) && $_GET['from'] !== '' ? (int)$_GET['from'] : 0;
+        $yearTo = isset($_GET['to']) && $_GET['to'] !== '' ? (int)$_GET['to'] : 9999;
+        $genre = strtolower(trim((string)($_GET['genre'] ?? '')));
+        if ($yearFrom < 0 || $yearTo > 9999 || $yearFrom > $yearTo || strlen($genre) > 100) json_error('Invalid programming filters', 422);
+        $items = [];
+        foreach ((Catalogue::get()['items'] ?? []) as $item) {
+            if (!is_array($item) || ($item['media_kind'] ?? '') !== 'video') continue;
+            if (relay_is_tv($item)) continue; // Movie programming rules and collection import
+            if ($source !== 'rules' && !isset($selected[(string)($item['id'] ?? '')])) continue;
+            $year = (int)($item['year'] ?? 0);
+            if ($yearFrom && $year < $yearFrom || $yearTo !== 9999 && $year > $yearTo) continue;
+            $genres = $item['genres'] ?? ($item['genre'] ?? []);
+            $genres = is_array($genres) ? implode(', ', $genres) : (string)$genres;
+            if ($genre !== '' && stripos($genres, $genre) === false) continue;
+            if (empty($item['id']) || empty($item['path']) || !is_file($item['path'])) continue;
+            $items[] = relay_public_hit($item, false);
+            if (count($items) >= 300) break;
+        }
+        json_out(['ok' => true, 'items' => $items, 'limited' => count($items) >= 300]);
+    }
     if ($action === 'catalogue' && $_SERVER['REQUEST_METHOD'] === 'GET') {
         require_once STREAM_ROOT . '/src/Live/library.php';
         echo json_encode(relay_catalogue_query($_GET), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
