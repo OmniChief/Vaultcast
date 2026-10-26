@@ -804,7 +804,7 @@ input[type=checkbox], input[type=radio], input[type=range] { accent-color: var(-
   background: linear-gradient(180deg, rgba(0,0,0,.72), transparent 24%, transparent 52%, rgba(0,0,0,.88));
   transition: opacity .4s var(--ease);
 }
-.live-player.idle .lp-chrome { opacity: 0; }
+.live-player.idle .lp-chrome { opacity: 0; pointer-events: none; }
 .live-player.idle { cursor: none; }
 .lp-top { display: flex; align-items: center; gap: 16px; }
 .lp-chan { display: flex; align-items: center; gap: 12px; }
