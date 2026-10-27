@@ -13796,7 +13796,8 @@ function viewCollectionDetail(){
         h('strong', { text:tvsSlotLabel(x) }), h('span', { className:'muted', text:' ' + x.days.map(function(d){ return TVS_DAYS[d]; }).join(', ') + ' ' + tvsFmtMin(x.startMin) }) ])); });
       return pane;
     }
-    function set(k, v, repaint){ s[k] = v; tvsMark(); if (repaint) tvsPaint(); }
+    var durationUpdate;
+    function set(k, v, repaint){ s[k] = v; tvsMark(); if (repaint) tvsPaint(); else if (durationUpdate) durationUpdate(); }
     var conflicts=tvsSlotConflicts(s,ch.slots);if(conflicts)pane.appendChild(h('p',{className:'settings-callout',text:'This slot overlaps '+conflicts+' other slot(s). Review timing or days before saving.'}));
     pane.appendChild(h('div', { className:'tvs-row' }, [ h('h3', { text:'Edit slot' }), h('button', { className:'btn ghost', type:'button', text:'Close', onClick:function(){ tvs.sel = null; tvsPaint(); } }) ]));
     pane.appendChild(h('label', {}, [ 'Title', h('input', { type:'text', value:s.title, placeholder:'Shown in the guide (optional)', onChange:function(e){ set('title', e.target.value, true); } }) ]));
@@ -13828,6 +13829,33 @@ function viewCollectionDetail(){
     pane.appendChild(h('label', { className:'tvs-check' }, [ h('input', { type:'checkbox', checked:!!s.fitOnly, onChange:function(e){ set('fitOnly', e.target.checked); } }), ' Only play programmes that fit' ]));
     pane.appendChild(h('p', { className:'muted', text:'Only play programmes that fit includes ad breaks. Remaining time uses complete items from the channel filler list, then other channel programmes that fit. If nothing fits, the channel is off air until the next programme.' }));
     pane.appendChild(h('label', { className:'tvs-check' }, [ h('input', { type:'checkbox', checked:s.ads, onChange:function(e){ set('ads', e.target.checked); } }), ' Allow ad breaks in this slot' ]));
+    pane.appendChild(h('label', { className:'tvs-check' }, [ h('input', { type:'checkbox', checked:!!s.paddingEnabled, onChange:function(e){ set('paddingEnabled', e.target.checked, true); } }), ' Pad to the end of this time slot' ]));
+    if (s.paddingEnabled) {
+      pane.appendChild(tvsListSelect('Padding filler pool', tvs.studio.fillerLists, s.paddingFillerListId || '', function(v){ set('paddingFillerListId', v); }));
+      pane.appendChild(tvsListSelect('Padding ad list', tvs.studio.adPools, s.paddingAdPoolId || '', function(v){ set('paddingAdPoolId', v); }));
+      pane.appendChild(h('p', { className:'muted', text:'Play the selected programmes once (one episode for a series), including channel ad breaks, then pad using only these lists. Complete items are combined to fit the remaining time as closely as possible. Programmes that overrun the slot are not started.' }));
+    }
+    var durationSummary = h('p', { className:'settings-callout', role:'status', 'aria-live':'polite', text:'Calculating programme, adverts and padding…' });
+    pane.appendChild(durationSummary);
+    var durationTimer, durationSequence = 0;
+    function exactDuration(ms){ var seconds = Math.ceil(Math.max(0, ms) / 1000); return Math.floor(seconds / 60) + 'm ' + (seconds % 60) + 's'; }
+    durationUpdate = function(){
+      clearTimeout(durationTimer); var sequence = ++durationSequence;
+      durationTimer = setTimeout(function(){
+        if (!pane.isConnected) return;
+        durationSummary.textContent = 'Calculating programme, adverts and padding…';
+        api('/live/tv_slot_preview', { method:'POST', body:{ studio:tvs.studio, channelId:tvs.channelId, slotId:s.id } }).then(function(j){
+          if (!pane.isConnected || sequence !== durationSequence) return;
+          if (!j || !j.ok) throw new Error('Duration calculation failed');
+          if (!j.available) { durationSummary.textContent = 'No airing of this slot in the next eight days. Check its days and date range.'; return; }
+          if (!j.requiredMs) { durationSummary.textContent = 'Select playable media with a known duration to calculate this slot.'; return; }
+          durationSummary.textContent = 'Next airing: programme ' + exactDuration(j.programmeMs) + ' + adverts ' + exactDuration(j.adsMs) + ' = ' + exactDuration(j.requiredMs) + '. Padding: ' + exactDuration(j.paddingMs) + '. Remaining gap: ' + exactDuration(j.gapMs) + '.';
+          if (j.requiredMs > j.endUnix - j.startUnix) durationSummary.textContent += ' Selected content exceeds this slot by ' + exactDuration(j.requiredMs - (j.endUnix - j.startUnix)) + '.';
+        }).catch(function(e){ if (pane.isConnected && sequence === durationSequence) durationSummary.textContent = friendlyMessage(e); });
+      }, 300);
+    };
+    durationUpdate();
+
     pane.appendChild(h('div', { className:'tvs-row' }, [
       h('label', {}, [ 'From', h('input', { type:'date', value:s.validFrom, onChange:function(e){ set('validFrom', e.target.value); } }) ]),
       h('label', {}, [ 'Until', h('input', { type:'date', value:s.validTo, onChange:function(e){ set('validTo', e.target.value); } }) ]),
