@@ -11,6 +11,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from contributor_setup import prepare
 
 APPDATA = os.environ.get("APPDATA", os.path.expanduser("~"))
 CONFIG_DIR = os.path.join(APPDATA, "VaultcastAIWorker")
@@ -26,42 +27,54 @@ def request(url, method="GET", data=None, headers=None, timeout=30):
     if headers:
         hdr.update(headers)
     req = urllib.request.Request(url, data=payload, headers=hdr, method=method)
-    with urllib.request.urlopen(req, timeout=timeout) as res:
-        raw = res.read()
-        return json.loads(raw.decode()) if raw else {}
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as res:
+            raw = res.read()
+            return json.loads(raw.decode()) if raw else {}
+    except urllib.error.HTTPError as exc:
+        try:
+            body = json.loads(exc.read().decode())
+            message = body.get("error") or body.get("detail")
+            if isinstance(message, str): exc.reason = message
+        except (ValueError, AttributeError):
+            pass
+        raise
+
+
+def save_config(config):
+    temporary = CONFIG_PATH + ".tmp"
+    with open(temporary, "w", encoding="utf-8") as f:
+        json.dump(config, f)
+    os.replace(temporary, CONFIG_PATH)
 
 
 def load_config():
     os.makedirs(CONFIG_DIR, exist_ok=True)
+    config = {}
     if os.path.exists(CONFIG_PATH):
         with open(CONFIG_PATH, encoding="utf-8") as f:
-            return json.load(f)
-    print("Vaultcast AI contributor setup")
-    server = input("Vaultcast URL (for example https://vaultcast.example.com): ").strip().rstrip("/")
-    code = input("One-time pairing code from AI → Images: ").strip().lower()
+            config = json.load(f)
+    if "--pair" in sys.argv:
+        config.pop("worker_token", None)
+        config.pop("worker_id", None)
+    config.update(prepare(config, request, graph_for, force=any(arg in sys.argv for arg in ("--setup", "--retest"))))
+    save_config(config)
+    if config.get("worker_token"):
+        return config
+    print("\nEngine ready. Pair this contributor with Vaultcast.")
+    print("Vaultcast receives this computer's name, GPU/RAM summary, InvokeAI version, and checked image profile.")
+    server = (input("Vaultcast URL (for example https://vaultcast.example.com) [" + config.get("server", "") + "]: ").strip() or config.get("server", "")).rstrip("/")
     if not server.startswith(("http://", "https://")):
         raise RuntimeError("Enter a full Vaultcast URL beginning with http:// or https://")
-    models = request(INVOKE + "/api/v2/models/")
-    records = models.get("models", models.get("items", models.get("data", [])))
-    sdxl = [m for m in records if str(m.get("base", "")).lower() == "sdxl" and str(m.get("type", "main")).lower() == "main"]
-    if not sdxl:
-        raise RuntimeError("InvokeAI has no installed SDXL main model. Install one in InvokeAI, then run this worker again.")
-    model = sdxl[0]
-    key = str(model.get("key", ""))
-    if not key:
-        raise RuntimeError("InvokeAI did not provide a model key.")
-    try:
-        model = request(INVOKE + "/api/v2/models/" + urllib.parse.quote(key, safe=""))
-    except Exception:
-        pass
-    model_name = str(model.get("name") or sdxl[0].get("name") or key)
+    config["server"] = server
+    save_config(config)
+    code = input("One-time pairing code from AI → Images: ").strip().lower()
+    model_name = config["model_name"]
     register = request(server + "/api/ai/worker/register", "POST", {
-        "pair_code": code, "name": socket.gethostname(), "model_name": model_name, "model_base": "sdxl"
+        "pair_code": code, "name": socket.gethostname(), "model_name": model_name, "model_base": "sdxl", "capabilities": config["capabilities"], "hardware": config["hardware"], "invoke_version": config["invoke_version"]
     })
-    config = {"server": server, "worker_token": register["worker_token"], "worker_id": register["worker_id"],
-              "model": model, "invoke": INVOKE, "model_name": model_name}
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump(config, f)
+    config.update({"server": server, "worker_token": register["worker_token"], "worker_id": register["worker_id"]})
+    save_config(config)
     print("Paired successfully. Credential saved in", CONFIG_PATH)
     return config
 
@@ -221,6 +234,13 @@ def run_job(cfg, job):
                 except Exception:
                     pass
             time.sleep(3)
+    except KeyboardInterrupt:
+        try:
+            request(cfg["invoke"] + "/api/v1/queue/default/i/" + str(item_id) + "/cancel", "PUT", timeout=10)
+            request(cfg["server"] + "/api/ai/worker/jobs/" + job["id"] + "/fail", "POST", {"error": "The contributor stopped. Please retry this generation."}, headers, timeout=10)
+        except Exception:
+            pass
+        raise
     finally:
         if progress_client is not None and progress_client.connected:
             progress_client.disconnect()
@@ -230,12 +250,14 @@ def main():
     cfg = load_config()
     token = cfg["worker_token"]
     if os.name == "nt":
-        print("VRAM handling is managed by your InvokeAI install; this worker does not change it.")
+        print("Existing InvokeAI memory settings are preserved. A dedicated contributor engine uses partial loading.")
         print("InvokeAI recommends partial loading (enabled by default) and, on Windows NVIDIA systems, setting CUDA - Sysmem Fallback Policy to Prefer No Sysmem Fallback in NVIDIA Control Panel.")
     print("Worker online for", cfg.get("model_name", "SDXL"), "— press Ctrl+C to stop.")
+    print("To rerun setup or capability checks later: start-worker.cmd --setup or --retest")
     while True:
         try:
-            request(cfg["server"] + "/api/ai/worker/heartbeat", "POST", {"ready": True, "model_name": cfg.get("model_name"), "model_base": "sdxl"}, {"X-Vaultcast-Worker": token}, timeout=15)
+            request(cfg["invoke"] + "/api/v1/app/version", timeout=5)
+            request(cfg["server"] + "/api/ai/worker/heartbeat", "POST", {"ready": True, "model_name": cfg.get("model_name"), "model_base": "sdxl", "capabilities": cfg["capabilities"], "hardware": cfg["hardware"], "invoke_version": cfg["invoke_version"]}, {"X-Vaultcast-Worker": token}, timeout=15)
             result = request(cfg["server"] + "/api/ai/worker/claim", "POST", {}, {"X-Vaultcast-Worker": token}, timeout=30)
             job = result.get("job")
             if job:
@@ -253,8 +275,18 @@ def main():
         except KeyboardInterrupt:
             break
         except Exception as exc:
+            if isinstance(exc, urllib.error.HTTPError) and exc.code == 401 and str(exc.url).startswith(cfg["server"] + "/api/ai/worker/"):
+                raise RuntimeError("Contributor credentials were rejected. Run start-worker.cmd --pair to pair this computer again.") from exc
             print("Connection/generation error:", exc)
+            try:
+                request(cfg["server"] + "/api/ai/worker/heartbeat", "POST", {"ready": False}, {"X-Vaultcast-Worker": token}, timeout=5)
+            except Exception:
+                pass
             time.sleep(10)
+    try:
+        request(cfg["server"] + "/api/ai/worker/heartbeat", "POST", {"ready": False}, {"X-Vaultcast-Worker": token}, timeout=5)
+    except Exception:
+        pass
     print("Worker stopped.")
 
 

@@ -1,20 +1,25 @@
 /* Vaultcast AI → Images */
 (function(root){
   'use strict';
-  var A, h, api, timer = 0, host = null, busy = false;
+  var A, h, api, timer = 0, host = null, busy = false, imageDimensions = null, currentTab = 'images';
   function call(path, opts){ return api(path, opts).then(function(j){ if (!j || !j.ok) throw j || {}; return j; }); }
   function button(label, fn, cls){ return h('button', { type:'button', className:'btn ' + (cls || ''), text:label, onClick:fn }); }
   function statusLabel(job){ return ({queued:'Queued',running:'Generating',completed:'Ready',failed:'Failed',canceled:'Canceled'})[job.status] || job.status; }
   function time(t){ return t ? new Date(Number(t) * 1000).toLocaleString() : ''; }
   function paint(data){
-    if (!host || !host.isConnected) return;
+    if (!host || !host.isConnected || currentTab !== 'images') return;
     var jobs = data.jobs || [], active = jobs.some(function(j){ return j.status === 'queued' || j.status === 'running'; });
     var worker = data.workers || { online:0, total:0 };
+    var capacity = Number(worker.max_image_pixels || worker.configured_max_image_pixels || 0);
+    if (imageDimensions && !imageDimensions.touched && capacity > 0) {
+      imageDimensions.width.value = imageDimensions.height.value = capacity < 1048576 ? '512' : '1024';
+    }
     var summary = h('div', { className:'ai-summary' }, [
       h('div', { className:'ai-stat' }, [h('strong', { text:String(worker.online || 0) }), h('span', { text:'computers ready' })]),
       h('div', { className:'ai-stat' }, [h('strong', { text:String(data.queue && data.queue.waiting || 0) }), h('span', { text:'images waiting' })]),
       h('div', { className:'ai-stat' }, [h('strong', { text:String(data.queue && data.queue.running || 0) }), h('span', { text:'generating now' })])
     ]);
+    if (capacity > 0) summary.appendChild(h('p', { className:'muted ai-capacity-note', text:(worker.max_image_pixels ? 'Online image profiles: ' : 'Configured image profiles: ') + (capacity < 1048576 ? 'up to 512 × 512' : 'up to 1024 × 1024') + '. Contributors only receive jobs within their reported image capacity.' }));
     var cards = jobs.slice(0, 10).map(function(job){
       var body = [h('div', { className:'ai-job-head' }, [h('span', { className:'ai-job-status ai-status-' + job.status, text:statusLabel(job) }), h('time', { className:'muted', text:time(job.created_at) })]),
         h('p', { className:'ai-job-prompt', text:job.prompt })];
@@ -28,10 +33,10 @@
     var library = h('section', { className:'hub-panel vc-panel ai-jobs' }, [h('div', { className:'hub-panel-head' }, [h('h2', { text:'Recent generations' }), h('span', { className:'muted', text:Math.min(jobs.length, 10) + ' latest' })]), h('div', { className:'hub-panel-body ai-job-list' }, cards.length ? cards : [h('p', { className:'muted', text:'Your generated images will appear here. You can leave the page while a request waits.' })])]);
     var summaryHost = host.querySelector('.ai-summary-host'), jobsHost = host.querySelector('.ai-jobs-host');
     if (summaryHost) summaryHost.replaceChildren(summary); if (jobsHost) jobsHost.replaceChildren(library);
-    if (active && !document.hidden) schedule(5000); else clearTimeout(timer);
+    if (!document.hidden) schedule(active ? 5000 : 15000); else clearTimeout(timer);
   }
   function showError(e){ if (A && A.toast) A.toast((e && (e.error || e.message)) || 'AI Images could not load.', { kind:'bad' }); }
-  function refresh(){ if (!host || !host.isConnected || busy) return Promise.resolve(); busy = true; return call('/ai/state').then(paint).catch(function(e){ showError(e); }).finally(function(){ busy = false; }); }
+  function refresh(){ if (!host || !host.isConnected || busy || currentTab !== 'images') return Promise.resolve(); busy = true; return call('/ai/state').then(paint).catch(function(e){ showError(e); }).finally(function(){ busy = false; }); }
   function schedule(ms){ clearTimeout(timer); timer = setTimeout(refresh, ms); }
   function renderLibrary(){
     clearTimeout(timer); host.replaceChildren();
@@ -114,13 +119,15 @@
     load(false);
   }
   function render(target, tab){
-    host = target; clearTimeout(timer); host.replaceChildren(); host.classList.add('vc-ai');
+    host = target; currentTab = tab || 'images'; imageDimensions = null; clearTimeout(timer); host.replaceChildren(); host.classList.add('vc-ai');
     if(tab==='library'){renderLibrary();return;}
     if(tab==='moderation'){renderModeration();return;}
     var prompt = h('textarea', { rows:'4', maxlength:'1200', placeholder:'Describe the image you want to create…', required:true, className:'ai-prompt' });
     var negative = h('textarea', { rows:'2', maxlength:'600', placeholder:'Optional: things to avoid', className:'ai-negative' });
     var width = h('input', { type:'number', min:'512', max:'1536', step:'8', value:'1024', required:true, 'aria-label':'Image width' });
     var height = h('input', { type:'number', min:'512', max:'1536', step:'8', value:'1024', required:true, 'aria-label':'Image height' });
+    imageDimensions = { width:width, height:height, touched:false };
+    width.oninput = height.oninput = function(){ imageDimensions.touched = true; };
     var steps = h('input', { type:'number', min:'1', max:'100', step:'1', value:'30', required:true, 'aria-label':'Generation steps' });
     var count = h('input', { type:'number', min:'1', max:'3', step:'1', value:'1', required:true, 'aria-label':'Number of images' });
     var cfg = h('input', { type:'number', min:'0', max:'30', step:'0.1', value:'7', required:true, 'aria-label':'CFG scale' });
@@ -163,7 +170,7 @@
     ]);
     var worker = h('details', { className:'hub-panel vc-panel ai-worker-panel' }, [
       h('summary', { className:'hub-panel-head ai-worker-summary' }, [h('h2', { text:'Contribute a computer' }), h('span', { className:'muted', text:'Optional' })]),
-      h('div', { className:'hub-panel-body' }, [h('p', { className:'muted', text:'Connect a Windows PC running InvokeAI 6 with an installed SDXL model. The lightweight worker runs separately from Vaultcast.' }), button('Pair a computer', function(){ call('/ai/pair', { method:'POST', body:{} }).then(function(j){ var code = h('code', { className:'ai-pair-code', text:j.pair_code }); var box = h('div', { className:'ai-pair-result' }, [h('p', { text:'Enter this one-time code in Optional/AIWorker/start-worker.cmd within 10 minutes.' }), code, h('p', { className:'muted', text:'The worker connects to InvokeAI at http://127.0.0.1:9090 and stores its credential in your Windows AppData folder.' })]); var old = host.querySelector('.ai-pair-result'); if (old) old.replaceWith(box); else host.querySelector('.ai-worker-panel .hub-panel-body').appendChild(box); }).catch(showError); }, 'ghost')])
+      h('div', { className:'hub-panel-body' }, [h('p', { className:'muted', text:'Run Optional/AIWorker/start-worker.cmd on the Windows PC you want to contribute. Setup can install a separate InvokeAI engine and starter image model, then check what the PC can generate. Request a pairing code when setup says the engine is ready.' }), button('Pair a computer', function(){ call('/ai/pair', { method:'POST', body:{} }).then(function(j){ var code = h('code', { className:'ai-pair-code', text:j.pair_code }); var box = h('div', { className:'ai-pair-result' }, [h('p', { text:'Once contributor setup says Engine ready, enter this one-time code within 10 minutes.' }), code, h('p', { className:'muted', text:'Contributor software runs on that PC. Credentials and capability reports are saved in its Windows AppData folder.' })]); var old = host.querySelector('.ai-pair-result'); if (old) old.replaceWith(box); else host.querySelector('.ai-worker-panel .hub-panel-body').appendChild(box); }).catch(showError); }, 'ghost')])
     ]);
     var summaryHost = h('div', { className:'ai-summary-host' }), jobsHost = h('div', { className:'ai-jobs-host' });
     host.append(h('header', { className:'vc-hero ai-hero' }, [h('div', { className:'vc-hero-copy' }, [h('span', { className:'eyebrow', text:'AI Studio' }), h('h1', { text:'Images' }), h('p', { className:'muted', text:'Create images with the Vaultcast community’s available computers.' })])]), summaryHost, form, jobsHost, worker);

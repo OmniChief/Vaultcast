@@ -33,6 +33,33 @@ final class AIImages
     private static function id(): string { return bin2hex(random_bytes(8)); }
     private static function libraryDocument(array $user): string { return self::LIBRARY . '-' . substr(hash('sha256', (string)$user['id']), 0, 24); }
     private static function signed(array $user): void { Arcade::signed($user); }
+    private static function imageCapacity(array $worker): int {
+        if (($worker['model_base'] ?? '') !== 'sdxl') return 0;
+        if (!isset($worker['capabilities'])) return 1048576; // Existing contributors keep working until upgraded.
+        $profile = $worker['capabilities']['images']['sdxl'] ?? [];
+        return !empty($profile['verified']) ? (int)($profile['max_pixels'] ?? 0) : 0;
+    }
+    private static function capabilityReport(array $body): array {
+        $caps = is_array($body['capabilities'] ?? null) ? $body['capabilities'] : [];
+        $images = is_array($caps['images'] ?? null) ? $caps['images'] : [];
+        $profile = $images['sdxl'] ?? [];
+        if (!is_array($profile)) $profile = [];
+        $pixels = (int)($profile['max_pixels'] ?? 0);
+        $verified = !empty($profile['verified']) && in_array($pixels, [262144, 1048576], true);
+        return ['images'=>['sdxl'=>['verified'=>$verified, 'max_pixels'=>$verified ? $pixels : 0,
+            'checked_at'=>max(0, min(time(), (int)($profile['checked_at'] ?? 0))),
+            'seconds'=>max(0, min(1800, (float)($profile['seconds'] ?? 0))),
+            'model_hash'=>mb_substr((string)($profile['model_hash'] ?? ''), 0, 128)]], 'video'=>['verified'=>false]];
+    }
+    private static function hardwareReport(array $body): array {
+        $hardware = is_array($body['hardware'] ?? null) ? $body['hardware'] : [];
+        $gpus = [];
+        foreach (array_slice(is_array($hardware['gpus'] ?? null) ? $hardware['gpus'] : [], 0, 8) as $gpu) {
+            if (!is_array($gpu)) continue;
+            $gpus[] = ['name'=>mb_substr((string)($gpu['name'] ?? ''), 0, 100), 'vram_mb'=>max(0, min(1048576, (int)($gpu['vram_mb'] ?? 0))), 'compute_capability'=>mb_substr((string)($gpu['compute_capability'] ?? ''), 0, 16)];
+        }
+        return ['platform'=>mb_substr((string)($hardware['platform'] ?? ''), 0, 24), 'ram_gb'=>max(0, min(4096, (float)($hardware['ram_gb'] ?? 0))), 'gpus'=>$gpus];
+    }
 
     public static function state(array $user): array {
         self::signed($user);
@@ -154,9 +181,16 @@ final class AIImages
         self::mutate($document, static function (&$all) use ($picture, $entry) { $all[(string)$picture['id']] = $entry; });
     }
     private static function workersOnline(): array {
-        $all = self::read(self::WORKERS); $online = [];
-        foreach ($all as $worker) if (!empty($worker['ready']) && (int)($worker['last_seen'] ?? 0) >= time() - self::ONLINE_SECONDS) $online[] = ['id' => $worker['id'], 'name' => $worker['name'] ?? 'Contributor PC', 'model' => $worker['model_name'] ?? '', 'last_seen' => (int)$worker['last_seen']];
-        return ['online' => count($online), 'connected' => count(array_filter($all, static function ($w) { return (int)($w['last_seen'] ?? 0) >= time() - self::ONLINE_SECONDS; })), 'total' => count($all), 'list' => $online];
+        $all = self::read(self::WORKERS); $online = []; $configuredMax = 0; $onlineMax = 0;
+        foreach ($all as $worker) {
+            $pixels = self::imageCapacity($worker); $configuredMax = max($configuredMax, $pixels);
+            if (!empty($worker['ready']) && $pixels > 0 && (int)($worker['last_seen'] ?? 0) >= time() - self::ONLINE_SECONDS) {
+                $onlineMax = max($onlineMax, $pixels);
+                $online[] = ['id'=>$worker['id'], 'name'=>$worker['name'] ?? 'Contributor PC', 'model'=>$worker['model_name'] ?? '', 'last_seen'=>(int)$worker['last_seen'], 'max_image_pixels'=>$pixels,
+                    'verified'=>!empty($worker['capabilities']['images']['sdxl']['verified'])];
+            }
+        }
+        return ['online'=>count($online), 'connected'=>count(array_filter($all, static function ($w) { return (int)($w['last_seen'] ?? 0) >= time() - self::ONLINE_SECONDS; })), 'total'=>count($all), 'list'=>$online, 'max_image_pixels'=>$onlineMax, 'configured_max_image_pixels'=>$configuredMax];
     }
 
     public static function createJob(array $user, array $body): array {
@@ -167,6 +201,8 @@ final class AIImages
         if (mb_strlen($negative) > 600) throw new DomainException('The negative prompt must be 600 characters or fewer.');
         $width = filter_var($body['width'] ?? 1024, FILTER_VALIDATE_INT); $height = filter_var($body['height'] ?? 1024, FILTER_VALIDATE_INT);
         if ($width === false || $height === false || $width < 512 || $height < 512 || $width > 1536 || $height > 1536 || $width % 8 !== 0 || $height % 8 !== 0 || $width * $height > 1048576) throw new DomainException('Use dimensions from 512 to 1536 pixels, in multiples of 8, with no more than 1 megapixel total.');
+        $contributors = self::read(self::WORKERS);
+        if ($contributors && !array_filter($contributors, static function ($w) use ($width, $height) { return self::imageCapacity($w) >= $width * $height; })) throw new DomainException('No configured contributor supports this image size. Choose 512 × 512 or connect a contributor with a larger verified image profile.');
         $steps = filter_var($body['steps'] ?? 30, FILTER_VALIDATE_INT);
         if ($steps === false || $steps < 1 || $steps > 100) throw new DomainException('Choose between 1 and 100 generation steps.');
         $count = filter_var($body['count'] ?? 1, FILTER_VALIDATE_INT);
@@ -242,6 +278,12 @@ final class AIImages
             unset($pairs[$codeHash]);
             return ['id' => $id, 'name' => $name, 'user_id' => $pair['user_id'], 'token_hash' => $tokenHash, 'model_name' => $modelName, 'model_base' => $modelBase, 'ready' => true, 'last_seen' => time(), 'created_at' => time()];
         });
+        if (isset($body['capabilities'])) {
+            $worker['capabilities'] = self::capabilityReport($body);
+            $worker['ready'] = self::imageCapacity($worker) > 0;
+        }
+        $worker['invoke_version'] = mb_substr((string)($body['invoke_version'] ?? ''), 0, 40);
+        if (isset($body['hardware'])) $worker['hardware'] = self::hardwareReport($body);
         self::mutate(self::WORKERS, static function (&$workers) use ($worker) { $workers[$worker['id']] = $worker; });
         return ['ok' => true, 'worker_id' => $id, 'worker_token' => $token, 'server_time' => time()];
     }
@@ -258,6 +300,10 @@ final class AIImages
             if (isset($status['ready'])) $workers[$worker['id']]['ready'] = (bool)$status['ready'];
             if (isset($status['model_name'])) $workers[$worker['id']]['model_name'] = mb_substr(trim((string)$status['model_name']), 0, 100);
             if (isset($status['model_base']) && in_array($status['model_base'], ['sd-1','sd-2','sdxl'], true)) $workers[$worker['id']]['model_base'] = $status['model_base'];
+            if (isset($status['capabilities'])) $workers[$worker['id']]['capabilities'] = self::capabilityReport($status);
+            if (isset($status['invoke_version'])) $workers[$worker['id']]['invoke_version'] = mb_substr((string)$status['invoke_version'], 0, 40);
+            if (isset($status['hardware'])) $workers[$worker['id']]['hardware'] = self::hardwareReport($status);
+            if (isset($workers[$worker['id']]['capabilities']) && self::imageCapacity($workers[$worker['id']]) === 0) $workers[$worker['id']]['ready'] = false;
         } });
     }
     public static function worker(string $action, string $id = ''): void {
@@ -267,12 +313,14 @@ final class AIImages
         if ($action === 'heartbeat' && $method === 'POST') { self::touchWorker($worker, body_json()); json_out(['ok' => true, 'worker_id' => $worker['id']]); }
         self::touchWorker($worker);
         if ($action === 'claim' && $method === 'POST') {
+            if (empty($worker['ready']) || self::imageCapacity($worker) === 0) json_out(['ok'=>true, 'job'=>null]);
             $job = self::mutate(self::JOBS, static function (&$jobs) use ($worker) {
                 $now = time();
                 foreach ($jobs as &$stale) if (($stale['status'] ?? '') === 'running' && (int)($stale['updated_at'] ?? 0) < $now - 180) { $stale['status'] = 'queued'; $stale['worker_id'] = null; $stale['progress'] = 0; }
                 unset($stale);
                 usort($jobs, static function ($a, $b) { return (int)($a['created_at'] ?? 0) <=> (int)($b['created_at'] ?? 0); });
                 foreach ($jobs as &$candidate) if (($candidate['status'] ?? '') === 'queued') {
+                    if ((int)$candidate['width'] * (int)$candidate['height'] > self::imageCapacity($worker)) continue;
                     $candidate['status'] = 'running'; $candidate['worker_id'] = $worker['id']; $candidate['started_at'] = $now; $candidate['updated_at'] = $now; $candidate['progress'] = 1; return $candidate;
                 }
                 return null;

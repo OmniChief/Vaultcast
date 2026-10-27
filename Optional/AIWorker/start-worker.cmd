@@ -1,74 +1,64 @@
 @echo off
 setlocal
+cd /d "%~dp0"
 title Vaultcast AI Contributor
 set "PYRUN="
-
 where py >nul 2>nul
 if not errorlevel 1 (
-  py -3 -c "import sys; raise SystemExit(0 if sys.version_info >= (3,10) else 1)" >nul 2>nul
+  py -3 -c "import sys; raise SystemExit(0 if sys.version_info >= (3,10) and sys.maxsize > 2**32 else 1)" >nul 2>nul
   if not errorlevel 1 set "PYRUN=py -3"
 )
-
 if not defined PYRUN (
   where python >nul 2>nul
   if not errorlevel 1 (
-    python -c "import sys; raise SystemExit(0 if sys.version_info >= (3,10) else 1)" >nul 2>nul
+    python -c "import sys; raise SystemExit(0 if sys.version_info >= (3,10) and sys.maxsize > 2**32 else 1)" >nul 2>nul
     if not errorlevel 1 set "PYRUN=python"
   )
 )
+if defined PYRUN goto prepare_worker
 
-if defined PYRUN goto check_socketio
-
-echo Python 3.10 or newer was not found.
+echo Python 3.10 or newer ^(64-bit^) is needed for contributor setup.
 where winget >nul 2>nul
-if errorlevel 1 goto manual_install
-echo.
-set /p "INSTALLPY=Install Python 3.12 for your Windows user with WinGet now? [Y/N]: "
-if /I not "%INSTALLPY%"=="Y" goto manual_install
-echo.
-winget install --id Python.Python.3.12 --exact --scope user
-if errorlevel 1 goto install_failed
-echo.
-echo Python installation finished. Close this window and run start-worker.cmd again.
+if errorlevel 1 goto manual_python
+set /p "INSTALLPY=Install Python 3.12 for your Windows user with WinGet? [Y/N]: "
+if /I not "%INSTALLPY%"=="Y" goto manual_python
+winget install --id Python.Python.3.12 --exact --scope user --architecture x64
+if errorlevel 1 goto manual_python
+if exist "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" (
+  set "PYRUN="%LOCALAPPDATA%\Programs\Python\Python312\python.exe""
+  goto prepare_worker
+)
+echo Python was installed. Close this window and run start-worker.cmd again.
 goto finish
 
-:manual_install
-echo.
-echo Install Python 3.10 or newer from https://www.python.org/downloads/windows/
-echo Then run start-worker.cmd again.
-goto finish
+:prepare_worker
+set "WORKERVENV=%LOCALAPPDATA%\VaultcastAIWorker\worker-venv"
+if exist "%WORKERVENV%\Scripts\python.exe" goto check_packages
+echo Creating an isolated contributor environment in %WORKERVENV%
+%PYRUN% -m venv "%WORKERVENV%"
+if errorlevel 1 goto environment_failed
 
-:install_failed
-echo.
-echo Python could not be installed automatically. Install it from https://www.python.org/downloads/windows/
-echo Then run start-worker.cmd again.
-goto finish
+:check_packages
+"%WORKERVENV%\Scripts\python.exe" -c "import socketio, uv" >nul 2>nul
+if not errorlevel 1 goto run_worker
+echo Contributor setup uses python-socketio for progress and uv to install an optional InvokeAI engine.
+echo These packages are installed only inside the contributor environment above.
+set /p "INSTALLDEPS=Install the contributor packages now? [Y/N]: "
+if /I not "%INSTALLDEPS%"=="Y" goto finish
+"%WORKERVENV%\Scripts\python.exe" -m pip install "python-socketio[client]>=5.11,<6" "uv==0.13.6"
+if errorlevel 1 goto environment_failed
 
 :run_worker
-%PYRUN% worker.py
+"%WORKERVENV%\Scripts\python.exe" worker.py %*
 goto finish
 
-:check_socketio
-%PYRUN% -c "import socketio" >nul 2>nul
-if not errorlevel 1 goto run_worker
-echo.
-echo Live progress updates need the small python-socketio client package.
-set /p "INSTALLSOCKETIO=Install it for this Python user now? [Y/N]: "
-if /I not "%INSTALLSOCKETIO%"=="Y" goto run_without_socketio
-echo.
-%PYRUN% -m pip install "python-socketio[client]"
-if errorlevel 1 goto socketio_failed
-goto run_worker
+:manual_python
+echo Install 64-bit Python 3.10 or newer from https://www.python.org/downloads/windows/
+echo Then run start-worker.cmd again.
+goto finish
 
-:socketio_failed
-echo.
-echo The progress package could not be installed. The worker can still generate images, but progress will stay indeterminate.
-goto run_worker
-
-:run_without_socketio
-echo.
-echo Continuing without live progress updates. The worker can still generate and upload images.
-goto run_worker
+:environment_failed
+echo Contributor environment setup failed. Check the error above and rerun this file to retry.
 
 :finish
 echo.

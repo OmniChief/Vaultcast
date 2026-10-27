@@ -7,6 +7,7 @@ body[data-mode="ai"] { --accent: #a78bfa; --accent-2: #38bdf8; }
 /* .vc-lazy lives in app.css: it is shown before this stylesheet loads. */
 .vc-play, .vc-misc, .vc-ai { padding: 18px var(--gutter) 64px; display: flex; flex-direction: column; gap: 18px; }
 .ai-summary { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; }
+.ai-capacity-note { grid-column:1 / -1; margin:0; font-size:.85rem; }
 .ai-stat { display:flex; flex-direction:column; gap:3px; padding:14px 16px; border-radius:var(--radius-lg); background:var(--surface-1); border:1px solid var(--border); }
 .ai-stat strong { font-size:1.45rem; }
 .ai-stat span, .ai-number-field span { color:var(--muted); font-size:.86rem; }
