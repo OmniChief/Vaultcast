@@ -264,3 +264,5 @@ html{background:transparent}
 .compat-modal{position:fixed;z-index:100000;top:5%;left:5%;right:5%;max-height:85%;overflow:auto;padding:24px;background:#172638;color:#edf2f7;border:3px solid #70dfea;box-shadow:0 0 0 100vmax #0009}.compat-modal-body input,.compat-modal-body textarea{max-width:100%}.compat-modal-body .btn{margin:4px}.cloud-slot{margin:16px 0;padding:16px;border:1px solid #35506b}.cloud-slot small{display:block;margin:8px 0}
 
 .compat-controller-panel{margin:14px 0}.compat-controller-row{padding:9px 0;border-bottom:1px solid #35506b}.compat-controller-row strong{display:inline-block;width:85px;vertical-align:middle}.compat-controller-keys{display:inline-block;width:42%;min-width:150px;margin:4px 10px 4px 0;vertical-align:middle}.compat-controller-row button{margin:3px 6px 3px 0}#compat-controller-status{margin:16px 0}#compat-controller-toggle{margin:10px 0}
+
+#compat-channel-number{position:fixed;top:20px;right:20px;z-index:100001;padding:16px 24px;background:#101b2a;color:#edf2f7;border:2px solid #70dfea;font-size:28px;font-weight:bold}

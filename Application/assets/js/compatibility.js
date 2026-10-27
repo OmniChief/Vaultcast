@@ -56,6 +56,30 @@
   var remoteField=null,remoteEditing=null,remoteOKDown=false;
   function remoteTag(node){return node&&node.tagName?node.tagName.toLowerCase():'';}
   function remoteStop(event){if(event.preventDefault)event.preventDefault();event.returnValue=false;}
+  // Channel entry stays independent of the media player's capabilities.
+  var channelMap=document.getElementById('compat-channel-map'),channelStatus=document.getElementById('compat-channel-number'),channelDigits='',channelTimer=null,channelHide=null,channelHeld={};
+  function clearChannelEntry(){clearTimeout(channelTimer);clearTimeout(channelHide);channelDigits='';if(channelStatus)channelStatus.style.display='none';}
+  function tuneChannel(){
+    clearTimeout(channelTimer);var number=parseInt(channelDigits,10),links=channelMap.getElementsByTagName('a');channelDigits='';
+    for(var i=0;i<links.length;i++)if(parseInt(links[i].getAttribute('data-channel-number'),10)===number){compatText(channelStatus,'Opening channel '+number+'…');window.location.href=links[i].href;return;}
+    compatText(channelStatus,'Channel '+number+' is unavailable.');channelHide=setTimeout(clearChannelEntry,2500);
+  }
+  function channelEntry(event){
+    if(!channelMap)return false;
+    var node=event.target||event.srcElement||document.activeElement,tag=remoteTag(node),code=event.keyCode||event.which,key=event.key,digit=null;
+    while(node){if(node.isContentEditable||node.getAttribute&&node.getAttribute('contenteditable')==='true')return false;node=node.parentNode;}
+    if(tag==='input'||tag==='textarea'||tag==='select')return false;
+    if(channelDigits&&(code===13||key==='Enter'||key==='OK'||code===23)){remoteStop(event);tuneChannel();return true;}
+    if(channelDigits&&(code===27||key==='Escape'||code===10009)){clearChannelEntry();remoteStop(event);return true;}
+    if(key&&/^[0-9]$/.test(key))digit=key;
+    else if(code>=48&&code<=57)digit=String(code-48);
+    else if(code>=96&&code<=105)digit=String(code-96);
+    if(digit===null)return false;
+    remoteStop(event);if(event.repeat||channelHeld['k'+code])return true;channelHeld['k'+code]=true;
+    clearTimeout(channelTimer);clearTimeout(channelHide);channelDigits+=digit;channelStatus.style.display='block';compatText(channelStatus,'Channel '+channelDigits+'…');
+    if(channelDigits.length===3)tuneChannel();else channelTimer=setTimeout(tuneChannel,1800);
+    return true;
+  }
   function remoteUsable(node){
     var tag=remoteTag(node),type=String(node.type||'').toLowerCase(),parent=node,style,rect;
     if(!node.focus||!node.getBoundingClientRect||node.disabled||type==='hidden'||node.getAttribute('aria-disabled')==='true')return false;
@@ -82,6 +106,7 @@
   function remoteNavigation(event){
     event=event||window.event;
     if(event.defaultPrevented||event.returnValue===false||event.altKey||event.ctrlKey||event.metaKey||event.shiftKey||event.isComposing)return;
+    if(channelEntry(event))return;
     // Game engines own arrows and Enter while their play surface has focus.
     var gameFocus=document.activeElement,gameStage=document.getElementById('compat-emulator-stage'),arcadeStage=document.querySelector&&document.querySelector('#compat-play-interactive .vc-game-stage');
     if(gameStage&&gameStage.contains(gameFocus)||arcadeStage&&arcadeStage.contains(gameFocus))return;
@@ -130,8 +155,10 @@
     remoteStop(event);
   }
   compatListen(document,'keydown',remoteNavigation);
-  compatListen(document,'keyup',function(){remoteOKDown=false;});
-  compatListen(window,'blur',function(){remoteOKDown=false;});
+  compatListen(document,'keyup',function(event){event=event||window.event;delete channelHeld['k'+(event.keyCode||event.which)];remoteOKDown=false;});
+  compatListen(window,'blur',function(){remoteOKDown=false;channelHeld={};clearChannelEntry();});
+  compatListen(window,'pagehide',clearChannelEntry);
+  compatListen(document,'focusin',function(event){event=event||window.event;var node=event.target||event.srcElement,tag=remoteTag(node);if(tag==='input'||tag==='textarea'||tag==='select'||node&&node.isContentEditable)clearChannelEntry();});
   compatListen(document,'mousedown',function(){remoteField=null;remoteEditing=null;});
   var config=window.__VC_COMPAT_PLAYER__,media=document.getElementById('compat-media');
   if(!config||!media){var openPlay=document.getElementById('compat-open-play');if(openPlay)openPlay.submit();return;}

@@ -214,7 +214,14 @@ final class CompatibilityBrowser {
         }
         require_once STREAM_ROOT.'/src/Live/store.php';require_once STREAM_ROOT.'/src/Live/epg.php';require_once STREAM_ROOT.'/src/Live/schedule.php';
         $schedule=mb_substr((string)($_GET['schedule'] ?? ''),0,100);$station=relay_load_station();$guide=LiveGuideCache::read(2,$schedule==='',self::$viewer,static function($hours,$slim)use($station){return epg_unified_guide($station,$hours,$slim,self::$viewer);});
-        $html='<h2>Live</h2>'.self::link('Radio',['view'=>'live','tab'=>'radio']);if($id!==''){
+        $html='<h2>Live</h2>'.self::link('Radio',['view'=>'live','tab'=>'radio']);
+        $html.='<p class="compat-note">Type a channel number on your remote or keyboard. Three digits tune immediately; shorter numbers tune after a brief pause.</p><div id="compat-channel-number" role="status" aria-live="polite" style="display:none"></div><div id="compat-channel-map" style="display:none">';
+        // Include the complete authorised lineup, regardless of pagination or search.
+        foreach($guide['channels'] ?? [] as $ch){
+            $number=(int)($ch['number'] ?? 0);if($number<1)continue;
+            $html.='<a data-channel-number="'.$number.'" href="'.self::esc(self::url(['view'=>'live','tab'=>($ch['kind'] ?? '')==='iptv'?'iptv':'relay','id'=>$ch['id']])).'">'.self::esc($ch['name'] ?? 'Channel').'</a>';
+        }
+        $html.='</div>';if($id!==''){
             $channel=null;foreach($guide['channels'] ?? [] as $ch)if((string)$ch['id']===$id)$channel=$ch;
             if(!$channel)throw new RuntimeException('Channel unavailable.');$html.='<h3>'.self::esc($channel['name']).'</h3>';
             if(($channel['kind'] ?? '')==='iptv'){
