@@ -641,6 +641,7 @@ try {
         $station = relay_load_station();
         $required = tvs_slot_programme_blocks($st, $station, $channelId, $occurrence, true);
         $blocks = tvs_occurrence_blocks($st, $station, $channelId, $occurrence);
+        if (($occurrence['slot']['overrun'] ?? '') === 'skip') $required = array_values(array_filter($blocks, function ($b) { return empty($b['padding']); }));
         $result = array('ok' => true, 'available' => true, 'startUnix' => $occurrence['start'], 'endUnix' => $occurrence['end'], 'delayMs' => $occurrence['start'] - ($occurrence['scheduledStart'] ?? $occurrence['start']), 'overrunMs' => max(0, $occurrence['end'] - ($occurrence['scheduledEnd'] ?? $occurrence['end'])), 'programmeMs' => 0, 'adsMs' => 0, 'paddingMs' => 0, 'gapMs' => $occurrence['end'] - $occurrence['start'], 'requiredMs' => 0);
         foreach ($required as $b) {
             $result['requiredMs'] += $b['durationMs'];
