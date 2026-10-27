@@ -92,7 +92,7 @@ function tvs_normalize_slot($s) {
         'order' => ($s['order'] ?? '') === 'shuffle' ? 'shuffle' : 'sequential',
         'singleEpisode' => !empty($s['singleEpisode']),
         'fitOnly' => !empty($s['fitOnly']),
-        'overrun' => ($s['overrun'] ?? '') === 'shift' ? 'shift' : 'boundary',
+        'overrun' => in_array($s['overrun'] ?? '', array('shift', 'skip'), true) ? $s['overrun'] : 'boundary',
         'paddingEnabled' => !empty($s['paddingEnabled']),
         'paddingFillerListId' => tvs_str($s['paddingFillerListId'] ?? '', 60),
         'paddingAdPoolId' => tvs_str($s['paddingAdPoolId'] ?? '', 60),
@@ -404,7 +404,7 @@ function tvs_occurrences($st, $channelId, $from, $to, $station = null) {
             $o['scheduledStart'] = $o['start']; $o['scheduledEnd'] = $o['end'];
             if ($o['start'] >= $epoch && ($o['start'] < $cursor || ($o['slot']['overrun'] ?? '') === 'shift')) {
                 $o['start'] = max($o['start'], $cursor);
-                $core = tvs_slot_programme_blocks($st, $station, $channelId, $o, true);
+                $core = tvs_slot_programme_blocks($st, $station, $channelId, $o, ($o['slot']['overrun'] ?? '') !== 'skip');
                 $o['end'] = max($o['end'], $core ? $core[count($core) - 1]['endUnix'] : $o['start']);
                 $o['elastic'] = true;
                 if ($o['end'] > $from && $o['start'] < $to) $o['coreBlocks'] = $core;
@@ -435,7 +435,7 @@ function tvs_slot_programme_blocks($st, $station, $channelId, $o, $measure = fal
     $seed = $channelId . ':' . $s['id'] . ':' . $scheduledStart;
     $single = !empty($s['singleEpisode']);
     $fitOnly = !empty($s['fitOnly']);
-    $padding = !empty($s['paddingEnabled']);
+    $padding = !empty($s['paddingEnabled']) || ($s['overrun'] ?? '') === 'skip';
     $limit = $single || $s['contentType'] === 'series' || $s['contentType'] === 'media' ? 1 : count($items);
     return tvs_fill_window($st, $station, $channelId, $items, $o['start'], $measure ? $o['start'] + 30 * 86400000 : $o['end'], $seed, $order, $s['ads'], $first, $tag, $padding || $measure ? $limit : ($single ? 1 : 0), !$measure && ($fitOnly || $padding), $padding);
 }
@@ -493,7 +493,7 @@ function tvs_occurrence_blocks($st, $station, $channelId, $o) {
     $s = $o['slot'];
     $out = $o['coreBlocks'] ?? tvs_slot_programme_blocks($st, $station, $channelId, $o, !empty($o['elastic']));
     $cursor = $out ? $out[count($out) - 1]['endUnix'] : $o['start'];
-    if (!empty($s['paddingEnabled'])) return array_merge($out, tvs_slot_padding($st, $station, $channelId, $s, $cursor, $o['end'], $channelId . ':' . $s['id'] . ':' . $o['start']));
+    if (!empty($s['paddingEnabled']) || ($s['overrun'] ?? '') === 'skip') return array_merge($out, tvs_slot_padding($st, $station, $channelId, $s, $cursor, $o['end'], $channelId . ':' . $s['id'] . ':' . $o['start']));
     $single = !empty($s['singleEpisode']); $fitOnly = !empty($s['fitOnly']);
     $items = tvs_slot_items($st, $station, $s);
     $seed = $channelId . ':' . $s['id'] . ':' . $o['start'];
@@ -594,7 +594,7 @@ function tvs_apply($station, $channelId, $blocks, $from, $to) {
     if (!$sched && !$occ) return $blocks;
     $sched = tvs_clip($sched, $from, $to);
     $reserved = $sched;
-    foreach ($occ as $o) if (!empty($o['elastic']) || !empty($o['slot']['singleEpisode']) || !empty($o['slot']['fitOnly']) || !empty($o['slot']['paddingEnabled'])) $reserved[] = array('startUnix' => $o['start'], 'endUnix' => $o['end']);
+    foreach ($occ as $o) if (($o['slot']['overrun'] ?? '') === 'skip' || !empty($o['elastic']) || !empty($o['slot']['singleEpisode']) || !empty($o['slot']['fitOnly']) || !empty($o['slot']['paddingEnabled'])) $reserved[] = array('startUnix' => $o['start'], 'endUnix' => $o['end']);
     $out = array_merge(tvs_overlay($blocks, $reserved, $channelId), $sched);
     usort($out, function ($a, $b) { return $a['startUnix'] - $b['startUnix']; });
     return $out;
