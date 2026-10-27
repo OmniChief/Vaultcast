@@ -529,6 +529,10 @@ function tvs_apply($station, $channelId, $from, $to) {
     if (!$cfg) return array();
     $occ = tvs_occurrences($st, $channelId, $from, $to, $station);
     $sched = array();
+    foreach ($occ as $o) {
+        if ($o['end'] <= $from) continue;
+        foreach (tvs_occurrence_blocks($st, $station, $channelId, $o) as $b) $sched[] = $b;
+    }
     // filler fills every gap between occurrences; gaps are anchored on their real start so any window agrees
     $filler = tvs_list_by_id($st['fillerLists'], $cfg['fillerListId']);
     $fItems = $filler ? tvs_playable(relay_media_map($station), $filler['mediaIds']) : array();
