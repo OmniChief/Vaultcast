@@ -13642,6 +13642,12 @@ function viewCollectionDetail(){
     var source=tvsChan(),choices=tvs.data.channels.filter(function(ch){return ch.id!==tvs.channelId;});if(!choices.length){toast('Create another Relay channel first.');return;}
     window.VaultcastHub.modal('Copy weekly schedule',function(body,close){var target=h('select',{'aria-label':'Destination channel'},choices.map(function(ch){return h('option',{value:ch.id,text:ch.number+' · '+ch.name});})),replace=h('input',{type:'checkbox'});body.appendChild(h('p',{text:'Copy this channel’s slots to another channel. Changes remain a draft until you save Studio.'}));body.appendChild(target);body.appendChild(h('label',{className:'check-label'},[replace,' Replace destination slots (otherwise append)']));body.appendChild(h('button',{className:'btn primary',text:'Copy slots',onClick:function(){var destination=tvsChan(target.value);if(replace.checked&&destination.slots.length&&!confirm('Replace all time slots on the destination channel?'))return;var copies=source.slots.map(function(slot){var copy=JSON.parse(JSON.stringify(slot));copy.id=tvsUid('slot');return copy;});destination.slots=replace.checked?copies:destination.slots.concat(copies);tvsMark();close();toast(copies.length+' slots copied. Save Studio to apply.');}}));});
   }
+  function tvsClearTable(){
+    var ch = tvsChan(), channel = tvs.data.channels.find(function(item){ return item.id === tvs.channelId; });
+    if (!ch.slots.length) return;
+    if (!confirm('Are you sure you want to clear all ' + ch.slots.length + ' time slots for ' + (channel ? channel.name : 'this channel') + '? Save Studio to apply this change.')) return;
+    ch.slots = []; tvs.sel = null; tvsMark(); tvsPaint();
+  }
   function tvsPaintSchedule(body, picker){
     var ch = tvsChan();
     var top = h('div', { className:'tvs-row' }, [picker(),h('button',{className:'btn primary',text:'Add time slot',onClick:tvsAddSlot}),h('button',{className:'btn',text:tvs.scheduleView==='calendar'?'Show agenda':'Show weekly calendar',onClick:function(){tvs.scheduleView=tvs.scheduleView==='calendar'?'agenda':'calendar';tvsPaint();}}),h('button',{className:'btn',text:'Copy schedule to channel',onClick:tvsCopySchedule}),
@@ -13649,6 +13655,7 @@ function viewCollectionDetail(){
         h('select', { onChange:function(e){ ch.mode = e.target.value; tvsMark(); tvsPaint(); } }, [
           h('option', { value:'overlay', selected:ch.mode === 'overlay', text:'Keep the Relay rotation' }),
           h('option', { value:'calendar', selected:ch.mode === 'calendar', text:'Play the filler list' }) ]) ]),
+      h('button', { className:'btn danger', type:'button', text:'Clear table', disabled:!ch.slots.length, onClick:tvsClearTable }),
       ch.mode === 'calendar' ? tvsListSelect('Filler list', tvs.studio.fillerLists, ch.fillerListId, function(v){ ch.fillerListId = v; tvsMark(); }) : null,
       h('p', { className:'muted tvs-hint', text:'Drag on an empty area to add a slot. Drag a slot to move it, drag its bottom edge to resize. Times snap to ' + TVS_SNAP + ' minutes.' })
     ]);
