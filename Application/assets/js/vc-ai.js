@@ -15,7 +15,7 @@
       h('div', { className:'ai-stat' }, [h('strong', { text:String(data.queue && data.queue.waiting || 0) }), h('span', { text:'images waiting' })]),
       h('div', { className:'ai-stat' }, [h('strong', { text:String(data.queue && data.queue.running || 0) }), h('span', { text:'generating now' })])
     ]);
-    var cards = jobs.map(function(job){
+    var cards = jobs.slice(0, 10).map(function(job){
       var body = [h('div', { className:'ai-job-head' }, [h('span', { className:'ai-job-status ai-status-' + job.status, text:statusLabel(job) }), h('time', { className:'muted', text:time(job.created_at) })]),
         h('p', { className:'ai-job-prompt', text:job.prompt })];
       if (job.status === 'queued') body.push(h('p', { className:'muted', text:'Position in queue: ' + (job.queue_position || 'next') }));
@@ -25,7 +25,7 @@
       if (job.status === 'completed' && job.image_url) body.unshift(h('a', { className:'ai-image-link', href:A.apiUrl(job.image_url), target:'_blank', rel:'noopener' }, [h('img', { src:A.apiUrl(job.image_url), alt:job.prompt, loading:'lazy' })]));
       return h('article', { className:'ai-job ai-job-' + job.status }, body);
     });
-    var library = h('section', { className:'hub-panel vc-panel ai-jobs' }, [h('div', { className:'hub-panel-head' }, [h('h2', { text:'Your generations' }), h('span', { className:'muted', text:jobs.length + ' recent' })]), h('div', { className:'hub-panel-body ai-job-list' }, cards.length ? cards : [h('p', { className:'muted', text:'Your generated images will appear here. You can leave the page while a request waits.' })])]);
+    var library = h('section', { className:'hub-panel vc-panel ai-jobs' }, [h('div', { className:'hub-panel-head' }, [h('h2', { text:'Recent generations' }), h('span', { className:'muted', text:Math.min(jobs.length, 10) + ' latest' })]), h('div', { className:'hub-panel-body ai-job-list' }, cards.length ? cards : [h('p', { className:'muted', text:'Your generated images will appear here. You can leave the page while a request waits.' })])]);
     var summaryHost = host.querySelector('.ai-summary-host'), jobsHost = host.querySelector('.ai-jobs-host');
     if (summaryHost) summaryHost.replaceChildren(summary); if (jobsHost) jobsHost.replaceChildren(library);
     if (active && !document.hidden) schedule(5000); else clearTimeout(timer);
@@ -33,8 +33,34 @@
   function showError(e){ if (A && A.toast) A.toast((e && (e.error || e.message)) || 'AI Images could not load.', { kind:'bad' }); }
   function refresh(){ if (!host || !host.isConnected || busy) return Promise.resolve(); busy = true; return call('/ai/state').then(paint).catch(function(e){ showError(e); }).finally(function(){ busy = false; }); }
   function schedule(ms){ clearTimeout(timer); timer = setTimeout(refresh, ms); }
-  function render(target){
+  function renderLibrary(){
+    clearTimeout(timer); host.replaceChildren();
+    var query = h('input', { type:'search', placeholder:'Search prompts and image names…', 'aria-label':'Search your generations' });
+    var sort = h('select', { 'aria-label':'Sort generations' }, [h('option',{value:'newest',text:'Newest first'}),h('option',{value:'oldest',text:'Oldest first'})]);
+    var favorites = h('input', { type:'checkbox' }), selected = {}, offset = 0, total = 0, busyLibrary = false, pendingReload = false;
+    var grid = h('div', { className:'ai-library-grid' }), countLabel = h('span',{className:'muted'}), more = button('Load more', function(){offset+=24;load(true);}, 'ghost'), del = button('Delete selected', deleteSelected, 'danger');
+    var controls = h('div',{className:'ai-library-controls'},[query,sort,h('label',{className:'ai-check'},[favorites,h('span',{text:'Favorites only'})]),countLabel,del]);
+    var panel = h('section',{className:'hub-panel vc-panel'},[h('div',{className:'hub-panel-head'},[h('h2',{text:'Your image library'}),h('span',{className:'muted',text:'Search, favorite, and organize your creations'})]),h('div',{className:'hub-panel-body'},[controls,grid,h('div',{className:'ai-library-more'},[more])])]);
+    host.append(h('header',{className:'vc-hero ai-hero'},[h('div',{className:'vc-hero-copy'},[h('span',{className:'eyebrow',text:'AI Studio'}),h('h1',{text:'Library'}),h('p',{className:'muted',text:'A searchable home for your generated images.'})])]),panel);
+    var debounce=0;
+    function load(append){
+      if(busyLibrary){if(!append)pendingReload=true;return;}busyLibrary=true;
+      if(!append){offset=0;grid.replaceChildren();selected={};}
+      var params='?limit=24&offset='+offset+'&sort='+encodeURIComponent(sort.value)+'&favorites='+(favorites.checked?'1':'0')+'&q='+encodeURIComponent(query.value.trim());
+      call('/ai/library'+params).then(function(data){total=data.total||0;countLabel.textContent=total+' image'+(total===1?'':'s');(data.items||[]).forEach(function(item){
+        var check=h('input',{type:'checkbox','aria-label':'Select '+item.name});check.checked=!!selected[item.id];check.onchange=function(){if(check.checked)selected[item.id]=true;else delete selected[item.id];};
+        var img=h('img',{src:A.apiUrl(item.url),alt:item.prompt||item.name,loading:'lazy'});
+        var image=h('a',{className:'ai-library-image',href:A.apiUrl(item.url),target:'_blank',rel:'noopener','aria-label':'Open '+item.name},[img]);
+        var star=button(item.favorite?'★':'☆',function(){call('/ai/library/'+item.id+'/favorite',{method:'POST',body:{favorite:!item.favorite}}).then(function(){load(false);}).catch(showError);},'ghost small');star.setAttribute('aria-label',item.favorite?'Remove favorite':'Add favorite');
+        var card=h('article',{className:'ai-library-card'},[image,h('div',{className:'ai-library-card-head'},[check,h('time',{className:'muted',text:time(item.created_at)}),star]),h('p',{className:'ai-library-prompt',text:item.prompt||item.name}),h('div',{className:'ai-library-meta'},[h('span',{text:item.width+' × '+item.height}),h('span',{text:'Seed '+(item.seed===null||item.seed===undefined?'random':item.seed)}),h('span',{text:(item.steps||'?')+' steps · '+(item.scheduler||'')})]),h('a',{className:'btn ghost small',href:A.apiUrl(item.url),download:item.name,text:'Download'})]);grid.appendChild(card);
+      });if(!append&&!total)grid.appendChild(h('p',{className:'muted',text:'Nothing matches this view. Try clearing your search or favorites filter.'}));more.hidden=!(data.has_more);}).catch(showError).finally(function(){busyLibrary=false;if(pendingReload){pendingReload=false;load(false);}});
+    }
+    function deleteSelected(){var ids=Object.keys(selected);if(!ids.length)return;A.confirmDialog('Delete '+ids.length+' generated image'+(ids.length===1?'':'s')+'? This also removes them from your picture library.',{okText:'Delete',danger:true}).then(function(ok){if(!ok)return;call('/ai/library/delete',{method:'POST',body:{ids:ids}}).then(function(){load(false);A.toast('Selected images deleted');}).catch(showError);});}
+    query.oninput=function(){clearTimeout(debounce);debounce=setTimeout(function(){load(false);},250);};sort.onchange=function(){load(false);};favorites.onchange=function(){load(false);};load(false);
+  }
+  function render(target, tab){
     host = target; clearTimeout(timer); host.replaceChildren(); host.classList.add('vc-ai');
+    if(tab==='library'){renderLibrary();return;}
     var prompt = h('textarea', { rows:'4', maxlength:'1200', placeholder:'Describe the image you want to create…', required:true, className:'ai-prompt' });
     var negative = h('textarea', { rows:'2', maxlength:'600', placeholder:'Optional: things to avoid', className:'ai-negative' });
     var width = h('input', { type:'number', min:'512', max:'1536', step:'8', value:'1024', required:true, 'aria-label':'Image width' });

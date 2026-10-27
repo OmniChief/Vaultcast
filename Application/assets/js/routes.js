@@ -88,7 +88,7 @@
       if (mt && ['board','calendar','drop','ambient'].indexOf(mt) < 0) return { view:'notfound', path:path };
       return { view:'misc', miscTab:mt || 'board', miscSub:parts[2] || '' };
     }
-    if (head === 'ai') return !parts[1] || parts[1] === 'images' ? { view:'ai', aiTab:'images' } : { view:'notfound', path:path };
+    if (head === 'ai') return !parts[1] || parts[1] === 'images' ? { view:'ai', aiTab:'images' } : parts[1] === 'library' ? { view:'ai', aiTab:'library' } : { view:'notfound', path:path };
     if (head === 'games' && parts[1] === 'leaderboards' && !parts[3]) return { view:'play', playTab:'leaderboards', playSub:parts[2] || '' };
     if (head === 'games') {
       if (parts[1] === 'lobby' || !parts[1]) return { view:'play', playTab: parts[1] === 'lobby' ? 'lobby' : 'games', sectionLetter:parts[1] === 'lobby' ? '' : letter(params.letter) };

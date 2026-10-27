@@ -139,6 +139,8 @@ final class Pictures
         if (!$r) throw new DomainException('Picture not found.');
         return $r;
     }
+    /** Verify that an image id belongs to this user without streaming the file. */
+    public static function serveExists(array $user, string $id): void { self::signed($user); self::own($user, $id); }
     public static function delete(array $user, array $ids): array {
         self::signed($user);
         foreach (array_slice(array_unique(array_map('strval', $ids)), 0, 500) as $id) {

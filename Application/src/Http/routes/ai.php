@@ -8,6 +8,9 @@ try {
 
     $user = Auth::requireUser();
     if ($path === '/ai/state' && $method === 'GET') json_out(AIImages::state($user));
+    if ($path === '/ai/library' && $method === 'GET') json_out(AIImages::library($user, $_GET));
+    if (preg_match('#^/ai/library/([a-f0-9]{16})/favorite$#D', $path, $m) && $method === 'POST') json_out(AIImages::favorite($user, $m[1], filter_var(body_json()['favorite'] ?? false, FILTER_VALIDATE_BOOLEAN)));
+    if ($path === '/ai/library/delete' && $method === 'POST') json_out(AIImages::deleteLibrary($user, (array)(body_json()['ids'] ?? [])));
     if ($path === '/ai/pair' && $method === 'POST') json_out(AIImages::pair($user));
     if ($path === '/ai/jobs' && $method === 'POST') json_out(AIImages::createJob($user, body_json()), 201);
     if (preg_match('#^/ai/jobs/([a-f0-9]{16})/cancel$#D', $path, $m) && $method === 'POST') json_out(AIImages::cancel($user, $m[1]));

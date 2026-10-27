@@ -7,6 +7,7 @@ final class AIImages
     private const JOBS = 'ai-image-jobs';
     private const WORKERS = 'ai-image-workers';
     private const PAIRS = 'ai-image-pairs';
+    private const LIBRARY = 'ai-image-library';
     private const ONLINE_SECONDS = 45;
     private static function q(string $sql, array $p = []): PDOStatement { return Arcade::query($sql, $p); }
 
@@ -30,6 +31,7 @@ final class AIImages
         return is_array($value) ? $value : [];
     }
     private static function id(): string { return bin2hex(random_bytes(8)); }
+    private static function libraryDocument(array $user): string { return self::LIBRARY . '-' . substr(hash('sha256', (string)$user['id']), 0, 24); }
     private static function signed(array $user): void { Arcade::signed($user); }
 
     public static function state(array $user): array {
@@ -49,6 +51,68 @@ final class AIImages
         unset($job);
         $workers = self::workersOnline();
         return ['ok' => true, 'jobs' => array_slice($jobs, 0, 100), 'queue' => ['waiting' => $position, 'running' => count($queue) - $position], 'workers' => $workers];
+    }
+
+    /** Long-lived per-user index for generated images; queue jobs can be pruned without losing library entries. */
+    public static function library(array $user, array $query = []): array {
+        self::signed($user);
+        $limit = max(1, min(60, (int)($query['limit'] ?? 24)));
+        $offset = max(0, (int)($query['offset'] ?? 0));
+        $term = mb_strtolower(trim((string)($query['q'] ?? '')));
+        $favoritesOnly = filter_var($query['favorites'] ?? false, FILTER_VALIDATE_BOOLEAN);
+        $sort = (string)($query['sort'] ?? 'newest') === 'oldest' ? 'oldest' : 'newest';
+        $document = self::libraryDocument($user);
+        $meta = self::read($document);
+        $backfill = [];
+        foreach (self::read(self::JOBS) as $job) {
+            $pictureId = (string)($job['picture_id'] ?? '');
+            if ((string)($job['user_id'] ?? '') !== (string)$user['id'] || ($job['status'] ?? '') !== 'completed' || !preg_match('/^[a-f0-9]{16}$/D', $pictureId) || isset($meta[$pictureId])) continue;
+            $meta[$pictureId] = ['prompt'=>(string)($job['prompt'] ?? ''), 'negative_prompt'=>(string)($job['negative_prompt'] ?? ''),
+                'created_at'=>(int)($job['finished_at'] ?? $job['created_at'] ?? time()), 'width'=>(int)($job['width'] ?? 0), 'height'=>(int)($job['height'] ?? 0),
+                'seed'=>$job['seed'] ?? null, 'steps'=>(int)($job['steps'] ?? 0), 'cfg_scale'=>(float)($job['cfg_scale'] ?? 0), 'scheduler'=>(string)($job['scheduler'] ?? ''), 'favorite'=>false];
+            $backfill[$pictureId] = $meta[$pictureId];
+        }
+        if ($backfill) self::mutate($document, static function (&$all) use ($backfill) { foreach ($backfill as $id=>$entry) if (!isset($all[$id])) $all[$id] = $entry; });
+        $rows = self::q('SELECT * FROM vaultcast_pictures WHERE user_id=? ORDER BY created_at DESC, id', [$user['id']])->fetchAll(PDO::FETCH_ASSOC);
+        $items = [];
+        foreach ($rows as $row) {
+            $id = (string)$row['id']; $entry = $meta[$id] ?? null;
+            if (!is_array($entry)) continue;
+            $entry['id'] = $id; $entry['name'] = (string)$row['name']; $entry['url'] = '/api/misc/pictures/' . $id;
+            $entry['width'] = (int)$row['width']; $entry['height'] = (int)$row['height']; $entry['bytes'] = (int)$row['bytes'];
+            if ($favoritesOnly && empty($entry['favorite'])) continue;
+            if ($term !== '' && mb_strpos(mb_strtolower((string)($entry['prompt'] ?? '') . ' ' . (string)$entry['name']), $term) === false) continue;
+            $items[] = $entry;
+        }
+        usort($items, static function ($a, $b) use ($sort) { return $sort === 'oldest' ? (int)$a['created_at'] <=> (int)$b['created_at'] : (int)$b['created_at'] <=> (int)$a['created_at']; });
+        return ['ok'=>true, 'items'=>array_slice($items, $offset, $limit), 'total'=>count($items), 'offset'=>$offset, 'limit'=>$limit, 'has_more'=>$offset + $limit < count($items)];
+    }
+    public static function favorite(array $user, string $id, bool $favorite): array {
+        self::signed($user);
+        // Confirm ownership in the picture store before changing library metadata.
+        Pictures::serveExists($user, $id);
+        $document = self::libraryDocument($user);
+        self::mutate($document, static function (&$all) use ($id, $favorite) {
+            if (!isset($all[$id])) throw new DomainException('Generated image not found.');
+            $all[$id]['favorite'] = $favorite;
+        });
+        return ['ok'=>true, 'favorite'=>$favorite];
+    }
+    public static function deleteLibrary(array $user, array $ids): array {
+        self::signed($user);
+        $ids = array_slice(array_values(array_unique(array_map('strval', $ids))), 0, 500);
+        $document = self::libraryDocument($user); $known = self::read($document);
+        $deleting = array_values(array_filter($ids, static function ($id) use ($known) { return isset($known[$id]); }));
+        if ($deleting) Pictures::delete($user, $deleting);
+        self::mutate($document, static function (&$all) use ($deleting) { foreach ($deleting as $id) unset($all[$id]); });
+        return ['ok'=>true, 'deleted'=>count($deleting)];
+    }
+    private static function indexGenerated(array $user, array $job, array $picture): void {
+        $entry = ['prompt'=>(string)$job['prompt'], 'negative_prompt'=>(string)($job['negative_prompt'] ?? ''), 'created_at'=>(int)($job['finished_at'] ?? time()),
+            'width'=>(int)$job['width'], 'height'=>(int)$job['height'], 'seed'=>$job['seed'] ?? null, 'steps'=>(int)$job['steps'],
+            'cfg_scale'=>(float)$job['cfg_scale'], 'scheduler'=>(string)$job['scheduler'], 'favorite'=>false, 'picture_created_at'=>(int)($picture['created_at'] ?? time())];
+        $document = self::libraryDocument($user);
+        self::mutate($document, static function (&$all) use ($picture, $entry) { $all[(string)$picture['id']] = $entry; });
     }
     private static function workersOnline(): array {
         $all = self::read(self::WORKERS); $online = [];
@@ -193,6 +257,7 @@ final class AIImages
             $owner = Auth::findById((string)$found['user_id']);
             if (!$owner) json_error('The image owner no longer exists.', 404);
             $picture = Pictures::saveGenerated($owner, (string)$_FILES['file']['tmp_name'], (string)($_FILES['file']['name'] ?? 'generated.png'));
+            self::indexGenerated($owner, $found, $picture);
             self::mutate(self::JOBS, static function (&$jobs) use ($worker, $id, $picture) {
                 foreach ($jobs as &$job) if (($job['id'] ?? '') === $id && ($job['status'] ?? '') === 'running' && ($job['worker_id'] ?? '') === $worker['id']) { $job['status'] = 'completed'; $job['picture_id'] = $picture['id']; $job['progress'] = 100; $job['updated_at'] = time(); $job['finished_at'] = time(); return; }
             });
