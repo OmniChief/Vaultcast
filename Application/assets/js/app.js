@@ -6420,7 +6420,7 @@ try {
     for (var i = 0; i < list.length; i++) if (list[i].id === chId) { idx = i; break; }
     if(!inlineHost)pushNav({ player:true, live: list[idx].id });
 
-    var lp = { idx: idx, ch: null, block: null, hls: null, token: 0, errors: 0, idleT: null, tickT: null, guideOpen: false, epgOpen: false, keyH: null, mode: 'live', playAt: 0, historyMs: ((live.guide && live.guide.historyDays) || 7) * 86400000, skew: 0 };
+    var lp = { idx: idx, ch: null, block: null, hls: null, token: 0, errors: 0, idleT: null, tickT: null, guideOpen: false, epgOpen: false, keyH: null, mode: 'live', playAt: 0, nextRelay: null, historyMs: ((live.guide && live.guide.historyDays) || 7) * 86400000, skew: 0 };
     var video = h('video', { id:'player-media', autoplay:true, playsinline:true, preload:'auto' });
     video.setAttribute('webkit-playsinline', 'true');
     var elNum = h('span', { className:'lp-num' }), elName = h('span', { className:'lp-name' }), elPill = h('span', { className:'lc-pill' });
@@ -6498,6 +6498,7 @@ try {
     function safePlay(){ try { var pr = video.play(); if (pr && pr.catch) pr.catch(function(){ overlay.classList.add('needs-tap'); }); } catch (e) {} }
     function teardownStream(){
       lp.token++;
+      lp.nextRelay = null;
       if (lp.hls) { try { lp.hls.destroy(); } catch (e) {} lp.hls = null; }
       try { video.pause(); } catch (e2) {}
       try { video.removeAttribute('src'); video.load(); } catch (e3) {}
@@ -6700,37 +6701,52 @@ try {
     function relayNext(b){
       lp.token++;
       lp.block = null;
-      var nextAt = b.endUnix + 20;
-      if (lp.mode === 'shift' && nextAt < relayNow() - 1500) tuneRelay(nextAt);
-      else { lp.mode = 'live'; lp.playAt = 0; tuneRelay(0); }
+      // Advance along the schedule instead of asking for the current live item:
+      // buffering must not skip the opening of a commercial (or an entire short ad).
+      tuneRelay(b.endUnix, true);
     }
-    function tuneRelay(at){
+    function requestRelay(at){
+      var asked = Date.now();
+      return liveApi('now', '&channel=' + encodeURIComponent(lp.ch.id) + (at ? '&at=' + Math.round(at) : '')).then(function(block){
+        var got = Date.now();
+        return { block:block, skew:block && block.serverNow ? (+block.serverNow + Math.max(0, got - asked) / 2) - got : null };
+      });
+    }
+    function prefetchRelay(){
+      if (!lp.block || lp.nextRelay) return;
+      var next = { at:lp.block.endUnix, request:null };
+      next.request = requestRelay(next.at).catch(function(){ if (lp.nextRelay === next) lp.nextRelay = null; return null; });
+      lp.nextRelay = next;
+    }
+    function tuneRelay(at, continuous){
       var tok = lp.token;
-      var c = lp.ch;
       if (at && at > 0) { lp.mode = 'shift'; lp.playAt = at; }
       else { lp.mode = 'live'; lp.playAt = 0; }
       setTuning(true);
-      var asked = Date.now();
-      liveApi('now', '&channel=' + encodeURIComponent(c.id) + (at ? '&at=' + Math.round(at) : '')).then(function(b){
+      var next = continuous && lp.nextRelay && lp.nextRelay.at === at ? lp.nextRelay : null;
+      lp.nextRelay = null;
+      var request = next ? next.request.then(function(result){ return result || requestRelay(at); }) : requestRelay(at);
+      request.then(function(result){
         if (tok !== lp.token) return;
+        var b = result.block;
         if (!b || !b.url) { setTuning(false); elTitle.textContent = 'Off air'; msg('This channel has nothing scheduled right now.'); return; }
-        var got = Date.now(), half = Math.max(0, got - asked) / 2;
-        if (b.serverNow) lp.skew = (+b.serverNow + half) - got;
+        if (result.skew != null) lp.skew = result.skew;
         var mOff = +b.mediaOffsetMs || 0;
         var baseMs = (b.seekMs != null) ? +b.seekMs : (mOff + Math.max(0, (at || relayNow()) - b.startUnix));
-        var baseAt = got - half;
+        var baseAt = Date.now();
         lp.block = b;
         paintNow(b);
         paintShiftPill();
-        function target(){ return Math.max(0, (baseMs + (Date.now() - baseAt)) / 1000); }
-        var seeks = 0;
+        function target(){ return Math.max(0, (baseMs + (continuous || at ? 0 : Date.now() - baseAt)) / 1000); }
+        var seeks = 0, positioned = false;
         function seekLive(){
-          if (tok !== lp.token) return;
+          if (tok !== lp.token || ((continuous || at) && positioned)) return;
           var off = target();
           try {
             var d = video.duration;
             if (d && isFinite(d) && d > 1 && off >= d - 1) { relayNext(b); return; }
             if (off > 1 && Math.abs((video.currentTime || 0) - off) > 2 && seeks < 4) { seeks++; video.currentTime = off; }
+            positioned = true;
           } catch (e) {}
         }
         video.onloadedmetadata = function(){ if (tok !== lp.token) return; seekLive(); if (tok === lp.token) safePlay(); };
@@ -6867,6 +6883,7 @@ try {
         var pos = ct ? (ct * 1000 - mo) : ((lp.mode === 'shift' && lp.playAt) ? (lp.playAt - b.startUnix) : (relayNow() - b.startUnix));
         elFill.style.width = Math.max(0, Math.min(100, 100 * pos / b.durationMs)) + '%';
         if (lp.mode === 'shift' && ct) lp.playAt = b.startUnix + Math.max(0, ct * 1000 - mo);
+        if (pos >= b.durationMs - 15000) prefetchRelay();
         // programme cut short by a rolling slot - leave the file at the slot boundary
         if (!video.paused && ct && ct * 1000 >= mo + b.durationMs - 250) relayNext(b);
         // Drifted well past the scheduled block while LIVE (stalled tab etc): resync to live
@@ -6881,6 +6898,7 @@ try {
 
     _liveCleanup = function(){
       lp.token++;
+      lp.nextRelay = null;
       clearInterval(lp.tickT); clearTimeout(lp.idleT);
       if (lp.keyH) document.removeEventListener('keydown', lp.keyH);
       if (lp.hls) { try { lp.hls.destroy(); } catch (e) {} lp.hls = null; }
