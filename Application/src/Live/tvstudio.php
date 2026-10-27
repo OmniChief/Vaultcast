@@ -738,20 +738,47 @@ function tvs_admin_payload() {
 }
 
 /** Apply channel numbering / naming edits made in the studio to the station document. */
-function tvs_apply_channel_edits($edits) {
-    if (!is_array($edits) || !$edits) return;
+function tvs_apply_channel_edits($edits, $add = array(), $remove = array()) {
+    if (!is_array($edits) || !is_array($add) || !is_array($remove)) throw new InvalidArgumentException('Invalid channel changes.');
+    if (!$edits && !$add && !$remove) return;
     $station = relay_load_station();
-    $seen = array();
+    $removed = array();
+    foreach ($remove as $id) if (is_string($id) && $id !== '') $removed[$id] = true;
+    if ($removed) $station['channels'] = array_values(array_filter($station['channels'], function($channel) use ($removed) { return empty($removed[$channel['id'] ?? '']); }));
+    foreach ($add as $channel) {
+        if (!is_array($channel)) throw new InvalidArgumentException('Invalid channel.');
+        $id = trim((string)($channel['id'] ?? ''));
+        $name = trim((string)($channel['name'] ?? ''));
+        $number = max(1, min(9999, (int)($channel['number'] ?? 1)));
+        if ($id === '' || strlen($id) > 80 || $name === '' || strlen($name) > 80) throw new InvalidArgumentException('Enter a channel name.');
+        foreach ($station['channels'] as $existing) if (($existing['id'] ?? '') === $id) throw new InvalidArgumentException('Channel already exists.');
+        $station['channels'][] = array_merge(array(
+            'id' => $id, 'number' => $number, 'name' => tvs_str($name, 80), 'slogan' => '', 'enabled' => true,
+            'libraryIds' => array('movie' => array(), 'episode' => array(), 'commercial' => array(), 'bumper' => array()),
+            'playlist' => array(), 'fillHours' => 6, 'commercialEveryMs' => 1500000, 'commercialsPerBreak' => 2,
+            'bumperBefore' => true, 'seed' => bin2hex(random_bytes(8)), 'rollingSchedule' => array('enabled' => false, 'slots' => array())
+        ), $channel);
+    }
     foreach ($station['channels'] as $i => $c) {
         foreach ($edits as $e) {
             if (!is_array($e) || ($e['id'] ?? '') !== $c['id']) continue;
             if (isset($e['number'])) $station['channels'][$i]['number'] = max(1, min(9999, (int)$e['number']));
             if (isset($e['name']) && trim((string)$e['name']) !== '') $station['channels'][$i]['name'] = tvs_str($e['name'], 80);
+            if (isset($e['slogan'])) $station['channels'][$i]['slogan'] = tvs_str($e['slogan'], 160);
             if (isset($e['enabled'])) $station['channels'][$i]['enabled'] = !empty($e['enabled']);
         }
-        $n = (int)$station['channels'][$i]['number'];
+    }
+    if (!$station['channels']) throw new InvalidArgumentException('Keep at least one channel.');
+    $seen = array();
+    foreach ($station['channels'] as $channel) {
+        $n = (int)($channel['number'] ?? 0);
         if (isset($seen[$n])) throw new InvalidArgumentException('Channel number ' . $n . ' is used twice.');
         $seen[$n] = true;
     }
     relay_save_station($station);
+    if ($removed) {
+        $studio = tvs_load();
+        foreach ($removed as $id => $_) unset($studio['channels'][$id]);
+        tvs_save($studio);
+    }
 }

@@ -8460,12 +8460,15 @@ try {
     var isAdmin = !!(u && u.role === 'admin');
     var groups = [
       {title:'Your account',description:'Your identity, personal preferences and saved games.',items:[{id:'inbox',label:'Inbox',hint:'Messages, invitations and anything that needs you'},{id:'settings-home',label:'Settings overview',hint:'Find a setting or choose a task'},{id:'account',label:'Profile & security',hint:'Display name, avatar, password and sign out'},{id:'parental',label:'Parental controls',hint:'Kids profile, age limits and PIN'},{id:'appearance',label:'Appearance & motion',hint:'Themes, animation and reduced motion'},{id:'playback',label:'Playback & skipping',hint:'Autoplay, mini player, intros and credits'},{id:'home-preferences',label:'Home & spoilers',hint:'Start page, compact layout and unwatched episode details'},{id:'cloud-saves',label:'Cloud saves',hint:'Save slots, backups, uploads and sharing'}]},
-      {title:'Library & metadata',description:'Connect folders, organise titles and correct missing information.',admin:true,items:[{id:'sections',label:'Libraries & folders',section:'Sources',hint:'Media types, paths and enabled libraries'},{id:'scan',label:'Scan for media',section:'Sources',hint:'Discover new or removed files'},{id:'ingest',label:'Import inbox',section:'Sources',hint:'Review incoming downloads before importing'},{id:'media',label:'Media manager',section:'Organise',hint:'Search and edit library records'},{id:'collections',label:'Collections',section:'Organise',hint:'Film sets and series groups'},{id:'library',label:'Find & rename',section:'Organise',hint:'Match names and organise files'},{id:'matching',label:'Metadata matching',section:'Metadata',hint:'Fix titles, posters and descriptions'},{id:'reports',label:'User reports',section:'Metadata',hint:'Review incorrect labels reported by users'}]},
+      {title:'Library & metadata',description:'Connect folders, organise titles and correct missing information.',admin:true,items:[{id:'sections',label:'Libraries & folders',section:'Sources',hint:'Media types, paths and enabled libraries'},{id:'scan',label:'Scan for media',section:'Sources',hint:'Discover new or removed files'},{id:'media',label:'Media manager',section:'Organise',hint:'Browse the catalogue, find misplaced files and edit library records'},{id:'collections',label:'Collections',section:'Organise',hint:'Film sets and series groups'},{id:'matching',label:'Metadata matching',section:'Metadata',hint:'Fix titles, posters and descriptions'},{id:'reports',label:'User reports',section:'Metadata',hint:'Review incorrect labels reported by users'}]},
       {title:'Artwork & design',description:'Site branding, bundled posters and library artwork.',admin:true,items:[{id:'site-artwork',label:'Site & theme posters',hint:'Replace default artwork and create smaller WebP images'},{id:'posters',label:'Library artwork',hint:'Fetch missing movie, show, season and game images'},{id:'artwork-integrity',label:'Repair missing images',hint:'Find broken records and missing files'},{id:'poster-optimise',label:'Optimise library images',hint:'Generate full, grid and search WebP variants'}]},
-      {title:'Live broadcasting',description:'Build channels, schedule programmes and manage public streams.',admin:true,items:[{id:'live-studio',label:'PseudoTV Studio',section:'Relay',hint:'Schedule programmes, filler and advertising'},{id:'live-channels',label:'Relay channels',section:'Relay',hint:'Create channels and manage rotations'},{id:'live-library',label:'Live media library',section:'Relay',hint:'Import programmes and prepare durations'},{id:'live-playlists',label:'Rotation playlists',section:'Relay',hint:'Reusable channel programme rotations'},{id:'live-schedule',label:'Rotation rules',section:'Relay',hint:'Legacy rotation scheduling; Studio manages weekly slots'},{id:'live-iptv',label:'IPTV & guide matching',section:'Sources',hint:'Feeds, channel mapping and EPG'},{id:'live-radio',label:'Radio stations',section:'Sources',hint:'Add stations or browse the public directory'},{id:'live-station',label:'Station & outputs',section:'Outputs',hint:'Streams, guide exports and station configuration'}]},
+      {title:'PseudoTV Studio',description:'Manage channels, programme schedules and the live media library.',admin:true,items:[{id:'live-studio',label:'TV Studio',hint:'Schedule programmes, manage channels, filler, adverts and status'},{id:'live-playlists',label:'Rotation playlists',section:'Additional rotation tools',hint:'Reusable channel programme rotations'},{id:'live-schedule',label:'Rotation rules',section:'Additional rotation tools',hint:'Legacy rolling schedule rules'}]},
+      {title:'IPTV & Guide Matching',description:'Manage IPTV feeds and match channels to programme guides.',admin:true,items:[{id:'live-iptv',label:'IPTV & Guide Matching',hint:'Feeds, channel mapping and EPG'}]},
+      {title:'Radio Stations',description:'Manage shared radio stations.',admin:true,items:[{id:'live-radio',label:'Radio stations',hint:'Add stations or browse the public directory'}]},
+      {title:'Station & Outputs',description:'Configure station identity and broadcast outputs.',admin:true,items:[{id:'live-station',label:'Station & outputs',hint:'Streams, guide exports and station configuration'}]},
       {title:'People & permissions',description:'Control who can access content and administrative tools.',admin:true,items:[{id:'users',label:'Accounts, roles & permissions',hint:'Create users and roles; assign individual access'}]},
       {title:'Playback & delivery',description:'Server delivery options and player dependencies.',admin:true,items:[{id:'directplay',label:'DirectPlay Settings',hint:'Playback policy, transcoding, threads and reusable copies'},{id:'trailers',label:'Trailers & extras',hint:'Online trailers, the muted hero trailer and extras thumbnails'},{id:'streaming',label:'Delivery & subtitles',hint:'Seeking, playback tokens and subtitles'},{id:'players',label:'Player assets',hint:'Local or CDN player files and emulator cores'},{id:'video-optimise',label:'Video conversion',hint:'Convert files, review requests and manage encoding jobs'}]},
-      {title:'Downloads',description:'Configure providers and review download activity.',admin:true,items:[{id:'acquisition',label:'Providers & integrations',hint:'RSS search, download clients and API connections'},{id:'queue',label:'Download queue',hint:'Active downloads, imports and errors'}]},
+      {title:'Downloads',description:'Configure providers and review download activity.',admin:true,items:[{id:'acquisition',label:'Providers & integrations',hint:'RSS search, download clients and API connections'},{id:'queue',label:'Download queue',hint:'Active downloads, imports and errors'},{id:'ingest',label:'Import inbox',hint:'Review incoming downloads before importing'}]},
       {title:'Application & server',description:'Site defaults, updates, performance and troubleshooting.',admin:true,items:[{id:'general',label:'Site defaults & access',hint:'Branding, guest access, public URL and installable app'},{id:'features',label:'Enabled features',hint:'Turn optional services on or off'},{id:'achievements',label:'Achievements',hint:'Turn achievements on or off and count past activity'},{id:'ambient',label:'Ambient & webcams',hint:'Webcams from boards and which ones Ambient offers'},{id:'updates',label:'Updates & branches',hint:'Manually check, install or switch update channels'},{id:'maintenance',label:'Task centre',hint:'Preparation jobs, progress, cancellation and history'},{id:'optimise-system',label:'Storage & caches',hint:'Generated files and safe cache tools'},{id:'diagnostics',label:'Diagnostics',hint:'Run selected checks and inspect failures'},{id:'system',label:'Server tools',hint:'Resource usage and service controls'},{id:'advanced',label:'Advanced & reset',hint:'PHP CLI, ffmpeg, ffprobe, tool paths, raw configuration and database reset'}]}
     ];
     var features = (state.home && state.home.features) || {};
@@ -8483,7 +8486,10 @@ try {
     }).filter(function(g){return g.items.length;});
     var flat = [];
     groups.forEach(function(g){ g.items.forEach(function(it){ flat.push(it.id); }); });
-    if (state.settingsSection === 'live') state.settingsSection = 'live-channels';
+    if (state.settingsSection === 'live') state.settingsSection = 'live-studio';
+    if (state.settingsSection === 'live-channels') { state.settingsSection = 'live-studio'; tvs.tab = 'channels'; }
+    if (state.settingsSection === 'live-library') { state.settingsSection = 'live-studio'; tvs.tab = 'media'; }
+    if (state.settingsSection === 'library') state.settingsSection = 'media';
     if (state.settingsSection === 'convert') state.settingsSection = 'video-optimise';
     if (flat.indexOf(state.settingsSection) < 0) state.settingsSection = 'settings-home';
     var sec = state.settingsSection;
@@ -9838,21 +9844,7 @@ try {
     return wrap;
   }
 
-  function renderLibraryManager(s){
-    var wrap = h('div', { className:'stack' });
-    wrap.appendChild(libraryQueryPanel());
-    wrap.appendChild(h('h3', { text:'Find misplaced / misnamed media' }));
-    wrap.appendChild(h('p', { className:'muted', text:'Scan downloads & Transmission for files not yet in the catalogue. Suggest show/movie match (TVMaze for TV), preview standard rename, then move into library paths. Incremental catalogue update — no full rescan required.' }));
-    wrap.appendChild(h('div', { className:'row-actions' }, [
-      fieldEl('orphan_limit','Limit', 50, 'number'),
-      h('label', {}, [ h('input', { id:'incl_sec', type:'checkbox' }), ' Include section roots' ]),
-      h('button', { className:'btn primary', text:'Scan orphans', onClick: function(){ scanOrphans(); } })
-    ]));
-    wrap.appendChild(h('div', { id:'orphan_status', className:'muted', text:'Idle' }));
-    wrap.appendChild(h('div', { id:'orphan_list', className:'stack' }));
-    wrap.appendChild(h('div', { id:'orphan_editor', className:'stack', style:'display:none;border:1px solid var(--border);padding:12px;border-radius:8px;margin-top:8px' }));
-    return wrap;
-  }
+  function renderLibraryManager(s){ return renderMediaManager(s); }
 
   /* Find & rename → query the library: terms (wildcards/fuzzy) → pick items → fix → preview → apply */
   function libraryQueryPanel(){
@@ -12277,7 +12269,7 @@ h('div', { className:'cv-find-bar' }, [
       return h('option', { value:sec.id, text:(sec.label||sec.id), selected: (state.mm&&state.mm.section)===sec.id });
     }));
     wrap.appendChild(h('div', { className:'row-actions' }, [
-      h('select', { id:'mm_section', onChange: function(){ state.mm.section=$('#mm_section').value; state.mm.page=1; mmLoadCatalogue(); } }, secOpts),
+      h('select', { id:'mm_section' }, secOpts),
       h('select', { id:'mm_mode' }, [
         h('option', { value:'auto', text:'Auto (shows for TV)', selected: !state.mm || state.mm.mode==='auto' }),
         h('option', { value:'items', text:'Items', selected: state.mm&&state.mm.mode==='items' }),
@@ -12285,7 +12277,7 @@ h('div', { className:'cv-find-bar' }, [
         h('option', { value:'items_noposter', text:'Items — no poster', selected: state.mm&&state.mm.mode==='items_noposter' }),
         h('option', { value:'shows_noposter', text:'Shows — no poster', selected: state.mm&&state.mm.mode==='shows_noposter' })
       ]),
-      h('input', { id:'mm_q', placeholder:'Filter…', value:(state.mm&&state.mm.q)||'', onKeydown: function(e){ if(e.key==='Enter'){ state.mm.q=$('#mm_q').value; state.mm.page=1; mmLoadCatalogue(); } } }),
+      h('input', { id:'mm_q', placeholder:'Filter…', value:(state.mm&&state.mm.q)||'' }),
       h('button', { className:'btn primary', text:'Browse catalogue', onClick: function(){
         state.mm.section = ($('#mm_section')||{}).value||'';
         state.mm.mode = ($('#mm_mode')||{}).value||'auto';
@@ -12295,7 +12287,7 @@ h('div', { className:'cv-find-bar' }, [
       }}),
       h('button', { className:'btn ghost', text:'Cancel', onClick: function(){ abortOp('mm_browse'); toast('Cancelled'); } })
     ]));
-    wrap.appendChild(h('div', { id:'mm_status', className:'muted', text:'Idle' }));
+    wrap.appendChild(h('div', { id:'mm_status', className:'muted', text:'Select filters and press Browse catalogue to load items.' }));
     wrap.appendChild(h('div', { id:'mm_list', className:'stack' }));
     wrap.appendChild(h('div', { id:'mm_editor', className:'stack mm-editor', style:'display:none' }));
     wrap.appendChild(h('hr'));
@@ -12316,7 +12308,13 @@ h('div', { className:'cv-find-bar' }, [
     ]));
     wrap.appendChild(h('div', { id:'mm_diag_status', className:'muted', text:'Idle' }));
     wrap.appendChild(h('div', { id:'mm_diag', className:'stack' }));
-    setTimeout(function(){ mmLoadCatalogue(); }, 0);
+    wrap.appendChild(h('hr'));
+    wrap.appendChild(h('h3', { text:'Find misplaced / misnamed media' }));
+    wrap.appendChild(h('p', { className:'muted', text:'Scan downloads and Transmission for files missing from the catalogue, then match and move them into library paths.' }));
+    wrap.appendChild(h('div', { className:'row-actions' }, [fieldEl('orphan_limit','Limit',50,'number'),h('label',{},[h('input',{id:'incl_sec',type:'checkbox'}),' Include section roots']),h('button',{className:'btn primary',text:'Scan misplaced media',onClick:scanOrphans})]));
+    wrap.appendChild(h('div', { id:'orphan_status', className:'muted', text:'Idle' }));
+    wrap.appendChild(h('div', { id:'orphan_list', className:'stack' }));
+    wrap.appendChild(h('div', { id:'orphan_editor', className:'stack', style:'display:none;border:1px solid var(--border);padding:12px;border-radius:8px;margin-top:8px' }));
     return wrap;
   }
 
@@ -13595,7 +13593,7 @@ function viewCollectionDetail(){
     host.innerHTML = '';
     // Scope root for TV Studio styles (.tvs-root ...), so they never reach the header or other panels.
     host = host.appendChild(h('div', { className:'tvs-root' }));
-    var tabs = [['schedule','Weekly schedule'],['filler','Filler'],['adverts','Adverts'],['channels','Channels'],['epg','EPG & outputs'],['dvr','Recordings'],['health','Status']];
+    var tabs = [['schedule','Weekly schedule'],['filler','Filler'],['adverts','Adverts'],['channels','Channels'],['epg','EPG & outputs'],['dvr','Recordings'],['media','Live media library'],['health','Status']];
     var chans = tvs.data.channels.slice().sort(function(a, b){ return a.number - b.number; });
     host.appendChild(h('div', { className:'tvs-bar' }, [
       h('div', { className:'tvs-tabs', role:'tablist' }, tabs.map(function(t){
@@ -13610,9 +13608,9 @@ function viewCollectionDetail(){
     ]));
     var warn = (tvs.data.warnings || []);
     if (warn.length) host.appendChild(h('div', { className:'tvs-warnings' }, warn.slice(0, 6).map(function(w){ return h('p', { text:'\u26a0 ' + w.message }); })));
-    if (!chans.length && tvs.tab !== 'health' && tvs.tab !== 'epg') {
-      host.appendChild(h('div', { className:'settings-card' }, [ h('p', { text:'Create a Relay channel first, then schedule it here.' }),
-        h('button', { className:'btn', type:'button', text:'Open Relay channels', onClick:function(){ openSettings('live-channels'); } }) ]));
+    if (!chans.length && tvs.tab !== 'health' && tvs.tab !== 'epg' && tvs.tab !== 'channels' && tvs.tab !== 'media') {
+      host.appendChild(h('div', { className:'settings-card' }, [ h('p', { text:'Create a channel in the Channels tab, then schedule it here.' }),
+        h('button', { className:'btn', type:'button', text:'Open Channels', onClick:function(){ tvs.tab='channels'; tvsPaint(); } }) ]));
       return;
     }
     var picker = function(){
@@ -13626,6 +13624,18 @@ function viewCollectionDetail(){
     };
     var body = h('div', { className:'tvs-body' });
     host.appendChild(body);
+    if (tvs.tab === 'media') {
+      var mediaPanel=h('div',{className:'stack'});
+      var mediaStatus=h('p',{id:'live-native-status',className:'muted live-native-status'+(liveSet.statusBad?' bad':''),text:liveSet.status||''});
+      body.appendChild(h('div',{className:'row-actions live-save-bar'},[
+        h('span',{id:'live-dirty',className:'live-dirty',hidden:!liveSet.dirty,text:'Unsaved changes'}),
+        h('button',{id:'live-discard',className:'btn ghost',type:'button',text:'Discard changes',disabled:!liveSet.dirty,onClick:function(){if(!confirm('Discard unsaved Live media library changes?'))return;liveLoadStation(true).then(function(){liveSetMsg('Changes discarded.');liveSyncDirty();paintLiveLibrary(mediaPanel);}).catch(function(error){liveSetMsg(String(error.message||error),true);});}}),
+        h('button',{className:'btn primary',type:'button','data-live-save':'1',text:'Save station',disabled:!liveSet.dirty,onClick:liveSaveStation})
+      ]));
+      body.appendChild(mediaStatus);body.appendChild(mediaPanel);
+      liveLoadStation(!liveSet.dirty).then(function(){if(!mediaPanel.isConnected||tvs.tab!=='media')return;liveSyncDirty();paintLiveLibrary(mediaPanel);}).catch(function(error){if(mediaPanel.isConnected)mediaPanel.replaceChildren(h('p',{className:'bad',text:String(error.message||error)}));});
+      return;
+    }
     ({ schedule:tvsPaintSchedule, filler:tvsPaintFiller, adverts:tvsPaintAdverts, channels:tvsPaintChannels, epg:tvsPaintEpg, dvr:tvsPaintDvr, health:tvsPaintHealth })[tvs.tab](body, picker);
   }
 
@@ -13927,14 +13937,23 @@ function viewCollectionDetail(){
   function tvsPaintChannels(body){
     var edits = {};
     var users = tvs.data.users || [];
+    function saveChannelEdits(add,remove){
+      var button=body.querySelector('[data-channel-save]');if(button)button.disabled=true;
+      tvsApi('tv_channels',{method:'POST',body:{channels:Object.keys(edits).map(function(id){return edits[id];}),add:add||[],remove:remove||[]}}).then(function(result){
+        if(!result||!result.ok)throw new Error((result&&result.error)||'Could not save channels');
+        (remove||[]).forEach(function(id){if(tvs.studio&&tvs.studio.channels)delete tvs.studio.channels[id];});
+        tvs.data=result;toast('Channels updated',{kind:'ok'});tvsPaint();
+      }).catch(function(error){toast(String(error.message||error),{kind:'bad'});if(button&&button.isConnected)button.disabled=false;});
+    }
     var rows = tvs.data.channels.slice().sort(function(a, b){ return a.number - b.number; }).map(function(c){
       var cfg = tvsChan(c.id);
-      edits[c.id] = { id:c.id, number:c.number, name:c.name, enabled:c.enabled };
+      edits[c.id] = { id:c.id, number:c.number, name:c.name, slogan:c.slogan||'', enabled:c.enabled };
       var e = edits[c.id];
       return h('tr', {}, [
         h('td', {}, [ h('input', { type:'number', min:'1', max:'9999', className:'tvs-num', value:String(c.number), onChange:function(ev){ e.number = Number(ev.target.value); } }) ]),
         h('td', {}, [ h('div', { className:'tvs-logo' }, [ cfg.logo ? h('img', { src:cfg.logo, alt:'' }) : h('span', { text:(c.name || '?').slice(0, 2) }) ]) ]),
         h('td', {}, [ h('input', { type:'text', value:c.name, onChange:function(ev){ e.name = ev.target.value; } }) ]),
+        h('td', {}, [ h('input', { type:'text', value:c.slogan||'', placeholder:'Channel slogan', onChange:function(ev){ e.slogan = ev.target.value; } }) ]),
         h('td', {}, [ h('input', { type:'url', value:cfg.logo, placeholder:'https://\\u2026/logo.png', onChange:function(ev){ cfg.logo = ev.target.value.trim(); tvsMark(); } }),
           h('button', { className:'btn ghost', type:'button', text:'Upload image', onClick:function(){
             var picker = document.createElement('input');
@@ -13963,18 +13982,18 @@ function viewCollectionDetail(){
         h('td', {}, [ h('select', { onChange:function(ev){ cfg.access.visibility = ev.target.value; tvsMark(); tvsPaint(); } }, [['everyone','Everyone'],['signed-in','Signed-in users'],['users','Chosen users'],['admins','Admins only']].map(function(o){ return h('option', { value:o[0], selected:cfg.access.visibility === o[0], text:o[1] }); })),
           cfg.access.visibility === 'users' ? h('select', { multiple:true, size:'3', onChange:function(ev){ cfg.access.users = Array.prototype.filter.call(ev.target.options, function(o){ return o.selected; }).map(function(o){ return o.value; }); tvsMark(); } }, users.map(function(u){ return h('option', { value:u.username, selected:cfg.access.users.indexOf(u.username) >= 0, text:u.username }); })) : null ]),
         h('td', {}, [ h('input', { type:'checkbox', checked:cfg.timeshift, title:'Allow rewinding into the past (history window set in Station)', onChange:function(ev){ cfg.timeshift = ev.target.checked; tvsMark(); } }) ]),
-        h('td', {}, [ h('input', { type:'checkbox', checked:c.enabled, title:'On air', onChange:function(ev){ e.enabled = ev.target.checked; } }) ])
+        h('td', {}, [ h('input', { type:'checkbox', checked:c.enabled, title:'On air', onChange:function(ev){ e.enabled = ev.target.checked; } }) ]),
+        h('td',{},[h('button',{className:'btn ghost sm',type:'button',text:'Delete',onClick:function(){if(tvs.data.channels.length<2){toast('Keep at least one channel.',{kind:'bad'});return;}if(confirm('Delete channel '+(c.number||'')+' '+(c.name||'')+'? This also removes its Studio schedule.'))saveChannelEdits([], [c.id]);}})])
       ]);
     });
     body.appendChild(h('div', { className:'settings-card' }, [
-      h('div', { className:'tvs-row' }, [ h('h3', { text:'Channels & numbering' }), h('button', { className:'btn', type:'button', text:'Apply numbers & names', onClick:function(){
-        tvsApi('tv_channels', { method:'POST', body:{ channels:Object.keys(edits).map(function(k){ return edits[k]; }) } }).then(function(j){
-          if (!j.ok) throw new Error(j.error || 'Failed'); var keep = tvs.studio; tvs.data = j; tvs.studio = keep; toast('Channels updated', { kind:'ok' }); tvsPaint();
-        }).catch(function(err){ toast(String(err.message || err), { kind:'bad' }); });
-      } }) ]),
-      h('p', { className:'muted', text:'Numbers, names and on-air apply immediately with the button. Logos, groups, access and timeshift are saved with "Save studio". IPTV channel numbers are edited under IPTV feeds.' }),
+      h('div', { className:'tvs-row' }, [ h('h3', { text:'Channels & numbering' }), h('div',{className:'row-actions'},[
+        h('button',{className:'btn',type:'button',text:'Add channel',onClick:function(){var used={};tvs.data.channels.forEach(function(channel){used[Number(channel.number)]=true;});var number=1;while(used[number])number++;var id=liveUid('ch');saveChannelEdits([{id:id,number:number,name:'Channel '+number,slogan:'',enabled:true,libraryIds:{movie:[],episode:[],commercial:[],bumper:[]},playlist:[],fillHours:6,commercialEveryMs:25*60*1000,commercialsPerBreak:2,bumperBefore:true,seed:liveUid('seed'),rollingSchedule:{enabled:false,slots:[]}}],[]);}}),
+        h('button', { className:'btn primary', 'data-channel-save':'1', type:'button', text:'Save channel changes', onClick:function(){saveChannelEdits([],[]);} })
+      ]) ]),
+      h('p', { className:'muted', text:'Save channel names, slogans, numbers and on-air state here. Logos, groups, access and timeshift are saved with Save studio. IPTV channel numbers are edited under IPTV & Guide Matching.' }),
       h('div', { className:'tvs-table-wrap' }, [ h('table', { className:'tvs-table' }, [
-        h('thead', {}, [ h('tr', {}, ['No.','','Name','Logo URL','Group','Who can watch','Timeshift','On air'].map(function(t){ return h('th', { text:t }); })) ]),
+        h('thead', {}, [ h('tr', {}, ['No.','','Name','Slogan','Logo URL','Group','Who can watch','Timeshift','On air',''].map(function(t){ return h('th', { text:t }); })) ]),
         h('tbody', {}, rows) ]) ])
     ]));
   }
@@ -15522,8 +15541,12 @@ function viewCollectionDetail(){
   function openSettings(section){
     if(kidLocked()){loadModule('vc-parental.js','VaultcastParental').then(function(mod){mod.unlockPrompt(function(){openSettings(section);});}).catch(function(){toast('Settings are locked on this profile.',{kind:'bad'});});return;}
     if(state.view==='settings'&&settingsDraftChanged()&&!confirm('Leave this page and discard unsaved form changes?'))return;
-    state.settingsSection = section || 'settings-home';
-    var adminIds = { maintenance:'maintenance', players:'players', features:'features', libraries:'sections', sections:'sections', scan:'scan', library:'library', media:'media', collections:'collections', streaming:'streaming', directplay:'directplay', convert:'convert', queue:'queue', acquisition:'acquisition', system:'system', general:'general', users:'users', advanced:'advanced', ingest:'ingest', matching:'matching', reports:'reports' };
+    section = section || 'settings-home';
+    if(section==='live-channels'){section='live-studio';tvs.tab='channels';}
+    if(section==='live-library'){section='live-studio';tvs.tab='media';}
+    if(section==='library')section='media';
+    state.settingsSection = section;
+    var adminIds = { maintenance:'maintenance', players:'players', features:'features', libraries:'sections', sections:'sections', scan:'scan', library:'media', media:'media', collections:'collections', streaming:'streaming', directplay:'directplay', convert:'convert', queue:'queue', acquisition:'acquisition', system:'system', general:'general', users:'users', advanced:'advanced', ingest:'ingest', matching:'matching', reports:'reports' };
     if (adminIds[state.settingsSection]) state.adminTab = adminIds[state.settingsSection];
     var needsAdmin = !!adminIds[state.settingsSection] || state.settingsSection === 'live' || (state.settingsSection && state.settingsSection.indexOf('live-') === 0);
     if (needsAdmin) {
