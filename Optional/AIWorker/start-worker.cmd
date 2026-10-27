@@ -17,7 +17,7 @@ if not defined PYRUN (
   )
 )
 
-if defined PYRUN goto run_worker
+if defined PYRUN goto check_socketio
 
 echo Python 3.10 or newer was not found.
 where winget >nul 2>nul
@@ -46,6 +46,29 @@ goto finish
 
 :run_worker
 %PYRUN% worker.py
+goto finish
+
+:check_socketio
+%PYRUN% -c "import socketio" >nul 2>nul
+if not errorlevel 1 goto run_worker
+echo.
+echo Live progress updates need the small python-socketio client package.
+set /p "INSTALLSOCKETIO=Install it for this Python user now? [Y/N]: "
+if /I not "%INSTALLSOCKETIO%"=="Y" goto run_without_socketio
+echo.
+%PYRUN% -m pip install "python-socketio[client]"
+if errorlevel 1 goto socketio_failed
+goto run_worker
+
+:socketio_failed
+echo.
+echo The progress package could not be installed. The worker can still generate images, but progress will stay indeterminate.
+goto run_worker
+
+:run_without_socketio
+echo.
+echo Continuing without live progress updates. The worker can still generate and upload images.
+goto run_worker
 
 :finish
 echo.

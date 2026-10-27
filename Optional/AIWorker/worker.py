@@ -6,6 +6,7 @@ import random
 import socket
 import sys
 import time
+import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -107,6 +108,52 @@ def multipart(url, token, filename, content):
         return json.loads(res.read().decode())
 
 
+def start_progress_listener(cfg, job_id, invoke_item_id):
+    progress = [1]
+    try:
+        import socketio
+    except ImportError:
+        print("Live progress is unavailable (python-socketio is not installed). The job will still run.")
+        return None, progress
+
+    client = socketio.Client(reconnection=False, logger=False, engineio_logger=False)
+
+    @client.on("connect")
+    def subscribe_to_queue():
+        client.emit("subscribe_queue", {"queue_id": "default"})
+
+    @client.on("invocation_progress")
+    def receive_progress(event):
+        if not isinstance(event, dict) or str(event.get("item_id")) != str(invoke_item_id):
+            return
+        invocation = event.get("invocation")
+        kind = invocation.get("type", "") if isinstance(invocation, dict) else ""
+        fraction = event.get("percentage")
+        if not isinstance(fraction, (int, float)):
+            return
+        if kind == "denoise_latents":
+            percent = 5 + int(max(0, min(1, fraction)) * 85)
+        elif kind in ("l2i", "sdxl_l2i"):
+            percent = 90 + int(max(0, min(1, fraction)) * 8)
+        else:
+            return
+        percent = max(progress[0], min(99, percent))
+        if percent == progress[0]:
+            return
+        progress[0] = percent
+        try:
+            request(cfg["server"] + "/api/ai/worker/jobs/" + job_id + "/progress", "POST", {"progress": percent}, {"X-Vaultcast-Worker": cfg["worker_token"]}, timeout=15)
+        except Exception as exc:
+            print("Could not send generation progress to Vaultcast:", exc)
+
+    try:
+        client.connect(cfg["invoke"], socketio_path="ws/socket.io", wait_timeout=8)
+        return client, progress
+    except Exception as exc:
+        print("Live InvokeAI progress could not connect; the job will still run:", exc)
+        return None, progress
+
+
 def run_job(cfg, job):
     token = cfg["worker_token"]
     headers = {"X-Vaultcast-Worker": token}
@@ -116,34 +163,51 @@ def run_job(cfg, job):
     item_id = (enqueued.get("item_ids") or [None])[0]
     if not item_id:
         raise RuntimeError("InvokeAI did not return a queue item ID.")
+    progress_client, current_progress = start_progress_listener(cfg, job["id"], item_id)
     last_update = 0
-    while True:
-        item = request(cfg["invoke"] + "/api/v1/queue/default/i/" + urllib.parse.quote(str(item_id)), headers=headers)
-        status = item.get("status") or item.get("queue", {}).get("status")
-        if status == "failed":
-            raise RuntimeError(item.get("error_message") or item.get("queue", {}).get("error") or "InvokeAI generation failed.")
-        if status == "canceled":
-            raise RuntimeError("InvokeAI generation was canceled.")
-        if status == "completed":
-            results = item.get("session", {}).get("results", [])
-            image_name = next((r.get("image", {}).get("image_name") or r.get("image_name") for r in results if r.get("type") == "image_output" or r.get("image") or r.get("image_name")), None)
-            if not image_name:
-                raise RuntimeError("InvokeAI completed without returning an image.")
-            image_url = cfg["invoke"] + "/api/v1/images/i/" + urllib.parse.quote(image_name, safe="") + "/full"
-            with urllib.request.urlopen(image_url, timeout=180) as res:
-                data = res.read()
-            multipart(cfg["server"] + "/api/ai/worker/jobs/" + job["id"] + "/complete", token, image_name, data)
-            print("Saved to the Vaultcast picture library.")
-            return
-        # InvokeAI's queue response does not expose a stable percentage across versions.
-        # Keep the Vaultcast lease alive without inventing progress values.
-        if time.time() - last_update >= 30:
-            try:
-                request(cfg["server"] + "/api/ai/worker/jobs/" + job["id"] + "/progress", "POST", {"progress": 1}, headers)
-                last_update = time.time()
-            except Exception:
-                pass
-        time.sleep(3)
+    try:
+        while True:
+            item = request(cfg["invoke"] + "/api/v1/queue/default/i/" + urllib.parse.quote(str(item_id)), headers=headers)
+            status = item.get("status")
+            if status == "failed":
+                raise RuntimeError(item.get("error_message") or "InvokeAI generation failed.")
+            if status == "canceled":
+                raise RuntimeError("InvokeAI generation was canceled.")
+            if status == "completed":
+                session = item.get("session") if isinstance(item.get("session"), dict) else {}
+                results = session.get("results", {})
+                entries = results.values() if isinstance(results, dict) else results if isinstance(results, list) else []
+                image_name = None
+                for result in entries:
+                    if not isinstance(result, dict) or result.get("type") != "image_output":
+                        continue
+                    image = result.get("image")
+                    if isinstance(image, dict):
+                        image_name = image.get("image_name")
+                    elif isinstance(image, str):
+                        image_name = image
+                    image_name = image_name or result.get("image_name")
+                    if image_name:
+                        break
+                if not image_name:
+                    raise RuntimeError("InvokeAI completed, but its session results contained no image output.")
+                image_url = cfg["invoke"] + "/api/v1/images/i/" + urllib.parse.quote(image_name, safe="") + "/full"
+                with urllib.request.urlopen(image_url, timeout=180) as res:
+                    data = res.read()
+                multipart(cfg["server"] + "/api/ai/worker/jobs/" + job["id"] + "/complete", token, image_name, data)
+                print("Saved to the Vaultcast picture library.")
+                return
+            # Keep the queue lease alive while InvokeAI loads models or decodes the image.
+            if time.time() - last_update >= 30:
+                try:
+                    request(cfg["server"] + "/api/ai/worker/jobs/" + job["id"] + "/progress", "POST", {"progress": current_progress[0]}, headers)
+                    last_update = time.time()
+                except Exception:
+                    pass
+            time.sleep(3)
+    finally:
+        if progress_client is not None and progress_client.connected:
+            progress_client.disconnect()
 
 
 def main():
@@ -163,6 +227,7 @@ def main():
                     run_job(cfg, job)
                 except Exception as exc:
                     print("Job failed:", exc)
+                    traceback.print_exc()
                     try:
                         request(cfg["server"] + "/api/ai/worker/jobs/" + job["id"] + "/fail", "POST", {"error": str(exc)}, {"X-Vaultcast-Worker": token})
                     except Exception:

@@ -25,6 +25,8 @@ body[data-mode="ai"] { --accent: #a78bfa; --accent-2: #38bdf8; }
 .ai-progress-wrap { display:flex; align-items:center; gap:9px; margin:10px 0; }
 .ai-progress { flex:1; height:7px; overflow:hidden; border-radius:99px; background:var(--surface-3); }
 .ai-progress span { display:block; height:100%; border-radius:inherit; background:linear-gradient(90deg,var(--accent),var(--accent-2)); transition:width .4s ease; }
+.ai-progress.ai-progress-indeterminate span { width:35%!important; animation:ai-progress-sweep 1.4s ease-in-out infinite alternate; }
+@keyframes ai-progress-sweep { from { transform:translateX(-80%); } to { transform:translateX(280%); } }
 .ai-pair-code { display:inline-block; padding:10px 14px; border:1px solid var(--border); border-radius:var(--radius-md); background:var(--surface-1); font-size:1.25rem; letter-spacing:.12em; }
 .ai-pair-result { display:flex; flex-direction:column; align-items:flex-start; gap:8px; }
 .vc-grow { flex: 1 1 auto; min-width: 0; }
