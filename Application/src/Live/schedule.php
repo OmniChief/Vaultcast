@@ -211,22 +211,6 @@ function relay_media_map($station) {
     return $map;
 }
 
-function relay_strip_legacy_schedule($station) {
-    if (!is_array($station)) return array();
-    if (!isset($station['channels']) || !is_array($station['channels'])) $station['channels'] = array();
-    foreach ($station['channels'] as &$channel) {
-        if (!is_array($channel)) continue;
-        foreach (array('playlist', 'rollingSchedule', 'fillHours', 'commercialEveryMs', 'commercialsPerBreak', 'bumperBefore', 'seed') as $legacy) unset($channel[$legacy]);
-    }
-    unset($channel);
-    unset($station['cycles'], $station['playlists']);
-    return $station;
-}
-
-function relay_prepare_station($station) {
-    return relay_enrich_station_episodes(relay_strip_legacy_schedule($station));
-}
-
 function relay_air_block($station, $channelId, $unixMs) {
     require_once __DIR__ . '/tvstudio.php';
     if (!tvs_has_calendar($channelId)) return null;
