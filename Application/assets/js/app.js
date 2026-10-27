@@ -13806,6 +13806,9 @@ function viewCollectionDetail(){
         h('option', { value:'sequential', selected:s.order === 'sequential', text:'In order' }), h('option', { value:'shuffle', selected:s.order === 'shuffle', text:'Shuffle each airing' }) ]) ]));
       pane.appendChild(tvsMediaPicker(s.mediaIds, function(ids){ if (s.contentType === 'media' && ids.length > 1) ids.splice(0, ids.length - 1); set('mediaIds', ids); }, ['movie','episode','bumper','commercial','other']));
     }
+    pane.appendChild(h('label', { className:'tvs-check' }, [ h('input', { type:'checkbox', checked:!!s.singleEpisode, onChange:function(e){ set('singleEpisode', e.target.checked); } }), ' Play only one episode / programme per slot' ]));
+    pane.appendChild(h('label', { className:'tvs-check' }, [ h('input', { type:'checkbox', checked:!!s.fitOnly, onChange:function(e){ set('fitOnly', e.target.checked); } }), ' Only play programmes that fit' ]));
+    pane.appendChild(h('p', { className:'muted', text:'Only play programmes that fit includes ad breaks. Remaining time uses complete items from the channel filler list, then other channel programmes that fit. If nothing fits, the channel is off air until the next programme.' }));
     pane.appendChild(h('label', { className:'tvs-check' }, [ h('input', { type:'checkbox', checked:s.ads, onChange:function(e){ set('ads', e.target.checked); } }), ' Allow ad breaks in this slot' ]));
     pane.appendChild(h('div', { className:'tvs-row' }, [
       h('label', {}, [ 'From', h('input', { type:'date', value:s.validFrom, onChange:function(e){ set('validFrom', e.target.value); } }) ]),
