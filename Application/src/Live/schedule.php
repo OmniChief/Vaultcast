@@ -752,3 +752,47 @@ function relay_build_m3u($station, $channelId, $origin) {
     }
     return implode("\n", $lines) . "\n";
 }
+
+/** Guide-only rows: keep programmes continuous across inserted advertising. */
+function relay_guide_blocks($blocks) {
+    $out = array();
+    $pendingStart = null;
+    $pendingEnd = null;
+    $contentEnd = null;
+    $offsetEnd = null;
+    foreach ($blocks as $b) {
+        $last = count($out) - 1;
+        $legacyAd = !empty($b['generated']) && ($b['kind'] ?? '') === 'commercial' && empty($b['advert']);
+        if (!empty($b['advert']) || $legacyAd) {
+            // Legacy rotation commercials follow a programme; Studio adverts
+            // may instead be a pre-roll belonging to the next programme.
+            if ($legacyAd && $last >= 0 && $out[$last]['endUnix'] === $b['startUnix']) {
+                $out[$last]['endUnix'] = $b['endUnix'];
+                $out[$last]['durationMs'] = $b['endUnix'] - $out[$last]['startUnix'];
+                $contentEnd = $b['endUnix'];
+            } else {
+                if ($pendingEnd !== $b['startUnix']) $pendingStart = $b['startUnix'];
+                $pendingEnd = $b['endUnix'];
+            }
+            continue;
+        }
+        $bridge = $pendingStart !== null && $pendingStart === $contentEnd && $pendingEnd === $b['startUnix'];
+        $offset = (int)($b['mediaOffsetMs'] ?? 0);
+        $continuation = $last >= 0 && $offset > 0 && $offset === $offsetEnd
+            && ($out[$last]['mediaId'] ?? null) === ($b['mediaId'] ?? null)
+            && ($out[$last]['slotId'] ?? '') === ($b['slotId'] ?? '')
+            && ($contentEnd === $b['startUnix'] || $bridge);
+        $offsetEnd = $offset + $b['endUnix'] - $b['startUnix'];
+        $contentEnd = $b['endUnix'];
+        if ($continuation) {
+            $out[$last]['endUnix'] = $b['endUnix'];
+            $out[$last]['durationMs'] = $b['endUnix'] - $out[$last]['startUnix'];
+        } else {
+            if ($pendingEnd === $b['startUnix']) $b['startUnix'] = $pendingStart;
+            $b['durationMs'] = $b['endUnix'] - $b['startUnix'];
+            $out[] = $b;
+        }
+        $pendingStart = $pendingEnd = null;
+    }
+    return $out;
+}
