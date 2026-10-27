@@ -13830,11 +13830,13 @@ function viewCollectionDetail(){
     pane.appendChild(h('p', { className:'muted', text:'Only play programmes that fit includes ad breaks. Remaining time uses complete items from the channel filler list, then other channel programmes that fit. If nothing fits, the channel is off air until the next programme.' }));
     pane.appendChild(h('label', { className:'tvs-check' }, [ h('input', { type:'checkbox', checked:s.ads, onChange:function(e){ set('ads', e.target.checked); } }), ' Allow ad breaks in this slot' ]));
     pane.appendChild(h('label', {}, [ 'If the programme runs over', h('select', { onChange:function(e){ set('overrun', e.target.value, true); } }, [
-      h('option', { value:'boundary', selected:s.overrun !== 'shift', text:'Use the slot boundary (current rules)' }),
+      h('option', { value:'boundary', selected:s.overrun !== 'shift' && s.overrun !== 'skip', text:'Use the slot boundary (current rules)' }),
+      h('option', { value:'skip', selected:s.overrun === 'skip', text:'Skip and pad' }),
       h('option', { value:'shift', selected:s.overrun === 'shift', text:'Finish, then shift the schedule' }) ]) ]));
+    if (s.overrun === 'skip') pane.appendChild(h('p', { className:'muted', text:'Skip programmes that cannot finish, including their ad breaks. Try another item from this slot’s chosen programmes or series, then pad the remaining time using only the selected filler pool and ad list. The next slot keeps its planned start.' }));
     if (s.overrun === 'shift') pane.appendChild(h('p', { className:'muted', text:'Play the selected content completely, including ad breaks. Later programmes start late when needed, and their padding shrinks first to recover the planned timing. A series plays one episode; chosen programmes play once.' }));
-    pane.appendChild(h('label', { className:'tvs-check' }, [ h('input', { type:'checkbox', checked:!!s.paddingEnabled, onChange:function(e){ set('paddingEnabled', e.target.checked, true); } }), ' Pad to the end of this time slot' ]));
-    if (s.paddingEnabled) {
+    pane.appendChild(h('label', { className:'tvs-check' }, [ h('input', { type:'checkbox', checked:!!s.paddingEnabled || s.overrun === 'skip', disabled:s.overrun === 'skip', onChange:function(e){ set('paddingEnabled', e.target.checked, true); } }), ' Pad to the end of this time slot' ]));
+    if (s.paddingEnabled || s.overrun === 'skip') {
       pane.appendChild(tvsListSelect('Padding filler pool', tvs.studio.fillerLists, s.paddingFillerListId || '', function(v){ set('paddingFillerListId', v); }));
       pane.appendChild(tvsListSelect('Padding ad list', tvs.studio.adPools, s.paddingAdPoolId || '', function(v){ set('paddingAdPoolId', v); }));
       pane.appendChild(h('p', { className:'muted', text:'Play the selected programmes once (one episode for a series), including channel ad breaks, then pad using only these lists. Complete items are combined to fit the remaining time as closely as possible. Programmes that overrun the slot are not started unless Finish, then shift is selected.' }));
@@ -13852,6 +13854,7 @@ function viewCollectionDetail(){
           if (!pane.isConnected || sequence !== durationSequence) return;
           if (!j || !j.ok) throw new Error('Duration calculation failed');
           if (!j.available) { durationSummary.textContent = 'No airing of this slot in the next eight days. Check its days and date range.'; return; }
+          if (!j.requiredMs && s.overrun === 'skip') { durationSummary.textContent = 'No programme fits. Padding: ' + exactDuration(j.paddingMs) + '. Remaining gap: ' + exactDuration(j.gapMs) + '.'; return; }
           if (!j.requiredMs) { durationSummary.textContent = 'Select playable media with a known duration to calculate this slot.'; return; }
           durationSummary.textContent = 'Next airing: programme ' + exactDuration(j.programmeMs) + ' + adverts ' + exactDuration(j.adsMs) + ' = ' + exactDuration(j.requiredMs) + '. Padding: ' + exactDuration(j.paddingMs) + '. Remaining gap: ' + exactDuration(j.gapMs) + '.';
           if (j.delayMs || j.overrunMs) durationSummary.textContent += ' Starts ' + exactDuration(j.delayMs) + ' late; finishes ' + exactDuration(j.overrunMs) + ' after its planned end.';
