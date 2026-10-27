@@ -9,11 +9,20 @@ body[data-mode="ai"] { --accent: #a78bfa; --accent-2: #38bdf8; }
 .ai-summary { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; }
 .ai-stat { display:flex; flex-direction:column; gap:3px; padding:14px 16px; border-radius:var(--radius-lg); background:var(--surface-1); border:1px solid var(--border); }
 .ai-stat strong { font-size:1.45rem; }
-.ai-stat span, .ai-size-field span { color:var(--muted); font-size:.86rem; }
+.ai-stat span, .ai-number-field span { color:var(--muted); font-size:.86rem; }
 .ai-form textarea { width:100%; box-sizing:border-box; resize:vertical; padding:12px; border:1px solid var(--border); border-radius:var(--radius-md); color:var(--text); background:var(--surface-1); font:inherit; }
 .ai-form-actions { display:flex; flex-wrap:wrap; align-items:end; justify-content:space-between; gap:12px; }
-.ai-size-field { display:flex; flex-direction:column; gap:6px; min-width:150px; }
-.ai-size-field select { padding:9px 12px; border:1px solid var(--border); border-radius:var(--radius-md); color:var(--text); background:var(--surface-1); font:inherit; }
+.ai-settings-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:10px; margin:14px 0; }
+.ai-number-field { display:flex; flex-direction:column; gap:6px; min-width:0; }
+.ai-number-field input, .ai-number-field select { width:100%; box-sizing:border-box; padding:9px 10px; border:1px solid var(--border); border-radius:var(--radius-md); color:var(--text); background:var(--surface-1); font:inherit; }
+.ai-advanced { margin:14px 0; padding:10px 12px; border:1px solid var(--border); border-radius:var(--radius-md); }
+.ai-advanced summary { cursor:pointer; font-weight:600; }
+.ai-advanced-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:10px; padding-top:12px; }
+.ai-check { display:flex; align-items:center; gap:8px; }
+.ai-note { margin:0; }
+.ai-worker-panel { margin-top:8px; }
+.ai-worker-summary { display:flex; align-items:center; justify-content:space-between; gap:12px; cursor:pointer; list-style-position:inside; }
+.ai-worker-summary h2 { display:inline; margin:0; font-size:1rem; }
 .ai-job-list { display:grid !important; grid-template-columns:repeat(auto-fill,minmax(min(100%,260px),1fr)); align-items:start; }
 .ai-job { min-width:0; overflow:hidden; padding:12px; border:1px solid var(--border); border-radius:var(--radius-lg); background:var(--surface-1); }
 .ai-job-head { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:9px; font-size:.8rem; }

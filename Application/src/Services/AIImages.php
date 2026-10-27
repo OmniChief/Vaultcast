@@ -62,18 +62,45 @@ final class AIImages
         if ($prompt === '' || mb_strlen($prompt) > 1200) throw new DomainException('Enter a prompt of up to 1,200 characters.');
         $negative = trim((string)($body['negative_prompt'] ?? ''));
         if (mb_strlen($negative) > 600) throw new DomainException('The negative prompt must be 600 characters or fewer.');
-        $width = (int)($body['width'] ?? 768); $height = (int)($body['height'] ?? 768);
-        if (!in_array($width, [512, 768, 1024], true) || !in_array($height, [512, 768, 1024], true) || $width * $height > 1048576) throw new DomainException('Choose a supported image size.');
-        $now = time(); $id = self::id();
-        self::mutate(self::JOBS, static function (&$jobs) use ($user, $prompt, $negative, $width, $height, $now, $id) {
+        $width = filter_var($body['width'] ?? 1024, FILTER_VALIDATE_INT); $height = filter_var($body['height'] ?? 1024, FILTER_VALIDATE_INT);
+        if ($width === false || $height === false || $width < 512 || $height < 512 || $width > 1536 || $height > 1536 || $width % 8 !== 0 || $height % 8 !== 0 || $width * $height > 1048576) throw new DomainException('Use dimensions from 512 to 1536 pixels, in multiples of 8, with no more than 1 megapixel total.');
+        $steps = filter_var($body['steps'] ?? 30, FILTER_VALIDATE_INT);
+        if ($steps === false || $steps < 1 || $steps > 100) throw new DomainException('Choose between 1 and 100 generation steps.');
+        $count = filter_var($body['count'] ?? 1, FILTER_VALIDATE_INT);
+        if ($count === false || $count < 1 || $count > 3) throw new DomainException('Choose between 1 and 3 images per request.');
+        $cfgScale = filter_var($body['cfg_scale'] ?? 7, FILTER_VALIDATE_FLOAT);
+        if ($cfgScale === false || !is_finite((float)$cfgScale) || $cfgScale < 0 || $cfgScale > 30) throw new DomainException('CFG scale must be between 0 and 30.');
+        $hiT1 = filter_var($body['hidiffusion_t1_ratio'] ?? 0.4, FILTER_VALIDATE_FLOAT);
+        $hiT2 = filter_var($body['hidiffusion_t2_ratio'] ?? 0, FILTER_VALIDATE_FLOAT);
+        if ($hiT1 === false || !is_finite((float)$hiT1) || $hiT1 < 0 || $hiT1 > 1 || $hiT2 === false || !is_finite((float)$hiT2) || $hiT2 < 0 || $hiT2 > 1) throw new DomainException('HiDiffusion ratios must be between 0 and 1.');
+        $schedulers = ['ddim','ddpm','deis','deis_k','lms','lms_k','pndm','heun','heun_k','euler','euler_k','euler_a','kdpm_2','kdpm_2_k','kdpm_2_a','kdpm_2_a_k','dpmpp_2s','dpmpp_2s_k','dpmpp_2m','dpmpp_2m_k','dpmpp_2m_sde','dpmpp_2m_sde_k','dpmpp_3m','dpmpp_3m_k','dpmpp_sde','dpmpp_sde_k','er_sde','unipc','unipc_k','lcm','tcd'];
+        $scheduler = (string)($body['scheduler'] ?? 'euler_a');
+        if (!in_array($scheduler, $schedulers, true)) throw new DomainException('Choose a scheduler supported by InvokeAI.');
+        $seed = null;
+        if (array_key_exists('seed', $body) && $body['seed'] !== null && $body['seed'] !== '') {
+            $seed = filter_var($body['seed'], FILTER_VALIDATE_INT);
+            if ($seed === false || $seed < 0 || $seed > 4294967295) throw new DomainException('Seed must be a whole number from 0 to 4,294,967,295, or leave it blank for a random seed.');
+        }
+        $boolean = static function (string $key, bool $default = false) use ($body): bool { return filter_var($body[$key] ?? $default, FILTER_VALIDATE_BOOLEAN); };
+        $settings = ['steps'=>$steps, 'cfg_scale'=>(float)$cfgScale, 'scheduler'=>$scheduler, 'seed'=>$seed,
+            'hidiffusion'=>$boolean('hidiffusion'), 'hidiffusion_raunet'=>$boolean('hidiffusion_raunet', true), 'hidiffusion_window_attn'=>$boolean('hidiffusion_window_attn', true),
+            'hidiffusion_t1_ratio'=>(float)$hiT1, 'hidiffusion_t2_ratio'=>(float)$hiT2, 'fp32'=>$boolean('fp32'), 'tiled'=>$boolean('tiled'),
+            'seamless_x'=>$boolean('seamless_x'), 'seamless_y'=>$boolean('seamless_y')];
+        $now = time(); $ids = [];
+        for ($i = 0; $i < $count; $i++) $ids[] = self::id();
+        self::mutate(self::JOBS, static function (&$jobs) use ($user, $prompt, $negative, $width, $height, $settings, $now, $ids, $count) {
             $ownQueued = 0;
             foreach ($jobs as $job) if ((string)($job['user_id'] ?? '') === (string)$user['id'] && in_array($job['status'] ?? '', ['queued', 'running'], true)) $ownQueued++;
-            if ($ownQueued >= 3) throw new DomainException('You already have three image requests queued or generating.');
-            $jobs[] = ['id' => $id, 'user_id' => (string)$user['id'], 'prompt' => $prompt, 'negative_prompt' => $negative, 'width' => $width, 'height' => $height,
-                'status' => 'queued', 'progress' => 0, 'created_at' => $now, 'updated_at' => $now, 'picture_id' => null, 'error' => ''];
+            if ($ownQueued + $count > 3) throw new DomainException('You can have up to three image requests queued or generating at a time.');
+            foreach ($ids as $i => $id) {
+                $jobSettings = $settings;
+                if ($jobSettings['seed'] !== null) $jobSettings['seed'] = ($jobSettings['seed'] + $i) % 4294967296;
+                $jobs[] = ['id' => $id, 'user_id' => (string)$user['id'], 'prompt' => $prompt, 'negative_prompt' => $negative, 'width' => $width, 'height' => $height] + $jobSettings + [
+                    'status' => 'queued', 'progress' => 0, 'created_at' => $now + $i, 'updated_at' => $now, 'picture_id' => null, 'error' => ''];
+            }
             if (count($jobs) > 2000) $jobs = array_values(array_filter($jobs, static function ($j) { return in_array($j['status'] ?? '', ['queued', 'running'], true) || (int)($j['created_at'] ?? 0) > time() - 86400 * 7; }));
         });
-        return ['ok' => true, 'job_id' => $id];
+        return ['ok' => true, 'job_ids' => $ids];
     }
     public static function cancel(array $user, string $id): array {
         self::signed($user);
@@ -147,7 +174,7 @@ final class AIImages
                 }
                 return null;
             });
-            json_out(['ok' => true, 'job' => $job ? array_intersect_key($job, array_flip(['id','prompt','negative_prompt','width','height'])) : null]);
+            json_out(['ok' => true, 'job' => $job ? array_intersect_key($job, array_flip(['id','prompt','negative_prompt','width','height','steps','cfg_scale','scheduler','seed','hidiffusion','hidiffusion_raunet','hidiffusion_window_attn','hidiffusion_t1_ratio','hidiffusion_t2_ratio','fp32','tiled','seamless_x','seamless_y'])) : null]);
         }
         if ($action === 'progress' && $method === 'POST') {
             $pct = max(1, min(99, (int)(body_json()['progress'] ?? 1)));

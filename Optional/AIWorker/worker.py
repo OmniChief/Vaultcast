@@ -73,6 +73,10 @@ def edge(src, src_field, dst, dst_field):
 def graph_for(job, model):
     """Build the simple SDXL text-to-image graph accepted by InvokeAI's executable-graph API."""
     ids = {name: name + "-" + uuid.uuid4().hex[:8] for name in ("loader", "pos", "neg", "pc", "nc", "noise", "denoise", "decode")}
+    width, height = int(job["width"]), int(job["height"])
+    seed = job.get("seed")
+    if seed is None:
+        seed = random.randint(0, 4294967295)
     model_id = {k: model[k] for k in ("key", "hash", "name", "base", "type") if k in model}
     if not all(k in model_id for k in ("key", "hash", "name", "base", "type")):
         raise RuntimeError("InvokeAI model details are incomplete (need key, hash, name, base and type). Re-pair after updating InvokeAI.")
@@ -80,14 +84,24 @@ def graph_for(job, model):
         ids["loader"]: {"id": ids["loader"], "type": "sdxl_model_loader", "model": model_id, "is_intermediate": True, "use_cache": True},
         ids["pos"]: {"id": ids["pos"], "type": "string", "value": job["prompt"], "is_intermediate": True, "use_cache": True},
         ids["neg"]: {"id": ids["neg"], "type": "string", "value": job.get("negative_prompt", ""), "is_intermediate": True, "use_cache": True},
-        ids["pc"]: {"id": ids["pc"], "type": "sdxl_compel_prompt", "is_intermediate": True, "use_cache": True},
-        ids["nc"]: {"id": ids["nc"], "type": "sdxl_compel_prompt", "is_intermediate": True, "use_cache": True},
-        ids["noise"]: {"id": ids["noise"], "type": "noise", "width": int(job["width"]), "height": int(job["height"]), "seed": random.randint(0, 2**31 - 1), "use_cpu": False, "is_intermediate": True, "use_cache": False},
-        ids["denoise"]: {"id": ids["denoise"], "type": "denoise_latents", "steps": 30, "cfg_scale": 7.0, "scheduler": "euler", "denoising_start": 0.0, "denoising_end": 1.0, "is_intermediate": True, "use_cache": False},
-        ids["decode"]: {"id": ids["decode"], "type": "l2i", "is_intermediate": False, "use_cache": False},
+        ids["pc"]: {"id": ids["pc"], "type": "sdxl_compel_prompt", "original_width": width, "original_height": height, "target_width": width, "target_height": height, "is_intermediate": True, "use_cache": True},
+        ids["nc"]: {"id": ids["nc"], "type": "sdxl_compel_prompt", "original_width": width, "original_height": height, "target_width": width, "target_height": height, "is_intermediate": True, "use_cache": True},
+        ids["noise"]: {"id": ids["noise"], "type": "noise", "width": width, "height": height, "seed": int(seed), "use_cpu": False, "is_intermediate": True, "use_cache": False},
+        ids["denoise"]: {"id": ids["denoise"], "type": "denoise_latents", "steps": int(job.get("steps", 30)), "cfg_scale": float(job.get("cfg_scale", 7)), "scheduler": job.get("scheduler", "euler_a"), "denoising_start": 0.0, "denoising_end": 1.0, "hidiffusion": bool(job.get("hidiffusion", False)), "hidiffusion_raunet": bool(job.get("hidiffusion_raunet", True)), "hidiffusion_window_attn": bool(job.get("hidiffusion_window_attn", True)), "hidiffusion_t1_ratio": float(job.get("hidiffusion_t1_ratio", 0.4)), "hidiffusion_t2_ratio": float(job.get("hidiffusion_t2_ratio", 0.0)), "is_intermediate": True, "use_cache": False},
+        ids["decode"]: {"id": ids["decode"], "type": "l2i", "fp32": bool(job.get("fp32", False)), "tiled": bool(job.get("tiled", False)), "is_intermediate": False, "use_cache": False},
     }
+    seamless = bool(job.get("seamless_x", False) or job.get("seamless_y", False))
+    if seamless:
+        ids["seamless"] = "seamless-" + uuid.uuid4().hex[:8]
+        nodes[ids["seamless"]] = {"id": ids["seamless"], "type": "seamless", "seamless_x": bool(job.get("seamless_x", False)), "seamless_y": bool(job.get("seamless_y", False)), "is_intermediate": True, "use_cache": True}
+        unet_node, unet_field = ids["seamless"], "unet"
+        vae_node, vae_field = ids["seamless"], "vae"
+    else:
+        unet_node, unet_field = ids["loader"], "unet"
+        vae_node, vae_field = ids["loader"], "vae"
     edges = [
-        edge(ids["loader"], "unet", ids["denoise"], "unet"),
+        edge(ids["loader"], "unet", ids["seamless"], "unet") if seamless else edge(ids["loader"], "unet", ids["denoise"], "unet"),
+        edge(ids["loader"], "vae", ids["seamless"], "vae") if seamless else edge(ids["loader"], "vae", ids["decode"], "vae"),
         edge(ids["loader"], "clip", ids["pc"], "clip"), edge(ids["loader"], "clip2", ids["pc"], "clip2"),
         edge(ids["loader"], "clip", ids["nc"], "clip"), edge(ids["loader"], "clip2", ids["nc"], "clip2"),
         edge(ids["pos"], "value", ids["pc"], "prompt"), edge(ids["pos"], "value", ids["pc"], "style"),
@@ -95,8 +109,10 @@ def graph_for(job, model):
         edge(ids["pc"], "conditioning", ids["denoise"], "positive_conditioning"),
         edge(ids["nc"], "conditioning", ids["denoise"], "negative_conditioning"),
         edge(ids["noise"], "noise", ids["denoise"], "noise"),
-        edge(ids["denoise"], " latents".strip(), ids["decode"], "latents"), edge(ids["loader"], "vae", ids["decode"], "vae"),
+        edge(ids["denoise"], "latents", ids["decode"], "latents"),
     ]
+    if seamless:
+        edges.extend([edge(unet_node, unet_field, ids["denoise"], "unet"), edge(vae_node, vae_field, ids["decode"], "vae")])
     return {"id": "vaultcast-" + uuid.uuid4().hex, "nodes": nodes, "edges": edges}
 
 
