@@ -536,15 +536,9 @@ function tvs_xmltv($station, $days = null) {
         $id = 'relay.' . $ch['id'];
         $x[] = '  <channel id="' . tvs_xml($id) . '"><display-name>' . tvs_xml($ch['name']) . '</display-name><display-name>' . tvs_xml($ch['number']) . '</display-name>'
             . (!empty($st['channels'][$ch['id']]['logo']) ? '<icon src="' . tvs_xml($st['channels'][$ch['id']]['logo']) . '"/>' : '') . '</channel>';
-        $prev = null;
-        foreach (relay_materialize($station, $ch['id'], $from, $to) as $b) {
-            if (!empty($b['advert'])) continue;
-            // merge contiguous segments of the same programme split by ad breaks
-            if ($prev && $prev['mediaId'] === $b['mediaId'] && ($prev['slotId'] ?? '') === ($b['slotId'] ?? '')) { $prev['endUnix'] = $b['endUnix']; continue; }
-            if ($prev) $progs[] = array($id, $prev);
-            $prev = $b;
+        foreach (relay_guide_blocks(relay_materialize($station, $ch['id'], $from, $to)) as $b) {
+            $progs[] = array($id, $b);
         }
-        if ($prev) $progs[] = array($id, $prev);
     }
     if ($st['epg']['includeIptv']) {
         require_once __DIR__ . '/epg.php';
