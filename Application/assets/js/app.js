@@ -8462,7 +8462,7 @@ try {
       {title:'Your account',description:'Your identity, personal preferences and saved games.',items:[{id:'inbox',label:'Inbox',hint:'Messages, invitations and anything that needs you'},{id:'settings-home',label:'Settings overview',hint:'Find a setting or choose a task'},{id:'account',label:'Profile & security',hint:'Display name, avatar, password and sign out'},{id:'parental',label:'Parental controls',hint:'Kids profile, age limits and PIN'},{id:'appearance',label:'Appearance & motion',hint:'Themes, animation and reduced motion'},{id:'playback',label:'Playback & skipping',hint:'Autoplay, mini player, intros and credits'},{id:'home-preferences',label:'Home & spoilers',hint:'Start page, compact layout and unwatched episode details'},{id:'cloud-saves',label:'Cloud saves',hint:'Save slots, backups, uploads and sharing'}]},
       {title:'Library & metadata',description:'Connect folders, organise titles and correct missing information.',admin:true,items:[{id:'sections',label:'Libraries & folders',section:'Sources',hint:'Media types, paths and enabled libraries'},{id:'scan',label:'Scan for media',section:'Sources',hint:'Discover new or removed files'},{id:'media',label:'Media manager',section:'Organise',hint:'Browse the catalogue, find misplaced files and edit library records'},{id:'collections',label:'Collections',section:'Organise',hint:'Film sets and series groups'},{id:'matching',label:'Metadata matching',section:'Metadata',hint:'Fix titles, posters and descriptions'},{id:'reports',label:'User reports',section:'Metadata',hint:'Review incorrect labels reported by users'}]},
       {title:'Artwork & design',description:'Site branding, bundled posters and library artwork.',admin:true,items:[{id:'site-artwork',label:'Site & theme posters',hint:'Replace default artwork and create smaller WebP images'},{id:'posters',label:'Library artwork',hint:'Fetch missing movie, show, season and game images'},{id:'artwork-integrity',label:'Repair missing images',hint:'Find broken records and missing files'},{id:'poster-optimise',label:'Optimise library images',hint:'Generate full, grid and search WebP variants'}]},
-      {title:'PseudoTV Studio',description:'Manage channels, programme schedules and the live media library.',admin:true,items:[{id:'live-studio',label:'TV Studio',hint:'Schedule programmes, manage channels, filler, adverts and status'},{id:'live-playlists',label:'Rotation playlists',section:'Additional rotation tools',hint:'Reusable channel programme rotations'},{id:'live-schedule',label:'Rotation rules',section:'Additional rotation tools',hint:'Legacy rolling schedule rules'}]},
+      {title:'PseudoTV Studio',description:'Manage channels, programmes and the live media library.',admin:true,items:[{id:'live-studio',label:'TV Studio',hint:'Schedule programmes, manage channels, filler, adverts and status'}]},
       {title:'IPTV & Guide Matching',description:'Manage IPTV feeds and match channels to programme guides.',admin:true,items:[{id:'live-iptv',label:'IPTV & Guide Matching',hint:'Feeds, channel mapping and EPG'}]},
       {title:'Radio Stations',description:'Manage shared radio stations.',admin:true,items:[{id:'live-radio',label:'Radio stations',hint:'Add stations or browse the public directory'}]},
       {title:'Station & Outputs',description:'Configure station identity and broadcast outputs.',admin:true,items:[{id:'live-station',label:'Station & outputs',hint:'Streams, guide exports and station configuration'}]},
@@ -8489,6 +8489,7 @@ try {
     if (state.settingsSection === 'live') state.settingsSection = 'live-studio';
     if (state.settingsSection === 'live-channels') { state.settingsSection = 'live-studio'; tvs.tab = 'channels'; }
     if (state.settingsSection === 'live-library') { state.settingsSection = 'live-studio'; tvs.tab = 'media'; }
+    if (state.settingsSection === 'live-playlists' || state.settingsSection === 'live-schedule') { state.settingsSection = 'live-studio'; tvs.tab = 'schedule'; }
     if (state.settingsSection === 'library') state.settingsSection = 'media';
     if (state.settingsSection === 'convert') state.settingsSection = 'video-optimise';
     if (flat.indexOf(state.settingsSection) < 0) state.settingsSection = 'settings-home';
@@ -13369,8 +13370,6 @@ function viewCollectionDetail(){
       'live-studio': { title: 'PseudoTV Studio', blurb: 'Weekly calendar per channel, filler that plays between slots, ad breaks, numbering, logos and access, XMLTV / M3U outputs, recordings and stream status.' },
       'live-channels': { title: 'Relay channels', blurb: 'Number, name and slogan each Relay channel, put it on or off air, and tick the movies, TV shows (whole show, season or single episodes), commercials and bumpers it may air.' },
       'live-library': { title: 'Relay media library', blurb: 'Everything Relay can schedule. Add movies or whole shows from the server catalogue, add files by URL, edit titles / season / episode / duration, or remove items.' },
-      'live-playlists': { title: 'Playlists & programming', blurb: 'Set programs air first, in order; under the fill window Relay fills at random from the channel library. Commercial breaks, bumpers and the random seed live here too.' },
-      'live-schedule': { title: 'Rolling schedule', blurb: '24-hour wall-clock slots: rotate a movie nightly, or advance one TV episode per day. Deterministic from the calendar day.' },
       'live-radio': { title:'Radio stations', blurb:'Your shared radio lineup. Find public stations or add a direct stream, then listen while browsing.' },
       'live-iptv': { title: 'IPTV feeds', blurb: 'M3U playlist feeds, browse and search channels, favourites lineup, on-demand stream Check, inactive filter, and XMLTV EPG.' },
       'live-station': { title: 'Station & outputs', blurb: 'Station identity, media base URL, timeshift history, guide lookahead, external-player stream URLs, and JSON backup / merge import.' }
@@ -13422,9 +13421,7 @@ function viewCollectionDetail(){
     else p = liveLoadStation(!liveSet.dirty).then(function(){
       if(!host.isConnected||state.settingsSection!==sec)return;
       liveSyncDirty();
-      if (sec === 'live-schedule') paintLiveSchedule(host);
-      else if (sec === 'live-playlists') paintLivePlaylists(host);
-      else if (sec === 'live-station') paintLiveStation(host);
+      if (sec === 'live-station') paintLiveStation(host);
       else if (sec === 'live-library') paintLiveLibrary(host);
       else paintLiveChannels(host);
     });
@@ -14663,209 +14660,6 @@ function viewCollectionDetail(){
     paintList();
   }
 
-  /* ---------------- Playlists & programming ---------------- */
-  function paintLivePlaylists(host){
-    var ch = liveCurrentChannel();
-    host.innerHTML = '';
-    if (!ch) {
-      host.appendChild(h('p', { className: 'muted', text: 'Add a Relay channel first.' }));
-      return;
-    }
-    liveEnsureChannel(ch);
-    var meterCard = h('div', { className: 'settings-card' });
-    var setCard = h('div', { className: 'settings-card live-plist-card' });
-    var libHost = h('div');
-
-    function paintMeter(){
-      var setMs = 0;
-      ch.playlist.forEach(function(id){ var m = liveMediaById(id); if (m && (m.kind === 'movie' || m.kind === 'episode')) setMs += m.durationMs || 0; });
-      var need = (ch.fillHours || 6) * 3600 * 1000;
-      var pct = Math.min(100, need ? (setMs / need) * 100 : 0);
-      var ok = setMs >= need;
-      meterCard.innerHTML = '';
-      meterCard.appendChild(h('div', { className: 'row-actions', style: 'justify-content:space-between;flex-wrap:wrap' }, [
-        h('h3', { text: 'Channel', style: 'margin:0' }),
-        h('div', { className: 'row-actions' }, [ liveChannelSelect(function(){ paintLivePlaylists(host); }) ])
-      ]));
-      meterCard.appendChild(h('div', { className: 'live-meter' + (ok ? ' ok' : '') }, [ h('span', { style: 'width:' + pct + '%' }) ]));
-      meterCard.appendChild(h('p', { className: 'muted', text: liveFmtDur(setMs) + ' set / ' + (ch.fillHours || 6) + 'h fill window \u2014 ' +
-        (ok ? 'at or over the fill window: this list loops with commercials.' : 'under the fill window: remaining airtime is generated at random from the channel library.') }));
-    }
-    function paintSet(){
-      setCard.innerHTML = '';
-      setCard.appendChild(h('div', { className: 'row-actions', style: 'justify-content:space-between;flex-wrap:wrap' }, [
-        h('h3', { text: 'Set playlist (' + ch.playlist.length + ')', style: 'margin:0' }),
-        ch.playlist.length ? h('button', { className: 'btn ghost sm', type: 'button', text: 'Clear playlist', onClick: function(){
-          if (!confirm('Clear all ' + ch.playlist.length + ' set programs on this channel?')) return;
-          ch.playlist = []; liveDirty(); paintSet(); paintMeter();
-        }}) : null
-      ]));
-      if (!ch.playlist.length) { setCard.appendChild(h('p', { className: 'muted', text: 'Empty \u2014 this channel is fully generated from its library.' })); return; }
-      setCard.appendChild(h('div', { className: 'live-plist live-plist-scroll' }, ch.playlist.map(function(id, index){
-        var m = liveMediaById(id);
-        function mv(to){
-          if (to < 0 || to >= ch.playlist.length) return;
-          var x = ch.playlist.splice(index, 1)[0]; ch.playlist.splice(to, 0, x);
-          liveDirty(); paintSet();
-        }
-        return h('div', { className: 'live-plist-row' }, [
-          h('span', { className: 'muted live-plist-n', text: String(index + 1) }),
-          h('div', { className: 'grow' }, [
-            h('strong', { text: m ? liveGuideTitle(m) : (id + ' (missing from library)') }),
-            m ? h('div', { className: 'muted', text: liveFmtDur(m.durationMs) }) : null
-          ]),
-          h('button', { className: 'btn ghost sm', type: 'button', text: 'Top', title: 'Move to top', disabled: index === 0, onClick: function(){ mv(0); } }),
-          h('button', { className: 'btn ghost sm', type: 'button', text: 'Up', disabled: index === 0, onClick: function(){ mv(index - 1); } }),
-          h('button', { className: 'btn ghost sm', type: 'button', text: 'Down', disabled: index === ch.playlist.length - 1, onClick: function(){ mv(index + 1); } }),
-          h('button', { className: 'btn ghost sm', type: 'button', text: 'Remove', onClick: function(){ ch.playlist.splice(index, 1); liveDirty(); paintSet(); paintMeter(); } })
-        ]);
-      })));
-    }
-    function add(ids){
-      if (!ids.length) return;
-      ids.forEach(function(id){ ch.playlist.push(id); });
-      liveDirty(); paintSet(); paintMeter();
-      liveSetMsg(livePlural(ids.length, 'program') + ' added to the set playlist of ' + (ch.name || ch.id) + '.');
-    }
-
-    var movies = ch.libraryIds.movie.map(liveMediaById).filter(function(m){ return m && m.kind === 'movie'; })
-      .sort(function(a, b){ return liveGuideTitle(a).localeCompare(liveGuideTitle(b)); });
-    var shows = liveShowIndex(ch.libraryIds.episode.map(liveMediaById).filter(function(m){ return m && m.kind === 'episode'; }));
-    var qKey = 'pl:' + ch.id;
-    function paintLib(){
-      libHost.innerHTML = '';
-      var q = String(liveSet.q[qKey] || '').trim().toLowerCase();
-      var mvs = q ? movies.filter(function(m){ return liveBlob(m).indexOf(q) >= 0; }) : movies;
-      var sh = liveFilterShows(shows, q);
-      if (!movies.length && !shows.length) { libHost.appendChild(h('p', { className: 'muted', text: 'No movies or TV ticked on this channel \u2014 tick them under Relay.' })); return; }
-      if (movies.length) {
-        libHost.appendChild(h('h4', { className: 'live-sub', text: 'Movies (' + mvs.length + (mvs.length !== movies.length ? ' of ' + movies.length : '') + ')' }));
-        libHost.appendChild(mvs.length ? h('div', { className: 'live-plist' }, mvs.map(function(m){
-          return h('div', { className: 'live-plist-row' }, [
-            h('div', { className: 'grow' }, [ h('strong', { text: liveGuideTitle(m) }), h('div', { className: 'muted', text: liveFmtDur(m.durationMs) }) ]),
-            h('button', { className: 'btn ghost sm', type: 'button', text: 'Add', onClick: function(){ add([m.id]); } })
-          ]);
-        })) : h('p', { className: 'muted', text: 'No movie matches.' }));
-      }
-      if (shows.length) {
-        libHost.appendChild(h('h4', { className: 'live-sub', text: 'TV (' + sh.length + (sh.length !== shows.length ? ' of ' + shows.length : '') + ' shows)' }));
-        libHost.appendChild(liveTree({
-          stateKey: 'pl:' + ch.id,
-          shows: sh,
-          empty: 'No show or episode matches.',
-          showTail: function(g){ return [ h('button', { className: 'btn ghost sm', type: 'button', text: 'Add all', title: 'Append every listed episode of ' + g.name + ' in order', onClick: function(){ add(liveIds(g.eps)); } }) ]; },
-          seasonTail: function(g, s){ return [ h('button', { className: 'btn ghost sm', type: 'button', text: 'Add season', onClick: function(){ add(liveIds(s.eps)); } }) ]; },
-          epRow: function(m){
-            return h('div', { className: 'live-plist-row live-tree-ep' }, [
-              h('div', { className: 'grow' }, [ h('span', { text: liveEpLabel(m) }), h('span', { className: 'muted', text: ' \u00b7 ' + liveFmtDur(m.durationMs) }) ]),
-              h('button', { className: 'btn ghost sm', type: 'button', text: 'Add', onClick: function(){ add([m.id]); } })
-            ]);
-          }
-        }));
-      }
-    }
-
-    host.appendChild(meterCard);
-    host.appendChild(h('div', { className: 'live-split' }, [
-      h('div', { className: 'settings-card' }, [
-        h('h3', { text: 'Channel library \u2192 set playlist' }),
-        h('div', { className: 'live-filter-bar' }, [ liveSearchInput(qKey, 'Search this channel\u2019s movies, shows, episodes\u2026', paintLib) ]),
-        libHost
-      ]),
-      setCard
-    ]));
-    paintMeter(); paintSet(); paintLib();
-
-    host.appendChild(h('div', { className: 'settings-card stack' }, [
-      h('h3', { text: 'Programming rules' }),
-      h('label', {}, ['Fill if set content is under (hours)', h('input', { type: 'number', min: 1, max: 24, value: ch.fillHours, onChange: function(e){ ch.fillHours = Math.max(1, Math.min(24, Number(e.target.value) || 6)); liveDirty(); paintMeter(); } })]),
-      h('label', {}, ['Commercial break every (minutes)', h('input', { type: 'number', min: 0, value: Math.round((ch.commercialEveryMs||0)/60000), onChange: function(e){ ch.commercialEveryMs = Math.max(0, Number(e.target.value) || 0) * 60000; liveDirty(); } })]),
-      h('label', {}, ['Commercials per break', h('input', { type: 'number', min: 1, max: 8, value: ch.commercialsPerBreak, onChange: function(e){ ch.commercialsPerBreak = Math.max(1, Math.min(8, Number(e.target.value) || 2)); liveDirty(); } })]),
-      h('label', { className: 'check-label' }, [ h('input', { type: 'checkbox', checked: !!ch.bumperBefore, onChange: function(e){ ch.bumperBefore = e.target.checked; liveDirty(); } }), ' Play a bumper before each program' ]),
-      h('label', {}, ['Random seed', h('input', { value: ch.seed || '', onInput: function(e){ ch.seed = e.target.value; liveDirty(); } })]),
-      h('p', { className: 'muted', text: 'The same seed always builds the same fill. Changing seed, playlist or libraries rebuilds the loop on save.' })
-    ]));
-  }
-
-  /* ---------------- Rolling schedule ---------------- */
-  /* the server matches slot.series against media.series (trimmed, case-insensitive) */
-  function liveSeriesValue(g){ return String((g.eps[0] && g.eps[0].series) || '').trim() || g.name; }
-  function liveSameSeries(a, b){ return String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase(); }
-  function paintLiveSchedule(host){
-    var ch = liveCurrentChannel();
-    host.innerHTML = '';
-    if (!ch) {
-      host.appendChild(h('p', { className: 'muted', text: 'Add a Relay channel first.' }));
-      return;
-    }
-    liveEnsureChannel(ch);
-    var rs = ch.rollingSchedule;
-
-    host.appendChild(h('div', { className: 'settings-card' }, [
-      h('div', { className: 'row-actions', style: 'justify-content:space-between;flex-wrap:wrap' }, [
-        h('h3', { text: '24-hour rolling schedule', style: 'margin:0' }),
-        h('div', { className: 'row-actions' }, [ liveChannelSelect(function(){ paintLiveSchedule(host); }) ])
-      ]),
-      h('p', { className: 'muted', text: 'Wall-clock slots overlay the PseudoTV loop in the Live guide. Rotation is deterministic from the calendar day (optional start date) \u2014 no NFO rewrites, no daily cursor files.' }),
-      h('label', { className: 'check-label' }, [
-        h('input', { type: 'checkbox', checked: !!rs.enabled, onChange: function(e){ rs.enabled = e.target.checked; liveDirty(); paintLiveSchedule(host); } }),
-        ' Enable rolling schedule on this channel'
-      ])
-    ]));
-
-    if (!rs.enabled) {
-      host.appendChild(h('p', { className: 'muted', text: 'Enable to add daily slots (e.g. 20:00 movie rotate, or next episode of a show).' }));
-      return;
-    }
-
-    var allMovies = (liveSet.station.media || []).filter(function(m){ return m.kind === 'movie'; });
-    var chMovies = allMovies.filter(function(m){ return ch.libraryIds.movie.indexOf(m.id) >= 0; });
-    var movies = (chMovies.length ? chMovies : allMovies).slice().sort(function(a, b){ return liveGuideTitle(a).localeCompare(liveGuideTitle(b)); });
-    var shows = liveShowIndex((liveSet.station.media || []).filter(function(m){ return m.kind === 'episode' && ch.libraryIds.episode.indexOf(m.id) >= 0; }));
-
-    rs.slots.forEach(function(slot, si){
-      if (!slot.id) slot.id = liveUid('rs');
-      if (!Array.isArray(slot.mediaIds)) slot.mediaIds = [];
-      var type = slot.type || 'movie_rotate';
-      host.appendChild(h('div', { className: 'settings-card stack live-roll-slot' }, [
-        h('div', { className: 'row-actions', style: 'justify-content:space-between' }, [
-          h('h3', { text: 'Slot ' + (si + 1) + ' \u00b7 ' + livePad2(slot.hour != null ? slot.hour : 20) + ':' + livePad2(slot.minute != null ? slot.minute : 0), style: 'margin:0' }),
-          h('button', { className: 'btn ghost', type: 'button', text: 'Remove slot', onClick: function(){
-            rs.slots.splice(si, 1); liveDirty(); paintLiveSchedule(host);
-          }})
-        ]),
-        h('div', { className: 'live-roll-time' }, [
-          h('label', {}, ['Hour', h('input', { type: 'number', min: 0, max: 23, value: slot.hour != null ? slot.hour : 20, onChange: function(e){ slot.hour = Math.max(0, Math.min(23, Number(e.target.value)||0)); liveDirty(); } })]),
-          h('label', {}, ['Minute', h('input', { type: 'number', min: 0, max: 59, value: slot.minute != null ? slot.minute : 0, onChange: function(e){ slot.minute = Math.max(0, Math.min(59, Number(e.target.value)||0)); liveDirty(); } })]),
-          h('label', {}, ['Type', h('select', { onChange: function(e){ slot.type = e.target.value; liveDirty(); paintLiveSchedule(host); } }, [
-            h('option', { value: 'movie_rotate', text: 'Movie rotate (1 per day)', selected: type === 'movie_rotate' }),
-            h('option', { value: 'episode_daily', text: 'Next TV episode (+1 / day)', selected: type === 'episode_daily' })
-          ])]),
-          h('label', {}, ['Start date (optional)', h('input', { type: 'date', value: slot.startDate || '', onChange: function(e){ slot.startDate = e.target.value; liveDirty(); } })])
-        ]),
-        (type === 'episode_daily') ? h('div', {}, [
-          h('label', {}, ['Series', h('select', { onChange: function(e){ slot.series = e.target.value; liveDirty(); } },
-            [h('option', { value: '', text: '\u2014 choose series \u2014', selected: !slot.series })].concat(shows.map(function(g){
-              return h('option', { value: liveSeriesValue(g), text: g.name + ' (' + livePlural(g.eps.length, 'episode') + ')', selected: liveSameSeries(slot.series, liveSeriesValue(g)) });
-            })).concat(slot.series && !shows.some(function(g){ return liveSameSeries(slot.series, liveSeriesValue(g)); }) ? [h('option', { value: slot.series, text: slot.series + ' (not ticked on this channel)', selected: true })] : [])
-          )]),
-          shows.length ? null : h('p', { className: 'muted', text: 'Tick a show on this channel under Relay to schedule its episodes.' })
-        ]) : h('div', {}, [
-          h('p', { className: 'muted', text: (chMovies.length ? 'Movies from this channel\u2019s library.' : 'This channel has no movies ticked \u2014 listing the whole Relay library.') + ' Ticked titles rotate one per calendar day.' }),
-          liveFlatChecks(movies, function(id){ return slot.mediaIds.indexOf(id) >= 0; }, function(ids, on){ liveSetApply(slot, 'mediaIds', ids, on); liveDirty(); }, 'rs:' + slot.id, null, 'No movies in the Relay media library yet.')
-        ]),
-        h('p', { className: 'muted', text: 'Every day at this time Relay airs the next movie in the selection, or the next episode of the chosen show.' })
-      ]));
-    });
-
-    host.appendChild(h('div', { className: 'row-actions' }, [
-      h('button', { className: 'btn', type: 'button', text: 'Add slot', onClick: function(){
-        rs.slots.push({ id: liveUid('rs'), hour: 20, minute: 0, type: 'movie_rotate', mediaIds: [], series: '', startDate: '' });
-        liveDirty(); paintLiveSchedule(host);
-      }})
-    ]));
-  }
-
   /* ---------------- Station, outputs, backup ---------------- */
   function liveMergeStation(incoming){
     var st = liveSet.station;
@@ -15448,6 +15242,7 @@ function viewCollectionDetail(){
     section = section || 'settings-home';
     if(section==='live-channels'){section='live-studio';tvs.tab='channels';}
     if(section==='live-library'){section='live-studio';tvs.tab='media';}
+    if(section==='live-playlists'||section==='live-schedule'){section='live-studio';tvs.tab='schedule';}
     if(section==='library')section='media';
     state.settingsSection = section;
     var adminIds = { maintenance:'maintenance', players:'players', features:'features', libraries:'sections', sections:'sections', scan:'scan', library:'media', media:'media', collections:'collections', streaming:'streaming', directplay:'directplay', convert:'convert', queue:'queue', acquisition:'acquisition', system:'system', general:'general', users:'users', advanced:'advanced', ingest:'ingest', matching:'matching', reports:'reports' };
