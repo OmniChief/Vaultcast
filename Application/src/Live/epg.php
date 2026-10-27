@@ -130,14 +130,13 @@ function epg_pick_for_channel($programsById, $ch) {
 }
 
 function epg_relay_programs($station, $channelId, $from, $to) {
-    $blocks = relay_materialize($station, $channelId, $from, $to);
+    $blocks = relay_guide_blocks(relay_materialize($station, $channelId, $from, $to));
     $byId = relay_media_map($station);
     $out = array();
     foreach ($blocks as $b) {
         $media = null;
         if (!empty($b['mediaId']) && isset($byId[$b['mediaId']])) $media = $byId[$b['mediaId']];
         $meta = relay_enrich_block_fields($b, $media);
-        // Collapse continuous commercials into one guide row optionally? keep titles.
         $out[] = array(
             'startUnix' => $b['startUnix'],
             'endUnix' => $b['endUnix'],
