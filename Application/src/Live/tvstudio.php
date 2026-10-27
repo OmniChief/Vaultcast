@@ -90,6 +90,8 @@ function tvs_normalize_slot($s) {
         'series' => tvs_str($s['series'] ?? '', 160),
         'fillerListId' => tvs_str($s['fillerListId'] ?? '', 60),
         'order' => ($s['order'] ?? '') === 'shuffle' ? 'shuffle' : 'sequential',
+        'singleEpisode' => !empty($s['singleEpisode']),
+        'fitOnly' => !empty($s['fitOnly']),
         'ads' => !isset($s['ads']) || !empty($s['ads']),
         'color' => preg_match('/^#[0-9a-fA-F]{6}$/', (string)($s['color'] ?? '')) ? $s['color'] : '',
         'validFrom' => preg_match('/^\d{4}-\d{2}-\d{2}$/', (string)($s['validFrom'] ?? '')) ? $s['validFrom'] : '',
@@ -264,10 +266,31 @@ function tvs_block($station, $channelId, $item, $start, $dur, $offset, $extra = 
  * Fill [start, end) from a list of items, inserting ad breaks per the channel rules.
  * Deterministic: depends only on start/end/seed. Programmes are cut at `end`.
  */
-function tvs_fill_window($st, $station, $channelId, $items, $start, $end, $seed, $order, $adsOn, $firstIndex = 0, $tag = array()) {
+function tvs_fill_window($st, $station, $channelId, $items, $start, $end, $seed, $order, $adsOn, $firstIndex = 0, $tag = array(), $maxItems = 0, $fitOnly = false) {
     $out = array();
     if (!$items || $end <= $start) return $out;
     if ($order === 'shuffle') $items = tvs_shuffled($items, $seed);
+    // Trial each complete programme including its actual ad breaks. Rejecting a
+    // candidate also rejects its adverts, so an oversized episode cannot leave a pre-roll.
+    if ($fitOnly) {
+        $t = $start; $i = $firstIndex; $played = 0;
+        while ($t < $end && $played < 2000 && (!$maxItems || $played < $maxItems)) {
+            $found = false;
+            for ($skip = 0; $skip < count($items); $skip++) {
+                $item = $items[$i++ % count($items)];
+                if ((int)$item['durationMs'] > $end - $t) continue;
+                $trial = tvs_fill_window($st, $station, $channelId, array($item), $t, $end, $seed, 'sequential', $adsOn, 0, $tag, 1);
+                $duration = 0;
+                foreach ($trial as $b) if (empty($b['advert'])) $duration += $b['durationMs'];
+                if ($duration !== (int)$item['durationMs']) continue;
+                foreach ($trial as $b) $out[] = $b;
+                $t = $trial[count($trial) - 1]['endUnix'];
+                $played++; $found = true; break;
+            }
+            if (!$found) break;
+        }
+        return $out;
+    }
     $cfg = $st['channels'][$channelId] ?? tvs_default_channel();
     $ads = $cfg['ads'];
     $pool = array();
@@ -296,7 +319,7 @@ function tvs_fill_window($st, $station, $channelId, $items, $start, $end, $seed,
             $t += $d;
         }
     };
-    while ($t < $end && $guard++ < 2000) {
+    while ($t < $end && $guard++ < 2000 && (!$maxItems || $guard <= $maxItems)) {
         $item = $items[$i % $n];
         $i++;
         $isProg = in_array($item['kind'] ?? 'other', $ads['kinds'], true) || (!in_array($item['kind'] ?? '', array('movie', 'episode'), true) && in_array('other', $ads['kinds'], true));
@@ -372,7 +395,27 @@ function tvs_occurrence_blocks($st, $station, $channelId, $o) {
     $order = $s['contentType'] === 'filler' ? (tvs_list_by_id($st['fillerLists'], $s['fillerListId'])['order'] ?? 'shuffle') : $s['order'];
     $tag = array('slotId' => $s['id'], 'slotTitle' => $s['title']);
     if ($s['color'] !== '') $tag['color'] = $s['color'];
-    return tvs_fill_window($st, $station, $channelId, $items, $o['start'], $o['end'], $channelId . ':' . $s['id'] . ':' . $o['start'], $order, $s['ads'], $first, $tag);
+    $seed = $channelId . ':' . $s['id'] . ':' . $o['start'];
+    $single = !empty($s['singleEpisode']);
+    $fitOnly = !empty($s['fitOnly']);
+    $out = tvs_fill_window($st, $station, $channelId, $items, $o['start'], $o['end'], $seed, $order, $s['ads'], $first, $tag, $single ? 1 : 0, $fitOnly);
+    if (!$single && !$fitOnly) return $out;
+    $cursor = $out ? $out[count($out) - 1]['endUnix'] : $o['start'];
+    $cfg = $st['channels'][$channelId];
+    $filler = tvs_list_by_id($st['fillerLists'], $cfg['fillerListId']);
+    $pools = array();
+    if ($filler) $pools[] = array(tvs_playable(relay_media_map($station), $filler['mediaIds']), $filler['order']);
+    // Use other channel programmes when the filler list cannot fill the remainder.
+    $ids = array();
+    foreach (($station['cycles'][$channelId]['blocks'] ?? array()) as $b) $ids[] = $b['mediaId'];
+    $excluded = $single ? array_column($items, 'id') : array();
+    $pools[] = array(tvs_playable(relay_media_map($station), array_values(array_diff(array_unique($ids), $excluded))), 'sequential');
+    foreach ($pools as $pool) {
+        $tail = tvs_fill_window($st, $station, $channelId, $pool[0], $cursor, $o['end'], $seed . ':remainder', $pool[1], $s['ads'], 0, array_merge($tag, array('filler' => true)), 0, true);
+        foreach ($tail as $b) $out[] = $b;
+        if ($tail) $cursor = $tail[count($tail) - 1]['endUnix'];
+    }
+    return $out;
 }
 
 function tvs_clip($blocks, $from, $to) {
@@ -448,9 +491,11 @@ function tvs_apply($station, $channelId, $blocks, $from, $to) {
         usort($sched, function ($a, $b) { return $a['startUnix'] - $b['startUnix']; });
         return tvs_clip($sched, $from, $to);
     }
-    if (!$sched) return $blocks;
+    if (!$sched && !$occ) return $blocks;
     $sched = tvs_clip($sched, $from, $to);
-    $out = array_merge(tvs_overlay($blocks, $sched, $channelId), $sched);
+    $reserved = $sched;
+    foreach ($occ as $o) if (!empty($o['slot']['singleEpisode']) || !empty($o['slot']['fitOnly'])) $reserved[] = array('startUnix' => $o['start'], 'endUnix' => $o['end']);
+    $out = array_merge(tvs_overlay($blocks, $reserved, $channelId), $sched);
     usort($out, function ($a, $b) { return $a['startUnix'] - $b['startUnix']; });
     return $out;
 }
