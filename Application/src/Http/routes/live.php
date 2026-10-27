@@ -437,8 +437,11 @@ try {
         json_out(['ok' => true, 'items' => $items, 'limited' => count($items) >= 300]);
     }
     if ($action === 'catalogue' && $_SERVER['REQUEST_METHOD'] === 'GET') {
+        $catalogueId = trim((string)($_GET['id'] ?? ''));
+        $adminItemLookup = $catalogueId !== '' && strpos($catalogueId, 'show:') !== 0;
+        if ($adminItemLookup) live_bridge_require_admin();
         require_once STREAM_ROOT . '/src/Live/library.php';
-        echo json_encode(relay_catalogue_query($_GET), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        echo json_encode(relay_catalogue_query($_GET, $adminItemLookup), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
         exit;
     }
     if ($action === 'station' && $_SERVER['REQUEST_METHOD'] === 'GET') {

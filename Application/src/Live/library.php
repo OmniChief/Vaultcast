@@ -169,7 +169,7 @@ function relay_public_hit($item, $withDuration) {
     return $hit;
 }
 
-function relay_catalogue_query($get) {
+function relay_catalogue_query($get, $allowUnlisted = false) {
     relay_stream_boot();
     $cat = Catalogue::get();
     $id = isset($get['id']) ? trim((string)$get['id']) : '';
@@ -251,14 +251,16 @@ function relay_catalogue_query($get) {
     }
 
     if ($id !== '') {
-        // Public Live playback may only serve media already registered with Live.
-    $station = relay_load_station();
-    $listed = false;
-    foreach ((array)($station['media'] ?? []) as $entry) {
-        if (is_array($entry) && (string)($entry['catalogueId'] ?? '') === $id) { $listed = true; break; }
-    }
-    if (!$listed) { http_response_code(404); echo 'Not in Live station'; return; }
-    $item = Catalogue::item($id);
+        if (!$allowUnlisted) {
+            // Keep public item lookups limited to media already in the Live station.
+            $station = relay_load_station();
+            $listed = false;
+            foreach ((array)($station['media'] ?? []) as $entry) {
+                if (is_array($entry) && (string)($entry['catalogueId'] ?? '') === $id) { $listed = true; break; }
+            }
+            if (!$listed) { http_response_code(404); echo 'Not in Live station'; return; }
+        }
+        $item = Catalogue::item($id);
         if (!$item || (isset($item['media_kind']) ? $item['media_kind'] : '') !== 'video') {
             return array('ok' => false, 'error' => 'Not in the video catalogue');
         }
