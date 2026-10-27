@@ -6,7 +6,8 @@ function relay_load_station() {
         require_once __DIR__ . '/seed.php';
         return relay_seed_station();
     }
-    return $station;
+    require_once __DIR__ . '/schedule.php';
+    return relay_strip_legacy_schedule($station);
 }
 function relay_save_station($station) {
     require_once __DIR__ . '/schedule.php';
@@ -17,7 +18,7 @@ function relay_save_station($station) {
         $station = relay_fill_durations($station, 0.0, $dstats);
 
     } catch (Throwable $e) { /* never block a save on probing */ }
-    $station = relay_rebuild_cycles($station);
+    $station = relay_prepare_station($station);
     \Vaultcast\Repository::putDocument('live_station', $station);
     return $station;
 }

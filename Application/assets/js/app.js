@@ -5673,9 +5673,8 @@ try {
   }
   /* Relay live edge - /now returns seekMs/serverNow/mediaOffsetMs; player joins mid-show,
      media without durations are backfilled (ffprobe) instead of becoming 1-second blocks */
-  /* Live settings are one native editor: Relay channels (show/season/episode trees, full
-     searchable lists), Relay media library (server catalogue import, add/edit/remove), playlists, schedule, IPTV, station */
-  /* Native Live/IPTV settings + 24h rolling schedule overlay */
+  /* Live settings share native media, IPTV and station editors. */
+  /* Native Live/IPTV settings */
   /* Settings accordion open-group in state (clicks no longer reverted by active-section re-derive) */
   /* Live structured show/episode/season + posters; Settings System + accordion; Collections full width */
   /* TV UI prefers episode_title (NFO/parsed) over file basename */
@@ -8486,7 +8485,6 @@ try {
     if (state.settingsSection === 'live') state.settingsSection = 'live-studio';
     if (state.settingsSection === 'live-channels') { state.settingsSection = 'live-studio'; tvs.tab = 'channels'; }
     if (state.settingsSection === 'live-library') { state.settingsSection = 'live-studio'; tvs.tab = 'media'; }
-    if (state.settingsSection === 'live-playlists' || state.settingsSection === 'live-schedule') { state.settingsSection = 'live-studio'; tvs.tab = 'schedule'; }
     if (state.settingsSection === 'library') state.settingsSection = 'media';
     if (state.settingsSection === 'convert') state.settingsSection = 'video-optimise';
     if (flat.indexOf(state.settingsSection) < 0) state.settingsSection = 'settings-home';
@@ -13018,17 +13016,7 @@ function viewCollectionDetail(){
     LIVE_KINDS.forEach(function(k){
       if (!Array.isArray(ch.libraryIds[k])) ch.libraryIds[k] = [];
     });
-    if (!Array.isArray(ch.playlist)) ch.playlist = [];
-    if (ch.commercialsPerBreak == null) ch.commercialsPerBreak = 2;
-    if (ch.bumperBefore == null) ch.bumperBefore = true;
-    if (ch.commercialEveryMs == null) ch.commercialEveryMs = 25 * 60 * 1000;
-    if (ch.fillHours == null) ch.fillHours = 6;
     if (ch.enabled == null) ch.enabled = true;
-    if (!ch.seed) ch.seed = ch.id || 'seed';
-    if (!ch.rollingSchedule || typeof ch.rollingSchedule !== 'object') {
-      ch.rollingSchedule = { enabled: false, slots: [] };
-    }
-    if (!Array.isArray(ch.rollingSchedule.slots)) ch.rollingSchedule.slots = [];
     return ch;
   }
 
@@ -13365,17 +13353,16 @@ function viewCollectionDetail(){
   function liveSectionMeta(sec){
     var map = {
       'live-studio': { title: 'PseudoTV Studio', blurb: 'Weekly calendar per channel, filler that plays between slots, ad breaks, numbering, logos and access, XMLTV / M3U outputs, recordings and stream status.' },
-      'live-channels': { title: 'Relay channels', blurb: 'Number, name and slogan each Relay channel, put it on or off air, and tick the movies, TV shows (whole show, season or single episodes), commercials and bumpers it may air.' },
       'live-library': { title: 'Relay media library', blurb: 'Everything Relay can schedule. Add movies or whole shows from the server catalogue, add files by URL, edit titles / season / episode / duration, or remove items.' },
       'live-radio': { title:'Radio stations', blurb:'Your shared radio lineup. Find public stations or add a direct stream, then listen while browsing.' },
       'live-iptv': { title: 'IPTV feeds', blurb: 'M3U playlist feeds, browse and search channels, favourites lineup, on-demand stream Check, inactive filter, and XMLTV EPG.' },
       'live-station': { title: 'Station & outputs', blurb: 'Station identity, media base URL, timeshift history, guide lookahead, external-player stream URLs, and JSON backup / merge import.' }
     };
-    return map[sec] || map['live-channels'];
+    return map[sec] || map['live-studio'];
   }
 
   function liveNativeSettingsKids(sec){
-    if (sec === 'live') sec = 'live-channels';
+    if (sec === 'live') sec = 'live-studio';
     var meta = liveSectionMeta(sec);
     var stationSection = sec !== 'live-iptv' && sec !== 'live-studio' && sec !== 'live-radio';
     setTimeout(function(){ fillLiveNativePanel(sec); }, 0);
@@ -13407,7 +13394,7 @@ function viewCollectionDetail(){
   function fillLiveNativePanel(sec){
     var host = document.getElementById('live-native-panel');
     if (!host || state.view!=='settings' || (state.settingsSection!==sec&&state.settingsSection!=='live')) return;
-    if (sec === 'live') sec = 'live-channels';
+    if (sec === 'live') sec = 'live-studio';
     host.innerHTML = '';
     host.appendChild(pendingContent({ className: 'muted', }));
     /* unsaved Relay edits survive moving between sections; otherwise always reload from the server */
@@ -13420,7 +13407,7 @@ function viewCollectionDetail(){
       liveSyncDirty();
       if (sec === 'live-station') paintLiveStation(host);
       else if (sec === 'live-library') paintLiveLibrary(host);
-      else paintLiveChannels(host);
+      else paintTvStudio(host);
     });
     p.catch(function(e){
       host.innerHTML = '';
@@ -13559,12 +13546,8 @@ function viewCollectionDetail(){
   function tvsPaintSchedule(body, picker){
     var ch = tvsChan();
     var top = h('div', { className:'tvs-row' }, [picker(),h('button',{className:'btn primary',text:'Add time slot',onClick:tvsAddSlot}),h('button',{className:'btn',text:tvs.scheduleView==='calendar'?'Show agenda':'Show weekly calendar',onClick:function(){tvs.scheduleView=tvs.scheduleView==='calendar'?'agenda':'calendar';tvsPaint();}}),h('button',{className:'btn',text:'Copy schedule to channel',onClick:tvsCopySchedule}),
-      h('label', { className:'tvs-chan-pick' }, [ h('span', { className:'muted', text:'Outside slots' }),
-        h('select', { onChange:function(e){ ch.mode = e.target.value; tvsMark(); tvsPaint(); } }, [
-          h('option', { value:'overlay', selected:ch.mode === 'overlay', text:'Keep the Relay rotation' }),
-          h('option', { value:'calendar', selected:ch.mode === 'calendar', text:'Play the filler list' }) ]) ]),
       h('button', { className:'btn danger', type:'button', text:'Clear table', disabled:!ch.slots.length, onClick:tvsClearTable }),
-      ch.mode === 'calendar' ? tvsListSelect('Filler list', tvs.studio.fillerLists, ch.fillerListId, function(v){ ch.fillerListId = v; tvsMark(); }) : null,
+      tvsListSelect('Filler list', tvs.studio.fillerLists, ch.fillerListId, function(v){ ch.fillerListId = v; tvsMark(); }),
       h('p', { className:'muted tvs-hint', text:'Drag on an empty area to add a slot. Drag a slot to move it, drag its bottom edge to resize. Times snap to ' + TVS_SNAP + ' minutes.' })
     ]);
     body.appendChild(top);
@@ -13886,7 +13869,7 @@ function viewCollectionDetail(){
     });
     body.appendChild(h('div', { className:'settings-card' }, [
       h('div', { className:'tvs-row' }, [ h('h3', { text:'Channels & numbering' }), h('div',{className:'row-actions'},[
-        h('button',{className:'btn',type:'button',text:'Add channel',onClick:function(){var used={};tvs.data.channels.forEach(function(channel){used[Number(channel.number)]=true;});var number=1;while(used[number])number++;var id=liveUid('ch');saveChannelEdits([{id:id,number:number,name:'Channel '+number,slogan:'',enabled:true,libraryIds:{movie:[],episode:[],commercial:[],bumper:[]},playlist:[],fillHours:6,commercialEveryMs:25*60*1000,commercialsPerBreak:2,bumperBefore:true,seed:liveUid('seed'),rollingSchedule:{enabled:false,slots:[]}}],[]);}}),
+        h('button',{className:'btn',type:'button',text:'Add channel',onClick:function(){var used={};tvs.data.channels.forEach(function(channel){used[Number(channel.number)]=true;});var number=1;while(used[number])number++;var id=liveUid('ch');saveChannelEdits([{id:id,number:number,name:'Channel '+number,slogan:'',enabled:true,libraryIds:{movie:[],episode:[],commercial:[],bumper:[]}}],[]);}}),
         h('button', { className:'btn primary', 'data-channel-save':'1', type:'button', text:'Save channel changes', onClick:function(){saveChannelEdits([],[]);} })
       ]) ]),
       h('p', { className:'muted', text:'Save channel names, slogans, numbers and on-air state here. Logos, groups, access and timeshift are saved with Save studio. IPTV channel numbers are edited under IPTV & Guide Matching.' }),
@@ -13965,325 +13948,6 @@ function viewCollectionDetail(){
 
   function liveMediaOfKind(kind){
     return (liveSet.station.media || []).filter(function(m){ return m.kind === kind; });
-  }
-
-  /* ---------------- Relay channels ---------------- */
-  function paintLiveChannels(host){
-    var st = liveSet.station;
-    host.innerHTML = '';
-    var list = (st.channels || []).slice().sort(function(a,b){ return (Number(a.number)||0)-(Number(b.number)||0); });
-    var byKind = {};
-    LIVE_KINDS.forEach(function(k){ byKind[k] = liveMediaOfKind(k).sort(function(a, b){ return liveGuideTitle(a).localeCompare(liveGuideTitle(b)); }); });
-    var showIdx = liveShowIndex(byKind.episode);
-
-    host.appendChild(h('div', { className: 'settings-card' }, [
-      h('div', { className: 'row-actions', style: 'justify-content:space-between;flex-wrap:wrap' }, [
-        h('h3', { text: 'Channels (' + list.length + ')', style: 'margin:0' }),
-        h('div', { className: 'row-actions' }, [
-          h('button', { className: 'btn', type: 'button', text: 'Add channel', onClick: function(){
-            var used = {};
-            st.channels.forEach(function(c){ used[Number(c.number)] = true; });
-            var n = 1; while (used[n]) n++;
-            var id = liveUid('ch');
-            st.channels.push(liveEnsureChannel({
-              id: id, number: n, name: 'Channel ' + n, slogan: '', enabled: true,
-              libraryIds: { movie: [], episode: [], commercial: [], bumper: [] },
-              playlist: [], fillHours: 6, commercialEveryMs: 25*60*1000, commercialsPerBreak: 2,
-              bumperBefore: true, seed: liveUid('seed'), rollingSchedule: { enabled: false, slots: [] }
-            }));
-            liveSet.channelId = id;
-            liveDirty();
-            paintLiveChannels(host);
-            liveSetMsg('Channel ' + n + ' added \u2014 name it, tick its library, then Save station.');
-          }})
-        ])
-      ]),
-      h('p', { className: 'muted', text: 'Relay library: ' + livePlural(byKind.movie.length, 'movie') + ' \u00b7 ' + livePlural(showIdx.length, 'show') + ' (' + livePlural(byKind.episode.length, 'episode') + ') \u00b7 ' + livePlural(byKind.commercial.length, 'commercial') + ' \u00b7 ' + livePlural(byKind.bumper.length, 'bumper') + '. Add or edit items under Media library. Save station rebuilds the PseudoTV loop.' })
-    ]));
-
-    list.forEach(function(ch){
-      liveEnsureChannel(ch);
-      var isOn = function(kind){ return function(id){ return liveSetHas(ch.libraryIds[kind], id); }; };
-      var setOn = function(kind){ return function(ids, on){ liveSetApply(ch.libraryIds, kind, ids, on); liveDirty(); }; };
-      var summaries = {};
-      function sumText(kind){
-        var have = {}, n = 0;
-        byKind[kind].forEach(function(m){ have[m.id] = true; });
-        ch.libraryIds[kind].forEach(function(id){ if (have[id]) n++; });
-        if (kind === 'episode') {
-          var shows = 0;
-          showIdx.forEach(function(g){ if (g.eps.some(function(m){ return liveSetHas(ch.libraryIds.episode, m.id); })) shows++; });
-          return LIVE_KIND_PLURAL.episode + ' \u2014 ' + shows + '/' + showIdx.length + ' shows \u00b7 ' + n + '/' + byKind.episode.length + ' episodes';
-        }
-        return LIVE_KIND_PLURAL[kind] + ' \u2014 ' + n + '/' + byKind[kind].length;
-      }
-      function refreshSum(kind){ if (summaries[kind]) summaries[kind].textContent = sumText(kind); }
-
-      function section(kind){
-        var openKey = 'chacc:' + ch.id + ':' + kind;
-        var sumEl = h('span', { text: sumText(kind) });
-        summaries[kind] = sumEl;
-        var det = h('details', { className: 'live-acc' }, [ h('summary', {}, [sumEl]) ]);
-        var built = false;
-        function build(){
-          if (built) return; built = true;
-          if (kind === 'episode') {
-            var treeHost = h('div', { className: 'live-tree-host' });
-            var qKey = 'chtv:' + ch.id;
-            var listed = function(){ var ids = []; liveFilterShows(showIdx, liveSet.q[qKey]).forEach(function(g){ ids = ids.concat(liveIds(g.eps)); }); return ids; };
-            var paintTree = function(){
-              treeHost.innerHTML = '';
-              treeHost.appendChild(liveTree({
-                stateKey: 'ch:' + ch.id,
-                shows: liveFilterShows(showIdx, liveSet.q[qKey]),
-                empty: byKind.episode.length ? 'No shows or episodes match.' : 'No TV in the Relay media library yet \u2014 add shows under Media library.',
-                onChange: function(){ refreshSum('episode'); },
-                showLead: function(g, ctx){ return liveTriBox(liveIds(g.eps), isOn('episode'), setOn('episode'), ctx, 'Tick / untick every listed episode of ' + g.name); },
-                seasonLead: function(g, s, ctx){ return liveTriBox(liveIds(s.eps), isOn('episode'), setOn('episode'), ctx, 'Tick / untick ' + g.name + ' ' + liveSeasonLabel(s)); },
-                epRow: function(m, ctx){
-                  var cb = h('input', { type: 'checkbox', onChange: function(ev){ setOn('episode')([m.id], ev.target.checked); ctx.sync(); } });
-                  ctx.addSync(function(){ cb.checked = isOn('episode')(m.id); });
-                  return h('label', { className: 'check-label live-tree-ep' }, [cb, h('span', { className: 'grow', text: liveEpLabel(m) }), h('span', { className: 'muted', text: liveFmtDur(m.durationMs) })]);
-                }
-              }));
-            };
-            det.appendChild(h('div', { className: 'live-acc-body' }, [
-              h('div', { className: 'live-filter-bar' }, [
-                liveSearchInput(qKey, 'Search shows or episodes\u2026', paintTree),
-                h('button', { className: 'btn ghost sm', type: 'button', text: 'Tick all listed', onClick: function(){ setOn('episode')(listed(), true); paintTree(); refreshSum('episode'); } }),
-                h('button', { className: 'btn ghost sm', type: 'button', text: 'Untick all listed', onClick: function(){ setOn('episode')(listed(), false); paintTree(); refreshSum('episode'); } })
-              ]),
-              h('p', { className: 'muted live-hint', text: 'Tick a show or season to take all of its episodes; expand it to pick single episodes.' }),
-              treeHost
-            ]));
-            paintTree();
-          } else {
-            det.appendChild(h('div', { className: 'live-acc-body' }, [
-              liveFlatChecks(byKind[kind], isOn(kind), setOn(kind), 'ch' + kind + ':' + ch.id, function(){ refreshSum(kind); },
-                'No ' + LIVE_KIND_PLURAL[kind].toLowerCase() + ' in the Relay media library yet \u2014 add them under Media library.')
-            ]));
-          }
-        }
-        det.addEventListener('toggle', function(){ liveSet.open[openKey] = det.open; if (det.open) build(); });
-        if (liveSet.open[openKey]) { det.open = true; build(); }
-        return det;
-      }
-
-      var card = h('div', { className: 'settings-card live-ch-card' + (ch.enabled === false ? ' is-off' : '') });
-      card.appendChild(h('div', { className: 'live-ch-head' }, [
-        h('label', {}, ['#', h('input', { type: 'number', min: 1, className: 'narrow', value: ch.number, onChange: function(e){ var n = Number(e.target.value); if (n > 0) { ch.number = n; liveDirty(); } else e.target.value = ch.number; } })]),
-        h('label', { className: 'grow' }, ['Name', h('input', { value: ch.name || '', onInput: function(e){ ch.name = e.target.value; liveDirty(); } })]),
-        h('label', { className: 'grow' }, ['Slogan', h('input', { value: ch.slogan || '', onInput: function(e){ ch.slogan = e.target.value; liveDirty(); } })]),
-        h('label', { className: 'check-label live-onair' }, [ h('input', { type: 'checkbox', checked: ch.enabled !== false, onChange: function(e){ ch.enabled = e.target.checked; liveDirty(); card.classList.toggle('is-off', !ch.enabled); } }), ' On air' ]),
-        h('button', { className: 'btn ghost', type: 'button', text: 'Remove', onClick: function(){
-          if (st.channels.length < 2) { liveSetMsg('Keep at least one Relay channel.', true); return; }
-          if (!confirm('Remove channel ' + (ch.number || '') + ' ' + (ch.name || ch.id) + '? (Takes effect when you Save station.)')) return;
-          st.channels = st.channels.filter(function(c){ return c.id !== ch.id; });
-          if (liveSet.channelId === ch.id) liveSet.channelId = st.channels[0].id;
-          liveDirty();
-          paintLiveChannels(host);
-        }})
-      ]));
-      var srcType = h('select', {}, [
-        h('option', { value:'rules', text:'Library movie rules' }),
-        h('option', { value:'collection', text:'Existing collection' }),
-        h('option', { value:'smart', text:'Existing smart collection' })
-      ]);
-      var srcChoice = h('select', { 'aria-label':'Choose collection' });
-      var sourceYears = h('div', { className:'row-actions' });
-      var yearFrom = h('input', { type:'number', min:1888, max:9999, placeholder:'From year', className:'narrow' });
-      var yearTo = h('input', { type:'number', min:1888, max:9999, placeholder:'To year', className:'narrow' });
-      var genre = h('input', { type:'text', placeholder:'Genre (e.g. comedy)', maxlength:100 });
-      sourceYears.appendChild(yearFrom); sourceYears.appendChild(yearTo); sourceYears.appendChild(genre);
-      var sourceMsg = h('span', { className:'muted', text:'Choose rules or an existing collection.' });
-      var sourceOptions = h('div', { className:'row-actions' }, [srcChoice]);
-      function changeSource(){ sourceOptions.hidden = srcType.value === 'rules'; }
-      srcType.addEventListener('change', function(){
-        changeSource();
-        if (srcType.value === 'rules') return;
-        sourceMsg.textContent = 'Loading collections…';
-        var endpoint = srcType.value === 'smart' ? '/smart-collections' : '/collections';
-        api(endpoint).then(function(j){
-          srcChoice.innerHTML = '';
-          (j.collections || []).forEach(function(c){ srcChoice.appendChild(h('option', { value:c.id, text:c.name || c.title || c.id })); });
-          sourceMsg.textContent = srcChoice.options.length ? 'Select a collection, then add its library movies.' : 'No collections available.';
-        }).catch(function(e){ sourceMsg.textContent = String(e.message || e); });
-      });
-      changeSource();
-      card.appendChild(h('details', { className:'live-acc' }, [
-        h('summary', { text:'Add programming from library, collections or rules' }),
-        h('div', { className:'live-acc-body stack' }, [
-          h('p', { className:'muted', text:'Add matching library movies to this Relay channel. Existing choices stay selected; Save station to apply scheduling.' }),
-          h('div', { className:'row-actions' }, [srcType, sourceOptions]),
-          sourceYears,
-          h('div', { className:'row-actions' }, [
-            h('button', { className:'btn', type:'button', text:'Add matches to channel', onClick:function(e){
-              if (srcType.value !== 'rules' && !srcChoice.value) { sourceMsg.textContent='Choose a collection first.'; return; }
-              var button = e.currentTarget; button.disabled = true;
-              sourceMsg.textContent = 'Finding matching library movies…';
-              var params = 'source=' + encodeURIComponent(srcType.value) +
-                '&id=' + encodeURIComponent(srcChoice.value || '') +
-                '&from=' + encodeURIComponent(yearFrom.value) +
-                '&to=' + encodeURIComponent(yearTo.value) +
-                '&genre=' + encodeURIComponent(genre.value);
-              liveApi('programme_source', params).then(function(result){
-                if (!result || !result.ok) throw new Error((result && result.error) || 'Import failed');
-                var added = 0, selected = 0, missing = [];
-                (result.items || []).forEach(function(x){
-                  var media = liveMediaByCatalogue(x.id);
-                  if (!media) {
-                    media = liveCatalogueToMedia(x);
-                    st.media.push(media); added++;
-                    if (!(media.durationMs > 0)) missing.push(x.id);
-                  }
-                  if (ch.libraryIds.movie.indexOf(media.id) < 0) { ch.libraryIds.movie.push(media.id); selected++; }
-                });
-                if (added || selected) { liveMediaChanged(); liveDirty(); }
-                sourceMsg.textContent = (result.items || []).length + ' matched, ' + added + ' imported and ' + selected + ' newly selected.' + (result.limited ? ' First 300 results only.' : '') + ' Save station to apply.';
-                if (missing.length) liveFillDurations(missing);
-              }).catch(function(err){ sourceMsg.textContent = String(err.message || err); }).then(function(){ button.disabled = false; });
-            } }),
-            sourceMsg
-          ])
-        ])
-      ]));
-      LIVE_KINDS.forEach(function(k){ card.appendChild(section(k)); });
-      host.appendChild(card);
-    });
-  }
-
-  function liveCurrentChannel(){
-    var st = liveSet.station;
-    if (!st) return null;
-    for (var i = 0; i < st.channels.length; i++) if (st.channels[i].id === liveSet.channelId) return st.channels[i];
-    return st.channels[0] || null;
-  }
-
-  function liveChannelSelect(onChange){
-    var st = liveSet.station;
-    var opts = (st.channels || []).slice().sort(function(a,b){ return (Number(a.number)||0)-(Number(b.number)||0); }).map(function(c){
-      return h('option', { value: c.id, text: (c.number || '?') + ' \u00b7 ' + (c.name || c.id) + (c.enabled === false ? ' (off air)' : ''), selected: c.id === liveSet.channelId });
-    });
-    return h('select', { 'aria-label': 'Channel', onChange: function(e){ liveSet.channelId = e.target.value; if (onChange) onChange(); } }, opts);
-  }
-
-  /* ---------------- Relay media library ---------------- */
-  function liveResolveMediaUrl(url){
-    if (!url) return '';
-    url = String(url);
-    if (/^https?:\/\//i.test(url) || url.indexOf('blob:') === 0) return url;
-    if (/^api\.php\?action=/.test(url)) return liveUrl(url);
-    if (url.charAt(0) === '/') return url;
-    var base = String((liveSet.station && liveSet.station.mediaBaseUrl) || '').replace(/\/$/, '');
-    return base ? (base + '/' + url) : liveUrl(url);
-  }
-  function liveEmptyItem(kind){
-    return {
-      id: liveUid(kind === 'episode' ? 'ep' : kind === 'movie' ? 'mov' : kind === 'commercial' ? 'ad' : 'bmp'),
-      kind: kind || 'movie', title: '', subtitle: '', series: '',
-      season: kind === 'episode' ? 1 : null, episode: kind === 'episode' ? 1 : null,
-      year: null, durationMs: 0, url: '', notes: ''
-    };
-  }
-  function liveStripMedia(ids){
-    var drop = {}; ids.forEach(function(id){ drop[id] = true; });
-    liveSet.station.channels.forEach(function(ch){
-      liveEnsureChannel(ch);
-      LIVE_KINDS.forEach(function(k){ ch.libraryIds[k] = ch.libraryIds[k].filter(function(x){ return !drop[x]; }); });
-      ch.playlist = ch.playlist.filter(function(x){ return !drop[x]; });
-      (ch.rollingSchedule.slots || []).forEach(function(sl){ if (Array.isArray(sl.mediaIds)) sl.mediaIds = sl.mediaIds.filter(function(x){ return !drop[x]; }); });
-    });
-  }
-  function liveRemoveMedia(ids){
-    var drop = {}; ids.forEach(function(id){ drop[id] = true; });
-    liveSet.station.media = liveSet.station.media.filter(function(m){ return !drop[m.id]; });
-    liveStripMedia(ids);
-    if (liveSet.editor && drop[liveSet.editor.item.id]) liveSet.editor = null;
-    liveMediaChanged();
-    liveDirty();
-    liveSetMsg(livePlural(ids.length, 'item') + ' removed from the Relay library. Save station to keep.');
-  }
-  function liveAttachToAll(item){
-    liveSet.station.channels.forEach(function(ch){
-      liveEnsureChannel(ch);
-      if (ch.libraryIds[item.kind].indexOf(item.id) < 0) ch.libraryIds[item.kind].push(item.id);
-    });
-  }
-  function liveMoveKind(item, prevKind){
-    if (prevKind === item.kind) return;
-    liveSet.station.channels.forEach(function(ch){
-      liveEnsureChannel(ch);
-      LIVE_KINDS.forEach(function(k){ ch.libraryIds[k] = ch.libraryIds[k].filter(function(x){ return x !== item.id; }); });
-      if (ch.libraryIds[item.kind].indexOf(item.id) < 0) ch.libraryIds[item.kind].push(item.id);
-      if (item.kind !== 'movie' && item.kind !== 'episode') ch.playlist = ch.playlist.filter(function(x){ return x !== item.id; });
-    });
-  }
-  function liveMediaByCatalogue(cid){
-    var media = liveSet.station.media;
-    for (var i = 0; i < media.length; i++) if (media[i].catalogueId === cid) return media[i];
-    return null;
-  }
-  /* per-user saved media-format filter for Add from server library */
-  function liveCatFormatsPref(){
-    var p = (state.user && state.user.prefs) || {};
-    return Array.isArray(p.live_cat_formats) ? p.live_cat_formats.slice() : [];
-  }
-  function liveCatSaveFormats(list){
-    if (state.user) { state.user.prefs = state.user.prefs || {}; state.user.prefs.live_cat_formats = list.slice(); }
-    api('/me/prefs', { method:'POST', body:{ live_cat_formats: list } }).catch(function(){});
-  }
-  function liveCatalogueToMedia(item){
-    var tv = item.type === 'tv' || item.type === 'anime' || (item.show && item.season != null && item.season !== '');
-    var entry = {
-      id: liveUid(tv ? 'ep' : 'mov'),
-      kind: tv ? 'episode' : 'movie',
-      title: (tv ? (item.episode_title || item.title) : item.title) || 'Untitled',
-      subtitle: '',
-      series: tv ? (item.show || '') : '',
-      season: tv && item.season != null && item.season !== '' ? Number(item.season) : null,
-      episode: tv && item.episode != null && item.episode !== '' ? Number(item.episode) : null,
-      year: item.year == null || item.year === '' ? null : Number(item.year),
-      durationMs: item.durationMs || 0,
-      url: item.url || (BASE + 'api/live/file?id=' + encodeURIComponent(item.id)),
-      notes: 'Vaultcast' + (item.section ? ' \u00b7 ' + item.section : '') + (item.rel ? ' \u00b7 ' + item.rel : ''),
-      catalogueId: item.id
-    };
-    if (tv && item.episode_title) entry.episode_title = item.episode_title;
-    return liveScrubMedia(entry);
-  }
-  function liveCatalogueLabel(x){
-    if (x.group === 'show') {
-      return (x.show || x.title || 'Untitled show') + ' \u00b7 ' + livePlural(x.episode_count || 0, 'episode') + (x.season_count ? ' \u00b7 ' + livePlural(x.season_count, 'season') : '');
-    }
-    if (x.show) {
-      var se = (x.season != null && x.season !== '' && x.episode != null && x.episode !== '') ? ('S' + livePad2(x.season) + 'E' + livePad2(x.episode)) : '';
-      var ep = liveFixText(x.episode_title || '');
-      return [liveFixText(x.show), se, ep && ep !== x.show ? ep : ''].filter(Boolean).join(' \u00b7 ');
-    }
-    return (x.title || 'Untitled') + (x.year ? ' (' + x.year + ')' : '');
-  }
-  function liveFillDurations(cids, onTick){
-    var queue = cids.slice(), active = 0;
-    liveSet.durPending += queue.length;
-    liveSyncDirty();
-    function next(){
-      while (active < 3 && queue.length) {
-        active++;
-        (function(cid){
-          liveApi('catalogue', 'id=' + encodeURIComponent(cid)).then(function(body){
-            if (body && body.ok && body.item && body.item.durationMs > 0 && liveSet.station) {
-              liveSet.station.media.forEach(function(m){ if (m.catalogueId === cid) m.durationMs = body.item.durationMs; });
-            }
-          }).catch(function(){}).then(function(){
-            active--; liveSet.durPending = Math.max(0, liveSet.durPending - 1);
-            liveSyncDirty();
-            if (onTick) onTick(liveSet.durPending === 0);
-            next();
-          });
-        })(queue.shift());
-      }
-    }
-    next();
   }
 
   function paintLiveLibrary(host){
@@ -14609,7 +14273,7 @@ function viewCollectionDetail(){
         ]),
         h('button', { className: 'btn ghost sm', type: 'button', text: 'Edit', onClick: function(){ edit(m); } }),
         h('button', { className: 'btn ghost sm', type: 'button', text: 'Remove', onClick: function(){
-          if (!confirm('Remove ' + liveGuideTitle(m) + ' from the Relay library (and every channel / playlist)?')) return;
+          if (!confirm('Remove ' + liveGuideTitle(m) + ' from the Relay media library?')) return;
           liveRemoveMedia([m.id]); counts(); paintList();
         }})
       ]);
@@ -14637,7 +14301,7 @@ function viewCollectionDetail(){
           showTail: function(g){ return [
             h('span', { className: 'muted', text: liveFmtDur(liveSumMs(g.eps)) }),
             h('button', { className: 'btn ghost sm', type: 'button', text: 'Remove show', onClick: function(){
-              if (!confirm('Remove ' + livePlural(g.eps.length, 'listed episode') + ' of ' + g.name + ' from the Relay library (and every channel / playlist)?')) return;
+              if (!confirm('Remove ' + livePlural(g.eps.length, 'listed episode') + ' of ' + g.name + ' from the Relay media library?')) return;
               liveRemoveMedia(liveIds(g.eps)); counts(); paintList();
             }})
           ]; },
@@ -15239,7 +14903,6 @@ function viewCollectionDetail(){
     section = section || 'settings-home';
     if(section==='live-channels'){section='live-studio';tvs.tab='channels';}
     if(section==='live-library'){section='live-studio';tvs.tab='media';}
-    if(section==='live-playlists'||section==='live-schedule'){section='live-studio';tvs.tab='schedule';}
     if(section==='library')section='media';
     state.settingsSection = section;
     var adminIds = { maintenance:'maintenance', players:'players', features:'features', libraries:'sections', sections:'sections', scan:'scan', library:'media', media:'media', collections:'collections', streaming:'streaming', directplay:'directplay', convert:'convert', queue:'queue', acquisition:'acquisition', system:'system', general:'general', users:'users', advanced:'advanced', ingest:'ingest', matching:'matching', reports:'reports' };
@@ -15521,7 +15184,7 @@ function viewCollectionDetail(){
       if (!state.settingsSection || state.settingsSection === 'account') state.settingsSection = state.adminTab || 'general';
     }
     if (state.view === 'settings') {
-      var adminOnly = { 'site-artwork':1,maintenance:1, players:1, features:1, diagnostics:1, sections:1, libraries:1, scan:1, library:1, media:1, collections:1, streaming:1, directplay:1, convert:1, queue:1, acquisition:1, system:1, general:1, users:1, advanced:1, ingest:1, matching:1, reports:1, live:1, 'live-channels':1, 'live-library':1, 'live-playlists':1, 'live-iptv':1, 'live-schedule':1, 'live-station':1, 'live-studio':1, 'live-radio':1 };
+      var adminOnly = { 'site-artwork':1,maintenance:1, players:1, features:1, diagnostics:1, sections:1, libraries:1, scan:1, library:1, media:1, collections:1, streaming:1, directplay:1, convert:1, queue:1, acquisition:1, system:1, general:1, users:1, advanced:1, ingest:1, matching:1, reports:1, live:1, 'live-channels':1, 'live-library':1, 'live-iptv':1, 'live-station':1, 'live-studio':1, 'live-radio':1 };
       if (adminOnly[state.settingsSection] && !canSettings(state.settingsSection)) {
         state._wantAdmin = true;
         state._settingsAfterLogin = state.settingsSection;

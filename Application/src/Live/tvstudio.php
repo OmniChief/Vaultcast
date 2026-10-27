@@ -1,15 +1,14 @@
 <?php
 /**
- * TV Studio: Tvheadend-style programming layer on top of Relay channels.
+ * TV Studio: weekly programming layer for live channels.
  *
- * Stored as the `live_tvstudio` document, separate from `live_station`, so the
- * existing Relay editor keeps working unchanged. Per channel it adds:
+ * Stored as the `live_tvstudio` document, separate from the live station. Per channel it adds:
  *   - a recurring weekly calendar (slots: days of week, start minute, length, content)
- *   - a filler list that plays whenever no slot is on air (calendar mode)
+ *   - a filler list that plays whenever no slot is on air
  *   - advert rules (pool, break every N minutes, break length, pre-roll)
  *   - numbering/logo/access overrides, recordings (DVR entries) and EPG settings.
  *
- * Everything is deterministic from wall-clock time, like the Relay cycle, so
+ * Everything is deterministic from wall-clock time, so
  * /now, the guide, XMLTV and M3U all agree without a running playout process.
  */
 if (!function_exists('relay_load_station')) require_once __DIR__ . '/store.php';
@@ -32,7 +31,6 @@ function tvs_default_state() {
 
 function tvs_default_channel() {
     return array(
-        'mode' => 'overlay',        // overlay: slots over the Relay cycle; calendar: slots + filler only
         'fillerListId' => '',
         'logo' => '',
         'group' => '',
@@ -108,7 +106,6 @@ function tvs_normalize_channel($c) {
     if (!is_array($c)) return $d;
     $out = $d;
     $out['overrunEpoch'] = max(0, (int)($c['overrunEpoch'] ?? 0));
-    $out['mode'] = ($c['mode'] ?? '') === 'calendar' ? 'calendar' : 'overlay';
     $out['fillerListId'] = tvs_str($c['fillerListId'] ?? '', 60);
     $logo = tvs_str($c['logo'] ?? '', 500);
     $out['logo'] = ($logo === '' || preg_match('#^(https?://|/)#i', $logo)) ? $logo : '';
@@ -203,7 +200,7 @@ function tvs_lint($st, $station) {
         for ($i = 0; $i + 1 < count($occ); $i++) {
             if ($occ[$i][1] > $occ[$i + 1][0]) $warn[] = array('channelId' => $cid, 'slotId' => $occ[$i + 1][2]['id'], 'message' => 'Slot "' . ($occ[$i + 1][2]['title'] ?: 'untitled') . '" overlaps the previous slot; the earlier one is cut short.');
         }
-        if ($c['mode'] === 'calendar' && $c['fillerListId'] === '') $warn[] = array('channelId' => $cid, 'message' => 'Calendar mode without a filler list: gaps will be off air.');
+        if ($c['fillerListId'] === '') $warn[] = array('channelId' => $cid, 'message' => 'No filler list: gaps will be off air.');
         if ($c['ads']['enabled'] && $c['ads']['poolId'] === '') $warn[] = array('channelId' => $cid, 'message' => 'Adverts are on but no ad pool is selected.');
     }
     return $warn;
@@ -476,13 +473,13 @@ function tvs_slot_padding($st, $station, $channelId, $slot, $start, $end, $seed)
     for ($cursor = $best; $cursor > 0;) {
         list($cursor, $index) = $reachable[$cursor]; $chosen[] = $index;
     }
-    $out = array(); $cursor = $start; $rotation = array();
+    $out = array(); $cursor = $start; $durationTurns = array();
     foreach (array_reverse($chosen) as $index) {
         $duration = (int)$items[$index]['media']['durationMs'];
         // Rotate equal-length items too, so a pool does not repeat one advert.
         $matches = array();
         foreach ($items as $item) if ((int)$item['media']['durationMs'] === $duration) $matches[] = $item;
-        $turn = $rotation[$duration] ?? 0; $item = $matches[$turn % count($matches)]; $rotation[$duration] = $turn + 1;
+        $turn = $durationTurns[$duration] ?? 0; $item = $matches[$turn % count($matches)]; $durationTurns[$duration] = $turn + 1;
         $out[] = tvs_block($station, $channelId, $item['media'], $cursor, $duration, 0, array('slotId' => $slot['id'], 'slotTitle' => $slot['title'], 'padding' => true, 'filler' => true, 'advert' => $item['advert'], 'generated' => true));
         $cursor += $duration;
     }
@@ -522,88 +519,49 @@ function tvs_clip($blocks, $from, $to) {
     return array_values(array_filter($blocks, function ($b) use ($from, $to) { return $b['endUnix'] > $from && $b['startUnix'] < $to; }));
 }
 
-/** Cut existing blocks around overlays (keeps media offsets for resumed tails). */
-function tvs_overlay($blocks, $overlays, $channelId) {
-    if (!$overlays) return $blocks;
-    $out = array();
-    foreach ($blocks as $b) {
-        $pieces = array($b);
-        foreach ($overlays as $ov) {
-            $next = array();
-            foreach ($pieces as $p) {
-                if ($ov['endUnix'] <= $p['startUnix'] || $ov['startUnix'] >= $p['endUnix']) { $next[] = $p; continue; }
-                $off = (int)($p['mediaOffsetMs'] ?? 0);
-                if ($p['startUnix'] < $ov['startUnix']) {
-                    $l = $p; $l['endUnix'] = $ov['startUnix']; $l['durationMs'] = $l['endUnix'] - $l['startUnix']; $l['split'] = true; $next[] = $l;
-                }
-                if ($ov['endUnix'] < $p['endUnix']) {
-                    $r = $p; $r['startUnix'] = $ov['endUnix']; $r['durationMs'] = $p['endUnix'] - $ov['endUnix'];
-                    $r['mediaOffsetMs'] = $off + ($ov['endUnix'] - $p['startUnix']); $r['id'] = $channelId . ':' . $r['startUnix']; $r['split'] = true; $next[] = $r;
-                }
-            }
-            $pieces = $next;
-        }
-        foreach ($pieces as $p) if ($p['endUnix'] > $p['startUnix']) $out[] = $p;
-    }
-    return $out;
-}
-
 /**
  * Hook used by relay_materialize(): apply the weekly calendar, filler and adverts.
- * Returns $blocks untouched when the channel has no studio configuration.
+ * Channels without a TV Studio schedule have no on-air programming.
  */
-function tvs_apply($station, $channelId, $blocks, $from, $to) {
-    try { $st = tvs_load(); } catch (Throwable $e) { return $blocks; }
+function tvs_apply($station, $channelId, $from, $to) {
+    try { $st = tvs_load(); } catch (Throwable $e) { return array(); }
     $cfg = $st['channels'][$channelId] ?? null;
-    if (!$cfg) return $blocks;
+    if (!$cfg) return array();
     $occ = tvs_occurrences($st, $channelId, $from, $to, $station);
     $sched = array();
+    // filler fills every gap between occurrences; gaps are anchored on their real start so any window agrees
+    $filler = tvs_list_by_id($st['fillerLists'], $cfg['fillerListId']);
+    $fItems = $filler ? tvs_playable(relay_media_map($station), $filler['mediaIds']) : array();
+    $gaps = array();
+    $cursor = tvs_week_start($from - 86400000, $st['timezone']);
     foreach ($occ as $o) {
-        if ($o['end'] <= $from) continue;
-        foreach (tvs_occurrence_blocks($st, $station, $channelId, $o) as $b) $sched[] = $b;
+        if ($o['start'] > $cursor) $gaps[] = array($cursor, $o['start']);
+        $cursor = max($cursor, $o['end']);
     }
-    if ($cfg['mode'] === 'calendar') {
-        // filler fills every gap between occurrences; gaps are anchored on their real start so any window agrees
-        $filler = tvs_list_by_id($st['fillerLists'], $cfg['fillerListId']);
-        $fItems = $filler ? tvs_playable(relay_media_map($station), $filler['mediaIds']) : array();
-        $gaps = array();
-        $cursor = tvs_week_start($from - 86400000, $st['timezone']);
-        foreach ($occ as $o) {
-            if ($o['start'] > $cursor) $gaps[] = array($cursor, $o['start']);
-            $cursor = max($cursor, $o['end']);
+    $tail = max($to, $cursor) ;
+    if ($cursor < $to) {
+        // open-ended gap: anchor filler on local week boundaries so it stays deterministic
+        $wk = $cursor;
+        while ($wk < $to) {
+            $nextWeek = tvs_week_start($wk + 8 * 86400000, $st['timezone']);
+            $gEnd = min($nextWeek, $tail);
+            $gaps[] = array($wk, $nextWeek); $wk = $nextWeek;
+            if ($gEnd >= $to) break;
         }
-        $tail = max($to, $cursor) ;
-        if ($cursor < $to) {
-            // open-ended gap: anchor filler on local week boundaries so it stays deterministic
-            $wk = $cursor;
-            while ($wk < $to) {
-                $nextWeek = tvs_week_start($wk + 8 * 86400000, $st['timezone']);
-                $gEnd = min($nextWeek, $tail);
-                $gaps[] = array($wk, $nextWeek); $wk = $nextWeek;
-                if ($gEnd >= $to) break;
-            }
-        }
-        foreach ($gaps as $g) {
-            if ($g[1] <= $from || $g[0] >= $to || !$fItems) continue;
-            foreach (tvs_fill_window($st, $station, $channelId, $fItems, $g[0], $g[1], $channelId . ':filler:' . $g[0], $filler['order'], true, 0, array('filler' => true)) as $b) $sched[] = $b;
-            // fill_window walks from the gap start; drop what ended before the window
-        }
-        usort($sched, function ($a, $b) { return $a['startUnix'] - $b['startUnix']; });
-        return tvs_clip($sched, $from, $to);
     }
-    if (!$sched && !$occ) return $blocks;
-    $sched = tvs_clip($sched, $from, $to);
-    $reserved = $sched;
-    foreach ($occ as $o) if (($o['slot']['overrun'] ?? '') === 'skip' || !empty($o['elastic']) || !empty($o['slot']['singleEpisode']) || !empty($o['slot']['fitOnly']) || !empty($o['slot']['paddingEnabled'])) $reserved[] = array('startUnix' => $o['start'], 'endUnix' => $o['end']);
-    $out = array_merge(tvs_overlay($blocks, $reserved, $channelId), $sched);
-    usort($out, function ($a, $b) { return $a['startUnix'] - $b['startUnix']; });
-    return $out;
+    foreach ($gaps as $g) {
+        if ($g[1] <= $from || $g[0] >= $to || !$fItems) continue;
+        foreach (tvs_fill_window($st, $station, $channelId, $fItems, $g[0], $g[1], $channelId . ':filler:' . $g[0], $filler['order'], true, 0, array('filler' => true)) as $b) $sched[] = $b;
+        // fill_window walks from the gap start; drop what ended before the window
+    }
+    usort($sched, function ($a, $b) { return $a['startUnix'] - $b['startUnix']; });
+    return tvs_clip($sched, $from, $to);
 }
 
-/** True when a channel needs materialising even without a Relay cycle (calendar-only channels). */
+/** True when a channel has TV Studio settings. */
 function tvs_has_calendar($channelId) {
     try { $st = tvs_load(); } catch (Throwable $e) { return false; }
-    return isset($st['channels'][$channelId]) && ($st['channels'][$channelId]['mode'] === 'calendar' || $st['channels'][$channelId]['slots']);
+    return isset($st['channels'][$channelId]);
 }
 
 /** Channel visibility for the current viewer (admins always see everything). */
@@ -755,8 +713,6 @@ function tvs_apply_channel_edits($edits, $add = array(), $remove = array()) {
         $station['channels'][] = array_merge(array(
             'id' => $id, 'number' => $number, 'name' => tvs_str($name, 80), 'slogan' => '', 'enabled' => true,
             'libraryIds' => array('movie' => array(), 'episode' => array(), 'commercial' => array(), 'bumper' => array()),
-            'playlist' => array(), 'fillHours' => 6, 'commercialEveryMs' => 1500000, 'commercialsPerBreak' => 2,
-            'bumperBefore' => true, 'seed' => bin2hex(random_bytes(8)), 'rollingSchedule' => array('enabled' => false, 'slots' => array())
         ), $channel);
     }
     foreach ($station['channels'] as $i => $c) {
