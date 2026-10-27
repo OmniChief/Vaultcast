@@ -51,6 +51,8 @@ if ($path === '/requests' || strpos($path, '/requests/') === 0) {
     require __DIR__ . '/routes/play.php';
 } elseif (strpos($path, '/misc/') === 0 || strpos($path, '/drop/') === 0) {
     require __DIR__ . '/routes/misc.php';
+} elseif (strpos($path, '/ai/') === 0 || $path === '/ai') {
+    require __DIR__ . '/routes/ai.php';
 } elseif (strpos($path, '/live/') === 0) {
     require __DIR__ . '/routes/live.php';
 } elseif (strpos($path, '/admin/') === 0) {

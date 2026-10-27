@@ -41,6 +41,7 @@
       return sec && sec !== 'account' ? 'settings/' + enc(sec) : 'settings';
     }
     if (v === 'misc') return 'misc' + (st.miscTab ? '/' + enc(st.miscTab) + (st.miscSub ? '/' + enc(st.miscSub) : '') : '');
+    if (v === 'ai') return 'ai' + (st.aiTab && st.aiTab !== 'images' ? '/' + enc(st.aiTab) : '');
     if (v === 'offline') return 'offline';
     if (v === 'requests') return st.requestsTab === 'manage' ? 'requests/manage' : (st.requestsTab === 'mine' ? 'requests/mine' : 'requests');
     if (v === 'inbox') return st.inboxPane === 'mail' ? 'inbox/private' : 'inbox';
@@ -87,6 +88,7 @@
       if (mt && ['board','calendar','drop','ambient'].indexOf(mt) < 0) return { view:'notfound', path:path };
       return { view:'misc', miscTab:mt || 'board', miscSub:parts[2] || '' };
     }
+    if (head === 'ai') return !parts[1] || parts[1] === 'images' ? { view:'ai', aiTab:'images' } : { view:'notfound', path:path };
     if (head === 'games' && parts[1] === 'leaderboards' && !parts[3]) return { view:'play', playTab:'leaderboards', playSub:parts[2] || '' };
     if (head === 'games') {
       if (parts[1] === 'lobby' || !parts[1]) return { view:'play', playTab: parts[1] === 'lobby' ? 'lobby' : 'games', sectionLetter:parts[1] === 'lobby' ? '' : letter(params.letter) };

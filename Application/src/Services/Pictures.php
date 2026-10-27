@@ -108,6 +108,31 @@ final class Pictures
         }
         return array_slice($out, 0, 50);
     }
+    /** Save an image returned by a trusted generation worker into its owner's existing picture library. */
+    public static function saveGenerated(array $user, string $file, string $name): array {
+        self::signed($user);
+        $size = (int)@filesize($file);
+        if ($size <= 0 || $size > self::MAX_FILE_MB * 1048576) throw new DomainException('Generated image is empty or exceeds the 25 MB picture limit.');
+        $mime = self::sniff($file);
+        if ($mime === null) throw new DomainException('The worker returned an unsupported image format.');
+        $info = @getimagesize($file);
+        if (!$info || (int)$info[0] < 1 || (int)$info[1] < 1 || ($info['mime'] ?? '') !== $mime || (int)$info[0] * (int)$info[1] > 100000000) throw new DomainException('The worker returned an invalid image.');
+        if (function_exists('finfo_open')) { $fi = finfo_open(FILEINFO_MIME_TYPE); $real = $fi ? (string)finfo_file($fi, $file) : $mime; if ($fi) finfo_close($fi); if ($real !== $mime) throw new DomainException('The worker returned an invalid image.'); }
+        $stat = self::q('SELECT COUNT(*) AS n, COALESCE(SUM(bytes),0) AS b FROM vaultcast_pictures WHERE user_id=?', [$user['id']])->fetch(PDO::FETCH_ASSOC);
+        if ((int)($stat['n'] ?? 0) >= self::MAX_COUNT || (int)($stat['b'] ?? 0) + $size > self::MAX_TOTAL_MB * 1048576) throw new DomainException('This account has reached its picture storage limit.');
+        $name = mb_substr(trim(preg_replace('/[\x00-\x1F\x7F\/\\\\]+/u', '', $name) ?? ''), 0, 200) ?: 'AI generation.' . self::EXT[$mime];
+        $id = bin2hex(random_bytes(8)); $now = time();
+        $row = ['id' => $id, 'user_id' => (string)$user['id'], 'ext' => self::EXT[$mime]];
+        $dest = self::path($row);
+        if (!@copy($file, $dest)) throw new DomainException('The generated image could not be saved on the server.');
+        @chmod($dest, 0640);
+        $sha = (string)sha1_file($dest);
+        try {
+            self::q('INSERT INTO vaultcast_pictures (id,user_id,name,ext,mime,bytes,width,height,sha1,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
+                [$id, $user['id'], $name, self::EXT[$mime], $mime, $size, (int)$info[0], (int)$info[1], $sha, $now]);
+        } catch (Throwable $e) { @unlink($dest); throw $e; }
+        return self::publicRow($row + ['name'=>$name, 'bytes'=>$size, 'width'=>(int)$info[0], 'height'=>(int)$info[1], 'mime'=>$mime, 'created_at'=>$now, 'sha1'=>$sha]);
+    }
     private static function own(array $user, string $id): array {
         if (!preg_match('/^[a-f0-9]{16}$/D', $id)) throw new DomainException('Picture not found.');
         $r = self::q('SELECT * FROM vaultcast_pictures WHERE id=? AND user_id=?', [$id, $user['id']])->fetch(PDO::FETCH_ASSOC);

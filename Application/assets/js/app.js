@@ -4787,6 +4787,7 @@ try {
     live: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="2.3" fill="currentColor"/><path d="M8.2 8.2a5.4 5.4 0 0 0 0 7.6M15.8 8.2a5.4 5.4 0 0 1 0 7.6M5.3 5.3a9.5 9.5 0 0 0 0 13.4M18.7 5.3a9.5 9.5 0 0 1 0 13.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
     play: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.2 7.5h9.6a4.2 4.2 0 0 1 4.2 4.2v.9a3.9 3.9 0 0 1-6.9 2.5l-.5-.6h-3.2l-.5.6a3.9 3.9 0 0 1-6.9-2.5v-.9a4.2 4.2 0 0 1 4.2-4.2z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M7.6 9.9v3M6.1 11.4h3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="15.6" cy="10.5" r="1.05" fill="currentColor"/><circle cx="17.6" cy="12.6" r="1.05" fill="currentColor"/></svg>',
     misc: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="3.5" width="7.2" height="7.2" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="3.5" y="13.3" width="7.2" height="7.2" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="13.3" y="13.3" width="7.2" height="7.2" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M16.9 3.2l1.05 2.35 2.35 1.05-2.35 1.05-1.05 2.35-1.05-2.35-2.35-1.05 2.35-1.05z" fill="currentColor"/></svg>',
+    ai: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l1.8 6.2L20 11l-6.2 1.8L12 19l-1.8-6.2L4 11l6.2-2.3z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M19 15l.9 2.6 2.6.9-2.6.9L19 22l-.9-2.6-2.6-.9 2.6-.9z" fill="currentColor"/></svg>',
     search: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="1.9"/><path d="M16 16l4.2 4.2" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>',
     user: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8.6" r="3.8" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M4.8 20a7.2 7.2 0 0 1 14.4 0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
     chevL: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 5.5L8 12l6.5 6.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
@@ -4820,6 +4821,7 @@ try {
     if (v === 'live') return 'live';
     if (v === 'play' || v === 'game') return 'play';
     if (v === 'misc') return 'misc';
+    if (v === 'ai') return 'ai';
     if (v === 'section' && state.sectionType === 'roms') return 'play';
     if (v === 'admin' || v === 'settings' || v === 'login' || v === 'welcome') return '';
     return 'vod';
@@ -4829,6 +4831,7 @@ try {
     if (mode === 'live') goLiveTab('now');
     else if (mode === 'play') { state.sectionQ = ''; state.sectionSystem = ''; if (!state.playTab || (state.playTab === 'games' && !romsSection())) state.playTab = romsSection() ? 'games' : 'arcade'; state.playSub = ''; navigate('play'); }
     else if (mode === 'misc') { if (!state.miscTab) state.miscTab = 'board'; state.miscSub = ''; navigate('misc'); }
+    else if (mode === 'ai') { navigate('ai'); }
     else if (mode === 'home') { state.hubTab=(state.user && state.user.prefs || {}).home_landing || 'overview';state.cinemaId=null;navigate('home'); }
     else navigate('library');
   }
@@ -4842,7 +4845,7 @@ try {
     if (state.view === 'game' && state.gamePath && !extra.live) return R.build({ view:'play', gamePath: state.gamePath, roomId:state.gameLobby ? state.gameLobby.session.id : null });
     return R.build({ systemSlug: state.view === 'play' && state.sectionSystem ? (state.sectionSystemSlug || null) : null, view: state.view, movieSlug: state.movieSlug, movieId: state.movieId, showSlug: state.showSlug, showKey: state.showKey,
       season: state.showSeason, episode: state.showEpisode, liveCh: extra.live || state.liveChannel || null, liveTab:state.liveTab, playTab: state.playTab, playSub: state.playSub, miscTab: state.miscTab, miscSub: state.miscSub, section: state.section,
-      collectionId: state.collectionId, searchQuery: state.searchQuery, settingsSection: state.settingsSection, adminTab: state.adminTab,
+      collectionId: state.collectionId, searchQuery: state.searchQuery, settingsSection: state.settingsSection, adminTab: state.adminTab, aiTab:state.aiTab,
       sectionLetter:state.sectionLetter, collectionsLetter:state.collectionsLetter, hubTab:state.hubTab, cinemaId:state.cinemaId, requestsTab:state.requestsTab });
   }
   function navUrl(extra){ return BASE + routePath(extra); }
@@ -4874,6 +4877,7 @@ try {
       });
     }
     if (r.view === 'misc') { state.view = 'misc'; state.miscTab = r.miscTab || 'board'; state.miscSub = r.miscSub || ''; return Promise.resolve(); }
+    if (r.view === 'ai') { state.view = 'ai'; state.aiTab = r.aiTab || 'images'; return Promise.resolve(); }
     if (r.view === 'live') { state.view = 'live'; state.liveTab=r.liveCh?(String(r.liveCh).indexOf('radio:')===0?'radio':String(r.liveCh).indexOf('iptv:')===0?'iptv':'relay'):(r.liveTab||'now'); state.liveChannel=r.liveCh||null; state._openLiveCh=null; return Promise.resolve(); }
     if (r.view === 'play' || r.view === 'game') {
       state.view = 'play'; state.playTab = r.playTab || 'games'; state.playSub = r.playSub || '';
@@ -5144,6 +5148,8 @@ try {
       if (achievementsOn()) items.push({ label: 'Achievements', active: tab === 'achievements', go: function(){ goPlayTab('achievements'); } });
     } else if (mode === 'misc') {
       [['board','Board'],['calendar','Calendar'],['drop','Drop'],['ambient','Ambient']].forEach(function(t){ items.push({ label:t[1], active:(state.miscTab||'board')===t[0], go:function(){ state.miscTab=t[0]; state.miscSub=''; if(state.view!=='misc')navigate('misc'); else { pushNav(); render(); } } }); });
+    } else if (mode === 'ai') {
+      items.push({ label:'Images', active:true, go:function(){ navigate('ai'); } });
     } else {
       return null;
     }
@@ -5298,10 +5304,12 @@ try {
       ['vod', 'Library', 'Films, shows and music'],
       ['live', 'Live', 'Relay, IPTV, radio & programme guides'],
       ['play', 'Play', 'Retro games, arcade, quiz nights and leaderboards'],
+      ['ai', 'AI', 'Image generation and AI tools'],
       ['misc', 'Misc', 'Dashboards, private file drop and ambient screens']
     ];
     modes = modes.filter(function(m){
       if (m[0] === 'misc') return !!(state.user && state.user.id && state.user.role !== 'guest');
+      if (m[0] === 'ai') return !!(state.user && state.user.id && state.user.role !== 'guest');
       if (m[0] !== 'home' && !userAreaAllowed({vod:'library', live:'live', play:'games'}[m[0]])) return false;
       if (m[0] === 'live') return !!(state.home && state.home.features && state.home.features.live);
       return true;
@@ -15827,6 +15835,7 @@ function viewCollectionDetail(){
     else if (state.view === 'requests') root.appendChild(shell(lazyView('vc-requests.js', 'VaultcastRequests', 'requests-view', function(mod, host){ mod.render(host); })));
     else if (state.view === 'inbox') { root.appendChild(shell(lazyView('vc-inbox.js', 'VaultcastInbox', 'inbox-view', function(mod, host){ mod.render(host); }))); updateAccountIndicators(); }
     else if (state.view === 'misc') root.appendChild(shell(lazyView('vc-misc.js', 'VaultcastMisc', 'misc-view', function(mod, host){ mod.render(host, state.miscTab || 'board', state.miscSub || ''); })));
+    else if (state.view === 'ai') root.appendChild(shell(lazyView('vc-ai.js', 'VaultcastAI', 'ai-view', function(mod, host){ mod.render(host, state.aiTab || 'images'); })));
     else root.appendChild(viewHome());
   }
 
@@ -15960,7 +15969,7 @@ function viewCollectionDetail(){
   function loadModule(file, globalName){
     if (globalName && window[globalName]) return Promise.resolve(window[globalName]);
     if (moduleLoads[file]) return moduleLoads[file];
-    var css = /^vc-(play|misc|games|calendar)\.js$/.test(file) ? loadExtraCss() : Promise.resolve();
+    var css = /^vc-(play|misc|games|calendar|ai)\.js$/.test(file) ? loadExtraCss() : Promise.resolve();
     moduleLoads[file] = new Promise(function(resolve, reject){
       var sm = document.createElement('script');
       sm.src = BASE + 'index.php?asset=assets/js/' + file + '&v=' + encodeURIComponent(window.__ASSET_VERSION__ || APP_VERSION);
