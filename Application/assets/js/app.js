@@ -13796,12 +13796,22 @@ function viewCollectionDetail(){
         h('strong', { text:tvsSlotLabel(x) }), h('span', { className:'muted', text:' ' + x.days.map(function(d){ return TVS_DAYS[d]; }).join(', ') + ' ' + tvsFmtMin(x.startMin) }) ])); });
       return pane;
     }
+    function duplicateSlot(){
+      var copy = JSON.parse(JSON.stringify(s)), end = s.startMin + s.durationMin, dayOffset = Math.floor(end / 1440);
+      copy.id = tvsUid('slot'); copy.startMin = end % 1440;
+      copy.days = s.days.map(function(day){ return (day + dayOffset) % 7; }).sort(function(a, b){ return a - b; });
+      if (dayOffset) ['validFrom', 'validTo'].forEach(function(key){
+        if (!copy[key]) return;
+        var date = new Date(copy[key] + 'T00:00:00Z'); date.setUTCDate(date.getUTCDate() + dayOffset); copy[key] = date.toISOString().slice(0, 10);
+      });
+      ch.slots.splice(ch.slots.indexOf(s) + 1, 0, copy); tvs.sel = copy.id; tvsMark(); tvsPaint();
+    }
     var durationUpdate;
     function set(k, v, repaint){ s[k] = v; tvsMark(); if (repaint) tvsPaint(); else if (durationUpdate) durationUpdate(); }
     var conflicts=tvsSlotConflicts(s,ch.slots);if(conflicts)pane.appendChild(h('p',{className:'settings-callout',text:'This slot overlaps '+conflicts+' other slot(s). Review timing or days before saving.'}));
     pane.appendChild(h('div', { className:'tvs-row' }, [ h('h3', { text:'Edit slot' }), h('button', { className:'btn ghost', type:'button', text:'Close', onClick:function(){ tvs.sel = null; tvsPaint(); } }) ]));
     pane.appendChild(h('label', {}, [ 'Title', h('input', { type:'text', value:s.title, placeholder:'Shown in the guide (optional)', onChange:function(e){ set('title', e.target.value, true); } }) ]));
-    pane.appendChild(h('div',{className:'row-actions'},[['Every day',[0,1,2,3,4,5,6]],['Weekdays',[0,1,2,3,4]],['Weekends',[5,6]]].map(function(pair){return h('button',{className:'btn ghost',text:pair[0],onClick:function(){set('days',pair[1].slice(),true);}}); })));
+    pane.appendChild(h('div',{className:'row-actions'},[['Every day',[0,1,2,3,4,5,6]],['Weekdays',[0,1,2,3,4]],['Weekends',[5,6]]].map(function(pair){return h('button',{className:'btn ghost',text:pair[0],onClick:function(){set('days',pair[1].slice(),true);}}); }).concat([h('button', { className:'btn ghost', type:'button', text:'Duplicate', title:'Add a copy immediately after this slot', onClick:duplicateSlot })])));
     pane.appendChild(h('div', { className:'tvs-days' }, TVS_DAYS.map(function(dn, d){
       return h('button', { type:'button', className:'tvs-daybtn' + (s.days.indexOf(d) >= 0 ? ' on' : ''), text:dn, onClick:function(){
         var i = s.days.indexOf(d); if (i >= 0) { if (s.days.length > 1) s.days.splice(i, 1); } else s.days.push(d); s.days.sort(); set('days', s.days, true);
@@ -13870,7 +13880,6 @@ function viewCollectionDetail(){
       h('label', {}, [ 'Colour', h('input', { type:'color', value:s.color || '#6c5ce7', onChange:function(e){ set('color', e.target.value, true); } }) ])
     ]));
     pane.appendChild(h('div', { className:'row-actions' }, [
-      h('button', { className:'btn ghost', type:'button', text:'Duplicate', onClick:function(){ var c = JSON.parse(JSON.stringify(s)); c.id = tvsUid('slot'); c.startMin = Math.min(1439, s.startMin + s.durationMin); ch.slots.push(c); tvs.sel = c.id; tvsMark(); tvsPaint(); } }),
       h('button', { className:'btn danger', type:'button', text:'Delete slot', onClick:function(){ tvsDeleteSlot(s.id); } })
     ]));
     return pane;
