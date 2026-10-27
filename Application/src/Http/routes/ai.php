@@ -7,6 +7,8 @@ try {
     if (preg_match('#^/ai/worker/jobs/([a-f0-9]{16})/(progress|complete|fail)$#D', $path, $m)) AIImages::worker($m[2], $m[1]);
 
     $user = Auth::requireUser();
+    if ($path === '/ai/moderation/library' && $method === 'GET') json_out(AIImages::moderationLibrary(Auth::requireAdmin(), $_GET));
+    if (preg_match('#^/ai/moderation/pictures/([a-f0-9]{16})$#D', $path, $m) && in_array($method, ['GET','HEAD'], true)) AIImages::moderationPicture(Auth::requireAdmin(), $m[1]);
     if ($path === '/ai/state' && $method === 'GET') json_out(AIImages::state($user));
     if ($path === '/ai/library' && $method === 'GET') json_out(AIImages::library($user, $_GET));
     if (preg_match('#^/ai/library/([a-f0-9]{16})/favorite$#D', $path, $m) && $method === 'POST') json_out(AIImages::favorite($user, $m[1], filter_var(body_json()['favorite'] ?? false, FILTER_VALIDATE_BOOLEAN)));

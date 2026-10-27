@@ -50,6 +50,9 @@ body[data-mode="ai"] { --accent: #a78bfa; --accent-2: #38bdf8; }
 .ai-library-prompt { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:3; overflow:hidden; overflow-wrap:anywhere; min-height:3.9em; margin:0 0 8px; }
 .ai-library-meta { display:flex; flex-wrap:wrap; gap:5px 9px; margin-bottom:9px; color:var(--muted); font-size:.76rem; }
 .ai-library-more { display:flex; justify-content:center; padding:12px; }
+.ai-review-details { font-size:.85rem; overflow-wrap:anywhere; }
+.ai-review-details summary { cursor:pointer; color:var(--accent); }
+.ai-review-details p { white-space:pre-wrap; }
 .vc-grow { flex: 1 1 auto; min-width: 0; }
 .sr-only { position: absolute !important; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 

@@ -159,8 +159,15 @@ final class Pictures
     }
     /** Owner-only download; images render inline, nothing else is ever stored. */
     public static function serve(array $user, string $id): void {
-        // Owner only (admins included: there is no admin view of other people's pictures).
-        self::signed($user); $r = self::own($user, $id); $file = self::path($r);
+        self::signed($user); self::serveRow(self::own($user, $id));
+    }
+    /** Used only after the AI moderation service verifies that this is an indexed generation. */
+    public static function serveForModeration(array $admin, string $ownerId, string $id): void {
+        if (($admin['role'] ?? '') !== 'admin') json_error('Administrator access required.', 403);
+        self::serveRow(self::own(['id'=>$ownerId], $id));
+    }
+    private static function serveRow(array $r): void {
+        $file = self::path($r);
         if (!is_file($file)) { http_response_code(410); header('Content-Type: text/plain'); exit('This picture is no longer available.'); }
         while (ob_get_level()) @ob_end_clean();
         $etag = '"' . $r['sha1'] . '"';

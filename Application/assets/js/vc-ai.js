@@ -58,9 +58,65 @@
     function deleteSelected(){var ids=Object.keys(selected);if(!ids.length)return;A.confirmDialog('Delete '+ids.length+' generated image'+(ids.length===1?'':'s')+'? This also removes them from your picture library.',{okText:'Delete',danger:true}).then(function(ok){if(!ok)return;call('/ai/library/delete',{method:'POST',body:{ids:ids}}).then(function(){load(false);A.toast('Selected images deleted');}).catch(showError);});}
     query.oninput=function(){clearTimeout(debounce);debounce=setTimeout(function(){load(false);},250);};sort.onchange=function(){load(false);};favorites.onchange=function(){load(false);};load(false);
   }
+  function renderModeration(){
+    if (!A.state.user || A.state.user.role !== 'admin') {
+      host.appendChild(h('p', { text:'Administrator access required.' })); return;
+    }
+    var pageHost = host, offset = 0, loading = false, pending = false, ownersLoaded = false, debounce = 0;
+    var search = h('input', { type:'search', placeholder:'Search prompts, names, or users…', 'aria-label':'Search generations' });
+    var owner = h('select', { 'aria-label':'Filter by user' }, [h('option', { value:'', text:'All users' })]);
+    var sort = h('select', { 'aria-label':'Sort generations' }, [h('option', { value:'newest', text:'Newest first' }), h('option', { value:'oldest', text:'Oldest first' })]);
+    var count = h('span', { className:'muted', role:'status' }), grid = h('div', { className:'ai-library-grid' });
+    var more = button('Load more', function(){ load(true); }, 'ghost'); more.hidden = true;
+    host.append(h('header', { className:'vc-hero ai-hero' }, [h('div', { className:'vc-hero-copy' }, [
+      h('span', { className:'eyebrow', text:'AI Studio · Administrator' }), h('h1', { text:'Moderation' }),
+      h('p', { className:'muted', text:'Review generated images and their prompts across all accounts.' })
+    ])]), h('section', { className:'hub-panel vc-panel' }, [h('div', { className:'hub-panel-body' }, [
+      h('div', { className:'ai-library-controls' }, [search, owner, sort, count]), grid,
+      h('div', { className:'ai-library-more' }, [more])
+    ])]));
+    function load(append){
+      if (!pageHost.isConnected) return;
+      if (loading) { if (!append) pending = true; return; }
+      loading = true; more.disabled = true;
+      var nextOffset = append ? offset + 24 : 0;
+      if (!append) grid.replaceChildren();
+      var params = '?limit=24&offset=' + nextOffset + '&sort=' + sort.value + '&owner_id=' + encodeURIComponent(owner.value) + '&q=' + encodeURIComponent(search.value.trim());
+      call('/ai/moderation/library' + params).then(function(data){
+        if (!pageHost.isConnected) return;
+        offset = nextOffset;
+        count.textContent = data.total + ' generation' + (data.total === 1 ? '' : 's');
+        if (!ownersLoaded) {
+          (data.owners || []).forEach(function(user){ owner.appendChild(h('option', { value:user.id, text:user.name })); });
+          ownersLoaded = true;
+        }
+        (data.items || []).forEach(function(item){
+          var url = A.apiUrl(item.url);
+          grid.appendChild(h('article', { className:'ai-library-card' }, [
+            h('a', { className:'ai-library-image', href:url, target:'_blank', rel:'noopener', 'aria-label':'Open generation by ' + item.owner_name }, [h('img', { src:url, alt:item.prompt || item.name, loading:'lazy' })]),
+            h('div', { className:'ai-library-card-head' }, [h('strong', { text:item.owner_name }), h('time', { className:'muted', text:time(item.created_at) })]),
+            h('p', { className:'ai-library-prompt', text:item.prompt || item.name }),
+            h('details', { className:'ai-review-details' }, [h('summary', { text:'Full prompt and settings' }),
+              h('p', { text:item.prompt || '' }), h('p', { text:'Negative prompt: ' + (item.negative_prompt || 'None') }),
+              h('p', { className:'muted', text:item.width + ' × ' + item.height + ' · ' + item.steps + ' steps · CFG ' + item.cfg_scale + ' · ' + item.scheduler + ' · Seed ' + (item.seed == null ? 'random' : item.seed) })
+            ])
+          ]));
+        });
+        if (!append && !data.total) grid.appendChild(h('p', { className:'muted', text:'No generations match this view.' }));
+        more.hidden = !data.has_more;
+      }).catch(showError).finally(function(){
+        loading = false; more.disabled = false;
+        if (pending) { pending = false; load(false); }
+      });
+    }
+    search.oninput = function(){ clearTimeout(debounce); debounce = setTimeout(function(){ load(false); }, 250); };
+    owner.onchange = sort.onchange = function(){ load(false); };
+    load(false);
+  }
   function render(target, tab){
     host = target; clearTimeout(timer); host.replaceChildren(); host.classList.add('vc-ai');
     if(tab==='library'){renderLibrary();return;}
+    if(tab==='moderation'){renderModeration();return;}
     var prompt = h('textarea', { rows:'4', maxlength:'1200', placeholder:'Describe the image you want to create…', required:true, className:'ai-prompt' });
     var negative = h('textarea', { rows:'2', maxlength:'600', placeholder:'Optional: things to avoid', className:'ai-negative' });
     var width = h('input', { type:'number', min:'512', max:'1536', step:'8', value:'1024', required:true, 'aria-label':'Image width' });
@@ -102,7 +158,7 @@
         h('label', { className:'vc-field' }, [h('span', { text:'Negative prompt' }), negative]),
         h('div', { className:'ai-settings-grid' }, [number('Width', width), number('Height', height), number('Images', count), number('Steps', steps), number('CFG scale', cfg), number('Scheduler', scheduler), number('Seed · blank for random', seed)]),
         advanced,
-        h('div', { className:'ai-form-actions' }, [h('p', { className:'muted ai-note', text:'SDXL starts at 1024 × 1024. Requests run on available contributor computers; completed images are saved to your picture library.' }), h('button', { type:'submit', className:'btn primary', text:'Add to queue' })])
+        h('div', { className:'ai-form-actions' }, [h('p', { className:'muted ai-note', text:'SDXL starts at 1024 × 1024. Requests run on available contributor computers. Generations are saved to your library and may be reviewed by administrators.' }), h('button', { type:'submit', className:'btn primary', text:'Add to queue' })])
       ])
     ]);
     var worker = h('details', { className:'hub-panel vc-panel ai-worker-panel' }, [

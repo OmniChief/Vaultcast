@@ -56,11 +56,9 @@ final class AIImages
     /** Long-lived per-user index for generated images; queue jobs can be pruned without losing library entries. */
     public static function library(array $user, array $query = []): array {
         self::signed($user);
-        $limit = max(1, min(60, (int)($query['limit'] ?? 24)));
-        $offset = max(0, (int)($query['offset'] ?? 0));
-        $term = mb_strtolower(trim((string)($query['q'] ?? '')));
-        $favoritesOnly = filter_var($query['favorites'] ?? false, FILTER_VALIDATE_BOOLEAN);
-        $sort = (string)($query['sort'] ?? 'newest') === 'oldest' ? 'oldest' : 'newest';
+        return self::libraryPage(self::libraryItems($user), $query);
+    }
+    private static function libraryItems(array $user): array {
         $document = self::libraryDocument($user);
         $meta = self::read($document);
         $backfill = [];
@@ -80,12 +78,53 @@ final class AIImages
             if (!is_array($entry)) continue;
             $entry['id'] = $id; $entry['name'] = (string)$row['name']; $entry['url'] = '/api/misc/pictures/' . $id;
             $entry['width'] = (int)$row['width']; $entry['height'] = (int)$row['height']; $entry['bytes'] = (int)$row['bytes'];
-            if ($favoritesOnly && empty($entry['favorite'])) continue;
-            if ($term !== '' && mb_strpos(mb_strtolower((string)($entry['prompt'] ?? '') . ' ' . (string)$entry['name']), $term) === false) continue;
             $items[] = $entry;
         }
+        return $items;
+    }
+    private static function libraryPage(array $items, array $query): array {
+        $limit = max(1, min(60, (int)($query['limit'] ?? 24)));
+        $offset = max(0, (int)($query['offset'] ?? 0));
+        $term = mb_strtolower(mb_substr(trim((string)($query['q'] ?? '')), 0, 1200));
+        $favoritesOnly = filter_var($query['favorites'] ?? false, FILTER_VALIDATE_BOOLEAN);
+        $sort = (string)($query['sort'] ?? 'newest') === 'oldest' ? 'oldest' : 'newest';
+        $items = array_values(array_filter($items, static function ($entry) use ($term, $favoritesOnly) {
+            if ($favoritesOnly && empty($entry['favorite'])) return false;
+            return $term === '' || mb_strpos(mb_strtolower((string)($entry['prompt'] ?? '') . ' ' . (string)($entry['negative_prompt'] ?? '') . ' ' . (string)$entry['name'] . ' ' . (string)($entry['owner_name'] ?? '')), $term) !== false;
+        }));
         usort($items, static function ($a, $b) use ($sort) { return $sort === 'oldest' ? (int)$a['created_at'] <=> (int)$b['created_at'] : (int)$b['created_at'] <=> (int)$a['created_at']; });
         return ['ok'=>true, 'items'=>array_slice($items, $offset, $limit), 'total'=>count($items), 'offset'=>$offset, 'limit'=>$limit, 'has_more'=>$offset + $limit < count($items)];
+    }
+    public static function moderationLibrary(array $admin, array $query = []): array {
+        if (($admin['role'] ?? '') !== 'admin') json_error('Administrator access required.', 403);
+        $items = []; $owners = [];
+        $ownerFilter = (string)($query['owner_id'] ?? '');
+        foreach (Auth::users() as $owner) {
+            if (($owner['id'] ?? '') === '' || (string)$owner['id'] === 'public') continue;
+            $owners[] = ['id'=>(string)$owner['id'], 'name'=>(string)($owner['username'] ?? $owner['id'])];
+            if ($ownerFilter !== '' && (string)$owner['id'] !== $ownerFilter) continue;
+            foreach (self::libraryItems($owner) as $entry) {
+                $entry['owner_id'] = (string)$owner['id'];
+                $entry['owner_name'] = (string)($owner['username'] ?? $owner['id']);
+                $entry['url'] = '/api/ai/moderation/pictures/' . $entry['id'];
+                $items[] = $entry;
+            }
+        }
+        return self::libraryPage($items, $query) + ['owners'=>$owners];
+    }
+    public static function moderationPicture(array $admin, string $id): void {
+        if (($admin['role'] ?? '') !== 'admin') json_error('Administrator access required.', 403);
+        $uid = self::q('SELECT user_id FROM vaultcast_pictures WHERE id=?', [$id])->fetchColumn();
+        $owner = $uid !== false ? Auth::findById((string)$uid) : null;
+        if (!$owner) json_error('Generated image not found.', 404);
+        // Admin review is limited to indexed AI generations, not personal picture uploads.
+        $meta = self::read(self::libraryDocument($owner));
+        $generated = isset($meta[$id]) && is_array($meta[$id]);
+        if (!$generated) foreach (self::read(self::JOBS) as $job) {
+            if (($job['picture_id'] ?? '') === $id && (string)($job['user_id'] ?? '') === (string)$owner['id'] && ($job['status'] ?? '') === 'completed') { $generated = true; break; }
+        }
+        if ($generated) Pictures::serveForModeration($admin, (string)$owner['id'], $id);
+        json_error('Generated image not found.', 404);
     }
     public static function favorite(array $user, string $id, bool $favorite): array {
         self::signed($user);

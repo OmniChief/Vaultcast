@@ -5151,6 +5151,7 @@ try {
     } else if (mode === 'ai') {
       items.push({ label:'Images', active:(state.aiTab||'images')==='images', go:function(){ state.aiTab='images'; if(state.view!=='ai')navigate('ai'); else { pushNav(); render(); } } });
       items.push({ label:'Library', active:state.aiTab==='library', go:function(){ state.aiTab='library'; if(state.view!=='ai')navigate('ai'); else { pushNav(); render(); } } });
+      if (state.user && state.user.role === 'admin') items.push({ label:'Moderation', active:state.aiTab==='moderation', go:function(){ state.aiTab='moderation'; if(state.view!=='ai')navigate('ai'); else { pushNav(); render(); } } });
     } else {
       return null;
     }
