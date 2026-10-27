@@ -627,8 +627,12 @@ try {
         $st = tvs_normalize_state(is_array($incoming) ? ($incoming['studio'] ?? array()) : array());
         $channelId = (string)($incoming['channelId'] ?? '');
         $slotId = (string)($incoming['slotId'] ?? '');
+        $saved = tvs_load();
+        foreach ($st['channels'] as $id => &$channel) $channel['overrunEpoch'] = (int)($saved['channels'][$id]['overrunEpoch'] ?? 0);
+        unset($channel);
+        $station = relay_load_station();
         $now = (int)round(microtime(true) * 1000);
-        $occurrences = tvs_occurrences($st, $channelId, $now, $now + 8 * 86400000);
+        $occurrences = tvs_occurrences($st, $channelId, $now, $now + 8 * 86400000, $station);
         $occurrence = null;
         foreach ($occurrences as $o) if ($o['slot']['id'] === $slotId && $o['end'] > $now) { $occurrence = $o; break; }
         if (!$occurrence) {
@@ -637,7 +641,8 @@ try {
         $station = relay_load_station();
         $required = tvs_slot_programme_blocks($st, $station, $channelId, $occurrence, true);
         $blocks = tvs_occurrence_blocks($st, $station, $channelId, $occurrence);
-        $result = array('ok' => true, 'available' => true, 'startUnix' => $occurrence['start'], 'endUnix' => $occurrence['end'], 'programmeMs' => 0, 'adsMs' => 0, 'paddingMs' => 0, 'gapMs' => $occurrence['end'] - $occurrence['start'], 'requiredMs' => 0);
+        if (($occurrence['slot']['overrun'] ?? '') === 'skip') $required = array_values(array_filter($blocks, function ($b) { return empty($b['padding']); }));
+        $result = array('ok' => true, 'available' => true, 'startUnix' => $occurrence['start'], 'endUnix' => $occurrence['end'], 'delayMs' => $occurrence['start'] - ($occurrence['scheduledStart'] ?? $occurrence['start']), 'overrunMs' => max(0, $occurrence['end'] - ($occurrence['scheduledEnd'] ?? $occurrence['end'])), 'programmeMs' => 0, 'adsMs' => 0, 'paddingMs' => 0, 'gapMs' => $occurrence['end'] - $occurrence['start'], 'requiredMs' => 0);
         foreach ($required as $b) {
             $result['requiredMs'] += $b['durationMs'];
             $result[!empty($b['advert']) ? 'adsMs' : 'programmeMs'] += $b['durationMs'];
