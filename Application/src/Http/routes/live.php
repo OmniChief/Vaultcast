@@ -612,7 +612,7 @@ try {
         require_once STREAM_ROOT . '/src/Live/tvstudio.php';
         $incoming = json_decode((string) file_get_contents('php://input'), true);
         try {
-            tvs_apply_channel_edits(is_array($incoming) ? ($incoming['channels'] ?? array()) : array());
+            tvs_apply_channel_edits(is_array($incoming) ? ($incoming['channels'] ?? array()) : array(), !empty($incoming['replace']));
         } catch (InvalidArgumentException $e) {
             http_response_code(400);
             echo json_encode(array('error' => $e->getMessage()));

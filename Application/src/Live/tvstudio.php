@@ -738,20 +738,59 @@ function tvs_admin_payload() {
 }
 
 /** Apply channel numbering / naming edits made in the studio to the station document. */
-function tvs_apply_channel_edits($edits) {
-    if (!is_array($edits) || !$edits) return;
+function tvs_apply_channel_edits($edits, bool $replace = false) {
+    if (!is_array($edits) || (!$replace && !$edits)) return;
     $station = relay_load_station();
+    $existing = array();
+    foreach ((array)($station['channels'] ?? array()) as $channel) {
+        if (isset($channel['id'])) $existing[(string)$channel['id']] = $channel;
+    }
     $seen = array();
-    foreach ($station['channels'] as $i => $c) {
-        foreach ($edits as $e) {
-            if (!is_array($e) || ($e['id'] ?? '') !== $c['id']) continue;
-            if (isset($e['number'])) $station['channels'][$i]['number'] = max(1, min(9999, (int)$e['number']));
-            if (isset($e['name']) && trim((string)$e['name']) !== '') $station['channels'][$i]['name'] = tvs_str($e['name'], 80);
-            if (isset($e['enabled'])) $station['channels'][$i]['enabled'] = !empty($e['enabled']);
+    $channels = $replace ? array() : (array)($station['channels'] ?? array());
+    $studio = tvs_load();
+    $keep = array();
+    $studioChanged = false;
+
+    foreach ($edits as $edit) {
+        if (!is_array($edit)) continue;
+        $id = tvs_str($edit['id'] ?? '', 120);
+        if ($id === '') continue;
+        if (!$replace && !isset($existing[$id])) continue;
+        if (isset($keep[$id])) throw new InvalidArgumentException('Duplicate channel id.');
+        $keep[$id] = true;
+        $channel = $existing[$id] ?? array(
+            'id' => $id, 'number' => 1, 'name' => 'Channel 1', 'slogan' => '', 'enabled' => true,
+            'libraryIds' => array('movie' => array(), 'episode' => array(), 'commercial' => array(), 'bumper' => array()),
+            'playlist' => array(), 'fillHours' => 6, 'commercialEveryMs' => 1500000,
+            'commercialsPerBreak' => 2, 'bumperBefore' => true, 'seed' => 'seed-' . bin2hex(random_bytes(4)),
+            'rollingSchedule' => array('enabled' => false, 'slots' => array()),
+        );
+        if (isset($edit['number'])) $channel['number'] = max(1, min(9999, (int)$edit['number']));
+        if (isset($edit['name']) && trim((string)$edit['name']) !== '') $channel['name'] = tvs_str($edit['name'], 80);
+        if (array_key_exists('slogan', $edit)) $channel['slogan'] = tvs_str($edit['slogan'], 200);
+        if (array_key_exists('enabled', $edit)) $channel['enabled'] = !empty($edit['enabled']);
+        $number = (int)$channel['number'];
+        if (isset($seen[$number])) throw new InvalidArgumentException('Channel number ' . $number . ' is used twice.');
+        $seen[$number] = true;
+
+        if ($replace) $channels[] = $channel;
+        else {
+            foreach ($channels as $i => $saved) {
+                if (($saved['id'] ?? '') === $id) { $channels[$i] = $channel; break; }
+            }
         }
-        $n = (int)$station['channels'][$i]['number'];
-        if (isset($seen[$n])) throw new InvalidArgumentException('Channel number ' . $n . ' is used twice.');
-        $seen[$n] = true;
+        if (!isset($studio['channels'][$id])) { $studio['channels'][$id] = tvs_default_channel(); $studioChanged = true; }
+    }
+
+    if ($replace) {
+        $station['channels'] = $channels;
+        foreach (array_keys((array)($studio['channels'] ?? array())) as $id) {
+            if (!isset($keep[$id])) { unset($studio['channels'][$id]); $studioChanged = true; }
+        }
+        if ($studioChanged || !$edits) tvs_save($studio);
+    } else {
+        $station['channels'] = $channels;
+        if ($studioChanged) tvs_save($studio);
     }
     relay_save_station($station);
 }
