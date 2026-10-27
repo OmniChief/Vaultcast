@@ -224,7 +224,7 @@ $__liveAction = live_bridge_action();
 if ($__liveAction !== null) {
     if (empty(Store::settings()['features']['live'])) live_bridge_deny(404, 'Live channels are disabled in Settings → Integrations.');
     $readActions = ['guide', 'now', 'iptv', 'iptv_status', 'file', 'iptv_hls', 'logo', 'local_file', 'station', 'catalogue', 'programme_source', 'duration', 'channel_logo', 'iptv_browse', 'epg_refresh', 'm3u', 'tune', 'tv_studio', 'tv_preview', 'tv_health', 'xmltv', 'playlist', 'channels', 'radio', 'radio_search', 'epg_channels'];
-    $writeActions = ['iptv_preview','station', 'iptv_add', 'iptv_remove', 'iptv_toggle', 'iptv_probe', 'iptv_save', 'epg_refresh', 'tv_studio', 'tv_channels', 'channel_logo', 'radio_save', 'epg_map'];
+    $writeActions = ['tv_slot_preview','iptv_preview','station', 'iptv_add', 'iptv_remove', 'iptv_toggle', 'iptv_probe', 'iptv_save', 'epg_refresh', 'tv_studio', 'tv_channels', 'channel_logo', 'radio_save', 'epg_map'];
     $m = $_SERVER['REQUEST_METHOD'] ?? 'GET';
     $isWrite = ($m === 'POST' || $m === 'PUT' || $m === 'PATCH' || $m === 'DELETE');
 
@@ -236,7 +236,7 @@ if ($__liveAction !== null) {
         if (!in_array($__liveAction, $readActions, true)) live_bridge_deny(404, 'Unknown live action');
     }
 
-    if (in_array($__liveAction, ['tv_studio', 'tv_preview', 'tv_health', 'duration', 'programme_source'], true)) live_bridge_require_admin();
+    if (in_array($__liveAction, ['tv_studio', 'tv_preview', 'tv_slot_preview', 'tv_health', 'duration', 'programme_source'], true)) live_bridge_require_admin();
     if ($__liveAction === 'epg_refresh') live_bridge_require_admin();
     if ($__liveAction === 'xmltv' || $__liveAction === 'playlist') live_bridge_tv_export($__liveAction);
     if ($__liveAction === 'logo') live_bridge_logo();
@@ -620,6 +620,33 @@ try {
         }
         echo json_encode(tvs_admin_payload(), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
         exit;
+    }
+    if ($action === 'tv_slot_preview' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        require_once STREAM_ROOT . '/src/Live/tvstudio.php';
+        $incoming = json_decode((string)file_get_contents('php://input'), true);
+        $st = tvs_normalize_state(is_array($incoming) ? ($incoming['studio'] ?? array()) : array());
+        $channelId = (string)($incoming['channelId'] ?? '');
+        $slotId = (string)($incoming['slotId'] ?? '');
+        $now = (int)round(microtime(true) * 1000);
+        $occurrences = tvs_occurrences($st, $channelId, $now, $now + 8 * 86400000);
+        $occurrence = null;
+        foreach ($occurrences as $o) if ($o['slot']['id'] === $slotId && $o['end'] > $now) { $occurrence = $o; break; }
+        if (!$occurrence) {
+            echo json_encode(array('ok' => true, 'available' => false)); exit;
+        }
+        $station = relay_load_station();
+        $required = tvs_slot_programme_blocks($st, $station, $channelId, $occurrence, true);
+        $blocks = tvs_occurrence_blocks($st, $station, $channelId, $occurrence);
+        $result = array('ok' => true, 'available' => true, 'startUnix' => $occurrence['start'], 'endUnix' => $occurrence['end'], 'programmeMs' => 0, 'adsMs' => 0, 'paddingMs' => 0, 'gapMs' => $occurrence['end'] - $occurrence['start'], 'requiredMs' => 0);
+        foreach ($required as $b) {
+            $result['requiredMs'] += $b['durationMs'];
+            $result[!empty($b['advert']) ? 'adsMs' : 'programmeMs'] += $b['durationMs'];
+        }
+        foreach ($blocks as $b) {
+            $result['gapMs'] -= $b['durationMs'];
+            if (!empty($b['padding'])) $result['paddingMs'] += $b['durationMs'];
+        }
+        echo json_encode($result); exit;
     }
     if ($action === 'tv_preview' && $_SERVER['REQUEST_METHOD'] === 'GET') {
         require_once STREAM_ROOT . '/src/Live/tvstudio.php';
