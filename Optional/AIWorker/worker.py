@@ -16,6 +16,7 @@ import urllib.request
 import uuid
 from contributor_setup import prepare, hardware, yes
 from encoding_worker import prepare_encoding, run_encoding, pending_encodings, retryable_upload
+from image_checks import check_image, BlankGenerationError
 
 APPDATA = os.environ.get("APPDATA", os.path.expanduser("~"))
 CONFIG_DIR = os.path.join(APPDATA, "VaultcastAIWorker")
@@ -158,7 +159,7 @@ def graph_for(job, model):
         ids["nc"]: {"id": ids["nc"], "type": "sdxl_compel_prompt", "original_width": width, "original_height": height, "target_width": width, "target_height": height, "is_intermediate": True, "use_cache": True},
         ids["noise"]: {"id": ids["noise"], "type": "noise", "width": width, "height": height, "seed": int(seed), "use_cpu": False, "is_intermediate": True, "use_cache": False},
         ids["denoise"]: {"id": ids["denoise"], "type": "denoise_latents", "steps": int(job.get("steps", 30)), "cfg_scale": float(job.get("cfg_scale", 7)), "scheduler": job.get("scheduler", "euler_a"), "denoising_start": 0.0, "denoising_end": 1.0, "hidiffusion": bool(job.get("hidiffusion", False)), "hidiffusion_raunet": bool(job.get("hidiffusion_raunet", True)), "hidiffusion_window_attn": bool(job.get("hidiffusion_window_attn", True)), "hidiffusion_t1_ratio": float(job.get("hidiffusion_t1_ratio", 0.4)), "hidiffusion_t2_ratio": float(job.get("hidiffusion_t2_ratio", 0.0)), "is_intermediate": True, "use_cache": False},
-        ids["decode"]: {"id": ids["decode"], "type": "l2i", "fp32": bool(job.get("fp32", False)), "tiled": bool(job.get("tiled", False)), "is_intermediate": False, "use_cache": False},
+        ids["decode"]: {"id": ids["decode"], "type": "l2i", "fp32": bool(job.get("fp32", True)), "tiled": bool(job.get("tiled", True)), "is_intermediate": False, "use_cache": False},
     }
     seamless = bool(job.get("seamless_x", False) or job.get("seamless_y", False))
     if seamless:
@@ -232,12 +233,18 @@ def start_progress_listener(cfg, job_id, invoke_item_id):
         except Exception as exc:
             print("Could not send generation progress to Vaultcast:", exc)
 
-    try:
-        client.connect(cfg["invoke"], socketio_path="ws/socket.io", wait_timeout=8)
-        return client, progress
-    except Exception as exc:
-        print("Live InvokeAI progress could not connect; the job will still run:", exc)
-        return None, progress
+    failures = []
+    for transports in (["websocket"], ["polling"]):
+        try:
+            client.connect(cfg["invoke"], socketio_path="ws/socket.io", transports=transports, wait_timeout=8)
+            return client, progress
+        except Exception as exc:
+            failures.append(str(exc))
+            try: client.disconnect()
+            except Exception: pass
+    logging.warning("InvokeAI progress connection failed: %s", "; ".join(failures))
+    print("Live InvokeAI step progress unavailable; using queue-stage polling.")
+    return None, progress
 
 
 def run_job(cfg, job):
@@ -280,9 +287,24 @@ def run_job(cfg, job):
                 image_url = cfg["invoke"] + "/api/v1/images/i/" + urllib.parse.quote(image_name, safe="") + "/full"
                 with urllib.request.urlopen(image_url, timeout=180) as res:
                     data = res.read()
+                try:
+                    check_image(data)
+                except BlankGenerationError:
+                    if not job.get("_precision_retry") and not (job.get("fp32", True) and job.get("tiled", True)):
+                        print("Black image detected. Retrying once with FP32 and tiled VAE decode.")
+                        if progress_client is not None and progress_client.connected: progress_client.disconnect()
+                        return run_job(cfg, dict(job, fp32=True, tiled=True, _precision_retry=True))
+                    raise
                 multipart(cfg["server"] + "/api/ai/worker/jobs/" + job["id"] + "/complete", token, image_name, data)
                 print("Saved to the Vaultcast picture library.")
                 return
+            if progress_client is None:
+                session = item.get("session") if isinstance(item.get("session"), dict) else {}
+                nodes = (session.get("execution_graph") or {}).get("nodes") or {}
+                results = session.get("results") or {}
+                completed = {nodes.get(node, {}).get("type") for node in results} if isinstance(results, dict) and isinstance(nodes, dict) else set()
+                stage = 98 if "l2i" in completed else 90 if "denoise_latents" in completed else 5 if completed else 1
+                if stage > current_progress[0]: current_progress[0] = stage; last_update = 0
             # Keep the queue lease alive while InvokeAI loads models or decodes the image.
             if time.time() - last_update >= 30:
                 try:

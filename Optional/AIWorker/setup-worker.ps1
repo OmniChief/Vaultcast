@@ -45,7 +45,7 @@ try {
     New-Item -ItemType Directory -Force -Path $workerRoot | Out-Null
     try { Start-Transcript -Path $logPath -Append | Out-Null; $transcribing=$true } catch { }
     Set-Location -LiteralPath $PSScriptRoot
-    foreach ($file in @('worker.py','contributor_setup.py','encoding_worker.py')) {
+    foreach ($file in @('worker.py','contributor_setup.py','encoding_worker.py','image_checks.py')) {
         if (!(Test-Path -LiteralPath (Join-Path $PSScriptRoot $file))) { throw "Missing $file. Extract the entire Optional/AIWorker folder; do not run it inside the ZIP." }
     }
     # Keep existing working non-redirected environments; new/repaired installs use the shared path.
@@ -96,12 +96,12 @@ try {
     if (!$hasPip) { Run-Checked $environmentPython @('-m','ensurepip','--upgrade') }
     $step = 'checking contributor dependencies'
     $hasPackages = $false
-    try { & $environmentPython -c 'import socketio,uv' 2>$null; $hasPackages=$LASTEXITCODE -eq 0 } catch { }
+    try { & $environmentPython -c 'import socketio,uv,PIL' 2>$null; $hasPackages=$LASTEXITCODE -eq 0 } catch { }
     if (!$hasPackages) {
         Write-Host "Dependencies are installed only in $environmentPath"
         if ((Read-Host 'Install the contributor packages now? [Y/N]') -notmatch '^(y|yes)$') { return }
         $step = 'installing contributor dependencies'
-        Run-Checked $environmentPython @('-m','pip','install','python-socketio[client]>=5.11,<6','uv==0.13.6')
+        Run-Checked $environmentPython @('-m','pip','install','python-socketio[client]>=5.11,<6','uv==0.13.6','Pillow>=10,<13')
     }
     $step = 'starting the contributor'
     Write-Host "Python setup complete. Contributor diagnostics: $(Join-Path $env:USERPROFILE '.vaultcast\worker.log')"

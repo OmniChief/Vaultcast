@@ -13,6 +13,7 @@ import sys
 import time
 import urllib.parse
 import urllib.request
+from image_checks import check_image
 
 INVOKE_VERSION = "6.14.2"
 ENGINE_URL = "http://127.0.0.1:9090"
@@ -227,9 +228,10 @@ def generation_check(request, url, model, graph_builder):
                         content = response.read(25 * 1048576 + 1)
                     if not content.startswith((b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff", b"RIFF")) or len(content) > 25 * 1048576:
                         raise RuntimeError("InvokeAI did not return a valid-sized image file.")
+                    check_image(content, capability=True)
                     seconds = round(time.monotonic() - start, 1)
                     print("Passed:", str(size) + "x" + str(size), "in", seconds, "seconds.")
-                    return {"images": {"sdxl": {"verified": True, "max_pixels": size * size, "checked_at": int(time.time()), "seconds": seconds, "model_hash": model.get("hash", "")}}, "video": {"verified": False}}
+                    return {"images": {"sdxl": {"verified": True, "validation_version": 2, "max_pixels": size * size, "checked_at": int(time.time()), "seconds": seconds, "model_hash": model.get("hash", "")}}, "video": {"verified": False}}
                 print("Checking", str(size) + "x" + str(size), "-", status, flush=True)
                 time.sleep(5)
             raise RuntimeError("Image check timed out after 30 minutes.")
@@ -254,6 +256,6 @@ def prepare(config, request, graph_builder, force=False):
     version = request(url + "/api/v1/app/version").get("version", "unknown")
     capabilities = config.get("capabilities") or {}
     profile = (capabilities.get("images") or {}).get("sdxl") or {}
-    if force or not profile.get("verified") or profile.get("model_hash") != model.get("hash") or config.get("invoke_version") != version or config.get("hardware") != info:
+    if force or profile.get("validation_version") != 2 or not profile.get("verified") or profile.get("model_hash") != model.get("hash") or config.get("invoke_version") != version or config.get("hardware") != info:
         capabilities = generation_check(request, url, model, graph_builder)
     return {"invoke": url, "model": model, "model_name": model["name"], "invoke_version": version, "hardware": info, "capabilities": capabilities}

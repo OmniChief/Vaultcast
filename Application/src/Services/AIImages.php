@@ -245,7 +245,7 @@ final class AIImages
         $boolean = static function (string $key, bool $default = false) use ($body): bool { return filter_var($body[$key] ?? $default, FILTER_VALIDATE_BOOLEAN); };
         $settings = ['steps'=>$steps, 'cfg_scale'=>(float)$cfgScale, 'scheduler'=>$scheduler, 'seed'=>$seed,
             'hidiffusion'=>$boolean('hidiffusion'), 'hidiffusion_raunet'=>$boolean('hidiffusion_raunet', true), 'hidiffusion_window_attn'=>$boolean('hidiffusion_window_attn', true),
-            'hidiffusion_t1_ratio'=>(float)$hiT1, 'hidiffusion_t2_ratio'=>(float)$hiT2, 'fp32'=>$boolean('fp32'), 'tiled'=>$boolean('tiled'),
+            'hidiffusion_t1_ratio'=>(float)$hiT1, 'hidiffusion_t2_ratio'=>(float)$hiT2, 'fp32'=>$boolean('fp32',true), 'tiled'=>$boolean('tiled',true),
             'seamless_x'=>$boolean('seamless_x'), 'seamless_y'=>$boolean('seamless_y')];
         $now = time(); $ids = [];
         for ($i = 0; $i < $count; $i++) $ids[] = self::id();

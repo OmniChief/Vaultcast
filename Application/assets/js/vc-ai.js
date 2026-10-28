@@ -151,8 +151,8 @@
     var hiWindowAttn = h('input', { type:'checkbox' }); hiWindowAttn.checked = true;
     var hiT1 = h('input', { type:'number', min:'0', max:'1', step:'0.05', value:'0.4' });
     var hiT2 = h('input', { type:'number', min:'0', max:'1', step:'0.05', value:'0' });
-    var fp32 = h('input', { type:'checkbox' });
-    var tiled = h('input', { type:'checkbox' });
+    var fp32 = h('input', { type:'checkbox', checked:true });
+    var tiled = h('input', { type:'checkbox', checked:true });
     var seamlessX = h('input', { type:'checkbox' });
     var seamlessY = h('input', { type:'checkbox' });
     function check(label, input){ return h('label', { className:'ai-check' }, [input, h('span', { text:label })]); }
