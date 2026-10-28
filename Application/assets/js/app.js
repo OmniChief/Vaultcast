@@ -11099,7 +11099,7 @@ h('div', { className:'cv-find-bar' }, [
     var playbackGroup=h('fieldset',{className:'settings-fieldset dp-settings-group'},[h('legend',{text:'Playback policy & transcoding'})]);
     Array.from(root.children).forEach(function(child){playbackGroup.appendChild(child);});root.appendChild(playbackGroup);
     root.appendChild(h('h3',{text:'Background library conversion'}));
-    root.appendChild(h('p',{className:'muted',text:'These settings control queued full-file conversions, independently of playback transcoding. Completed batch conversions replace the original after a duration check, retaining the existing library entry.'}));
+    root.appendChild(h('p',{className:'muted',text:'These settings control queued full-file conversions, independently of playback transcoding. Completed batch conversions replace the original after upload, retaining the existing library entry.'}));
     var backgroundSettings=renderConvertAdminPanel(s,true);backgroundSettings.classList.add('settings-fieldset');root.appendChild(backgroundSettings);return root;
   }
   function renderConvertAdminPanel(s,settingsOnly){
@@ -11372,7 +11372,7 @@ h('div', { className:'cv-find-bar' }, [
           if(job.transfer_rate>0)text+=' · '+transferSize(job.transfer_rate)+'/s';
           if(job.transfer_eta>0){var secs=Number(job.transfer_eta);text+=' · ~'+(secs>=60?Math.ceil(secs/60)+' min':Math.ceil(secs)+' sec')+' left';}
         }else if(phase==='hash')text+=' · Checking local file';
-        else if(phase==='verify')text+=' · Checking duration and replacing original';
+        else if(phase==='verify')text+=' · Replacing original';
         return h('div',{className:'muted cv-glass-transfer',role:'status',text:text});
       }
 
@@ -12167,7 +12167,7 @@ h('div', { className:'cv-find-bar' }, [
 
         h('section', { className:'cv-section settings-card' }, [
           h('h3', { className:'admin-section-title', text:'Output & server load' }),
-          h('p', { className:'muted', text:'Batch output is checked for matching duration, renamed to the original basename with the converted extension, and replaces the original under the same library ID. CPU nice and disk I/O class apply on Linux; thread limits apply on every platform.' }),
+          h('p', { className:'muted', text:'Completed batch output is renamed to the original basename with the converted extension, and replaces the original under the same library ID. CPU nice and disk I/O class apply on Linux; thread limits apply on every platform.' }),
           selectEl('target_container', 'Container', c.target_container||'mp4', [
             { value:'mp4', label:'MP4 (best DirectPlay)' },
             { value:'m4v', label:'M4V' },
@@ -12223,7 +12223,7 @@ h('div', { className:'cv-find-bar' }, [
           cvToggleRow('cv_batch_external_only', 'Only use external workers', 'Saves immediately and shares the policy with DirectPlay Settings. Batch jobs wait for contributors; they do not fall back to server encoding.', externalOnly),
           h('p',{id:'cv_batch_policy_status',className:'muted',role:'status'}),
           h('p',{id:'cv_batch_contributors',className:'muted',text:'Checking encoding computers…'}),
-          h('p', { className:'muted', text:'Glass queue + Find all for DirectPlay gaps (real H.264/AAC). Restrict to Movies / TV / Anime — games are never scanned. Completed conversions automatically replace their originals after a duration check. Results stream in live; Stop keeps what was found. TV series stay in accordions.' }),
+          h('p', { className:'muted', text:'Glass queue + Find all for DirectPlay gaps (real H.264/AAC). Restrict to Movies / TV / Anime — games are never scanned. Completed conversions automatically replace their originals after upload. Results stream in live; Stop keeps what was found. TV series stay in accordions.' }),
           h('div', { id:'cv_batch_list', className:'cv-batch-list cv-glass-wrap' }, [ pendingContent({ className:'muted', }) ]),
           h('div', { className:'row-actions' }, [
             h('button', { className:'btn', text:'Refresh queue', onClick: function(){ refreshConvertAdmin(); } }),

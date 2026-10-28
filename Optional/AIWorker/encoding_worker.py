@@ -78,7 +78,7 @@ class ConsoleProgress:
             elif phase == "encode" and 0 < percent < 100:
                 text += "  ETA " + self.remaining((now - sample["started"]) * (100 - percent) / percent)
             elif phase == "verify":
-                text = "Finalising: duration check and replacing original " + "|/-\\"[int(now * 2) % 4]
+                text = "Finalising: replacing original " + "|/-\\"[int(now * 2) % 4]
             if self.terminal:
                 columns = max(40, shutil.get_terminal_size((120, 25)).columns)
                 text = text[:columns - 1]
@@ -472,9 +472,9 @@ def run_encoding(cfg, job, request):
                         transferred(sent, size, 90, 9)
             finally:
                 uploader.close()
-            phase("verify", "checking duration and replacing original", 99)
+            phase("verify", "replacing original", 99)
             update()
-            # Completion owns the queue lock while checking duration and replacing; stop progress first.
+            # Completion owns the queue lock while replacing the original; stop progress first.
             stop.set()
             thread.join(timeout=25)
             for attempt in range(3):

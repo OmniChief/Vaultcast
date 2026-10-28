@@ -1143,12 +1143,6 @@ class Convert {
             if (file_exists($target) && (!$srcExists || \Vaultcast\Paths::real($target)!==$srcReal)) $reject('Replacement filename already exists; no files were changed: '.$target,409);
             if (!is_writable($parent)) $reject('Folder is not writable: '.$parent,403);
             $outputStat=['size'=>(int)filesize($destReal),'mtime'=>(int)filemtime($destReal)];
-            $dDest=($job['output_duration_stat'] ?? null)===$outputStat ? (float)($job['output_duration_s'] ?? 0) : self::probeDuration($destReal);
-            if (!$dDest) $reject('Could not verify converted duration; original kept',409);
-            $dSrc=(float)($job['duration_s'] ?? 0);
-            if ($dSrc<=0 && $srcExists) $dSrc=self::probeDuration($srcReal);
-            if ($dSrc && $dDest<$dSrc-max(10.0,$dSrc*0.03)) $reject('Converted file is shorter than the original; original kept',409);
-
             Store::invalidate('catalogue');
             $cat=Catalogue::get(); $oldId=(string)($job['item_id'] ?? '');
             $oldItem=$cat['items'][$oldId] ?? null;
@@ -1163,12 +1157,11 @@ class Convert {
             $known=Store::get('directplay_profiles',[])[$destReal] ?? [];
             $ready=!empty($known['ready']) || !empty($job['external_worker_id']) || in_array($job['quality_mode'] ?? '',['directplay','near_lossless','balanced','efficient'],true);
             $profile=['ready'=>$ready && in_array($extension,['mp4','m4v','mov'],true)]+$outputStat;
-            $job['output_duration_s']=$dDest; $job['output_duration_stat']=$outputStat;
             $replacement=$oldItem;
             $replacement['id']=$oldId; $replacement['path']=$target;
             $replacement['rel']=substr($target,strlen($root)+1); $replacement['ext']=$extension;
             $replacement['size']=(int)filesize($destReal); $replacement['mtime']=(int)filemtime($destReal);
-            $replacement['duration']=$dDest; $replacement['caption_source']=$src;
+            $replacement['caption_source']=$src;
             unset($replacement['directplay_path'],$replacement['directplay_versions'],$replacement['directplay_ready'],$replacement['prepared_copy'],$replacement['video_codec'],$replacement['audio_codec']);
             $oldIds=[];
             foreach ($cat['items'] ?? [] as $id=>$item) if ((string)$id!==$oldId && in_array($normal((string)($item['path'] ?? '')),$paths,true)) { unset($cat['items'][$id]); $oldIds[]=(string)$id; }
@@ -1403,7 +1396,7 @@ class Convert {
                 $job['started_at']=date('c'); $job['finished_at']=null; $job['progress']=0;
                 $job['message']='Contributor '.$worker['name'].' · downloading source';
                 $job['source_stat']=['size'=>(int)filesize($src),'mtime'=>(int)filemtime($src)];
-                $job['duration_s']=self::probeDuration($src);
+                $job['duration_s']=(float)($item['duration'] ?? 0) ?: null;
                 $job['quality_mode']=$quality['quality_mode'];
                 self::saveQueue($q);
                 return ['ok'=>true,'job'=>['id'=>$job['id'],'title'=>$job['title'],'lease'=>$job['lease_token'],
@@ -1500,19 +1493,6 @@ class Convert {
                 $part=(string)$job['part']; clearstatcache(true,$part);
                 $bytes=(int)($body['bytes'] ?? 0);
                 if (!is_file($part) || $bytes<1000 || filesize($part)!==$bytes) json_error('Converted upload is incomplete.',422);
-                // Read container duration only: no full-file hash, decode or codec validation on the server.
-                $actual=self::probeDuration($part); $duration=(float)($job['duration_s'] ?? 0);
-                if (!$actual) json_error('Could not read the uploaded video duration with ffprobe within 8 seconds. Upload retained for retry; check the server ffprobe path and availability.',503);
-                if ($duration<=0 || abs($actual-$duration)>max(3,$duration*0.01)) {
-                    // Existing jobs can contain durations from the old stream-metadata probe.
-                    $current=self::probeDuration((string)$job['src']);
-                    if (!$current) json_error('Could not read the original video duration with ffprobe. Upload retained for retry; check the server ffprobe path and availability.',503);
-                    $duration=$current; $job['duration_s']=$current;
-                }
-                $tolerance=max(3,$duration*0.01);
-                if (abs($actual-$duration)>$tolerance) json_error(sprintf('Converted duration %.3fs differs from original %.3fs (allowed difference %.3fs). Local conversion retained; original not replaced.',$actual,$duration,$tolerance),422);
-                $job['output_duration_s']=$actual;
-                $job['output_duration_stat']=['size'=>$bytes,'mtime'=>(int)filemtime($part)];
                 $src=(string)$job['src']; clearstatcache(true,$src);
                 if (!is_file($src) || filesize($src)!==$job['source_stat']['size'] || filemtime($src)!==$job['source_stat']['mtime']) json_error('The original changed; it was kept. Cancel and queue a fresh conversion.',409);
                 if (is_file($job['dest'])) json_error('Output already exists; it was not overwritten.',409);
