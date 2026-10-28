@@ -14,7 +14,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
-from contributor_setup import prepare, hardware, yes
+from contributor_setup import prepare, hardware, yes, release_managed_models
 from encoding_worker import prepare_encoding, run_encoding, pending_encodings, retryable_upload
 from image_checks import check_image, BlankGenerationError
 
@@ -323,9 +323,13 @@ def run_job(cfg, job):
     finally:
         if progress_client is not None and progress_client.connected:
             progress_client.disconnect()
+        release_managed_models(request)
 
 
 def main():
+    if "--uninstall" in sys.argv:
+        print("Run uninstall-worker.cmd or start-worker.cmd --uninstall to remove this contributor.")
+        return
     cfg = load_config()
     token = cfg["worker_token"]
     images = cfg["contributions"].get("images")

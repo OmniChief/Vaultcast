@@ -3,7 +3,7 @@ declare(strict_types=1);
 header('Cache-Control: no-store');
 try {
     if (preg_match('#^/ai/worker/register$#D', $path)) AIImages::worker('register');
-    if (preg_match('#^/ai/worker/(heartbeat|claim)$#D', $path, $m)) AIImages::worker($m[1]);
+    if (preg_match('#^/ai/worker/(heartbeat|claim|unregister)$#D', $path, $m)) AIImages::worker($m[1]);
     if ($path==='/ai/worker/encoding/claim') AIImages::worker('encoding-claim');
     if (preg_match('#^/ai/worker/encoding/jobs/([a-f0-9]{16})/(source|status|progress|chunk|complete|fail)$#D',$path,$m)) AIImages::worker('encoding-'.$m[2],$m[1]);
     if (preg_match('#^/ai/worker/jobs/([a-f0-9]{16})/(progress|complete|fail)$#D', $path, $m)) AIImages::worker($m[2], $m[1]);

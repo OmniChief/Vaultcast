@@ -23,6 +23,27 @@ SDXL_SOURCE = "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/r
 _managed_process = None
 
 
+def release_managed_models(request):
+    if _managed_process is None or _managed_process.poll() is not None:
+        return
+    try:
+        request(ENGINE_URL + "/api/v2/models/empty_model_cache", "POST", {}, timeout=30)
+        print("Released unused model cache from the dedicated contributor engine.")
+    except Exception as error:
+        print("Could not release the dedicated engine cache:", error)
+
+
+def record_engine(root, installing=False):
+    try: previous = json.loads(ENGINE_STATE.read_text(encoding="utf-8"))
+    except (OSError, ValueError): previous = {}
+    roots = previous.get("owned_roots") or ([previous["root"]] if previous.get("root") else [])
+    roots = list(dict.fromkeys([str(value) for value in roots] + [str(root)]))
+    DATA.mkdir(parents=True, exist_ok=True)
+    temporary = ENGINE_STATE.with_suffix(".tmp")
+    temporary.write_text(json.dumps({"root": str(root), "owned_roots": roots, "version": INVOKE_VERSION, "installing": installing}), encoding="utf-8")
+    temporary.replace(ENGINE_STATE)
+
+
 @atexit.register
 def stop_managed_engine():
     if _managed_process is not None and _managed_process.poll() is None:
@@ -125,6 +146,7 @@ def install_engine(info):
     if not yes("Download and install this contributor engine now?", False):
         raise RuntimeError("Setup stopped before installing the engine.")
     marker.touch()
+    record_engine(root, installing=True)
     gpu = info["gpus"][0]
     try: legacy = float(gpu["compute_capability"]) < 7.5
     except (ValueError, KeyError): legacy = True
@@ -143,7 +165,7 @@ def install_engine(info):
     if not config.exists():
         config.write_text("schema_version: 4.0.3\nhost: 127.0.0.1\nport: 9090\nenable_partial_loading: true\nkeep_ram_copy_of_weights: false\n", encoding="utf-8")
     DATA.mkdir(parents=True, exist_ok=True)
-    ENGINE_STATE.write_text(json.dumps({"root": str(root), "version": INVOKE_VERSION}), encoding="utf-8")
+    record_engine(root)
     return root
 
 
@@ -257,5 +279,10 @@ def prepare(config, request, graph_builder, force=False):
     capabilities = config.get("capabilities") or {}
     profile = (capabilities.get("images") or {}).get("sdxl") or {}
     if force or profile.get("validation_version") != 2 or not profile.get("verified") or profile.get("model_hash") != model.get("hash") or config.get("invoke_version") != version or config.get("hardware") != info:
-        capabilities = generation_check(request, url, model, graph_builder)
+        try:
+            capabilities = generation_check(request, url, model, graph_builder)
+        finally:
+            release_managed_models(request)
+    else:
+        release_managed_models(request)
     return {"invoke": url, "model": model, "model_name": model["name"], "invoke_version": version, "hardware": info, "capabilities": capabilities}

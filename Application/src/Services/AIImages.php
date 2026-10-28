@@ -342,6 +342,10 @@ final class AIImages
         $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
         if ($action === 'register' && $method === 'POST') json_out(self::registerWorker(body_json()));
         $worker = self::authenticateWorker();
+        if ($action==='unregister' && $method==='POST') {
+            self::mutate(self::WORKERS,static function (&$workers) use($worker) { unset($workers[$worker['id']]); });
+            json_out(['ok'=>true]);
+        }
         if ($action === 'heartbeat' && $method === 'POST') { self::touchWorker($worker, body_json()); json_out(['ok' => true, 'worker_id' => $worker['id']]); }
         if ($action!=='encoding-chunk' || (int)($worker['last_seen'] ?? 0)<time()-15) self::touchWorker($worker);
         if ($action==='encoding-claim' || strpos($action,'encoding-')===0) {
