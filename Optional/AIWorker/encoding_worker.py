@@ -21,6 +21,7 @@ from contributor_setup import DATA, yes
 
 FLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 BUILD = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+NATIVE_DATA = Path(os.environ.get("USERPROFILE", os.path.expanduser("~"))) / ".vaultcast"
 
 
 class ConsoleProgress:
@@ -171,13 +172,17 @@ def digest(path):
 
 
 def probe(binary, path):
-    return json.loads(subprocess.check_output([binary, "-v", "error", "-show_streams", "-show_format", "-of", "json", str(path)],
-        timeout=45, creationflags=FLAGS))
+    try:
+        return json.loads(subprocess.check_output([str(Path(binary).resolve()), "-v", "error", "-show_streams", "-show_format", "-of", "json", str(Path(path).resolve())],
+            stderr=subprocess.PIPE, timeout=45, creationflags=FLAGS))
+    except subprocess.CalledProcessError as error:
+        raise RuntimeError("ffprobe failed (exit " + str(error.returncode) + "): " + (error.stderr or b"").decode(errors="replace")[-2000:]) from error
 
 
 def transfer_root(cfg):
     owner = hashlib.sha256((cfg["server"] + "|" + cfg["worker_id"]).encode()).hexdigest()[:24]
-    return DATA / "conversions" / owner
+    legacy = DATA / "conversions" / owner
+    return legacy.resolve() if legacy.is_dir() else NATIVE_DATA / "conversions" / owner
 
 
 def save_transfer(root, state):
@@ -275,9 +280,13 @@ def download_ffmpeg(url, expected, archive):
 
 
 def prepare_encoding(config, force=False):
-    directory = DATA / "ffmpeg"
-    ffmpeg = config.get("ffmpeg") or shutil.which("ffmpeg") or str(directory / "ffmpeg.exe")
+    # Native FFmpeg must share these paths with Python, including the Store distribution.
+    directory = NATIVE_DATA / "ffmpeg"
+    previous = DATA / "ffmpeg" / "ffmpeg.exe"
+    ffmpeg = config.get("ffmpeg") or shutil.which("ffmpeg") or str(previous if previous.is_file() else directory / "ffmpeg.exe")
     ffprobe = config.get("ffprobe") or shutil.which("ffprobe") or str(Path(ffmpeg).with_name("ffprobe.exe" if os.name == "nt" else "ffprobe"))
+    if Path(ffmpeg).is_file(): ffmpeg = str(Path(ffmpeg).resolve())
+    if Path(ffprobe).is_file(): ffprobe = str(Path(ffprobe).resolve())
     if not Path(ffmpeg).is_file() or not Path(ffprobe).is_file():
         if os.name != "nt":
             raise RuntimeError("Install FFmpeg and ffprobe with libx264/AAC support using your package manager, then rerun setup.")
@@ -313,7 +322,10 @@ def prepare_encoding(config, force=False):
         archive.unlink(missing_ok=True)
         print("FFmpeg extraction complete.", flush=True)
         ffmpeg, ffprobe = str(directory / "ffmpeg.exe"), str(directory / "ffprobe.exe")
-    version = subprocess.check_output([ffmpeg, "-version"], text=True, timeout=15, creationflags=FLAGS).splitlines()[0]
+    result = subprocess.run([ffmpeg, "-version"], capture_output=True, text=True, errors="replace", timeout=15, creationflags=FLAGS)
+    if result.returncode or not result.stdout.strip():
+        raise RuntimeError("FFmpeg could not start (exit " + str(result.returncode) + "): " + (result.stderr or result.stdout)[-2000:])
+    version = result.stdout.splitlines()[0]
     profile = (config.get("capabilities") or {}).get("encoding") or {}
     if force or not profile.get("verified") or config.get("ffmpeg_version") != version:
         default = max(1, min(8, (os.cpu_count() or 2) - 1))
@@ -322,11 +334,15 @@ def prepare_encoding(config, force=False):
         if not 1 <= threads <= (os.cpu_count() or 1):
             raise RuntimeError("Choose a CPU thread count between 1 and " + str(os.cpu_count() or 1))
         print("Checking H.264/AAC encoding with a one-second local clip...")
-        with tempfile.TemporaryDirectory(prefix="vaultcast-encoder-check-") as temporary:
+        temporary_root = NATIVE_DATA / "tmp"
+        temporary_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="encoder-check-", dir=temporary_root) as temporary:
             output = Path(temporary) / "check.mp4"
-            subprocess.run([ffmpeg, "-nostdin", "-v", "error", "-f", "lavfi", "-i", "color=size=128x128:rate=10",
+            result = subprocess.run([ffmpeg, "-nostdin", "-v", "error", "-f", "lavfi", "-i", "color=size=128x128:rate=10",
                 "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-t", "1", "-c:v", "libx264", "-threads", str(threads),
-                "-pix_fmt", "yuv420p", "-c:a", "aac", "-movflags", "+faststart", str(output)], check=True, timeout=60, creationflags=FLAGS)
+                "-pix_fmt", "yuv420p", "-c:a", "aac", "-movflags", "+faststart", str(output)], capture_output=True, text=True, errors="replace", timeout=60, creationflags=FLAGS)
+            if result.returncode:
+                raise RuntimeError("FFmpeg encoding check failed (exit " + str(result.returncode) + "). Output folder: " + str(output.parent) + "\n" + (result.stderr or result.stdout)[-3000:])
             streams = probe(ffprobe, output)["streams"]
             if not any(s.get("codec_name") == "h264" for s in streams) or not any(s.get("codec_name") == "aac" for s in streams):
                 raise RuntimeError("FFmpeg did not pass the H.264/AAC check.")

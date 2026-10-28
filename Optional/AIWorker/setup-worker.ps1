@@ -104,6 +104,7 @@ try {
         Run-Checked $environmentPython @('-m','pip','install','python-socketio[client]>=5.11,<6','uv==0.13.6')
     }
     $step = 'starting the contributor'
+    Write-Host "Python setup complete. Contributor diagnostics: $(Join-Path $env:USERPROFILE '.vaultcast\worker.log')"
     if ($transcribing) { Stop-Transcript | Out-Null; $transcribing=$false }
     & $environmentPython (Join-Path $PSScriptRoot 'worker.py') @WorkerArguments
     if ($LASTEXITCODE -ne 0) { throw "Contributor exited with code $LASTEXITCODE" }

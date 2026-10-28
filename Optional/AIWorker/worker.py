@@ -1,7 +1,9 @@
 """Optional Vaultcast image and video-encoding contributor (Windows, Python 3.10+)."""
 import getpass
 import json
+import logging
 import os
+from pathlib import Path
 import random
 import re
 import socket
@@ -328,6 +330,7 @@ def main():
                 if result.get("job"):
                     try: run_encoding(cfg, result["job"], request)
                     except Exception as exc:
+                        logging.exception("Conversion or upload paused")
                         print("Conversion/upload paused:", exc)
                         if retryable_upload(exc):
                             print("Files kept. Retrying in 15 seconds.")
@@ -370,8 +373,15 @@ def main():
 
 
 if __name__ == "__main__":
+    log_path = Path(os.environ.get("USERPROFILE", os.path.expanduser("~"))) / ".vaultcast" / "worker.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(filename=log_path, encoding="utf-8", level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.info("Contributor starting with Python %s", sys.executable)
+    print("Worker diagnostic log:", log_path, flush=True)
     try:
         main()
     except Exception as e:
+        logging.exception("Contributor setup failed")
         print("Setup error:", e)
+        print("Full error saved to:", log_path)
         input("Press Enter to close.")
