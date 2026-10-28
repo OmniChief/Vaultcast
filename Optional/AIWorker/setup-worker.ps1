@@ -1,7 +1,10 @@
 param([Parameter(ValueFromRemainingArguments=$true)][string[]]$WorkerArguments)
 $ErrorActionPreference = 'Stop'
 $workerRoot = Join-Path $env:LOCALAPPDATA 'VaultcastAIWorker'
-$environmentPath = Join-Path $workerRoot 'worker-venv'
+$legacyEnvironmentPath = Join-Path $workerRoot 'worker-venv'
+# Store Python virtualizes AppData. The user-profile folder is shared with ordinary PowerShell.
+$environmentRoot = Join-Path $env:USERPROFILE '.vaultcast'
+$environmentPath = Join-Path $environmentRoot 'worker-venv'
 $logPath = Join-Path $workerRoot 'setup.log'
 $step = 'starting contributor setup'
 $transcribing = $false
@@ -45,6 +48,14 @@ try {
     foreach ($file in @('worker.py','contributor_setup.py','encoding_worker.py')) {
         if (!(Test-Path -LiteralPath (Join-Path $PSScriptRoot $file))) { throw "Missing $file. Extract the entire Optional/AIWorker folder; do not run it inside the ZIP." }
     }
+    # Keep existing working non-redirected environments; new/repaired installs use the shared path.
+    $legacyPython = Join-Path $legacyEnvironmentPath 'Scripts\python.exe'
+    if (Test-Path -LiteralPath $legacyPython) {
+        try {
+            & $legacyPython -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) and sys.maxsize > 2**32 else 1)' 2>$null
+            if ($LASTEXITCODE -eq 0) { $environmentPath=$legacyEnvironmentPath; $environmentRoot=$workerRoot }
+        } catch { }
+    }
     $step = 'finding a working 64-bit Python 3.10 or newer'
     $python = Find-WorkingPython
     if (!$python) {
@@ -68,15 +79,16 @@ try {
     }
     if (!$healthy) {
         $step = 'rebuilding the contributor Python environment'
+        New-Item -ItemType Directory -Force -Path $environmentRoot | Out-Null
         if (Test-Path -LiteralPath $environmentPath) {
             $resolvedEnvironment = [IO.Path]::GetFullPath($environmentPath)
-            if ([IO.Path]::GetDirectoryName($resolvedEnvironment) -ne [IO.Path]::GetFullPath($workerRoot)) { throw 'Unexpected environment path; refusing to move it.' }
+            if ([IO.Path]::GetDirectoryName($resolvedEnvironment) -ne [IO.Path]::GetFullPath($environmentRoot)) { throw 'Unexpected environment path; refusing to move it.' }
             $backupName = 'worker-venv.broken-' + [Guid]::NewGuid().ToString('N')
             Rename-Item -LiteralPath $environmentPath -NewName $backupName
             Write-Host "Broken environment kept as $backupName. Pairing, models and retained conversions are preserved."
         }
         Run-Checked $python @('-m','venv',$environmentPath)
-        Run-Checked $environmentPython @('-c','import sys; print("Environment ready:",sys.executable)')
+        Run-Checked $environmentPython @('-c',"import sys; print('Environment ready:',sys.executable)")
     }
     $step = 'checking pip'
     $hasPip = $false
