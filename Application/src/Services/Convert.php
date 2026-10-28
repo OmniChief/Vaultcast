@@ -1097,119 +1097,98 @@ class Convert {
         } finally { self::unlockQueue($queueLock); }
     }
 
-    /**
-     * Completed job: delete the original source file, keep the converted file
-     * (same folder), repoint catalogue / progress / collections, mark done.
-     */
+    /** Replace a source with its converted bytes while retaining the library identity. */
     public static function removeOriginal(string $jobId): array {
-        $queueLock = self::editQueueLock();
+        $queueLock=self::editQueueLock();
         try {
-        $q = self::queue();
-        $i = self::findJob($q, $jobId);
-        if ($i < 0) json_error('Job not found', 404);
-        $job = $q[$i];
-        if (($job['status'] ?? '') !== 'done') json_error('Convert has not completed successfully', 400);
-        if (!empty($job['original_removed'])) {
-            return ['ok' => true, 'job' => $job, 'message' => 'Original already removed'];
-        }
+            $q=self::queue(); $i=self::findJob($q,$jobId);
+            if ($i<0) json_error('Job not found',404);
+            $job=$q[$i];
+            if (($job['status'] ?? '')!=='done') json_error('Convert has not completed successfully',400);
+            $src=str_replace('\\','/',(string)($job['src'] ?? ''));
+            $dest=str_replace('\\','/',(string)($job['dest'] ?? ''));
+            if (!empty($job['original_removed']) && !preg_match('/\.directplay\.[^.]+$/i',$dest)) return ['ok'=>true,'job'=>$job,'message'=>'Original already replaced'];
+            $destReal=$dest!=='' ? \Vaultcast\Paths::real($dest) : false;
+            if (!$destReal || !is_file($destReal)) json_error('Converted file not found: '.$dest,409);
+            if (!self::underLibraryRoot($destReal)) json_error('Converted file is outside the library roots',400);
+            if (filesize($destReal)<1000) json_error('Converted file looks incomplete; original kept',409);
+            $parent=\Vaultcast\Paths::real(dirname($src));
+            if (!$parent || $parent!==dirname($destReal)) json_error('Converted file must be beside the original',409);
+            $extension=strtolower(pathinfo($destReal,PATHINFO_EXTENSION));
+            if (!isset(self::CONTAINERS[$extension])) json_error('Unsupported converted container',409);
+            $target=$parent.'/'.pathinfo($src,PATHINFO_FILENAME).'.'.$extension;
+            $srcReal=\Vaultcast\Paths::real($src); $srcExists=$srcReal!==false && is_file($srcReal);
+            if ($srcExists && $srcReal===$destReal) json_error('Source and converted file are the same path',409);
+            if ($srcExists && isset($job['source_stat']) && ((int)filesize($srcReal)!==$job['source_stat']['size'] || (int)filemtime($srcReal)!==$job['source_stat']['mtime'])) json_error('The original changed after conversion; it was kept',409);
+            if (file_exists($target) && (!$srcExists || \Vaultcast\Paths::real($target)!==$srcReal)) json_error('Replacement filename already exists; no files were changed: '.$target,409);
+            if (!is_writable($parent)) json_error('Folder is not writable: '.$parent,403);
+            $dDest=self::probeDuration($destReal);
+            if ($dDest===null) json_error('Could not verify converted duration; original kept',409);
+            $dSrc=$srcExists ? self::probeDuration($srcReal) : (float)($job['duration_s'] ?? 0);
+            if ($dSrc && $dDest<$dSrc-max(10.0,$dSrc*0.03)) json_error('Converted file is shorter than the original; original kept',409);
 
-        $src = (string)($job['src'] ?? '');
-        $dest = (string)($job['dest'] ?? '');
-        $destReal = $dest !== '' ? \Vaultcast\Paths::real($dest) : false;
-        if ($destReal === false || !is_file($destReal)) json_error('Converted file not found: ' . $dest, 409);
-        $destSize = (int)@filesize($destReal);
-        if ($destSize < 1048576) json_error('Converted file looks too small (' . $destSize . ' bytes) - original kept', 409);
-        if (!self::underLibraryRoot($destReal)) json_error('Converted file is outside the library roots', 400);
+            Store::invalidate('catalogue');
+            $cat=Catalogue::get(); $oldId=(string)($job['item_id'] ?? '');
+            $oldItem=$cat['items'][$oldId] ?? null;
+            $normal=static function(string $path): string { $path=str_replace('\\','/',$path); return PHP_OS_FAMILY==='Windows' ? strtolower($path) : $path; };
+            $paths=array_map($normal,array_values(array_unique([$src,$dest,$destReal,$target])));
+            if ($oldItem && !in_array($normal((string)($oldItem['path'] ?? '')),$paths,true)) json_error('The library item has changed; no files were replaced',409);
+            if (!$oldItem) foreach ($cat['items'] ?? [] as $item) if (in_array($normal((string)($item['path'] ?? '')),$paths,true)) { $oldItem=$item; break; }
+            if (!$oldItem || $oldId==='') json_error('Library item not found; no files were replaced',409);
+            $section=(string)($oldItem['section'] ?? $job['section'] ?? ''); $root=false;
+            foreach (Store::settings()['sections'] ?? [] as $sec) if (($sec['id'] ?? '')===$section) { $root=\Vaultcast\Paths::real((string)$sec['path']); break; }
+            if (!$root || strpos($target,$root.'/')!==0) json_error('Replacement is outside its library section',409);
+            $profile=self::copyProfile($destReal);
+            $replacement=$oldItem;
+            $replacement['id']=$oldId; $replacement['path']=$target;
+            $replacement['rel']=substr($target,strlen($root)+1); $replacement['ext']=$extension;
+            $replacement['size']=(int)filesize($destReal); $replacement['mtime']=(int)filemtime($destReal);
+            $replacement['duration']=$dDest; $replacement['caption_source']=$src;
+            unset($replacement['directplay_path'],$replacement['directplay_versions'],$replacement['directplay_ready'],$replacement['prepared_copy'],$replacement['video_codec'],$replacement['audio_codec']);
+            $oldIds=[];
+            foreach ($cat['items'] ?? [] as $id=>$item) if ((string)$id!==$oldId && in_array($normal((string)($item['path'] ?? '')),$paths,true)) { unset($cat['items'][$id]); $oldIds[]=(string)$id; }
+            $cat['items'][$oldId]=$replacement;
+            $counts=[]; $shows=[];
+            foreach ($cat['items'] as $item) { $sid=(string)$item['section']; $counts[$sid]=($counts[$sid] ?? 0)+1; if (!empty($item['show'])) $shows[$sid][$item['show']]=true; }
+            foreach ($cat['sections'] as &$sec) { $sid=(string)$sec['id']; $sec['count']=$counts[$sid] ?? 0; if (in_array($sec['type'] ?? '',['tv','anime'],true)) $sec['show_count']=count($shows[$sid] ?? []); }
+            unset($sec); $cat['item_count']=count($cat['items']); $cat['updated_at']=date('c');
+            $profiles=Store::get('directplay_profiles',[]); unset($profiles[$destReal]);
+            $profiles[$target]=array_replace($profile,['canonical_id'=>$oldId,'original_removed'=>true,'source'=>$src]);
+            $job['dest']=$target; $job['dest_item_id']=$oldId; $job['original_removed']=true;
+            $job['original_removed_at']=date('c'); $job['resolved']=true; $job['resolved_at']=date('c');
+            $job['resolution']='original_removed'; $job['message']='Done - original replaced by '.basename($target);
+            $q[$i]=$job;
 
-        $srcReal = $src !== '' ? \Vaultcast\Paths::real($src) : false;
-        $srcExists = $srcReal !== false && is_file($srcReal);
-        if ($srcExists) {
-            if(isset($job['source_stat']) && ((int)filesize($srcReal)!==$job['source_stat']['size'] || (int)filemtime($srcReal)!==$job['source_stat']['mtime']))json_error('The original changed after conversion. It was kept; review or regenerate the copy.',409);
-            if ($srcReal === $destReal) json_error('Source and converted file are the same path', 400);
-            if (dirname($srcReal) !== dirname($destReal)) json_error('Converted file is not beside the original - refusing to delete', 400);
-            if (!self::underLibraryRoot($srcReal)) json_error('Original is outside the library roots', 400);
-            if (!is_writable(dirname($srcReal))) json_error('Folder not writable: ' . dirname($srcReal), 403);
-
-            // Verify the converted file plays through (duration within 3% / 10 s of the source).
-            $dDest = self::probeDuration($destReal);
-            if ($dDest === null) json_error('Could not read converted file duration (ffprobe) - original kept', 409);
-            $dSrc = self::probeDuration($srcReal);
-            if ($dSrc !== null && $dDest < $dSrc - max(10.0, $dSrc * 0.03)) {
-                json_error(sprintf('Converted file is shorter than the original (%.0fs vs %.0fs) - original kept', $dDest, $dSrc), 409);
+            // Preserve rollback bytes until the database changes have committed.
+            $backup=$parent.'/.vaultcast-replace-'.$jobId.'-'.bin2hex(random_bytes(4)).'.bak';
+            if ($srcExists && !@rename($srcReal,$backup)) json_error('Could not move the original aside; no files were replaced',500);
+            if (!@rename($destReal,$target)) {
+                if ($srcExists && !@rename($backup,$srcReal)) throw new RuntimeException('Replacement failed; original remains at '.$backup);
+                json_error('Could not rename the converted file; original restored',500);
             }
-        }
-
-        // Make sure the converted file is in the catalogue before the original disappears.
-        $section = (string)($job['section'] ?? '');
-        $oldItem = !empty($job['item_id']) ? Catalogue::item((string)$job['item_id']) : null;
-        if ($section === '' && $oldItem) $section = (string)($oldItem['section'] ?? '');
-        $newItem = $section !== '' ? Catalogue::ingestFile($destReal, $section, false) : null;
-        if (!$newItem) json_error('Could not add converted file to the catalogue - original kept', 500);
-        $newId = (string)$newItem['id'];
-        if(!Catalogue::item($newId))json_error('The converted version is hidden from the catalogue. Restore it before replacing the original.',409);
-
-        if ($srcExists) {
-            if (!@unlink($srcReal)) {
-                $err = error_get_last();
-                Catalogue::mergeDirectPlayVersions();
-                json_error('Could not delete original: ' . ($err['message'] ?? 'permission denied'), 500);
+            try {
+                $result=\Vaultcast\Database::transaction(static function () use ($cat,$profiles,$oldIds,$oldId,$job,$q) {
+                    if (!Store::set('directplay_profiles',$profiles)) throw new RuntimeException('Could not save replacement identity');
+                    if (!Catalogue::save($cat,false)) throw new RuntimeException('Could not save replacement catalogue entry');
+                    $saved=Catalogue::item($oldId);
+                    if (!$saved || ($saved['path'] ?? '')!==$job['dest']) throw new RuntimeException('Replacement library entry was not retained');
+                    $prog=self::migrateProgress($oldIds,$oldId); $cols=self::migrateCollections($oldIds,$oldId);
+                    $n=self::resolveLinkedRequests($job,'Done - original replaced',$oldId);
+                    if (!self::saveQueue($q)) throw new RuntimeException('Could not save replacement job');
+                    return ['progress_migrated'=>$prog,'collection_links_migrated'=>$cols,'requests_resolved'=>$n];
+                });
+            } catch (\Throwable $error) {
+                $restored=@rename($target,$destReal);
+                if ($srcExists) $restored=@rename($backup,$srcReal) && $restored;
+                Store::invalidate();
+                if (!$restored) throw new RuntimeException('Database update failed; check replacement files at '.$target.' and '.$backup,0,$error);
+                throw $error;
             }
-            clearstatcache(true, $srcReal);
-        }
-
-        $oldIds = Catalogue::removePath($srcExists ? $srcReal : $src);
-        $oldId = (string)($job['item_id'] ?? '');
-        // Retain the source identity so saved links, favourites and metadata pins survive.
-        if($oldId!=='' && $oldId!==$newId && (!Catalogue::item($oldId) || ($oldItem && (string)($oldItem['path'] ?? '')===$src))) {
-            $convertedId=$newId;$cat=Catalogue::get();$replacement=$cat['items'][$convertedId] ?? $newItem;
-            foreach(['title','year','show','season','episode','episode_title','poster','show_poster','season_poster'] as $field)if(isset($oldItem[$field]))$replacement[$field]=$oldItem[$field];
-            $replacement['id']=$oldId;$replacement['caption_source']=$src;unset($cat['items'][$convertedId]);$cat['items'][$oldId]=$replacement;
-            $profiles=Store::get('directplay_profiles',[]);
-            $profiles[$destReal]=array_replace($profiles[$destReal] ?? [],['canonical_id'=>$oldId,'original_removed'=>true,'source'=>$src]);
-            \Vaultcast\Database::transaction(static function()use($profiles,$cat){Store::set('directplay_profiles',$profiles);Catalogue::save($cat);});
-            Store::invalidate('catalogue');$oldIds[]=$convertedId;$newId=$oldId;
-        }
-        if ($oldId !== '' && $oldId !== $newId && !in_array($oldId, $oldIds, true)) {
-            // catalogue item for the original may carry an un-normalised path
-            $old = Catalogue::item($oldId);
-            if ($old && (string)($old['path'] ?? '') === $src) $oldIds = array_merge($oldIds, Catalogue::removeIds([$oldId]));
-        }
-        if ($oldId !== '' && !in_array($oldId, $oldIds, true)) $oldIds[] = $oldId;
-        $oldIds = array_values(array_unique(array_filter($oldIds, function ($x) use ($newId) { return $x !== '' && $x !== $newId; })));
-
-        $prog = self::migrateProgress($oldIds, $newId);
-        $cols = self::migrateCollections($oldIds, $newId);
-
-        $job['dest_item_id'] = $newId;
-        $n = self::resolveLinkedRequests($job, 'Done - converted, original removed', $newId);
-
-        $q = self::queue();
-        $i = self::findJob($q, $jobId);
-        if ($i >= 0) {
-            $q[$i]['dest_item_id'] = $newId;
-            $q[$i]['original_removed'] = true;
-            $q[$i]['original_removed_at'] = date('c');
-            $q[$i]['resolved'] = true;
-            $q[$i]['resolved_at'] = date('c');
-            $q[$i]['resolution'] = 'original_removed';
-            $q[$i]['message'] = $srcExists ? 'Done - original removed' : 'Done - original was already gone; catalogue updated';
-            self::saveQueue($q);
-            $job = $q[$i];
-        }
-        self::audit('remove-original job=' . $jobId . ' src=' . $src . ' dest=' . $destReal . ' new=' . $newId
-            . ' old=' . implode(',', $oldIds) . ' progress=' . $prog . ' collections=' . $cols . ' requests=' . $n
-            . ($srcExists ? '' : ' (src already missing)'));
-        return [
-            'ok' => true,
-            'job' => $job,
-            'deleted' => $srcExists ? $srcReal : null,
-            'kept' => $destReal,
-            'new_item_id' => $newId,
-            'removed_item_ids' => $oldIds,
-            'progress_migrated' => $prog,
-            'collection_links_migrated' => $cols,
-            'requests_resolved' => $n,
-        ];
+            Store::invalidate('catalogue');
+            $warning=null;
+            if ($srcExists && !@unlink($backup)) $warning='Replaced successfully; the old file could not be removed from '.$backup;
+            self::audit('replace job='.$jobId.' src='.$src.' target='.$target.' id='.$oldId.' aliases='.implode(',',$oldIds));
+            return ['ok'=>true,'job'=>$job,'deleted'=>$srcExists ? $src : null,'kept'=>$target,'new_item_id'=>$oldId,'removed_item_ids'=>$oldIds,'warning'=>$warning]+$result;
         } finally { self::unlockQueue($queueLock); }
     }
 

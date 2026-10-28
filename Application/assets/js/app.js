@@ -11285,10 +11285,12 @@ h('div', { className:'cv-find-bar' }, [
       }
       function removeConvertOriginal(job, btn){
         if (!job || !job.id) return;
+        var source=String(job.src||''),converted=String(job.dest||''),extension=(converted.match(/\.([^.\/\\]+)$/)||[])[1]||'mp4';
+        var replacement=source.replace(/\.[^.\/\\]+$/,'.'+extension);
         var msg = 'Replace original with converted file for "' + (job.title || job.item_id || 'item') + '"?\n\n'
-          + 'Delete: ' + (job.src || '?') + '\n\n'
-          + 'Keep (same folder): ' + (job.dest || '?') + '\n\n'
-          + 'The converted file is checked first (size + duration). The catalogue, watch progress and collection links move to the converted file, and the job is marked done. This cannot be undone.';
+          + 'Replace: ' + (job.src || '?') + '\n\n'
+          + 'Rename converted file to: ' + replacement + '\n\n'
+          + 'The original library entry, watch progress and collection links are kept. The old file is removed after the catalogue update succeeds. This cannot be undone.';
         confirmDialog(msg, { okText:'Replace original', danger:true }).then(function(ok){
           if (!ok) return;
           if (btn) { btn.disabled = true; btn.textContent = 'Replacing\u2026'; }
@@ -11297,7 +11299,7 @@ h('div', { className:'cv-find-bar' }, [
               if (btn) { btn.disabled = false; btn.textContent = 'Replace'; }
               return toast((res && res.error) || 'Remove failed - original kept', { kind:'bad', ms: 6500 });
             }
-            toast('Original removed - marked done' + (res.requests_resolved ? (' (' + res.requests_resolved + ' TV request' + (res.requests_resolved === 1 ? '' : 's') + ' closed)') : ''), { kind:'ok' });
+            toast(res.warning || 'Original replaced; library entry retained' + (res.requests_resolved ? (' (' + res.requests_resolved + ' TV request' + (res.requests_resolved === 1 ? '' : 's') + ' closed)') : ''), { kind:res.warning?'warn':'ok' });
             refreshConvertAdmin();
           }).catch(function(){
             if (btn) { btn.disabled = false; btn.textContent = 'Replace'; }
@@ -11565,6 +11567,7 @@ h('div', { className:'cv-find-bar' }, [
       function paintJobRow(job){
         var actions = [];
         var needsAction = job.status === 'done' && !job.resolved;
+        if(job.status==='done' && job.original_removed && /\.directplay\.[^.]+$/i.test(job.dest||'')) actions.push(h('button',{className:'btn primary cv-glass-btn',text:'Finish replacement',title:'Rename the converted file and repair its library entry',onClick:function(e){removeConvertOriginal(job,e.currentTarget);}}));
         var pct = jobProgressPct(job);
         if (job.status === 'queued' || job.status === 'running') {
           actions.push(h('button', { className:'btn ghost cv-glass-btn', text:'Cancel', onClick: function(){ cancelJob(job); }}));

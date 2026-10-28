@@ -631,11 +631,14 @@ class Catalogue {
     public static function buildItem(string $full, string $rel, string $rootReal, string $sectionId, string $type, array $videoExt, array $audioExt, ?int $size = null, ?int $mtime = null): array {
         $ext = strtolower(pathinfo($full, PATHINFO_EXTENSION));
         $id = substr(sha1($sectionId . '|' . $rel), 0, 16);
-        if(preg_match('/\.directplay\.[^.]+$/i',$full)) {
-            if(self::$directPlayProfiles===null)self::$directPlayProfiles=Store::get('directplay_profiles',[]);
-            $profile=self::$directPlayProfiles[str_replace('\\','/',$full)] ?? [];
-            if(!empty($profile['original_removed']) && !is_file((string)($profile['source'] ?? '')) && preg_match('/^[a-f0-9]{16}$/D',(string)($profile['canonical_id'] ?? '')))$id=$profile['canonical_id'];
-        }
+        if(self::$directPlayProfiles===null)self::$directPlayProfiles=Store::get('directplay_profiles',[]);
+        $profile=self::$directPlayProfiles[str_replace('\\','/',$full)] ?? [];
+        // Replacements keep their library identity after the .directplay suffix is removed too.
+        $source=str_replace('\\','/',(string)($profile['source'] ?? ''));
+        $sameSource=PHP_OS_FAMILY==='Windows' ? strcasecmp($source,str_replace('\\','/',$full))===0 : $source===str_replace('\\','/',$full);
+        if(!empty($profile['original_removed']) && ($sameSource || !is_file($source)) &&
+            (int)($profile['size'] ?? -1)===($size ?? (int)@filesize($full)) && (int)($profile['mtime'] ?? -1)===($mtime ?? (int)@filemtime($full)) &&
+            preg_match('/^[a-f0-9]{16}$/D',(string)($profile['canonical_id'] ?? '')))$id=$profile['canonical_id'];
         $title = self::guessTitle((string)preg_replace('/(?:\.directplay)+(?=\.[^.]+$)/i','',$rel), $type);
         $episodeTitle = $title['episode_title'] ?? null;
         if (($type === 'tv' || $type === 'anime') && $full) {
