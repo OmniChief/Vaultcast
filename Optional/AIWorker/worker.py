@@ -7,6 +7,7 @@ from pathlib import Path
 import random
 import re
 import socket
+import threading
 import sys
 import time
 import traceback
@@ -57,6 +58,69 @@ def save_config(config):
     os.replace(temporary, CONFIG_PATH)
 
 
+def ask_number(label, minimum, maximum, default):
+    while True:
+        try:
+            answer = int(input(label + " [" + str(default) + "]: ").strip() or default)
+            if minimum <= answer <= maximum: return answer
+        except ValueError: pass
+        print("Choose a whole number between", minimum, "and", maximum)
+
+
+def available_cpu_cores():
+    if os.name == "nt":
+        import ctypes
+        kernel = ctypes.windll.kernel32
+        kernel.GetCurrentProcess.restype = ctypes.c_void_p
+        kernel.GetProcessAffinityMask.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t), ctypes.POINTER(ctypes.c_size_t)]
+        process_mask, system_mask = ctypes.c_size_t(), ctypes.c_size_t()
+        if kernel.GetProcessAffinityMask(kernel.GetCurrentProcess(), ctypes.byref(process_mask), ctypes.byref(system_mask)):
+            return [index for index in range(ctypes.sizeof(process_mask) * 8) if process_mask.value & (1 << index)]
+    if hasattr(os, "sched_getaffinity"): return sorted(os.sched_getaffinity(0))
+    return list(range(os.cpu_count() or 1))
+
+
+def choose_slots(modes):
+    available = available_cpu_cores()
+    result = []
+    if modes.get("images"):
+        result.append({"id":1,"images":True,"encoding":False,"cpu_cores":[]})
+        print("One image worker will use InvokeAI's GPU queue.")
+    if modes.get("encoding"):
+        count = ask_number("How many conversion workers", 1, min(32-len(result),len(available)), 1)
+        print("CPU cores below are logical processors allocated to FFmpeg; leave some free for gaming if wanted.")
+        used = 0
+        for index in range(count):
+            number = len(result) + 1
+            remaining = len(available) - used
+            maximum = remaining - (count-index-1)
+            amount = ask_number("CPU cores for conversion worker " + str(index+1) + " (" + str(remaining) + " unassigned)",1,maximum,min(2,maximum))
+            cores = available[used:used+amount]; used += amount
+            result.append({"id":number,"images":False,"encoding":True,"cpu_cores":cores})
+    return result
+
+
+def show_slots(slots):
+    for slot in slots:
+        kinds = (['images'] if slot.get('images') else []) + (['encoding'] if slot.get('encoding') else [])
+        print("Worker", slot["id"], ":", " + ".join(kinds), "|", len(slot.get("cpu_cores", [])), "encoding CPU cores")
+
+
+def worker_headers(cfg):
+    return {"X-Vaultcast-Worker": cfg["worker_token"], "X-Vaultcast-Slot": str(cfg.get("slot_id", 0))}
+
+
+def slot_label(cfg):
+    return "[Worker " + str(cfg.get("slot_id", 1)) + "]"
+
+
+def active_capabilities(cfg):
+    caps = dict(cfg.get("capabilities") or {})
+    if not cfg["contributions"].get("images"): caps["images"] = {}
+    if not cfg["contributions"].get("encoding"): caps["encoding"] = {"verified": False}
+    return caps
+
+
 def load_config():
     os.makedirs(CONFIG_DIR, exist_ok=True)
     config = {}
@@ -66,26 +130,34 @@ def load_config():
     if "--pair" in sys.argv:
         config.pop("worker_token", None)
         config.pop("worker_id", None)
-    force = any(arg in sys.argv for arg in ("--setup", "--retest"))
+    force = "--retest" in sys.argv
+    has_previous = bool(config.get("contributions"))
+    reuse = yes("Use previous configuration?", True) if has_previous else False
     info = hardware()
-    modes = config.get("contributions")
-    if force or not modes:
-        print("\nVaultcast contributor setup")
-        print("Encoding produces MP4/H.264/AAC using this computer's CPU; no AI engine or GPU is needed.")
+    modes = dict(config.get("contributions") or {})
+    if not reuse:
+        print("\nChoose what this computer will contribute for this run.")
         capable = any(g.get("vram_mb", 0) >= 6144 for g in info.get("gpus", [])) and (info.get("ram_gb") or 16) >= 12
+        capable = capable or bool((config.get("capabilities", {}).get("images", {}).get("sdxl") or {}).get("verified"))
         if capable:
-            print("This computer can try AI image contribution. A real generation check confirms its supported profile.")
-            choice = input("Contribute [1] AI images, [2] video encoding, [3] both [3]: ").strip() or "3"
-            if choice not in ("1", "2", "3"): raise RuntimeError("Choose 1, 2 or 3.")
-            modes = {"images": choice in ("1", "3"), "encoding": choice in ("2", "3")}
+            choice = ask_number("Contribute: 1=AI images, 2=video encoding, 3=both", 1, 3, 3)
+            modes = {"images": choice in (1, 3), "encoding": choice in (2, 3)}
         else:
-            print("No supported NVIDIA image-generation hardware detected (at least 6 GB VRAM and 12 GB system RAM).")
-            if not yes("Contribute video encoding only?"): raise RuntimeError("No contribution selected.")
+            print("No supported NVIDIA image hardware detected. Video encoding can still use the CPU.")
+            if not yes("Contribute video encoding?"): raise RuntimeError("No contribution selected.")
             modes = {"images": False, "encoding": True}
+        config["slots"] = choose_slots(modes)
+    elif not config.get("slots"):
+        cores = available_cpu_cores()[:max(1, int(config.get("encoding_threads", 1)))] if modes.get("encoding") else []
+        config["slots"] = [{"id": 1, **modes, "cpu_cores": cores}]
+    modes = {kind: any(slot.get(kind) for slot in config["slots"]) for kind in ("images", "encoding")}
+    if modes["encoding"]:
+        config["encoding_threads"] = max(len(slot.get("cpu_cores", [])) for slot in config["slots"] if slot.get("encoding"))
+    show_slots(config["slots"])
     config["hardware"] = info
     if modes.get("images"):
         try:
-            config.update(prepare(config, request, graph_for, force=force))
+            config.update(prepare(dict(config, _autostart=reuse), request, graph_for, force=force))
         except Exception as exc:
             print("AI image setup failed:", exc)
             if not modes.get("encoding") or not yes("Continue as an encoding-only contributor?"):
@@ -93,15 +165,17 @@ def load_config():
             modes["images"] = False
     caps = config.setdefault("capabilities", {})
     if not modes.get("images"):
-        caps["images"] = {}
-        config["model_name"] = ""
+        config.setdefault("model_name", "")
     if modes.get("encoding"):
         print("Encoding uses your own Vaultcast account. Only videos your account can access are assigned to this computer.")
         settings = prepare_encoding(config, force=force)
         caps["encoding"] = settings.pop("encoding_profile")
         config.update(settings)
     else:
-        caps["encoding"] = {"verified": False}
+        caps.setdefault("encoding", {"verified": False})
+    for slot in config["slots"]:
+        if not modes.get("images"): slot["images"] = False
+    config["slots"] = [slot for slot in config["slots"] if slot.get("images") or slot.get("encoding")]
     config["contributions"] = modes
     save_config(config)
     if config.get("worker_token"):
@@ -124,7 +198,7 @@ def load_config():
             continue
         try:
             register = request(server + "/api/ai/worker/register", "POST", {
-                "pair_code": code, "name": socket.gethostname(), "model_name": model_name, "model_base": "sdxl" if modes.get("images") else "", "capabilities": config["capabilities"], "hardware": config["hardware"], "invoke_version": config.get("invoke_version", "")
+                "pair_code": code, "name": socket.gethostname(), "model_name": model_name, "model_base": "sdxl" if modes.get("images") else "", "capabilities": active_capabilities(config), "hardware": config["hardware"], "invoke_version": config.get("invoke_version", "")
             })
             break
         except urllib.error.HTTPError as exc:
@@ -187,10 +261,10 @@ def graph_for(job, model):
     return {"id": "vaultcast-" + uuid.uuid4().hex, "nodes": nodes, "edges": edges}
 
 
-def multipart(url, token, filename, content):
+def multipart(url, token, filename, content, slot=0):
     boundary = "----Vaultcast" + uuid.uuid4().hex
     body = ("--" + boundary + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"" + os.path.basename(filename) + "\"\r\nContent-Type: image/png\r\n\r\n").encode() + content + ("\r\n--" + boundary + "--\r\n").encode()
-    req = urllib.request.Request(url, data=body, headers={"X-Vaultcast-Worker": token, "Content-Type": "multipart/form-data; boundary=" + boundary}, method="POST")
+    req = urllib.request.Request(url, data=body, headers={"X-Vaultcast-Worker": token, "Content-Type": "multipart/form-data; boundary=" + boundary, "X-Vaultcast-Slot": str(slot)}, method="POST")
     with urllib.request.urlopen(req, timeout=180) as res:
         return json.loads(res.read().decode())
 
@@ -229,7 +303,7 @@ def start_progress_listener(cfg, job_id, invoke_item_id):
             return
         progress[0] = percent
         try:
-            request(cfg["server"] + "/api/ai/worker/jobs/" + job_id + "/progress", "POST", {"progress": percent}, {"X-Vaultcast-Worker": cfg["worker_token"]}, timeout=15)
+            request(cfg["server"] + "/api/ai/worker/jobs/" + job_id + "/progress", "POST", {"progress": percent}, worker_headers(cfg), timeout=15)
         except Exception as exc:
             print("Could not send generation progress to Vaultcast:", exc)
 
@@ -249,8 +323,8 @@ def start_progress_listener(cfg, job_id, invoke_item_id):
 
 def run_job(cfg, job):
     token = cfg["worker_token"]
-    headers = {"X-Vaultcast-Worker": token}
-    print("Generating:", job["prompt"][:100])
+    headers = worker_headers(cfg)
+    print(slot_label(cfg), "Generating:", job["prompt"][:100])
     graph = graph_for(job, cfg["model"])
     enqueued = request(cfg["invoke"] + "/api/v1/queue/default/enqueue_batch", "POST", {"batch": {"graph": graph, "runs": 1, "origin": "vaultcast"}})
     item_id = (enqueued.get("item_ids") or [None])[0]
@@ -260,6 +334,7 @@ def run_job(cfg, job):
     last_update = 0
     try:
         while True:
+            if cfg.get("_stop_event") and cfg["_stop_event"].is_set(): raise KeyboardInterrupt()
             item = request(cfg["invoke"] + "/api/v1/queue/default/i/" + urllib.parse.quote(str(item_id)), headers=headers)
             status = item.get("status")
             if status == "failed":
@@ -295,7 +370,7 @@ def run_job(cfg, job):
                         if progress_client is not None and progress_client.connected: progress_client.disconnect()
                         return run_job(cfg, dict(job, fp32=True, tiled=True, _precision_retry=True))
                     raise
-                multipart(cfg["server"] + "/api/ai/worker/jobs/" + job["id"] + "/complete", token, image_name, data)
+                multipart(cfg["server"] + "/api/ai/worker/jobs/" + job["id"] + "/complete", token, image_name, data, cfg.get("slot_id", 0))
                 print("Saved to the Vaultcast picture library.")
                 return
             if progress_client is None:
@@ -326,76 +401,126 @@ def run_job(cfg, job):
         release_managed_models(request)
 
 
-def main():
-    if "--uninstall" in sys.argv:
-        print("Run uninstall-worker.cmd or start-worker.cmd --uninstall to remove this contributor.")
-        return
-    cfg = load_config()
-    token = cfg["worker_token"]
-    images = cfg["contributions"].get("images")
-    encoding = cfg["contributions"].get("encoding")
-    if os.name == "nt" and images:
-        print("Existing InvokeAI memory settings are preserved. A dedicated contributor engine uses partial loading.")
-        print("InvokeAI recommends partial loading (enabled by default) and, on Windows NVIDIA systems, setting CUDA - Sysmem Fallback Policy to Prefer No Sysmem Fallback in NVIDIA Control Panel.")
-    print("Worker online for", " + ".join(([cfg.get("model_name", "SDXL")] if images else []) + (["MP4/H.264/AAC encoding"] if encoding else [])), "- press Ctrl+C to stop.")
-    print("To rerun setup or capability checks later: start-worker.cmd --setup or --retest")
+_active_conversions = set()
+_conversion_lock = threading.Lock()
+_image_lock = threading.Lock()
+
+
+def run_slot(cfg, stop):
+    images, encoding = cfg["contributions"].get("images"), cfg["contributions"].get("encoding")
+    headers = worker_headers(cfg)
     prefer_encoding = True
-    while True:
+    while not stop.is_set():
         try:
             image_ready = images
             if images:
                 try: request(cfg["invoke"] + "/api/v1/app/version", timeout=5)
                 except Exception: image_ready = False
-            caps = dict(cfg["capabilities"])
-            if not image_ready: caps["images"] = {}
-            headers = {"X-Vaultcast-Worker": token}
-            request(cfg["server"] + "/api/ai/worker/heartbeat", "POST", {"ready": image_ready or encoding, "model_name": cfg.get("model_name"), "model_base": "sdxl" if images else "", "capabilities": caps, "hardware": cfg["hardware"], "invoke_version": cfg.get("invoke_version", "")}, headers, timeout=15)
-            retained = pending_encodings(cfg) if encoding else []
+            with _conversion_lock:
+                retained = [job for job in pending_encodings(cfg) if job["id"] not in _active_conversions] if encoding else []
             if encoding and (retained or prefer_encoding or not image_ready):
-                result = {"job": retained[0]} if retained else request(cfg["server"] + "/api/ai/worker/encoding/claim", "POST", {}, headers, timeout=40)
-                if result.get("job"):
-                    try: run_encoding(cfg, result["job"], request)
-                    except Exception as exc:
-                        logging.exception("Conversion or upload paused")
-                        print("Conversion/upload paused:", exc)
-                        if retryable_upload(exc):
-                            print("Files kept. Retrying in 15 seconds.")
-                            time.sleep(15)
+                result = {"job": retained[0]} if retained else request(cfg["server"] + "/api/ai/worker/encoding/claim", "POST", {}, headers, timeout=15)
+                job = result.get("job")
+                if job:
+                    with _conversion_lock:
+                        claimed = job["id"] not in _active_conversions
+                        if claimed: _active_conversions.add(job["id"])
+                    if not claimed:
+                        stop.wait(1)
+                        continue
+                    try:
+                        run_encoding(cfg, job, request)
+                    except Exception as error:
+                        logging.exception("Conversion/upload paused in slot %s", cfg["slot_id"])
+                        print(slot_label(cfg), "Conversion/upload paused:", error)
+                        if retryable_upload(error):
+                            print(slot_label(cfg), "Files kept. Retrying in 15 seconds.")
+                            stop.wait(15)
+                    finally:
+                        with _conversion_lock: _active_conversions.discard(job["id"])
                     prefer_encoding = False
                     continue
-            result = request(cfg["server"] + "/api/ai/worker/claim", "POST", {}, headers, timeout=30) if image_ready else {}
-            job = result.get("job")
             prefer_encoding = True
-            if job:
+            if image_ready and _image_lock.acquire(blocking=False):
                 try:
-                    run_job(cfg, job)
-                except Exception as exc:
-                    print("Job failed:", exc)
-                    traceback.print_exc()
-                    try:
-                        request(cfg["server"] + "/api/ai/worker/jobs/" + job["id"] + "/fail", "POST", {"error": str(exc)}, {"X-Vaultcast-Worker": token})
-                    except Exception:
-                        pass
-            else:
-                time.sleep(5)
+                    result = request(cfg["server"] + "/api/ai/worker/claim", "POST", {}, headers, timeout=15)
+                    job = result.get("job")
+                    if job:
+                        try: run_job(cfg, job)
+                        except Exception as error:
+                            logging.exception("Image generation failed in slot %s", cfg["slot_id"])
+                            print(slot_label(cfg), "Image failed:", error)
+                            try: request(cfg["server"] + "/api/ai/worker/jobs/" + job["id"] + "/fail", "POST", {"error": str(error)}, headers)
+                            except Exception: pass
+                        continue
+                finally:
+                    _image_lock.release()
+            stop.wait(3)
         except KeyboardInterrupt:
             break
-        except Exception as exc:
-            if isinstance(exc, urllib.error.HTTPError) and exc.code == 403 and str(exc.url).startswith(cfg["server"] + "/api/ai/worker/encoding/"):
-                raise RuntimeError("This account cannot currently contribute encoding. Check that the account is active and has Library access, or run start-worker.cmd --setup to select images only.") from exc
-            if isinstance(exc, urllib.error.HTTPError) and exc.code == 401 and str(exc.url).startswith(cfg["server"] + "/api/ai/worker/"):
-                raise RuntimeError("Contributor credentials were rejected. Run start-worker.cmd --pair to pair this computer again.") from exc
-            print("Connection/generation error:", exc)
-            try:
-                request(cfg["server"] + "/api/ai/worker/heartbeat", "POST", {"ready": False}, {"X-Vaultcast-Worker": token}, timeout=5)
-            except Exception:
-                pass
-            time.sleep(10)
+        except Exception as error:
+            if isinstance(error, urllib.error.HTTPError) and error.code in (401,403): raise
+            print(slot_label(cfg), "Connection error:", error)
+            stop.wait(10)
+
+
+def heartbeat(cfg, ready=True):
+    images = cfg["contributions"].get("images")
+    caps = active_capabilities(cfg)
+    if images:
+        try: request(cfg["invoke"] + "/api/v1/app/version", timeout=5)
+        except Exception: caps["images"] = {}
+    return request(cfg["server"] + "/api/ai/worker/heartbeat", "POST", {
+        "ready": ready, "model_name": cfg.get("model_name"), "model_base": "sdxl" if images else "",
+        "capabilities": caps, "hardware": cfg["hardware"], "invoke_version": cfg.get("invoke_version", ""),
+        "slots": cfg["slots"]}, worker_headers(cfg), timeout=15)
+
+
+def main():
+    if "--uninstall" in sys.argv:
+        print("Run uninstall-worker.cmd or start-worker.cmd --uninstall to remove this contributor.")
+        return
+    cfg = load_config()
+    stop = threading.Event()
+    threads = []
+    available = set(available_cpu_cores())
+    used = set()
+    for slot in cfg["slots"]:
+        cores = slot.get("cpu_cores", [])
+        if slot.get("encoding") and (not cores or not set(cores).issubset(available) or used.intersection(cores)):
+            raise RuntimeError("Saved CPU allocation is unavailable or overlaps. Restart and choose not to reuse previous configuration.")
+        used.update(cores)
+    response = heartbeat(cfg)
+    if response.get("slot_protocol") != 1:
+        raise RuntimeError("Update the Vaultcast webapp before starting this multi-worker version.")
+    def start_slot(slot):
+        local = dict(cfg, slot_id=slot["id"], contributions={"images":slot.get("images",False),"encoding":slot.get("encoding",False)},
+            encoding_threads=max(1,len(slot.get("cpu_cores",[]))), cpu_cores=slot.get("cpu_cores",[]), _stop_event=stop,
+            parallel_workers=len(cfg["slots"]))
+        try: run_slot(local,stop)
+        except Exception as error:
+            logging.exception("Worker slot stopped")
+            print(slot_label(local), "Stopped:", error)
+            stop.set()
+    print("Starting", len(cfg["slots"]), "workers. Press Ctrl+C to stop all workers.")
+    for slot in cfg["slots"]:
+        thread = threading.Thread(target=start_slot,args=(slot,),name="worker-"+str(slot["id"]))
+        thread.start(); threads.append(thread)
     try:
-        request(cfg["server"] + "/api/ai/worker/heartbeat", "POST", {"ready": False}, {"X-Vaultcast-Worker": token}, timeout=5)
-    except Exception:
-        pass
-    print("Worker stopped.")
+        while not stop.wait(10) and any(thread.is_alive() for thread in threads):
+            try: heartbeat(cfg)
+            except Exception as error: print("Contributor heartbeat:",error)
+    except KeyboardInterrupt:
+        print("Stopping workers; retaining unconfirmed conversion files...")
+    finally:
+        stop.set()
+        for thread in threads:
+            while thread.is_alive():
+                try: thread.join(timeout=1)
+                except KeyboardInterrupt: print("Waiting for active worker operations to stop...")
+        try: heartbeat(cfg,False)
+        except Exception: pass
+    print("All workers stopped.")
 
 
 if __name__ == "__main__":

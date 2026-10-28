@@ -26,10 +26,11 @@ NATIVE_DATA = Path(os.environ.get("USERPROFILE", os.path.expanduser("~"))) / ".v
 
 class ConsoleProgress:
     """Refresh the local display independently of slow server progress requests."""
-    def __init__(self, snapshot, stream=None):
+    def __init__(self, snapshot, stream=None, label="", live=True):
         self.snapshot = snapshot
         self.stream = stream or sys.stdout
-        self.terminal = self.stream.isatty()
+        self.terminal = self.stream.isatty() and live
+        self.label = label
         self.stop = threading.Event()
         self.lock = threading.Lock()
         self.width = 0
@@ -80,6 +81,7 @@ class ConsoleProgress:
                 text += "  ETA " + self.remaining((now - sample["started"]) * (100 - percent) / percent)
             elif phase == "verify":
                 text = "Finalising: replacing original " + "|/-\\"[int(now * 2) % 4]
+            if self.label: text = "[" + self.label + "] " + text
             if self.terminal:
                 columns = max(40, shutil.get_terminal_size((120, 25)).columns)
                 text = text[:columns - 1]
@@ -95,7 +97,7 @@ class ConsoleProgress:
             if self.width:
                 self.stream.write("\r" + " " * self.width + "\r")
                 self.width = 0
-            print(*args, file=self.stream, **kwargs)
+            print(*((["[" + self.label + "]"] if self.label else []) + list(args)), file=self.stream, **kwargs)
             self.stream.flush()
 
     def close(self):
@@ -130,7 +132,7 @@ class ChunkUploader:
     def send(self, chunk, offset, on_sent):
         if self.connection is None:
             constructor = http.client.HTTPSConnection if self.target.scheme == "https" else http.client.HTTPConnection
-            self.connection = constructor(self.target.hostname, self.target.port, timeout=120)
+            self.connection = constructor(self.target.hostname, self.target.port, timeout=30)
         connection = self.connection
         try:
             path = self.target.path + ("?" + self.target.query if self.target.query else "")
@@ -207,6 +209,24 @@ def retryable_upload(error):
     if isinstance(error, urllib.error.HTTPError):
         return error.code >= 500 or error.code in (408, 429)
     return isinstance(error, (urllib.error.URLError, OSError, http.client.HTTPException))
+
+
+def set_encoding_affinity(process, cores):
+    if not cores: return
+    if os.name == "nt":
+        import ctypes
+        kernel = ctypes.windll.kernel32
+        kernel.OpenProcess.argtypes = [ctypes.c_ulong,ctypes.c_int,ctypes.c_ulong]
+        kernel.OpenProcess.restype = ctypes.c_void_p
+        kernel.SetProcessAffinityMask.argtypes = [ctypes.c_void_p,ctypes.c_size_t]
+        kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+        handle = kernel.OpenProcess(0x0200,False,process.pid)
+        if not handle: raise ctypes.WinError()
+        try:
+            if not kernel.SetProcessAffinityMask(handle,sum(1 << int(core) for core in cores)): raise ctypes.WinError()
+        finally: kernel.CloseHandle(handle)
+    elif hasattr(os,"sched_setaffinity"):
+        os.sched_setaffinity(process.pid,set(cores))
 
 
 def cleanup_transfer(root, cfg):
@@ -329,8 +349,8 @@ def prepare_encoding(config, force=False):
     profile = (config.get("capabilities") or {}).get("encoding") or {}
     if force or not profile.get("verified") or config.get("ffmpeg_version") != version:
         default = max(1, min(8, (os.cpu_count() or 2) - 1))
-        answer = input("CPU threads for encoding [" + str(default) + "]: ").strip()
-        threads = int(answer) if answer else default
+        answer = "" if config.get("encoding_threads") else input("CPU threads for encoding [" + str(default) + "]: ").strip()
+        threads = int(config.get("encoding_threads") or answer or default)
         if not 1 <= threads <= (os.cpu_count() or 1):
             raise RuntimeError("Choose a CPU thread count between 1 and " + str(os.cpu_count() or 1))
         print("Checking H.264/AAC encoding with a one-second local clip...")
@@ -354,7 +374,7 @@ def prepare_encoding(config, force=False):
 
 def run_encoding(cfg, job, request):
     base = cfg["server"] + "/api/ai/worker/encoding/jobs/" + job["id"]
-    headers = {"X-Vaultcast-Worker": cfg["worker_token"], "X-Vaultcast-Lease": job["lease"]}
+    headers = {"X-Vaultcast-Worker": cfg["worker_token"], "X-Vaultcast-Lease": job["lease"], "X-Vaultcast-Slot":str(cfg.get("slot_id",0))}
     if not re.fullmatch(r"[a-f0-9]{16}", str(job["id"])):
         raise RuntimeError("Invalid conversion job ID.")
     workspace = transfer_root(cfg) / job["id"]
@@ -392,13 +412,14 @@ def run_encoding(cfg, job, request):
     last_success = [time.monotonic()]
     sample = {"phase": "download", "at": time.monotonic(), "bytes": 0, "rate": 0}
     update_lock = threading.Lock()
-    display = ConsoleProgress(lambda: dict(status))
+    display = ConsoleProgress(lambda: dict(status), label="Worker "+str(cfg.get("slot_id",1)), live=cfg.get("parallel_workers",1)<=1)
 
     def phase(name, label, progress, total=0):
         status.update(phase=name, stage=label, progress=progress, phase_progress=0,
             bytes_done=0, bytes_total=total, rate_bps=0, eta_seconds=0)
 
     def transferred(done, total, start, weight):
+        if cfg.get("_stop_event") and cfg["_stop_event"].is_set(): raise KeyboardInterrupt()
         status.update(bytes_done=done, bytes_total=total, phase_progress=round(done / max(1, total) * 100, 1),
             progress=round(start + done / max(1, total) * weight, 1))
 
@@ -433,7 +454,7 @@ def run_encoding(cfg, job, request):
         while not stop.wait(2):
             update()
 
-    print("Converting:", job["title"], flush=True)
+    print("[Worker", str(cfg.get("slot_id",1))+"] Converting:", job["title"], flush=True)
     display.start()
     update()
     thread = threading.Thread(target=heartbeat, daemon=True)
@@ -449,8 +470,9 @@ def run_encoding(cfg, job, request):
                     raise RuntimeError("Not enough local temporary disk space (need about " + str(round(required / 1073741824, 1)) + " GB).")
                 if not source.is_file() or source.stat().st_size != job["bytes"]:
                     received = 0
-                    with urllib.request.urlopen(urllib.request.Request(base + "/source", headers=headers), timeout=120) as response, source.open("wb") as file:
+                    with urllib.request.urlopen(urllib.request.Request(base + "/source", headers=headers), timeout=30) as response, source.open("wb") as file:
                         while True:
+                            if cfg.get("_stop_event") and cfg["_stop_event"].is_set(): raise KeyboardInterrupt()
                             if lost.is_set(): raise RuntimeError("Conversion lease was canceled or lost.")
                             chunk = response.read1(262144)
                             if not chunk: break
@@ -481,7 +503,10 @@ def run_encoding(cfg, job, request):
                 with (root / "ffmpeg.log").open("wb") as log:
                     process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=log, creationflags=FLAGS)
                     try:
+                        try: set_encoding_affinity(process,cfg.get("cpu_cores"))
+                        except OSError as error: raise RuntimeError("Could not apply this worker's CPU allocation: " + str(error)) from error
                         while process.poll() is None:
+                            if cfg.get("_stop_event") and cfg["_stop_event"].is_set(): raise KeyboardInterrupt()
                             if lost.wait(1): raise RuntimeError("Conversion canceled or contributor lease lost.")
                             try:
                                 with (root / "progress").open("rb") as progress_file:
@@ -563,7 +588,7 @@ def run_encoding(cfg, job, request):
             thread.join(timeout=25)
             for attempt in range(3):
                 try:
-                    confirmation = request(base + "/complete", "POST", {"bytes": size}, headers, timeout=1800)
+                    confirmation = request(base + "/complete", "POST", {"bytes": size}, headers, timeout=60)
                     if not confirmation.get("uploaded"):
                         raise RuntimeError("Server did not confirm receipt; update Vaultcast before retrying this worker.")
                     break

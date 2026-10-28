@@ -326,6 +326,12 @@ final class AIImages
         }
         json_error('Worker credential is invalid.', 401);
     }
+    private static function slotAllows(array $worker,string $kind): bool {
+        $number=(int)($worker['slot_id'] ?? 0);
+        if (!isset($worker['slots'])) return $number===0;
+        foreach ($worker['slots'] as $slot) if ((int)$slot['id']===$number) return !empty($slot[$kind]);
+        return false;
+    }
     private static function touchWorker(array $worker, array $status = []): void {
         self::mutate(self::WORKERS, static function (&$workers) use ($worker, $status) { if (isset($workers[$worker['id']])) {
             $workers[$worker['id']]['last_seen'] = time();
@@ -335,6 +341,16 @@ final class AIImages
             if (isset($status['capabilities'])) $workers[$worker['id']]['capabilities'] = self::capabilityReport($status);
             if (isset($status['invoke_version'])) $workers[$worker['id']]['invoke_version'] = mb_substr((string)$status['invoke_version'], 0, 40);
             if (isset($status['hardware'])) $workers[$worker['id']]['hardware'] = self::hardwareReport($status);
+            if (isset($status['slots']) && is_array($status['slots'])) {
+                $slots=[];
+                foreach (array_slice($status['slots'],0,32) as $slot) {
+                    if (!is_array($slot)) continue;
+                    $number=(int)($slot['id'] ?? 0);
+                    if ($number<1 || $number>32) continue;
+                    $slots[$number]=['id'=>$number,'images'=>!empty($slot['images']),'encoding'=>!empty($slot['encoding'])];
+                }
+                $workers[$worker['id']]['slots']=array_values($slots);
+            }
             if (isset($workers[$worker['id']]['capabilities']) && self::imageCapacity($workers[$worker['id']]) === 0 && empty($workers[$worker['id']]['capabilities']['encoding']['verified'])) $workers[$worker['id']]['ready'] = false;
         } });
     }
@@ -342,18 +358,19 @@ final class AIImages
         $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
         if ($action === 'register' && $method === 'POST') json_out(self::registerWorker(body_json()));
         $worker = self::authenticateWorker();
+        $worker['slot_id']=max(0,min(32,(int)($_SERVER['HTTP_X_VAULTCAST_SLOT'] ?? 0)));
         if ($action==='unregister' && $method==='POST') {
             self::mutate(self::WORKERS,static function (&$workers) use($worker) { unset($workers[$worker['id']]); });
             json_out(['ok'=>true]);
         }
-        if ($action === 'heartbeat' && $method === 'POST') { self::touchWorker($worker, body_json()); json_out(['ok' => true, 'worker_id' => $worker['id']]); }
+        if ($action === 'heartbeat' && $method === 'POST') { self::touchWorker($worker, body_json()); json_out(['ok' => true, 'worker_id' => $worker['id'], 'slot_protocol'=>1]); }
         if ($action!=='encoding-chunk' || (int)($worker['last_seen'] ?? 0)<time()-15) self::touchWorker($worker);
         if ($action==='encoding-claim' || strpos($action,'encoding-')===0) {
             $owner=Auth::findById((string)$worker['user_id']);
             if (!$owner || !AreaAccess::allowed($owner,'library') || empty($worker['capabilities']['encoding']['verified'])) json_error('Encoding contribution requires Library access and a checked encoding profile.',403);
             $worker['account']=$owner;
             $lease=(string)($_SERVER['HTTP_X_VAULTCAST_LEASE'] ?? '');
-            if ($action==='encoding-claim' && $method==='POST') json_out(empty($worker['ready']) ? ['ok'=>true,'job'=>null] : Convert::externalClaim($worker));
+            if ($action==='encoding-claim' && $method==='POST') json_out(empty($worker['ready']) || !self::slotAllows($worker,'encoding') ? ['ok'=>true,'job'=>null] : Convert::externalClaim($worker));
             if ($action==='encoding-source' && $method==='GET') Convert::externalSource($worker,$id,$lease);
             if ($method==='POST') {
                 $result=Convert::externalUpdate($worker,$id,$lease,substr($action,9),$action==='encoding-chunk' ? [] : body_json());
@@ -368,15 +385,16 @@ final class AIImages
             json_error('Encoding endpoint not found.',404);
         }
         if ($action === 'claim' && $method === 'POST') {
-            if (empty($worker['ready']) || self::imageCapacity($worker) === 0) json_out(['ok'=>true, 'job'=>null]);
+            if (empty($worker['ready']) || self::imageCapacity($worker) === 0 || !self::slotAllows($worker,'images')) json_out(['ok'=>true, 'job'=>null]);
             $job = self::mutate(self::JOBS, static function (&$jobs) use ($worker) {
                 $now = time();
                 foreach ($jobs as &$stale) if (($stale['status'] ?? '') === 'running' && (int)($stale['updated_at'] ?? 0) < $now - 180) { $stale['status'] = 'queued'; $stale['worker_id'] = null; $stale['progress'] = 0; }
                 unset($stale);
+                foreach ($jobs as $active) if (($active['status'] ?? '')==='running' && ($active['worker_id'] ?? '')===$worker['id'] && (int)($active['worker_slot'] ?? 0)===$worker['slot_id']) return null;
                 usort($jobs, static function ($a, $b) { return (int)($a['created_at'] ?? 0) <=> (int)($b['created_at'] ?? 0); });
                 foreach ($jobs as &$candidate) if (($candidate['status'] ?? '') === 'queued') {
                     if ((int)$candidate['width'] * (int)$candidate['height'] > self::imageCapacity($worker)) continue;
-                    $candidate['status'] = 'running'; $candidate['worker_id'] = $worker['id']; $candidate['started_at'] = $now; $candidate['updated_at'] = $now; $candidate['progress'] = 1; return $candidate;
+                    $candidate['status'] = 'running'; $candidate['worker_id'] = $worker['id']; $candidate['worker_slot']=$worker['slot_id']; $candidate['started_at'] = $now; $candidate['updated_at'] = $now; $candidate['progress'] = 1; return $candidate;
                 }
                 return null;
             });
@@ -385,7 +403,7 @@ final class AIImages
         if ($action === 'progress' && $method === 'POST') {
             $pct = max(1, min(99, (int)(body_json()['progress'] ?? 1)));
             $ok = self::mutate(self::JOBS, static function (&$jobs) use ($worker, $id, $pct) {
-                foreach ($jobs as &$job) if (($job['id'] ?? '') === $id && ($job['status'] ?? '') === 'running' && ($job['worker_id'] ?? '') === $worker['id']) { $job['progress'] = $pct; $job['updated_at'] = time(); return true; }
+                foreach ($jobs as &$job) if (($job['id'] ?? '') === $id && ($job['status'] ?? '') === 'running' && ($job['worker_id'] ?? '') === $worker['id'] && (int)($job['worker_slot'] ?? 0)===$worker['slot_id']) { $job['progress'] = $pct; $job['updated_at'] = time(); return true; }
                 return false;
             });
             if (!$ok) json_error('This job is no longer assigned to this worker.', 409);
@@ -394,7 +412,7 @@ final class AIImages
         if ($action === 'complete' && $method === 'POST') {
             $pictureId=self::mutate(self::JOBS, static function (&$jobs) use ($worker,$id) {
                 foreach ($jobs as &$job) {
-                    if (($job['id'] ?? '')!==$id || ($job['worker_id'] ?? '')!==$worker['id']) continue;
+                    if (($job['id'] ?? '')!==$id || ($job['worker_id'] ?? '')!==$worker['id'] || (int)($job['worker_slot'] ?? 0)!==$worker['slot_id']) continue;
                     if (($job['status'] ?? '')==='completed') return (string)$job['picture_id'];
                     if (($job['status'] ?? '')!=='running') break;
                     if (empty($_FILES['file']['tmp_name'])) throw new DomainException('Upload the generated image as file.');
@@ -414,7 +432,7 @@ final class AIImages
         if ($action === 'fail' && $method === 'POST') {
             $msg = mb_substr(trim((string)(body_json()['error'] ?? 'Generation failed.')), 0, 300);
             self::mutate(self::JOBS, static function (&$jobs) use ($worker, $id, $msg) {
-                foreach ($jobs as &$job) if (($job['id'] ?? '') === $id && ($job['status'] ?? '') === 'running' && ($job['worker_id'] ?? '') === $worker['id']) { ContributionPoints::refundImage($job); $job['status'] = 'failed'; $job['error'] = $msg; $job['updated_at'] = time(); $job['finished_at'] = time(); return; }
+                foreach ($jobs as &$job) if (($job['id'] ?? '') === $id && ($job['status'] ?? '') === 'running' && ($job['worker_id'] ?? '') === $worker['id'] && (int)($job['worker_slot'] ?? 0)===$worker['slot_id']) { ContributionPoints::refundImage($job); $job['status'] = 'failed'; $job['error'] = $msg; $job['updated_at'] = time(); $job['finished_at'] = time(); return; }
             });
             json_out(['ok' => true]);
         }

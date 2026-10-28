@@ -169,7 +169,7 @@ def install_engine(info):
     return root
 
 
-def ensure_engine(request, url, info):
+def ensure_engine(request, url, info, autostart=False):
     if alive(request, url): return url
     if url.rstrip("/") != ENGINE_URL:
         raise RuntimeError("Your configured InvokeAI endpoint is offline: " + url)
@@ -179,7 +179,7 @@ def ensure_engine(request, url, info):
             raise RuntimeError("Port 9090 is in use but is not responding as InvokeAI. Check the existing service before continuing.")
     for root in engine_roots():
         if (root / ".venv/Scripts/invokeai-web.exe").is_file():
-            if yes("Start the existing InvokeAI install at " + str(root) + "?"):
+            if autostart or yes("Start the existing InvokeAI install at " + str(root) + "?"):
                 start_engine(root, request); return ENGINE_URL
             raise RuntimeError("Start InvokeAI manually and rerun the contributor.")
     root = install_engine(info)
@@ -273,7 +273,7 @@ def prepare(config, request, graph_builder, force=False):
     info = hardware()
     print("\nVaultcast contributor -", info["platform"], info.get("ram_gb") or "unknown", "GB RAM")
     for gpu in info["gpus"]: print("GPU:", gpu["name"], "-", gpu["vram_mb"], "MB VRAM")
-    url = ensure_engine(request, config.get("invoke", ENGINE_URL), info)
+    url = ensure_engine(request, config.get("invoke", ENGINE_URL), info, autostart=config.get("_autostart",False))
     model = select_model(request, url, (config.get("model") or {}).get("key"), choose=force)
     version = request(url + "/api/v1/app/version").get("version", "unknown")
     capabilities = config.get("capabilities") or {}

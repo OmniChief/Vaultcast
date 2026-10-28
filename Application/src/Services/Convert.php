@@ -1376,7 +1376,7 @@ class Convert {
             // Reap expired leases and collect any completed local process before claiming.
             self::tick(false);
             $q=self::queue();
-            foreach ($q as $job) if (($job['status'] ?? '')==='running' && ($job['external_worker_id'] ?? '')===$worker['id']) return ['ok'=>true,'job'=>null];
+            foreach ($q as $job) if (($job['status'] ?? '')==='running' && ($job['external_worker_id'] ?? '')===$worker['id'] && (int)($job['worker_slot'] ?? 0)===(int)($worker['slot_id'] ?? 0)) return ['ok'=>true,'job'=>null];
             foreach ($q as &$job) {
                 if (($job['status'] ?? '')!=='queued') continue;
                 $item=Catalogue::item((string)$job['item_id']);
@@ -1391,7 +1391,7 @@ class Convert {
                 $job['dest']=$dest; $job['container']='mp4'; $job['pid']=null;
                 $job['part']=dirname($dest).'/.'.basename($dest).'.worker-'.$job['id'].'.part';
                 @unlink($job['part']);
-                $job['status']='running'; $job['external_worker_id']=$worker['id'];
+                $job['status']='running'; $job['external_worker_id']=$worker['id']; $job['worker_slot']=(int)($worker['slot_id'] ?? 0);
                 $job['lease_token']=bin2hex(random_bytes(16)); $job['lease_until']=time()+300;
                 $job['started_at']=date('c'); $job['finished_at']=null; $job['progress']=0;
                 $job['message']='Contributor '.$worker['name'].' · downloading source';
