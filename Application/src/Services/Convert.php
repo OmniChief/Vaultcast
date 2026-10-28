@@ -535,11 +535,9 @@ class Convert {
         unset($job);
 
         if ($completed) {
-            foreach ($q as &$job) {
-                if (!in_array($job['id'] ?? '', $completed, true)) continue;
-                $job = self::onComplete($job);
-            }
-            unset($job);
+            self::saveQueue($q);
+            foreach ($completed as $completedId) self::autoReplace($completedId);
+            Store::invalidate('convert_queue'); $q=self::queue(); $beforeTick=$q;
         }
 
         if ($running) {
@@ -897,6 +895,24 @@ class Convert {
         } finally { self::unlockQueue($queueLock); }
     }
 
+    public static function retry(string $id): array {
+        $lock=self::editQueueLock();
+        try {
+            $q=self::queue(); $i=self::findJob($q,$id);
+            if ($i<0) json_error('Conversion not found.',404);
+            if (!in_array($q[$i]['status'] ?? '',['failed','cancelled'],true)) json_error('Only failed or canceled conversions can retry.',409);
+            foreach ($q as $other) if (($other['id'] ?? '')!==$id && ($other['item_id'] ?? '')===$q[$i]['item_id'] && in_array($other['status'] ?? '',['queued','running'],true)) json_error('This title already has a queued conversion.',409);
+            if (!is_file((string)$q[$i]['src'])) json_error('The original file is unavailable.',409);
+            if (is_file((string)$q[$i]['dest'])) json_error('A converted file already exists. Review it before retrying.',409);
+            self::cleanupPartialFiles($q[$i]);
+            $q[$i]['status']='queued'; $q[$i]['progress']=0; $q[$i]['pid']=null;
+            $q[$i]['started_at']=null; $q[$i]['finished_at']=null; $q[$i]['message']='Retry queued';
+            unset($q[$i]['external_worker_id'],$q[$i]['lease_token'],$q[$i]['lease_until'],$q[$i]['phase'],$q[$i]['phase_progress']);
+            self::saveQueue($q); self::tick();
+            return ['ok'=>true];
+        } finally { self::unlockQueue($lock); }
+    }
+
     /** Remove .part / progress / exit leftovers for a job. */
     private static function cleanupPartialFiles(array $job): array {
         $cleaned = [];
@@ -1098,47 +1114,56 @@ class Convert {
     }
 
     /** Replace a source with its converted bytes while retaining the library identity. */
-    public static function removeOriginal(string $jobId): array {
+    public static function removeOriginal(string $jobId, bool $automatic = false): array {
         $queueLock=self::editQueueLock();
         try {
+            $reject=static function(string $message,int $code=409) use($automatic): void {
+                if ($automatic) throw new DomainException($message);
+                json_error($message,$code);
+            };
             $q=self::queue(); $i=self::findJob($q,$jobId);
-            if ($i<0) json_error('Job not found',404);
+            if ($i<0) $reject('Job not found',404);
             $job=$q[$i];
-            if (($job['status'] ?? '')!=='done') json_error('Convert has not completed successfully',400);
+            if (($job['status'] ?? '')!=='done') $reject('Convert has not completed successfully',400);
             $src=str_replace('\\','/',(string)($job['src'] ?? ''));
             $dest=str_replace('\\','/',(string)($job['dest'] ?? ''));
             if (!empty($job['original_removed']) && !preg_match('/\.directplay\.[^.]+$/i',$dest)) return ['ok'=>true,'job'=>$job,'message'=>'Original already replaced'];
             $destReal=$dest!=='' ? \Vaultcast\Paths::real($dest) : false;
-            if (!$destReal || !is_file($destReal)) json_error('Converted file not found: '.$dest,409);
-            if (!self::underLibraryRoot($destReal)) json_error('Converted file is outside the library roots',400);
-            if (filesize($destReal)<1000) json_error('Converted file looks incomplete; original kept',409);
+            if (!$destReal || !is_file($destReal)) $reject('Converted file not found: '.$dest,409);
+            if (!self::underLibraryRoot($destReal)) $reject('Converted file is outside the library roots',400);
+            if (filesize($destReal)<1000) $reject('Converted file looks incomplete; original kept',409);
             $parent=\Vaultcast\Paths::real(dirname($src));
-            if (!$parent || $parent!==dirname($destReal)) json_error('Converted file must be beside the original',409);
+            if (!$parent || $parent!==dirname($destReal)) $reject('Converted file must be beside the original',409);
             $extension=strtolower(pathinfo($destReal,PATHINFO_EXTENSION));
-            if (!isset(self::CONTAINERS[$extension])) json_error('Unsupported converted container',409);
+            if (!isset(self::CONTAINERS[$extension])) $reject('Unsupported converted container',409);
             $target=$parent.'/'.pathinfo($src,PATHINFO_FILENAME).'.'.$extension;
             $srcReal=\Vaultcast\Paths::real($src); $srcExists=$srcReal!==false && is_file($srcReal);
-            if ($srcExists && $srcReal===$destReal) json_error('Source and converted file are the same path',409);
-            if ($srcExists && isset($job['source_stat']) && ((int)filesize($srcReal)!==$job['source_stat']['size'] || (int)filemtime($srcReal)!==$job['source_stat']['mtime'])) json_error('The original changed after conversion; it was kept',409);
-            if (file_exists($target) && (!$srcExists || \Vaultcast\Paths::real($target)!==$srcReal)) json_error('Replacement filename already exists; no files were changed: '.$target,409);
-            if (!is_writable($parent)) json_error('Folder is not writable: '.$parent,403);
-            $dDest=self::probeDuration($destReal);
-            if ($dDest===null) json_error('Could not verify converted duration; original kept',409);
-            $dSrc=$srcExists ? self::probeDuration($srcReal) : (float)($job['duration_s'] ?? 0);
-            if ($dSrc && $dDest<$dSrc-max(10.0,$dSrc*0.03)) json_error('Converted file is shorter than the original; original kept',409);
+            if ($srcExists && $srcReal===$destReal) $reject('Source and converted file are the same path',409);
+            if ($srcExists && isset($job['source_stat']) && ((int)filesize($srcReal)!==$job['source_stat']['size'] || (int)filemtime($srcReal)!==$job['source_stat']['mtime'])) $reject('The original changed after conversion; it was kept',409);
+            if (file_exists($target) && (!$srcExists || \Vaultcast\Paths::real($target)!==$srcReal)) $reject('Replacement filename already exists; no files were changed: '.$target,409);
+            if (!is_writable($parent)) $reject('Folder is not writable: '.$parent,403);
+            $outputStat=['size'=>(int)filesize($destReal),'mtime'=>(int)filemtime($destReal)];
+            $dDest=($job['output_duration_stat'] ?? null)===$outputStat ? (float)($job['output_duration_s'] ?? 0) : self::probeDuration($destReal);
+            if (!$dDest) $reject('Could not verify converted duration; original kept',409);
+            $dSrc=(float)($job['duration_s'] ?? 0);
+            if ($dSrc<=0 && $srcExists) $dSrc=self::probeDuration($srcReal);
+            if ($dSrc && $dDest<$dSrc-max(10.0,$dSrc*0.03)) $reject('Converted file is shorter than the original; original kept',409);
 
             Store::invalidate('catalogue');
             $cat=Catalogue::get(); $oldId=(string)($job['item_id'] ?? '');
             $oldItem=$cat['items'][$oldId] ?? null;
             $normal=static function(string $path): string { $path=str_replace('\\','/',$path); return PHP_OS_FAMILY==='Windows' ? strtolower($path) : $path; };
             $paths=array_map($normal,array_values(array_unique([$src,$dest,$destReal,$target])));
-            if ($oldItem && !in_array($normal((string)($oldItem['path'] ?? '')),$paths,true)) json_error('The library item has changed; no files were replaced',409);
+            if ($oldItem && !in_array($normal((string)($oldItem['path'] ?? '')),$paths,true)) $reject('The library item has changed; no files were replaced',409);
             if (!$oldItem) foreach ($cat['items'] ?? [] as $item) if (in_array($normal((string)($item['path'] ?? '')),$paths,true)) { $oldItem=$item; break; }
-            if (!$oldItem || $oldId==='') json_error('Library item not found; no files were replaced',409);
+            if (!$oldItem || $oldId==='') $reject('Library item not found; no files were replaced',409);
             $section=(string)($oldItem['section'] ?? $job['section'] ?? ''); $root=false;
             foreach (Store::settings()['sections'] ?? [] as $sec) if (($sec['id'] ?? '')===$section) { $root=\Vaultcast\Paths::real((string)$sec['path']); break; }
-            if (!$root || strpos($target,$root.'/')!==0) json_error('Replacement is outside its library section',409);
-            $profile=self::copyProfile($destReal);
+            if (!$root || strpos($target,$root.'/')!==0) $reject('Replacement is outside its library section',409);
+            $known=Store::get('directplay_profiles',[])[$destReal] ?? [];
+            $ready=!empty($known['ready']) || !empty($job['external_worker_id']) || in_array($job['quality_mode'] ?? '',['directplay','near_lossless','balanced','efficient'],true);
+            $profile=['ready'=>$ready && in_array($extension,['mp4','m4v','mov'],true)]+$outputStat;
+            $job['output_duration_s']=$dDest; $job['output_duration_stat']=$outputStat;
             $replacement=$oldItem;
             $replacement['id']=$oldId; $replacement['path']=$target;
             $replacement['rel']=substr($target,strlen($root)+1); $replacement['ext']=$extension;
@@ -1161,10 +1186,10 @@ class Convert {
 
             // Preserve rollback bytes until the database changes have committed.
             $backup=$parent.'/.vaultcast-replace-'.$jobId.'-'.bin2hex(random_bytes(4)).'.bak';
-            if ($srcExists && !@rename($srcReal,$backup)) json_error('Could not move the original aside; no files were replaced',500);
+            if ($srcExists && !@rename($srcReal,$backup)) $reject('Could not move the original aside; no files were replaced',500);
             if (!@rename($destReal,$target)) {
                 if ($srcExists && !@rename($backup,$srcReal)) throw new RuntimeException('Replacement failed; original remains at '.$backup);
-                json_error('Could not rename the converted file; original restored',500);
+                $reject('Could not rename the converted file; original restored',500);
             }
             try {
                 $result=\Vaultcast\Database::transaction(static function () use ($cat,$profiles,$oldIds,$oldId,$job,$q) {
@@ -1190,6 +1215,21 @@ class Convert {
             self::audit('replace job='.$jobId.' src='.$src.' target='.$target.' id='.$oldId.' aliases='.implode(',',$oldIds));
             return ['ok'=>true,'job'=>$job,'deleted'=>$srcExists ? $src : null,'kept'=>$target,'new_item_id'=>$oldId,'removed_item_ids'=>$oldIds,'warning'=>$warning]+$result;
         } finally { self::unlockQueue($queueLock); }
+    }
+
+    private static function autoReplace(string $id): array {
+        try {
+            $result=self::removeOriginal($id,true);
+            return ['ok'=>true,'uploaded'=>true,'replaced'=>true,'warning'=>$result['warning'] ?? null];
+        }
+        catch (Throwable $error) {
+            Store::invalidate('convert_queue'); $q=self::queue(); $i=self::findJob($q,$id);
+            if ($i>=0) {
+                $q[$i]['message']='Converted; automatic replacement needs attention: '.$error->getMessage();
+                self::saveQueue($q);
+            }
+            return ['ok'=>true,'uploaded'=>$i>=0 && is_file((string)$q[$i]['dest']),'replacement_pending'=>true,'warning'=>$error->getMessage()];
+        }
     }
 
     /** Move per-user watch progress from old item ids to the new one. */
@@ -1369,7 +1409,7 @@ class Convert {
                 $job['quality_mode']=$quality['quality_mode'];
                 self::saveQueue($q);
                 return ['ok'=>true,'job'=>['id'=>$job['id'],'title'=>$job['title'],'lease'=>$job['lease_token'],
-                    'bytes'=>$job['source_stat']['size'],'duration'=>$job['duration_s'],
+                    'bytes'=>$job['source_stat']['size'],'source_mtime'=>$job['source_stat']['mtime'],'duration'=>$job['duration_s'],
                     'upload_chunk_bytes'=>4194304,
                     'crf'=>max(0,min(28,(int)($quality['crf'] ?? 18))),
                     'preset'=>self::sanitizePreset((string)($quality['preset'] ?? 'medium')),
@@ -1409,12 +1449,20 @@ class Convert {
         try {
             $q=self::queue();
             $done=self::findJob($q,$id);
-            if ($action==='complete' && $done>=0 && ($q[$done]['status'] ?? '')==='done' &&
-                ($q[$done]['external_worker_id'] ?? '')===$worker['id'] && $lease!=='' && hash_equals((string)($q[$done]['lease_token'] ?? ''),$lease)) return ['ok'=>true];
+            if (in_array($action,['complete','status'],true) && $done>=0 && ($q[$done]['status'] ?? '')==='done' &&
+                ($q[$done]['external_worker_id'] ?? '')===$worker['id'] && $lease!=='' && hash_equals((string)($q[$done]['lease_token'] ?? ''),$lease)) {
+                if ($action==='complete' && empty($q[$done]['original_removed'])) return self::autoReplace($id);
+                return ['ok'=>true,'completed'=>true,'uploaded'=>is_file((string)$q[$done]['dest']),'replaced'=>!empty($q[$done]['original_removed'])];
+            }
             $i=self::externalJob($q,$worker,$id,$lease); $job=&$q[$i];
             $renewLease=(int)($job['lease_until'] ?? 0)<time()+240;
             $job['lease_until']=time()+300;
-            if ($action==='progress') {
+            if ($action==='status') {
+                clearstatcache(true,(string)$job['part']);
+                $received=is_file((string)$job['part']) ? (int)filesize($job['part']) : 0;
+                self::saveQueue($q);
+                return ['ok'=>true,'uploaded'=>false,'completed'=>false,'received'=>$received];
+            } elseif ($action==='progress') {
                 $job['progress']=max(0,min(99.5,(float)($body['progress'] ?? 0)));
                 $phase=(string)($body['phase'] ?? '');
                 if (in_array($phase,['download','encode','hash','upload','verify'],true)) {
@@ -1452,23 +1500,19 @@ class Convert {
             } elseif ($action==='complete') {
                 @set_time_limit(0);
                 $part=(string)$job['part']; clearstatcache(true,$part);
-                $bytes=(int)($body['bytes'] ?? 0); $sha=(string)($body['sha256'] ?? '');
-                if (!is_file($part) || $bytes<1000 || filesize($part)!==$bytes || !preg_match('/^[a-f0-9]{64}$/D',$sha) || !hash_equals($sha,hash_file('sha256',$part))) json_error('Converted upload is incomplete or corrupt.',422);
-                $probe=MediaProbe::probeSummary($part,20,false);
-                $file=fopen($part,'rb'); $signature=fread($file,12); fclose($file);
-                if (substr($signature,4,4)!=='ftyp') json_error('Output must use the MP4 container.',422);
-                if (empty($probe['probed']) || ($probe['video_codec'] ?? '')!=='h264' || ($probe['pixel_format'] ?? '')!=='yuv420p') json_error('Output must contain H.264 8-bit video.',422);
-                foreach ($probe['audio_tracks'] ?? [] as $track) if (($track['codec'] ?? '')!=='aac') json_error('Output audio must be AAC.',422);
-                if (isset($job['source_audio_count']) && (int)$probe['audio_count']!==$job['source_audio_count']) json_error('Converted audio tracks do not match the source.',422);
-                $duration=(float)($job['duration_s'] ?? 0); $actual=(float)($probe['duration'] ?? 0);
-                if ($actual<=0 || ($duration>0 && abs($actual-$duration)>max(3,$duration*0.01))) json_error('Converted video duration does not match the source.',422);
+                $bytes=(int)($body['bytes'] ?? 0);
+                if (!is_file($part) || $bytes<1000 || filesize($part)!==$bytes) json_error('Converted upload is incomplete.',422);
+                // Read container duration only: no full-file hash, decode or codec validation on the server.
+                $actual=self::probeDuration($part); $duration=(float)($job['duration_s'] ?? 0);
+                if (!$actual || ($duration>0 && abs($actual-$duration)>max(3,$duration*0.01))) json_error('Converted video duration does not match the source.',422);
+                $job['output_duration_s']=$actual;
+                $job['output_duration_stat']=['size'=>$bytes,'mtime'=>(int)filemtime($part)];
                 $src=(string)$job['src']; clearstatcache(true,$src);
                 if (!is_file($src) || filesize($src)!==$job['source_stat']['size'] || filemtime($src)!==$job['source_stat']['mtime']) json_error('The original changed; it was kept. Cancel and queue a fresh conversion.',409);
                 if (is_file($job['dest'])) json_error('Output already exists; it was not overwritten.',409);
                 if (!rename($part,$job['dest'])) throw new RuntimeException('Could not publish converted file.');
                 $job['status']='done'; $job['progress']=100; $job['finished_at']=date('c');
                 $job['message']='Completed by '.$worker['name'].' — saved beside original';
-                $job=self::onComplete($job);
             } elseif ($action==='fail') {
                 self::cleanupPartialFiles($job);
                 $job['status']='failed'; $job['finished_at']=date('c');
@@ -1478,7 +1522,7 @@ class Convert {
                 if ($action==='complete') ContributionPoints::rewardConversion((string)$worker['user_id'],$id);
                 if (!self::saveQueue($q)) throw new RuntimeException('Could not save conversion update.');
             });
-            return ['ok'=>true];
+            return $action==='complete' ? self::autoReplace($id) : ['ok'=>true];
         } finally { self::unlockQueue($lock); }
     }
 

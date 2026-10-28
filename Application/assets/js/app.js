@@ -11099,7 +11099,7 @@ h('div', { className:'cv-find-bar' }, [
     var playbackGroup=h('fieldset',{className:'settings-fieldset dp-settings-group'},[h('legend',{text:'Playback policy & transcoding'})]);
     Array.from(root.children).forEach(function(child){playbackGroup.appendChild(child);});root.appendChild(playbackGroup);
     root.appendChild(h('h3',{text:'Background library conversion'}));
-    root.appendChild(h('p',{className:'muted',text:'These settings control manually queued full-file conversions, independently of playback transcoding. Originals stay on disk until you explicitly replace them.'}));
+    root.appendChild(h('p',{className:'muted',text:'These settings control queued full-file conversions, independently of playback transcoding. Completed batch conversions replace the original after a duration check, retaining the existing library entry.'}));
     var backgroundSettings=renderConvertAdminPanel(s,true);backgroundSettings.classList.add('settings-fieldset');root.appendChild(backgroundSettings);return root;
   }
   function renderConvertAdminPanel(s,settingsOnly){
@@ -11372,7 +11372,7 @@ h('div', { className:'cv-find-bar' }, [
           if(job.transfer_rate>0)text+=' · '+transferSize(job.transfer_rate)+'/s';
           if(job.transfer_eta>0){var secs=Number(job.transfer_eta);text+=' · ~'+(secs>=60?Math.ceil(secs/60)+' min':Math.ceil(secs)+' sec')+' left';}
         }else if(phase==='hash')text+=' · Checking local file';
-        else if(phase==='verify')text+=' · Server checking returned file';
+        else if(phase==='verify')text+=' · Checking duration and replacing original';
         return h('div',{className:'muted cv-glass-transfer',role:'status',text:text});
       }
 
@@ -11591,6 +11591,7 @@ h('div', { className:'cv-find-bar' }, [
           actions.push(h('button', { className:'btn ghost cv-glass-btn', text:'Cancel', onClick: function(){ cancelJob(job); }}));
         }
         if (job.status === 'cancelled' || job.status === 'failed') {
+          actions.push(h('button',{className:'btn ghost cv-glass-btn',text:'Retry',onClick:function(){api('/admin/convert/'+job.id+'/retry',{method:'POST',body:{}}).then(function(r){if(!r.ok)return toast(r.error||'Could not retry',{kind:'bad'});refreshConvertAdmin();});}}));
           actions.push(h('button', {
             className: 'btn ghost cv-trash cv-glass-btn',
             title: 'Remove from queue and clean partial convert files',
@@ -11613,7 +11614,7 @@ h('div', { className:'cv-find-bar' }, [
           }}));
         }
         var stateLabel = String(job.status||'').toUpperCase();
-        if (job.status === 'running') stateLabel = ({download:'Downloading',encode:'Encoding',hash:'Checking file',upload:'Uploading',verify:'Verifying'}[job.phase] || 'Converting') + ' · ' + Math.round(pct) + '% overall';
+        if (job.status === 'running') stateLabel = ({download:'Downloading',encode:'Encoding',hash:'Checking file',upload:'Uploading',verify:'Finalising'}[job.phase] || 'Converting') + ' · ' + Math.round(pct) + '% overall';
         if (job.status === 'queued') stateLabel = 'Queued \u2014 waiting';
         if (job.status === 'done') stateLabel = job.resolved ? 'Done' : 'Converted \u2014 choose what to keep';
         var saveModes = { audio:'Audio only', video:'Video only', both:'Video + audio' };
@@ -12166,7 +12167,7 @@ h('div', { className:'cv-find-bar' }, [
 
         h('section', { className:'cv-section settings-card' }, [
           h('h3', { className:'admin-section-title', text:'Output & server load' }),
-          h('p', { className:'muted', text:'Output is saved beside the original as <name>.directplay.<container> and shown as an alternate under the same library title. CPU nice and disk I/O class apply on Linux; thread limits apply on every platform.' }),
+          h('p', { className:'muted', text:'Batch output is checked for matching duration, renamed to the original basename with the converted extension, and replaces the original under the same library ID. CPU nice and disk I/O class apply on Linux; thread limits apply on every platform.' }),
           selectEl('target_container', 'Container', c.target_container||'mp4', [
             { value:'mp4', label:'MP4 (best DirectPlay)' },
             { value:'m4v', label:'M4V' },
@@ -12222,7 +12223,7 @@ h('div', { className:'cv-find-bar' }, [
           cvToggleRow('cv_batch_external_only', 'Only use external workers', 'Saves immediately and shares the policy with DirectPlay Settings. Batch jobs wait for contributors; they do not fall back to server encoding.', externalOnly),
           h('p',{id:'cv_batch_policy_status',className:'muted',role:'status'}),
           h('p',{id:'cv_batch_contributors',className:'muted',text:'Checking encoding computers…'}),
-          h('p', { className:'muted', text:'Glass queue + Find all for DirectPlay gaps (real H.264/AAC). Restrict to Movies / TV / Anime — games are never scanned. Results stream in live; Stop keeps what was found. TV series stay in accordions.' }),
+          h('p', { className:'muted', text:'Glass queue + Find all for DirectPlay gaps (real H.264/AAC). Restrict to Movies / TV / Anime — games are never scanned. Completed conversions automatically replace their originals after a duration check. Results stream in live; Stop keeps what was found. TV series stay in accordions.' }),
           h('div', { id:'cv_batch_list', className:'cv-batch-list cv-glass-wrap' }, [ pendingContent({ className:'muted', }) ]),
           h('div', { className:'row-actions' }, [
             h('button', { className:'btn', text:'Refresh queue', onClick: function(){ refreshConvertAdmin(); } }),

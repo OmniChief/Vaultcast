@@ -68,6 +68,7 @@ if ($path === '/admin/convert' && $method === 'POST') {
 if ($path === '/admin/convert/clear-finished' && $method === 'POST') {
     json_out(Convert::clearFinished());
 }
+if (preg_match('#^/admin/convert/([a-f0-9]{16})/retry$#D',$path,$m) && $method==='POST') json_out(Convert::retry($m[1]));
 
 if (preg_match('#^/admin/convert/([a-f0-9]+)/cancel$#', $path, $m) && $method === 'POST') {
     json_out(Convert::cancel($m[1]));

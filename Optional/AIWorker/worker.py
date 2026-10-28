@@ -13,7 +13,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from contributor_setup import prepare, hardware, yes
-from encoding_worker import prepare_encoding, run_encoding
+from encoding_worker import prepare_encoding, run_encoding, pending_encodings, retryable_upload
 
 APPDATA = os.environ.get("APPDATA", os.path.expanduser("~"))
 CONFIG_DIR = os.path.join(APPDATA, "VaultcastAIWorker")
@@ -322,11 +322,16 @@ def main():
             if not image_ready: caps["images"] = {}
             headers = {"X-Vaultcast-Worker": token}
             request(cfg["server"] + "/api/ai/worker/heartbeat", "POST", {"ready": image_ready or encoding, "model_name": cfg.get("model_name"), "model_base": "sdxl" if images else "", "capabilities": caps, "hardware": cfg["hardware"], "invoke_version": cfg.get("invoke_version", "")}, headers, timeout=15)
-            if encoding and (prefer_encoding or not image_ready):
-                result = request(cfg["server"] + "/api/ai/worker/encoding/claim", "POST", {}, headers, timeout=40)
+            retained = pending_encodings(cfg) if encoding else []
+            if encoding and (retained or prefer_encoding or not image_ready):
+                result = {"job": retained[0]} if retained else request(cfg["server"] + "/api/ai/worker/encoding/claim", "POST", {}, headers, timeout=40)
                 if result.get("job"):
                     try: run_encoding(cfg, result["job"], request)
-                    except Exception as exc: print("Conversion failed:", exc)
+                    except Exception as exc:
+                        print("Conversion/upload paused:", exc)
+                        if retryable_upload(exc):
+                            print("Files kept. Retrying in 15 seconds.")
+                            time.sleep(15)
                     prefer_encoding = False
                     continue
             result = request(cfg["server"] + "/api/ai/worker/claim", "POST", {}, headers, timeout=30) if image_ready else {}

@@ -1,5 +1,6 @@
 """Optional full-file MP4/H.264/AAC contribution; independent of InvokeAI."""
 import hashlib
+from contextlib import nullcontext
 import http.client
 import io
 import json
@@ -83,6 +84,47 @@ def probe(binary, path):
         timeout=45, creationflags=FLAGS))
 
 
+def transfer_root(cfg):
+    owner = hashlib.sha256((cfg["server"] + "|" + cfg["worker_id"]).encode()).hexdigest()[:24]
+    return DATA / "conversions" / owner
+
+
+def save_transfer(root, state):
+    temporary = root / "state.tmp"
+    temporary.write_text(json.dumps(state), encoding="utf-8")
+    temporary.replace(root / "state.json")
+
+
+def pending_encodings(cfg):
+    jobs = []
+    for file in sorted(transfer_root(cfg).glob("*/state.json")):
+        try:
+            state = json.loads(file.read_text(encoding="utf-8"))
+            if not state.get("waiting_for_claim"):
+                jobs.append(state["job"])
+        except (OSError, ValueError, KeyError):
+            print("Could not read retained conversion state:", file)
+    return jobs
+
+
+def retryable_upload(error):
+    if isinstance(error, urllib.error.HTTPError):
+        return error.code >= 500 or error.code in (408, 429)
+    return isinstance(error, (urllib.error.URLError, OSError, http.client.HTTPException))
+
+
+def cleanup_transfer(root, cfg):
+    # Delete only this confirmed job's private workspace, never the parent contribution folder.
+    resolved = root.resolve()
+    if resolved.parent != transfer_root(cfg).resolve() or not re.fullmatch(r"[a-f0-9]{16}", resolved.name):
+        raise RuntimeError("Refusing to clean an unexpected conversion folder.")
+    try:
+        shutil.rmtree(resolved)
+        print("Confirmed upload; local downloaded source and converted file deleted.")
+    except OSError as error:
+        print("Upload confirmed, but local cleanup needs retry:", root, error)
+
+
 def prepare_encoding(config, force=False):
     directory = DATA / "ffmpeg"
     ffmpeg = config.get("ffmpeg") or shutil.which("ffmpeg") or str(directory / "ffmpeg.exe")
@@ -138,6 +180,36 @@ def prepare_encoding(config, force=False):
 def run_encoding(cfg, job, request):
     base = cfg["server"] + "/api/ai/worker/encoding/jobs/" + job["id"]
     headers = {"X-Vaultcast-Worker": cfg["worker_token"], "X-Vaultcast-Lease": job["lease"]}
+    if not re.fullmatch(r"[a-f0-9]{16}", str(job["id"])):
+        raise RuntimeError("Invalid conversion job ID.")
+    workspace = transfer_root(cfg) / job["id"]
+    workspace.mkdir(parents=True, exist_ok=True)
+    state_file = workspace / "state.json"
+    state = json.loads(state_file.read_text(encoding="utf-8")) if state_file.exists() else {}
+    previous = state.get("job", {})
+    if previous and (previous.get("bytes") != job["bytes"] or previous.get("source_mtime") != job.get("source_mtime")):
+        raise RuntimeError("Source changed; retained conversion files kept at " + str(workspace))
+    state.update(job=job, waiting_for_claim=False)
+    save_transfer(workspace, state)
+    if state.get("upload_confirmed"):
+        cleanup_transfer(workspace, cfg)
+        return
+    try:
+        remote = request(base + "/status", "POST", {}, headers, timeout=20)
+    except urllib.error.HTTPError as error:
+        if error.code < 500 and error.code not in (408, 429):
+            state["waiting_for_claim"] = True
+            save_transfer(workspace, state)
+        raise
+    if remote.get("uploaded"):
+        state["upload_confirmed"] = True
+        save_transfer(workspace, state)
+        cleanup_transfer(workspace, cfg)
+        return
+    if remote.get("completed"):
+        state["waiting_for_claim"] = True
+        save_transfer(workspace, state)
+        raise RuntimeError("Server no longer has the confirmed output. Local files kept at " + str(workspace))
     stop = threading.Event()
     lost = threading.Event()
     status = {"progress": 0, "stage": "downloading source", "phase": "download", "phase_progress": 0,
@@ -191,76 +263,82 @@ def run_encoding(cfg, job, request):
     process = None
     try:
         print("Converting:", job["title"], flush=True)
-        with tempfile.TemporaryDirectory(prefix="vaultcast-convert-") as temporary:
+        with nullcontext(str(workspace)) as temporary:
             root = Path(temporary)
             source, output = root / "source.video", root / "directplay.mp4"
-            required = int(job["bytes"]) * 3 + 1073741824
-            if shutil.disk_usage(root).free < required:
-                raise RuntimeError("Not enough local temporary disk space (need about " + str(round(required / 1073741824, 1)) + " GB).")
-            received = 0
-            with urllib.request.urlopen(urllib.request.Request(base + "/source", headers=headers), timeout=120) as response, source.open("wb") as file:
-                while True:
-                    if lost.is_set(): raise RuntimeError("Conversion lease was canceled or lost.")
-                    chunk = response.read1(262144)
-                    if not chunk: break
-                    file.write(chunk)
-                    received += len(chunk)
-                    transferred(received, job["bytes"], 0, 10)
-            if received != job["bytes"]:
-                raise RuntimeError("Source download was incomplete.")
-            info = probe(cfg["ffprobe"], source)
-            video = next((s for s in info["streams"] if s.get("codec_type") == "video" and not (s.get("disposition") or {}).get("attached_pic")), None)
-            if not video: raise RuntimeError("Source contains no video stream.")
-            audio = [s for s in info["streams"] if s.get("codec_type") == "audio"]
-            duration = float((info.get("format") or {}).get("duration") or job.get("duration") or 0)
-            copy_video = job.get("smart") and video.get("codec_name") == "h264" and video.get("pix_fmt") == "yuv420p"
-            copy_audio = job.get("smart") and all(s.get("codec_name") == "aac" for s in audio)
-            threads = str(cfg.get("encoding_threads", 1))
-            command = [cfg["ffmpeg"], "-nostdin", "-y", "-hide_banner", "-loglevel", "error", "-threads", threads,
-                "-filter_threads", threads, "-progress", str(root / "progress"), "-nostats", "-i", str(source), "-map", "0:" + str(video["index"]), "-map", "0:a?",
-                "-map_metadata", "0", "-map_chapters", "0", "-c:v", "copy" if copy_video else "libx264"]
-            if not copy_video:
-                command += ["-threads", threads, "-preset", job["preset"], "-crf", str(job["crf"]), "-pix_fmt", "yuv420p",
-                    "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2"]
-            command += ["-c:a", "copy" if copy_audio else "aac"]
-            if not copy_audio: command += ["-b:a", job["audio_bitrate"]]
-            command += ["-movflags", "+faststart", "-f", "mp4", str(output)]
-            phase("encode", "encoding", 10)
-            update()
-            with (root / "ffmpeg.log").open("wb") as log:
-                process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=log, creationflags=FLAGS)
-                try:
-                    while process.poll() is None:
-                        if lost.wait(1): raise RuntimeError("Conversion canceled or contributor lease lost.")
-                        try:
-                            with (root / "progress").open("rb") as progress_file:
-                                progress_file.seek(max(0, progress_file.seek(0, 2) - 8192))
-                                content = progress_file.read().decode(errors="replace")
-                            values = re.findall(r"out_time_us=(\d+)", content)
-                            if values and duration > 0:
-                                status["progress"] = round(10 + min(80, int(values[-1]) / 1000000 / duration * 80), 1)
-                                status["phase_progress"] = round(min(100, int(values[-1]) / 1000000 / duration * 100), 1)
-                        except OSError:
-                            pass
-                    if process.returncode:
-                        raise RuntimeError((root / "ffmpeg.log").read_text(errors="replace")[-600:] or "FFmpeg failed.")
-                finally:
-                    if process.poll() is None:
-                        process.terminate()
-                        try: process.wait(timeout=10)
-                        except subprocess.TimeoutExpired:
-                            process.kill(); process.wait()
-            check = probe(cfg["ffprobe"], output)
-            if not any(s.get("codec_name") == "h264" for s in check["streams"]):
-                raise RuntimeError("Converted file failed validation.")
+            if not state.get("output_ready") or not output.is_file() or output.stat().st_size != state.get("output_size"):
+                required = int(job["bytes"]) * 3 + 1073741824
+                if shutil.disk_usage(root).free < required:
+                    raise RuntimeError("Not enough local temporary disk space (need about " + str(round(required / 1073741824, 1)) + " GB).")
+                if not source.is_file() or source.stat().st_size != job["bytes"]:
+                    received = 0
+                    with urllib.request.urlopen(urllib.request.Request(base + "/source", headers=headers), timeout=120) as response, source.open("wb") as file:
+                        while True:
+                            if lost.is_set(): raise RuntimeError("Conversion lease was canceled or lost.")
+                            chunk = response.read1(262144)
+                            if not chunk: break
+                            file.write(chunk)
+                            received += len(chunk)
+                            transferred(received, job["bytes"], 0, 10)
+                    if received != job["bytes"]:
+                        raise RuntimeError("Source download was incomplete.")
+                info = probe(cfg["ffprobe"], source)
+                video = next((s for s in info["streams"] if s.get("codec_type") == "video" and not (s.get("disposition") or {}).get("attached_pic")), None)
+                if not video: raise RuntimeError("Source contains no video stream.")
+                audio = [s for s in info["streams"] if s.get("codec_type") == "audio"]
+                duration = float((info.get("format") or {}).get("duration") or job.get("duration") or 0)
+                copy_video = job.get("smart") and video.get("codec_name") == "h264" and video.get("pix_fmt") == "yuv420p"
+                copy_audio = job.get("smart") and all(s.get("codec_name") == "aac" for s in audio)
+                threads = str(cfg.get("encoding_threads", 1))
+                command = [cfg["ffmpeg"], "-nostdin", "-y", "-hide_banner", "-loglevel", "error", "-threads", threads,
+                    "-filter_threads", threads, "-progress", str(root / "progress"), "-nostats", "-i", str(source), "-map", "0:" + str(video["index"]), "-map", "0:a?",
+                    "-map_metadata", "0", "-map_chapters", "0", "-c:v", "copy" if copy_video else "libx264"]
+                if not copy_video:
+                    command += ["-threads", threads, "-preset", job["preset"], "-crf", str(job["crf"]), "-pix_fmt", "yuv420p",
+                        "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2"]
+                command += ["-c:a", "copy" if copy_audio else "aac"]
+                if not copy_audio: command += ["-b:a", job["audio_bitrate"]]
+                command += ["-movflags", "+faststart", "-f", "mp4", str(output)]
+                phase("encode", "encoding", 10)
+                update()
+                with (root / "ffmpeg.log").open("wb") as log:
+                    process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=log, creationflags=FLAGS)
+                    try:
+                        while process.poll() is None:
+                            if lost.wait(1): raise RuntimeError("Conversion canceled or contributor lease lost.")
+                            try:
+                                with (root / "progress").open("rb") as progress_file:
+                                    progress_file.seek(max(0, progress_file.seek(0, 2) - 8192))
+                                    content = progress_file.read().decode(errors="replace")
+                                values = re.findall(r"out_time_us=(\d+)", content)
+                                if values and duration > 0:
+                                    status["progress"] = round(10 + min(80, int(values[-1]) / 1000000 / duration * 80), 1)
+                                    status["phase_progress"] = round(min(100, int(values[-1]) / 1000000 / duration * 100), 1)
+                            except OSError:
+                                pass
+                        if process.returncode:
+                            raise RuntimeError((root / "ffmpeg.log").read_text(errors="replace")[-600:] or "FFmpeg failed.")
+                    finally:
+                        if process.poll() is None:
+                            process.terminate()
+                            try: process.wait(timeout=10)
+                            except subprocess.TimeoutExpired:
+                                process.kill(); process.wait()
+                check = probe(cfg["ffprobe"], output)
+                if not any(s.get("codec_name") == "h264" for s in check["streams"]):
+                    raise RuntimeError("Converted file failed validation.")
+                state.update(output_ready=True, output_size=output.stat().st_size)
+                save_transfer(workspace, state)
+            else:
+                print("Reusing retained conversion; resuming upload.")
             size = output.stat().st_size
-            phase("hash", "checking converted file", 90)
-            update()
-            sha = digest(output)
             if lost.is_set(): raise RuntimeError("Conversion canceled or lease lost.")
             phase("upload", "uploading converted file", 90, size)
             update()
-            sent = 0
+            remote = request(base + "/status", "POST", {}, headers, timeout=20)
+            sent = int(remote.get("received", 0))
+            if sent < 0 or sent > size: raise RuntimeError("Server upload offset exceeds the retained output.")
+            transferred(sent, size, 90, 9)
             chunk_size = max(262144, min(4194304, int(job.get("upload_chunk_bytes", 1048576))))
             uploader = ChunkUploader(base + "/chunk", headers)
             try:
@@ -291,19 +369,26 @@ def run_encoding(cfg, job, request):
                                     break
                                 if attempt == 2: raise
                                 time.sleep(2)
-                        if smaller: continue
+                        if smaller:
+                            remote = request(base + "/status", "POST", {}, headers, timeout=20)
+                            sent = int(remote.get("received", 0))
+                            if not 0 <= sent <= size: raise RuntimeError("Invalid server upload offset.")
+                            transferred(sent, size, 90, 9)
+                            continue
                         sent += len(chunk)
                         transferred(sent, size, 90, 9)
             finally:
                 uploader.close()
-            phase("verify", "server verifying output", 99)
+            phase("verify", "checking duration and replacing original", 99)
             update()
-            # Completion owns the queue lock while hashing/probing; stop progress calls first.
+            # Completion owns the queue lock while checking duration and replacing; stop progress first.
             stop.set()
             thread.join(timeout=25)
             for attempt in range(3):
                 try:
-                    request(base + "/complete", "POST", {"bytes": size, "sha256": sha}, headers, timeout=1800)
+                    confirmation = request(base + "/complete", "POST", {"bytes": size}, headers, timeout=1800)
+                    if not confirmation.get("uploaded"):
+                        raise RuntimeError("Server did not confirm receipt; update Vaultcast before retrying this worker.")
                     break
                 except urllib.error.HTTPError as exc:
                     if exc.code < 500 or attempt == 2: raise
@@ -311,17 +396,24 @@ def run_encoding(cfg, job, request):
                 except OSError:
                     if attempt == 2: raise
                     time.sleep(3)
-            print("Conversion uploaded and added to Vaultcast.")
+            print("Conversion uploaded and original replaced." if confirmation.get("replaced") else "Conversion uploaded; replacement needs administrator attention.")
+            if confirmation.get("warning"): print("Server note:", confirmation["warning"])
+            state["upload_confirmed"] = True
+            save_transfer(workspace, state)
+            cleanup_transfer(workspace, cfg)
     except BaseException as exc:
         if process is not None and process.poll() is None:
             process.terminate()
             try: process.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 process.kill(); process.wait()
-        try:
-            request(base + "/fail", "POST", {"error": "Contributor stopped" if isinstance(exc, KeyboardInterrupt) else str(exc)}, headers, timeout=15)
-        except Exception:
-            pass
+        transient = retryable_upload(exc) or isinstance(exc, KeyboardInterrupt)
+        state["waiting_for_claim"] = lost.is_set() or not transient
+        save_transfer(workspace, state)
+        print("Unconfirmed files retained for retry:", workspace)
+        if not transient and not lost.is_set():
+            try: request(base + "/fail", "POST", {"error": str(exc)}, headers, timeout=15)
+            except Exception: pass
         raise
     finally:
         stop.set()
