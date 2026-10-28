@@ -202,7 +202,7 @@ final class AIImages
         foreach ($all as $worker) {
             if (!empty($worker['ready']) && !empty($worker['capabilities']['encoding']['verified']) && (int)($worker['last_seen'] ?? 0)>=time()-self::ONLINE_SECONDS) {
                 $owner=Auth::findById((string)$worker['user_id']);
-                if (($owner['role'] ?? '')==='admin') $encoders++;
+                if ($owner && !empty(Access::state($owner)['active']) && AreaAccess::allowed($owner,'library')) $encoders++;
             }
             $pixels = self::imageCapacity($worker); $configuredMax = max($configuredMax, $pixels);
             if (!empty($worker['ready']) && $pixels > 0 && (int)($worker['last_seen'] ?? 0) >= time() - self::ONLINE_SECONDS) {
@@ -301,7 +301,8 @@ final class AIImages
             $pair = $pairs[$codeHash] ?? null;
             if (!is_array($pair) || (int)$pair['expires_at'] < time()) throw new DomainException('Pairing code expired or was already used. Generate a new one in Vaultcast.');
             $owner=Auth::findById((string)$pair['user_id']);
-            if ($encoding && ($owner['role'] ?? '')!=='admin') throw new DomainException('Encoding contributors must use a pairing code from an administrator account.');
+            if (!$owner || ($owner['role'] ?? '')==='guest' || empty(Access::state($owner)['active'])) throw new DomainException('Pairing requires an active Vaultcast account.');
+            if ($encoding && !AreaAccess::allowed($owner,'library')) throw new DomainException('Encoding contribution requires Library access. Ask an administrator to enable Library access for your account.');
             unset($pairs[$codeHash]);
             return ['id' => $id, 'name' => $name, 'user_id' => $pair['user_id'], 'token_hash' => $tokenHash, 'model_name' => $modelName, 'model_base' => $modelBase, 'ready' => true, 'last_seen' => time(), 'created_at' => time()];
         });
@@ -318,7 +319,11 @@ final class AIImages
         $token = (string)($_SERVER['HTTP_X_VAULTCAST_WORKER'] ?? '');
         if (!preg_match('/^[a-f0-9]{64}$/D', $token)) json_error('Worker credential required.', 401);
         $hash = hash('sha256', $token);
-        foreach (self::read(self::WORKERS) as $worker) if (hash_equals((string)($worker['token_hash'] ?? ''), $hash)) return $worker;
+        foreach (self::read(self::WORKERS) as $worker) if (hash_equals((string)($worker['token_hash'] ?? ''), $hash)) {
+            $owner=Auth::findById((string)$worker['user_id']);
+            if (!$owner || ($owner['role'] ?? '')==='guest' || empty(Access::state($owner)['active'])) json_error('The contributor account is no longer active.',403);
+            return $worker;
+        }
         json_error('Worker credential is invalid.', 401);
     }
     private static function touchWorker(array $worker, array $status = []): void {
@@ -341,7 +346,8 @@ final class AIImages
         if ($action!=='encoding-chunk' || (int)($worker['last_seen'] ?? 0)<time()-15) self::touchWorker($worker);
         if ($action==='encoding-claim' || strpos($action,'encoding-')===0) {
             $owner=Auth::findById((string)$worker['user_id']);
-            if (($owner['role'] ?? '')!=='admin' || empty($worker['capabilities']['encoding']['verified'])) json_error('Administrator-paired encoding contributor required.',403);
+            if (!$owner || !AreaAccess::allowed($owner,'library') || empty($worker['capabilities']['encoding']['verified'])) json_error('Encoding contribution requires Library access and a checked encoding profile.',403);
+            $worker['account']=$owner;
             $lease=(string)($_SERVER['HTTP_X_VAULTCAST_LEASE'] ?? '');
             if ($action==='encoding-claim' && $method==='POST') json_out(empty($worker['ready']) ? ['ok'=>true,'job'=>null] : Convert::externalClaim($worker));
             if ($action==='encoding-source' && $method==='GET') Convert::externalSource($worker,$id,$lease);

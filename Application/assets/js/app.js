@@ -12177,7 +12177,7 @@ h('div', { className:'cv-find-bar' }, [
             cvToggleRow('cv_en', 'Enable ffmpeg convert queue', 'Start queued library conversions. Turning this off pauses new jobs; an existing job can finish.', !!c.enabled),
             cvToggleRow('cv_external_only', 'Only use external workers for conversion', 'Saves immediately. Queued conversions wait for a contributing computer. Existing jobs can finish; playback transcoding is controlled separately.', !!c.external_workers_only),
             h('p',{id:'cv_contributors',className:'muted',text:'Refresh the conversion queue to see encoding computers online.'}),
-            h('p',{className:'muted',text:'External workers produce MP4 with H.264 video and AAC audio. Pair encoding computers using an admin account in AI → Images → Contribute a computer.'}),
+            h('p',{className:'muted',text:'External workers produce MP4 with H.264 video and AAC audio. Pair encoding computers using the contributor’s own account in AI → Images → Contribute a computer. Library access is required.'}),
             h('p',{className:'muted',text:'Server conversions run one at a time. Each external computer can handle one conversion, so several contributors can work on different files. Playback transcoding has its own slot limit above.'}),
             h('label', { className:'feature-row', 'for':'cv_threads' }, [
               h('span', { className:'feature-text' }, [

@@ -3,6 +3,7 @@ import getpass
 import json
 import os
 import random
+import re
 import socket
 import sys
 import time
@@ -36,7 +37,11 @@ def request(url, method="GET", data=None, headers=None, timeout=30):
         try:
             body = json.loads(exc.read().decode())
             message = body.get("error") or body.get("detail")
-            if isinstance(message, str): exc.reason = message
+            if isinstance(message, list):
+                message = "; ".join(".".join(str(part) for part in error.get("loc", [])) + ": " + str(error.get("msg", "Invalid value")) for error in message if isinstance(error, dict))
+            if isinstance(message, str):
+                endpoint = urllib.parse.urlsplit(url).path
+                exc.msg = message + " (" + method + " " + endpoint + ")"
         except (ValueError, AttributeError):
             pass
         raise
@@ -88,7 +93,7 @@ def load_config():
         caps["images"] = {}
         config["model_name"] = ""
     if modes.get("encoding"):
-        print("Encoding requires pairing with a code from an administrator account because it downloads library videos.")
+        print("Encoding uses your own Vaultcast account. Only videos your account can access are assigned to this computer.")
         settings = prepare_encoding(config, force=force)
         caps["encoding"] = settings.pop("encoding_profile")
         config.update(settings)
@@ -105,11 +110,24 @@ def load_config():
         raise RuntimeError("Enter a full Vaultcast URL beginning with http:// or https://")
     config["server"] = server
     save_config(config)
-    code = input("One-time pairing code from AI → Images: ").strip().lower()
     model_name = config["model_name"]
-    register = request(server + "/api/ai/worker/register", "POST", {
-        "pair_code": code, "name": socket.gethostname(), "model_name": model_name, "model_base": "sdxl" if modes.get("images") else "", "capabilities": config["capabilities"], "hardware": config["hardware"], "invoke_version": config.get("invoke_version", "")
-    })
+    print("Use the 32-character ONE-TIME PAIRING CODE from AI → Images → Pair a computer, not an account/device API key.")
+    print("Each computer needs a fresh code; a code expires after 10 minutes and can only be used once.")
+    while True:
+        code = "".join(input("One-time pairing code (or Q to stop): ").split()).lower()
+        if code == "q": raise RuntimeError("Pairing canceled. Setup is saved; rerun the worker to continue.")
+        if not re.fullmatch(r"[a-f0-9]{32}", code):
+            print("That is not a pairing code. Generate a fresh code using Pair a computer in AI → Images.")
+            continue
+        try:
+            register = request(server + "/api/ai/worker/register", "POST", {
+                "pair_code": code, "name": socket.gethostname(), "model_name": model_name, "model_base": "sdxl" if modes.get("images") else "", "capabilities": config["capabilities"], "hardware": config["hardware"], "invoke_version": config.get("invoke_version", "")
+            })
+            break
+        except urllib.error.HTTPError as exc:
+            if exc.code not in (400, 403, 422): raise
+            print("Pairing rejected:", exc)
+            print("Setup is saved. Correct the issue above and enter a fresh code, or Q to stop.")
     config.update({"server": server, "worker_token": register["worker_token"], "worker_id": register["worker_id"]})
     save_config(config)
     print("Paired successfully. Credential saved in", CONFIG_PATH)
@@ -330,7 +348,7 @@ def main():
             break
         except Exception as exc:
             if isinstance(exc, urllib.error.HTTPError) and exc.code == 403 and str(exc.url).startswith(cfg["server"] + "/api/ai/worker/encoding/"):
-                raise RuntimeError("Encoding requires an administrator-paired contributor. Run start-worker.cmd --pair and use a code from an administrator account, or --setup to select images only.") from exc
+                raise RuntimeError("This account cannot currently contribute encoding. Check that the account is active and has Library access, or run start-worker.cmd --setup to select images only.") from exc
             if isinstance(exc, urllib.error.HTTPError) and exc.code == 401 and str(exc.url).startswith(cfg["server"] + "/api/ai/worker/"):
                 raise RuntimeError("Contributor credentials were rejected. Run start-worker.cmd --pair to pair this computer again.") from exc
             print("Connection/generation error:", exc)

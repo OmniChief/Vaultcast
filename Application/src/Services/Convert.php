@@ -1346,6 +1346,8 @@ class Convert {
             foreach ($q as $job) if (($job['status'] ?? '')==='running' && ($job['external_worker_id'] ?? '')===$worker['id']) return ['ok'=>true,'job'=>null];
             foreach ($q as &$job) {
                 if (($job['status'] ?? '')!=='queued') continue;
+                $item=Catalogue::item((string)$job['item_id']);
+                if (!$item || !Parental::allows($worker['account'],$item)) continue;
                 $src=\Vaultcast\Paths::real((string)$job['src']);
                 if (!$src || !self::underLibraryRoot($src) || !is_file($src)) {
                     $job['status']='failed'; $job['message']='Source file is unavailable in the library'; continue;
@@ -1384,6 +1386,8 @@ class Convert {
         if (($job['status'] ?? '')!=='running' || ($job['external_worker_id'] ?? '')!==$worker['id'] ||
             $lease==='' || !hash_equals((string)($job['lease_token'] ?? ''),$lease) || (int)($job['lease_until'] ?? 0)<time())
             json_error('This conversion is no longer assigned to this worker.',409);
+        $item=Catalogue::item((string)$job['item_id']);
+        if (!$item || !Parental::allows($worker['account'],$item)) json_error('This video is no longer accessible to the contributor account.',403);
         return $i;
     }
 
