@@ -11362,7 +11362,7 @@ h('div', { className:'cv-find-bar' }, [
         return bytes>=1073741824?(bytes/1073741824).toFixed(2)+' GiB':bytes>=1048576?(bytes/1048576).toFixed(1)+' MiB':(bytes/1024).toFixed(1)+' KiB';
       }
       function transferDetails(job){
-        if(job.status!=='running'||!job.phase)return null;
+        if(!job||job.status!=='running'||!job.phase)return null;
         var phase=job.phase,pct=Math.max(0,Math.min(100,Number(job.phase_progress)||0));
         var download=phase==='download'?pct:100,encode=phase==='download'?0:phase==='encode'?pct:100;
         var upload=phase==='upload'?pct:phase==='verify'?100:0;
