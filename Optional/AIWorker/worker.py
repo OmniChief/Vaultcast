@@ -1,4 +1,4 @@
-"""Optional Vaultcast contributor for InvokeAI 6.x (Windows, Python 3.10+)."""
+"""Optional Vaultcast image and video-encoding contributor (Windows, Python 3.10+)."""
 import getpass
 import json
 import os
@@ -11,7 +11,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
-from contributor_setup import prepare
+from contributor_setup import prepare, hardware, yes
+from encoding_worker import prepare_encoding, run_encoding
 
 APPDATA = os.environ.get("APPDATA", os.path.expanduser("~"))
 CONFIG_DIR = os.path.join(APPDATA, "VaultcastAIWorker")
@@ -57,12 +58,48 @@ def load_config():
     if "--pair" in sys.argv:
         config.pop("worker_token", None)
         config.pop("worker_id", None)
-    config.update(prepare(config, request, graph_for, force=any(arg in sys.argv for arg in ("--setup", "--retest"))))
+    force = any(arg in sys.argv for arg in ("--setup", "--retest"))
+    info = hardware()
+    modes = config.get("contributions")
+    if force or not modes:
+        print("\nVaultcast contributor setup")
+        print("Encoding produces MP4/H.264/AAC using this computer's CPU; no AI engine or GPU is needed.")
+        capable = any(g.get("vram_mb", 0) >= 6144 for g in info.get("gpus", [])) and (info.get("ram_gb") or 16) >= 12
+        if capable:
+            print("This computer can try AI image contribution. A real generation check confirms its supported profile.")
+            choice = input("Contribute [1] AI images, [2] video encoding, [3] both [3]: ").strip() or "3"
+            if choice not in ("1", "2", "3"): raise RuntimeError("Choose 1, 2 or 3.")
+            modes = {"images": choice in ("1", "3"), "encoding": choice in ("2", "3")}
+        else:
+            print("No supported NVIDIA image-generation hardware detected (at least 6 GB VRAM and 12 GB system RAM).")
+            if not yes("Contribute video encoding only?"): raise RuntimeError("No contribution selected.")
+            modes = {"images": False, "encoding": True}
+    config["hardware"] = info
+    if modes.get("images"):
+        try:
+            config.update(prepare(config, request, graph_for, force=force))
+        except Exception as exc:
+            print("AI image setup failed:", exc)
+            if not modes.get("encoding") or not yes("Continue as an encoding-only contributor?"):
+                raise
+            modes["images"] = False
+    caps = config.setdefault("capabilities", {})
+    if not modes.get("images"):
+        caps["images"] = {}
+        config["model_name"] = ""
+    if modes.get("encoding"):
+        print("Encoding requires pairing with a code from an administrator account because it downloads library videos.")
+        settings = prepare_encoding(config, force=force)
+        caps["encoding"] = settings.pop("encoding_profile")
+        config.update(settings)
+    else:
+        caps["encoding"] = {"verified": False}
+    config["contributions"] = modes
     save_config(config)
     if config.get("worker_token"):
         return config
-    print("\nEngine ready. Pair this contributor with Vaultcast.")
-    print("Vaultcast receives this computer's name, GPU/RAM summary, InvokeAI version, and checked image profile.")
+    print("\nContributor ready. Pair this computer with Vaultcast.")
+    print("Vaultcast receives this computer's name, GPU/RAM summary, and checked contribution profiles.")
     server = (input("Vaultcast URL (for example https://vaultcast.example.com) [" + config.get("server", "") + "]: ").strip() or config.get("server", "")).rstrip("/")
     if not server.startswith(("http://", "https://")):
         raise RuntimeError("Enter a full Vaultcast URL beginning with http:// or https://")
@@ -71,7 +108,7 @@ def load_config():
     code = input("One-time pairing code from AI → Images: ").strip().lower()
     model_name = config["model_name"]
     register = request(server + "/api/ai/worker/register", "POST", {
-        "pair_code": code, "name": socket.gethostname(), "model_name": model_name, "model_base": "sdxl", "capabilities": config["capabilities"], "hardware": config["hardware"], "invoke_version": config["invoke_version"]
+        "pair_code": code, "name": socket.gethostname(), "model_name": model_name, "model_base": "sdxl" if modes.get("images") else "", "capabilities": config["capabilities"], "hardware": config["hardware"], "invoke_version": config.get("invoke_version", "")
     })
     config.update({"server": server, "worker_token": register["worker_token"], "worker_id": register["worker_id"]})
     save_config(config)
@@ -249,17 +286,34 @@ def run_job(cfg, job):
 def main():
     cfg = load_config()
     token = cfg["worker_token"]
-    if os.name == "nt":
+    images = cfg["contributions"].get("images")
+    encoding = cfg["contributions"].get("encoding")
+    if os.name == "nt" and images:
         print("Existing InvokeAI memory settings are preserved. A dedicated contributor engine uses partial loading.")
         print("InvokeAI recommends partial loading (enabled by default) and, on Windows NVIDIA systems, setting CUDA - Sysmem Fallback Policy to Prefer No Sysmem Fallback in NVIDIA Control Panel.")
-    print("Worker online for", cfg.get("model_name", "SDXL"), "— press Ctrl+C to stop.")
+    print("Worker online for", " + ".join(([cfg.get("model_name", "SDXL")] if images else []) + (["MP4/H.264/AAC encoding"] if encoding else [])), "— press Ctrl+C to stop.")
     print("To rerun setup or capability checks later: start-worker.cmd --setup or --retest")
+    prefer_encoding = True
     while True:
         try:
-            request(cfg["invoke"] + "/api/v1/app/version", timeout=5)
-            request(cfg["server"] + "/api/ai/worker/heartbeat", "POST", {"ready": True, "model_name": cfg.get("model_name"), "model_base": "sdxl", "capabilities": cfg["capabilities"], "hardware": cfg["hardware"], "invoke_version": cfg["invoke_version"]}, {"X-Vaultcast-Worker": token}, timeout=15)
-            result = request(cfg["server"] + "/api/ai/worker/claim", "POST", {}, {"X-Vaultcast-Worker": token}, timeout=30)
+            image_ready = images
+            if images:
+                try: request(cfg["invoke"] + "/api/v1/app/version", timeout=5)
+                except Exception: image_ready = False
+            caps = dict(cfg["capabilities"])
+            if not image_ready: caps["images"] = {}
+            headers = {"X-Vaultcast-Worker": token}
+            request(cfg["server"] + "/api/ai/worker/heartbeat", "POST", {"ready": image_ready or encoding, "model_name": cfg.get("model_name"), "model_base": "sdxl" if images else "", "capabilities": caps, "hardware": cfg["hardware"], "invoke_version": cfg.get("invoke_version", "")}, headers, timeout=15)
+            if encoding and (prefer_encoding or not image_ready):
+                result = request(cfg["server"] + "/api/ai/worker/encoding/claim", "POST", {}, headers, timeout=40)
+                if result.get("job"):
+                    try: run_encoding(cfg, result["job"], request)
+                    except Exception as exc: print("Conversion failed:", exc)
+                    prefer_encoding = False
+                    continue
+            result = request(cfg["server"] + "/api/ai/worker/claim", "POST", {}, headers, timeout=30) if image_ready else {}
             job = result.get("job")
+            prefer_encoding = True
             if job:
                 try:
                     run_job(cfg, job)
@@ -275,6 +329,8 @@ def main():
         except KeyboardInterrupt:
             break
         except Exception as exc:
+            if isinstance(exc, urllib.error.HTTPError) and exc.code == 403 and str(exc.url).startswith(cfg["server"] + "/api/ai/worker/encoding/"):
+                raise RuntimeError("Encoding requires an administrator-paired contributor. Run start-worker.cmd --pair and use a code from an administrator account, or --setup to select images only.") from exc
             if isinstance(exc, urllib.error.HTTPError) and exc.code == 401 and str(exc.url).startswith(cfg["server"] + "/api/ai/worker/"):
                 raise RuntimeError("Contributor credentials were rejected. Run start-worker.cmd --pair to pair this computer again.") from exc
             print("Connection/generation error:", exc)

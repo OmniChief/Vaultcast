@@ -31,6 +31,7 @@ class Convert {
     public static function defaults(): array {
         return [
             'enabled' => true,
+            'external_workers_only' => false,
             'one_job_at_a_time' => true,
             'threads' => 1,
             'max_threads' => self::maxCpuThreads(),
@@ -53,7 +54,7 @@ class Convert {
             'target_video'=>self::VIDEO_CODECS,'target_audio'=>self::AUDIO_CODECS,'target_container'=>array_keys(self::CONTAINERS)];
         foreach($choices as $key=>$values)if(array_key_exists($key,$cv)&&!in_array($cv[$key],$values,true))throw new InvalidArgumentException('Choose a supported conversion '.$key.'.');
         foreach(['crf'=>[0,28],'nice'=>[0,19],'ionice_class'=>[1,3]] as $key=>$bounds)if(array_key_exists($key,$cv)&&(!is_int($cv[$key])||$cv[$key]<$bounds[0]||$cv[$key]>$bounds[1]))throw new InvalidArgumentException('Conversion '.$key.' must be between '.implode(' and ',$bounds).'.');
-        foreach(['enabled','prefer_directplay','preserve_resolution','one_job_at_a_time'] as $key)if(array_key_exists($key,$cv)&&!is_bool($cv[$key]))throw new InvalidArgumentException('Choose on or off for conversion '.$key.'.');
+        foreach(['enabled','external_workers_only','prefer_directplay','preserve_resolution','one_job_at_a_time'] as $key)if(array_key_exists($key,$cv)&&!is_bool($cv[$key]))throw new InvalidArgumentException('Choose on or off for conversion '.$key.'.');
         $cv['one_job_at_a_time']=true;
         if(isset($cv['preserve_resolution'])&&!$cv['preserve_resolution'])throw new InvalidArgumentException('Background conversion preserves source resolution. Playback transcoding has a resolution limit.');
         return $cv;
@@ -134,14 +135,29 @@ class Convert {
         return $dir . '/' . $base . '.directplay.' . $container;
     }
 
+    private static $queueLock = null;
+    private static $queueLockDepth = 0;
     private static function lockQueue() {
+        if (is_resource(self::$queueLock)) { self::$queueLockDepth++; return self::$queueLock; }
         $fh = @fopen(STREAM_DATA . '/convert_queue.lock', 'c');
         if ($fh && !@flock($fh, LOCK_EX | LOCK_NB)) { @fclose($fh); return false; }
-        return $fh ?: null;
+        if (!$fh) return false;
+        self::$queueLock = $fh; self::$queueLockDepth = 1;
+        Store::invalidate('convert_queue');
+        return $fh;
     }
 
     private static function unlockQueue($fh): void {
+        if ($fh === self::$queueLock && --self::$queueLockDepth > 0) return;
         if (is_resource($fh)) { @flock($fh, LOCK_UN); @fclose($fh); }
+        self::$queueLock = null; self::$queueLockDepth = 0;
+    }
+
+    private static function editQueueLock() {
+        $lock = false;
+        for ($i=0; $i<100 && $lock===false; $i++) { $lock=self::lockQueue(); if ($lock===false) usleep(100000); }
+        if ($lock===false) json_error('Conversion queue is busy. Please retry.', 409);
+        return $lock;
     }
 
     private static function audit(string $msg): void {
@@ -149,6 +165,8 @@ class Convert {
     }
 
     public static function enqueue(string $itemId): array {
+        $queueLock = self::editQueueLock();
+        try {
         $item = Catalogue::item($itemId);
         if (!$item) json_error('Item not found', 404);
         if (($item['media_kind'] ?? '') !== 'video') json_error('Only video items can convert', 400);
@@ -192,6 +210,7 @@ class Convert {
         self::saveQueue($q);
         self::tick();
         return ['ok' => true, 'entry' => $entry];
+        } finally { self::unlockQueue($queueLock); }
     }
 
     /** Enqueue many item ids; returns per-id results. */
@@ -432,7 +451,7 @@ class Convert {
         ];
     }
 
-    public static function tick(): array {
+    public static function tick(bool $allowLocalStart = true): array {
         $settings = Store::settings();
         $cv = array_merge(self::defaults(), is_array($settings['convert'] ?? null) ? $settings['convert'] : []);
         $lock = self::lockQueue();
@@ -447,6 +466,14 @@ class Convert {
         $completed = [];
         foreach ($q as &$job) {
             if (($job['status'] ?? '') === 'running') {
+                if (!empty($job['external_worker_id'])) {
+                    if ((int)($job['lease_until'] ?? 0) < time()) {
+                        self::cleanupPartialFiles($job);
+                        $job['status']='queued'; $job['progress']=0; $job['message']='Contributor disconnected; waiting for a worker';
+                        unset($job['external_worker_id'], $job['lease_token'], $job['lease_until']);
+                    } else { $running=$job; }
+                    continue;
+                }
                 $pid = (int)($job['pid'] ?? 0);
                 if ($pid > 0 && self::pidAlive($pid)) {
                     $pct = self::readJobProgress($job);
@@ -514,7 +541,7 @@ class Convert {
             return ['ok' => true, 'running' => $running, 'queue' => $q];
         }
 
-        if(empty($cv['enabled'])) {
+        if(!$allowLocalStart || empty($cv['enabled']) || !empty($cv['external_workers_only'])) {
             if($q!==$beforeTick)self::saveQueue($q);self::unlockQueue($lock);
             return ['ok'=>true,'enabled'=>false,'queue'=>$q];
         }
@@ -818,6 +845,8 @@ class Convert {
     }
 
     public static function cancel(string $jobId): array {
+        $queueLock = self::editQueueLock();
+        try {
         $q = self::queue();
         $cleaned = [];
         foreach ($q as &$job) {
@@ -847,6 +876,7 @@ class Convert {
         unset($job);
         self::saveQueue($q);
         return ['ok' => true, 'cleaned' => $cleaned];
+        } finally { self::unlockQueue($queueLock); }
     }
 
     /** Remove .part / progress / exit leftovers for a job. */
@@ -918,6 +948,8 @@ class Convert {
      * Completed job: keep both files, just mark the job + linked requests done.
      */
     public static function resolveJob(string $jobId): array {
+        $queueLock = self::editQueueLock();
+        try {
         $q = self::queue();
         $i = self::findJob($q, $jobId);
         if ($i < 0) json_error('Job not found', 404);
@@ -931,6 +963,7 @@ class Convert {
         self::saveQueue($q);
         self::audit('resolve keep job=' . $jobId . ' requests=' . $n);
         return ['ok' => true, 'job' => $q[$i], 'requests_resolved' => $n];
+        } finally { self::unlockQueue($queueLock); }
     }
 
     public static function automaticPlaybackBlocked(string $itemId): bool {
@@ -977,6 +1010,8 @@ class Convert {
      * Removes dest from disk + catalogue; marks job resolved as deleted_conversion.
      */
     public static function deleteConverted(string $jobId): array {
+        $queueLock = self::editQueueLock();
+        try {
         $q = self::queue();
         $i = self::findJob($q, $jobId);
         if ($i < 0) json_error('Job not found', 404);
@@ -1041,6 +1076,7 @@ class Convert {
             'removed_item_ids' => $removedIds,
             'requests_resolved' => $n,
         ];
+        } finally { self::unlockQueue($queueLock); }
     }
 
     /**
@@ -1048,6 +1084,8 @@ class Convert {
      * (same folder), repoint catalogue / progress / collections, mark done.
      */
     public static function removeOriginal(string $jobId): array {
+        $queueLock = self::editQueueLock();
+        try {
         $q = self::queue();
         $i = self::findJob($q, $jobId);
         if ($i < 0) json_error('Job not found', 404);
@@ -1154,6 +1192,7 @@ class Convert {
             'collection_links_migrated' => $cols,
             'requests_resolved' => $n,
         ];
+        } finally { self::unlockQueue($queueLock); }
     }
 
     /** Move per-user watch progress from old item ids to the new one. */
@@ -1253,6 +1292,8 @@ class Convert {
 
     /** Remove a cancelled/failed/resolved job from the queue and clean partials. */
     public static function discard(string $jobId): array {
+        $queueLock = self::editQueueLock();
+        try {
         $q = self::queue();
         $cleaned = [];
         $kept = [];
@@ -1283,14 +1324,143 @@ class Convert {
         }
         self::saveQueue(array_values($kept));
         return ['ok' => true, 'cleaned' => $cleaned, 'queue' => array_values($kept)];
+        } finally { self::unlockQueue($queueLock); }
     }
 
     public static function clearFinished(): array {
+        $queueLock = self::editQueueLock();
+        try {
         $q = array_values(array_filter(self::queue(), function ($job) {
             return in_array($job['status'] ?? '', ['queued', 'running'], true);
         }));
         self::saveQueue($q);
         return ['ok' => true, 'queue' => $q];
+        } finally { self::unlockQueue($queueLock); }
+    }
+
+    public static function externalClaim(array $worker): array {
+        $lock=self::editQueueLock();
+        try {
+            $cv=array_merge(self::defaults(), Store::settings()['convert'] ?? []);
+            if (empty($cv['enabled'])) return ['ok'=>true,'job'=>null];
+            // Reap expired leases and collect any completed local process before claiming.
+            self::tick(false);
+            $q=self::queue();
+            foreach ($q as $job) if (($job['status'] ?? '')==='running' && ($job['external_worker_id'] ?? '')===$worker['id']) return ['ok'=>true,'job'=>null];
+            foreach ($q as &$job) {
+                if (($job['status'] ?? '')!=='queued') continue;
+                $src=\Vaultcast\Paths::real((string)$job['src']);
+                if (!$src || !self::underLibraryRoot($src) || !is_file($src)) {
+                    $job['status']='failed'; $job['message']='Source file is unavailable in the library'; continue;
+                }
+                $dest=self::destFor($src,'mp4');
+                if (is_file($dest)) { $job['status']='failed'; $job['message']='A DirectPlay output already exists; it was not overwritten'; continue; }
+                $quality=self::applyQualityMode($cv);
+                $job['dest']=$dest; $job['container']='mp4'; $job['pid']=null;
+                $job['part']=dirname($dest).'/.'.basename($dest).'.worker-'.$job['id'].'.part';
+                @unlink($job['part']);
+                $job['status']='running'; $job['external_worker_id']=$worker['id'];
+                $job['lease_token']=bin2hex(random_bytes(16)); $job['lease_until']=time()+300;
+                $job['started_at']=date('c'); $job['finished_at']=null; $job['progress']=0;
+                $job['message']='Contributor '.$worker['name'].' · downloading source';
+                $job['source_stat']=['size'=>(int)filesize($src),'mtime'=>(int)filemtime($src)];
+                $sourceProbe=MediaProbe::probeSummary($src,8,true);
+                $job['duration_s']=$sourceProbe['duration'];
+                $job['source_audio_count']=!empty($sourceProbe['probed']) ? (int)$sourceProbe['audio_count'] : null;
+                $job['quality_mode']=$quality['quality_mode'];
+                self::saveQueue($q);
+                return ['ok'=>true,'job'=>['id'=>$job['id'],'title'=>$job['title'],'lease'=>$job['lease_token'],
+                    'bytes'=>$job['source_stat']['size'],'duration'=>$job['duration_s'],
+                    'crf'=>max(0,min(28,(int)($quality['crf'] ?? 18))),
+                    'preset'=>self::sanitizePreset((string)($quality['preset'] ?? 'medium')),
+                    'audio_bitrate'=>in_array($quality['audio_bitrate'] ?? '',['96k','128k','160k','192k','256k','320k'],true) ? $quality['audio_bitrate'] : '320k',
+                    'smart'=>in_array($quality['quality_mode'],['directplay','original'],true)]];
+            }
+            unset($job); self::saveQueue($q);
+            return ['ok'=>true,'job'=>null];
+        } finally { self::unlockQueue($lock); }
+    }
+
+    private static function externalJob(array $q, array $worker, string $id, string $lease): int {
+        $i=self::findJob($q,$id); $job=$i>=0 ? $q[$i] : [];
+        if (($job['status'] ?? '')!=='running' || ($job['external_worker_id'] ?? '')!==$worker['id'] ||
+            $lease==='' || !hash_equals((string)($job['lease_token'] ?? ''),$lease) || (int)($job['lease_until'] ?? 0)<time())
+            json_error('This conversion is no longer assigned to this worker.',409);
+        return $i;
+    }
+
+    public static function externalSource(array $worker, string $id, string $lease): void {
+        $lock=self::editQueueLock();
+        try {
+            $q=self::queue(); $i=self::externalJob($q,$worker,$id,$lease); $job=$q[$i];
+            $src=\Vaultcast\Paths::real((string)$job['src']);
+            if (!$src || !self::underLibraryRoot($src) || !is_file($src)) json_error('Source is unavailable.',404);
+            $q[$i]['lease_until']=time()+300; self::saveQueue($q);
+        } finally { self::unlockQueue($lock); }
+        @set_time_limit(0);
+        header('Cache-Control: no-store');
+        Stream::sendFile($src,'application/octet-stream'); exit;
+    }
+
+    public static function externalUpdate(array $worker, string $id, string $lease, string $action, array $body=[]): array {
+        $lock=self::editQueueLock();
+        try {
+            $q=self::queue();
+            $done=self::findJob($q,$id);
+            if ($action==='complete' && $done>=0 && ($q[$done]['status'] ?? '')==='done' &&
+                ($q[$done]['external_worker_id'] ?? '')===$worker['id'] && $lease!=='' && hash_equals((string)($q[$done]['lease_token'] ?? ''),$lease)) return ['ok'=>true];
+            $i=self::externalJob($q,$worker,$id,$lease); $job=&$q[$i];
+            $job['lease_until']=time()+300;
+            if ($action==='progress') {
+                $job['progress']=max(0,min(99.5,(float)($body['progress'] ?? 0)));
+                $job['message']='Contributor '.$worker['name'].' · '.mb_substr((string)($body['stage'] ?? 'encoding'),0,80).' · '.$job['progress'].'%';
+            } elseif ($action==='chunk') {
+                // Raw bounded chunks bypass PHP multipart limits and keep RAM independent of film size.
+                $offset=filter_var($_SERVER['HTTP_X_UPLOAD_OFFSET'] ?? '',FILTER_VALIDATE_INT);
+                if ($offset===false || $offset<0) json_error('Invalid upload offset.',400);
+                $input=fopen('php://input','rb'); $chunk=stream_get_contents($input,1048577); fclose($input);
+                if ($chunk===false || strlen($chunk)<1 || strlen($chunk)>1048576) json_error('Send a chunk of at most 1 MiB.',413);
+                $part=(string)$job['part']; clearstatcache(true,$part); $size=is_file($part) ? (int)filesize($part) : 0;
+                if ($offset!==$size) {
+                    if ($offset+strlen($chunk)!==$size) json_error('Upload offset does not match.',409);
+                    $file=fopen($part,'rb'); fseek($file,$offset); $previous=fread($file,strlen($chunk)); fclose($file);
+                    if (!hash_equals(hash('sha256',$previous),hash('sha256',$chunk))) json_error('Upload chunk does not match.',409);
+                } else {
+                    $max=max(1073741824,(int)($job['source_stat']['size'] ?? 0)*8);
+                    if ($size+strlen($chunk)>$max) json_error('Converted file exceeds this job upload limit.',413);
+                    $free=@disk_free_space(dirname($part));
+                    if ($free!==false && $free<strlen($chunk)+16777216) json_error('Server output disk is full.',507);
+                    if (file_put_contents($part,$chunk,FILE_APPEND)!==strlen($chunk)) throw new RuntimeException('Could not save output chunk.');
+                    $size+=strlen($chunk);
+                }
+                self::saveQueue($q); return ['ok'=>true,'received'=>$size];
+            } elseif ($action==='complete') {
+                @set_time_limit(0);
+                $part=(string)$job['part']; clearstatcache(true,$part);
+                $bytes=(int)($body['bytes'] ?? 0); $sha=(string)($body['sha256'] ?? '');
+                if (!is_file($part) || $bytes<1000 || filesize($part)!==$bytes || !preg_match('/^[a-f0-9]{64}$/D',$sha) || !hash_equals($sha,hash_file('sha256',$part))) json_error('Converted upload is incomplete or corrupt.',422);
+                $probe=MediaProbe::probeSummary($part,20,false);
+                $file=fopen($part,'rb'); $signature=fread($file,12); fclose($file);
+                if (substr($signature,4,4)!=='ftyp') json_error('Output must use the MP4 container.',422);
+                if (empty($probe['probed']) || ($probe['video_codec'] ?? '')!=='h264' || ($probe['pixel_format'] ?? '')!=='yuv420p') json_error('Output must contain H.264 8-bit video.',422);
+                foreach ($probe['audio_tracks'] ?? [] as $track) if (($track['codec'] ?? '')!=='aac') json_error('Output audio must be AAC.',422);
+                if (isset($job['source_audio_count']) && (int)$probe['audio_count']!==$job['source_audio_count']) json_error('Converted audio tracks do not match the source.',422);
+                $duration=(float)($job['duration_s'] ?? 0); $actual=(float)($probe['duration'] ?? 0);
+                if ($actual<=0 || ($duration>0 && abs($actual-$duration)>max(3,$duration*0.01))) json_error('Converted video duration does not match the source.',422);
+                $src=(string)$job['src']; clearstatcache(true,$src);
+                if (!is_file($src) || filesize($src)!==$job['source_stat']['size'] || filemtime($src)!==$job['source_stat']['mtime']) json_error('The original changed; it was kept. Cancel and queue a fresh conversion.',409);
+                if (is_file($job['dest'])) json_error('Output already exists; it was not overwritten.',409);
+                if (!rename($part,$job['dest'])) throw new RuntimeException('Could not publish converted file.');
+                $job['status']='done'; $job['progress']=100; $job['finished_at']=date('c');
+                $job['message']='Completed by '.$worker['name'].' — saved beside original';
+                $job=self::onComplete($job);
+            } elseif ($action==='fail') {
+                self::cleanupPartialFiles($job);
+                $job['status']='failed'; $job['finished_at']=date('c');
+                $job['message']='Contributor: '.mb_substr((string)($body['error'] ?? 'Conversion failed'),0,300);
+            } else json_error('Unknown conversion action.',404);
+            self::saveQueue($q); return ['ok'=>true];
+        } finally { self::unlockQueue($lock); }
     }
 
     /* ---- Convert requests (TV / non-admin notify admin) ---- */

@@ -27,6 +27,7 @@ if ($path === '/admin/convert' && $method === 'GET') {
         'requests' => Convert::requests(),
         'pending_requests' => Convert::pendingRequests(),
         'defaults' => Convert::defaults(),
+        'contributors' => AIImages::contributorStatus(),
     ]);
 }
 

@@ -12007,6 +12007,8 @@ h('div', { className:'cv-find-bar' }, [
             });
           }
           lastQueue = r.queue || [];
+          var contributors = $('#cv_contributors');
+          if (contributors) contributors.textContent = String((r.contributors || {}).encoding_online || 0) + ' encoding computers online';
           paintUnified();
         }).catch(function(){
           if (!opts.quiet) toast('Could not refresh convert status', { kind:'bad' });
@@ -12016,6 +12018,7 @@ h('div', { className:'cv-find-bar' }, [
       function collectConvertSettings(){
         return {
           enabled: !!( $('#cv_en') && $('#cv_en').checked ),
+          external_workers_only: !!( $('#cv_external_only') && $('#cv_external_only').checked ),
           one_job_at_a_time: true,
           threads: cvThreadsValue() || 1,
           quality_mode: modeState.mode || 'directplay',
@@ -12096,7 +12099,10 @@ h('div', { className:'cv-find-bar' }, [
           ]),
           h('div', { className:'feature-card cv-feature-card' }, [
             cvToggleRow('cv_en', 'Enable ffmpeg convert queue', 'Start queued library conversions. Turning this off pauses new jobs; an existing job can finish.', !!c.enabled),
-            h('p',{className:'muted',text:'Background conversions run one at a time. Playback transcoding has its own slot limit above.'}),
+            cvToggleRow('cv_external_only', 'Only use external workers for conversion', 'Queued conversions wait for a contributing computer. No new background conversion starts on this server. Existing jobs can finish; playback transcoding is controlled separately.', !!c.external_workers_only),
+            h('p',{id:'cv_contributors',className:'muted',text:'Refresh the conversion queue to see encoding computers online.'}),
+            h('p',{className:'muted',text:'External workers produce MP4 with H.264 video and AAC audio. Pair encoding computers using an admin account in AI → Images → Contribute a computer.'}),
+            h('p',{className:'muted',text:'Server conversions run one at a time. Each external computer can handle one conversion, so several contributors can work on different files. Playback transcoding has its own slot limit above.'}),
             h('label', { className:'feature-row', 'for':'cv_threads' }, [
               h('span', { className:'feature-text' }, [
                 h('strong', { text:'Conversion threads' }),

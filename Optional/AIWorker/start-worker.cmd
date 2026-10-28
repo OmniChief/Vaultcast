@@ -1,7 +1,7 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-title Vaultcast AI Contributor
+title Vaultcast Contributor
 set "PYRUN="
 where py >nul 2>nul
 if not errorlevel 1 (

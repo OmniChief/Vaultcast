@@ -42,6 +42,7 @@ final class AIImages
     private static function capabilityReport(array $body): array {
         $caps = is_array($body['capabilities'] ?? null) ? $body['capabilities'] : [];
         $images = is_array($caps['images'] ?? null) ? $caps['images'] : [];
+        $encoding = is_array($caps['encoding'] ?? null) ? $caps['encoding'] : [];
         $profile = $images['sdxl'] ?? [];
         if (!is_array($profile)) $profile = [];
         $pixels = (int)($profile['max_pixels'] ?? 0);
@@ -49,7 +50,8 @@ final class AIImages
         return ['images'=>['sdxl'=>['verified'=>$verified, 'max_pixels'=>$verified ? $pixels : 0,
             'checked_at'=>max(0, min(time(), (int)($profile['checked_at'] ?? 0))),
             'seconds'=>max(0, min(1800, (float)($profile['seconds'] ?? 0))),
-            'model_hash'=>mb_substr((string)($profile['model_hash'] ?? ''), 0, 128)]], 'video'=>['verified'=>false]];
+            'model_hash'=>mb_substr((string)($profile['model_hash'] ?? ''), 0, 128)]], 'video'=>['verified'=>false],
+            'encoding'=>['verified'=>!empty($encoding['verified']), 'profile'=>'mp4-h264-aac']];
     }
     private static function hardwareReport(array $body): array {
         $hardware = is_array($body['hardware'] ?? null) ? $body['hardware'] : [];
@@ -196,8 +198,12 @@ final class AIImages
         self::mutate($document, static function (&$all) use ($picture, $entry) { $all[(string)$picture['id']] = $entry; });
     }
     private static function workersOnline(): array {
-        $all = self::read(self::WORKERS); $online = []; $configuredMax = 0; $onlineMax = 0;
+        $all = self::read(self::WORKERS); $online = []; $configuredMax = 0; $onlineMax = 0; $encoders=0;
         foreach ($all as $worker) {
+            if (!empty($worker['ready']) && !empty($worker['capabilities']['encoding']['verified']) && (int)($worker['last_seen'] ?? 0)>=time()-self::ONLINE_SECONDS) {
+                $owner=Auth::findById((string)$worker['user_id']);
+                if (($owner['role'] ?? '')==='admin') $encoders++;
+            }
             $pixels = self::imageCapacity($worker); $configuredMax = max($configuredMax, $pixels);
             if (!empty($worker['ready']) && $pixels > 0 && (int)($worker['last_seen'] ?? 0) >= time() - self::ONLINE_SECONDS) {
                 $onlineMax = max($onlineMax, $pixels);
@@ -205,8 +211,9 @@ final class AIImages
                     'verified'=>!empty($worker['capabilities']['images']['sdxl']['verified'])];
             }
         }
-        return ['online'=>count($online), 'connected'=>count(array_filter($all, static function ($w) { return (int)($w['last_seen'] ?? 0) >= time() - self::ONLINE_SECONDS; })), 'total'=>count($all), 'list'=>$online, 'max_image_pixels'=>$onlineMax, 'configured_max_image_pixels'=>$configuredMax];
+        return ['online'=>count($online), 'encoding_online'=>$encoders, 'connected'=>count(array_filter($all, static function ($w) { return (int)($w['last_seen'] ?? 0) >= time() - self::ONLINE_SECONDS; })), 'total'=>count($all), 'list'=>$online, 'max_image_pixels'=>$onlineMax, 'configured_max_image_pixels'=>$configuredMax];
     }
+    public static function contributorStatus(): array { return self::workersOnline(); }
 
     public static function createJob(array $user, array $body): array {
         self::signed($user);
@@ -286,16 +293,19 @@ final class AIImages
         $name = mb_substr(trim((string)($body['name'] ?? 'Contributor PC')), 0, 60) ?: 'Contributor PC';
         $modelName = mb_substr(trim((string)($body['model_name'] ?? '')), 0, 100);
         $modelBase = trim((string)($body['model_base'] ?? ''));
-        if ($modelName === '' || !in_array($modelBase, ['sd-1', 'sd-2', 'sdxl'], true)) throw new DomainException('This InvokeAI model family is not supported by the current Vaultcast worker.');
-        $worker = self::mutate(self::PAIRS, static function (&$pairs) use ($codeHash, $tokenHash, $id, $name, $modelName, $modelBase) {
+        $encoding=!empty(self::capabilityReport($body)['encoding']['verified']);
+        if (!$encoding && ($modelName === '' || !in_array($modelBase, ['sd-1', 'sd-2', 'sdxl'], true))) throw new DomainException('Choose image generation or encoding for this contributor.');
+        $worker = self::mutate(self::PAIRS, static function (&$pairs) use ($codeHash, $tokenHash, $id, $name, $modelName, $modelBase, $encoding) {
             $pair = $pairs[$codeHash] ?? null;
             if (!is_array($pair) || (int)$pair['expires_at'] < time()) throw new DomainException('Pairing code expired or was already used. Generate a new one in Vaultcast.');
+            $owner=Auth::findById((string)$pair['user_id']);
+            if ($encoding && ($owner['role'] ?? '')!=='admin') throw new DomainException('Encoding contributors must use a pairing code from an administrator account.');
             unset($pairs[$codeHash]);
             return ['id' => $id, 'name' => $name, 'user_id' => $pair['user_id'], 'token_hash' => $tokenHash, 'model_name' => $modelName, 'model_base' => $modelBase, 'ready' => true, 'last_seen' => time(), 'created_at' => time()];
         });
         if (isset($body['capabilities'])) {
             $worker['capabilities'] = self::capabilityReport($body);
-            $worker['ready'] = self::imageCapacity($worker) > 0;
+            $worker['ready'] = self::imageCapacity($worker) > 0 || $encoding;
         }
         $worker['invoke_version'] = mb_substr((string)($body['invoke_version'] ?? ''), 0, 40);
         if (isset($body['hardware'])) $worker['hardware'] = self::hardwareReport($body);
@@ -318,7 +328,7 @@ final class AIImages
             if (isset($status['capabilities'])) $workers[$worker['id']]['capabilities'] = self::capabilityReport($status);
             if (isset($status['invoke_version'])) $workers[$worker['id']]['invoke_version'] = mb_substr((string)$status['invoke_version'], 0, 40);
             if (isset($status['hardware'])) $workers[$worker['id']]['hardware'] = self::hardwareReport($status);
-            if (isset($workers[$worker['id']]['capabilities']) && self::imageCapacity($workers[$worker['id']]) === 0) $workers[$worker['id']]['ready'] = false;
+            if (isset($workers[$worker['id']]['capabilities']) && self::imageCapacity($workers[$worker['id']]) === 0 && empty($workers[$worker['id']]['capabilities']['encoding']['verified'])) $workers[$worker['id']]['ready'] = false;
         } });
     }
     public static function worker(string $action, string $id = ''): void {
@@ -327,6 +337,15 @@ final class AIImages
         $worker = self::authenticateWorker();
         if ($action === 'heartbeat' && $method === 'POST') { self::touchWorker($worker, body_json()); json_out(['ok' => true, 'worker_id' => $worker['id']]); }
         self::touchWorker($worker);
+        if ($action==='encoding-claim' || strpos($action,'encoding-')===0) {
+            $owner=Auth::findById((string)$worker['user_id']);
+            if (($owner['role'] ?? '')!=='admin' || empty($worker['capabilities']['encoding']['verified'])) json_error('Administrator-paired encoding contributor required.',403);
+            $lease=(string)($_SERVER['HTTP_X_VAULTCAST_LEASE'] ?? '');
+            if ($action==='encoding-claim' && $method==='POST') json_out(empty($worker['ready']) ? ['ok'=>true,'job'=>null] : Convert::externalClaim($worker));
+            if ($action==='encoding-source' && $method==='GET') Convert::externalSource($worker,$id,$lease);
+            if ($method==='POST') json_out(Convert::externalUpdate($worker,$id,$lease,substr($action,9),$action==='encoding-chunk' ? [] : body_json()));
+            json_error('Encoding endpoint not found.',404);
+        }
         if ($action === 'claim' && $method === 'POST') {
             if (empty($worker['ready']) || self::imageCapacity($worker) === 0) json_out(['ok'=>true, 'job'=>null]);
             $job = self::mutate(self::JOBS, static function (&$jobs) use ($worker) {
