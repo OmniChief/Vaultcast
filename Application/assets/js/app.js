@@ -11127,6 +11127,28 @@ h('div', { className:'cv-find-bar' }, [
         gen: 0
       };
       var lastQueue = [];
+      var externalOnly = !!c.external_workers_only, policySave = null, policyRevision = 0;
+      function paintRoutingPolicy(){
+        root.querySelectorAll('#cv_external_only,#cv_batch_external_only').forEach(function(input){input.checked=externalOnly;input.disabled=!!policySave;});
+        var note=root.querySelector('#cv_batch_policy_status');
+        if(note)note.textContent=policySave?'Saving conversion routing…':externalOnly?'External workers only: queued files wait for a contributing computer.':'Server conversion is allowed. Enable external workers only to keep encoding off this server.';
+      }
+      function saveRoutingPolicy(value){
+        var previous=externalOnly; externalOnly=value; policyRevision++;
+        policySave=api('/admin/convert/policy',{method:'POST',body:{external_workers_only:value}}).then(function(r){
+          if(!r.ok)throw new Error(r.error||'Could not save conversion routing.');
+          externalOnly=!!r.external_workers_only;
+          if(state.settings){state.settings.convert=state.settings.convert||{};state.settings.convert.external_workers_only=externalOnly;}
+          toast(externalOnly?'Saved: external workers only':'Saved: server conversion allowed',{kind:'ok'});
+        }).catch(function(e){externalOnly=previous;toast(e.message||'Could not save conversion routing.',{kind:'bad'});throw e;}).finally(function(){policySave=null;paintRoutingPolicy();});
+        paintRoutingPolicy();
+        return policySave;
+      }
+      function queueWithRouting(path,body){
+        return (policySave||Promise.resolve()).then(function(){
+          return api(path,{method:'POST',body:Object.assign({},body,{external_workers_only:externalOnly})});
+        });
+      }
 
       var QUALITY_MODES = [
         { id:'original', title:'Original / lossless', blurb:'Remux only (stream-copy). No re-encode \u2014 same quality & ~same size. Tiny server load. A copy is preferred only after browser-compatible codecs are verified.' },
@@ -11234,10 +11256,10 @@ h('div', { className:'cv-find-bar' }, [
         opts = opts || {};
         if (!req || !req.id) return;
         var doStart = function(){
-          api('/admin/convert/requests/'+req.id, { method:'POST', body:{ action:'start' } }).then(function(res){
+          queueWithRouting('/admin/convert/requests/'+req.id, {action:'start'}).then(function(res){
             toast(res.ok ? (res.convert && res.convert.message || 'Accepted - convert queued') : (res.error||'Failed'), { kind: res.ok ? 'ok' : 'bad' });
             refreshConvertAdmin();
-          });
+          }).catch(function(e){toast(e.message||'Could not queue conversion.',{kind:'bad'});});
         };
         if (opts.skipConfirm) return doStart();
         confirmDialog('Accept convert request for "'+(req.title||req.item_id||'item')+'" and add it to the batch converter?', { okText:'Accept & queue' }).then(function(ok){
@@ -11353,13 +11375,13 @@ h('div', { className:'cv-find-bar' }, [
       function enqueueIds(ids, label){
         ids = (ids || []).filter(Boolean);
         if (!ids.length) return toast('Nothing selected');
-        api('/admin/convert', { method:'POST', body:{ item_ids: ids } }).then(function(r){
+        queueWithRouting('/admin/convert', {item_ids:ids}).then(function(r){
           if (!r.ok) return toast(r.error || 'Enqueue failed', { kind:'bad' });
           toast((label || 'Queued') + ': ' + (r.queued||0) + (r.skipped ? (', skipped ' + r.skipped) : ''), { kind:'ok' });
           ids.forEach(function(id){ delete findState.selected[id]; });
           refreshConvertAdmin();
           paintUnified();
-        });
+        }).catch(function(e){toast(e.message||'Could not queue conversion.',{kind:'bad'});});
       }
 
       function cancelJob(job){
@@ -11935,6 +11957,7 @@ h('div', { className:'cv-find-bar' }, [
 
       function refreshConvertAdmin(opts){
         opts = opts || {};
+        var routingRevision=policyRevision;
         api('/admin/convert').then(function(r){
           var pending = r.pending_requests || [];
           updateConvertNotif(pending.length);
@@ -12009,6 +12032,13 @@ h('div', { className:'cv-find-bar' }, [
           lastQueue = r.queue || [];
           var contributors = $('#cv_contributors');
           if (contributors) contributors.textContent = String((r.contributors || {}).encoding_online || 0) + ' encoding computers online';
+          var batchContributors=root.querySelector('#cv_batch_contributors');
+          if(batchContributors)batchContributors.textContent=String((r.contributors||{}).encoding_online||0)+' encoding computers online';
+          if(!policySave && routingRevision===policyRevision && typeof r.external_workers_only==='boolean'){
+            externalOnly=r.external_workers_only;
+            if(state.settings){state.settings.convert=state.settings.convert||{};state.settings.convert.external_workers_only=externalOnly;}
+            paintRoutingPolicy();
+          }
           paintUnified();
         }).catch(function(){
           if (!opts.quiet) toast('Could not refresh convert status', { kind:'bad' });
@@ -12018,7 +12048,7 @@ h('div', { className:'cv-find-bar' }, [
       function collectConvertSettings(){
         return {
           enabled: !!( $('#cv_en') && $('#cv_en').checked ),
-          external_workers_only: !!( $('#cv_external_only') && $('#cv_external_only').checked ),
+          external_workers_only: externalOnly,
           one_job_at_a_time: true,
           threads: cvThreadsValue() || 1,
           quality_mode: modeState.mode || 'directplay',
@@ -12099,7 +12129,7 @@ h('div', { className:'cv-find-bar' }, [
           ]),
           h('div', { className:'feature-card cv-feature-card' }, [
             cvToggleRow('cv_en', 'Enable ffmpeg convert queue', 'Start queued library conversions. Turning this off pauses new jobs; an existing job can finish.', !!c.enabled),
-            cvToggleRow('cv_external_only', 'Only use external workers for conversion', 'Queued conversions wait for a contributing computer. No new background conversion starts on this server. Existing jobs can finish; playback transcoding is controlled separately.', !!c.external_workers_only),
+            cvToggleRow('cv_external_only', 'Only use external workers for conversion', 'Saves immediately. Queued conversions wait for a contributing computer. Existing jobs can finish; playback transcoding is controlled separately.', !!c.external_workers_only),
             h('p',{id:'cv_contributors',className:'muted',text:'Refresh the conversion queue to see encoding computers online.'}),
             h('p',{className:'muted',text:'External workers produce MP4 with H.264 video and AAC audio. Pair encoding computers using an admin account in AI → Images → Contribute a computer.'}),
             h('p',{className:'muted',text:'Server conversions run one at a time. Each external computer can handle one conversion, so several contributors can work on different files. Playback transcoding has its own slot limit above.'}),
@@ -12143,6 +12173,9 @@ h('div', { className:'cv-find-bar' }, [
 
         h('section', { className:'cv-section settings-card cv-batch-section' }, [
           h('h3', { className:'admin-section-title', text:'Batch video converter' }),
+          cvToggleRow('cv_batch_external_only', 'Only use external workers', 'Saves immediately and shares the policy with DirectPlay Settings. Batch jobs wait for contributors; they do not fall back to server encoding.', externalOnly),
+          h('p',{id:'cv_batch_policy_status',className:'muted',role:'status'}),
+          h('p',{id:'cv_batch_contributors',className:'muted',text:'Checking encoding computers…'}),
           h('p', { className:'muted', text:'Glass queue + Find all for DirectPlay gaps (real H.264/AAC). Restrict to Movies / TV / Anime — games are never scanned. Results stream in live; Stop keeps what was found. TV series stay in accordions.' }),
           h('div', { id:'cv_batch_list', className:'cv-batch-list cv-glass-wrap' }, [ pendingContent({ className:'muted', }) ]),
           h('div', { className:'row-actions' }, [
@@ -12214,6 +12247,8 @@ h('div', { className:'cv-find-bar' }, [
         setTimeout(refreshPlaybackJobs,0);
       }
       setTimeout(function(){
+        root.querySelectorAll('#cv_external_only,#cv_batch_external_only').forEach(function(input){input.onchange=function(){saveRoutingPolicy(input.checked).catch(function(){});};});
+        paintRoutingPolicy();
         syncModeUi();
         updateCrfHint(c.crf!=null?+c.crf:18);
         if(!settingsOnly)refreshConvertAdmin();

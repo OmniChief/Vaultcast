@@ -164,6 +164,21 @@ class Convert {
         @file_put_contents(STREAM_DATA . '/convert_actions.log', '[' . date('c') . '] ' . $msg . "\n", FILE_APPEND | LOCK_EX);
     }
 
+    /** Apply the batch routing policy before any enqueue can start a local process. */
+    public static function withExternalPolicy(array $body, callable $action): array {
+        if (array_key_exists('external_workers_only',$body) && !is_bool($body['external_workers_only'])) json_error('Choose on or off for external workers only.',422);
+        $lock=self::editQueueLock();
+        try {
+            if (array_key_exists('external_workers_only',$body)) {
+                Store::invalidate('settings');
+                $settings=Store::settings();
+                $settings['convert']['external_workers_only']=$body['external_workers_only'];
+                if (!Store::set('settings',$settings)) json_error('Could not save conversion routing policy.',500);
+            }
+            return $action();
+        } finally { self::unlockQueue($lock); }
+    }
+
     public static function enqueue(string $itemId): array {
         $queueLock = self::editQueueLock();
         try {
@@ -756,6 +771,9 @@ class Convert {
     }
 
     private static function startJob(array $job, array $cv): array {
+        // Final guard shared by every local queue start, including stale callers.
+        Store::invalidate('settings');
+        if (!empty(Store::settings()['convert']['external_workers_only'])) return $job;
         $cv = self::applyQualityMode($cv);
         $nice = (int)($cv['nice'] ?? self::DEFAULT_NICE);
         if ($nice < 0) $nice = 0;
