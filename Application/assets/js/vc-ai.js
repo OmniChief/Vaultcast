@@ -75,7 +75,7 @@
     var more = button('Load more', function(){ load(true); }, 'ghost'); more.hidden = true;
     host.append(h('header', { className:'vc-hero ai-hero' }, [h('div', { className:'vc-hero-copy' }, [
       h('span', { className:'eyebrow', text:'AI Studio · Administrator' }), h('h1', { text:'Moderation' }),
-      h('p', { className:'muted', text:'Review generated images and their prompts across all accounts.' })
+      h('p', { className:'muted', text:'Review generated images and their prompts across all accounts, and delete inappropriate images.' })
     ])]), h('section', { className:'hub-panel vc-panel' }, [h('div', { className:'hub-panel-body' }, [
       h('div', { className:'ai-library-controls' }, [search, owner, sort, count]), grid,
       h('div', { className:'ai-library-more' }, [more])
@@ -104,7 +104,13 @@
             h('details', { className:'ai-review-details' }, [h('summary', { text:'Full prompt and settings' }),
               h('p', { text:item.prompt || '' }), h('p', { text:'Negative prompt: ' + (item.negative_prompt || 'None') }),
               h('p', { className:'muted', text:item.width + ' × ' + item.height + ' · ' + item.steps + ' steps · CFG ' + item.cfg_scale + ' · ' + item.scheduler + ' · Seed ' + (item.seed == null ? 'random' : item.seed) })
-            ])
+            ]),
+            button('Delete image', function(){
+              A.confirmDialog('Delete this generation by ' + item.owner_name + '? This permanently removes the image from their library and recent generations.', {okText:'Delete image',danger:true}).then(function(ok){
+                if (!ok) return;
+                call('/ai/moderation/pictures/' + item.id + '/delete', {method:'POST',body:{}}).then(function(){load(false);A.toast('Image deleted');}).catch(showError);
+              });
+            }, 'danger small')
           ]));
         });
         if (!append && !data.total) grid.appendChild(h('p', { className:'muted', text:'No generations match this view.' }));

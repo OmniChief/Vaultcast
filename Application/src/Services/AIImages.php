@@ -145,6 +145,16 @@ final class AIImages
         return self::libraryPage($items, $query) + ['owners'=>$owners];
     }
     public static function moderationPicture(array $admin, string $id): void {
+        $owner = self::moderationOwner($admin, $id);
+        Pictures::serveForModeration($admin, (string)$owner['id'], $id);
+    }
+    public static function moderationDelete(array $admin, string $id): array {
+        $owner = self::moderationOwner($admin, $id);
+        Pictures::delete($owner, [$id]);
+        self::mutate(self::libraryDocument($owner), static function (&$all) use ($id) { unset($all[$id]); });
+        return ['ok'=>true, 'deleted'=>1];
+    }
+    private static function moderationOwner(array $admin, string $id): array {
         if (($admin['role'] ?? '') !== 'admin') json_error('Administrator access required.', 403);
         $uid = self::q('SELECT user_id FROM vaultcast_pictures WHERE id=?', [$id])->fetchColumn();
         $owner = $uid !== false ? Auth::findById((string)$uid) : null;
@@ -155,7 +165,7 @@ final class AIImages
         if (!$generated) foreach (self::read(self::JOBS) as $job) {
             if (($job['picture_id'] ?? '') === $id && (string)($job['user_id'] ?? '') === (string)$owner['id'] && ($job['status'] ?? '') === 'completed') { $generated = true; break; }
         }
-        if ($generated) Pictures::serveForModeration($admin, (string)$owner['id'], $id);
+        if ($generated) return $owner;
         json_error('Generated image not found.', 404);
     }
     public static function favorite(array $user, string $id, bool $favorite): array {
