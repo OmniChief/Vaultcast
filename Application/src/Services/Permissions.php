@@ -25,6 +25,7 @@ final class Permissions {
         return ($user['permissions'][$permission] ?? self::roles()[$role]['permissions'][$permission] ?? false)===true;
     }
     public static function publicUser(array $user): array {
+        $user['contribution_points']=ContributionPoints::summary((string)$user['id']);
         $user['capabilities']=[];foreach(self::CAPABILITIES as $key=>$label)$user['capabilities'][$key]=self::allowed($user,$key);return $user;
     }
     public static function require(string $permission): array {

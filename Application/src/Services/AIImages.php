@@ -83,7 +83,7 @@ final class AIImages
         }
         unset($job);
         $workers = self::workersOnline();
-        return ['ok' => true, 'jobs' => array_slice($jobs, 0, 100), 'queue' => ['waiting' => $position, 'running' => count($queue) - $position], 'workers' => $workers];
+        return ['ok' => true, 'jobs' => array_slice($jobs, 0, 100), 'queue' => ['waiting' => $position, 'running' => count($queue) - $position], 'workers' => $workers, 'points'=>ContributionPoints::summary((string)$user['id'])];
     }
 
     /** Long-lived per-user index for generated images; queue jobs can be pruned without losing library entries. */
@@ -254,10 +254,11 @@ final class AIImages
             foreach ($jobs as $job) if ((string)($job['user_id'] ?? '') === (string)$user['id'] && in_array($job['status'] ?? '', ['queued', 'running'], true)) $ownQueued++;
             if ($ownQueued + $count > 3) throw new DomainException('You can have up to three image requests queued or generating at a time.');
             foreach ($ids as $i => $id) {
+                ContributionPoints::chargeImage((string)$user['id'],$id);
                 $jobSettings = $settings;
                 if ($jobSettings['seed'] !== null) $jobSettings['seed'] = ($jobSettings['seed'] + $i) % 4294967296;
                 $jobs[] = ['id' => $id, 'user_id' => (string)$user['id'], 'prompt' => $prompt, 'negative_prompt' => $negative, 'width' => $width, 'height' => $height] + $jobSettings + [
-                    'status' => 'queued', 'progress' => 0, 'created_at' => $now + $i, 'updated_at' => $now, 'picture_id' => null, 'error' => ''];
+                    'status' => 'queued', 'progress' => 0, 'created_at' => $now + $i, 'updated_at' => $now, 'picture_id' => null, 'error' => '', 'points_cost'=>2];
             }
             if (count($jobs) > 2000) $jobs = array_values(array_filter($jobs, static function ($j) { return in_array($j['status'] ?? '', ['queued', 'running'], true) || (int)($j['created_at'] ?? 0) > time() - 86400 * 7; }));
         });
@@ -269,6 +270,7 @@ final class AIImages
             foreach ($jobs as &$job) if (($job['id'] ?? '') === $id && (string)($job['user_id'] ?? '') === (string)$user['id']) {
                 if (($job['status'] ?? '') === 'running') throw new DomainException('This image has already started generating.');
                 if (($job['status'] ?? '') !== 'queued') throw new DomainException('This request can no longer be canceled.');
+                ContributionPoints::refundImage($job);
                 $job['status'] = 'canceled'; $job['updated_at'] = time(); return true;
             }
             return false;
@@ -380,23 +382,29 @@ final class AIImages
             json_out(['ok' => true]);
         }
         if ($action === 'complete' && $method === 'POST') {
-            $found = null;
-            foreach (self::read(self::JOBS) as $job) if (($job['id'] ?? '') === $id && ($job['status'] ?? '') === 'running' && ($job['worker_id'] ?? '') === $worker['id']) { $found = $job; break; }
-            if (!$found) json_error('This job is no longer assigned to this worker.', 409);
-            if (empty($_FILES['file']['tmp_name'])) json_error('Upload the generated image as file.', 400);
-            $owner = Auth::findById((string)$found['user_id']);
-            if (!$owner) json_error('The image owner no longer exists.', 404);
-            $picture = Pictures::saveGenerated($owner, (string)$_FILES['file']['tmp_name'], (string)($_FILES['file']['name'] ?? 'generated.png'));
-            self::indexGenerated($owner, $found, $picture);
-            self::mutate(self::JOBS, static function (&$jobs) use ($worker, $id, $picture) {
-                foreach ($jobs as &$job) if (($job['id'] ?? '') === $id && ($job['status'] ?? '') === 'running' && ($job['worker_id'] ?? '') === $worker['id']) { $job['status'] = 'completed'; $job['picture_id'] = $picture['id']; $job['progress'] = 100; $job['updated_at'] = time(); $job['finished_at'] = time(); return; }
+            $pictureId=self::mutate(self::JOBS, static function (&$jobs) use ($worker,$id) {
+                foreach ($jobs as &$job) {
+                    if (($job['id'] ?? '')!==$id || ($job['worker_id'] ?? '')!==$worker['id']) continue;
+                    if (($job['status'] ?? '')==='completed') return (string)$job['picture_id'];
+                    if (($job['status'] ?? '')!=='running') break;
+                    if (empty($_FILES['file']['tmp_name'])) throw new DomainException('Upload the generated image as file.');
+                    $owner=Auth::findById((string)$job['user_id']);
+                    if (!$owner) throw new DomainException('The image owner no longer exists.');
+                    $picture=Pictures::saveGenerated($owner,(string)$_FILES['file']['tmp_name'],(string)($_FILES['file']['name'] ?? 'generated.png'));
+                    self::indexGenerated($owner,$job,$picture);
+                    ContributionPoints::rewardImage((string)$worker['user_id'],$id);
+                    $job['status']='completed'; $job['picture_id']=$picture['id']; $job['progress']=100;
+                    $job['updated_at']=time(); $job['finished_at']=time();
+                    return (string)$picture['id'];
+                }
+                throw new DomainException('This job is no longer assigned to this worker.');
             });
-            json_out(['ok' => true, 'picture_id' => $picture['id']]);
+            json_out(['ok'=>true,'picture_id'=>$pictureId]);
         }
         if ($action === 'fail' && $method === 'POST') {
             $msg = mb_substr(trim((string)(body_json()['error'] ?? 'Generation failed.')), 0, 300);
             self::mutate(self::JOBS, static function (&$jobs) use ($worker, $id, $msg) {
-                foreach ($jobs as &$job) if (($job['id'] ?? '') === $id && ($job['status'] ?? '') === 'running' && ($job['worker_id'] ?? '') === $worker['id']) { $job['status'] = 'failed'; $job['error'] = $msg; $job['updated_at'] = time(); $job['finished_at'] = time(); return; }
+                foreach ($jobs as &$job) if (($job['id'] ?? '') === $id && ($job['status'] ?? '') === 'running' && ($job['worker_id'] ?? '') === $worker['id']) { ContributionPoints::refundImage($job); $job['status'] = 'failed'; $job['error'] = $msg; $job['updated_at'] = time(); $job['finished_at'] = time(); return; }
             });
             json_out(['ok' => true]);
         }

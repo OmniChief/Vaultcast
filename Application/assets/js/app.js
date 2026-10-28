@@ -8531,6 +8531,7 @@ try {
         h('h2', { text: 'Account' }),
         h('p', { className: 'muted', text: u.username ? ('Signed in as ' + (u.display_name || u.username)) : 'Browsing as guest — sign in to sync preferences.' }),
         u.username ? h('div', { className: 'stack settings-card' }, [
+          h('p',{className:'muted',text:'Contribution points: '+Number((u.contribution_points||{}).balance||0)+' available · '+Number((u.contribution_points||{}).earned||0)+' earned'}),
           h('label', {}, ['Display name', h('input', { id: 'dn', value: u.display_name || '' })]),
           h('div', {className:'profile-avatar-editor'}, [profileAvatar(u), h('label', {}, ['Avatar (JPEG, PNG or WebP, up to 1 MB)', h('input', {id:'profile_avatar', type:'file', accept:'image/jpeg,image/png,image/webp'})])]),
           h('label', {className:'check-label'}, [h('input', {id:'remove_avatar', type:'checkbox'}), 'Remove avatar (use initials)']),
@@ -10153,10 +10154,27 @@ try {
           });
         }});
         var edit = h('button', {className:'btn ghost', type:'button', text:'Edit user', onClick:function(){editUserAreas(u);}});
-        table.appendChild(h('tr', {}, [ h('td',{}, [ h('strong', { text:u.username }), u.display_name && u.display_name !== u.username ? h('div', { className:'muted', text:u.display_name }) : null ].filter(Boolean)), h('td',{text:(state.userRoles[u.role]||{}).name||u.role}), h('td',{}, [accessBadge(u)]), h('td',{}, [expires]), h('td',{}, [ctrl]), h('td',{}, [h('div', {className:'row-actions'}, [edit, del])]) ]));
+        table.appendChild(h('tr', {}, [ h('td',{}, [ h('strong', { text:u.username }), h('div',{className:'muted',text:Number((u.contribution_points||{}).balance||0)+' points · '+Number((u.contribution_points||{}).earned||0)+' earned'}), u.display_name && u.display_name !== u.username ? h('div', { className:'muted', text:u.display_name }) : null ].filter(Boolean)), h('td',{text:(state.userRoles[u.role]||{}).name||u.role}), h('td',{}, [accessBadge(u)]), h('td',{}, [expires]), h('td',{}, [ctrl]), h('td',{}, [h('div', {className:'row-actions'}, [h('button',{className:'btn ghost',type:'button',text:'Add points',onClick:function(){grantContributionPoints(u);}}), edit, del])]) ]));
       });
       el.appendChild(h('div', { className:'table-scroll' }, [table]));
     });
+  }
+
+  function grantContributionPoints(user,onSaved){
+    var amount=h('input',{type:'number',min:'1',max:'1000000',step:'1',value:'10',required:true});
+    var note=h('input',{type:'text',maxlength:'200',placeholder:'Optional reason'}),status=h('p',{className:'muted',role:'status'});
+    var requestId=Array.from(crypto.getRandomValues(new Uint8Array(16))).map(function(n){return n.toString(16).padStart(2,'0');}).join('');
+    var submit=h('button',{type:'submit',className:'btn primary',text:'Add points'});
+    var form=h('form',{className:'stack',onSubmit:function(e){
+      e.preventDefault();if(submit.disabled)return;submit.disabled=true;
+      api('/admin/users/'+encodeURIComponent(user.id)+'/points',{method:'POST',body:{amount:Number(amount.value),note:note.value,request_id:requestId}}).then(function(r){
+        if(!r.ok)throw new Error(r.error||'Could not add points.');
+        if(state.user&&state.user.id===user.id)state.user.contribution_points=r.points;
+        dialog.close();if($('#user_list'))loadUsers();if(onSaved)onSaved(r.points);
+        toast('Points added. Balance: '+r.points.balance,{kind:'ok'});
+      }).catch(function(e){status.textContent=e.message||'Could not add points.';submit.disabled=false;});
+    }},[h('p',{text:'Add contribution points to '+(user.display_name||user.name||user.username)+'.'}),h('label',{},['Points',amount]),h('label',{},['Reason',note]),status,submit]);
+    var dialog=permissionDialog('Add contribution points',form);
   }
 
   function renderRoles(){
@@ -16011,7 +16029,7 @@ function viewCollectionDetail(){
   });
 
   /* helpers for assets/js/matching.js (Ingest inbox / Fix matching / Label reports) */
-  window.NSApp = { h: h, swap: swapChildren, api: api, toast: toast, dialog: permissionDialog, base: BASE, rowEl: rowEl, emptyState: emptyState, confirmDialog: confirmDialog, render: render, state: state, can:can,
+  window.NSApp = { grantPoints:grantContributionPoints, h: h, swap: swapChildren, api: api, toast: toast, dialog: permissionDialog, base: BASE, rowEl: rowEl, emptyState: emptyState, confirmDialog: confirmDialog, render: render, state: state, can:can,
     openSettings: openSettings, openShow: openShow, openMovie: openMovie, openGame:openGame, navigate:navigate, refreshArtwork:refreshArtwork, fmtSize: fmtSize, version: APP_VERSION,
     shell:shell,communityPoster:communityPoster,refreshCommunityRating:refreshCommunityRating,heroClock:heroClock,homePosterEl:homePosterEl,homeSectionPosterEl:homeSectionPosterEl,collectionsPosterEl:collectionsPosterEl,librarySummary:librarySummary,cardEl:cardEl,homeActivitySections:homeActivitySections,applyRoute:applyRoute,replaceNav:replaceNav,openPlayer:openPlayer,playItem:playItem,copyText:copyText,shareUrl:shareUrl,startLobbyHost:startLobbyHost,captureGameState:lobbyCaptureState,loadGameState:loadGameState,restoreMultiplayerState:restoreMultiplayerState,quitGame:function(){closePlayer();} };
   var moduleLoads = {};

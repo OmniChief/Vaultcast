@@ -8,6 +8,7 @@
   function time(t){ return t ? new Date(Number(t) * 1000).toLocaleString() : ''; }
   function paint(data){
     if (!host || !host.isConnected || currentTab !== 'images') return;
+    if(data.points && A.state.user)A.state.user.contribution_points=data.points;
     var jobs = data.jobs || [], active = jobs.some(function(j){ return j.status === 'queued' || j.status === 'running'; });
     var worker = data.workers || { online:0, total:0 };
     var capacity = Number(worker.max_image_pixels || worker.configured_max_image_pixels || 0);
@@ -15,6 +16,7 @@
       imageDimensions.width.value = imageDimensions.height.value = capacity < 1048576 ? '512' : '1024';
     }
     var summary = h('div', { className:'ai-summary' }, [
+      h('div', { className:'ai-stat' }, [h('strong', { text:String((data.points || {}).balance || 0) }), h('span', { text:'contribution points' })]),
       h('div', { className:'ai-stat' }, [h('strong', { text:String(worker.online || 0) }), h('span', { text:'computers ready' })]),
       h('div', { className:'ai-stat' }, [h('strong', { text:String(data.queue && data.queue.waiting || 0) }), h('span', { text:'images waiting' })]),
       h('div', { className:'ai-stat' }, [h('strong', { text:String(data.queue && data.queue.running || 0) }), h('span', { text:'generating now' })])
@@ -171,7 +173,7 @@
         h('label', { className:'vc-field' }, [h('span', { text:'Negative prompt' }), negative]),
         h('div', { className:'ai-settings-grid' }, [number('Width', width), number('Height', height), number('Images', count), number('Steps', steps), number('CFG scale', cfg), number('Scheduler', scheduler), number('Seed · blank for random', seed)]),
         advanced,
-        h('div', { className:'ai-form-actions' }, [h('p', { className:'muted ai-note', text:'SDXL starts at 1024 × 1024. Requests run on available contributor computers. Generations are saved to your library and may be reviewed by administrators.' }), h('button', { type:'submit', className:'btn primary', text:'Add to queue' })])
+        h('div', { className:'ai-form-actions' }, [h('p', { className:'muted ai-note', text:'Each image costs 2 contribution points, refunded if it fails or is canceled. Contributors earn 2 points per delivered image and 5 per completed video conversion. Generations are saved to your library and may be reviewed by administrators.' }), h('button', { type:'submit', className:'btn primary', text:'Add to queue · 2 points per image' })])
       ])
     ]);
     var worker = h('details', { className:'hub-panel vc-panel ai-worker-panel' }, [

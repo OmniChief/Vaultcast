@@ -1470,7 +1470,11 @@ class Convert {
                 $job['status']='failed'; $job['finished_at']=date('c');
                 $job['message']='Contributor: '.mb_substr((string)($body['error'] ?? 'Conversion failed'),0,300);
             } else json_error('Unknown conversion action.',404);
-            self::saveQueue($q); return ['ok'=>true];
+            \Vaultcast\Database::transaction(static function () use ($q,$action,$worker,$id) {
+                if ($action==='complete') ContributionPoints::rewardConversion((string)$worker['user_id'],$id);
+                if (!self::saveQueue($q)) throw new RuntimeException('Could not save conversion update.');
+            });
+            return ['ok'=>true];
         } finally { self::unlockQueue($lock); }
     }
 

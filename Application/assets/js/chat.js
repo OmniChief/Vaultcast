@@ -12,6 +12,11 @@
   function modal(title,build){return window.VaultcastHub.modal(title,function(body,close){body.classList.add('chat-modal-body');build(body,close);});}
   function expiry(value){return h('select',{'aria-label':'Message expiry'},[[3600,'1 hour'],[21600,'6 hours'],[86400,'24 hours'],[604800,'7 days'],[2592000,'30 days'],[0,'Keep until deleted']].map(function(v){return h('option',{value:v[0],text:v[1],selected:Number(value)===v[0]});}));}
   function profile(id){return api('/profile?id='+encodeURIComponent(id)).then(function(j){modal(j.profile.name,function(body,close){body.appendChild(h('div',{className:'hub-profile'},[avatar(j.profile),h('div',{},[h('h3',{text:j.profile.name}),h('p',{className:'muted',text:'@'+j.profile.username})])]));
+      var points=j.points||{};
+      var balance=h('p',{text:Number(points.balance||0)+' points available · '+Number(points.earned||0)+' earned through contribution'});
+      var pointCard=h('section',{className:'settings-card'},[h('h3',{text:'Contribution points'}),balance,h('p',{className:'muted',text:Number(points.images_generated||0)+' images generated · '+Number(points.videos_converted||0)+' videos converted'}),h('p',{className:'muted',text:'Images cost 2 points. Contributing an image earns 2; a completed video conversion earns 5.'})]);
+      if(A.state.user&&A.state.user.role==='admin')pointCard.appendChild(button('Add points',function(){A.grantPoints(j.profile,function(updated){balance.textContent=updated.balance+' points available · '+updated.earned+' earned through contribution';});}));
+      body.appendChild(pointCard);
       if(j.full&&Array.isArray(j.showcase)&&j.showcase.length)body.appendChild(h('div',{className:'vca-showcase'},[h('h4',{text:'Badges'}),h('div',{className:'vca-showcase-row'},j.showcase.map(function(b){return h('span',{className:'vca-chip vca-tier-'+String(b.tier||'bronze').replace(/[^a-z]/g,''),title:(b.detail||'')+(b.tier_label?' · '+b.tier_label:'')},[h('span',{className:'vca-chip-icon','aria-hidden':'true',text:b.icon||'🏅'}),h('span',{text:b.name||'Achievement'})]);}))]));
       if(j.full)body.appendChild(window.VaultcastHub.profileHighlights(j,close));
       else body.appendChild(h('p',{className:'muted',text:'Full profile is visible to accepted friends only.'}));
