@@ -476,6 +476,20 @@ def heartbeat(cfg, ready=True):
         "slots": cfg["slots"]}, worker_headers(cfg), timeout=15)
 
 
+def wait_for_server(cfg):
+    attempt = 0
+    while True:
+        try:
+            return heartbeat(cfg)
+        except Exception as error:
+            if not retryable_upload(error): raise
+            attempt += 1
+            delay = min(30, 5 * attempt)
+            print("Vaultcast is busy or unavailable:", error)
+            print("Retrying connection in", delay, "seconds. Setup is saved; press Ctrl+C to stop.", flush=True)
+            time.sleep(delay)
+
+
 def main():
     if "--uninstall" in sys.argv:
         print("Run uninstall-worker.cmd or start-worker.cmd --uninstall to remove this contributor.")
@@ -490,9 +504,11 @@ def main():
         if slot.get("encoding") and (not cores or not set(cores).issubset(available) or used.intersection(cores)):
             raise RuntimeError("Saved CPU allocation is unavailable or overlaps. Restart and choose not to reuse previous configuration.")
         used.update(cores)
-    response = heartbeat(cfg)
+    response = wait_for_server(cfg)
     if response.get("slot_protocol") != 1:
         raise RuntimeError("Update the Vaultcast webapp before starting this multi-worker version.")
+    if cfg["contributions"].get("encoding") and response.get("transfer_protocol") != 1:
+        raise RuntimeError("Update the Vaultcast webapp before starting this transfer-queue worker version.")
     def start_slot(slot):
         local = dict(cfg, slot_id=slot["id"], contributions={"images":slot.get("images",False),"encoding":slot.get("encoding",False)},
             encoding_threads=max(1,len(slot.get("cpu_cores",[]))), cpu_cores=slot.get("cpu_cores",[]), _stop_event=stop,

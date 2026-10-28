@@ -1,6 +1,6 @@
 """Optional full-file MP4/H.264/AAC contribution; independent of InvokeAI."""
 import hashlib
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 import http.client
 import io
 import json
@@ -22,6 +22,88 @@ from contributor_setup import DATA, yes
 FLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 BUILD = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
 NATIVE_DATA = Path(os.environ.get("USERPROFILE", os.path.expanduser("~"))) / ".vaultcast"
+_transfer_locks = {"download": threading.Lock(), "upload": threading.Lock()}
+
+
+def check_stopping(cfg, lost):
+    if cfg.get("_stop_event") and cfg["_stop_event"].is_set(): raise KeyboardInterrupt()
+    if lost.is_set(): raise RuntimeError("Conversion lease was canceled or lost.")
+
+
+def transfer_wait(cfg, lost, seconds):
+    until = time.monotonic() + seconds
+    while time.monotonic() < until:
+        check_stopping(cfg, lost)
+        lost.wait(min(1, max(0, until-time.monotonic())))
+
+
+@contextmanager
+def transfer_slot(cfg, base, direction, request, headers, status, phase, update, display, lost, total):
+    start = 0 if direction == "download" else 90
+    phase("wait_" + direction, "waiting for " + direction + " slot", start, total)
+    display.log("Waiting for this account's", direction, "slot...")
+    update()
+    lock = _transfer_locks[direction]
+    while not lock.acquire(timeout=1): check_stopping(cfg, lost)
+    granted = False
+    try:
+        while True:
+            check_stopping(cfg, lost)
+            try:
+                result = request(base + "/transfer", "POST", {"direction":direction}, headers, timeout=20)
+                if result.get("granted"):
+                    granted = True
+                    break
+                delay = max(3, min(30, float(result.get("retry_after",5))))
+            except Exception as error:
+                if not retryable_upload(error): raise
+                display.log("Transfer queue temporarily unavailable; retrying:", error)
+                delay = 10
+            transfer_wait(cfg, lost, delay)
+        status["transfer_direction"] = direction
+        phase(direction, "downloading source" if direction == "download" else "uploading converted file", start, total)
+        update()
+        yield
+    finally:
+        status.pop("transfer_direction", None)
+        # Release even after an uncertain acquire response. The authenticated job owns only its reservation.
+        try: request(base + "/transfer", "POST", {"direction":direction,"release":True}, headers, timeout=10)
+        except Exception:
+            if granted: display.log("Transfer slot release not confirmed; it will expire automatically.")
+        lock.release()
+
+
+def download_source(cfg, base, headers, source, size, transferred, display, lost):
+    for attempt in range(5):
+        check_stopping(cfg, lost)
+        received = source.stat().st_size if source.is_file() else 0
+        if received == size: return
+        if received > size: received = 0
+        request_headers = dict(headers)
+        if received: request_headers["Range"] = "bytes=" + str(received) + "-"
+        try:
+            with urllib.request.urlopen(urllib.request.Request(base + "/source", headers=request_headers), timeout=60) as response:
+                if response.status == 206:
+                    if not response.headers.get("Content-Range", "").startswith("bytes " + str(received) + "-"):
+                        raise RuntimeError("Server returned an unexpected source download range.")
+                else:
+                    received = 0
+                with source.open("ab" if received else "wb") as file:
+                    transferred(received, size, 0, 10)
+                    while True:
+                        check_stopping(cfg, lost)
+                        chunk = response.read1(262144)
+                        if not chunk: break
+                        file.write(chunk)
+                        received += len(chunk)
+                        transferred(received, size, 0, 10)
+            if received != size: raise http.client.IncompleteRead(b"", max(0,size-received))
+            return
+        except Exception as error:
+            if not retryable_upload(error) or attempt == 4: raise
+            delay = min(30,5*(attempt+1))
+            display.log("Source download interrupted; keeping partial file and retrying in", delay, "seconds:", error)
+            transfer_wait(cfg, lost, delay)
 
 
 class ConsoleProgress:
@@ -81,6 +163,8 @@ class ConsoleProgress:
                 text += "  ETA " + self.remaining((now - sample["started"]) * (100 - percent) / percent)
             elif phase == "verify":
                 text = "Finalising: replacing original " + "|/-\\"[int(now * 2) % 4]
+            elif phase in ("wait_download", "wait_upload"):
+                text = "Waiting for this account's " + phase[5:] + " slot..."
             if self.label: text = "[" + self.label + "] " + text
             if self.terminal:
                 columns = max(40, shutil.get_terminal_size((120, 25)).columns)
@@ -451,7 +535,7 @@ def run_encoding(cfg, job, request):
             lost.set()
 
     def heartbeat():
-        while not stop.wait(2):
+        while not stop.wait(5):
             update()
 
     print("[Worker", str(cfg.get("slot_id",1))+"] Converting:", job["title"], flush=True)
@@ -469,18 +553,8 @@ def run_encoding(cfg, job, request):
                 if shutil.disk_usage(root).free < required:
                     raise RuntimeError("Not enough local temporary disk space (need about " + str(round(required / 1073741824, 1)) + " GB).")
                 if not source.is_file() or source.stat().st_size != job["bytes"]:
-                    received = 0
-                    with urllib.request.urlopen(urllib.request.Request(base + "/source", headers=headers), timeout=30) as response, source.open("wb") as file:
-                        while True:
-                            if cfg.get("_stop_event") and cfg["_stop_event"].is_set(): raise KeyboardInterrupt()
-                            if lost.is_set(): raise RuntimeError("Conversion lease was canceled or lost.")
-                            chunk = response.read1(262144)
-                            if not chunk: break
-                            file.write(chunk)
-                            received += len(chunk)
-                            transferred(received, job["bytes"], 0, 10)
-                    if received != job["bytes"]:
-                        raise RuntimeError("Source download was incomplete.")
+                    with transfer_slot(cfg, base, "download", request, headers, status, phase, update, display, lost, job["bytes"]):
+                        download_source(cfg, base, headers, source, job["bytes"], transferred, display, lost)
                 info = probe(cfg["ffprobe"], source)
                 video = next((s for s in info["streams"] if s.get("codec_type") == "video" and not (s.get("disposition") or {}).get("attached_pic")), None)
                 if not video: raise RuntimeError("Source contains no video stream.")
@@ -535,77 +609,76 @@ def run_encoding(cfg, job, request):
                 display.log("Reusing retained conversion; resuming upload.")
             size = output.stat().st_size
             if lost.is_set(): raise RuntimeError("Conversion canceled or lease lost.")
-            phase("upload", "uploading converted file", 90, size)
-            update()
-            remote = request(base + "/status", "POST", {}, headers, timeout=20)
-            sent = int(remote.get("received", 0))
-            if sent < 0 or sent > size: raise RuntimeError("Server upload offset exceeds the retained output.")
-            transferred(sent, size, 90, 9)
-            chunk_size = max(262144, min(4194304, int(job.get("upload_chunk_bytes", 1048576))))
-            uploader = ChunkUploader(base + "/chunk", headers)
-            try:
-                with output.open("rb") as file:
-                    while sent < size:
-                        if lost.is_set(): raise RuntimeError("Conversion canceled or lease lost.")
-                        file.seek(sent)
-                        chunk = file.read(chunk_size)
-                        smaller = False
-                        for attempt in range(3):
-                            try:
-                                uploader.send(chunk, sent, lambda done: transferred(done, size, 90, 9))
-                                break
-                            except urllib.error.HTTPError as exc:
-                                if exc.code == 413 and chunk_size > 262144:
-                                    chunk_size //= 2
-                                    display.log("Server upload limit: reducing chunks to", chunk_size // 1024, "KiB")
-                                    smaller = True
-                                    break
-                                if exc.code < 500 or attempt == 2: raise
-                                time.sleep(2)
-                            except (OSError, ValueError, http.client.HTTPException):
-                                # Some proxies reset the socket before their 413 response can be read.
-                                if chunk_size > 262144 and attempt == 0:
-                                    chunk_size = max(262144, min(1048576, chunk_size // 2))
-                                    display.log("Upload connection interrupted; retrying with", chunk_size // 1024, "KiB chunks")
-                                    smaller = True
-                                    break
-                                if attempt == 2: raise
-                                time.sleep(2)
-                        if smaller:
-                            remote = request(base + "/status", "POST", {}, headers, timeout=20)
-                            sent = int(remote.get("received", 0))
-                            if not 0 <= sent <= size: raise RuntimeError("Invalid server upload offset.")
-                            transferred(sent, size, 90, 9)
-                            continue
-                        sent += len(chunk)
-                        transferred(sent, size, 90, 9)
-            finally:
-                uploader.close()
-            phase("verify", "replacing original", 99)
-            update()
-            # Completion owns the queue lock while replacing the original; stop progress first.
-            stop.set()
-            thread.join(timeout=25)
-            for attempt in range(3):
+            with transfer_slot(cfg, base, "upload", request, headers, status, phase, update, display, lost, size):
+                remote = request(base + "/status", "POST", {}, headers, timeout=20)
+                sent = int(remote.get("received", 0))
+                if sent < 0 or sent > size: raise RuntimeError("Server upload offset exceeds the retained output.")
+                transferred(sent, size, 90, 9)
+                chunk_size = max(262144, min(4194304, int(job.get("upload_chunk_bytes", 1048576))))
+                uploader = ChunkUploader(base + "/chunk", headers)
                 try:
-                    confirmation = request(base + "/complete", "POST", {"bytes": size}, headers, timeout=60)
-                    if not confirmation.get("uploaded"):
-                        raise RuntimeError("Server did not confirm receipt; update Vaultcast before retrying this worker.")
-                    break
-                except urllib.error.HTTPError as exc:
-                    if exc.code < 500 or attempt == 2: raise
-                    time.sleep(3)
-                except OSError:
-                    if attempt == 2: raise
-                    time.sleep(3)
-            status.update(phase="done", phase_progress=100, progress=100)
-            display.render(force=True)
-            display.close()
-            print("Conversion uploaded and original replaced." if confirmation.get("replaced") else "Conversion uploaded; replacement needs administrator attention.")
-            if confirmation.get("warning"): print("Server note:", confirmation["warning"])
-            state["upload_confirmed"] = True
-            save_transfer(workspace, state)
-            cleanup_transfer(workspace, cfg)
+                    with output.open("rb") as file:
+                        while sent < size:
+                            if lost.is_set(): raise RuntimeError("Conversion canceled or lease lost.")
+                            file.seek(sent)
+                            chunk = file.read(chunk_size)
+                            smaller = False
+                            for attempt in range(3):
+                                try:
+                                    uploader.send(chunk, sent, lambda done: transferred(done, size, 90, 9))
+                                    break
+                                except urllib.error.HTTPError as exc:
+                                    if exc.code == 413 and chunk_size > 262144:
+                                        chunk_size //= 2
+                                        display.log("Server upload limit: reducing chunks to", chunk_size // 1024, "KiB")
+                                        smaller = True
+                                        break
+                                    if exc.code < 500 or attempt == 2: raise
+                                    time.sleep(2)
+                                except (OSError, ValueError, http.client.HTTPException):
+                                    # Some proxies reset the socket before their 413 response can be read.
+                                    if chunk_size > 262144 and attempt == 0:
+                                        chunk_size = max(262144, min(1048576, chunk_size // 2))
+                                        display.log("Upload connection interrupted; retrying with", chunk_size // 1024, "KiB chunks")
+                                        smaller = True
+                                        break
+                                    if attempt == 2: raise
+                                    time.sleep(2)
+                            if smaller:
+                                remote = request(base + "/status", "POST", {}, headers, timeout=20)
+                                sent = int(remote.get("received", 0))
+                                if not 0 <= sent <= size: raise RuntimeError("Invalid server upload offset.")
+                                transferred(sent, size, 90, 9)
+                                continue
+                            sent += len(chunk)
+                            transferred(sent, size, 90, 9)
+                finally:
+                    uploader.close()
+                phase("verify", "replacing original", 99)
+                update()
+                # Completion owns the queue lock while replacing the original; stop progress first.
+                stop.set()
+                thread.join(timeout=25)
+                for attempt in range(3):
+                    try:
+                        confirmation = request(base + "/complete", "POST", {"bytes": size}, headers, timeout=60)
+                        if not confirmation.get("uploaded"):
+                            raise RuntimeError("Server did not confirm receipt; update Vaultcast before retrying this worker.")
+                        break
+                    except urllib.error.HTTPError as exc:
+                        if exc.code < 500 or attempt == 2: raise
+                        time.sleep(3)
+                    except OSError:
+                        if attempt == 2: raise
+                        time.sleep(3)
+                status.update(phase="done", phase_progress=100, progress=100)
+                display.render(force=True)
+                display.close()
+                print("Conversion uploaded and original replaced." if confirmation.get("replaced") else "Conversion uploaded; replacement needs administrator attention.")
+                if confirmation.get("warning"): print("Server note:", confirmation["warning"])
+                state["upload_confirmed"] = True
+                save_transfer(workspace, state)
+                cleanup_transfer(workspace, cfg)
     except BaseException as exc:
         if process is not None and process.poll() is None:
             process.terminate()
