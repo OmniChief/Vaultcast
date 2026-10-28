@@ -11529,7 +11529,7 @@ h('div', { className:'cv-find-bar' }, [
           el.textContent = 'Scan complete \u2014 ' + findState.found + ' need DirectPlay convert' +
             (findState.total ? (' (' + findState.scanned + ' / ' + findState.total + ' videos in ' + scopeNote + ')') : '');
         } else {
-          el.textContent = 'Choose Movies / TV / Anime, then Find all. Scans real codecs (not extension). Games are skipped. TV series stay in accordions.';
+          el.textContent = 'Choose Movies / TV / Anime, then Find all. Checks for MP4 files with H.264 video and AAC audio. Games are skipped. TV series stay in accordions.';
         }
         var btn = $('#cv_find_all_btn');
         if (btn) {
@@ -12223,7 +12223,7 @@ h('div', { className:'cv-find-bar' }, [
           cvToggleRow('cv_batch_external_only', 'Only use external workers', 'Saves immediately and shares the policy with DirectPlay Settings. Batch jobs wait for contributors; they do not fall back to server encoding.', externalOnly),
           h('p',{id:'cv_batch_policy_status',className:'muted',role:'status'}),
           h('p',{id:'cv_batch_contributors',className:'muted',text:'Checking encoding computers…'}),
-          h('p', { className:'muted', text:'Glass queue + Find all for DirectPlay gaps (real H.264/AAC). Restrict to Movies / TV / Anime — games are never scanned. Completed conversions automatically replace their originals after upload. Results stream in live; Stop keeps what was found. TV series stay in accordions.' }),
+          h('p', { className:'muted', text:'Find all checks for MP4 files with H.264 video and AAC audio. Other containers appear even when their codecs already match. Restrict to Movies / TV / Anime — games are never scanned. Completed conversions automatically replace their originals after upload. Results stream in live; Stop keeps what was found. TV series stay in accordions.' }),
           h('div', { id:'cv_batch_list', className:'cv-batch-list cv-glass-wrap' }, [ pendingContent({ className:'muted', }) ]),
           h('div', { className:'row-actions' }, [
             h('button', { className:'btn', text:'Refresh queue', onClick: function(){ refreshConvertAdmin(); } }),

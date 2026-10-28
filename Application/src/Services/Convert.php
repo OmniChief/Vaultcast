@@ -266,8 +266,9 @@ class Convert {
      * q empty + needs_convert=1 lists items that typically need DirectPlay convert.
      */
 
-    /** Human reason a title needs DirectPlay convert (H.264 + AAC). */
+    /** Human reason a title needs DirectPlay convert (MP4 + H.264 + AAC). */
     public static function convertReason(array $it, ?array $probe = null): string {
+        $ext = strtolower(ltrim((string)($it['ext'] ?? pathinfo((string)($it['path'] ?? ''), PATHINFO_EXTENSION)), '.'));
         $vc = '';
         $ac = '';
         if (is_array($probe)) {
@@ -281,12 +282,12 @@ class Convert {
         $h264 = ($vc === 'h264' || $vc === 'avc' || strpos($vc, 'h264') === 0 || strpos($vc, 'avc') === 0);
         $aacOk = ($ac === '' || $ac === 'aac' || $ac === 'mp4a' || strpos($ac, 'aac') === 0);
         if ($vc === '' && $ac === '') {
-            $ext = strtoupper((string)($it['ext'] ?? ''));
             return $ext !== ''
-                ? ($ext . " — codecs unknown; convert for DirectPlay")
-                : 'Codecs unknown — convert for DirectPlay';
+                ? (strtoupper($ext) . " — codecs unknown; convert to MP4 / H.264 / AAC")
+                : 'Container and codecs unknown — convert to MP4 / H.264 / AAC';
         }
         $parts = [];
+        if ($ext !== 'mp4') $parts[] = ($ext !== '' ? strtoupper($ext) : 'Unknown') . ' container (need MP4)';
         if ($vc !== '' && !$h264) {
             $parts[] = strtoupper($vc) . ' video (need H.264)';
         }
@@ -382,6 +383,8 @@ class Convert {
             } else {
                 $needs = Catalogue::needsConvert($it, false);
             }
+            $ext = strtolower(ltrim((string)($it['ext'] ?? pathinfo((string)($it['path'] ?? ''), PATHINFO_EXTENSION)), '.'));
+            if ($ext !== 'mp4') $needs = true;
             if (!$needs) continue;
 
             $pub = Catalogue::publicItem($it, false);
