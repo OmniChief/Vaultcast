@@ -1,7 +1,7 @@
 /* Vaultcast AI → Images */
 (function(root){
   'use strict';
-  var A, h, api, timer = 0, host = null, busy = false, imageDimensions = null, currentTab = 'images';
+  var A, h, api, timer = 0, host = null, busy = false, imageDimensions = null, modelPicker = null, currentTab = 'images';
   function call(path, opts){ return api(path, opts).then(function(j){ if (!j || !j.ok) throw j || {}; return j; }); }
   function button(label, fn, cls){ return h('button', { type:'button', className:'btn ' + (cls || ''), text:label, onClick:fn }); }
   function statusLabel(job){ return ({queued:'Queued',running:'Generating',completed:'Ready',failed:'Failed',canceled:'Canceled'})[job.status] || job.status; }
@@ -11,7 +11,8 @@
     if(data.points && A.state.user)A.state.user.contribution_points=data.points;
     var jobs = data.jobs || [], active = jobs.some(function(j){ return j.status === 'queued' || j.status === 'running'; });
     var worker = data.workers || { online:0, total:0 };
-    var capacity = Number(worker.max_image_pixels || worker.configured_max_image_pixels || 0);
+    var selectedModel = modelPicker ? modelPicker.update(worker.models || []) : null;
+    var capacity = Number(selectedModel && selectedModel.max_image_pixels || 0);
     if (imageDimensions && !imageDimensions.touched && capacity > 0) {
       imageDimensions.width.value = imageDimensions.height.value = capacity < 1048576 ? '512' : '1024';
     }
@@ -25,6 +26,8 @@
     var cards = jobs.slice(0, 10).map(function(job){
       var body = [h('div', { className:'ai-job-head' }, [h('span', { className:'ai-job-status ai-status-' + job.status, text:statusLabel(job) }), h('time', { className:'muted', text:time(job.created_at) })]),
         h('p', { className:'ai-job-prompt', text:job.prompt })];
+      if(job.model_name)body.push(h('p',{className:'muted',text:'Model: '+job.model_name}));
+      if(job.status==='queued'&&job.waiting_reason)body.push(h('p',{className:'muted',text:job.waiting_reason}));
       if (job.status === 'queued') body.push(h('p', { className:'muted', text:'Position in queue: ' + (job.queue_position || 'next') }));
       if (job.status === 'running') { var pct = Math.max(1, Math.min(100, Number(job.progress || 1))); body.push(h('div', { className:'ai-progress-wrap' }, [h('div', { className:'ai-progress' + (pct <= 1 ? ' ai-progress-indeterminate' : ''), role:'progressbar', 'aria-valuenow':String(pct), 'aria-valuetext':pct <= 1 ? 'Starting generation' : pct + '%', 'aria-valuemin':'0', 'aria-valuemax':'100' }, [h('span', { style:'width:' + pct + '%' })]), h('small', { text:pct <= 1 ? 'Starting…' : pct + '%' })])); }
       if (job.status === 'failed') body.push(h('p', { className:'bad', text:job.error || 'Generation failed.' }));
@@ -59,7 +62,7 @@
         var img=h('img',{src:A.apiUrl(item.url),alt:item.prompt||item.name,loading:'lazy'});
         var image=h('a',{className:'ai-library-image',href:A.apiUrl(item.url),target:'_blank',rel:'noopener','aria-label':'Open '+item.name},[img]);
         var star=button(item.favorite?'★':'☆',function(){call('/ai/library/'+item.id+'/favorite',{method:'POST',body:{favorite:!item.favorite}}).then(function(){load(false);}).catch(showError);},'ghost small');star.setAttribute('aria-label',item.favorite?'Remove favorite':'Add favorite');
-        var card=h('article',{className:'ai-library-card'},[image,h('div',{className:'ai-library-card-head'},[check,h('time',{className:'muted',text:time(item.created_at)}),star]),h('p',{className:'ai-library-prompt',text:item.prompt||item.name}),h('div',{className:'ai-library-meta'},[h('span',{text:item.width+' × '+item.height}),h('span',{text:'Seed '+(item.seed===null||item.seed===undefined?'random':item.seed)}),h('span',{text:(item.steps||'?')+' steps · '+(item.scheduler||'')})]),h('a',{className:'btn ghost small',href:A.apiUrl(item.url),download:item.name,text:'Download'})]);grid.appendChild(card);
+        var card=h('article',{className:'ai-library-card'},[image,h('div',{className:'ai-library-card-head'},[check,h('time',{className:'muted',text:time(item.created_at)}),star]),h('p',{className:'ai-library-prompt',text:item.prompt||item.name}),h('div',{className:'ai-library-meta'},[h('span',{text:item.width+' × '+item.height}),h('span',{text:'Seed '+(item.seed===null||item.seed===undefined?'random':item.seed)}),h('span',{text:(item.steps||'?')+' steps · '+(item.scheduler||'')+(item.model_name?' · '+item.model_name:'')})]),h('a',{className:'btn ghost small',href:A.apiUrl(item.url),download:item.name,text:'Download'})]);grid.appendChild(card);
       });if(!append&&!total)grid.appendChild(h('p',{className:'muted',text:'Nothing matches this view. Try clearing your search or favorites filter.'}));more.hidden=!(data.has_more);}).catch(showError).finally(function(){busyLibrary=false;if(pendingReload){pendingReload=false;load(false);}});
     }
     function deleteSelected(){var ids=Object.keys(selected);if(!ids.length)return;A.confirmDialog('Delete '+ids.length+' generated image'+(ids.length===1?'':'s')+'? This also removes them from your picture library.',{okText:'Delete',danger:true}).then(function(ok){if(!ok)return;call('/ai/library/delete',{method:'POST',body:{ids:ids}}).then(function(){load(false);A.toast('Selected images deleted');}).catch(showError);});}
@@ -105,7 +108,7 @@
             h('p', { className:'ai-library-prompt', text:item.prompt || item.name }),
             h('details', { className:'ai-review-details' }, [h('summary', { text:'Full prompt and settings' }),
               h('p', { text:item.prompt || '' }), h('p', { text:'Negative prompt: ' + (item.negative_prompt || 'None') }),
-              h('p', { className:'muted', text:item.width + ' × ' + item.height + ' · ' + item.steps + ' steps · CFG ' + item.cfg_scale + ' · ' + item.scheduler + ' · Seed ' + (item.seed == null ? 'random' : item.seed) })
+              h('p', { className:'muted', text:item.width + ' × ' + item.height + ' · ' + item.steps + ' steps · CFG ' + item.cfg_scale + ' · ' + item.scheduler + ' · Seed ' + (item.seed == null ? 'random' : item.seed) + (item.model_name ? ' · Model: ' + item.model_name : '') })
             ]),
             button('Delete image', function(){
               A.confirmDialog('Delete this generation by ' + item.owner_name + '? This permanently removes the image from their library and recent generations.', {okText:'Delete image',danger:true}).then(function(ok){
@@ -127,11 +130,13 @@
     load(false);
   }
   function render(target, tab){
-    host = target; currentTab = tab || 'images'; imageDimensions = null; clearTimeout(timer); host.replaceChildren(); host.classList.add('vc-ai');
+    host = target; currentTab = tab || 'images'; imageDimensions = null; modelPicker = null; clearTimeout(timer); host.replaceChildren(); host.classList.add('vc-ai');
     if(tab==='library'){renderLibrary();return;}
     if(tab==='moderation'){renderModeration();return;}
     var prompt = h('textarea', { rows:'4', maxlength:'1200', placeholder:'Describe the image you want to create…', required:true, className:'ai-prompt' });
     var negative = h('textarea', { rows:'2', maxlength:'600', placeholder:'Optional: things to avoid', className:'ai-negative' });
+    var modelSelect = h('select', {required:true,'aria-label':'Image model'}, [h('option',{value:'',text:'Loading available models...'})]);
+    var modelNote = h('p',{className:'muted',role:'status',text:'Checking installed SDXL models reported by image contributors...'});
     var width = h('input', { type:'number', min:'512', max:'1536', step:'8', value:'1024', required:true, 'aria-label':'Image width' });
     var height = h('input', { type:'number', min:'512', max:'1536', step:'8', value:'1024', required:true, 'aria-label':'Image height' });
     imageDimensions = { width:width, height:height, touched:false };
@@ -163,19 +168,40 @@
     ])]);
     var form = h('form', { className:'hub-panel vc-panel ai-form', onSubmit:function(e){
       e.preventDefault(); if (busy) return;
+      if(!modelPicker||!modelPicker.models.some(function(model){return model.id===modelSelect.value;})){showError({error:'No image model is available. Choose a model reported by an online image contributor.'});return;}
       if (Number(width.value) * Number(height.value) > 1048576) { showError({ error:'Image dimensions must total no more than 1 megapixel.' }); return; }
-      var submit=form.querySelector('[type=submit]'); submit.disabled=true;
-      call('/ai/jobs', { method:'POST', body:{ prompt:prompt.value, negative_prompt:negative.value, width:Number(width.value), height:Number(height.value), count:Number(count.value), steps:Number(steps.value), cfg_scale:Number(cfg.value), scheduler:scheduler.value, seed:seed.value.trim()==='' ? null : Number(seed.value), hidiffusion:hiDiffusion.checked, hidiffusion_raunet:hiRaunet.checked, hidiffusion_window_attn:hiWindowAttn.checked, hidiffusion_t1_ratio:Number(hiT1.value), hidiffusion_t2_ratio:Number(hiT2.value), fp32:fp32.checked, tiled:tiled.checked, seamless_x:seamlessX.checked, seamless_y:seamlessY.checked } }).then(function(){ prompt.value=''; return refresh(); }).catch(showError).finally(function(){ submit.disabled=false; });
+      var picker=modelPicker; picker.submitting=true; form.querySelector('[type=submit]').disabled=true;
+      call('/ai/jobs', { method:'POST', body:{ model_id:modelSelect.value, prompt:prompt.value, negative_prompt:negative.value, width:Number(width.value), height:Number(height.value), count:Number(count.value), steps:Number(steps.value), cfg_scale:Number(cfg.value), scheduler:scheduler.value, seed:seed.value.trim()==='' ? null : Number(seed.value), hidiffusion:hiDiffusion.checked, hidiffusion_raunet:hiRaunet.checked, hidiffusion_window_attn:hiWindowAttn.checked, hidiffusion_t1_ratio:Number(hiT1.value), hidiffusion_t2_ratio:Number(hiT2.value), fp32:fp32.checked, tiled:tiled.checked, seamless_x:seamlessX.checked, seamless_y:seamlessY.checked } }).then(function(){ prompt.value=''; return refresh(); }).catch(showError).finally(function(){picker.submitting=false;if(form.isConnected)picker.update(picker.models);});
     } }, [
       h('div', { className:'hub-panel-head' }, [h('h2', { text:'Create an image' })]),
       h('div', { className:'hub-panel-body' }, [
+        h('label', { className:'vc-field' }, [h('span',{text:'Image model'}),modelSelect]),modelNote,
         h('label', { className:'vc-field' }, [h('span', { text:'Prompt' }), prompt]),
         h('label', { className:'vc-field' }, [h('span', { text:'Negative prompt' }), negative]),
         h('div', { className:'ai-settings-grid' }, [number('Width', width), number('Height', height), number('Images', count), number('Steps', steps), number('CFG scale', cfg), number('Scheduler', scheduler), number('Seed · blank for random', seed)]),
         advanced,
-        h('div', { className:'ai-form-actions' }, [h('p', { className:'muted ai-note', text:'Each image costs 2 contribution points, refunded if it fails or is canceled. Contributors earn 2 points per delivered image and 5 per completed video conversion. Generations are saved to your library and may be reviewed by administrators.' }), h('button', { type:'submit', className:'btn primary', text:'Add to queue · 2 points per image' })])
+        h('div', { className:'ai-form-actions' }, [h('p', { className:'muted ai-note', text:'Each image costs 2 contribution points, refunded if it fails or is canceled. Contributors earn 2 points per delivered image and 5 per completed video conversion. Generations are saved to your library and may be reviewed by administrators.' }), h('button', { type:'submit', className:'btn primary', disabled:true, text:'Add to queue · 2 points per image' })])
       ])
     ]);
+    modelPicker={models:[],submitting:false,signature:null,update:function(models){
+      this.models=models;
+      var signature=JSON.stringify(models),previous=modelSelect.value;
+      if(signature!==this.signature){
+        this.signature=signature;
+        modelSelect.replaceChildren();
+        var exists=models.some(function(model){return model.id===previous;});
+        if(previous&&!exists)modelSelect.appendChild(h('option',{value:previous,text:'Previously selected model is unavailable',disabled:true}));
+        if(!models.length&&!previous)modelSelect.appendChild(h('option',{value:'',text:'No image models available'}));
+        models.forEach(function(model){modelSelect.appendChild(h('option',{value:model.id,text:model.name+' · '+model.hash.slice(-8)+' · '+model.online_workers+' computer'+(model.online_workers===1?'':'s')}));});
+        modelSelect.value=previous|| (models[0]&&models[0].id)||'';
+      }
+      var selected=models.filter(function(model){return model.id===modelSelect.value;})[0]||null;
+      modelSelect.disabled=!models.length;
+      form.querySelector('[type=submit]').disabled=this.submitting||!selected;
+      modelNote.textContent=selected?'Only contributors with this exact model receive the request. '+selected.online_workers+' matching computer'+(selected.online_workers===1?'':'s')+' online.':!models.length?'No SDXL image models are available. Start an image contributor with an installed model.':'The selected model is no longer available. Choose another model.';
+      return selected;
+    }};
+    modelSelect.onchange=function(){var selected=modelPicker.update(modelPicker.models);if(selected&&!imageDimensions.touched)width.value=height.value=selected.max_image_pixels<1048576?'512':'1024';};
     var worker = h('details', { className:'hub-panel vc-panel ai-worker-panel' }, [
       h('summary', { className:'hub-panel-head ai-worker-summary' }, [h('h2', { text:'Contribute a computer' }), h('span', { className:'muted', text:'Optional' })]),
       h('div', { className:'hub-panel-body' }, [h('p', { className:'muted', text:'Run Optional/AIWorker/start-worker.cmd on the Windows PC you want to contribute. Choose AI images, video encoding, or both. Encoding can install portable FFmpeg and does not need InvokeAI or a GPU. AI setup checks compatible hardware and can install an engine and model. Pair using your own account to earn contribution points. Encoding requires Library access and only receives videos your account can access.' }), button('Pair a computer', function(){ call('/ai/pair', { method:'POST', body:{} }).then(function(j){ var code = h('code', { className:'ai-pair-code', text:j.pair_code }); var box = h('div', { className:'ai-pair-result' }, [h('p', { text:'Once contributor setup says Contributor ready, enter this one-time code within 10 minutes.' }), code, h('p', { className:'muted', text:'Contributor software runs on that PC. Credentials and capability reports are saved in its Windows AppData folder.' })]); var old = host.querySelector('.ai-pair-result'); if (old) old.replaceWith(box); else host.querySelector('.ai-worker-panel .hub-panel-body').appendChild(box); }).catch(showError); }, 'ghost')])
@@ -186,6 +212,6 @@
     document.addEventListener('visibilitychange', onVisibility);
   }
   function onVisibility(){ if (document.hidden) clearTimeout(timer); else refresh(); }
-  function stop(){ clearTimeout(timer); document.removeEventListener('visibilitychange', onVisibility); host = null; }
+  function stop(){ clearTimeout(timer); document.removeEventListener('visibilitychange', onVisibility); host = null; modelPicker = null; }
   root.VaultcastAI = { init:function(app){ A=app; h=app.h; api=app.api; }, render:render, stop:stop };
 })(this);

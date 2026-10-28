@@ -15,7 +15,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
-from contributor_setup import prepare, hardware, yes, release_managed_models
+from contributor_setup import prepare, hardware, yes, release_managed_models, installed_models, model_identity, model_report
 from encoding_worker import prepare_encoding, run_encoding, pending_encodings, retryable_upload
 from image_checks import check_image, BlankGenerationError
 from worker_console import WorkerConsole
@@ -24,6 +24,10 @@ APPDATA = os.environ.get("APPDATA", os.path.expanduser("~"))
 CONFIG_DIR = os.path.join(APPDATA, "VaultcastAIWorker")
 CONFIG_PATH = os.path.join(CONFIG_DIR, "worker.json")
 INVOKE = "http://127.0.0.1:9090"
+
+
+class ModelUnavailableError(RuntimeError):
+    pass
 
 
 def request(url, method="GET", data=None, headers=None, timeout=30):
@@ -203,7 +207,7 @@ def load_config():
             continue
         try:
             register = request(server + "/api/ai/worker/register", "POST", {
-                "pair_code": code, "name": socket.gethostname(), "model_name": model_name, "model_base": "sdxl" if modes.get("images") else "", "capabilities": active_capabilities(config), "hardware": config["hardware"], "invoke_version": config.get("invoke_version", "")
+                "pair_code": code, "name": socket.gethostname(), "model_name": model_name, "model_base": "sdxl" if modes.get("images") else "", "models":model_report(config.get("models",[])) if modes.get("images") else [], "capabilities": active_capabilities(config), "hardware": config["hardware"], "invoke_version": config.get("invoke_version", "")
             })
             break
         except urllib.error.HTTPError as exc:
@@ -332,7 +336,11 @@ def run_job(cfg, job):
     headers = worker_headers(cfg)
     print(slot_label(cfg), "Generating:", job["prompt"][:100])
     slot_status(cfg, "Generating image | " + job["prompt"][:100])
-    graph = graph_for(job, cfg["model"])
+    models = installed_models(request,cfg["invoke"])
+    cfg["models"] = models
+    model = next((model for model in models if model_identity(model)==job.get("model_id")),None)
+    if model is None: raise ModelUnavailableError("The requested model is no longer installed on this computer.")
+    graph = graph_for(job, model)
     enqueued = request(cfg["invoke"] + "/api/v1/queue/default/enqueue_batch", "POST", {"batch": {"graph": graph, "runs": 1, "origin": "vaultcast"}})
     item_id = (enqueued.get("item_ids") or [None])[0]
     if not item_id:
@@ -421,8 +429,12 @@ def run_slot(cfg, stop):
         try:
             image_ready = images
             if images:
-                try: request(cfg["invoke"] + "/api/v1/app/version", timeout=5)
-                except Exception: image_ready = False
+                try:
+                    cfg["models"] = installed_models(request,cfg["invoke"])
+                    slot_status(cfg,"Waiting for image job" if cfg["models"] else "No SDXL image models available; waiting for installation")
+                except Exception:
+                    image_ready = False
+                    slot_status(cfg,"InvokeAI unavailable; waiting to reconnect")
             with _conversion_lock:
                 retained = [job for job in pending_encodings(cfg) if job["id"] not in _active_conversions] if encoding else []
             if encoding and (retained or prefer_encoding or not image_ready):
@@ -452,13 +464,19 @@ def run_slot(cfg, stop):
             prefer_encoding = True
             if image_ready and _image_lock.acquire(blocking=False):
                 try:
-                    result = request(cfg["server"] + "/api/ai/worker/claim", "POST", {}, headers, timeout=15)
+                    result = request(cfg["server"] + "/api/ai/worker/claim", "POST", {"models":model_report(cfg.get("models",[]))}, headers, timeout=15)
                     job = result.get("job")
                     if job:
                         try:
                             run_job(cfg, job)
                             slot_status(cfg, "Waiting for job")
                         except Exception as error:
+                            try: remaining = installed_models(request,cfg["invoke"])
+                            except Exception: remaining = None
+                            if isinstance(error,ModelUnavailableError) or (remaining is not None and not any(model_identity(model)==job.get("model_id") for model in remaining)):
+                                request(cfg["server"] + "/api/ai/worker/jobs/" + job["id"] + "/unavailable", "POST", {"models":model_report(remaining or [])}, headers)
+                                print(slot_label(cfg),"Requested model was removed; job returned to the queue for a matching contributor.")
+                                continue
                             logging.exception("Image generation failed in slot %s", cfg["slot_id"])
                             print(slot_label(cfg), "Image failed:", error)
                             slot_status(cfg, "Image failed: " + str(error))
@@ -480,12 +498,13 @@ def run_slot(cfg, stop):
 def heartbeat(cfg, ready=True):
     images = cfg["contributions"].get("images")
     caps = active_capabilities(cfg)
+    models = []
     if images:
-        try: request(cfg["invoke"] + "/api/v1/app/version", timeout=5)
+        try: models = installed_models(request,cfg["invoke"])
         except Exception: caps["images"] = {}
     result = request(cfg["server"] + "/api/ai/worker/heartbeat", "POST", {
         "ready": ready, "model_name": cfg.get("model_name"), "model_base": "sdxl" if images else "",
-        "capabilities": caps, "hardware": cfg["hardware"], "invoke_version": cfg.get("invoke_version", ""),
+        "capabilities": caps, "models":model_report(models), "hardware": cfg["hardware"], "invoke_version": cfg.get("invoke_version", ""),
         "slots": cfg["slots"]}, worker_headers(cfg), timeout=15)
     if cfg.get("_console"): cfg["_console"].set_limits(result.get("transfer_limits"))
     return result
@@ -522,6 +541,8 @@ def main():
     response = wait_for_server(cfg)
     if response.get("slot_protocol") != 1:
         raise RuntimeError("Update the Vaultcast webapp before starting this multi-worker version.")
+    if cfg["contributions"].get("images") and response.get("image_model_protocol") != 1:
+        raise RuntimeError("Update the Vaultcast webapp before starting this model-selection worker version.")
     if cfg["contributions"].get("encoding") and (response.get("transfer_protocol") != 1 or response.get("transfer_scope") != "machine"):
         raise RuntimeError("Update the Vaultcast webapp before starting this transfer-queue worker version.")
     def start_slot(slot):

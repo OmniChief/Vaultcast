@@ -2,6 +2,7 @@
 import csv
 import atexit
 import ctypes
+import hashlib
 import json
 import os
 import pathlib
@@ -11,6 +12,7 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from image_checks import check_image
@@ -187,9 +189,27 @@ def ensure_engine(request, url, info, autostart=False):
     return ENGINE_URL
 
 
+def model_identity(model):
+    return hashlib.sha256((str(model["base"]) + "\n" + str(model["hash"]).strip().lower()).encode()).hexdigest()
+
+
+def installed_models(request, url):
+    models = request(url + "/api/v2/models/", timeout=15).get("models", [])
+    try:
+        missing = {m["key"] for m in request(url + "/api/v2/models/missing", timeout=15).get("models", [])}
+    except urllib.error.HTTPError as error:
+        if error.code not in (404,405): raise
+        missing = set()  # Older InvokeAI versions do not expose the missing-files endpoint.
+    return [m for m in models if isinstance(m,dict) and m.get("base") == "sdxl" and m.get("type") == "main"
+        and all(m.get(key) for key in ("key","hash","name")) and m["key"] not in missing]
+
+
+def model_report(models):
+    return [{"name":m["name"],"hash":str(m["hash"]).strip().lower(),"base":m["base"],"type":m["type"]} for m in models]
+
+
 def select_model(request, url, preferred=None, choose=False):
-    def installed():
-        return [m for m in request(url + "/api/v2/models/").get("models", []) if m.get("base") == "sdxl" and m.get("type") == "main"]
+    def installed(): return installed_models(request, url)
     models = installed()
     if not models:
         print("\nNo SDXL image model is installed. The starter model is Stability AI SDXL Base 1.0 (~7 GB).")
@@ -213,7 +233,7 @@ def select_model(request, url, preferred=None, choose=False):
         for model in models:
             if model.get("key") == preferred: return model
     if len(models) == 1: return models[0]
-    print("\nChoose the image model to contribute:")
+    print("\nChoose a model for the capability check. All installed SDXL models will be offered to Vaultcast:")
     for index, model in enumerate(models, 1): print(str(index) + ". " + model["name"])
     while True:
         try:
@@ -274,6 +294,11 @@ def prepare(config, request, graph_builder, force=False):
     print("\nVaultcast contributor -", info["platform"], info.get("ram_gb") or "unknown", "GB RAM")
     for gpu in info["gpus"]: print("GPU:", gpu["name"], "-", gpu["vram_mb"], "MB VRAM")
     url = ensure_engine(request, config.get("invoke", ENGINE_URL), info, autostart=config.get("_autostart",False))
+    capabilities = config.get("capabilities") or {}
+    profile = (capabilities.get("images") or {}).get("sdxl") or {}
+    if not force and profile.get("verified") and not installed_models(request,url):
+        print("No SDXL image models available. The image worker will wait for a model to be installed.")
+        return {"invoke":url,"model":None,"model_name":"","models":[],"hardware":info,"capabilities":capabilities}
     model = select_model(request, url, (config.get("model") or {}).get("key"), choose=force)
     version = request(url + "/api/v1/app/version").get("version", "unknown")
     capabilities = config.get("capabilities") or {}
@@ -285,4 +310,4 @@ def prepare(config, request, graph_builder, force=False):
             release_managed_models(request)
     else:
         release_managed_models(request)
-    return {"invoke": url, "model": model, "model_name": model["name"], "invoke_version": version, "hardware": info, "capabilities": capabilities}
+    return {"invoke": url, "model": model, "model_name": model["name"], "models":installed_models(request,url), "invoke_version": version, "hardware": info, "capabilities": capabilities}

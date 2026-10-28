@@ -34,10 +34,27 @@ final class AIImages
     private static function libraryDocument(array $user): string { return self::LIBRARY . '-' . substr(hash('sha256', (string)$user['id']), 0, 24); }
     private static function signed(array $user): void { Arcade::signed($user); }
     private static function imageCapacity(array $worker): int {
+        if (empty($worker['models']) || (int)($worker['models_seen'] ?? 0)<time()-self::ONLINE_SECONDS) return 0;
         if (($worker['model_base'] ?? '') !== 'sdxl') return 0;
         if (!isset($worker['capabilities'])) return 1048576; // Existing contributors keep working until upgraded.
         $profile = $worker['capabilities']['images']['sdxl'] ?? [];
         return !empty($profile['verified']) ? (int)($profile['max_pixels'] ?? 0) : 0;
+    }
+    private static function modelReport(array $models): array {
+        $result=[];
+        foreach (array_slice($models,0,256) as $model) {
+            if (!is_array($model) || ($model['base'] ?? '')!=='sdxl' || ($model['type'] ?? '')!=='main') continue;
+            $hash=strtolower(trim((string)($model['hash'] ?? '')));
+            $name=mb_substr(trim((string)($model['name'] ?? '')),0,128);
+            if ($name==='' || $hash==='' || strlen($hash)>128) continue;
+            $id=hash('sha256',"sdxl\n".$hash);
+            $result[$id]=['id'=>$id,'hash'=>$hash,'name'=>$name,'base'=>'sdxl','type'=>'main'];
+        }
+        return array_values($result);
+    }
+    private static function hasModel(array $worker, string $id): bool {
+        foreach ($worker['models'] ?? [] as $model) if (($model['id'] ?? '')===$id) return true;
+        return false;
     }
     private static function capabilityReport(array $body): array {
         $caps = is_array($body['capabilities'] ?? null) ? $body['capabilities'] : [];
@@ -83,6 +100,12 @@ final class AIImages
         }
         unset($job);
         $workers = self::workersOnline();
+        foreach ($jobs as &$job) if (($job['status'] ?? '')==='queued' && !empty($job['model_id'])) {
+            $available=false;
+            foreach ($workers['models'] as $model) if ($model['id']===$job['model_id'] && $model['max_image_pixels']>=(int)$job['width']*(int)$job['height']) { $available=true; break; }
+            if (!$available) $job['waiting_reason']='Waiting for a contributor with this model and image capacity.';
+        }
+        unset($job);
         return ['ok' => true, 'jobs' => array_slice($jobs, 0, 100), 'queue' => ['waiting' => $position, 'running' => count($queue) - $position], 'workers' => $workers, 'points'=>ContributionPoints::summary((string)$user['id'])];
     }
 
@@ -193,12 +216,13 @@ final class AIImages
     private static function indexGenerated(array $user, array $job, array $picture): void {
         $entry = ['prompt'=>(string)$job['prompt'], 'negative_prompt'=>(string)($job['negative_prompt'] ?? ''), 'created_at'=>(int)($job['finished_at'] ?? time()),
             'width'=>(int)$job['width'], 'height'=>(int)$job['height'], 'seed'=>$job['seed'] ?? null, 'steps'=>(int)$job['steps'],
-            'cfg_scale'=>(float)$job['cfg_scale'], 'scheduler'=>(string)$job['scheduler'], 'favorite'=>false, 'picture_created_at'=>(int)($picture['created_at'] ?? time())];
+            'cfg_scale'=>(float)$job['cfg_scale'], 'scheduler'=>(string)$job['scheduler'], 'model_id'=>$job['model_id'] ?? null, 'model_name'=>$job['model_name'] ?? '',
+            'model_hash'=>$job['model_hash'] ?? '', 'favorite'=>false, 'picture_created_at'=>(int)($picture['created_at'] ?? time())];
         $document = self::libraryDocument($user);
         self::mutate($document, static function (&$all) use ($picture, $entry) { $all[(string)$picture['id']] = $entry; });
     }
     private static function workersOnline(): array {
-        $all = self::read(self::WORKERS); $online = []; $configuredMax = 0; $onlineMax = 0; $encoders=0;
+        $all = self::read(self::WORKERS); $online = []; $configuredMax = 0; $onlineMax = 0; $encoders=0; $models=[];
         foreach ($all as $worker) {
             if (!empty($worker['ready']) && !empty($worker['capabilities']['encoding']['verified']) && (int)($worker['last_seen'] ?? 0)>=time()-self::ONLINE_SECONDS) {
                 $owner=Auth::findById((string)$worker['user_id']);
@@ -207,11 +231,19 @@ final class AIImages
             $pixels = self::imageCapacity($worker); $configuredMax = max($configuredMax, $pixels);
             if (!empty($worker['ready']) && $pixels > 0 && (int)($worker['last_seen'] ?? 0) >= time() - self::ONLINE_SECONDS) {
                 $onlineMax = max($onlineMax, $pixels);
+                foreach ($worker['models'] as $model) {
+                    $id=$model['id'];
+                    if (!isset($models[$id])) $models[$id]=$model+['online_workers'=>0,'max_image_pixels'=>0];
+                    $models[$id]['online_workers']++;
+                    $models[$id]['max_image_pixels']=max($models[$id]['max_image_pixels'],$pixels);
+                }
                 $online[] = ['id'=>$worker['id'], 'name'=>$worker['name'] ?? 'Contributor PC', 'model'=>$worker['model_name'] ?? '', 'last_seen'=>(int)$worker['last_seen'], 'max_image_pixels'=>$pixels,
+                    'models'=>$worker['models'],
                     'verified'=>!empty($worker['capabilities']['images']['sdxl']['verified'])];
             }
         }
-        return ['online'=>count($online), 'encoding_online'=>$encoders, 'connected'=>count(array_filter($all, static function ($w) { return (int)($w['last_seen'] ?? 0) >= time() - self::ONLINE_SECONDS; })), 'total'=>count($all), 'list'=>$online, 'max_image_pixels'=>$onlineMax, 'configured_max_image_pixels'=>$configuredMax];
+        $models=array_values($models); usort($models,static function ($a,$b) { return strcasecmp($a['name'],$b['name']); });
+        return ['online'=>count($online), 'encoding_online'=>$encoders, 'connected'=>count(array_filter($all, static function ($w) { return (int)($w['last_seen'] ?? 0) >= time() - self::ONLINE_SECONDS; })), 'total'=>count($all), 'list'=>$online, 'models'=>$models, 'max_image_pixels'=>$onlineMax, 'configured_max_image_pixels'=>$configuredMax];
     }
     public static function contributorStatus(): array { return self::workersOnline(); }
 
@@ -223,8 +255,12 @@ final class AIImages
         if (mb_strlen($negative) > 600) throw new DomainException('The negative prompt must be 600 characters or fewer.');
         $width = filter_var($body['width'] ?? 1024, FILTER_VALIDATE_INT); $height = filter_var($body['height'] ?? 1024, FILTER_VALIDATE_INT);
         if ($width === false || $height === false || $width < 512 || $height < 512 || $width > 1536 || $height > 1536 || $width % 8 !== 0 || $height % 8 !== 0 || $width * $height > 1048576) throw new DomainException('Use dimensions from 512 to 1536 pixels, in multiples of 8, with no more than 1 megapixel total.');
-        $contributors = self::read(self::WORKERS);
-        if ($contributors && !array_filter($contributors, static function ($w) use ($width, $height) { return self::imageCapacity($w) >= $width * $height; })) throw new DomainException('No configured contributor supports this image size. Choose 512 × 512 or connect a contributor with a larger verified image profile.');
+        $models=self::workersOnline()['models'];
+        if (!$models) throw new DomainException('No image models are available. Connect an image contributor with an installed SDXL model.');
+        $modelId=(string)($body['model_id'] ?? ''); $selected=null;
+        foreach ($models as $model) if ($model['id']===$modelId) { $selected=$model; break; }
+        if (!$selected) throw new DomainException('The selected image model is no longer available. Choose an available model.');
+        if ($selected['max_image_pixels']<$width*$height) throw new DomainException('No contributor with this model supports this image size. Choose a smaller size.');
         $steps = filter_var($body['steps'] ?? 30, FILTER_VALIDATE_INT);
         if ($steps === false || $steps < 1 || $steps > 100) throw new DomainException('Choose between 1 and 100 generation steps.');
         $count = filter_var($body['count'] ?? 1, FILTER_VALIDATE_INT);
@@ -243,7 +279,7 @@ final class AIImages
             if ($seed === false || $seed < 0 || $seed > 4294967295) throw new DomainException('Seed must be a whole number from 0 to 4,294,967,295, or leave it blank for a random seed.');
         }
         $boolean = static function (string $key, bool $default = false) use ($body): bool { return filter_var($body[$key] ?? $default, FILTER_VALIDATE_BOOLEAN); };
-        $settings = ['steps'=>$steps, 'cfg_scale'=>(float)$cfgScale, 'scheduler'=>$scheduler, 'seed'=>$seed,
+        $settings = ['model_id'=>$selected['id'],'model_name'=>$selected['name'],'model_hash'=>$selected['hash'],'steps'=>$steps, 'cfg_scale'=>(float)$cfgScale, 'scheduler'=>$scheduler, 'seed'=>$seed,
             'hidiffusion'=>$boolean('hidiffusion'), 'hidiffusion_raunet'=>$boolean('hidiffusion_raunet', true), 'hidiffusion_window_attn'=>$boolean('hidiffusion_window_attn', true),
             'hidiffusion_t1_ratio'=>(float)$hiT1, 'hidiffusion_t2_ratio'=>(float)$hiT2, 'fp32'=>$boolean('fp32',true), 'tiled'=>$boolean('tiled',true),
             'seamless_x'=>$boolean('seamless_x'), 'seamless_y'=>$boolean('seamless_y')];
@@ -308,6 +344,7 @@ final class AIImages
         });
         if (isset($body['capabilities'])) {
             $worker['capabilities'] = self::capabilityReport($body);
+            $worker['models']=self::modelReport(is_array($body['models'] ?? null) ? $body['models'] : []); $worker['models_seen']=time();
             $worker['ready'] = self::imageCapacity($worker) > 0 || $encoding;
         }
         $worker['invoke_version'] = mb_substr((string)($body['invoke_version'] ?? ''), 0, 40);
@@ -341,6 +378,9 @@ final class AIImages
             if (isset($status['capabilities'])) $workers[$worker['id']]['capabilities'] = self::capabilityReport($status);
             if (isset($status['invoke_version'])) $workers[$worker['id']]['invoke_version'] = mb_substr((string)$status['invoke_version'], 0, 40);
             if (isset($status['hardware'])) $workers[$worker['id']]['hardware'] = self::hardwareReport($status);
+            if (isset($status['models']) && is_array($status['models'])) {
+                $workers[$worker['id']]['models']=self::modelReport($status['models']); $workers[$worker['id']]['models_seen']=time();
+            }
             if (isset($status['slots']) && is_array($status['slots'])) {
                 $slots=[];
                 foreach (array_slice($status['slots'],0,32) as $slot) {
@@ -363,8 +403,8 @@ final class AIImages
             self::mutate(self::WORKERS,static function (&$workers) use($worker) { unset($workers[$worker['id']]); });
             json_out(['ok'=>true]);
         }
-        if ($action === 'heartbeat' && $method === 'POST') { self::touchWorker($worker, body_json()); json_out(['ok' => true, 'worker_id' => $worker['id'], 'slot_protocol'=>1, 'transfer_protocol'=>1, 'transfer_scope'=>'machine', 'transfer_limits'=>Convert::transferLimits()]); }
-        if ($action!=='encoding-chunk' || (int)($worker['last_seen'] ?? 0)<time()-15) self::touchWorker($worker);
+        if ($action === 'heartbeat' && $method === 'POST') { self::touchWorker($worker, body_json()); json_out(['ok' => true, 'worker_id' => $worker['id'], 'slot_protocol'=>1, 'image_model_protocol'=>1, 'transfer_protocol'=>1, 'transfer_scope'=>'machine', 'transfer_limits'=>Convert::transferLimits()]); }
+        if ($action!=='claim' && ($action!=='encoding-chunk' || (int)($worker['last_seen'] ?? 0)<time()-15)) self::touchWorker($worker);
         if ($action==='encoding-claim' || strpos($action,'encoding-')===0) {
             $owner=Auth::findById((string)$worker['user_id']);
             if (!$owner || !AreaAccess::allowed($owner,'library') || empty($worker['capabilities']['encoding']['verified'])) json_error('Encoding contribution requires Library access and a checked encoding profile.',403);
@@ -385,6 +425,10 @@ final class AIImages
             json_error('Encoding endpoint not found.',404);
         }
         if ($action === 'claim' && $method === 'POST') {
+            $body=body_json();
+            if (!is_array($body['models'] ?? null)) json_out(['ok'=>true,'job'=>null,'upgrade_required'=>'Update the contributor to report installed image models.']);
+            self::touchWorker($worker,['models'=>$body['models'],'ready'=>true]);
+            $worker['models']=self::modelReport($body['models']); $worker['models_seen']=time(); $worker['ready']=true;
             if (empty($worker['ready']) || self::imageCapacity($worker) === 0 || !self::slotAllows($worker,'images')) json_out(['ok'=>true, 'job'=>null]);
             $job = self::mutate(self::JOBS, static function (&$jobs) use ($worker) {
                 $now = time();
@@ -393,12 +437,14 @@ final class AIImages
                 foreach ($jobs as $active) if (($active['status'] ?? '')==='running' && ($active['worker_id'] ?? '')===$worker['id'] && (int)($active['worker_slot'] ?? 0)===$worker['slot_id']) return null;
                 usort($jobs, static function ($a, $b) { return (int)($a['created_at'] ?? 0) <=> (int)($b['created_at'] ?? 0); });
                 foreach ($jobs as &$candidate) if (($candidate['status'] ?? '') === 'queued') {
+                    if (!empty($candidate['model_id']) && !self::hasModel($worker,(string)$candidate['model_id'])) continue;
                     if ((int)$candidate['width'] * (int)$candidate['height'] > self::imageCapacity($worker)) continue;
+                    if (empty($candidate['model_id'])) { $model=$worker['models'][0]; $candidate['model_id']=$model['id']; $candidate['model_name']=$model['name']; $candidate['model_hash']=$model['hash']; }
                     $candidate['status'] = 'running'; $candidate['worker_id'] = $worker['id']; $candidate['worker_slot']=$worker['slot_id']; $candidate['started_at'] = $now; $candidate['updated_at'] = $now; $candidate['progress'] = 1; return $candidate;
                 }
                 return null;
             });
-            json_out(['ok' => true, 'job' => $job ? array_intersect_key($job, array_flip(['id','prompt','negative_prompt','width','height','steps','cfg_scale','scheduler','seed','hidiffusion','hidiffusion_raunet','hidiffusion_window_attn','hidiffusion_t1_ratio','hidiffusion_t2_ratio','fp32','tiled','seamless_x','seamless_y'])) : null]);
+            json_out(['ok' => true, 'job' => $job ? array_intersect_key($job, array_flip(['id','model_id','model_name','model_hash','prompt','negative_prompt','width','height','steps','cfg_scale','scheduler','seed','hidiffusion','hidiffusion_raunet','hidiffusion_window_attn','hidiffusion_t1_ratio','hidiffusion_t2_ratio','fp32','tiled','seamless_x','seamless_y'])) : null]);
         }
         if ($action === 'progress' && $method === 'POST') {
             $pct = max(1, min(99, (int)(body_json()['progress'] ?? 1)));
@@ -408,6 +454,19 @@ final class AIImages
             });
             if (!$ok) json_error('This job is no longer assigned to this worker.', 409);
             json_out(['ok' => true]);
+        }
+        if ($action === 'unavailable' && $method === 'POST') {
+            $body=body_json();
+            self::touchWorker($worker,['models'=>is_array($body['models'] ?? null) ? $body['models'] : []]);
+            $ok=self::mutate(self::JOBS,static function (&$jobs) use ($worker,$id) {
+                foreach ($jobs as &$job) if (($job['id'] ?? '')===$id && ($job['status'] ?? '')==='running' && ($job['worker_id'] ?? '')===$worker['id'] && (int)($job['worker_slot'] ?? 0)===$worker['slot_id']) {
+                    $job['status']='queued'; $job['progress']=0; $job['updated_at']=time();
+                    unset($job['worker_id'],$job['worker_slot'],$job['started_at']); return true;
+                }
+                return false;
+            });
+            if (!$ok) json_error('This image is no longer assigned to this worker.',409);
+            json_out(['ok'=>true,'requeued'=>true]);
         }
         if ($action === 'complete' && $method === 'POST') {
             $pictureId=self::mutate(self::JOBS, static function (&$jobs) use ($worker,$id) {
