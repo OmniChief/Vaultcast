@@ -63,7 +63,11 @@ final class AIImages
 
     public static function state(array $user): array {
         self::signed($user);
-        $jobs = array_values(array_filter(self::read(self::JOBS), static function ($j) use ($user) { return (string)($j['user_id'] ?? '') === (string)$user['id']; }));
+        $pictures = Pictures::ownedIds((string)$user['id']);
+        $jobs = array_values(array_filter(self::read(self::JOBS), static function ($j) use ($user, $pictures) {
+            if ((string)($j['user_id'] ?? '') !== (string)$user['id']) return false;
+            return ($j['status'] ?? '') !== 'completed' || isset($pictures[(string)($j['picture_id'] ?? '')]);
+        }));
         usort($jobs, static function ($a, $b) { return (int)($b['created_at'] ?? 0) <=> (int)($a['created_at'] ?? 0); });
         $queue = array_values(array_filter(self::read(self::JOBS), static function ($j) { return in_array($j['status'] ?? '', ['queued', 'running'], true); }));
         usort($queue, static function ($a, $b) { return (int)($a['created_at'] ?? 0) <=> (int)($b['created_at'] ?? 0); });
@@ -88,17 +92,18 @@ final class AIImages
     private static function libraryItems(array $user): array {
         $document = self::libraryDocument($user);
         $meta = self::read($document);
+        $rows = self::q('SELECT * FROM vaultcast_pictures WHERE user_id=? ORDER BY created_at DESC, id', [$user['id']])->fetchAll(PDO::FETCH_ASSOC);
+        $pictures = array_fill_keys(array_column($rows, 'id'), true);
         $backfill = [];
         foreach (self::read(self::JOBS) as $job) {
             $pictureId = (string)($job['picture_id'] ?? '');
-            if ((string)($job['user_id'] ?? '') !== (string)$user['id'] || ($job['status'] ?? '') !== 'completed' || !preg_match('/^[a-f0-9]{16}$/D', $pictureId) || isset($meta[$pictureId])) continue;
+            if ((string)($job['user_id'] ?? '') !== (string)$user['id'] || ($job['status'] ?? '') !== 'completed' || !isset($pictures[$pictureId]) || !preg_match('/^[a-f0-9]{16}$/D', $pictureId) || isset($meta[$pictureId])) continue;
             $meta[$pictureId] = ['prompt'=>(string)($job['prompt'] ?? ''), 'negative_prompt'=>(string)($job['negative_prompt'] ?? ''),
                 'created_at'=>(int)($job['finished_at'] ?? $job['created_at'] ?? time()), 'width'=>(int)($job['width'] ?? 0), 'height'=>(int)($job['height'] ?? 0),
                 'seed'=>$job['seed'] ?? null, 'steps'=>(int)($job['steps'] ?? 0), 'cfg_scale'=>(float)($job['cfg_scale'] ?? 0), 'scheduler'=>(string)($job['scheduler'] ?? ''), 'favorite'=>false];
             $backfill[$pictureId] = $meta[$pictureId];
         }
         if ($backfill) self::mutate($document, static function (&$all) use ($backfill) { foreach ($backfill as $id=>$entry) if (!isset($all[$id])) $all[$id] = $entry; });
-        $rows = self::q('SELECT * FROM vaultcast_pictures WHERE user_id=? ORDER BY created_at DESC, id', [$user['id']])->fetchAll(PDO::FETCH_ASSOC);
         $items = [];
         foreach ($rows as $row) {
             $id = (string)$row['id']; $entry = $meta[$id] ?? null;
