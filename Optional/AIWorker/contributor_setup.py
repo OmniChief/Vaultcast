@@ -230,7 +230,7 @@ def generation_check(request, url, model, graph_builder):
                     seconds = round(time.monotonic() - start, 1)
                     print("Passed:", str(size) + "x" + str(size), "in", seconds, "seconds.")
                     return {"images": {"sdxl": {"verified": True, "max_pixels": size * size, "checked_at": int(time.time()), "seconds": seconds, "model_hash": model.get("hash", "")}}, "video": {"verified": False}}
-                print("Checking", str(size) + "x" + str(size), "—", status, flush=True)
+                print("Checking", str(size) + "x" + str(size), "-", status, flush=True)
                 time.sleep(5)
             raise RuntimeError("Image check timed out after 30 minutes.")
         except (Exception, KeyboardInterrupt) as exc:
@@ -247,8 +247,8 @@ def generation_check(request, url, model, graph_builder):
 
 def prepare(config, request, graph_builder, force=False):
     info = hardware()
-    print("\nVaultcast contributor —", info["platform"], info.get("ram_gb") or "unknown", "GB RAM")
-    for gpu in info["gpus"]: print("GPU:", gpu["name"], "—", gpu["vram_mb"], "MB VRAM")
+    print("\nVaultcast contributor -", info["platform"], info.get("ram_gb") or "unknown", "GB RAM")
+    for gpu in info["gpus"]: print("GPU:", gpu["name"], "-", gpu["vram_mb"], "MB VRAM")
     url = ensure_engine(request, config.get("invoke", ENGINE_URL), info)
     model = select_model(request, url, (config.get("model") or {}).get("key"), choose=force)
     version = request(url + "/api/v1/app/version").get("version", "unknown")

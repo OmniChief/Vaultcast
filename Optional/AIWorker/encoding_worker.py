@@ -216,6 +216,64 @@ def cleanup_transfer(root, cfg):
         print("Upload confirmed, but local cleanup needs retry:", root, error)
 
 
+def download_ffmpeg(url, expected, archive):
+    """Resume a verified installer download instead of losing it on interrupted setup."""
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    checksum_file = archive.with_suffix(".sha256")
+    if not checksum_file.exists() or checksum_file.read_text(encoding="ascii").strip() != expected:
+        archive.unlink(missing_ok=True)
+        checksum_file.write_text(expected, encoding="ascii")
+    state = {"phase": "download", "phase_progress": 0, "bytes_done": 0, "bytes_total": 0}
+    display = ConsoleProgress(lambda: dict(state))
+    display.start()
+    try:
+        for attempt in range(5):
+            offset = archive.stat().st_size if archive.exists() else 0
+            if offset and digest(archive) == expected:
+                display.log("Using the already downloaded FFmpeg package.")
+                return
+            if offset: display.log("Resuming FFmpeg download from", ConsoleProgress.size(offset))
+            headers = {"User-Agent": "Vaultcast-Contributor", "Accept-Encoding": "identity"}
+            if offset: headers["Range"] = "bytes=" + str(offset) + "-"
+            try:
+                with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=20) as response:
+                    if response.status == 206:
+                        match = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+)", response.headers.get("Content-Range", ""))
+                        if not match or int(match[1]) != offset: raise RuntimeError("Server returned an invalid download range.")
+                        total = int(match[3])
+                    else:
+                        if offset: display.log("Download server cannot resume this request; restarting the package.")
+                        offset = 0
+                        total = int(response.headers.get("Content-Length", 0))
+                    received = offset
+                    state.update(bytes_done=offset, bytes_total=total)
+                    with archive.open("ab" if offset else "wb") as output:
+                        while True:
+                            chunk = response.read1(262144)
+                            if not chunk: break
+                            output.write(chunk)
+                            received += len(chunk)
+                            state.update(bytes_done=received, phase_progress=min(100, received / total * 100) if total else 0)
+                    if total and received != total: raise OSError("FFmpeg download ended before the full package arrived.")
+                display.log("Download finished. Checking package checksum...")
+                if digest(archive) != expected:
+                    archive.unlink(missing_ok=True)
+                    raise OSError("FFmpeg checksum did not match; retrying a fresh package.")
+                state["phase_progress"] = 100
+                display.render(force=True)
+                return
+            except (OSError, urllib.error.URLError, http.client.HTTPException, RuntimeError) as error:
+                if isinstance(error, urllib.error.HTTPError) and error.code == 416:
+                    archive.unlink(missing_ok=True)
+                display.log("FFmpeg download interrupted:", error)
+                if attempt == 4:
+                    raise RuntimeError("FFmpeg download failed after 5 attempts. Partial download kept at " + str(archive) + "; rerun setup to resume.") from error
+                display.log("Retrying in 3 seconds (attempt", str(attempt + 2) + "/5).")
+                time.sleep(3)
+    finally:
+        display.close()
+
+
 def prepare_encoding(config, force=False):
     directory = DATA / "ffmpeg"
     ffmpeg = config.get("ffmpeg") or shutil.which("ffmpeg") or str(directory / "ffmpeg.exe")
@@ -226,24 +284,34 @@ def prepare_encoding(config, force=False):
         if not yes("Download portable FFmpeg/ffprobe from gyan.dev (about 110 MB), only for this contributor?"):
             raise RuntimeError("Encoding needs FFmpeg and ffprobe.")
         directory.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(prefix="vaultcast-ffmpeg-") as temporary:
-            archive = Path(temporary) / "ffmpeg.zip"
-            with urllib.request.urlopen(BUILD + ".sha256", timeout=30) as response:
-                expected = response.read(2048).decode().strip().split()[0].lower()
-            if not re.fullmatch(r"[a-f0-9]{64}", expected):
-                raise RuntimeError("FFmpeg download checksum was unavailable.")
-            print("Downloading FFmpegâ€¦", flush=True)
-            with urllib.request.urlopen(BUILD, timeout=120) as response, archive.open("wb") as output:
-                shutil.copyfileobj(response, output, 1048576)
-            if digest(archive) != expected:
-                raise RuntimeError("FFmpeg checksum did not match. Rerun setup to retry.")
-            with zipfile.ZipFile(archive) as package:
-                for name in ("ffmpeg.exe", "ffprobe.exe"):
-                    member = next((m for m in package.namelist() if m.endswith("/bin/" + name)), None)
-                    if not member:
-                        raise RuntimeError("FFmpeg package is missing " + name)
-                    with package.open(member) as source, (directory / name).open("wb") as output:
-                        shutil.copyfileobj(source, output)
+        archive = DATA / "downloads" / "ffmpeg.zip.part"
+        print("FFmpeg download cache:", archive)
+        for attempt in range(3):
+            try:
+                print("Getting FFmpeg package checksum...", flush=True)
+                with urllib.request.urlopen(BUILD + ".sha256", timeout=20) as response:
+                    expected = response.read(2048).decode().strip().split()[0].lower()
+                break
+            except (OSError, urllib.error.URLError, IndexError) as error:
+                if attempt == 2: raise RuntimeError("Could not reach the FFmpeg download service: " + str(error)) from error
+                print("Checksum request failed; retrying:", error, flush=True)
+                time.sleep(3)
+        if not re.fullmatch(r"[a-f0-9]{64}", expected):
+            raise RuntimeError("FFmpeg download checksum was unavailable.")
+        download_ffmpeg(BUILD, expected, archive)
+        print("Extracting FFmpeg and ffprobe...", flush=True)
+        with zipfile.ZipFile(archive) as package:
+            for name in ("ffmpeg.exe", "ffprobe.exe"):
+                member = next((m for m in package.namelist() if m.endswith("/bin/" + name)), None)
+                if not member:
+                    raise RuntimeError("FFmpeg package is missing " + name)
+                print("Installing", name, flush=True)
+                temporary_exe = directory / (name + ".installing")
+                with package.open(member) as source, temporary_exe.open("wb") as output:
+                    shutil.copyfileobj(source, output)
+                temporary_exe.replace(directory / name)
+        archive.unlink(missing_ok=True)
+        print("FFmpeg extraction complete.", flush=True)
         ffmpeg, ffprobe = str(directory / "ffmpeg.exe"), str(directory / "ffprobe.exe")
     version = subprocess.check_output([ffmpeg, "-version"], text=True, timeout=15, creationflags=FLAGS).splitlines()[0]
     profile = (config.get("capabilities") or {}).get("encoding") or {}
@@ -253,7 +321,7 @@ def prepare_encoding(config, force=False):
         threads = int(answer) if answer else default
         if not 1 <= threads <= (os.cpu_count() or 1):
             raise RuntimeError("Choose a CPU thread count between 1 and " + str(os.cpu_count() or 1))
-        print("Checking H.264/AAC encoding with a one-second local clipâ€¦")
+        print("Checking H.264/AAC encoding with a one-second local clip...")
         with tempfile.TemporaryDirectory(prefix="vaultcast-encoder-check-") as temporary:
             output = Path(temporary) / "check.mp4"
             subprocess.run([ffmpeg, "-nostdin", "-v", "error", "-f", "lavfi", "-i", "color=size=128x128:rate=10",

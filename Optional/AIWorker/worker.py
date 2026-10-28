@@ -111,13 +111,13 @@ def load_config():
     config["server"] = server
     save_config(config)
     model_name = config["model_name"]
-    print("Use the 32-character ONE-TIME PAIRING CODE from AI → Images → Pair a computer, not an account/device API key.")
+    print("Use the 32-character ONE-TIME PAIRING CODE from AI -> Images -> Pair a computer, not an account/device API key.")
     print("Each computer needs a fresh code; a code expires after 10 minutes and can only be used once.")
     while True:
         code = "".join(input("One-time pairing code (or Q to stop): ").split()).lower()
         if code == "q": raise RuntimeError("Pairing canceled. Setup is saved; rerun the worker to continue.")
         if not re.fullmatch(r"[a-f0-9]{32}", code):
-            print("That is not a pairing code. Generate a fresh code using Pair a computer in AI → Images.")
+            print("That is not a pairing code. Generate a fresh code using Pair a computer in AI -> Images.")
             continue
         try:
             register = request(server + "/api/ai/worker/register", "POST", {
@@ -309,7 +309,7 @@ def main():
     if os.name == "nt" and images:
         print("Existing InvokeAI memory settings are preserved. A dedicated contributor engine uses partial loading.")
         print("InvokeAI recommends partial loading (enabled by default) and, on Windows NVIDIA systems, setting CUDA - Sysmem Fallback Policy to Prefer No Sysmem Fallback in NVIDIA Control Panel.")
-    print("Worker online for", " + ".join(([cfg.get("model_name", "SDXL")] if images else []) + (["MP4/H.264/AAC encoding"] if encoding else [])), "— press Ctrl+C to stop.")
+    print("Worker online for", " + ".join(([cfg.get("model_name", "SDXL")] if images else []) + (["MP4/H.264/AAC encoding"] if encoding else [])), "- press Ctrl+C to stop.")
     print("To rerun setup or capability checks later: start-worker.cmd --setup or --retest")
     prefer_encoding = True
     while True:
