@@ -363,7 +363,7 @@ final class AIImages
             self::mutate(self::WORKERS,static function (&$workers) use($worker) { unset($workers[$worker['id']]); });
             json_out(['ok'=>true]);
         }
-        if ($action === 'heartbeat' && $method === 'POST') { self::touchWorker($worker, body_json()); json_out(['ok' => true, 'worker_id' => $worker['id'], 'slot_protocol'=>1, 'transfer_protocol'=>1, 'transfer_scope'=>'machine']); }
+        if ($action === 'heartbeat' && $method === 'POST') { self::touchWorker($worker, body_json()); json_out(['ok' => true, 'worker_id' => $worker['id'], 'slot_protocol'=>1, 'transfer_protocol'=>1, 'transfer_scope'=>'machine', 'transfer_limits'=>Convert::transferLimits()]); }
         if ($action!=='encoding-chunk' || (int)($worker['last_seen'] ?? 0)<time()-15) self::touchWorker($worker);
         if ($action==='encoding-claim' || strpos($action,'encoding-')===0) {
             $owner=Auth::findById((string)$worker['user_id']);

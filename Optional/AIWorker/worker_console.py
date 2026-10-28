@@ -10,6 +10,7 @@ class WorkerConsole:
     def __init__(self, slots, stream=None):
         self.stream = stream or sys.stdout
         self.rows = {slot["id"]: "Waiting for job" for slot in slots}
+        self.limits = {"download":1,"upload":1}
         self.messages = deque(maxlen=3)
         self.buffers = {}
         self.lock = threading.RLock()
@@ -73,6 +74,15 @@ class WorkerConsole:
             self.rows[slot] = text
             if self.enabled: self._draw()
 
+    def set_limits(self, limits):
+        if not isinstance(limits, dict): return
+        with self.lock:
+            if self.closed: return
+            values = {key:max(1,min(32,int(limits.get(key,1)))) for key in ("download","upload")}
+            if values == self.limits: return
+            self.limits = values
+            if self.enabled: self._draw()
+
     def log(self, text):
         with self.lock:
             if self.closed: return
@@ -88,7 +98,8 @@ class WorkerConsole:
         width = max(1, columns - 1)
         room = max(1, height - 8)
         rows = sorted(self.rows.items())
-        lines = ["Vaultcast Contributor | Ctrl+C to stop", "One download + one upload per computer; encodes run in parallel.", ""]
+        lines = ["Vaultcast Contributor | Ctrl+C to stop",
+            "Transfer slots per computer: " + str(self.limits['download']) + " download / " + str(self.limits['upload']) + " upload. Encodes run in parallel.", ""]
         lines += ["[Worker " + str(slot) + "] " + text for slot, text in rows[:room]]
         if len(rows) > room: lines.append(str(len(rows)-room) + " more workers (increase window height to show all)")
         lines += [""] + list(self.messages)

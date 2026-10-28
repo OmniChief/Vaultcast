@@ -11146,6 +11146,39 @@ h('div', { className:'cv-find-bar' }, [
       };
       var lastQueue = [], convertRefreshing = false, pendingConvertRefresh = false;
       var externalOnly = !!c.external_workers_only, policySave = null, policyRevision = 0;
+      var transferSave = null, transferDraft = false, transferRevision = 0;
+      function applyTransferLimits(limits){
+        ['download','upload'].forEach(function(kind){
+          var value=limits[kind],input=root.querySelector('#cv_batch_'+kind+'_slots');
+          if(input)input.value=String(value);
+          c['external_'+kind+'_slots']=value;
+          if(state.settings){state.settings.convert=state.settings.convert||{};state.settings.convert['external_'+kind+'_slots']=value;}
+        });
+      }
+      function saveTransferLimits(){
+        if(transferSave)return;
+        var body={},valid=true;
+        ['download','upload'].forEach(function(kind){
+          var input=root.querySelector('#cv_batch_'+kind+'_slots'),value=Number(input.value);
+          if(!Number.isInteger(value)||value<1||value>32){valid=false;input.setAttribute('aria-invalid','true');}
+          else input.removeAttribute('aria-invalid');
+          body['external_'+kind+'_slots']=value;
+        });
+        if(!valid){toast('Transfer slots must be whole numbers from 1 to 32.',{kind:'bad'});return;}
+        transferRevision++;
+        var button=root.querySelector('#cv_batch_save_slots'),note=root.querySelector('#cv_batch_slots_status');
+        button.disabled=true;note.textContent='Saving transfer slots...';
+        root.querySelectorAll('.cv-transfer-slots input').forEach(function(input){input.disabled=true;});
+        transferSave=api('/admin/convert/policy',{method:'POST',body:body}).then(function(r){
+          if(!r.ok)throw new Error(r.error||'Could not save transfer slots.');
+          applyTransferLimits(r.transfer_limits);transferDraft=false;
+          note.textContent='Saved. New transfers use these limits; active transfers can finish.';
+          toast('Saved transfer slots per computer',{kind:'ok'});
+        }).catch(function(error){note.textContent='Not saved. '+error.message;toast(error.message,{kind:'bad'});}).finally(function(){
+          transferSave=null;button.disabled=false;
+          root.querySelectorAll('.cv-transfer-slots input').forEach(function(input){input.disabled=false;});
+        });
+      }
       function paintRoutingPolicy(){
         root.querySelectorAll('#cv_external_only,#cv_batch_external_only').forEach(function(input){input.checked=externalOnly;input.disabled=!!policySave;});
         var note=root.querySelector('#cv_batch_policy_status');
@@ -11363,7 +11396,7 @@ h('div', { className:'cv-find-bar' }, [
       }
       function transferDetails(job){
         if(!job||job.status!=='running'||!job.phase)return null;
-        if(job.phase==='wait_download'||job.phase==='wait_upload')return h('div',{className:'muted cv-glass-transfer',role:'status',text:'Waiting for '+(job.phase==='wait_download'?'download':'upload')+' slot (one per computer)'});
+        if(job.phase==='wait_download'||job.phase==='wait_upload')return h('div',{className:'muted cv-glass-transfer',role:'status',text:'Waiting for '+(job.phase==='wait_download'?'download':'upload')+' slot on this computer'});
         var phase=job.phase,pct=Math.max(0,Math.min(100,Number(job.phase_progress)||0));
         var download=phase==='download'?pct:100,encode=phase==='download'?0:phase==='encode'?pct:100;
         var upload=phase==='upload'?pct:phase==='verify'?100:0;
@@ -12003,6 +12036,7 @@ h('div', { className:'cv-find-bar' }, [
         if(convertRefreshing){if(!opts.quiet)pendingConvertRefresh=true;return;}
         convertRefreshing=true;
         var routingRevision=policyRevision;
+        var limitsRevision=transferRevision;
         api('/admin/convert').then(function(r){
           var pending = r.pending_requests || [];
           updateConvertNotif(pending.length);
@@ -12079,6 +12113,7 @@ h('div', { className:'cv-find-bar' }, [
           if (contributors) contributors.textContent = String((r.contributors || {}).encoding_online || 0) + ' encoding computers online';
           var batchContributors=root.querySelector('#cv_batch_contributors');
           if(batchContributors)batchContributors.textContent=String((r.contributors||{}).encoding_online||0)+' encoding computers online';
+          if(!transferSave&&!transferDraft&&limitsRevision===transferRevision&&r.transfer_limits)applyTransferLimits(r.transfer_limits);
           if(!policySave && routingRevision===policyRevision && typeof r.external_workers_only==='boolean'){
             externalOnly=r.external_workers_only;
             if(state.settings){state.settings.convert=state.settings.convert||{};state.settings.convert.external_workers_only=externalOnly;}
@@ -12224,6 +12259,18 @@ h('div', { className:'cv-find-bar' }, [
           cvToggleRow('cv_batch_external_only', 'Only use external workers', 'Saves immediately and shares the policy with DirectPlay Settings. Batch jobs wait for contributors; they do not fall back to server encoding.', externalOnly),
           h('p',{id:'cv_batch_policy_status',className:'muted',role:'status'}),
           h('p',{id:'cv_batch_contributors',className:'muted',text:'Checking encoding computers…'}),
+          h('div',{className:'cv-transfer-slots'},[
+            h('h4',{text:'Contributor transfer slots'}),
+            h('p',{className:'muted',text:'Limits apply separately to each contributing computer. Encoding can continue in parallel. Lower limits leave active transfers running until they finish.'}),
+            h('div',{className:'cv-custom-grid'},['download','upload'].map(function(kind){
+              return h('label',{className:'cv-field'},[
+                h('span',{className:'cv-field-label',text:(kind==='download'?'Download':'Upload')+' slots per computer'}),
+                h('input',{id:'cv_batch_'+kind+'_slots',type:'number',min:'1',max:'32',step:'1',value:String(c['external_'+kind+'_slots']||1),onInput:function(){transferDraft=true;var note=root.querySelector('#cv_batch_slots_status');if(note)note.textContent='Unsaved changes.';}})
+              ]);
+            })),
+            h('div',{className:'row-actions'},[h('button',{id:'cv_batch_save_slots',className:'btn',text:'Save transfer slots',onClick:saveTransferLimits})]),
+            h('p',{id:'cv_batch_slots_status',className:'muted',role:'status',text:'Default: one download and one upload per computer.'})
+          ]),
           h('p', { className:'muted', text:'Find all checks for MP4 files with H.264 video and AAC audio. Other containers appear even when their codecs already match. Restrict to Movies / TV / Anime — games are never scanned. Completed conversions automatically replace their originals after upload. Results stream in live; Stop keeps what was found. TV series stay in accordions.' }),
           h('div', { id:'cv_batch_list', className:'cv-batch-list cv-glass-wrap' }, [ pendingContent({ className:'muted', }) ]),
           h('div', { className:'row-actions' }, [

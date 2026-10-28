@@ -11,7 +11,7 @@ if (preg_match('#^/admin/transcode/([a-f0-9]{32})/stop$#D',$path,$match) && $met
 if ($path==='/admin/convert/merge-versions' && $method==='POST') json_out(Maintenance::start('versions','DirectPlay duplicate repair'));
 if ($path==='/admin/convert/policy' && $method==='POST') {
     json_out(Convert::withExternalPolicy(body_json(), static function () {
-        return ['ok'=>true,'external_workers_only'=>!empty(Store::settings()['convert']['external_workers_only'])];
+        return ['ok'=>true,'external_workers_only'=>!empty(Store::settings()['convert']['external_workers_only']),'transfer_limits'=>Convert::transferLimits()];
     }));
 }
 if ($path === '/admin/convert/pending' && $method === 'GET') {
@@ -34,6 +34,7 @@ if ($path === '/admin/convert' && $method === 'GET') {
         'defaults' => Convert::defaults(),
         'contributors' => AIImages::contributorStatus(),
         'external_workers_only' => !empty(Store::settings()['convert']['external_workers_only']),
+        'transfer_limits' => Convert::transferLimits(),
     ]);
 }
 

@@ -22,7 +22,6 @@ from contributor_setup import DATA, yes
 FLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 BUILD = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
 NATIVE_DATA = Path(os.environ.get("USERPROFILE", os.path.expanduser("~"))) / ".vaultcast"
-_transfer_locks = {"download": threading.Lock(), "upload": threading.Lock()}
 
 
 def check_stopping(cfg, lost):
@@ -43,8 +42,6 @@ def transfer_slot(cfg, base, direction, request, headers, status, phase, update,
     phase("wait_" + direction, "waiting for " + direction + " slot", start, total)
     display.log("Waiting for this computer's", direction, "slot...")
     update()
-    lock = _transfer_locks[direction]
-    while not lock.acquire(timeout=1): check_stopping(cfg, lost)
     granted = False
     try:
         while True:
@@ -70,7 +67,6 @@ def transfer_slot(cfg, base, direction, request, headers, status, phase, update,
         try: request(base + "/transfer", "POST", {"direction":direction,"release":True}, headers, timeout=10)
         except Exception:
             if granted: display.log("Transfer slot release not confirmed; it will expire automatically.")
-        lock.release()
 
 
 def download_source(cfg, base, headers, source, size, transferred, display, lost):

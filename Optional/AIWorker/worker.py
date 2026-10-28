@@ -483,10 +483,12 @@ def heartbeat(cfg, ready=True):
     if images:
         try: request(cfg["invoke"] + "/api/v1/app/version", timeout=5)
         except Exception: caps["images"] = {}
-    return request(cfg["server"] + "/api/ai/worker/heartbeat", "POST", {
+    result = request(cfg["server"] + "/api/ai/worker/heartbeat", "POST", {
         "ready": ready, "model_name": cfg.get("model_name"), "model_base": "sdxl" if images else "",
         "capabilities": caps, "hardware": cfg["hardware"], "invoke_version": cfg.get("invoke_version", ""),
         "slots": cfg["slots"]}, worker_headers(cfg), timeout=15)
+    if cfg.get("_console"): cfg["_console"].set_limits(result.get("transfer_limits"))
+    return result
 
 
 def wait_for_server(cfg):
@@ -533,6 +535,7 @@ def main():
             stop.set()
     print("Starting", len(cfg["slots"]), "workers. Press Ctrl+C to stop all workers.")
     with WorkerConsole(cfg["slots"]) as console:
+        console.set_limits(response.get("transfer_limits"))
         cfg["_console"] = console
         for slot in cfg["slots"]:
             thread = threading.Thread(target=start_slot,args=(slot,),name="worker-"+str(slot["id"]))

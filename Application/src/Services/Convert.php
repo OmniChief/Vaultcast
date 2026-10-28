@@ -32,6 +32,8 @@ class Convert {
         return [
             'enabled' => true,
             'external_workers_only' => false,
+            'external_download_slots' => 1,
+            'external_upload_slots' => 1,
             'one_job_at_a_time' => true,
             'threads' => 1,
             'max_threads' => self::maxCpuThreads(),
@@ -53,7 +55,7 @@ class Convert {
         $choices=['quality_mode'=>self::QUALITY_MODES,'preset'=>self::PRESETS,'audio_bitrate'=>['96k','128k','160k','192k','256k','320k'],
             'target_video'=>self::VIDEO_CODECS,'target_audio'=>self::AUDIO_CODECS,'target_container'=>array_keys(self::CONTAINERS)];
         foreach($choices as $key=>$values)if(array_key_exists($key,$cv)&&!in_array($cv[$key],$values,true))throw new InvalidArgumentException('Choose a supported conversion '.$key.'.');
-        foreach(['crf'=>[0,28],'nice'=>[0,19],'ionice_class'=>[1,3]] as $key=>$bounds)if(array_key_exists($key,$cv)&&(!is_int($cv[$key])||$cv[$key]<$bounds[0]||$cv[$key]>$bounds[1]))throw new InvalidArgumentException('Conversion '.$key.' must be between '.implode(' and ',$bounds).'.');
+        foreach(['crf'=>[0,28],'nice'=>[0,19],'ionice_class'=>[1,3],'external_download_slots'=>[1,32],'external_upload_slots'=>[1,32]] as $key=>$bounds)if(array_key_exists($key,$cv)&&(!is_int($cv[$key])||$cv[$key]<$bounds[0]||$cv[$key]>$bounds[1]))throw new InvalidArgumentException('Conversion '.$key.' must be a whole number between '.implode(' and ',$bounds).'.');
         foreach(['enabled','external_workers_only','prefer_directplay','preserve_resolution','one_job_at_a_time'] as $key)if(array_key_exists($key,$cv)&&!is_bool($cv[$key]))throw new InvalidArgumentException('Choose on or off for conversion '.$key.'.');
         $cv['one_job_at_a_time']=true;
         if(isset($cv['preserve_resolution'])&&!$cv['preserve_resolution'])throw new InvalidArgumentException('Background conversion preserves source resolution. Playback transcoding has a resolution limit.');
@@ -166,13 +168,14 @@ class Convert {
 
     /** Apply the batch routing policy before any enqueue can start a local process. */
     public static function withExternalPolicy(array $body, callable $action): array {
-        if (array_key_exists('external_workers_only',$body) && !is_bool($body['external_workers_only'])) json_error('Choose on or off for external workers only.',422);
+        $changes=array_intersect_key($body,array_flip(['external_workers_only','external_download_slots','external_upload_slots']));
+        try { self::validateSettings($changes); } catch (InvalidArgumentException $e) { json_error($e->getMessage(),422); }
         $lock=self::editQueueLock();
         try {
-            if (array_key_exists('external_workers_only',$body)) {
+            if ($changes) {
                 Store::invalidate('settings');
                 $settings=Store::settings();
-                $settings['convert']['external_workers_only']=$body['external_workers_only'];
+                $settings['convert']=array_replace($settings['convert'] ?? [],$changes);
                 if (!Store::set('settings',$settings)) json_error('Could not save conversion routing policy.',500);
             }
             return $action();
@@ -1426,12 +1429,22 @@ class Convert {
         return $i;
     }
 
+    public static function transferLimits(): array {
+        $settings=Store::settings()['convert'] ?? [];
+        return ['download'=>max(1,min(32,(int)($settings['external_download_slots'] ?? 1))),
+            'upload'=>max(1,min(32,(int)($settings['external_upload_slots'] ?? 1)))];
+    }
+
     private static function reserveTransfer(array &$q, int $index, string $direction, string $workerId): bool {
         $key=$direction.'_until'; $now=time();
+        // Lower limits affect new transfers; an existing transfer can finish normally.
+        $held=(int)($q[$index][$key] ?? 0)>$now;
+        $active=0;
         foreach ($q as $i=>$other) {
             if ($i===$index || ($other['status'] ?? '')!=='running' || ($other['external_worker_id'] ?? '')!==$workerId) continue;
-            if ((int)($other[$key] ?? 0)>$now && (int)($other['lease_until'] ?? 0)>=$now) return false;
+            if ((int)($other[$key] ?? 0)>$now && (int)($other['lease_until'] ?? 0)>=$now) $active++;
         }
+        if (!$held && $active>=self::transferLimits()[$direction]) return false;
         $q[$index][$key]=$now+120;
         return true;
     }
@@ -1443,13 +1456,17 @@ class Convert {
             $src=\Vaultcast\Paths::real((string)$job['src']);
             if (!$src || !self::underLibraryRoot($src) || !is_file($src)) json_error('Source is unavailable.',404);
             if (!self::reserveTransfer($q,$i,'download',(string)$worker['id'])) {
-                header('Retry-After: 5'); json_error('Another contributor download is active for this computer. Please wait.',429);
+                header('Retry-After: 5'); json_error('All download slots for this computer are busy. Please wait.',429);
             }
             // Keep stalled/abandoned streaming requests from overlapping after their reservation expires.
-            $streamLock=@fopen(STREAM_DATA.'/convert_download_'.hash('sha256',(string)$worker['id']).'.lock','c');
-            if (!$streamLock || !@flock($streamLock,LOCK_EX|LOCK_NB)) {
-                if (is_resource($streamLock)) fclose($streamLock);
-                header('Retry-After: 5'); json_error('The previous download for this computer is still closing. Please wait.',429);
+            $streamLock=false;
+            for ($slot=0; $slot<self::transferLimits()['download']; $slot++) {
+                $candidate=@fopen(STREAM_DATA.'/convert_download_'.hash('sha256',(string)$worker['id']).($slot ? '.'.$slot : '').'.lock','c');
+                if ($candidate && @flock($candidate,LOCK_EX|LOCK_NB)) { $streamLock=$candidate; break; }
+                if (is_resource($candidate)) fclose($candidate);
+            }
+            if (!$streamLock) {
+                header('Retry-After: 5'); json_error('Previous downloads for this computer are still closing. Please wait.',429);
             }
             register_shutdown_function(static function () use ($streamLock) { @flock($streamLock,LOCK_UN); @fclose($streamLock); });
             $q[$i]['lease_until']=time()+300; self::saveQueue($q);
@@ -1504,7 +1521,7 @@ class Convert {
             } elseif ($action==='chunk') {
                 $renewTransfer=(int)($job['upload_until'] ?? 0)<time()+60;
                 if (!self::reserveTransfer($q,$i,'upload',(string)$worker['id'])) {
-                    header('Retry-After: 5'); json_error('Another contributor upload is active for this computer. Please wait.',429);
+                    header('Retry-After: 5'); json_error('All upload slots for this computer are busy. Please wait.',429);
                 }
                 // Raw bounded chunks bypass PHP multipart limits and keep RAM independent of film size.
                 $offset=filter_var($_SERVER['HTTP_X_UPLOAD_OFFSET'] ?? '',FILTER_VALIDATE_INT);
