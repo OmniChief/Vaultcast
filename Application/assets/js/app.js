@@ -11363,7 +11363,7 @@ h('div', { className:'cv-find-bar' }, [
       }
       function transferDetails(job){
         if(!job||job.status!=='running'||!job.phase)return null;
-        if(job.phase==='wait_download'||job.phase==='wait_upload')return h('div',{className:'muted cv-glass-transfer',role:'status',text:'Waiting for '+(job.phase==='wait_download'?'download':'upload')+' slot (one per account)'});
+        if(job.phase==='wait_download'||job.phase==='wait_upload')return h('div',{className:'muted cv-glass-transfer',role:'status',text:'Waiting for '+(job.phase==='wait_download'?'download':'upload')+' slot (one per computer)'});
         var phase=job.phase,pct=Math.max(0,Math.min(100,Number(job.phase_progress)||0));
         var download=phase==='download'?pct:100,encode=phase==='download'?0:phase==='encode'?pct:100;
         var upload=phase==='upload'?pct:phase==='verify'?100:0;

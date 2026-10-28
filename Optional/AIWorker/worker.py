@@ -18,6 +18,7 @@ import uuid
 from contributor_setup import prepare, hardware, yes, release_managed_models
 from encoding_worker import prepare_encoding, run_encoding, pending_encodings, retryable_upload
 from image_checks import check_image, BlankGenerationError
+from worker_console import WorkerConsole
 
 APPDATA = os.environ.get("APPDATA", os.path.expanduser("~"))
 CONFIG_DIR = os.path.join(APPDATA, "VaultcastAIWorker")
@@ -112,6 +113,10 @@ def worker_headers(cfg):
 
 def slot_label(cfg):
     return "[Worker " + str(cfg.get("slot_id", 1)) + "]"
+
+
+def slot_status(cfg, text):
+    if cfg.get("_console"): cfg["_console"].set_status(cfg.get("slot_id",1),text)
 
 
 def active_capabilities(cfg):
@@ -302,6 +307,7 @@ def start_progress_listener(cfg, job_id, invoke_item_id):
         if percent == progress[0]:
             return
         progress[0] = percent
+        slot_status(cfg, "Generating image: " + str(percent) + "%")
         try:
             request(cfg["server"] + "/api/ai/worker/jobs/" + job_id + "/progress", "POST", {"progress": percent}, worker_headers(cfg), timeout=15)
         except Exception as exc:
@@ -325,6 +331,7 @@ def run_job(cfg, job):
     token = cfg["worker_token"]
     headers = worker_headers(cfg)
     print(slot_label(cfg), "Generating:", job["prompt"][:100])
+    slot_status(cfg, "Generating image | " + job["prompt"][:100])
     graph = graph_for(job, cfg["model"])
     enqueued = request(cfg["invoke"] + "/api/v1/queue/default/enqueue_batch", "POST", {"batch": {"graph": graph, "runs": 1, "origin": "vaultcast"}})
     item_id = (enqueued.get("item_ids") or [None])[0]
@@ -430,9 +437,11 @@ def run_slot(cfg, stop):
                         continue
                     try:
                         run_encoding(cfg, job, request)
+                        slot_status(cfg, "Waiting for job")
                     except Exception as error:
                         logging.exception("Conversion/upload paused in slot %s", cfg["slot_id"])
                         print(slot_label(cfg), "Conversion/upload paused:", error)
+                        slot_status(cfg, "Paused: " + str(error))
                         if retryable_upload(error):
                             print(slot_label(cfg), "Files kept. Retrying in 15 seconds.")
                             stop.wait(15)
@@ -446,10 +455,13 @@ def run_slot(cfg, stop):
                     result = request(cfg["server"] + "/api/ai/worker/claim", "POST", {}, headers, timeout=15)
                     job = result.get("job")
                     if job:
-                        try: run_job(cfg, job)
+                        try:
+                            run_job(cfg, job)
+                            slot_status(cfg, "Waiting for job")
                         except Exception as error:
                             logging.exception("Image generation failed in slot %s", cfg["slot_id"])
                             print(slot_label(cfg), "Image failed:", error)
+                            slot_status(cfg, "Image failed: " + str(error))
                             try: request(cfg["server"] + "/api/ai/worker/jobs/" + job["id"] + "/fail", "POST", {"error": str(error)}, headers)
                             except Exception: pass
                         continue
@@ -461,6 +473,7 @@ def run_slot(cfg, stop):
         except Exception as error:
             if isinstance(error, urllib.error.HTTPError) and error.code in (401,403): raise
             print(slot_label(cfg), "Connection error:", error)
+            slot_status(cfg, "Connection retry: " + str(error))
             stop.wait(10)
 
 
@@ -507,7 +520,7 @@ def main():
     response = wait_for_server(cfg)
     if response.get("slot_protocol") != 1:
         raise RuntimeError("Update the Vaultcast webapp before starting this multi-worker version.")
-    if cfg["contributions"].get("encoding") and response.get("transfer_protocol") != 1:
+    if cfg["contributions"].get("encoding") and (response.get("transfer_protocol") != 1 or response.get("transfer_scope") != "machine"):
         raise RuntimeError("Update the Vaultcast webapp before starting this transfer-queue worker version.")
     def start_slot(slot):
         local = dict(cfg, slot_id=slot["id"], contributions={"images":slot.get("images",False),"encoding":slot.get("encoding",False)},
@@ -519,23 +532,25 @@ def main():
             print(slot_label(local), "Stopped:", error)
             stop.set()
     print("Starting", len(cfg["slots"]), "workers. Press Ctrl+C to stop all workers.")
-    for slot in cfg["slots"]:
-        thread = threading.Thread(target=start_slot,args=(slot,),name="worker-"+str(slot["id"]))
-        thread.start(); threads.append(thread)
-    try:
-        while not stop.wait(10) and any(thread.is_alive() for thread in threads):
-            try: heartbeat(cfg)
-            except Exception as error: print("Contributor heartbeat:",error)
-    except KeyboardInterrupt:
-        print("Stopping workers; retaining unconfirmed conversion files...")
-    finally:
-        stop.set()
-        for thread in threads:
-            while thread.is_alive():
-                try: thread.join(timeout=1)
-                except KeyboardInterrupt: print("Waiting for active worker operations to stop...")
-        try: heartbeat(cfg,False)
-        except Exception: pass
+    with WorkerConsole(cfg["slots"]) as console:
+        cfg["_console"] = console
+        for slot in cfg["slots"]:
+            thread = threading.Thread(target=start_slot,args=(slot,),name="worker-"+str(slot["id"]))
+            thread.start(); threads.append(thread)
+        try:
+            while not stop.wait(10) and any(thread.is_alive() for thread in threads):
+                try: heartbeat(cfg)
+                except Exception as error: print("Contributor heartbeat:",error)
+        except KeyboardInterrupt:
+            print("Stopping workers; retaining unconfirmed conversion files...")
+        finally:
+            stop.set()
+            for thread in threads:
+                while thread.is_alive():
+                    try: thread.join(timeout=1)
+                    except KeyboardInterrupt: print("Waiting for active worker operations to stop...")
+            try: heartbeat(cfg,False)
+            except Exception: pass
     print("All workers stopped.")
 
 

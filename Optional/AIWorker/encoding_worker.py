@@ -41,7 +41,7 @@ def transfer_wait(cfg, lost, seconds):
 def transfer_slot(cfg, base, direction, request, headers, status, phase, update, display, lost, total):
     start = 0 if direction == "download" else 90
     phase("wait_" + direction, "waiting for " + direction + " slot", start, total)
-    display.log("Waiting for this account's", direction, "slot...")
+    display.log("Waiting for this computer's", direction, "slot...")
     update()
     lock = _transfer_locks[direction]
     while not lock.acquire(timeout=1): check_stopping(cfg, lost)
@@ -108,10 +108,12 @@ def download_source(cfg, base, headers, source, size, transferred, display, lost
 
 class ConsoleProgress:
     """Refresh the local display independently of slow server progress requests."""
-    def __init__(self, snapshot, stream=None, label="", live=True):
+    def __init__(self, snapshot, stream=None, label="", live=True, dashboard=None, slot=1):
         self.snapshot = snapshot
         self.stream = stream or sys.stdout
-        self.terminal = self.stream.isatty() and live
+        self.dashboard = dashboard if dashboard and dashboard.enabled else None
+        self.slot = slot
+        self.terminal = self.stream.isatty() and live and not self.dashboard
         self.label = label
         self.stop = threading.Event()
         self.lock = threading.Lock()
@@ -150,7 +152,7 @@ class ConsoleProgress:
                 rate = max(0, done - sample["done"]) / elapsed
                 sample["rate"] = rate if not sample["rate"] else sample["rate"] * 0.5 + rate * 0.5
                 sample.update(at=now, done=done)
-            if not self.terminal and not force and not changed and now - self.last_emit < 5: return
+            if not self.terminal and not self.dashboard and not force and not changed: return
             labels = {"download": "Download", "encode": "Encoding", "upload": "Upload", "verify": "Finalising", "done": "Completed"}
             filled = int(percent / 100 * 20)
             bar = "#" * filled + "-" * (20 - filled)
@@ -164,20 +166,27 @@ class ConsoleProgress:
             elif phase == "verify":
                 text = "Finalising: replacing original " + "|/-\\"[int(now * 2) % 4]
             elif phase in ("wait_download", "wait_upload"):
-                text = "Waiting for this account's " + phase[5:] + " slot..."
-            if self.label: text = "[" + self.label + "] " + text
-            if self.terminal:
+                text = "Waiting for this computer's " + phase[5:] + " slot..."
+            if data.get("title"): text += " | " + str(data["title"])
+            if self.dashboard:
+                self.dashboard.set_status(self.slot, text)
+            elif self.terminal:
+                if self.label: text = "[" + self.label + "] " + text
                 columns = max(40, shutil.get_terminal_size((120, 25)).columns)
                 text = text[:columns - 1]
                 self.stream.write("\r" + text + " " * max(0, self.width - len(text)))
                 self.stream.flush()
                 self.width = len(text)
             else:
+                if self.label: text = "[" + self.label + "] " + text
                 print(text, file=self.stream, flush=True)
             self.last_emit = now
 
     def log(self, *args, **kwargs):
         with self.lock:
+            if self.dashboard:
+                self.dashboard.log(("[" + self.label + "] " if self.label else "") + " ".join(str(arg) for arg in args))
+                return
             if self.width:
                 self.stream.write("\r" + " " * self.width + "\r")
                 self.width = 0
@@ -491,12 +500,13 @@ def run_encoding(cfg, job, request):
         raise RuntimeError("Server no longer has the confirmed output. Local files kept at " + str(workspace))
     stop = threading.Event()
     lost = threading.Event()
-    status = {"progress": 0, "stage": "downloading source", "phase": "download", "phase_progress": 0,
+    status = {"title":job["title"], "progress": 0, "stage": "downloading source", "phase": "download", "phase_progress": 0,
         "bytes_done": 0, "bytes_total": job["bytes"], "rate_bps": 0, "eta_seconds": 0}
     last_success = [time.monotonic()]
     sample = {"phase": "download", "at": time.monotonic(), "bytes": 0, "rate": 0}
     update_lock = threading.Lock()
-    display = ConsoleProgress(lambda: dict(status), label="Worker "+str(cfg.get("slot_id",1)), live=cfg.get("parallel_workers",1)<=1)
+    display = ConsoleProgress(lambda: dict(status), label="Worker "+str(cfg.get("slot_id",1)), live=cfg.get("parallel_workers",1)<=1,
+        dashboard=cfg.get("_console"), slot=cfg.get("slot_id",1))
 
     def phase(name, label, progress, total=0):
         status.update(phase=name, stage=label, progress=progress, phase_progress=0,

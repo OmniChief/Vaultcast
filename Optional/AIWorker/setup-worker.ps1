@@ -45,7 +45,7 @@ try {
     New-Item -ItemType Directory -Force -Path $workerRoot | Out-Null
     try { Start-Transcript -Path $logPath -Append | Out-Null; $transcribing=$true } catch { }
     Set-Location -LiteralPath $PSScriptRoot
-    foreach ($file in @('worker.py','contributor_setup.py','encoding_worker.py','image_checks.py')) {
+    foreach ($file in @('worker.py','contributor_setup.py','encoding_worker.py','image_checks.py','worker_console.py')) {
         if (!(Test-Path -LiteralPath (Join-Path $PSScriptRoot $file))) { throw "Missing $file. Extract the entire Optional/AIWorker folder; do not run it inside the ZIP." }
     }
     # Keep existing working non-redirected environments; new/repaired installs use the shared path.

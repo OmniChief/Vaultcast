@@ -1394,7 +1394,7 @@ class Convert {
                 $job['dest']=$dest; $job['container']='mp4'; $job['pid']=null;
                 $job['part']=dirname($dest).'/.'.basename($dest).'.worker-'.$job['id'].'.part';
                 @unlink($job['part']);
-                $job['status']='running'; $job['external_worker_id']=$worker['id']; $job['external_user_id']=(string)$worker['user_id']; $job['worker_slot']=(int)($worker['slot_id'] ?? 0);
+                $job['status']='running'; $job['external_worker_id']=$worker['id']; $job['worker_slot']=(int)($worker['slot_id'] ?? 0);
                 unset($job['download_until'],$job['upload_until']);
                 $job['lease_token']=bin2hex(random_bytes(16)); $job['lease_until']=time()+300;
                 $job['started_at']=date('c'); $job['finished_at']=null; $job['progress']=0;
@@ -1426,13 +1426,12 @@ class Convert {
         return $i;
     }
 
-    private static function reserveTransfer(array &$q, int $index, string $direction, string $userId): bool {
+    private static function reserveTransfer(array &$q, int $index, string $direction, string $workerId): bool {
         $key=$direction.'_until'; $now=time();
         foreach ($q as $i=>$other) {
-            if ($i===$index || ($other['status'] ?? '')!=='running' || ($other['external_user_id'] ?? '')!==$userId) continue;
+            if ($i===$index || ($other['status'] ?? '')!=='running' || ($other['external_worker_id'] ?? '')!==$workerId) continue;
             if ((int)($other[$key] ?? 0)>$now && (int)($other['lease_until'] ?? 0)>=$now) return false;
         }
-        $q[$index]['external_user_id']=$userId;
         $q[$index][$key]=$now+120;
         return true;
     }
@@ -1443,14 +1442,14 @@ class Convert {
             $q=self::queue(); $i=self::externalJob($q,$worker,$id,$lease); $job=$q[$i];
             $src=\Vaultcast\Paths::real((string)$job['src']);
             if (!$src || !self::underLibraryRoot($src) || !is_file($src)) json_error('Source is unavailable.',404);
-            if (!self::reserveTransfer($q,$i,'download',(string)$worker['user_id'])) {
-                header('Retry-After: 5'); json_error('Another contributor download is active for this account. Please wait.',429);
+            if (!self::reserveTransfer($q,$i,'download',(string)$worker['id'])) {
+                header('Retry-After: 5'); json_error('Another contributor download is active for this computer. Please wait.',429);
             }
             // Keep stalled/abandoned streaming requests from overlapping after their reservation expires.
-            $streamLock=@fopen(STREAM_DATA.'/convert_download_'.hash('sha256',(string)$worker['user_id']).'.lock','c');
+            $streamLock=@fopen(STREAM_DATA.'/convert_download_'.hash('sha256',(string)$worker['id']).'.lock','c');
             if (!$streamLock || !@flock($streamLock,LOCK_EX|LOCK_NB)) {
                 if (is_resource($streamLock)) fclose($streamLock);
-                header('Retry-After: 5'); json_error('The previous download for this account is still closing. Please wait.',429);
+                header('Retry-After: 5'); json_error('The previous download for this computer is still closing. Please wait.',429);
             }
             register_shutdown_function(static function () use ($streamLock) { @flock($streamLock,LOCK_UN); @fclose($streamLock); });
             $q[$i]['lease_until']=time()+300; self::saveQueue($q);
@@ -1473,12 +1472,11 @@ class Convert {
             $i=self::externalJob($q,$worker,$id,$lease); $job=&$q[$i];
             $renewLease=(int)($job['lease_until'] ?? 0)<time()+240;
             $job['lease_until']=time()+300;
-            $job['external_user_id']=(string)$worker['user_id'];
             if ($action==='transfer') {
                 $direction=(string)($body['direction'] ?? '');
                 if (!in_array($direction,['download','upload'],true)) json_error('Choose download or upload.',422);
                 if (!empty($body['release'])) { unset($job[$direction.'_until']); $granted=false; }
-                else $granted=self::reserveTransfer($q,$i,$direction,(string)$worker['user_id']);
+                else $granted=self::reserveTransfer($q,$i,$direction,(string)$worker['id']);
                 self::saveQueue($q);
                 return ['ok'=>true,'granted'=>$granted,'retry_after'=>5];
             } elseif ($action==='status') {
@@ -1500,13 +1498,13 @@ class Convert {
                 }
                 $direction=(string)($body['transfer_direction'] ?? '');
                 if (in_array($direction,['download','upload'],true) && (int)($job[$direction.'_until'] ?? 0)>time()) {
-                    if (!self::reserveTransfer($q,$i,$direction,(string)$worker['user_id'])) json_error('Transfer reservation was lost. Please retry.',409);
+                    if (!self::reserveTransfer($q,$i,$direction,(string)$worker['id'])) json_error('Transfer reservation was lost. Please retry.',409);
                 }
                 $job['message']='Contributor '.$worker['name'].' · '.mb_substr((string)($body['stage'] ?? 'encoding'),0,80).' · '.$job['progress'].'%';
             } elseif ($action==='chunk') {
                 $renewTransfer=(int)($job['upload_until'] ?? 0)<time()+60;
-                if (!self::reserveTransfer($q,$i,'upload',(string)$worker['user_id'])) {
-                    header('Retry-After: 5'); json_error('Another contributor upload is active for this account. Please wait.',429);
+                if (!self::reserveTransfer($q,$i,'upload',(string)$worker['id'])) {
+                    header('Retry-After: 5'); json_error('Another contributor upload is active for this computer. Please wait.',429);
                 }
                 // Raw bounded chunks bypass PHP multipart limits and keep RAM independent of film size.
                 $offset=filter_var($_SERVER['HTTP_X_UPLOAD_OFFSET'] ?? '',FILTER_VALIDATE_INT);
