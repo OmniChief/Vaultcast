@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -20,6 +21,96 @@ from contributor_setup import DATA, yes
 
 FLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 BUILD = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+
+
+class ConsoleProgress:
+    """Refresh the local display independently of slow server progress requests."""
+    def __init__(self, snapshot, stream=None):
+        self.snapshot = snapshot
+        self.stream = stream or sys.stdout
+        self.terminal = self.stream.isatty()
+        self.stop = threading.Event()
+        self.lock = threading.Lock()
+        self.width = 0
+        self.last_emit = 0
+        self.sample = None
+        self.closed = False
+        self.thread = threading.Thread(target=self._run, daemon=True)
+
+    @staticmethod
+    def size(value):
+        for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+            if value < 1024 or unit == "TiB": return f"{value:.1f} {unit}"
+            value /= 1024
+
+    @staticmethod
+    def remaining(seconds):
+        seconds = max(0, int(seconds))
+        return f"{seconds // 3600:d}:{seconds // 60 % 60:02d}:{seconds % 60:02d}" if seconds >= 3600 else f"{seconds // 60:02d}:{seconds % 60:02d}"
+
+    def start(self):
+        self.thread.start()
+
+    def render(self, force=False):
+        data = self.snapshot()
+        phase = data.get("phase", "download")
+        percent = max(0, min(100, float(data.get("phase_progress", 0))))
+        now = time.monotonic()
+        done, total = int(data.get("bytes_done", 0)), int(data.get("bytes_total", 0))
+        with self.lock:
+            changed = self.sample is None or self.sample["phase"] != phase
+            if changed: self.sample = {"phase": phase, "at": now, "done": done, "rate": 0, "started": now}
+            sample = self.sample
+            elapsed = now - sample["at"]
+            if elapsed >= 0.5:
+                rate = max(0, done - sample["done"]) / elapsed
+                sample["rate"] = rate if not sample["rate"] else sample["rate"] * 0.5 + rate * 0.5
+                sample.update(at=now, done=done)
+            if not self.terminal and not force and not changed and now - self.last_emit < 5: return
+            labels = {"download": "Download", "encode": "Encoding", "upload": "Upload", "verify": "Finalising", "done": "Completed"}
+            filled = int(percent / 100 * 20)
+            bar = "#" * filled + "-" * (20 - filled)
+            text = f"{labels.get(phase, phase):10} [{bar}] {percent:5.1f}%"
+            if phase in ("download", "upload"):
+                text += f"  {self.size(done)} / {self.size(total)}"
+                if sample["rate"] > 0:
+                    text += f"  {self.size(sample['rate'])}/s  ETA {self.remaining((total-done)/sample['rate'])}"
+            elif phase == "encode" and 0 < percent < 100:
+                text += "  ETA " + self.remaining((now - sample["started"]) * (100 - percent) / percent)
+            elif phase == "verify":
+                text = "Finalising: duration check and replacing original " + "|/-\\"[int(now * 2) % 4]
+            if self.terminal:
+                columns = max(40, shutil.get_terminal_size((120, 25)).columns)
+                text = text[:columns - 1]
+                self.stream.write("\r" + text + " " * max(0, self.width - len(text)))
+                self.stream.flush()
+                self.width = len(text)
+            else:
+                print(text, file=self.stream, flush=True)
+            self.last_emit = now
+
+    def log(self, *args, **kwargs):
+        with self.lock:
+            if self.width:
+                self.stream.write("\r" + " " * self.width + "\r")
+                self.width = 0
+            print(*args, file=self.stream, **kwargs)
+            self.stream.flush()
+
+    def close(self):
+        self.stop.set()
+        if self.thread.is_alive(): self.thread.join(timeout=2)
+        with self.lock:
+            if not self.closed and self.width:
+                self.stream.write("\n")
+                self.stream.flush()
+            self.width = 0
+            self.closed = True
+
+    def _run(self):
+        while not self.stop.is_set():
+            self.render()
+            self.stop.wait(0.5)
 
 
 class ChunkUploader:
@@ -217,6 +308,7 @@ def run_encoding(cfg, job, request):
     last_success = [time.monotonic()]
     sample = {"phase": "download", "at": time.monotonic(), "bytes": 0, "rate": 0}
     update_lock = threading.Lock()
+    display = ConsoleProgress(lambda: dict(status))
 
     def phase(name, label, progress, total=0):
         status.update(phase=name, stage=label, progress=progress, phase_progress=0,
@@ -257,12 +349,13 @@ def run_encoding(cfg, job, request):
         while not stop.wait(2):
             update()
 
+    print("Converting:", job["title"], flush=True)
+    display.start()
     update()
     thread = threading.Thread(target=heartbeat, daemon=True)
     thread.start()
     process = None
     try:
-        print("Converting:", job["title"], flush=True)
         with nullcontext(str(workspace)) as temporary:
             root = Path(temporary)
             source, output = root / "source.video", root / "directplay.mp4"
@@ -330,7 +423,7 @@ def run_encoding(cfg, job, request):
                 state.update(output_ready=True, output_size=output.stat().st_size)
                 save_transfer(workspace, state)
             else:
-                print("Reusing retained conversion; resuming upload.")
+                display.log("Reusing retained conversion; resuming upload.")
             size = output.stat().st_size
             if lost.is_set(): raise RuntimeError("Conversion canceled or lease lost.")
             phase("upload", "uploading converted file", 90, size)
@@ -355,7 +448,7 @@ def run_encoding(cfg, job, request):
                             except urllib.error.HTTPError as exc:
                                 if exc.code == 413 and chunk_size > 262144:
                                     chunk_size //= 2
-                                    print("Server upload limit: reducing chunks to", chunk_size // 1024, "KiB")
+                                    display.log("Server upload limit: reducing chunks to", chunk_size // 1024, "KiB")
                                     smaller = True
                                     break
                                 if exc.code < 500 or attempt == 2: raise
@@ -364,7 +457,7 @@ def run_encoding(cfg, job, request):
                                 # Some proxies reset the socket before their 413 response can be read.
                                 if chunk_size > 262144 and attempt == 0:
                                     chunk_size = max(262144, min(1048576, chunk_size // 2))
-                                    print("Upload connection interrupted; retrying with", chunk_size // 1024, "KiB chunks")
+                                    display.log("Upload connection interrupted; retrying with", chunk_size // 1024, "KiB chunks")
                                     smaller = True
                                     break
                                 if attempt == 2: raise
@@ -396,6 +489,9 @@ def run_encoding(cfg, job, request):
                 except OSError:
                     if attempt == 2: raise
                     time.sleep(3)
+            status.update(phase="done", phase_progress=100, progress=100)
+            display.render(force=True)
+            display.close()
             print("Conversion uploaded and original replaced." if confirmation.get("replaced") else "Conversion uploaded; replacement needs administrator attention.")
             if confirmation.get("warning"): print("Server note:", confirmation["warning"])
             state["upload_confirmed"] = True
@@ -410,6 +506,7 @@ def run_encoding(cfg, job, request):
         transient = retryable_upload(exc) or isinstance(exc, KeyboardInterrupt)
         state["waiting_for_claim"] = lost.is_set() or not transient
         save_transfer(workspace, state)
+        display.close()
         print("Unconfirmed files retained for retry:", workspace)
         if not transient and not lost.is_set():
             try: request(base + "/fail", "POST", {"error": str(exc)}, headers, timeout=15)
@@ -418,3 +515,4 @@ def run_encoding(cfg, job, request):
     finally:
         stop.set()
         thread.join(timeout=25)
+        display.close()
