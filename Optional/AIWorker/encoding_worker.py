@@ -1,5 +1,7 @@
 """Optional full-file MP4/H.264/AAC contribution; independent of InvokeAI."""
 import hashlib
+import http.client
+import io
 import json
 import os
 from pathlib import Path
@@ -11,11 +13,61 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import urllib.parse
 import zipfile
 from contributor_setup import DATA, yes
 
 FLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 BUILD = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+
+
+class ChunkUploader:
+    """Keep one connection open across bounded, individually acknowledged chunks."""
+    def __init__(self, url, headers):
+        self.url = url
+        self.target = urllib.parse.urlsplit(url)
+        self.headers = headers
+        self.connection = None
+
+    def close(self):
+        if self.connection:
+            self.connection.close()
+        self.connection = None
+
+    def send(self, chunk, offset, on_sent):
+        if self.connection is None:
+            constructor = http.client.HTTPSConnection if self.target.scheme == "https" else http.client.HTTPConnection
+            self.connection = constructor(self.target.hostname, self.target.port, timeout=120)
+        connection = self.connection
+        try:
+            path = self.target.path + ("?" + self.target.query if self.target.query else "")
+            connection.putrequest("POST", path)
+            for key, value in {**self.headers, "Content-Type": "application/octet-stream", "Accept": "application/json",
+                "Content-Length": str(len(chunk)), "X-Upload-Offset": str(offset)}.items():
+                connection.putheader(key, value)
+            connection.endheaders()
+            send_error = None
+            try:
+                for at in range(0, len(chunk), 65536):
+                    piece = chunk[at:at + 65536]
+                    connection.send(piece)
+                    on_sent(offset + at + len(piece))
+            except OSError as exc:
+                # A proxy can reject an oversized body before it has all been sent.
+                send_error = exc
+            response = connection.getresponse()
+            content = response.read()
+            if response.status >= 400:
+                raise urllib.error.HTTPError(self.url, response.status, response.reason, response.headers, io.BytesIO(content))
+            if send_error:
+                raise send_error
+            result = json.loads(content)
+            if result.get("received") != offset + len(chunk):
+                raise RuntimeError("Server did not acknowledge the complete chunk.")
+            return result
+        except BaseException:
+            self.close()
+            raise
 
 
 def digest(path):
@@ -88,23 +140,49 @@ def run_encoding(cfg, job, request):
     headers = {"X-Vaultcast-Worker": cfg["worker_token"], "X-Vaultcast-Lease": job["lease"]}
     stop = threading.Event()
     lost = threading.Event()
-    status = {"progress": 0, "stage": "downloading source"}
+    status = {"progress": 0, "stage": "downloading source", "phase": "download", "phase_progress": 0,
+        "bytes_done": 0, "bytes_total": job["bytes"], "rate_bps": 0, "eta_seconds": 0}
     last_success = [time.monotonic()]
+    sample = {"phase": "download", "at": time.monotonic(), "bytes": 0, "rate": 0}
+    update_lock = threading.Lock()
+
+    def phase(name, label, progress, total=0):
+        status.update(phase=name, stage=label, progress=progress, phase_progress=0,
+            bytes_done=0, bytes_total=total, rate_bps=0, eta_seconds=0)
+
+    def transferred(done, total, start, weight):
+        status.update(bytes_done=done, bytes_total=total, phase_progress=round(done / max(1, total) * 100, 1),
+            progress=round(start + done / max(1, total) * weight, 1))
 
     def update():
+        if not update_lock.acquire(blocking=False): return
         try:
-            request(base + "/progress", "POST", dict(status), headers, timeout=20)
+            snapshot = dict(status)
+            now = time.monotonic()
+            if sample["phase"] != snapshot["phase"]:
+                sample.update(phase=snapshot["phase"], at=now, bytes=snapshot["bytes_done"], rate=0)
+            elapsed = now - sample["at"]
+            if elapsed >= 1:
+                rate = max(0, snapshot["bytes_done"] - sample["bytes"]) / elapsed
+                rate = rate if not sample["rate"] else sample["rate"] * 0.5 + rate * 0.5
+                sample.update(at=now, bytes=snapshot["bytes_done"], rate=rate)
+            rate = sample["rate"]
+            snapshot["rate_bps"] = round(rate)
+            snapshot["eta_seconds"] = round(max(0, snapshot["bytes_total"] - snapshot["bytes_done"]) / rate) if rate > 0 else 0
+            request(base + "/progress", "POST", snapshot, headers, timeout=15)
             last_success[0] = time.monotonic()
         except urllib.error.HTTPError as exc:
             if exc.code in (401, 403, 409):
                 lost.set()
         except Exception:
             pass
+        finally:
+            update_lock.release()
         if time.monotonic() - last_success[0] > 180:
             lost.set()
 
     def heartbeat():
-        while not stop.wait(20):
+        while not stop.wait(2):
             update()
 
     update()
@@ -123,11 +201,11 @@ def run_encoding(cfg, job, request):
             with urllib.request.urlopen(urllib.request.Request(base + "/source", headers=headers), timeout=120) as response, source.open("wb") as file:
                 while True:
                     if lost.is_set(): raise RuntimeError("Conversion lease was canceled or lost.")
-                    chunk = response.read(1048576)
+                    chunk = response.read1(262144)
                     if not chunk: break
                     file.write(chunk)
                     received += len(chunk)
-                    status["progress"] = round(min(10, received / max(1, job["bytes"]) * 10), 1)
+                    transferred(received, job["bytes"], 0, 10)
             if received != job["bytes"]:
                 raise RuntimeError("Source download was incomplete.")
             info = probe(cfg["ffprobe"], source)
@@ -147,7 +225,7 @@ def run_encoding(cfg, job, request):
             command += ["-c:a", "copy" if copy_audio else "aac"]
             if not copy_audio: command += ["-b:a", job["audio_bitrate"]]
             command += ["-movflags", "+faststart", "-f", "mp4", str(output)]
-            status.update(stage="encoding", progress=10)
+            phase("encode", "encoding", 10)
             update()
             with (root / "ffmpeg.log").open("wb") as log:
                 process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=log, creationflags=FLAGS)
@@ -155,10 +233,13 @@ def run_encoding(cfg, job, request):
                     while process.poll() is None:
                         if lost.wait(1): raise RuntimeError("Conversion canceled or contributor lease lost.")
                         try:
-                            content = (root / "progress").read_text(errors="replace")[-8192:]
+                            with (root / "progress").open("rb") as progress_file:
+                                progress_file.seek(max(0, progress_file.seek(0, 2) - 8192))
+                                content = progress_file.read().decode(errors="replace")
                             values = re.findall(r"out_time_us=(\d+)", content)
                             if values and duration > 0:
                                 status["progress"] = round(10 + min(80, int(values[-1]) / 1000000 / duration * 80), 1)
+                                status["phase_progress"] = round(min(100, int(values[-1]) / 1000000 / duration * 100), 1)
                         except OSError:
                             pass
                     if process.returncode:
@@ -173,31 +254,50 @@ def run_encoding(cfg, job, request):
             if not any(s.get("codec_name") == "h264" for s in check["streams"]):
                 raise RuntimeError("Converted file failed validation.")
             size = output.stat().st_size
+            phase("hash", "checking converted file", 90)
+            update()
             sha = digest(output)
             if lost.is_set(): raise RuntimeError("Conversion canceled or lease lost.")
-            status.update(stage="uploading converted file", progress=90)
+            phase("upload", "uploading converted file", 90, size)
             update()
             sent = 0
-            with output.open("rb") as file:
-                for chunk in iter(lambda: file.read(1048576), b""):
-                    if lost.is_set(): raise RuntimeError("Conversion canceled or lease lost.")
-                    for attempt in range(3):
-                        try:
-                            req = urllib.request.Request(base + "/chunk", data=chunk, method="POST", headers={**headers,
-                                "Content-Type": "application/octet-stream", "X-Upload-Offset": str(sent)})
-                            with urllib.request.urlopen(req, timeout=120) as response:
-                                result = json.loads(response.read())
-                            if result.get("received") != sent + len(chunk): raise RuntimeError("Server did not acknowledge the complete chunk.")
-                            break
-                        except urllib.error.HTTPError as exc:
-                            if exc.code < 500 or attempt == 2: raise
-                            time.sleep(2)
-                        except (OSError, ValueError):
-                            if attempt == 2: raise
-                            time.sleep(2)
-                    sent += len(chunk)
-                    status["progress"] = round(90 + sent / max(1, size) * 9, 1)
-            status.update(stage="server verifying output", progress=99)
+            chunk_size = max(262144, min(4194304, int(job.get("upload_chunk_bytes", 1048576))))
+            uploader = ChunkUploader(base + "/chunk", headers)
+            try:
+                with output.open("rb") as file:
+                    while sent < size:
+                        if lost.is_set(): raise RuntimeError("Conversion canceled or lease lost.")
+                        file.seek(sent)
+                        chunk = file.read(chunk_size)
+                        smaller = False
+                        for attempt in range(3):
+                            try:
+                                uploader.send(chunk, sent, lambda done: transferred(done, size, 90, 9))
+                                break
+                            except urllib.error.HTTPError as exc:
+                                if exc.code == 413 and chunk_size > 262144:
+                                    chunk_size //= 2
+                                    print("Server upload limit: reducing chunks to", chunk_size // 1024, "KiB")
+                                    smaller = True
+                                    break
+                                if exc.code < 500 or attempt == 2: raise
+                                time.sleep(2)
+                            except (OSError, ValueError, http.client.HTTPException):
+                                # Some proxies reset the socket before their 413 response can be read.
+                                if chunk_size > 262144 and attempt == 0:
+                                    chunk_size = max(262144, min(1048576, chunk_size // 2))
+                                    print("Upload connection interrupted; retrying with", chunk_size // 1024, "KiB chunks")
+                                    smaller = True
+                                    break
+                                if attempt == 2: raise
+                                time.sleep(2)
+                        if smaller: continue
+                        sent += len(chunk)
+                        transferred(sent, size, 90, 9)
+            finally:
+                uploader.close()
+            phase("verify", "server verifying output", 99)
+            update()
             # Completion owns the queue lock while hashing/probing; stop progress calls first.
             stop.set()
             thread.join(timeout=25)

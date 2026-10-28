@@ -156,7 +156,7 @@ class Convert {
     private static function editQueueLock() {
         $lock = false;
         for ($i=0; $i<100 && $lock===false; $i++) { $lock=self::lockQueue(); if ($lock===false) usleep(100000); }
-        if ($lock===false) json_error('Conversion queue is busy. Please retry.', 409);
+        if ($lock===false) json_error('Conversion queue is busy. Please retry.', 503);
         return $lock;
     }
 
@@ -1389,6 +1389,7 @@ class Convert {
                 self::saveQueue($q);
                 return ['ok'=>true,'job'=>['id'=>$job['id'],'title'=>$job['title'],'lease'=>$job['lease_token'],
                     'bytes'=>$job['source_stat']['size'],'duration'=>$job['duration_s'],
+                    'upload_chunk_bytes'=>4194304,
                     'crf'=>max(0,min(28,(int)($quality['crf'] ?? 18))),
                     'preset'=>self::sanitizePreset((string)($quality['preset'] ?? 'medium')),
                     'audio_bitrate'=>in_array($quality['audio_bitrate'] ?? '',['96k','128k','160k','192k','256k','320k'],true) ? $quality['audio_bitrate'] : '320k',
@@ -1428,16 +1429,27 @@ class Convert {
             if ($action==='complete' && $done>=0 && ($q[$done]['status'] ?? '')==='done' &&
                 ($q[$done]['external_worker_id'] ?? '')===$worker['id'] && $lease!=='' && hash_equals((string)($q[$done]['lease_token'] ?? ''),$lease)) return ['ok'=>true];
             $i=self::externalJob($q,$worker,$id,$lease); $job=&$q[$i];
+            $renewLease=(int)($job['lease_until'] ?? 0)<time()+240;
             $job['lease_until']=time()+300;
             if ($action==='progress') {
                 $job['progress']=max(0,min(99.5,(float)($body['progress'] ?? 0)));
+                $phase=(string)($body['phase'] ?? '');
+                if (in_array($phase,['download','encode','hash','upload','verify'],true)) {
+                    $job['phase']=$phase;
+                    $job['phase_progress']=max(0,min(100,(float)($body['phase_progress'] ?? 0)));
+                    $job['transfer_bytes']=max(0,(int)($body['bytes_done'] ?? 0));
+                    $job['transfer_total']=max(0,(int)($body['bytes_total'] ?? 0));
+                    $job['transfer_rate']=max(0,(float)($body['rate_bps'] ?? 0));
+                    $job['transfer_eta']=max(0,min(604800,(int)($body['eta_seconds'] ?? 0)));
+                    $job['progress_updated_at']=time();
+                }
                 $job['message']='Contributor '.$worker['name'].' · '.mb_substr((string)($body['stage'] ?? 'encoding'),0,80).' · '.$job['progress'].'%';
             } elseif ($action==='chunk') {
                 // Raw bounded chunks bypass PHP multipart limits and keep RAM independent of film size.
                 $offset=filter_var($_SERVER['HTTP_X_UPLOAD_OFFSET'] ?? '',FILTER_VALIDATE_INT);
                 if ($offset===false || $offset<0) json_error('Invalid upload offset.',400);
-                $input=fopen('php://input','rb'); $chunk=stream_get_contents($input,1048577); fclose($input);
-                if ($chunk===false || strlen($chunk)<1 || strlen($chunk)>1048576) json_error('Send a chunk of at most 1 MiB.',413);
+                $input=fopen('php://input','rb'); $chunk=stream_get_contents($input,4194305); fclose($input);
+                if ($chunk===false || strlen($chunk)<1 || strlen($chunk)>4194304) json_error('Send a chunk of at most 4 MiB.',413);
                 $part=(string)$job['part']; clearstatcache(true,$part); $size=is_file($part) ? (int)filesize($part) : 0;
                 if ($offset!==$size) {
                     if ($offset+strlen($chunk)!==$size) json_error('Upload offset does not match.',409);
@@ -1451,7 +1463,9 @@ class Convert {
                     if (file_put_contents($part,$chunk,FILE_APPEND)!==strlen($chunk)) throw new RuntimeException('Could not save output chunk.');
                     $size+=strlen($chunk);
                 }
-                self::saveQueue($q); return ['ok'=>true,'received'=>$size];
+                // Progress heartbeats persist the display separately; avoid a full queue write per chunk.
+                if ($renewLease) self::saveQueue($q);
+                return ['ok'=>true,'received'=>$size];
             } elseif ($action==='complete') {
                 @set_time_limit(0);
                 $part=(string)$job['part']; clearstatcache(true,$part);

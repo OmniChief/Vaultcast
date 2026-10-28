@@ -11126,7 +11126,7 @@ h('div', { className:'cv-find-bar' }, [
         scopes: { movies: true, tv: true, anime: true },
         gen: 0
       };
-      var lastQueue = [];
+      var lastQueue = [], convertRefreshing = false, pendingConvertRefresh = false;
       var externalOnly = !!c.external_workers_only, policySave = null, policyRevision = 0;
       function paintRoutingPolicy(){
         root.querySelectorAll('#cv_external_only,#cv_batch_external_only').forEach(function(input){input.checked=externalOnly;input.disabled=!!policySave;});
@@ -11336,6 +11336,24 @@ h('div', { className:'cv-find-bar' }, [
         if (p == null || isNaN(+p)) return job.status === 'running' ? 3 : 0;
         var cap = job.status === 'running' ? 99.5 : 100;
         return Math.max(0, Math.min(cap, +p));
+      }
+      function transferSize(bytes){
+        bytes=Math.max(0,Number(bytes)||0);
+        return bytes>=1073741824?(bytes/1073741824).toFixed(2)+' GiB':bytes>=1048576?(bytes/1048576).toFixed(1)+' MiB':(bytes/1024).toFixed(1)+' KiB';
+      }
+      function transferDetails(job){
+        if(job.status!=='running'||!job.phase)return null;
+        var phase=job.phase,pct=Math.max(0,Math.min(100,Number(job.phase_progress)||0));
+        var download=phase==='download'?pct:100,encode=phase==='download'?0:phase==='encode'?pct:100;
+        var upload=phase==='upload'?pct:phase==='verify'?100:0;
+        var text='Download '+download.toFixed(1)+'% · Encode '+encode.toFixed(1)+'% · Upload '+upload.toFixed(1)+'%';
+        if(phase==='download'||phase==='upload'){
+          text+=' · '+transferSize(job.transfer_bytes)+' / '+transferSize(job.transfer_total);
+          if(job.transfer_rate>0)text+=' · '+transferSize(job.transfer_rate)+'/s';
+          if(job.transfer_eta>0){var secs=Number(job.transfer_eta);text+=' · ~'+(secs>=60?Math.ceil(secs/60)+' min':Math.ceil(secs)+' sec')+' left';}
+        }else if(phase==='hash')text+=' · Checking local file';
+        else if(phase==='verify')text+=' · Server checking returned file';
+        return h('div',{className:'muted cv-glass-transfer',role:'status',text:text});
       }
 
       function jobByItemId(){
@@ -11574,7 +11592,7 @@ h('div', { className:'cv-find-bar' }, [
           }}));
         }
         var stateLabel = String(job.status||'').toUpperCase();
-        if (job.status === 'running') stateLabel = 'Converting ' + Math.round(pct) + '%';
+        if (job.status === 'running') stateLabel = ({download:'Downloading',encode:'Encoding',hash:'Checking file',upload:'Uploading',verify:'Verifying'}[job.phase] || 'Converting') + ' · ' + Math.round(pct) + '% overall';
         if (job.status === 'queued') stateLabel = 'Queued \u2014 waiting';
         if (job.status === 'done') stateLabel = job.resolved ? 'Done' : 'Converted \u2014 choose what to keep';
         var saveModes = { audio:'Audio only', video:'Video only', both:'Video + audio' };
@@ -11598,6 +11616,7 @@ h('div', { className:'cv-find-bar' }, [
             h('div', { className:'cv-glass-main' }, [
               h('div', { className:'cv-glass-title', text: job.title || job.item_id || 'Job' }),
               h('div', { className:'cv-glass-reason muted', text: reason }),
+              transferDetails(job),
               h('div', { className:'muted cv-glass-path', text: (job.src || '') + (job.dest ? (' \u2192 ' + job.dest) : '') })
             ]),
             h('div', { className:'cv-glass-side' }, [
@@ -11659,7 +11678,8 @@ h('div', { className:'cv-find-bar' }, [
               h('div', { className:'cv-glass-title', text: title }),
               h('div', { className:'cv-glass-reason', text: active
                 ? ((job.status === 'running' ? ('Converting ' + Math.round(pct) + '%') : 'Queued') + ' \u00b7 ' + convertReason(it))
-                : convertReason(it) })
+                : convertReason(it) }),
+              transferDetails(job)
             ]),
             h('div', { className:'cv-glass-side' }, [
               active && job.status === 'running'
@@ -11957,6 +11977,8 @@ h('div', { className:'cv-find-bar' }, [
 
       function refreshConvertAdmin(opts){
         opts = opts || {};
+        if(convertRefreshing){if(!opts.quiet)pendingConvertRefresh=true;return;}
+        convertRefreshing=true;
         var routingRevision=policyRevision;
         api('/admin/convert').then(function(r){
           var pending = r.pending_requests || [];
@@ -12042,6 +12064,9 @@ h('div', { className:'cv-find-bar' }, [
           paintUnified();
         }).catch(function(){
           if (!opts.quiet) toast('Could not refresh convert status', { kind:'bad' });
+        }).finally(function(){
+          convertRefreshing=false;
+          if(pendingConvertRefresh){pendingConvertRefresh=false;refreshConvertAdmin();}
         });
       }
 

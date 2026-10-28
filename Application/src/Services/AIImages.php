@@ -336,14 +336,23 @@ final class AIImages
         if ($action === 'register' && $method === 'POST') json_out(self::registerWorker(body_json()));
         $worker = self::authenticateWorker();
         if ($action === 'heartbeat' && $method === 'POST') { self::touchWorker($worker, body_json()); json_out(['ok' => true, 'worker_id' => $worker['id']]); }
-        self::touchWorker($worker);
+        if ($action!=='encoding-chunk' || (int)($worker['last_seen'] ?? 0)<time()-15) self::touchWorker($worker);
         if ($action==='encoding-claim' || strpos($action,'encoding-')===0) {
             $owner=Auth::findById((string)$worker['user_id']);
             if (($owner['role'] ?? '')!=='admin' || empty($worker['capabilities']['encoding']['verified'])) json_error('Administrator-paired encoding contributor required.',403);
             $lease=(string)($_SERVER['HTTP_X_VAULTCAST_LEASE'] ?? '');
             if ($action==='encoding-claim' && $method==='POST') json_out(empty($worker['ready']) ? ['ok'=>true,'job'=>null] : Convert::externalClaim($worker));
             if ($action==='encoding-source' && $method==='GET') Convert::externalSource($worker,$id,$lease);
-            if ($method==='POST') json_out(Convert::externalUpdate($worker,$id,$lease,substr($action,9),$action==='encoding-chunk' ? [] : body_json()));
+            if ($method==='POST') {
+                $result=Convert::externalUpdate($worker,$id,$lease,substr($action,9),$action==='encoding-chunk' ? [] : body_json());
+                if ($action==='encoding-chunk') {
+                    // Explicit framing lets contributors reuse the same HTTP connection.
+                    $json=json_encode($result,JSON_UNESCAPED_SLASHES);
+                    header('Content-Type: application/json'); header('Content-Length: '.strlen($json));
+                    echo $json; exit;
+                }
+                json_out($result);
+            }
             json_error('Encoding endpoint not found.',404);
         }
         if ($action === 'claim' && $method === 'POST') {
