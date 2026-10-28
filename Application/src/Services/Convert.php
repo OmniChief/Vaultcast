@@ -954,7 +954,7 @@ class Convert {
 
     /** ffprobe container duration in seconds (null when unknown). */
     private static function probeDuration(string $path): ?float {
-        return MediaProbe::duration($path, 8);
+        return MediaProbe::durationOnly($path, 8);
     }
 
     /** Mark TV convert requests linked to this job/item as done. Returns count. */
@@ -1403,9 +1403,7 @@ class Convert {
                 $job['started_at']=date('c'); $job['finished_at']=null; $job['progress']=0;
                 $job['message']='Contributor '.$worker['name'].' · downloading source';
                 $job['source_stat']=['size'=>(int)filesize($src),'mtime'=>(int)filemtime($src)];
-                $sourceProbe=MediaProbe::probeSummary($src,8,true);
-                $job['duration_s']=$sourceProbe['duration'];
-                $job['source_audio_count']=!empty($sourceProbe['probed']) ? (int)$sourceProbe['audio_count'] : null;
+                $job['duration_s']=self::probeDuration($src);
                 $job['quality_mode']=$quality['quality_mode'];
                 self::saveQueue($q);
                 return ['ok'=>true,'job'=>['id'=>$job['id'],'title'=>$job['title'],'lease'=>$job['lease_token'],
@@ -1504,7 +1502,15 @@ class Convert {
                 if (!is_file($part) || $bytes<1000 || filesize($part)!==$bytes) json_error('Converted upload is incomplete.',422);
                 // Read container duration only: no full-file hash, decode or codec validation on the server.
                 $actual=self::probeDuration($part); $duration=(float)($job['duration_s'] ?? 0);
-                if (!$actual || ($duration>0 && abs($actual-$duration)>max(3,$duration*0.01))) json_error('Converted video duration does not match the source.',422);
+                if (!$actual) json_error('Could not read the uploaded video duration with ffprobe within 8 seconds. Upload retained for retry; check the server ffprobe path and availability.',503);
+                if ($duration<=0 || abs($actual-$duration)>max(3,$duration*0.01)) {
+                    // Existing jobs can contain durations from the old stream-metadata probe.
+                    $current=self::probeDuration((string)$job['src']);
+                    if (!$current) json_error('Could not read the original video duration with ffprobe. Upload retained for retry; check the server ffprobe path and availability.',503);
+                    $duration=$current; $job['duration_s']=$current;
+                }
+                $tolerance=max(3,$duration*0.01);
+                if (abs($actual-$duration)>$tolerance) json_error(sprintf('Converted duration %.3fs differs from original %.3fs (allowed difference %.3fs). Local conversion retained; original not replaced.',$actual,$duration,$tolerance),422);
                 $job['output_duration_s']=$actual;
                 $job['output_duration_stat']=['size'=>$bytes,'mtime'=>(int)filemtime($part)];
                 $src=(string)$job['src']; clearstatcache(true,$src);
