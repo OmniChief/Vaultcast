@@ -4,12 +4,15 @@ import os
 import shutil
 import sys
 import threading
+from worker_version import VERSION
 
 
 def slot_kind(slot):
     kinds = []
     if slot.get("images"):
         kinds.append("Image generation")
+    if slot.get("video"):
+        kinds.append("AI video generation")
     if slot.get("encoding"):
         names = {"h264_nvenc":"NVIDIA NVENC", "h264_qsv":"Intel Quick Sync", "h264_amf":"AMD AMF"}
         encoder = slot.get("encoding_encoder", "libx264")
@@ -116,7 +119,7 @@ class WorkerConsole:
         width = max(1, columns - 1)
         room = max(1, height - 8)
         rows = sorted(self.rows.items())
-        lines = ["Vaultcast Contributor | Ctrl+C to stop",
+        lines = ["Vaultcast Contributor " + VERSION + " | Ctrl+C to stop",
             "Transfer slots per computer: " + str(self.limits['download']) + " download / " + str(self.limits['upload']) + " upload. GPU jobs take turns; CPU encodes run in parallel.", ""]
         lines += ["[Worker " + str(slot) + " | " + self.kinds.get(slot, "") + "] " + text for slot, text in rows[:room]]
         if len(rows) > room: lines.append(str(len(rows)-room) + " more workers (increase window height to show all)")

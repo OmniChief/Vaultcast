@@ -20,6 +20,7 @@ from contributor_setup import prepare, hardware, yes, release_managed_models, in
 from encoding_worker import prepare_encoding, run_encoding, pending_encodings, retryable_upload, InvalidServerResponse, GpuCoordinator, wait_for_image_idle, ConsoleProgress
 from image_checks import check_image, BlankGenerationError
 from worker_console import WorkerConsole, slot_kind
+from worker_version import VERSION
 
 APPDATA = os.environ.get("APPDATA", os.path.expanduser("~"))
 CONFIG_DIR = os.path.join(APPDATA, "VaultcastAIWorker")
@@ -176,6 +177,7 @@ def active_capabilities(cfg):
     caps = dict(cfg.get("capabilities") or {})
     if not cfg["contributions"].get("images"): caps["images"] = {}
     if not cfg["contributions"].get("encoding"): caps["encoding"] = {"verified": False}
+    if not cfg["contributions"].get("video"): caps["video"] = {"verified": False}
     return caps
 
 
@@ -384,12 +386,54 @@ def start_progress_listener(cfg, job_id, invoke_item_id):
     return None, progress
 
 
+def worker_models(cfg):
+    if cfg.get("image_backend") == "comfyui":
+        from comfy_backend import Engine
+        return Engine(cfg).models()
+    return installed_models(request, cfg["invoke"])
+
+
+def run_comfy_image(cfg, job):
+    from comfy_backend import Engine, image_graph
+    engine = Engine(cfg)
+    model = next((m for m in worker_models(cfg) if model_identity(m) == job.get("model_id")), None)
+    if model is None:
+        raise ModelUnavailableError("The requested SDXL model is no longer installed.")
+    base = cfg["server"] + "/api/ai/worker/jobs/" + job["id"]
+    last = [0]
+    def progress(value, message):
+        slot_status(cfg, message)
+        console = cfg.get("_console")
+        if console and hasattr(console, "set_progress"):
+            console.set_progress(cfg["slot_id"], {"phase_progress": value})
+        if time.monotonic() - last[0] >= 25:
+            request(base + "/progress", "POST", {"progress": value or 1}, worker_headers(cfg))
+            last[0] = time.monotonic()
+    outputs = engine.generate(image_graph(job, model), cfg["server"] + ":image:" + job["id"], cfg.get("_stop_event"), progress)
+    url, filename = engine.output(outputs)
+    with urllib.request.urlopen(url, timeout=180) as response:
+        data = response.read(25 * 1024 * 1024 + 1)
+    check_image(data)
+    for attempt in range(5):
+        try:
+            multipart(base + "/complete", cfg["worker_token"], filename, data, cfg.get("slot_id", 0))
+            return
+        except Exception as error:
+            if not retryable_upload(error) or attempt == 4:
+                raise
+            progress(99, "Retrying upload; the generated image is retained")
+            if cfg.get("_stop_event") and cfg["_stop_event"].wait(5):
+                raise InterruptedError("Worker stopped; generated output is retained.")
+
+
 def run_job(cfg, job):
+    if cfg.get("image_backend") == "comfyui":
+        return run_comfy_image(cfg, job)
     token = cfg["worker_token"]
     headers = worker_headers(cfg)
     print(slot_label(cfg), "Generating:", job["prompt"][:100])
     slot_status(cfg, "Generating image | " + job["prompt"][:100])
-    models = installed_models(request,cfg["invoke"])
+    models = worker_models(cfg)
     cfg["models"] = models
     model = next((model for model in models if model_identity(model)==job.get("model_id")),None)
     if model is None: raise ModelUnavailableError("The requested model is no longer installed on this computer.")
@@ -475,20 +519,23 @@ _image_lock = threading.Lock()
 
 
 def run_slot(cfg, stop):
+    if cfg["contributions"].get("video"):
+        from video_worker import run
+        return run(cfg, stop)
     images, encoding = cfg["contributions"].get("images"), cfg["contributions"].get("encoding")
     headers = worker_headers(cfg)
     prefer_encoding = True
     previous_wait_reason = None
-    while not stop.is_set():
+    while not stop.is_set() and not (cfg.get("_drain_event") and cfg["_drain_event"].is_set()):
         try:
             image_ready = images
             if images:
                 try:
-                    cfg["models"] = installed_models(request,cfg["invoke"])
+                    cfg["models"] = worker_models(cfg)
                     slot_status(cfg,"Waiting for image job" if cfg["models"] else "No SDXL image models available; waiting for installation")
                 except Exception:
                     image_ready = False
-                    slot_status(cfg,"InvokeAI unavailable; waiting to reconnect")
+                    slot_status(cfg,"AI engine unavailable; waiting to reconnect")
             with _conversion_lock:
                 retained = [job for job in pending_encodings(cfg) if job["id"] not in _active_conversions] if encoding else []
             if encoding and (retained or prefer_encoding or not image_ready):
@@ -535,7 +582,7 @@ def run_slot(cfg, stop):
                                 run_job(cfg, job)
                                 slot_status(cfg, "Waiting for job")
                             except Exception as error:
-                                try: remaining = installed_models(request,cfg["invoke"])
+                                try: remaining = worker_models(cfg)
                                 except Exception: remaining = None
                                 if isinstance(error,ModelUnavailableError) or (remaining is not None and not any(model_identity(model)==job.get("model_id") for model in remaining)):
                                     request(cfg["server"] + "/api/ai/worker/jobs/" + job["id"] + "/unavailable", "POST", {"models":model_report(remaining or [])}, headers)
@@ -564,12 +611,12 @@ def heartbeat(cfg, ready=True):
     caps = active_capabilities(cfg)
     models = []
     if images:
-        try: models = installed_models(request,cfg["invoke"])
+        try: models = worker_models(cfg)
         except Exception: caps["images"] = {}
     result = request(cfg["server"] + "/api/ai/worker/heartbeat", "POST", {
         "ready": ready, "model_name": cfg.get("model_name"), "model_base": "sdxl" if images else "",
         "capabilities": caps, "models":model_report(models), "hardware": cfg["hardware"], "invoke_version": cfg.get("invoke_version", ""),
-        "slots": cfg["slots"]}, worker_headers(cfg), timeout=15)
+        "slots": cfg["slots"], "worker_version": VERSION}, worker_headers(cfg), timeout=15)
     if cfg.get("_console"): cfg["_console"].set_limits(result.get("transfer_limits"))
     return result
 
@@ -621,7 +668,7 @@ def main():
             logging.exception("Worker slot stopped")
             print(slot_label(local), "Stopped:", error)
             stop.set()
-    print("Starting", len(cfg["slots"]), "workers. Press Ctrl+C to stop all workers.")
+    print("Vaultcast", VERSION, "— starting", len(cfg["slots"]), "workers. Press Ctrl+C to stop all workers.")
     with WorkerConsole(cfg["slots"]) as console:
         console.set_limits(response.get("transfer_limits"))
         cfg["_console"] = console

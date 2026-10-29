@@ -124,6 +124,19 @@ def wait_for_image_idle(cfg, request, lost, display):
     # A saved InvokeAI URL is not permission to use images in this run.
     if not cfg.get("_images_enabled"):
         return
+    if cfg.get("image_backend") == "comfyui":
+        from comfy_backend import Engine
+        engine = Engine(cfg)
+        while True:
+            check_stopping(cfg, lost)
+            try:
+                if engine.idle():
+                    engine.free()
+                    return
+                display.log("Waiting for AI generation before hardware encoding.")
+            except Exception as error:
+                display.log("Cannot confirm the AI engine is idle:", error)
+            transfer_wait(cfg, lost, 5)
     while True:
         check_stopping(cfg, lost)
         try:
@@ -380,6 +393,8 @@ class ConsoleProgress:
                 text = "Waiting for this computer's " + phase[5:] + " slot..."
             if data.get("title"): text += " | " + str(data["title"])
             if self.dashboard:
+                if hasattr(self.dashboard, "set_progress"):
+                    self.dashboard.set_progress(self.slot, data)
                 self.dashboard.set_status(self.slot, text)
             elif self.terminal:
                 if self.label: text = "[" + self.label + "] " + text
