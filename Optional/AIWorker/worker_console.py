@@ -6,10 +6,22 @@ import sys
 import threading
 
 
+def slot_kind(slot):
+    kinds = []
+    if slot.get("images"):
+        kinds.append("Image generation")
+    if slot.get("encoding"):
+        names = {"h264_nvenc":"NVIDIA NVENC", "h264_qsv":"Intel Quick Sync", "h264_amf":"AMD AMF"}
+        encoder = slot.get("encoding_encoder", "libx264")
+        kinds.append("Hardware encoding / " + names[encoder] if encoder in names else "CPU encoding")
+    return " + ".join(kinds)
+
+
 class WorkerConsole:
     def __init__(self, slots, stream=None):
         self.stream = stream or sys.stdout
         self.rows = {slot["id"]: "Waiting for job" for slot in slots}
+        self.kinds = {slot["id"]: slot_kind(slot) for slot in slots}
         self.limits = {"download":1,"upload":1}
         self.messages = deque(maxlen=3)
         self.buffers = {}
@@ -74,6 +86,12 @@ class WorkerConsole:
             self.rows[slot] = text
             if self.enabled: self._draw()
 
+    def set_kind(self, slot, text):
+        with self.lock:
+            self.kinds[slot] = text
+            if self.enabled:
+                self._draw()
+
     def set_limits(self, limits):
         if not isinstance(limits, dict): return
         with self.lock:
@@ -99,8 +117,8 @@ class WorkerConsole:
         room = max(1, height - 8)
         rows = sorted(self.rows.items())
         lines = ["Vaultcast Contributor | Ctrl+C to stop",
-            "Transfer slots per computer: " + str(self.limits['download']) + " download / " + str(self.limits['upload']) + " upload. Encodes run in parallel.", ""]
-        lines += ["[Worker " + str(slot) + "] " + text for slot, text in rows[:room]]
+            "Transfer slots per computer: " + str(self.limits['download']) + " download / " + str(self.limits['upload']) + " upload. GPU jobs take turns; CPU encodes run in parallel.", ""]
+        lines += ["[Worker " + str(slot) + " | " + self.kinds.get(slot, "") + "] " + text for slot, text in rows[:room]]
         if len(rows) > room: lines.append(str(len(rows)-room) + " more workers (increase window height to show all)")
         lines += [""] + list(self.messages)
         # Never write the bottom screen row: a newline there would scroll the display.
