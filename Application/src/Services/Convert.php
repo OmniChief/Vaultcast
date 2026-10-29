@@ -1384,9 +1384,8 @@ class Convert {
             $q=self::queue(); $beforeClaim=$q;
             foreach ($q as $job) if (($job['status'] ?? '')==='running' && ($job['external_worker_id'] ?? '')===$worker['id'] && (int)($job['worker_slot'] ?? 0)===(int)($worker['slot_id'] ?? 0)) return ['ok'=>true,'job'=>null,'waiting_reason'=>'Job '.$job['id'].' is still assigned to this slot; awaiting resume or lease expiry.'];
             $mode=AIImages::encodingMode($worker);
-            $contributors=AIImages::encodingContributors($q);
-            $queued=0; $accessible=0; $reserved=0;
-            foreach ($q as &$job) {
+            $queued=0; $accessible=0; $selected=null;
+            foreach ($q as $index => &$job) {
                 if (($job['status'] ?? '')!=='queued') continue;
                 $queued++;
                 $item=Catalogue::item((string)$job['item_id']);
@@ -1397,22 +1396,21 @@ class Convert {
                     $job['status']='failed'; $job['message']='Source file is unavailable in the library'; continue;
                 }
                 clearstatcache(true,$src);
-                $sourceBytes=(int)filesize($src);
-                // Use source size: under 400 MB goes to CPU, 400 MB and above to hardware.
-                $preferred=$sourceBytes<400000000 ? 'cpu' : 'hardware';
-                if ($mode!==$preferred) {
-                    $preferredFree=false;
-                    foreach ($contributors as $contributor) {
-                        if (!empty($contributor['modes'][$preferred]) && Parental::allows($contributor['account'],$item)) {
-                            $preferredFree=true;
-                            break;
-                        }
-                    }
-                    // Busy preferred slots are unavailable; let the other type keep the queue moving.
-                    if ($preferredFree) { $reserved++; continue; }
+                $sourceBytes=filesize($src);
+                if ($sourceBytes===false) {
+                    $job['status']='failed'; $job['message']='Source file size is unavailable'; continue;
                 }
                 $dest=self::destFor($src,'mp4');
                 if (is_file($dest)) { $job['status']='failed'; $job['message']='A DirectPlay output already exists; it was not overwritten'; continue; }
+                // Select without reordering the stored queue. Equal sizes retain queue order.
+                if ($selected===null || ($mode==='hardware' ? $sourceBytes>$selected['bytes'] : $sourceBytes<$selected['bytes'])) {
+                    $selected=['index'=>$index,'src'=>$src,'dest'=>$dest,'bytes'=>$sourceBytes,'item'=>$item];
+                }
+            }
+            unset($job);
+            if ($selected!==null) {
+                $job=&$q[$selected['index']];
+                $src=$selected['src']; $dest=$selected['dest']; $sourceBytes=$selected['bytes']; $item=$selected['item'];
                 $quality=self::applyQualityMode($cv);
                 $job['dest']=$dest; $job['container']='mp4'; $job['pid']=null;
                 $job['lease_token']=bin2hex(random_bytes(16));
@@ -1435,9 +1433,9 @@ class Convert {
                     'audio_bitrate'=>in_array($quality['audio_bitrate'] ?? '',['96k','128k','160k','192k','256k','320k'],true) ? $quality['audio_bitrate'] : '320k',
                     'smart'=>in_array($quality['quality_mode'],['directplay','original'],true)]];
             }
-            unset($job); if ($q!==$beforeClaim) self::saveQueue($q);
+            if ($q!==$beforeClaim) self::saveQueue($q);
             $reason=$queued===0 ? 'No conversions are queued.' : ($accessible===0 ? 'Queued conversions are not accessible to this account.' :
-                ($reserved>0 ? 'Waiting: eligible jobs prefer a free '.($mode==='cpu' ? 'hardware' : 'CPU').' encoding slot.' : 'No queued source is eligible; check failed jobs and source paths.'));
+                'No queued source is eligible; check failed jobs and source paths.');
             return ['ok'=>true,'job'=>null,'waiting_reason'=>$reason];
         } finally { self::unlockQueue($lock); }
     }
