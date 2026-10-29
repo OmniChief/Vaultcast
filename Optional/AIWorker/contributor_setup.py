@@ -245,7 +245,7 @@ def select_model(request, url, preferred=None, choose=False):
 
 def generation_check(request, url, model, graph_builder):
     print("\nContributor capability check: one neutral SDXL image, including final decode and download.")
-    print("This uses your GPU and saves an image in InvokeAI. Video contribution is not enabled by this worker yet.")
+    print("This uses your GPU and saves an image in InvokeAI. Video workers start after contributor setup finishes.")
     if not yes("Run the image check now?"):
         raise RuntimeError("A successful image check is required before this computer accepts jobs. Rerun setup when ready.")
     q = request(url + "/api/v1/queue/default/status").get("queue", {})

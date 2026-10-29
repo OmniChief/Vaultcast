@@ -25,6 +25,123 @@ BUILD = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
 NATIVE_DATA = Path(os.environ.get("USERPROFILE", os.path.expanduser("~"))) / ".vaultcast"
 
 
+ENCODERS = {"libx264": "CPU (libx264)", "h264_nvenc": "NVIDIA NVENC",
+    "h264_qsv": "Intel Quick Sync", "h264_amf": "AMD AMF"}
+
+
+@contextmanager
+def machine_gpu_slot(cfg, lost=None):
+    """Coordinate separate contributor windows running as the same OS user."""
+    NATIVE_DATA.mkdir(parents=True, exist_ok=True)
+    with (NATIVE_DATA / "gpu.lock").open("a+b") as file:
+        if file.seek(0, 2) == 0:
+            file.write(b"0")
+            file.flush()
+        acquired = False
+        try:
+            while not acquired:
+                check_stopping(cfg, lost or threading.Event())
+                file.seek(0)
+                try:
+                    if os.name == "nt":
+                        import msvcrt
+                        msvcrt.locking(file.fileno(), msvcrt.LK_NBLCK, 1)
+                    else:
+                        import fcntl
+                        fcntl.flock(file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    acquired = True
+                except OSError as error:
+                    if error.errno not in (11, 13) and getattr(error, "winerror", None) not in (32, 33):
+                        raise
+                    time.sleep(0.5)
+            yield
+        finally:
+            if acquired:
+                file.seek(0)
+                if os.name == "nt":
+                    import msvcrt
+                    msvcrt.locking(file.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(file.fileno(), fcntl.LOCK_UN)
+
+
+
+class GpuCoordinator:
+    """FIFO admission shared by all image and hardware-encoding slots in this process."""
+    def __init__(self):
+        self.condition = threading.Condition()
+        self.queue = []
+        self.busy = False
+
+    @contextmanager
+    def reserve(self, cfg, lost=None, waiting=None):
+        ticket = object()
+        acquired = False
+        with self.condition:
+            self.queue.append(ticket)
+            try:
+                while self.busy or self.queue[0] is not ticket:
+                    check_stopping(cfg, lost or threading.Event())
+                    if waiting:
+                        waiting()
+                    self.condition.wait(0.5)
+                check_stopping(cfg, lost or threading.Event())
+                self.queue.pop(0)
+                self.busy = acquired = True
+            finally:
+                if not acquired:
+                    self.queue.remove(ticket)
+                    self.condition.notify_all()
+        try:
+            with machine_gpu_slot(cfg, lost):
+                yield
+        finally:
+            with self.condition:
+                self.busy = False
+                self.condition.notify_all()
+
+
+def encoder_options(encoder, quality=18, preset="medium", device=0):
+    if encoder == "libx264":
+        return ["-preset", preset, "-crf", str(quality), "-pix_fmt", "yuv420p"]
+    quality = str(max(1, min(51, int(quality))))
+    if encoder == "h264_nvenc":
+        speed = "p6" if preset in ("slow", "slower", "veryslow", "placebo") else "p4"
+        return ["-gpu", str(device), "-preset", speed, "-rc", "vbr", "-cq", quality,
+            "-b:v", "0", "-pix_fmt", "nv12"]
+    if encoder == "h264_qsv":
+        return ["-preset", "medium", "-global_quality", quality, "-pix_fmt", "nv12"]
+    if encoder == "h264_amf":
+        return ["-quality", "balanced", "-rc", "cqp", "-qp_i", quality,
+            "-qp_p", quality, "-qp_b", quality, "-pix_fmt", "nv12"]
+    raise RuntimeError("Unsupported video encoder: " + str(encoder))
+
+
+def wait_for_image_idle(cfg, request, lost, display):
+    required = bool(cfg.get("_images_enabled"))
+    if not required and not cfg.get("invoke"):
+        return
+    reached_invoke = False
+    while True:
+        check_stopping(cfg, lost)
+        try:
+            queue = request(cfg["invoke"] + "/api/v1/queue/default/status", timeout=10).get("queue")
+            reached_invoke = True
+            if not isinstance(queue, dict) or "pending" not in queue or "in_progress" not in queue:
+                raise OSError("Cannot confirm InvokeAI is idle.")
+            if not queue["pending"] and not queue["in_progress"]:
+                # The image worker may leave models resident even after its queue is idle.
+                request(cfg["invoke"] + "/api/v2/models/empty_model_cache", "POST", {}, timeout=30)
+                return
+            display.log("Waiting for InvokeAI's image queue before hardware encoding.")
+        except Exception as error:
+            if not required and not reached_invoke and isinstance(error, urllib.error.URLError) and not isinstance(error, urllib.error.HTTPError):
+                return  # Hardware-only run with a saved, currently offline InvokeAI address.
+            display.log("Hardware encoding waiting for InvokeAI:", error)
+        transfer_wait(cfg, lost, 5)
+
+
 class InvalidServerResponse(RuntimeError):
     """A proxy or interrupted response did not return the expected JSON object."""
 
@@ -222,12 +339,16 @@ class ConsoleProgress:
             filled = int(percent / 100 * 20)
             bar = "#" * filled + "-" * (20 - filled)
             text = f"{labels.get(phase, phase):10} [{bar}] {percent:5.1f}%"
+            if phase == "encode" and data.get("stage", "").startswith("encoding ("):
+                text = data["stage"] + " " + text
             if phase in ("download", "upload"):
                 text += f"  {self.size(done)} / {self.size(total)}"
                 if sample["rate"] > 0:
                     text += f"  {self.size(sample['rate'])}/s  ETA {self.remaining((total-done)/sample['rate'])}"
             elif phase == "encode" and 0 < percent < 100:
                 text += "  ETA " + self.remaining((now - sample["started"]) * (100 - percent) / percent)
+            elif phase == "encode" and data.get("stage") == "waiting for GPU":
+                text = "Waiting for GPU (image generation or another hardware encode)..."
             elif phase == "verify":
                 text = "Finalising: replacing original " + "|/-\\"[int(now * 2) % 4]
             elif phase in ("wait_download", "wait_upload"):
@@ -467,6 +588,102 @@ def download_ffmpeg(url, expected, archive):
         display.close()
 
 
+
+
+class EncoderProcessError(RuntimeError):
+    pass
+
+
+def encode_video(command, cfg, lost, root, duration, status):
+    with (root / "ffmpeg.log").open("wb") as log:
+        process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=log, creationflags=FLAGS)
+        try:
+            try:
+                set_encoding_affinity(process, cfg.get("cpu_cores"))
+            except OSError as error:
+                raise RuntimeError("Could not apply this worker's CPU allocation: " + str(error)) from error
+            while process.poll() is None:
+                check_stopping(cfg, lost)
+                lost.wait(1)
+                try:
+                    with (root / "progress").open("rb") as progress_file:
+                        progress_file.seek(max(0, progress_file.seek(0, 2) - 8192))
+                        content = progress_file.read().decode(errors="replace")
+                    values = re.findall(r"out_time_us=(\d+)", content)
+                    if values and duration > 0:
+                        fraction = min(1, int(values[-1]) / 1000000 / duration)
+                        status["progress"] = round(10 + fraction * 80, 1)
+                        status["phase_progress"] = round(fraction * 100, 1)
+                except OSError:
+                    pass
+            check_stopping(cfg, lost)
+            if process.returncode:
+                raise EncoderProcessError((root / "ffmpeg.log").read_text(errors="replace")[-1500:] or "FFmpeg failed.")
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+
+def check_encoder(ffmpeg, ffprobe, encoder, device, threads, temporary_root):
+    with tempfile.TemporaryDirectory(prefix="encoder-check-", dir=temporary_root) as temporary:
+        output = Path(temporary) / "check.mp4"
+        command = [ffmpeg, "-nostdin", "-y", "-v", "error", "-f", "lavfi", "-i", "color=size=256x256:rate=24",
+            "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-t", "1", "-c:v", encoder,
+            "-threads", str(threads)] + encoder_options(encoder, device=device) + [
+            "-c:a", "aac", "-movflags", "+faststart", str(output)]
+        result = subprocess.run(command, capture_output=True, text=True, errors="replace", timeout=60, creationflags=FLAGS)
+        if result.returncode:
+            raise RuntimeError((result.stderr or result.stdout)[-1500:])
+        streams = probe(ffprobe, output)["streams"]
+        if not any(v.get("codec_name") == "h264" and v.get("pix_fmt") == "yuv420p" for v in streams) or not any(
+                v.get("codec_name") == "aac" for v in streams):
+            raise RuntimeError("Encoder did not produce compatible H.264/AAC output.")
+
+
+def choose_encoder(config, ffmpeg, ffprobe, threads, temporary_root, force):
+    saved = config.get("encoding_encoder")
+    if not config.get("_hardware_requested"):
+        check_encoder(ffmpeg, ffprobe, "libx264", 0, threads, temporary_root)
+        return "libx264", 0
+    if saved in ENCODERS and saved != "libx264" and not force and not config.get("_choose_encoder"):
+        options = [(saved, int(config.get("encoding_device", 0)))]
+        select = False
+    else:
+        options = []
+        # Probe actual encodes; presence in FFmpeg's encoder list alone proves no hardware support.
+        count = max(1, len((config.get("hardware") or {}).get("gpus", [])))
+        options += [("h264_nvenc", index) for index in range(count)]
+        options += [("h264_qsv", 0), ("h264_amf", 0)]
+        select = True
+    usable = []
+    for encoder, device in options:
+        label = ENCODERS[encoder] + (" GPU " + str(device) if encoder == "h264_nvenc" else "")
+        print("Checking", label, "with a local H.264/AAC clip...", flush=True)
+        try:
+            check_encoder(ffmpeg, ffprobe, encoder, device, threads, temporary_root)
+            usable.append((encoder, device))
+            print(label, "passed.")
+        except (RuntimeError, OSError, subprocess.SubprocessError) as error:
+            print(label, "unavailable:", error)
+    if not usable:
+        raise RuntimeError("No hardware encoder passed the H.264/AAC check. Check GPU drivers/FFmpeg, or restart and select CPU workers.")
+    if not select or len(usable) == 1:
+        return usable[0]
+    for index, (encoder, device) in enumerate(usable, 1):
+        print(str(index) + ":", ENCODERS[encoder], "GPU " + str(device) if encoder == "h264_nvenc" else "")
+    while True:
+        try:
+            choice = int(input("Video encoder [1]: ").strip() or "1")
+            if 1 <= choice <= len(usable):
+                return usable[choice - 1]
+        except ValueError:
+            pass
+        print("Choose an encoder from the list.")
+
 def prepare_encoding(config, force=False):
     # Native FFmpeg must share these paths with Python, including the Store distribution.
     directory = NATIVE_DATA / "ffmpeg"
@@ -514,30 +731,19 @@ def prepare_encoding(config, force=False):
     if result.returncode or not result.stdout.strip():
         raise RuntimeError("FFmpeg could not start (exit " + str(result.returncode) + "): " + (result.stderr or result.stdout)[-2000:])
     version = result.stdout.splitlines()[0]
-    profile = (config.get("capabilities") or {}).get("encoding") or {}
-    if force or not profile.get("verified") or config.get("ffmpeg_version") != version:
-        default = max(1, min(8, (os.cpu_count() or 2) - 1))
-        answer = "" if config.get("encoding_threads") else input("CPU threads for encoding [" + str(default) + "]: ").strip()
-        threads = int(config.get("encoding_threads") or answer or default)
-        if not 1 <= threads <= (os.cpu_count() or 1):
-            raise RuntimeError("Choose a CPU thread count between 1 and " + str(os.cpu_count() or 1))
-        print("Checking H.264/AAC encoding with a one-second local clip...")
-        temporary_root = NATIVE_DATA / "tmp"
-        temporary_root.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(prefix="encoder-check-", dir=temporary_root) as temporary:
-            output = Path(temporary) / "check.mp4"
-            result = subprocess.run([ffmpeg, "-nostdin", "-v", "error", "-f", "lavfi", "-i", "color=size=128x128:rate=10",
-                "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-t", "1", "-c:v", "libx264", "-threads", str(threads),
-                "-pix_fmt", "yuv420p", "-c:a", "aac", "-movflags", "+faststart", str(output)], capture_output=True, text=True, errors="replace", timeout=60, creationflags=FLAGS)
-            if result.returncode:
-                raise RuntimeError("FFmpeg encoding check failed (exit " + str(result.returncode) + "). Output folder: " + str(output.parent) + "\n" + (result.stderr or result.stdout)[-3000:])
-            streams = probe(ffprobe, output)["streams"]
-            if not any(s.get("codec_name") == "h264" for s in streams) or not any(s.get("codec_name") == "aac" for s in streams):
-                raise RuntimeError("FFmpeg did not pass the H.264/AAC check.")
-        config["encoding_threads"] = threads
-        print("Encoding profile passed. No GPU is required for this CPU encoder.")
+    threads = max(1, int(config.get("encoding_threads", 1)))
+    temporary_root = NATIVE_DATA / "tmp"
+    temporary_root.mkdir(parents=True, exist_ok=True)
+    encoder, device = choose_encoder(config, ffmpeg, ffprobe, threads, temporary_root, force)
+    if encoder != "libx264" and config.get("_cpu_requested"):
+        check_encoder(ffmpeg, ffprobe, "libx264", 0, threads, temporary_root)
+    if encoder != "libx264":
+        print("Hardware encoding and AI image generation take turns on the GPU. CPU decoding/audio still use the assigned cores.")
+        print("Hardware quality settings approximate the requested quality; they are not identical to x264 CRF.")
     return {"ffmpeg": ffmpeg, "ffprobe": ffprobe, "ffmpeg_version": version,
-        "encoding_threads": config.get("encoding_threads", 1), "encoding_profile": {"verified": True, "profile": "mp4-h264-aac"}}
+        "encoding_encoder": encoder, "encoding_device": device, "encoding_threads": threads,
+        "encoding_profile": {"verified": True, "profile": "mp4-h264-aac", "encoder": encoder,
+            "gpu_policy": "exclusive" if encoder != "libx264" else "cpu"}}
 
 
 def run_encoding(cfg, job, request):
@@ -580,7 +786,7 @@ def run_encoding(cfg, job, request):
     last_success = [time.monotonic()]
     sample = {"phase": "download", "at": time.monotonic(), "bytes": 0, "rate": 0}
     update_lock = threading.Lock()
-    display = ConsoleProgress(lambda: dict(status), label="Worker "+str(cfg.get("slot_id",1)), live=cfg.get("parallel_workers",1)<=1,
+    display = ConsoleProgress(lambda: dict(status), label="Worker "+str(cfg.get("slot_id",1))+" | "+("CPU encoding" if cfg.get("encoding_encoder", "libx264")=="libx264" else "Hardware encoding / "+ENCODERS[cfg["encoding_encoder"]]), live=cfg.get("parallel_workers",1)<=1,
         dashboard=cfg.get("_console"), slot=cfg.get("slot_id",1))
 
     def phase(name, label, progress, total=0):
@@ -628,7 +834,6 @@ def run_encoding(cfg, job, request):
     update()
     thread = threading.Thread(target=heartbeat, daemon=True)
     thread.start()
-    process = None
     try:
         with nullcontext(str(workspace)) as temporary:
             root = Path(temporary)
@@ -647,44 +852,52 @@ def run_encoding(cfg, job, request):
                 duration = float((info.get("format") or {}).get("duration") or job.get("duration") or 0)
                 copy_video = job.get("smart") and video.get("codec_name") == "h264" and video.get("pix_fmt") == "yuv420p"
                 copy_audio = job.get("smart") and all(s.get("codec_name") == "aac" for s in audio)
-                threads = str(cfg.get("encoding_threads", 1))
-                command = [cfg["ffmpeg"], "-nostdin", "-y", "-hide_banner", "-loglevel", "error", "-threads", threads,
-                    "-filter_threads", threads, "-progress", str(root / "progress"), "-nostats", "-i", str(source), "-map", "0:" + str(video["index"]), "-map", "0:a?",
-                    "-map_metadata", "0", "-map_chapters", "0", "-c:v", "copy" if copy_video else "libx264"]
-                if not copy_video:
-                    command += ["-threads", threads, "-preset", job["preset"], "-crf", str(job["crf"]), "-pix_fmt", "yuv420p",
-                        "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2"]
-                command += ["-c:a", "copy" if copy_audio else "aac"]
-                if not copy_audio: command += ["-b:a", job["audio_bitrate"]]
-                command += ["-movflags", "+faststart", "-f", "mp4", str(output)]
-                phase("encode", "encoding", 10)
-                update()
-                with (root / "ffmpeg.log").open("wb") as log:
-                    process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=log, creationflags=FLAGS)
+                selected = cfg.get("encoding_encoder", "libx264")
+                # A hardware quality number cannot promise x264's lossless CRF=0.
+                if not copy_video and int(job["crf"]) == 0 and selected != "libx264" and not cfg.get("encoding_cpu_fallback", False):
+                    raise RuntimeError("Lossless CRF=0 needs a CPU worker; CPU fallback is disabled for this hardware worker.")
+                if copy_video or int(job["crf"]) == 0:
+                    selected = "libx264"
+                encoders = [selected, "libx264"] if selected != "libx264" and cfg.get("encoding_cpu_fallback", False) else [selected]
+                for encoder in encoders:
+                    threads = str(cfg.get("encoding_threads", 1))
+                    command = [cfg["ffmpeg"], "-nostdin", "-y", "-hide_banner", "-loglevel", "error", "-threads", threads,
+                        "-filter_threads", threads, "-progress", str(root / "progress"), "-nostats", "-i", str(source),
+                        "-map", "0:" + str(video["index"]), "-map", "0:a?", "-map_metadata", "0", "-map_chapters", "0",
+                        "-c:v", "copy" if copy_video else encoder]
+                    if not copy_video:
+                        command += ["-threads", threads] + encoder_options(encoder, job["crf"], job["preset"], cfg.get("encoding_device", 0))
+                        command += ["-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2"]
+                    command += ["-c:a", "copy" if copy_audio else "aac"]
+                    if not copy_audio:
+                        command += ["-b:a", job["audio_bitrate"]]
+                    command += ["-movflags", "+faststart", "-f", "mp4", str(output)]
+                    hardware = not copy_video and encoder != "libx264"
+                    kind = "Hardware encoding / " + ENCODERS[encoder] if hardware else ("Video copy / CPU audio" if copy_video else "CPU encoding")
+                    if encoder != selected:
+                        kind += " (hardware fallback)"
+                    display.label = "Worker " + str(cfg.get("slot_id", 1)) + " | " + kind
+                    if cfg.get("_console"):
+                        cfg["_console"].set_kind(cfg.get("slot_id", 1), kind)
+                    coordinator = cfg.get("_gpu_coordinator")
+                    if hardware and coordinator is None:
+                        raise RuntimeError("Hardware encoding requires the shared GPU coordinator. Restart the updated worker.")
+                    phase("encode", "waiting for GPU" if hardware else "encoding (CPU)", 10)
+                    update()
                     try:
-                        try: set_encoding_affinity(process,cfg.get("cpu_cores"))
-                        except OSError as error: raise RuntimeError("Could not apply this worker's CPU allocation: " + str(error)) from error
-                        while process.poll() is None:
-                            if cfg.get("_stop_event") and cfg["_stop_event"].is_set(): raise KeyboardInterrupt()
-                            if lost.wait(1): raise RuntimeError("Conversion canceled or contributor lease lost.")
-                            try:
-                                with (root / "progress").open("rb") as progress_file:
-                                    progress_file.seek(max(0, progress_file.seek(0, 2) - 8192))
-                                    content = progress_file.read().decode(errors="replace")
-                                values = re.findall(r"out_time_us=(\d+)", content)
-                                if values and duration > 0:
-                                    status["progress"] = round(10 + min(80, int(values[-1]) / 1000000 / duration * 80), 1)
-                                    status["phase_progress"] = round(min(100, int(values[-1]) / 1000000 / duration * 100), 1)
-                            except OSError:
-                                pass
-                        if process.returncode:
-                            raise RuntimeError((root / "ffmpeg.log").read_text(errors="replace")[-600:] or "FFmpeg failed.")
-                    finally:
-                        if process.poll() is None:
-                            process.terminate()
-                            try: process.wait(timeout=10)
-                            except subprocess.TimeoutExpired:
-                                process.kill(); process.wait()
+                        with coordinator.reserve(cfg, lost) if hardware else nullcontext():
+                            if hardware:
+                                wait_for_image_idle(cfg, request, lost, display)
+                            phase("encode", "encoding (" + ENCODERS[encoder] + ")", 10)
+                            update()
+                            # Remove stale progress before a CPU fallback restarts from the beginning.
+                            (root / "progress").unlink(missing_ok=True)
+                            encode_video(command, cfg, lost, root, duration, status)
+                        break
+                    except EncoderProcessError as error:
+                        if not hardware or not cfg.get("encoding_cpu_fallback", False):
+                            raise
+                        display.log(ENCODERS[encoder], "failed; retrying this conversion on CPU:", error)
                 check = probe(cfg["ffprobe"], output)
                 if not any(s.get("codec_name") == "h264" for s in check["streams"]):
                     raise RuntimeError("Converted file failed validation.")
@@ -748,11 +961,6 @@ def run_encoding(cfg, job, request):
                 save_transfer(workspace, state)
                 cleanup_transfer(workspace, cfg)
     except BaseException as exc:
-        if process is not None and process.poll() is None:
-            process.terminate()
-            try: process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                process.kill(); process.wait()
         transient = retryable_upload(exc) or isinstance(exc, KeyboardInterrupt)
         state["waiting_for_claim"] = lost.is_set() or not transient
         save_transfer(workspace, state)
@@ -766,3 +974,5 @@ def run_encoding(cfg, job, request):
         stop.set()
         thread.join(timeout=25)
         display.close()
+        if cfg.get("_console") and cfg.get("_slot_kind"):
+            cfg["_console"].set_kind(cfg.get("slot_id", 1), cfg["_slot_kind"])

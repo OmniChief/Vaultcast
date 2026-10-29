@@ -1,5 +1,6 @@
 """Optional Vaultcast image and video-encoding contributor (Windows, Python 3.10+)."""
 import getpass
+from contextlib import nullcontext
 import json
 import logging
 import os
@@ -16,9 +17,9 @@ import urllib.parse
 import urllib.request
 import uuid
 from contributor_setup import prepare, hardware, yes, release_managed_models, installed_models, model_identity, model_report
-from encoding_worker import prepare_encoding, run_encoding, pending_encodings, retryable_upload, InvalidServerResponse
+from encoding_worker import prepare_encoding, run_encoding, pending_encodings, retryable_upload, InvalidServerResponse, GpuCoordinator, wait_for_image_idle, ConsoleProgress
 from image_checks import check_image, BlankGenerationError
-from worker_console import WorkerConsole
+from worker_console import WorkerConsole, slot_kind
 
 APPDATA = os.environ.get("APPDATA", os.path.expanduser("~"))
 CONFIG_DIR = os.path.join(APPDATA, "VaultcastAIWorker")
@@ -94,30 +95,68 @@ def available_cpu_cores():
     return list(range(os.cpu_count() or 1))
 
 
+def choose_worker_types():
+    print("\nChoose worker types for this computer:")
+    print("  1. Image generation (InvokeAI / Stable Diffusion)")
+    print("  2. Hardware video encoding (NVIDIA / Intel / AMD)")
+    print("  3. CPU video encoding (libx264)")
+    print("Select one, or combine them: 1,2 / 1,3 / 2,3 / 1,2,3.")
+    while True:
+        choices = {part.strip() for part in input("Worker types [3]: ").strip().split(",")} - {""}
+        choices = choices or {"3"}
+        if choices <= {"1", "2", "3"}:
+            return {"images":"1" in choices, "hardware":"2" in choices, "cpu":"3" in choices,
+                "encoding":bool(choices & {"2", "3"})}
+        print("Enter 1, 2 or 3, separated by commas when selecting multiple types.")
+
+
 def choose_slots(modes):
     available = available_cpu_cores()
     result = []
     if modes.get("images"):
-        result.append({"id":1,"images":True,"encoding":False,"cpu_cores":[]})
-        print("One image worker will use InvokeAI's GPU queue.")
-    if modes.get("encoding"):
-        count = ask_number("How many conversion workers", 1, min(32-len(result),len(available)), 1)
-        print("CPU cores below are logical processors allocated to FFmpeg; leave some free for gaming if wanted.")
-        used = 0
-        for index in range(count):
-            number = len(result) + 1
-            remaining = len(available) - used
-            maximum = remaining - (count-index-1)
-            amount = ask_number("CPU cores for conversion worker " + str(index+1) + " (" + str(remaining) + " unassigned)",1,maximum,min(2,maximum))
-            cores = available[used:used+amount]; used += amount
-            result.append({"id":number,"images":False,"encoding":True,"cpu_cores":cores})
+        result.append({"id":1, "images":True, "encoding":False, "cpu_cores":[]})
+        print("One image-generation worker will use InvokeAI's GPU queue.")
+    counts = {}
+    kinds = [kind for kind in ("hardware", "cpu") if modes.get(kind)]
+    remaining = len(available)
+    for index, kind in enumerate(kinds):
+        maximum = min(32 - len(result) - sum(counts.values()) - (len(kinds)-index-1), remaining - (len(kinds)-index-1))
+        if maximum < 1:
+            raise RuntimeError("Not enough CPU cores for separate hardware and CPU slots. Choose fewer worker types.")
+        counts[kind] = ask_number("How many " + kind + " video workers", 1, maximum, 1)
+        remaining -= counts[kind]
+    if kinds:
+        print("Video workers need CPU cores for decoding, filters and audio, including hardware workers.")
+    used = 0
+    remaining_slots = sum(counts.values())
+    for kind in kinds:
+        for index in range(counts[kind]):
+            maximum = len(available) - used - (remaining_slots - 1)
+            amount = ask_number("CPU cores for " + kind + " video worker " + str(index+1), 1, maximum,
+                min(1 if kind == "hardware" else 2, maximum))
+            cores = available[used:used+amount]
+            used += amount
+            remaining_slots -= 1
+            result.append({"id":len(result)+1, "images":False, "encoding":True,
+                "encoding_mode":kind, "cpu_cores":cores})
     return result
+
+
+def configure_slot_encoders(config):
+    selected = config.get("encoding_encoder", "libx264")
+    for slot in config["slots"]:
+        if not slot.get("encoding"):
+            continue
+        mode = slot.get("encoding_mode", "cpu")
+        if mode == "hardware" and selected == "libx264":
+            raise RuntimeError("Hardware encoding was selected but no hardware encoder passed. Choose CPU workers to use CPU encoding.")
+        slot["encoding_encoder"] = selected if mode == "hardware" else "libx264"
+        slot["encoding_device"] = int(config.get("encoding_device", 0)) if mode == "hardware" else 0
 
 
 def show_slots(slots):
     for slot in slots:
-        kinds = (['images'] if slot.get('images') else []) + (['encoding'] if slot.get('encoding') else [])
-        print("Worker", slot["id"], ":", " + ".join(kinds), "|", len(slot.get("cpu_cores", [])), "encoding CPU cores")
+        print("Worker", slot["id"], ":", slot_kind(slot), "|", len(slot.get("cpu_cores", [])), "CPU cores")
 
 
 def worker_headers(cfg):
@@ -125,7 +164,8 @@ def worker_headers(cfg):
 
 
 def slot_label(cfg):
-    return "[Worker " + str(cfg.get("slot_id", 1)) + "]"
+    slot = dict(cfg.get("contributions", {}), encoding_encoder=cfg.get("encoding_encoder", "libx264"))
+    return "[Worker " + str(cfg.get("slot_id", 1)) + " | " + slot_kind(slot) + "]"
 
 
 def slot_status(cfg, text):
@@ -154,28 +194,20 @@ def load_config():
     info = hardware()
     modes = dict(config.get("contributions") or {})
     if not reuse:
-        print("\nChoose what this computer will contribute for this run.")
-        capable = any(g.get("vram_mb", 0) >= 6144 for g in info.get("gpus", [])) and (info.get("ram_gb") or 16) >= 12
-        capable = capable or bool((config.get("capabilities", {}).get("images", {}).get("sdxl") or {}).get("verified"))
-        if capable:
-            choice = ask_number("Contribute: 1=AI images, 2=video encoding, 3=both", 1, 3, 3)
-            modes = {"images": choice in (1, 3), "encoding": choice in (2, 3)}
-        else:
-            print("No supported NVIDIA image hardware detected. Video encoding can still use the CPU.")
-            if not yes("Contribute video encoding?"): raise RuntimeError("No contribution selected.")
-            modes = {"images": False, "encoding": True}
+        modes = choose_worker_types()
         config["slots"] = choose_slots(modes)
+        config["_choose_encoder"] = True
     elif not config.get("slots"):
         cores = available_cpu_cores()[:max(1, int(config.get("encoding_threads", 1)))] if modes.get("encoding") else []
         config["slots"] = [{"id": 1, **modes, "cpu_cores": cores}]
     modes = {kind: any(slot.get(kind) for slot in config["slots"]) for kind in ("images", "encoding")}
     if modes["encoding"]:
         config["encoding_threads"] = max(len(slot.get("cpu_cores", [])) for slot in config["slots"] if slot.get("encoding"))
-    show_slots(config["slots"])
     config["hardware"] = info
     if modes.get("images"):
         try:
-            config.update(prepare(dict(config, _autostart=reuse), request, graph_for, force=force))
+            with GpuCoordinator().reserve(config):
+                config.update(prepare(dict(config, _autostart=reuse), request, graph_for, force=force))
         except Exception as exc:
             print("AI image setup failed:", exc)
             if not modes.get("encoding") or not yes("Continue as an encoding-only contributor?"):
@@ -186,15 +218,27 @@ def load_config():
         config.setdefault("model_name", "")
     if modes.get("encoding"):
         print("Encoding uses your own Vaultcast account. Only videos your account can access are assigned to this computer.")
-        settings = prepare_encoding(config, force=force)
+        config["_hardware_requested"] = any(slot.get("encoding_mode") == "hardware" for slot in config["slots"])
+        if config["_hardware_requested"] and (force or config.get("_choose_encoder") or "encoding_cpu_fallback" not in config):
+            config["encoding_cpu_fallback"] = yes("Allow hardware workers to fall back to CPU if hardware encoding fails?", False)
+        config["_cpu_requested"] = any(slot.get("encoding_mode", "cpu") == "cpu" and slot.get("encoding") for slot in config["slots"]) or bool(config.get("encoding_cpu_fallback"))
+        with GpuCoordinator().reserve(config) if config["_hardware_requested"] else nullcontext():
+            if config["_hardware_requested"]:
+                wait_for_image_idle(dict(config, _images_enabled=bool(modes.get("images"))), request, threading.Event(), ConsoleProgress(lambda: {}))
+            settings = prepare_encoding(config, force=force)
         caps["encoding"] = settings.pop("encoding_profile")
         config.update(settings)
+        configure_slot_encoders(config)
     else:
         caps.setdefault("encoding", {"verified": False})
     for slot in config["slots"]:
         if not modes.get("images"): slot["images"] = False
     config["slots"] = [slot for slot in config["slots"] if slot.get("images") or slot.get("encoding")]
     config["contributions"] = modes
+    show_slots(config["slots"])
+    config.pop("_choose_encoder", None)
+    config.pop("_hardware_requested", None)
+    config.pop("_cpu_requested", None)
     save_config(config)
     if config.get("worker_token"):
         return config
@@ -473,25 +517,27 @@ def run_slot(cfg, stop):
             prefer_encoding = True
             if image_ready and _image_lock.acquire(blocking=False):
                 try:
-                    result = request(cfg["server"] + "/api/ai/worker/claim", "POST", {"models":model_report(cfg.get("models",[]))}, headers, timeout=15)
-                    job = result.get("job")
-                    if job:
-                        try:
-                            run_job(cfg, job)
-                            slot_status(cfg, "Waiting for job")
-                        except Exception as error:
-                            try: remaining = installed_models(request,cfg["invoke"])
-                            except Exception: remaining = None
-                            if isinstance(error,ModelUnavailableError) or (remaining is not None and not any(model_identity(model)==job.get("model_id") for model in remaining)):
-                                request(cfg["server"] + "/api/ai/worker/jobs/" + job["id"] + "/unavailable", "POST", {"models":model_report(remaining or [])}, headers)
-                                print(slot_label(cfg),"Requested model was removed; job returned to the queue for a matching contributor.")
-                                continue
-                            logging.exception("Image generation failed in slot %s", cfg["slot_id"])
-                            print(slot_label(cfg), "Image failed:", error)
-                            slot_status(cfg, "Image failed: " + str(error))
-                            try: request(cfg["server"] + "/api/ai/worker/jobs/" + job["id"] + "/fail", "POST", {"error": str(error)}, headers)
-                            except Exception: pass
-                        continue
+                    slot_status(cfg, "Waiting for GPU / image job")
+                    with cfg["_gpu_coordinator"].reserve(cfg):
+                        result = request(cfg["server"] + "/api/ai/worker/claim", "POST", {"models":model_report(cfg.get("models",[]))}, headers, timeout=15)
+                        job = result.get("job")
+                        if job:
+                            try:
+                                run_job(cfg, job)
+                                slot_status(cfg, "Waiting for job")
+                            except Exception as error:
+                                try: remaining = installed_models(request,cfg["invoke"])
+                                except Exception: remaining = None
+                                if isinstance(error,ModelUnavailableError) or (remaining is not None and not any(model_identity(model)==job.get("model_id") for model in remaining)):
+                                    request(cfg["server"] + "/api/ai/worker/jobs/" + job["id"] + "/unavailable", "POST", {"models":model_report(remaining or [])}, headers)
+                                    print(slot_label(cfg),"Requested model was removed; job returned to the queue for a matching contributor.")
+                                    continue
+                                logging.exception("Image generation failed in slot %s", cfg["slot_id"])
+                                print(slot_label(cfg), "Image failed:", error)
+                                slot_status(cfg, "Image failed: " + str(error))
+                                try: request(cfg["server"] + "/api/ai/worker/jobs/" + job["id"] + "/fail", "POST", {"error": str(error)}, headers)
+                                except Exception: pass
+                            continue
                 finally:
                     _image_lock.release()
             stop.wait(3)
@@ -547,6 +593,8 @@ def main():
         if slot.get("encoding") and (not cores or not set(cores).issubset(available) or used.intersection(cores)):
             raise RuntimeError("Saved CPU allocation is unavailable or overlaps. Restart and choose not to reuse previous configuration.")
         used.update(cores)
+    cfg["_gpu_coordinator"] = GpuCoordinator()
+    cfg["_images_enabled"] = bool(cfg["contributions"].get("images"))
     response = wait_for_server(cfg)
     if response.get("slot_protocol") != 1:
         raise RuntimeError("Update the Vaultcast webapp before starting this multi-worker version.")
@@ -557,7 +605,8 @@ def main():
     def start_slot(slot):
         local = dict(cfg, slot_id=slot["id"], contributions={"images":slot.get("images",False),"encoding":slot.get("encoding",False)},
             encoding_threads=max(1,len(slot.get("cpu_cores",[]))), cpu_cores=slot.get("cpu_cores",[]), _stop_event=stop,
-            parallel_workers=len(cfg["slots"]))
+            parallel_workers=len(cfg["slots"]), encoding_encoder=slot.get("encoding_encoder", "libx264"),
+            encoding_device=slot.get("encoding_device", 0), _slot_kind=slot_kind(slot))
         try: run_slot(local,stop)
         except Exception as error:
             logging.exception("Worker slot stopped")
