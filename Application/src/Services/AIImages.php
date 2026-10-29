@@ -78,7 +78,7 @@ final class AIImages
         return ['images'=>['sdxl'=>['verified'=>$verified, 'max_pixels'=>$verified ? $pixels : 0,
             'checked_at'=>max(0, min(time(), (int)($profile['checked_at'] ?? 0))),
             'seconds'=>max(0, min(1800, (float)($profile['seconds'] ?? 0))),
-            'model_hash'=>mb_substr((string)($profile['model_hash'] ?? ''), 0, 128)]], 'video'=>['verified'=>false],
+            'model_hash'=>mb_substr((string)($profile['model_hash'] ?? ''), 0, 128)]], 'video'=>['verified'=>!empty($caps['video']['verified'])],
             'encoding'=>['verified'=>!empty($encoding['verified']), 'profile'=>'mp4-h264-aac']];
     }
     private static function hardwareReport(array $body): array {
@@ -343,7 +343,7 @@ final class AIImages
         $modelName = mb_substr(trim((string)($body['model_name'] ?? '')), 0, 100);
         $modelBase = trim((string)($body['model_base'] ?? ''));
         $encoding=!empty(self::capabilityReport($body)['encoding']['verified']);
-        if (!$encoding && ($modelName === '' || !in_array($modelBase, ['sd-1', 'sd-2', 'sdxl'], true))) throw new DomainException('Choose image generation or encoding for this contributor.');
+        if (!$encoding && empty($body['capabilities']['video']['verified']) && ($modelName === '' || !in_array($modelBase, ['sd-1', 'sd-2', 'sdxl'], true))) throw new DomainException('Choose image generation or encoding for this contributor.');
         $worker = self::mutate(self::PAIRS, static function (&$pairs) use ($codeHash, $tokenHash, $id, $name, $modelName, $modelBase, $encoding) {
             $pair = $pairs[$codeHash] ?? null;
             if (!is_array($pair) || (int)$pair['expires_at'] < time()) throw new DomainException('Pairing code expired or was already used. Generate a new one in Vaultcast.');
@@ -356,7 +356,7 @@ final class AIImages
         if (isset($body['capabilities'])) {
             $worker['capabilities'] = self::capabilityReport($body);
             $worker['models']=self::modelReport(is_array($body['models'] ?? null) ? $body['models'] : []); $worker['models_seen']=time();
-            $worker['ready'] = self::imageCapacity($worker) > 0 || $encoding;
+            $worker['ready'] = self::imageCapacity($worker) > 0 || $encoding || !empty($worker['capabilities']['video']['verified']);
         }
         $worker['invoke_version'] = mb_substr((string)($body['invoke_version'] ?? ''), 0, 40);
         if (isset($body['hardware'])) $worker['hardware'] = self::hardwareReport($body);
@@ -411,12 +411,12 @@ final class AIImages
                     if ($number<1 || $number>32) continue;
                     $encoder=(string)($slot['encoding_encoder'] ?? 'libx264');
                     if (!in_array($encoder,['libx264','h264_nvenc','h264_qsv','h264_amf'],true)) $encoder='libx264';
-                    $slots[$number]=['id'=>$number,'images'=>!empty($slot['images']),'encoding'=>!empty($slot['encoding']),
+                    $slots[$number]=['id'=>$number,'images'=>!empty($slot['images']),'video'=>!empty($slot['video']),'encoding'=>!empty($slot['encoding']),
                         'encoding_encoder'=>$encoder,'encoding_mode'=>$encoder==='libx264' ? 'cpu' : 'hardware'];
                 }
                 $workers[$worker['id']]['slots']=array_values($slots);
             }
-            if (isset($workers[$worker['id']]['capabilities']) && self::imageCapacity($workers[$worker['id']]) === 0 && empty($workers[$worker['id']]['capabilities']['encoding']['verified'])) $workers[$worker['id']]['ready'] = false;
+            if (isset($workers[$worker['id']]['capabilities']) && self::imageCapacity($workers[$worker['id']]) === 0 && empty($workers[$worker['id']]['capabilities']['encoding']['verified']) && empty($workers[$worker['id']]['capabilities']['video']['verified'])) $workers[$worker['id']]['ready'] = false;
         } }, true);
     }
     public static function worker(string $action, string $id = ''): void {
@@ -424,6 +424,10 @@ final class AIImages
         if ($action === 'register' && $method === 'POST') json_out(self::registerWorker(body_json()));
         $worker = self::authenticateWorker();
         $worker['slot_id']=max(0,min(32,(int)($_SERVER['HTTP_X_VAULTCAST_SLOT'] ?? 0)));
+        if (strpos($action,'video-')===0 && $method==='POST') {
+            if (!self::slotAllows($worker,'video')) json_error('This slot is not enabled for AI video generation.',403);
+            json_out(AIVideos::worker($worker,substr($action,6),$id));
+        }
         if ($action==='unregister' && $method==='POST') {
             self::mutate(self::WORKERS,static function (&$workers) use($worker) { unset($workers[$worker['id']]); });
             json_out(['ok'=>true]);

@@ -129,6 +129,31 @@
     owner.onchange = sort.onchange = function(){ load(false); };
     load(false);
   }
+  function renderVideos(){
+    clearTimeout(timer); currentTab='video'; host.replaceChildren();
+    var prompt=h('textarea',{required:true,maxLength:2000,placeholder:'Describe the scene and movement…','aria-label':'Video description'});
+    var negative=h('textarea',{maxLength:2000,placeholder:'Things to avoid (optional)','aria-label':'Negative prompt'});
+    var size=h('select',{'aria-label':'Video size'},[h('option',{value:'512x320',text:'512 × 320 · faster'}),h('option',{value:'768x448',text:'768 × 448 · more detail'})]);
+    var length=h('select',{'aria-label':'Video length'},[h('option',{value:'49',text:'About 2 seconds'}),h('option',{value:'81',text:'About 3.3 seconds'}),h('option',{value:'121',text:'About 5 seconds'})]);
+    var list=h('div',{className:'ai-job-list'}),submit=h('button',{type:'submit',className:'btn primary',text:'Queue video'});
+    var form=h('form',{className:'hub-panel vc-panel',onSubmit:function(event){event.preventDefault();submit.disabled=true;call('/ai/video',{method:'POST',body:{prompt:prompt.value,negative_prompt:negative.value,size:size.value,frames:Number(length.value)}}).then(load).catch(showError).finally(function(){submit.disabled=false;});}},[h('div',{className:'hub-panel-body'},[h('h1',{text:'AI video generation'}),h('p',{text:'Describe a short clip. A connected AI video worker generates it using Wan 2.2. Generation may take several minutes. Up to three videos can wait at once; this initial video feature does not charge contribution points.'}),prompt,negative,size,length,submit,button('Back to images',function(){currentTab='images';render(host,'images');},'ghost')])]);
+    host.append(form,list);
+    function load(){
+      if(!host||!host.isConnected||currentTab!=='video')return;
+      return call('/ai/video').then(function(data){
+        if(!host||currentTab!=='video')return;
+        list.replaceChildren();
+        (data.jobs||[]).forEach(function(job){
+          var children=[h('h3',{text:job.prompt}),h('p',{text:statusLabel(job)+(job.status==='running'?' · '+job.progress+'%':'')})];
+          if(job.error)children.push(h('p',{className:'bad',text:job.error}));
+          if(job.status==='completed')children.push(h('video',{controls:true,preload:'metadata',src:A.apiUrl('/ai/video/'+job.id+'/file'),style:'width:100%;max-width:768px'}));
+          children.push(button(job.status==='queued'||job.status==='running'?'Cancel':'Delete',function(){call('/ai/video/'+job.id+'/'+(job.status==='queued'||job.status==='running'?'cancel':'delete'),{method:'POST',body:{}}).then(load).catch(showError);},'ghost'));
+          list.appendChild(h('article',{className:'ai-job'},children));
+        });
+      }).catch(showError).finally(function(){clearTimeout(timer);if(host&&currentTab==='video')timer=setTimeout(load,10000);});
+    }
+    load();
+  }
   function render(target, tab){
     host = target; currentTab = tab || 'images'; imageDimensions = null; modelPicker = null; clearTimeout(timer); host.replaceChildren(); host.classList.add('vc-ai');
     if(tab==='library'){renderLibrary();return;}
@@ -204,10 +229,11 @@
     modelSelect.onchange=function(){var selected=modelPicker.update(modelPicker.models);if(selected&&!imageDimensions.touched)width.value=height.value=selected.max_image_pixels<1048576?'512':'1024';};
     var worker = h('details', { className:'hub-panel vc-panel ai-worker-panel' }, [
       h('summary', { className:'hub-panel-head ai-worker-summary' }, [h('h2', { text:'Contribute a computer' }), h('span', { className:'muted', text:'Optional' })]),
-      h('div', { className:'hub-panel-body' }, [h('p', { className:'muted', text:'Run Optional/AIWorker/start-worker.cmd on the Windows PC you want to contribute. Choose AI images, video encoding, or both. Encoding can install portable FFmpeg and does not need InvokeAI or a GPU. AI setup checks compatible hardware and can install an engine and model. Pair using your own account to earn contribution points. Encoding requires Library access and only receives videos your account can access.' }), button('Pair a computer', function(){ call('/ai/pair', { method:'POST', body:{} }).then(function(j){ var code = h('code', { className:'ai-pair-code', text:j.pair_code }); var box = h('div', { className:'ai-pair-result' }, [h('p', { text:'Once contributor setup says Contributor ready, enter this one-time code within 10 minutes.' }), code, h('p', { className:'muted', text:'Contributor software runs on that PC. Credentials and capability reports are saved in its Windows AppData folder.' })]); var old = host.querySelector('.ai-pair-result'); if (old) old.replaceWith(box); else host.querySelector('.ai-worker-panel .hub-panel-body').appendChild(box); }).catch(showError); }, 'ghost')])
+      h('div', { className:'hub-panel-body' }, [h('p', { className:'muted', text:'Run Optional/AIWorker/start-worker.cmd on the Windows PC you want to contribute. Use the manager to set up AI image/video generation, CPU conversion or hardware conversion workers. Encoding can install portable FFmpeg and does not need InvokeAI or a GPU. AI setup checks compatible hardware and can install an engine and model. Pair using your own account to earn contribution points. Encoding requires Library access and only receives videos your account can access.' }), button('Pair a computer', function(){ call('/ai/pair', { method:'POST', body:{} }).then(function(j){ var code = h('code', { className:'ai-pair-code', text:j.pair_code }); var box = h('div', { className:'ai-pair-result' }, [h('p', { text:'Enter this one-time code in the worker manager within 10 minutes, or sign in there using your Vaultcast account.' }), code, h('p', { className:'muted', text:'Contributor software runs on that PC. Credentials and capability reports are saved in its Windows AppData folder.' })]); var old = host.querySelector('.ai-pair-result'); if (old) old.replaceWith(box); else host.querySelector('.ai-worker-panel .hub-panel-body').appendChild(box); }).catch(showError); }, 'ghost')])
     ]);
     var summaryHost = h('div', { className:'ai-summary-host' }), jobsHost = h('div', { className:'ai-jobs-host' });
     host.append(h('header', { className:'vc-hero ai-hero' }, [h('div', { className:'vc-hero-copy' }, [h('span', { className:'eyebrow', text:'AI Studio' }), h('h1', { text:'Images' }), h('p', { className:'muted', text:'Create images with the Vaultcast community’s available computers.' })])]), summaryHost, form, jobsHost, worker);
+    host.prepend(button('AI video generation',renderVideos,'ghost'));
     refresh();
     document.addEventListener('visibilitychange', onVisibility);
   }
