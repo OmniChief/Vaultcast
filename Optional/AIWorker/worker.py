@@ -31,7 +31,7 @@ class ModelUnavailableError(RuntimeError):
     pass
 
 
-def request(url, method="GET", data=None, headers=None, timeout=30):
+def request(url, method="GET", data=None, headers=None, timeout=30, expect_object=True):
     payload = json.dumps(data).encode() if data is not None else None
     hdr = {"Accept": "application/json"}
     if payload is not None:
@@ -42,14 +42,14 @@ def request(url, method="GET", data=None, headers=None, timeout=30):
     try:
         with urllib.request.urlopen(req, timeout=timeout) as res:
             raw = res.read()
-            if not raw and res.status == 204:
+            if not raw and (res.status == 204 or not expect_object):
                 return {}
             try:
                 result = json.loads(raw.decode())
             except (ValueError, UnicodeError) as error:
                 raise InvalidServerResponse("Expected JSON from " + method + " " + urllib.parse.urlsplit(url).path +
                     "; received an empty, truncated or non-JSON response (possibly a proxy/login page).") from error
-            if not isinstance(result, dict):
+            if expect_object and not isinstance(result, dict):
                 raise InvalidServerResponse("Expected a JSON object from " + urllib.parse.urlsplit(url).path)
             return result
     except urllib.error.HTTPError as exc:

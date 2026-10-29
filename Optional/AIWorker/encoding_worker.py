@@ -119,25 +119,21 @@ def encoder_options(encoder, quality=18, preset="medium", device=0):
 
 
 def wait_for_image_idle(cfg, request, lost, display):
-    required = bool(cfg.get("_images_enabled"))
-    if not required and not cfg.get("invoke"):
+    # A saved InvokeAI URL is not permission to use images in this run.
+    if not cfg.get("_images_enabled"):
         return
-    reached_invoke = False
     while True:
         check_stopping(cfg, lost)
         try:
             queue = request(cfg["invoke"] + "/api/v1/queue/default/status", timeout=10).get("queue")
-            reached_invoke = True
             if not isinstance(queue, dict) or "pending" not in queue or "in_progress" not in queue:
                 raise OSError("Cannot confirm InvokeAI is idle.")
             if not queue["pending"] and not queue["in_progress"]:
                 # The image worker may leave models resident even after its queue is idle.
-                request(cfg["invoke"] + "/api/v2/models/empty_model_cache", "POST", {}, timeout=30)
+                request(cfg["invoke"] + "/api/v2/models/empty_model_cache", "POST", {}, timeout=30, expect_object=False)
                 return
             display.log("Waiting for InvokeAI's image queue before hardware encoding.")
         except Exception as error:
-            if not required and not reached_invoke and isinstance(error, urllib.error.URLError) and not isinstance(error, urllib.error.HTTPError):
-                return  # Hardware-only run with a saved, currently offline InvokeAI address.
             display.log("Hardware encoding waiting for InvokeAI:", error)
         transfer_wait(cfg, lost, 5)
 

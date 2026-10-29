@@ -29,7 +29,7 @@ def release_managed_models(request):
     if _managed_process is None or _managed_process.poll() is not None:
         return
     try:
-        request(ENGINE_URL + "/api/v2/models/empty_model_cache", "POST", {}, timeout=30)
+        request(ENGINE_URL + "/api/v2/models/empty_model_cache", "POST", {}, timeout=30, expect_object=False)
         print("Released unused model cache from the dedicated contributor engine.")
     except Exception as error:
         print("Could not release the dedicated engine cache:", error)
@@ -283,7 +283,7 @@ def generation_check(request, url, model, graph_builder):
             if isinstance(exc, KeyboardInterrupt): raise
             print("Image check failed:", exc)
             if size == 1024 and yes("Try the lower-memory 512x512 profile?"):
-                try: request(url + "/api/v2/models/empty_model_cache", "POST", {})
+                try: request(url + "/api/v2/models/empty_model_cache", "POST", {}, expect_object=False)
                 except Exception: pass
                 continue
             raise RuntimeError("This computer has not passed an image profile; it will not accept jobs.") from exc
