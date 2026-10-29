@@ -540,7 +540,7 @@ def run_slot(cfg, stop):
                             continue
                 finally:
                     _image_lock.release()
-            stop.wait(3)
+            stop.wait(10 if encoding and not image_ready else 3)
         except KeyboardInterrupt:
             break
         except Exception as error:

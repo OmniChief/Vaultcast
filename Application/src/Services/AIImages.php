@@ -12,19 +12,30 @@ final class AIImages
     private static function q(string $sql, array $p = []): PDOStatement { return Arcade::query($sql, $p); }
 
     /** Serialize read/modify/write operations with a row lock on the existing documents table. */
-    private static function mutate(string $name, callable $fn)
+    private static function mutate(string $name, callable $fn, bool $retrySafe = false)
     {
-        return \Vaultcast\Database::transaction(static function (PDO $pdo) use ($name, $fn) {
-            $insert = $pdo->prepare('INSERT IGNORE INTO vaultcast_documents(name,payload) VALUES (?,?)');
-            $insert->execute([$name, '{}']);
-            $read = $pdo->prepare('SELECT payload FROM vaultcast_documents WHERE name=? FOR UPDATE');
-            $read->execute([$name]);
-            $value = json_decode((string)$read->fetchColumn(), true);
-            if (!is_array($value)) $value = [];
-            $result = $fn($value);
-            \Vaultcast\Repository::putDocument($name, $value);
-            return $result;
-        });
+        $nested=\Vaultcast\Database::connection()->inTransaction();
+        for ($attempt=0; ; $attempt++) {
+            try {
+                return \Vaultcast\Database::transaction(static function (PDO $pdo) use ($name, $fn) {
+                    // Acquire an exclusive lock directly, avoiding shared duplicate-key lock upgrades.
+                    $insert=$pdo->prepare('INSERT INTO vaultcast_documents(name,payload) VALUES (?,?) ON DUPLICATE KEY UPDATE name=VALUES(name)');
+                    $insert->execute([$name,'{}']);
+                    $read=$pdo->prepare('SELECT payload FROM vaultcast_documents WHERE name=? FOR UPDATE');
+                    $read->execute([$name]);
+                    $value=json_decode((string)$read->fetchColumn(),true);
+                    if (!is_array($value)) $value=[];
+                    $result=$fn($value);
+                    \Vaultcast\Repository::putDocument($name,$value);
+                    return $result;
+                });
+            } catch (PDOException $error) {
+                // Retry only explicitly database-only callbacks, never image/file publication.
+                if (!$retrySafe || $nested || $attempt>=2 || !in_array((int)($error->errorInfo[1] ?? 0),[1213,1205],true)) throw $error;
+                Store::invalidate();
+                usleep(random_int(25000,75000)*($attempt+1));
+            }
+        }
     }
     private static function read(string $name): array {
         $value = \Vaultcast\Repository::document($name, []);
@@ -426,7 +437,7 @@ final class AIImages
                 $workers[$worker['id']]['slots']=array_values($slots);
             }
             if (isset($workers[$worker['id']]['capabilities']) && self::imageCapacity($workers[$worker['id']]) === 0 && empty($workers[$worker['id']]['capabilities']['encoding']['verified'])) $workers[$worker['id']]['ready'] = false;
-        } });
+        } }, true);
     }
     public static function worker(string $action, string $id = ''): void {
         $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
@@ -438,7 +449,7 @@ final class AIImages
             json_out(['ok'=>true]);
         }
         if ($action === 'heartbeat' && $method === 'POST') { self::touchWorker($worker, body_json()); json_out(['ok' => true, 'worker_id' => $worker['id'], 'slot_protocol'=>1, 'image_model_protocol'=>1, 'transfer_protocol'=>1, 'transfer_scope'=>'machine', 'transfer_limits'=>Convert::transferLimits()]); }
-        if ($action!=='claim' && ($action!=='encoding-chunk' || (int)($worker['last_seen'] ?? 0)<time()-15)) self::touchWorker($worker);
+        if ($action!=='claim' && $action!=='encoding-chunk' && (int)($worker['last_seen'] ?? 0)<time()-15) self::touchWorker($worker);
         if ($action==='encoding-claim' || strpos($action,'encoding-')===0) {
             $owner=Auth::findById((string)$worker['user_id']);
             if (!$owner || !AreaAccess::allowed($owner,'library') || empty($worker['capabilities']['encoding']['verified'])) json_error('Encoding contribution requires Library access and a checked encoding profile.',403);

@@ -160,6 +160,8 @@ def retry_request(request, url, data, headers, cfg, lost, display=None, timeout=
 def upload_file(output, size, sent, chunk_size, uploader, get_status, transferred, cfg, lost, display):
     """Resolve ambiguous writes against the server before resending any bytes."""
     failures = 0
+    chunk_limit = chunk_size
+    acknowledged_chunks = 0
     with output.open("rb") as file:
         while sent < size:
             check_stopping(cfg, lost)
@@ -172,12 +174,18 @@ def upload_file(output, size, sent, chunk_size, uploader, get_status, transferre
                 uploader.send(chunk, sent, lambda done: check_stopping(cfg, lost))
                 sent += len(chunk)
                 failures = 0
+                acknowledged_chunks += 1
+                if acknowledged_chunks >= 16 and chunk_size < chunk_limit:
+                    chunk_size = min(chunk_limit, chunk_size * 2)
+                    acknowledged_chunks = 0
+                    display.log("Upload connection recovered; increasing chunks to", chunk_size // 1024, "KiB")
             except Exception as error:
                 too_large = isinstance(error, urllib.error.HTTPError) and error.code == 413
                 conflict = isinstance(error, urllib.error.HTTPError) and error.code == 409
                 if not (too_large or conflict or retryable_upload(error)):
                     raise
                 uploader.close()
+                acknowledged_chunks = 0
                 remote = get_status()
                 if remote.get("uploaded"):
                     return remote
@@ -192,6 +200,7 @@ def upload_file(output, size, sent, chunk_size, uploader, get_status, transferre
                     if chunk_size <= 262144:
                         raise
                     chunk_size = max(262144, chunk_size // 2)
+                    chunk_limit = chunk_size  # A confirmed HTTP 413 is a hard server limit.
                     display.log("Server upload limit: reducing chunks to", chunk_size // 1024, "KiB")
                 elif conflict and not advanced:
                     raise
@@ -202,7 +211,8 @@ def upload_file(output, size, sent, chunk_size, uploader, get_status, transferre
                 if failures >= 5:
                     raise
                 display.log("Upload interrupted:", error, "Server confirmed", sent, "of", size, "bytes.")
-                transfer_wait(cfg, lost, min(30, 2 ** failures) + random.uniform(0, 2))
+                if not advanced:
+                    transfer_wait(cfg, lost, min(30, 2 ** failures) + random.uniform(0, 2))
             transferred(sent, size, 90, 9)
     return None
 
@@ -917,7 +927,7 @@ def run_encoding(cfg, job, request):
             display.log("Server connection unavailable; continuing the local encode. Completed output will be kept for upload.")
 
     def heartbeat():
-        while not stop.wait(5):
+        while not stop.wait(15):
             update()
 
     print("[Worker", str(cfg.get("slot_id",1))+"] Converting:", job["title"], flush=True)

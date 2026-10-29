@@ -25,6 +25,8 @@ server {
     }
     location = /api { return 302 /api/status; }
     location ^~ /api/ {
+        # Worker chunks are bounded to 4 MiB; avoid a temporary request-body file per chunk.
+        client_body_buffer_size 4m;
         include fastcgi_params;
         fastcgi_param SCRIPT_FILENAME $document_root/index.php;
         fastcgi_param SCRIPT_NAME /index.php;
