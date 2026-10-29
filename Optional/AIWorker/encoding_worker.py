@@ -5,6 +5,7 @@ import http.client
 import io
 import json
 import os
+import random
 from pathlib import Path
 import re
 import shutil
@@ -22,6 +23,74 @@ from contributor_setup import DATA, yes
 FLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 BUILD = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
 NATIVE_DATA = Path(os.environ.get("USERPROFILE", os.path.expanduser("~"))) / ".vaultcast"
+
+
+class InvalidServerResponse(RuntimeError):
+    """A proxy or interrupted response did not return the expected JSON object."""
+
+
+def retry_request(request, url, data, headers, cfg, lost, display=None, timeout=30):
+    for attempt in range(5):
+        check_stopping(cfg, lost)
+        try:
+            return request(url, "POST", data, headers, timeout=timeout)
+        except Exception as error:
+            if not retryable_upload(error) or attempt == 4:
+                raise
+            delay = min(30, 2 ** (attempt + 1)) + random.uniform(0, 2)
+            if display:
+                display.log("Server temporarily unavailable; retrying in", round(delay), "seconds:", error)
+            transfer_wait(cfg, lost, delay)
+
+
+def upload_file(output, size, sent, chunk_size, uploader, get_status, transferred, cfg, lost, display):
+    """Resolve ambiguous writes against the server before resending any bytes."""
+    failures = 0
+    with output.open("rb") as file:
+        while sent < size:
+            check_stopping(cfg, lost)
+            file.seek(sent)
+            chunk = file.read(chunk_size)
+            if not chunk:
+                raise RuntimeError("Retained output ended before its expected size.")
+            try:
+                # Display acknowledged bytes, not socket writes that may still be rejected.
+                uploader.send(chunk, sent, lambda done: check_stopping(cfg, lost))
+                sent += len(chunk)
+                failures = 0
+            except Exception as error:
+                too_large = isinstance(error, urllib.error.HTTPError) and error.code == 413
+                conflict = isinstance(error, urllib.error.HTTPError) and error.code == 409
+                if not (too_large or conflict or retryable_upload(error)):
+                    raise
+                uploader.close()
+                remote = get_status()
+                if remote.get("uploaded"):
+                    return remote
+                received = remote.get("received")
+                if type(received) is not int or not sent <= received <= sent + len(chunk):
+                    raise RuntimeError("Server returned an unexpected upload offset; local files retained.") from error
+                advanced = received > sent
+                sent = received
+                failures = 0 if advanced else failures + 1
+                transferred(sent, size, 90, 9)
+                if too_large:
+                    if chunk_size <= 262144:
+                        raise
+                    chunk_size = max(262144, chunk_size // 2)
+                    display.log("Server upload limit: reducing chunks to", chunk_size // 1024, "KiB")
+                elif conflict and not advanced:
+                    raise
+                elif not advanced and chunk_size > 262144 and isinstance(error, (OSError, http.client.HTTPException)):
+                    # Some proxies close oversized requests without returning a readable 413.
+                    chunk_size = max(262144, min(1048576, chunk_size // 2))
+                    display.log("Upload connection interrupted; reducing chunks to", chunk_size // 1024, "KiB")
+                if failures >= 5:
+                    raise
+                display.log("Upload interrupted:", error, "Server confirmed", sent, "of", size, "bytes.")
+                transfer_wait(cfg, lost, min(30, 2 ** failures) + random.uniform(0, 2))
+            transferred(sent, size, 90, 9)
+    return None
 
 
 def check_stopping(cfg, lost):
@@ -224,6 +293,8 @@ class ChunkUploader:
             self.connection = constructor(self.target.hostname, self.target.port, timeout=30)
         connection = self.connection
         try:
+            if connection.sock is not None:
+                connection.sock.settimeout(30)
             path = self.target.path + ("?" + self.target.query if self.target.query else "")
             connection.putrequest("POST", path)
             for key, value in {**self.headers, "Content-Type": "application/octet-stream", "Accept": "application/json",
@@ -239,15 +310,23 @@ class ChunkUploader:
             except OSError as exc:
                 # A proxy can reject an oversized body before it has all been sent.
                 send_error = exc
+            # Receiving/saving a chunk may take longer than writing it to the socket.
+            if connection.sock is not None:
+                connection.sock.settimeout(120)
             response = connection.getresponse()
             content = response.read()
             if response.status >= 400:
                 raise urllib.error.HTTPError(self.url, response.status, response.reason, response.headers, io.BytesIO(content))
             if send_error:
                 raise send_error
-            result = json.loads(content)
+            try:
+                result = json.loads(content)
+            except (ValueError, UnicodeError) as error:
+                raise InvalidServerResponse("Upload response was empty, truncated or non-JSON.") from error
+            if not isinstance(result, dict):
+                raise InvalidServerResponse("Upload response was not a JSON object.")
             if result.get("received") != offset + len(chunk):
-                raise RuntimeError("Server did not acknowledge the complete chunk.")
+                raise InvalidServerResponse("Server did not acknowledge the complete chunk.")
             return result
         except BaseException:
             self.close()
@@ -297,7 +376,7 @@ def pending_encodings(cfg):
 def retryable_upload(error):
     if isinstance(error, urllib.error.HTTPError):
         return error.code >= 500 or error.code in (408, 429)
-    return isinstance(error, (urllib.error.URLError, OSError, http.client.HTTPException))
+    return isinstance(error, (urllib.error.URLError, OSError, http.client.HTTPException, InvalidServerResponse))
 
 
 def set_encoding_affinity(process, cores):
@@ -479,7 +558,7 @@ def run_encoding(cfg, job, request):
         cleanup_transfer(workspace, cfg)
         return
     try:
-        remote = request(base + "/status", "POST", {}, headers, timeout=20)
+        remote = retry_request(request, base + "/status", {}, headers, cfg, threading.Event(), timeout=30)
     except urllib.error.HTTPError as error:
         if error.code < 500 and error.code not in (408, 429):
             state["waiting_for_claim"] = True
@@ -616,48 +695,22 @@ def run_encoding(cfg, job, request):
             size = output.stat().st_size
             if lost.is_set(): raise RuntimeError("Conversion canceled or lease lost.")
             with transfer_slot(cfg, base, "upload", request, headers, status, phase, update, display, lost, size):
-                remote = request(base + "/status", "POST", {}, headers, timeout=20)
-                sent = int(remote.get("received", 0))
-                if sent < 0 or sent > size: raise RuntimeError("Server upload offset exceeds the retained output.")
+                def get_status():
+                    return retry_request(request, base + "/status", {}, headers, cfg, lost, display, timeout=30)
+
+                remote = get_status()
+                sent = size if remote.get("uploaded") else remote.get("received", 0)
+                if type(sent) is not int or not 0 <= sent <= size:
+                    raise RuntimeError("Invalid server upload offset.")
                 transferred(sent, size, 90, 9)
                 chunk_size = max(262144, min(4194304, int(job.get("upload_chunk_bytes", 1048576))))
                 uploader = ChunkUploader(base + "/chunk", headers)
                 try:
-                    with output.open("rb") as file:
-                        while sent < size:
-                            if lost.is_set(): raise RuntimeError("Conversion canceled or lease lost.")
-                            file.seek(sent)
-                            chunk = file.read(chunk_size)
-                            smaller = False
-                            for attempt in range(3):
-                                try:
-                                    uploader.send(chunk, sent, lambda done: transferred(done, size, 90, 9))
-                                    break
-                                except urllib.error.HTTPError as exc:
-                                    if exc.code == 413 and chunk_size > 262144:
-                                        chunk_size //= 2
-                                        display.log("Server upload limit: reducing chunks to", chunk_size // 1024, "KiB")
-                                        smaller = True
-                                        break
-                                    if exc.code < 500 or attempt == 2: raise
-                                    time.sleep(2)
-                                except (OSError, ValueError, http.client.HTTPException):
-                                    # Some proxies reset the socket before their 413 response can be read.
-                                    if chunk_size > 262144 and attempt == 0:
-                                        chunk_size = max(262144, min(1048576, chunk_size // 2))
-                                        display.log("Upload connection interrupted; retrying with", chunk_size // 1024, "KiB chunks")
-                                        smaller = True
-                                        break
-                                    if attempt == 2: raise
-                                    time.sleep(2)
-                            if smaller:
-                                remote = request(base + "/status", "POST", {}, headers, timeout=20)
-                                sent = int(remote.get("received", 0))
-                                if not 0 <= sent <= size: raise RuntimeError("Invalid server upload offset.")
-                                transferred(sent, size, 90, 9)
-                                continue
-                            sent += len(chunk)
-                            transferred(sent, size, 90, 9)
+                    if not remote.get("uploaded"):
+                        recovered = upload_file(output, size, sent, chunk_size, uploader, get_status,
+                            transferred, cfg, lost, display)
+                        if recovered:
+                            remote = recovered
                 finally:
                     uploader.close()
                 phase("verify", "replacing original", 99)
@@ -665,18 +718,27 @@ def run_encoding(cfg, job, request):
                 # Completion owns the queue lock while replacing the original; stop progress first.
                 stop.set()
                 thread.join(timeout=25)
-                for attempt in range(3):
+                confirmation = remote if remote.get("uploaded") else None
+                for attempt in range(5):
+                    if confirmation:
+                        break
+                    check_stopping(cfg, lost)
                     try:
-                        confirmation = request(base + "/complete", "POST", {"bytes": size}, headers, timeout=60)
+                        confirmation = request(base + "/complete", "POST", {"bytes": size}, headers, timeout=120)
                         if not confirmation.get("uploaded"):
                             raise RuntimeError("Server did not confirm receipt; update Vaultcast before retrying this worker.")
-                        break
-                    except urllib.error.HTTPError as exc:
-                        if exc.code < 500 or attempt == 2: raise
-                        time.sleep(3)
-                    except OSError:
-                        if attempt == 2: raise
-                        time.sleep(3)
+                    except Exception as error:
+                        if not retryable_upload(error):
+                            raise
+                        # A completion response can be lost after the server published the file.
+                        remote = get_status()
+                        if remote.get("uploaded"):
+                            confirmation = remote
+                            break
+                        if attempt == 4:
+                            raise
+                        display.log("Finalisation response interrupted; checking server before retry:", error)
+                        transfer_wait(cfg, lost, min(30, 3 * (attempt + 1)) + random.uniform(0, 2))
                 status.update(phase="done", phase_progress=100, progress=100)
                 display.render(force=True)
                 display.close()

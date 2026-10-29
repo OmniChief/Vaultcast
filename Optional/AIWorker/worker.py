@@ -16,7 +16,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from contributor_setup import prepare, hardware, yes, release_managed_models, installed_models, model_identity, model_report
-from encoding_worker import prepare_encoding, run_encoding, pending_encodings, retryable_upload
+from encoding_worker import prepare_encoding, run_encoding, pending_encodings, retryable_upload, InvalidServerResponse
 from image_checks import check_image, BlankGenerationError
 from worker_console import WorkerConsole
 
@@ -41,7 +41,16 @@ def request(url, method="GET", data=None, headers=None, timeout=30):
     try:
         with urllib.request.urlopen(req, timeout=timeout) as res:
             raw = res.read()
-            return json.loads(raw.decode()) if raw else {}
+            if not raw and res.status == 204:
+                return {}
+            try:
+                result = json.loads(raw.decode())
+            except (ValueError, UnicodeError) as error:
+                raise InvalidServerResponse("Expected JSON from " + method + " " + urllib.parse.urlsplit(url).path +
+                    "; received an empty, truncated or non-JSON response (possibly a proxy/login page).") from error
+            if not isinstance(result, dict):
+                raise InvalidServerResponse("Expected a JSON object from " + urllib.parse.urlsplit(url).path)
+            return result
     except urllib.error.HTTPError as exc:
         try:
             body = json.loads(exc.read().decode())
