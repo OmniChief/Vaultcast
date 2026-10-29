@@ -478,6 +478,7 @@ def run_slot(cfg, stop):
     images, encoding = cfg["contributions"].get("images"), cfg["contributions"].get("encoding")
     headers = worker_headers(cfg)
     prefer_encoding = True
+    previous_wait_reason = None
     while not stop.is_set():
         try:
             image_ready = images
@@ -493,7 +494,15 @@ def run_slot(cfg, stop):
             if encoding and (retained or prefer_encoding or not image_ready):
                 result = {"job": retained[0]} if retained else request(cfg["server"] + "/api/ai/worker/encoding/claim", "POST", {}, headers, timeout=15)
                 job = result.get("job")
+                if not job:
+                    reason = result.get("waiting_reason") or "Waiting for job (server returned no assignment)."
+                    slot_status(cfg, reason)
+                    if reason != previous_wait_reason:
+                        print(slot_label(cfg), reason, flush=True)
+                        logging.info("%s %s", slot_label(cfg), reason)
+                        previous_wait_reason = reason
                 if job:
+                    previous_wait_reason = None
                     with _conversion_lock:
                         claimed = job["id"] not in _active_conversions
                         if claimed: _active_conversions.add(job["id"])

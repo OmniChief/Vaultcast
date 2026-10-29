@@ -391,18 +391,23 @@ final class AIImages
         return 'cpu';
     }
 
-    /** Online encoding types, restricted to active accounts with Library access. */
-    public static function encodingContributors(): array {
-        $contributors=[];
+    /** Free online encoding slots, restricted to active accounts with Library access. */
+    public static function encodingContributors(array $jobs = []): array {
+        $contributors=[]; $occupied=[];
+        foreach ($jobs as $job) {
+            if (($job['status'] ?? '')==='running' && (int)($job['lease_until'] ?? 0)>=time() && !empty($job['external_worker_id'])) {
+                $occupied[(string)$job['external_worker_id']][(int)($job['worker_slot'] ?? 0)]=true;
+            }
+        }
         foreach (self::read(self::WORKERS) as $worker) {
             if (empty($worker['ready']) || empty($worker['capabilities']['encoding']['verified']) ||
                 (int)($worker['last_seen'] ?? 0)<time()-self::ONLINE_SECONDS) continue;
             $owner=Auth::findById((string)$worker['user_id']);
             if (!$owner || ($owner['role'] ?? '')==='guest' || empty(Access::state($owner)['active']) || !AreaAccess::allowed($owner,'library')) continue;
             $modes=[];
-            if (!isset($worker['slots'])) $modes['cpu']=true;
+            if (!isset($worker['slots']) && empty($occupied[(string)$worker['id']][0])) $modes['cpu']=true;
             foreach ($worker['slots'] ?? [] as $slot) {
-                if (empty($slot['encoding'])) continue;
+                if (empty($slot['encoding']) || !empty($occupied[(string)$worker['id']][(int)$slot['id']])) continue;
                 $mode=in_array($slot['encoding_encoder'] ?? '', ['h264_nvenc','h264_qsv','h264_amf'], true) ? 'hardware' : 'cpu';
                 $modes[$mode]=true;
             }
@@ -455,7 +460,11 @@ final class AIImages
             if (!$owner || !AreaAccess::allowed($owner,'library') || empty($worker['capabilities']['encoding']['verified'])) json_error('Encoding contribution requires Library access and a checked encoding profile.',403);
             $worker['account']=$owner;
             $lease=(string)($_SERVER['HTTP_X_VAULTCAST_LEASE'] ?? '');
-            if ($action==='encoding-claim' && $method==='POST') json_out(empty($worker['ready']) || !self::slotAllows($worker,'encoding') ? ['ok'=>true,'job'=>null] : Convert::externalClaim($worker));
+            if ($action==='encoding-claim' && $method==='POST') {
+                if (empty($worker['ready'])) json_out(['ok'=>true,'job'=>null,'waiting_reason'=>'Contributor is not ready; check its heartbeat and encoding profile.']);
+                if (!self::slotAllows($worker,'encoding')) json_out(['ok'=>true,'job'=>null,'waiting_reason'=>'This slot is not registered for video encoding; restart the contributor.']);
+                json_out(Convert::externalClaim($worker));
+            }
             if ($action==='encoding-source' && $method==='GET') Convert::externalSource($worker,$id,$lease);
             if ($method==='POST') {
                 $result=Convert::externalUpdate($worker,$id,$lease,substr($action,9),$action==='encoding-chunk' ? [] : body_json());

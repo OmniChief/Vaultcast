@@ -1378,17 +1378,20 @@ class Convert {
         $lock=self::editQueueLock();
         try {
             $cv=array_merge(self::defaults(), Store::settings()['convert'] ?? []);
-            if (empty($cv['enabled'])) return ['ok'=>true,'job'=>null];
+            if (empty($cv['enabled'])) return ['ok'=>true,'job'=>null,'waiting_reason'=>'Video conversion is disabled in Vaultcast settings.'];
             // Reap expired leases and collect any completed local process before claiming.
             self::tick(false);
             $q=self::queue(); $beforeClaim=$q;
-            foreach ($q as $job) if (($job['status'] ?? '')==='running' && ($job['external_worker_id'] ?? '')===$worker['id'] && (int)($job['worker_slot'] ?? 0)===(int)($worker['slot_id'] ?? 0)) return ['ok'=>true,'job'=>null];
+            foreach ($q as $job) if (($job['status'] ?? '')==='running' && ($job['external_worker_id'] ?? '')===$worker['id'] && (int)($job['worker_slot'] ?? 0)===(int)($worker['slot_id'] ?? 0)) return ['ok'=>true,'job'=>null,'waiting_reason'=>'Job '.$job['id'].' is still assigned to this slot; awaiting resume or lease expiry.'];
             $mode=AIImages::encodingMode($worker);
-            $contributors=AIImages::encodingContributors();
+            $contributors=AIImages::encodingContributors($q);
+            $queued=0; $accessible=0; $reserved=0;
             foreach ($q as &$job) {
                 if (($job['status'] ?? '')!=='queued') continue;
+                $queued++;
                 $item=Catalogue::item((string)$job['item_id']);
                 if (!$item || !Parental::allows($worker['account'],$item)) continue;
+                $accessible++;
                 $src=\Vaultcast\Paths::real((string)$job['src']);
                 if (!$src || !self::underLibraryRoot($src) || !is_file($src)) {
                     $job['status']='failed'; $job['message']='Source file is unavailable in the library'; continue;
@@ -1398,15 +1401,15 @@ class Convert {
                 // Use source size: under 400 MB goes to CPU, 400 MB and above to hardware.
                 $preferred=$sourceBytes<400000000 ? 'cpu' : 'hardware';
                 if ($mode!==$preferred) {
-                    $preferredOnline=false;
+                    $preferredFree=false;
                     foreach ($contributors as $contributor) {
                         if (!empty($contributor['modes'][$preferred]) && Parental::allows($contributor['account'],$item)) {
-                            $preferredOnline=true;
+                            $preferredFree=true;
                             break;
                         }
                     }
-                    // Without an eligible preferred type online, either type may keep the queue moving.
-                    if ($preferredOnline) continue;
+                    // Busy preferred slots are unavailable; let the other type keep the queue moving.
+                    if ($preferredFree) { $reserved++; continue; }
                 }
                 $dest=self::destFor($src,'mp4');
                 if (is_file($dest)) { $job['status']='failed'; $job['message']='A DirectPlay output already exists; it was not overwritten'; continue; }
@@ -1433,7 +1436,9 @@ class Convert {
                     'smart'=>in_array($quality['quality_mode'],['directplay','original'],true)]];
             }
             unset($job); if ($q!==$beforeClaim) self::saveQueue($q);
-            return ['ok'=>true,'job'=>null];
+            $reason=$queued===0 ? 'No conversions are queued.' : ($accessible===0 ? 'Queued conversions are not accessible to this account.' :
+                ($reserved>0 ? 'Waiting: eligible jobs prefer a free '.($mode==='cpu' ? 'hardware' : 'CPU').' encoding slot.' : 'No queued source is eligible; check failed jobs and source paths.'));
+            return ['ok'=>true,'job'=>null,'waiting_reason'=>$reason];
         } finally { self::unlockQueue($lock); }
     }
 
@@ -1511,18 +1516,22 @@ class Convert {
 
     /** No queue lock or database transaction is held while receiving or writing bytes. */
     private static function externalChunk(array $worker, string $id, string $lease): array {
+        $started=microtime(true);
         $offset=filter_var($_SERVER['HTTP_X_UPLOAD_OFFSET'] ?? '',FILTER_VALIDATE_INT);
         if ($offset===false || $offset<0) json_error('Invalid upload offset.',400);
         $length=filter_var($_SERVER['CONTENT_LENGTH'] ?? '',FILTER_VALIDATE_INT);
         if ($length!==false && ($length<1 || $length>4194304)) json_error('Send a chunk of at most 4 MiB.',413);
         // Validate authorization before reading the bounded body, then revalidate after acquiring the job lock.
         self::externalJob(self::queue(),$worker,$id,$lease);
+        $authorized=microtime(true);
         $input=fopen('php://input','rb');
         if (!$input) throw new RuntimeException('Could not read upload body.');
         try { $chunk=stream_get_contents($input,4194305); } finally { fclose($input); }
         if ($chunk===false || strlen($chunk)<1 || strlen($chunk)>4194304) json_error('Send a chunk of at most 4 MiB.',413);
         if ($length!==false && strlen($chunk)!==$length) json_error('Upload body was interrupted. Retry this chunk.',408);
+        $received=microtime(true);
         $fileLock=self::uploadLock($id);
+        $locked=microtime(true);
         try {
             Store::invalidate('convert_queue'); $q=self::queue();
             $i=self::externalJob($q,$worker,$id,$lease); $job=$q[$i];
@@ -1538,6 +1547,7 @@ class Convert {
                     self::saveQueue($q); $job=$q[$i];
                 } finally { self::unlockQueue($queueLock); }
             }
+            $writing=microtime(true);
             $part=(string)$job['part']; clearstatcache(true,$part);
             $size=is_file($part) ? (int)filesize($part) : 0;
             $stream=fopen($part,'c+b');
@@ -1567,6 +1577,7 @@ class Convert {
                     $size+=$written;
                 }
             } finally { fclose($stream); }
+            $writtenAt=microtime(true);
             // Cancel/reassignment may happen during the write. Never acknowledge or retain its stale bytes.
             Store::invalidate('convert_queue'); $current=self::queue(); $index=self::findJob($current,$id);
             if ($index<0 || ($current[$index]['status'] ?? '')!=='running' ||
@@ -1574,6 +1585,14 @@ class Convert {
                 if ($index<0 || ($current[$index]['part'] ?? '')!==$part || ($current[$index]['status'] ?? '')!=='running') @unlink($part);
                 json_error('This conversion is no longer assigned to this worker.',409);
             }
+            $finished=microtime(true);
+            header('Server-Timing: '.implode(', ',[
+                'job_auth;dur='.sprintf('%.1F',($authorized-$started)*1000),
+                'body;dur='.sprintf('%.1F',($received-$authorized)*1000),
+                'job_lock;dur='.sprintf('%.1F',($locked-$received)*1000),
+                'control;dur='.sprintf('%.1F',($writing-$locked)*1000),
+                'file_write;dur='.sprintf('%.1F',($writtenAt-$writing)*1000),
+                'verify;dur='.sprintf('%.1F',($finished-$writtenAt)*1000)]));
             return ['ok'=>true,'received'=>$size];
         } finally { self::releaseUploadLock($fileLock); }
     }

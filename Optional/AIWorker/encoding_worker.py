@@ -4,6 +4,7 @@ from contextlib import contextmanager, nullcontext
 import http.client
 import io
 import json
+import logging
 import math
 import os
 import random
@@ -162,6 +163,9 @@ def upload_file(output, size, sent, chunk_size, uploader, get_status, transferre
     failures = 0
     chunk_limit = chunk_size
     acknowledged_chunks = 0
+    report_at = time.monotonic()
+    report_bytes = sent
+    send_seconds = response_seconds = 0.0
     with output.open("rb") as file:
         while sent < size:
             check_stopping(cfg, lost)
@@ -173,6 +177,20 @@ def upload_file(output, size, sent, chunk_size, uploader, get_status, transferre
                 # Display acknowledged bytes, not socket writes that may still be rejected.
                 uploader.send(chunk, sent, lambda done: check_stopping(cfg, lost))
                 sent += len(chunk)
+                timing = uploader.last_timing
+                if timing:
+                    send_seconds += timing["send"]
+                    response_seconds += timing["response"]
+                now = time.monotonic()
+                if now-report_at >= 30:
+                    rate = (sent-report_bytes) / (now-report_at) / 1048576
+                    line = ("Upload acknowledged: " + str(round(rate, 2)) + " MiB/s; chunks " + str(chunk_size//1024) +
+                        " KiB; sending " + str(round(send_seconds, 1)) + "s, awaiting responses " + str(round(response_seconds, 1)) +
+                        "s; last chunk server milliseconds: " + (timing["server"] if timing else "unavailable"))
+                    display.log(line)
+                    logging.info(line)
+                    report_at, report_bytes = now, sent
+                    send_seconds = response_seconds = 0.0
                 failures = 0
                 acknowledged_chunks += 1
                 if acknowledged_chunks >= 16 and chunk_size < chunk_limit:
@@ -409,6 +427,7 @@ class ChunkUploader:
         self.target = urllib.parse.urlsplit(url)
         self.headers = headers
         self.connection = None
+        self.last_timing = None
 
     def close(self):
         if self.connection:
@@ -416,6 +435,7 @@ class ChunkUploader:
         self.connection = None
 
     def send(self, chunk, offset, on_sent):
+        started = time.monotonic()
         if self.connection is None:
             constructor = http.client.HTTPSConnection if self.target.scheme == "https" else http.client.HTTPConnection
             self.connection = constructor(self.target.hostname, self.target.port, timeout=30)
@@ -438,6 +458,7 @@ class ChunkUploader:
             except OSError as exc:
                 # A proxy can reject an oversized body before it has all been sent.
                 send_error = exc
+            sent_at = time.monotonic()
             # Receiving/saving a chunk may take longer than writing it to the socket.
             if connection.sock is not None:
                 connection.sock.settimeout(120)
@@ -455,6 +476,8 @@ class ChunkUploader:
                 raise InvalidServerResponse("Upload response was not a JSON object.")
             if result.get("received") != offset + len(chunk):
                 raise InvalidServerResponse("Server did not acknowledge the complete chunk.")
+            self.last_timing = {"send": sent_at-started, "response": time.monotonic()-sent_at,
+                "server": response.headers.get("Server-Timing", "unavailable")[:512]}
             return result
         except BaseException:
             self.close()
