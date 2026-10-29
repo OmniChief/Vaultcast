@@ -4,6 +4,7 @@ from contextlib import contextmanager, nullcontext
 import http.client
 import io
 import json
+import math
 import os
 import random
 from pathlib import Path
@@ -460,7 +461,7 @@ def digest(path):
 
 def probe(binary, path):
     try:
-        return json.loads(subprocess.check_output([str(Path(binary).resolve()), "-v", "error", "-show_streams", "-show_format", "-of", "json", str(Path(path).resolve())],
+        return json.loads(subprocess.check_output([str(Path(binary).resolve()), "-v", "error", "-show_streams", "-show_format", "-show_data_hash", "sha256", "-of", "json", str(Path(path).resolve())],
             stderr=subprocess.PIPE, timeout=45, creationflags=FLAGS))
     except subprocess.CalledProcessError as error:
         raise RuntimeError("ffprobe failed (exit " + str(error.returncode) + "): " + (error.stderr or b"").decode(errors="replace")[-2000:]) from error
@@ -483,7 +484,7 @@ def pending_encodings(cfg):
     for file in sorted(transfer_root(cfg).glob("*/state.json")):
         try:
             state = json.loads(file.read_text(encoding="utf-8"))
-            if not state.get("waiting_for_claim"):
+            if not state.get("waiting_for_claim") and state.get("worker_slot", cfg.get("slot_id", 0)) == cfg.get("slot_id", 0):
                 jobs.append(state["job"])
         except (OSError, ValueError, KeyError):
             print("Could not read retained conversion state:", file)
@@ -590,7 +591,7 @@ class EncoderProcessError(RuntimeError):
     pass
 
 
-def encode_video(command, cfg, lost, root, duration, status):
+def encode_video(command, cfg, lost, root, duration, status, completed_seconds=0, total_duration=None):
     with (root / "ffmpeg.log").open("wb") as log:
         process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=log, creationflags=FLAGS)
         try:
@@ -607,13 +608,14 @@ def encode_video(command, cfg, lost, root, duration, status):
                         content = progress_file.read().decode(errors="replace")
                     values = re.findall(r"out_time_us=(\d+)", content)
                     if values and duration > 0:
-                        fraction = min(1, int(values[-1]) / 1000000 / duration)
+                        fraction = min(1, (completed_seconds + min(duration, int(values[-1]) / 1000000)) / (total_duration or duration))
                         status["progress"] = round(10 + fraction * 80, 1)
                         status["phase_progress"] = round(fraction * 100, 1)
                 except OSError:
                     pass
-            check_stopping(cfg, lost)
+            # A finished file remains useful even if the server lease was lost at the same instant.
             if process.returncode:
+                check_stopping(cfg, lost)
                 raise EncoderProcessError((root / "ffmpeg.log").read_text(errors="replace")[-1500:] or "FFmpeg failed.")
         finally:
             if process.poll() is None:
@@ -623,6 +625,94 @@ def encode_video(command, cfg, lost, root, duration, status):
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait()
+
+
+CHECKPOINT_SECONDS = 300
+
+
+def checkpoint_streams(info):
+    return [(stream.get("codec_type"), stream.get("codec_name"), stream.get("width"),
+        stream.get("height"), stream.get("pix_fmt"), stream.get("sample_rate"), stream.get("channels"),
+        stream.get("channel_layout"), stream.get("time_base"), stream.get("extradata_hash"))
+        for stream in info.get("streams", []) if stream.get("codec_type") in ("video", "audio")]
+
+
+def inspect_checkpoint(cfg, path, seconds):
+    info = probe(cfg["ffprobe"], path)
+    streams = info.get("streams", [])
+    actual = float((info.get("format") or {}).get("duration") or 0)
+    if actual <= 0 or not any(stream.get("codec_name") == "h264" for stream in streams) or abs(actual-seconds) > 2:
+        raise RuntimeError("Encoding checkpoint failed validation: " + str(path))
+    return info
+
+
+def encode_with_checkpoints(command, cfg, lost, root, duration, status, state, display):
+    encoder = command[command.index("-c:v") + 1]
+    if encoder == "copy" or not math.isfinite(duration) or duration <= 0:
+        display.log("Checkpoint resume is unavailable for stream-copy jobs or sources without a known duration.")
+        encode_video(command, cfg, lost, root, duration, status)
+        return
+    identity = {"command": command, "ffmpeg_version": cfg.get("ffmpeg_version"),
+        "source_bytes": state["job"]["bytes"], "source_mtime": state["job"].get("source_mtime"),
+        "checkpoint_seconds": CHECKPOINT_SECONDS, "protocol": 1}
+    signature = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:24]
+    checkpoints = state.setdefault("checkpoint_sets", {}).setdefault(signature, {"parts": {}})
+    if state.get("checkpoint_active") not in (None, signature):
+        display.log("Encoder/settings changed; starting a separate compatible checkpoint set. Previous sections are retained.")
+    state["checkpoint_active"] = signature
+    directory = root / ("checkpoints-" + signature)
+    directory.mkdir(exist_ok=True)
+    save_transfer(root, state)
+    count = math.ceil(duration / CHECKPOINT_SECONDS)
+    reference = None
+    entries = []
+    for index in range(count):
+        check_stopping(cfg, lost)
+        start = index * CHECKPOINT_SECONDS
+        seconds = min(CHECKPOINT_SECONDS, duration-start)
+        part = directory / ("part-" + str(index).zfill(6) + ".mp4")
+        record = checkpoints["parts"].get(str(index), {})
+        retained = part.is_file() and part.stat().st_size == record.get("bytes")
+        if retained:
+            info = inspect_checkpoint(cfg, part, seconds)
+            display.log("Reusing encoding checkpoint", str(index+1) + "/" + str(count))
+        else:
+            status["stage"] = "encoding (" + ENCODERS[encoder] + ") section " + str(index+1) + "/" + str(count)
+            display.log("Encoding checkpoint", str(index+1) + "/" + str(count), "from", round(start), "seconds.")
+            section = list(command)
+            # Accurate input seeking decodes/discards to the requested timestamp when transcoding.
+            at = section.index("-i")
+            section[at:at] = ["-ss", format(start, ".6f")]
+            section[section.index("-map_chapters") + 1] = "-1"
+            section[-1] = str(part)
+            section[-1:-1] = ["-t", format(seconds, ".6f")]
+            (root / "progress").unlink(missing_ok=True)
+            encode_video(section, cfg, lost, root, seconds, status, start, duration)
+            info = inspect_checkpoint(cfg, part, seconds)
+        streams = checkpoint_streams(info)
+        if reference is not None and streams != reference:
+            raise RuntimeError("Encoding checkpoints have incompatible streams; files kept instead of publishing a broken MP4.")
+        reference = streams
+        if not retained:
+            checkpoints["parts"][str(index)] = {"bytes": part.stat().st_size, "seconds": seconds}
+            save_transfer(root, state)
+        done = min(duration, start+seconds)
+        status.update(progress=round(10+done/duration*80, 1), phase_progress=round(done/duration*100, 1))
+        # Generated relative filenames contain no user-controlled quoting or path components.
+        entries += ["file '" + directory.name + "/" + part.name + "'", "duration " + format(seconds, ".6f")]
+    manifest = root / "checkpoints.ffconcat"
+    manifest.write_text("ffconcat version 1.0\n" + "\n".join(entries) + "\n", encoding="ascii")
+    source = command[command.index("-i")+1]
+    status["stage"] = "joining completed encoding checkpoints"
+    display.log("All encoding checkpoints saved; joining the MP4 without re-encoding.")
+    (root / "progress").unlink(missing_ok=True)
+    assemble = [cfg["ffmpeg"], "-nostdin", "-y", "-hide_banner", "-loglevel", "error",
+        "-progress", str(root / "progress"), "-nostats", "-f", "concat", "-safe", "0", "-i", str(manifest),
+        "-i", source, "-map", "0", "-map_metadata", "1", "-map_chapters", "1", "-c", "copy",
+        "-movflags", "+faststart", "-f", "mp4", command[-1]]
+    encode_video(assemble, cfg, lost, root, duration, status, duration, duration)
+    inspect_checkpoint(cfg, Path(command[-1]), duration)
+
 
 def check_encoder(ffmpeg, ffprobe, encoder, device, threads, temporary_root):
     with tempfile.TemporaryDirectory(prefix="encoder-check-", dir=temporary_root) as temporary:
@@ -754,7 +844,7 @@ def run_encoding(cfg, job, request):
     previous = state.get("job", {})
     if previous and (previous.get("bytes") != job["bytes"] or previous.get("source_mtime") != job.get("source_mtime")):
         raise RuntimeError("Source changed; retained conversion files kept at " + str(workspace))
-    state.update(job=job, waiting_for_claim=False)
+    state.update(job=job, waiting_for_claim=False, worker_slot=cfg.get("slot_id", 0))
     save_transfer(workspace, state)
     if state.get("upload_confirmed"):
         cleanup_transfer(workspace, cfg)
@@ -780,6 +870,7 @@ def run_encoding(cfg, job, request):
     status = {"title":job["title"], "progress": 0, "stage": "downloading source", "phase": "download", "phase_progress": 0,
         "bytes_done": 0, "bytes_total": job["bytes"], "rate_bps": 0, "eta_seconds": 0}
     last_success = [time.monotonic()]
+    connection_warning = [False]
     sample = {"phase": "download", "at": time.monotonic(), "bytes": 0, "rate": 0}
     update_lock = threading.Lock()
     display = ConsoleProgress(lambda: dict(status), label="Worker "+str(cfg.get("slot_id",1))+" | "+("CPU encoding" if cfg.get("encoding_encoder", "libx264")=="libx264" else "Hardware encoding / "+ENCODERS[cfg["encoding_encoder"]]), live=cfg.get("parallel_workers",1)<=1,
@@ -811,6 +902,9 @@ def run_encoding(cfg, job, request):
             snapshot["eta_seconds"] = round(max(0, snapshot["bytes_total"] - snapshot["bytes_done"]) / rate) if rate > 0 else 0
             request(base + "/progress", "POST", snapshot, headers, timeout=15)
             last_success[0] = time.monotonic()
+            if connection_warning[0]:
+                display.log("Server connection restored; keeping the current conversion.")
+                connection_warning[0] = False
         except urllib.error.HTTPError as exc:
             if exc.code in (401, 403, 409):
                 lost.set()
@@ -818,8 +912,9 @@ def run_encoding(cfg, job, request):
             pass
         finally:
             update_lock.release()
-        if time.monotonic() - last_success[0] > 180:
-            lost.set()
+        if time.monotonic() - last_success[0] > 180 and not lost.is_set() and not connection_warning[0]:
+            connection_warning[0] = True
+            display.log("Server connection unavailable; continuing the local encode. Completed output will be kept for upload.")
 
     def heartbeat():
         while not stop.wait(5):
@@ -834,8 +929,17 @@ def run_encoding(cfg, job, request):
         with nullcontext(str(workspace)) as temporary:
             root = Path(temporary)
             source, output = root / "source.video", root / "directplay.mp4"
+            if not state.get("output_ready") and state.get("encoding_complete") and output.is_file() and output.stat().st_size == state.get("output_size"):
+                check = probe(cfg["ffprobe"], output)
+                if not any(stream.get("codec_name") == "h264" for stream in check["streams"]):
+                    raise RuntimeError("Retained completed conversion failed validation; local files kept.")
+                state["output_ready"] = True
+                save_transfer(workspace, state)
+                display.log("Recovered completed conversion after interruption; resuming upload without encoding again.")
             if not state.get("output_ready") or not output.is_file() or output.stat().st_size != state.get("output_size"):
                 required = int(job["bytes"]) * 3 + 1073741824
+                if source.is_file() and source.stat().st_size == job["bytes"]:
+                    required -= int(job["bytes"])  # Resume does not need another copy of the downloaded source.
                 if shutil.disk_usage(root).free < required:
                     raise RuntimeError("Not enough local temporary disk space (need about " + str(round(required / 1073741824, 1)) + " GB).")
                 if not source.is_file() or source.stat().st_size != job["bytes"]:
@@ -886,9 +990,13 @@ def run_encoding(cfg, job, request):
                                 wait_for_image_idle(cfg, request, lost, display)
                             phase("encode", "encoding (" + ENCODERS[encoder] + ")", 10)
                             update()
-                            # Remove stale progress before a CPU fallback restarts from the beginning.
+                            # Record local completion before probing or making another server request.
+                            state.update(encoding_complete=False, output_ready=False)
+                            save_transfer(workspace, state)
                             (root / "progress").unlink(missing_ok=True)
-                            encode_video(command, cfg, lost, root, duration, status)
+                            encode_with_checkpoints(command, cfg, lost, root, duration, status, state, display)
+                            state.update(encoding_complete=True, output_size=output.stat().st_size)
+                            save_transfer(workspace, state)
                         break
                     except EncoderProcessError as error:
                         if not hardware or not cfg.get("encoding_cpu_fallback", False):
@@ -961,7 +1069,15 @@ def run_encoding(cfg, job, request):
         state["waiting_for_claim"] = lost.is_set() or not transient
         save_transfer(workspace, state)
         display.close()
-        print("Unconfirmed files retained for retry:", workspace)
+        if state.get("output_ready") or state.get("encoding_complete"):
+            print("Completed conversion retained for upload retry; it does not need encoding again:", workspace)
+        else:
+            active = state.get("checkpoint_sets", {}).get(state.get("checkpoint_active"), {})
+            parts = len(active.get("parts", {}))
+            if parts:
+                print("Saved", parts, "encoding checkpoints; the next authorized attempt can reuse them:", workspace)
+            else:
+                print("Source retained; no complete encoding checkpoint was saved yet:", workspace)
         if not transient and not lost.is_set():
             try: request(base + "/fail", "POST", {"error": str(exc)}, headers, timeout=15)
             except Exception: pass
