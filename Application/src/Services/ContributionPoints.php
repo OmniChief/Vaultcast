@@ -16,7 +16,8 @@ final class ContributionPoints
             $insert->execute(['contribution-event-'.hash('sha256',$key),json_encode($event,JSON_THROW_ON_ERROR)]);
             if ($insert->rowCount()===0) return false;
             $name=self::account($id);
-            $insert->execute([$name,'{}']);
+            $accountLock=$pdo->prepare('INSERT INTO vaultcast_documents(name,payload) VALUES (?,?) ON DUPLICATE KEY UPDATE name=VALUES(name)');
+            $accountLock->execute([$name,'{}']);
             $read=$pdo->prepare('SELECT payload FROM vaultcast_documents WHERE name=? FOR UPDATE'); $read->execute([$name]);
             $account=json_decode((string)$read->fetchColumn(),true) ?: [];
             $account=array_replace(['balance'=>0,'earned'=>0,'spent'=>0,'admin_added'=>0,'images_generated'=>0,'videos_converted'=>0],$account);

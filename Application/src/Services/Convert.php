@@ -1381,7 +1381,7 @@ class Convert {
             if (empty($cv['enabled'])) return ['ok'=>true,'job'=>null];
             // Reap expired leases and collect any completed local process before claiming.
             self::tick(false);
-            $q=self::queue();
+            $q=self::queue(); $beforeClaim=$q;
             foreach ($q as $job) if (($job['status'] ?? '')==='running' && ($job['external_worker_id'] ?? '')===$worker['id'] && (int)($job['worker_slot'] ?? 0)===(int)($worker['slot_id'] ?? 0)) return ['ok'=>true,'job'=>null];
             $mode=AIImages::encodingMode($worker);
             $contributors=AIImages::encodingContributors();
@@ -1412,11 +1412,12 @@ class Convert {
                 if (is_file($dest)) { $job['status']='failed'; $job['message']='A DirectPlay output already exists; it was not overwritten'; continue; }
                 $quality=self::applyQualityMode($cv);
                 $job['dest']=$dest; $job['container']='mp4'; $job['pid']=null;
-                $job['part']=dirname($dest).'/.'.basename($dest).'.worker-'.$job['id'].'.part';
+                $job['lease_token']=bin2hex(random_bytes(16));
+                $job['part']=dirname($dest).'/.'.basename($dest).'.worker-'.$job['id'].'-'.substr($job['lease_token'],0,16).'.part';
                 @unlink($job['part']);
                 $job['status']='running'; $job['external_worker_id']=$worker['id']; $job['worker_slot']=(int)($worker['slot_id'] ?? 0);
                 unset($job['download_until'],$job['upload_until']);
-                $job['lease_token']=bin2hex(random_bytes(16)); $job['lease_until']=time()+300;
+                $job['lease_until']=time()+300;
                 $job['started_at']=date('c'); $job['finished_at']=null; $job['progress']=0;
                 $job['message']='Contributor '.$worker['name'].' · downloading source';
                 $job['source_stat']=['size'=>$sourceBytes,'mtime'=>(int)filemtime($src)];
@@ -1431,7 +1432,7 @@ class Convert {
                     'audio_bitrate'=>in_array($quality['audio_bitrate'] ?? '',['96k','128k','160k','192k','256k','320k'],true) ? $quality['audio_bitrate'] : '320k',
                     'smart'=>in_array($quality['quality_mode'],['directplay','original'],true)]];
             }
-            unset($job); self::saveQueue($q);
+            unset($job); if ($q!==$beforeClaim) self::saveQueue($q);
             return ['ok'=>true,'job'=>null];
         } finally { self::unlockQueue($lock); }
     }
@@ -1490,20 +1491,126 @@ class Convert {
         } finally { self::unlockQueue($lock); }
         @set_time_limit(0);
         header('Cache-Control: no-store');
-        Stream::sendFile($src,'application/octet-stream'); exit;
+        Stream::emitAccelOrSend($src,'application/octet-stream'); exit;
+    }
+
+    private static function uploadLock(string $id) {
+        if (!preg_match('/^[a-f0-9]{16}$/D',$id)) json_error('Invalid conversion job.',400);
+        $file=fopen(STREAM_DATA.'/convert_upload_'.$id.'.lock','c');
+        if (!$file) throw new RuntimeException('Could not open upload lock.');
+        for ($attempt=0; $attempt<40; $attempt++) {
+            if (flock($file,LOCK_EX|LOCK_NB)) return $file;
+            usleep(100000);
+        }
+        fclose($file); header('Retry-After: 1'); json_error('This upload is busy. Please retry.',429);
+    }
+
+    private static function releaseUploadLock($file): void {
+        if (is_resource($file)) { flock($file,LOCK_UN); fclose($file); }
+    }
+
+    /** No queue lock or database transaction is held while receiving or writing bytes. */
+    private static function externalChunk(array $worker, string $id, string $lease): array {
+        $offset=filter_var($_SERVER['HTTP_X_UPLOAD_OFFSET'] ?? '',FILTER_VALIDATE_INT);
+        if ($offset===false || $offset<0) json_error('Invalid upload offset.',400);
+        $length=filter_var($_SERVER['CONTENT_LENGTH'] ?? '',FILTER_VALIDATE_INT);
+        if ($length!==false && ($length<1 || $length>4194304)) json_error('Send a chunk of at most 4 MiB.',413);
+        // Validate authorization before reading the bounded body, then revalidate after acquiring the job lock.
+        self::externalJob(self::queue(),$worker,$id,$lease);
+        $input=fopen('php://input','rb');
+        if (!$input) throw new RuntimeException('Could not read upload body.');
+        try { $chunk=stream_get_contents($input,4194305); } finally { fclose($input); }
+        if ($chunk===false || strlen($chunk)<1 || strlen($chunk)>4194304) json_error('Send a chunk of at most 4 MiB.',413);
+        if ($length!==false && strlen($chunk)!==$length) json_error('Upload body was interrupted. Retry this chunk.',408);
+        $fileLock=self::uploadLock($id);
+        try {
+            Store::invalidate('convert_queue'); $q=self::queue();
+            $i=self::externalJob($q,$worker,$id,$lease); $job=$q[$i];
+            if ((int)($job['upload_until'] ?? 0)<time()+60 || (int)$job['lease_until']<time()+60) {
+                // Occasional short reservation renewal; never wrap the file write in the queue lock.
+                $queueLock=self::editQueueLock();
+                try {
+                    $q=self::queue(); $i=self::externalJob($q,$worker,$id,$lease);
+                    if (!self::reserveTransfer($q,$i,'upload',(string)$worker['id'])) {
+                        header('Retry-After: 5'); json_error('All upload slots for this computer are busy.',429);
+                    }
+                    $q[$i]['lease_until']=time()+300;
+                    self::saveQueue($q); $job=$q[$i];
+                } finally { self::unlockQueue($queueLock); }
+            }
+            $part=(string)$job['part']; clearstatcache(true,$part);
+            $size=is_file($part) ? (int)filesize($part) : 0;
+            $stream=fopen($part,'c+b');
+            if (!$stream) throw new RuntimeException('Could not open output chunk file.');
+            try {
+                if ($offset!==$size) {
+                    if ($offset+strlen($chunk)!==$size) json_error('Upload offset does not match.',409);
+                    fseek($stream,$offset); $previous=fread($stream,strlen($chunk));
+                    if ($previous===false || !hash_equals(hash('sha256',$previous),hash('sha256',$chunk))) json_error('Upload chunk does not match.',409);
+                } else {
+                    $max=max(1073741824,(int)($job['source_stat']['size'] ?? 0)*8);
+                    if ($size+strlen($chunk)>$max) json_error('Converted file exceeds this job upload limit.',413);
+                    $free=@disk_free_space(dirname($part));
+                    if ($free!==false && $free<strlen($chunk)+16777216) json_error('Server output disk is full.',507);
+                    fseek($stream,$size); $written=0;
+                    try {
+                        while ($written<strlen($chunk)) {
+                            $bytes=fwrite($stream,substr($chunk,$written));
+                            if ($bytes===false || $bytes===0) throw new RuntimeException('Could not save output chunk.');
+                            $written+=$bytes;
+                        }
+                        if (!fflush($stream)) throw new RuntimeException('Could not flush output chunk.');
+                    } catch (Throwable $error) {
+                        ftruncate($stream,$size); fflush($stream);
+                        throw $error;
+                    }
+                    $size+=$written;
+                }
+            } finally { fclose($stream); }
+            // Cancel/reassignment may happen during the write. Never acknowledge or retain its stale bytes.
+            Store::invalidate('convert_queue'); $current=self::queue(); $index=self::findJob($current,$id);
+            if ($index<0 || ($current[$index]['status'] ?? '')!=='running' ||
+                !hash_equals((string)($current[$index]['lease_token'] ?? ''),$lease)) {
+                if ($index<0 || ($current[$index]['part'] ?? '')!==$part || ($current[$index]['status'] ?? '')!=='running') @unlink($part);
+                json_error('This conversion is no longer assigned to this worker.',409);
+            }
+            return ['ok'=>true,'received'=>$size];
+        } finally { self::releaseUploadLock($fileLock); }
+    }
+
+    private static function externalStatus(array $worker, string $id, string $lease): array {
+        $fileLock=self::uploadLock($id);
+        try {
+            Store::invalidate('convert_queue'); $q=self::queue(); $i=self::findJob($q,$id);
+            if ($i>=0 && ($q[$i]['status'] ?? '')==='done' && ($q[$i]['external_worker_id'] ?? '')===$worker['id'] &&
+                $lease!=='' && hash_equals((string)($q[$i]['lease_token'] ?? ''),$lease)) {
+                return ['ok'=>true,'completed'=>true,'uploaded'=>is_file((string)$q[$i]['dest']),'replaced'=>!empty($q[$i]['original_removed'])];
+            }
+            $i=self::externalJob($q,$worker,$id,$lease); $part=(string)$q[$i]['part'];
+            clearstatcache(true,$part);
+            return ['ok'=>true,'completed'=>false,'uploaded'=>false,'received'=>is_file($part) ? (int)filesize($part) : 0];
+        } finally { self::releaseUploadLock($fileLock); }
     }
 
     public static function externalUpdate(array $worker, string $id, string $lease, string $action, array $body=[]): array {
-        $lock=self::editQueueLock();
+        if ($action==='chunk') return self::externalChunk($worker,$id,$lease);
+        if ($action==='status') return self::externalStatus($worker,$id,$lease);
+        $fileLock=in_array($action,['complete','fail'],true) ? self::uploadLock($id) : null;
+        $lock=null;
         try {
+            $lock=self::editQueueLock();
             $q=self::queue();
             $done=self::findJob($q,$id);
             if ((in_array($action,['complete','status'],true) || ($action==='transfer' && !empty($body['release']))) && $done>=0 && ($q[$done]['status'] ?? '')==='done' &&
                 ($q[$done]['external_worker_id'] ?? '')===$worker['id'] && $lease!=='' && hash_equals((string)($q[$done]['lease_token'] ?? ''),$lease)) {
-                if ($action==='complete' && empty($q[$done]['original_removed'])) return self::autoReplace($id);
+                if ($action==='complete' && empty($q[$done]['original_removed'])) {
+                    self::unlockQueue($lock); $lock=null;
+                    return self::autoReplace($id);
+                }
                 return ['ok'=>true,'completed'=>true,'uploaded'=>is_file((string)$q[$done]['dest']),'replaced'=>!empty($q[$done]['original_removed'])];
             }
             $i=self::externalJob($q,$worker,$id,$lease); $job=&$q[$i];
+            $published=false;
             $renewLease=(int)($job['lease_until'] ?? 0)<time()+240;
             $job['lease_until']=time()+300;
             if ($action==='transfer') {
@@ -1511,14 +1618,13 @@ class Convert {
                 if (!in_array($direction,['download','upload'],true)) json_error('Choose download or upload.',422);
                 if (!empty($body['release'])) { unset($job[$direction.'_until']); $granted=false; }
                 else $granted=self::reserveTransfer($q,$i,$direction,(string)$worker['id']);
-                self::saveQueue($q);
+                if ($granted || !empty($body['release']) || $renewLease) self::saveQueue($q);
                 return ['ok'=>true,'granted'=>$granted,'retry_after'=>5];
-            } elseif ($action==='status') {
-                clearstatcache(true,(string)$job['part']);
-                $received=is_file((string)$job['part']) ? (int)filesize($job['part']) : 0;
-                self::saveQueue($q);
-                return ['ok'=>true,'uploaded'=>false,'completed'=>false,'received'=>$received];
             } elseif ($action==='progress') {
+                $phase=(string)($body['phase'] ?? '');
+                $direction=(string)($body['transfer_direction'] ?? '');
+                $refresh=in_array($direction,['download','upload'],true) && (int)($job[$direction.'_until'] ?? 0)<time()+60;
+                if (!$renewLease && !$refresh && $phase===($job['phase'] ?? '') && (int)($job['progress_updated_at'] ?? 0)>time()-15) return ['ok'=>true];
                 $job['progress']=max(0,min(99.5,(float)($body['progress'] ?? 0)));
                 $phase=(string)($body['phase'] ?? '');
                 if (in_array($phase,['wait_download','download','encode','hash','wait_upload','upload','verify'],true)) {
@@ -1535,32 +1641,6 @@ class Convert {
                     if (!self::reserveTransfer($q,$i,$direction,(string)$worker['id'])) json_error('Transfer reservation was lost. Please retry.',409);
                 }
                 $job['message']='Contributor '.$worker['name'].' · '.mb_substr((string)($body['stage'] ?? 'encoding'),0,80).' · '.$job['progress'].'%';
-            } elseif ($action==='chunk') {
-                $renewTransfer=(int)($job['upload_until'] ?? 0)<time()+60;
-                if (!self::reserveTransfer($q,$i,'upload',(string)$worker['id'])) {
-                    header('Retry-After: 5'); json_error('All upload slots for this computer are busy. Please wait.',429);
-                }
-                // Raw bounded chunks bypass PHP multipart limits and keep RAM independent of film size.
-                $offset=filter_var($_SERVER['HTTP_X_UPLOAD_OFFSET'] ?? '',FILTER_VALIDATE_INT);
-                if ($offset===false || $offset<0) json_error('Invalid upload offset.',400);
-                $input=fopen('php://input','rb'); $chunk=stream_get_contents($input,4194305); fclose($input);
-                if ($chunk===false || strlen($chunk)<1 || strlen($chunk)>4194304) json_error('Send a chunk of at most 4 MiB.',413);
-                $part=(string)$job['part']; clearstatcache(true,$part); $size=is_file($part) ? (int)filesize($part) : 0;
-                if ($offset!==$size) {
-                    if ($offset+strlen($chunk)!==$size) json_error('Upload offset does not match.',409);
-                    $file=fopen($part,'rb'); fseek($file,$offset); $previous=fread($file,strlen($chunk)); fclose($file);
-                    if (!hash_equals(hash('sha256',$previous),hash('sha256',$chunk))) json_error('Upload chunk does not match.',409);
-                } else {
-                    $max=max(1073741824,(int)($job['source_stat']['size'] ?? 0)*8);
-                    if ($size+strlen($chunk)>$max) json_error('Converted file exceeds this job upload limit.',413);
-                    $free=@disk_free_space(dirname($part));
-                    if ($free!==false && $free<strlen($chunk)+16777216) json_error('Server output disk is full.',507);
-                    if (file_put_contents($part,$chunk,FILE_APPEND)!==strlen($chunk)) throw new RuntimeException('Could not save output chunk.');
-                    $size+=strlen($chunk);
-                }
-                // Progress heartbeats persist the display separately; avoid a full queue write per chunk.
-                if ($renewLease || $renewTransfer) self::saveQueue($q);
-                return ['ok'=>true,'received'=>$size];
             } elseif ($action==='complete') {
                 @set_time_limit(0);
                 $part=(string)$job['part']; clearstatcache(true,$part);
@@ -1570,6 +1650,7 @@ class Convert {
                 if (!is_file($src) || filesize($src)!==$job['source_stat']['size'] || filemtime($src)!==$job['source_stat']['mtime']) json_error('The original changed; it was kept. Cancel and queue a fresh conversion.',409);
                 if (is_file($job['dest'])) json_error('Output already exists; it was not overwritten.',409);
                 if (!rename($part,$job['dest'])) throw new RuntimeException('Could not publish converted file.');
+                $published=true;
                 $job['status']='done'; $job['progress']=100; $job['finished_at']=date('c');
                 $job['message']='Completed by '.$worker['name'].' — saved beside original';
             } elseif ($action==='fail') {
@@ -1577,12 +1658,20 @@ class Convert {
                 $job['status']='failed'; $job['finished_at']=date('c');
                 $job['message']='Contributor: '.mb_substr((string)($body['error'] ?? 'Conversion failed'),0,300);
             } else json_error('Unknown conversion action.',404);
-            \Vaultcast\Database::transaction(static function () use ($q,$action,$worker,$id) {
-                if ($action==='complete') ContributionPoints::rewardConversion((string)$worker['user_id'],$id);
-                if (!self::saveQueue($q)) throw new RuntimeException('Could not save conversion update.');
-            });
+            try {
+                \Vaultcast\Database::transaction(static function () use ($q,$action,$worker,$id) {
+                    if ($action==='complete') ContributionPoints::rewardConversion((string)$worker['user_id'],$id);
+                    if (!self::saveQueue($q)) throw new RuntimeException('Could not save conversion update.');
+                });
+            } catch (PDOException $error) {
+                if ($published && in_array((int)($error->errorInfo[1] ?? 0),[1213,1205],true) && !file_exists($part)) {
+                    if (!rename($job['dest'],$part)) throw new RuntimeException('Database rejected completion and output could not be restored for retry.',0,$error);
+                }
+                throw $error;
+            }
+            self::unlockQueue($lock); $lock=null;
             return $action==='complete' ? self::autoReplace($id) : ['ok'=>true];
-        } finally { self::unlockQueue($lock); }
+        } finally { if ($lock!==null) self::unlockQueue($lock); self::releaseUploadLock($fileLock); }
     }
 
     /* ---- Convert requests (TV / non-admin notify admin) ---- */

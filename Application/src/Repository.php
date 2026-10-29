@@ -137,7 +137,7 @@ final class Repository
         Database::transaction(function (\PDO $pdo) use ($name, $value): void {
             if ($name === 'catalogue') {
                 // Serialize catalogue replacements without exposing a half-written scan.
-                $pdo->exec("INSERT IGNORE INTO vaultcast_documents (name,payload) VALUES ('catalogue','{}')");
+                $pdo->exec("INSERT INTO vaultcast_documents (name,payload) VALUES ('catalogue','{}') ON DUPLICATE KEY UPDATE name=VALUES(name)");
                 $pdo->query("SELECT name FROM vaultcast_documents WHERE name='catalogue' FOR UPDATE")->fetch();
                 // A conversion changes one or two records, not every row in the library.
                 // Keep the catalogue transaction, but leave identical InnoDB rows untouched.
@@ -165,7 +165,7 @@ final class Repository
                 foreach ($value as $userId => $items) foreach ($items as $itemId => $progress) self::saveProgress((string)$userId, (string)$itemId, $progress);
                 $value = [];
             } elseif ($name === 'users') {
-                $pdo->exec("INSERT IGNORE INTO vaultcast_documents (name,payload) VALUES ('users','[]')");
+                $pdo->exec("INSERT INTO vaultcast_documents (name,payload) VALUES ('users','[]') ON DUPLICATE KEY UPDATE name=VALUES(name)");
                 $pdo->query("SELECT name FROM vaultcast_documents WHERE name='users' FOR UPDATE")->fetch();
                 // Replace atomically: a duplicate username must never update another identity.
                 $pdo->exec('DELETE FROM vaultcast_users');
