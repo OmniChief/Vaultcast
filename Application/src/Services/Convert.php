@@ -1383,6 +1383,8 @@ class Convert {
             self::tick(false);
             $q=self::queue();
             foreach ($q as $job) if (($job['status'] ?? '')==='running' && ($job['external_worker_id'] ?? '')===$worker['id'] && (int)($job['worker_slot'] ?? 0)===(int)($worker['slot_id'] ?? 0)) return ['ok'=>true,'job'=>null];
+            $mode=AIImages::encodingMode($worker);
+            $contributors=AIImages::encodingContributors();
             foreach ($q as &$job) {
                 if (($job['status'] ?? '')!=='queued') continue;
                 $item=Catalogue::item((string)$job['item_id']);
@@ -1390,6 +1392,21 @@ class Convert {
                 $src=\Vaultcast\Paths::real((string)$job['src']);
                 if (!$src || !self::underLibraryRoot($src) || !is_file($src)) {
                     $job['status']='failed'; $job['message']='Source file is unavailable in the library'; continue;
+                }
+                clearstatcache(true,$src);
+                $sourceBytes=(int)filesize($src);
+                // Use source size: under 400 MB goes to CPU, 400 MB and above to hardware.
+                $preferred=$sourceBytes<400000000 ? 'cpu' : 'hardware';
+                if ($mode!==$preferred) {
+                    $preferredOnline=false;
+                    foreach ($contributors as $contributor) {
+                        if (!empty($contributor['modes'][$preferred]) && Parental::allows($contributor['account'],$item)) {
+                            $preferredOnline=true;
+                            break;
+                        }
+                    }
+                    // Without an eligible preferred type online, either type may keep the queue moving.
+                    if ($preferredOnline) continue;
                 }
                 $dest=self::destFor($src,'mp4');
                 if (is_file($dest)) { $job['status']='failed'; $job['message']='A DirectPlay output already exists; it was not overwritten'; continue; }
@@ -1402,7 +1419,7 @@ class Convert {
                 $job['lease_token']=bin2hex(random_bytes(16)); $job['lease_until']=time()+300;
                 $job['started_at']=date('c'); $job['finished_at']=null; $job['progress']=0;
                 $job['message']='Contributor '.$worker['name'].' · downloading source';
-                $job['source_stat']=['size'=>(int)filesize($src),'mtime'=>(int)filemtime($src)];
+                $job['source_stat']=['size'=>$sourceBytes,'mtime'=>(int)filemtime($src)];
                 $job['duration_s']=(float)($item['duration'] ?? 0) ?: null;
                 $job['quality_mode']=$quality['quality_mode'];
                 self::saveQueue($q);
