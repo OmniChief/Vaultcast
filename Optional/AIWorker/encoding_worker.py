@@ -483,7 +483,7 @@ def pending_encodings(cfg):
     for file in sorted(transfer_root(cfg).glob("*/state.json")):
         try:
             state = json.loads(file.read_text(encoding="utf-8"))
-            if not state.get("waiting_for_claim"):
+            if not state.get("waiting_for_claim") and state.get("worker_slot", cfg.get("slot_id", 0)) == cfg.get("slot_id", 0):
                 jobs.append(state["job"])
         except (OSError, ValueError, KeyError):
             print("Could not read retained conversion state:", file)
@@ -612,8 +612,9 @@ def encode_video(command, cfg, lost, root, duration, status):
                         status["phase_progress"] = round(fraction * 100, 1)
                 except OSError:
                     pass
-            check_stopping(cfg, lost)
+            # A finished file remains useful even if the server lease was lost at the same instant.
             if process.returncode:
+                check_stopping(cfg, lost)
                 raise EncoderProcessError((root / "ffmpeg.log").read_text(errors="replace")[-1500:] or "FFmpeg failed.")
         finally:
             if process.poll() is None:
@@ -754,7 +755,7 @@ def run_encoding(cfg, job, request):
     previous = state.get("job", {})
     if previous and (previous.get("bytes") != job["bytes"] or previous.get("source_mtime") != job.get("source_mtime")):
         raise RuntimeError("Source changed; retained conversion files kept at " + str(workspace))
-    state.update(job=job, waiting_for_claim=False)
+    state.update(job=job, waiting_for_claim=False, worker_slot=cfg.get("slot_id", 0))
     save_transfer(workspace, state)
     if state.get("upload_confirmed"):
         cleanup_transfer(workspace, cfg)
@@ -780,6 +781,7 @@ def run_encoding(cfg, job, request):
     status = {"title":job["title"], "progress": 0, "stage": "downloading source", "phase": "download", "phase_progress": 0,
         "bytes_done": 0, "bytes_total": job["bytes"], "rate_bps": 0, "eta_seconds": 0}
     last_success = [time.monotonic()]
+    connection_warning = [False]
     sample = {"phase": "download", "at": time.monotonic(), "bytes": 0, "rate": 0}
     update_lock = threading.Lock()
     display = ConsoleProgress(lambda: dict(status), label="Worker "+str(cfg.get("slot_id",1))+" | "+("CPU encoding" if cfg.get("encoding_encoder", "libx264")=="libx264" else "Hardware encoding / "+ENCODERS[cfg["encoding_encoder"]]), live=cfg.get("parallel_workers",1)<=1,
@@ -811,6 +813,9 @@ def run_encoding(cfg, job, request):
             snapshot["eta_seconds"] = round(max(0, snapshot["bytes_total"] - snapshot["bytes_done"]) / rate) if rate > 0 else 0
             request(base + "/progress", "POST", snapshot, headers, timeout=15)
             last_success[0] = time.monotonic()
+            if connection_warning[0]:
+                display.log("Server connection restored; keeping the current conversion.")
+                connection_warning[0] = False
         except urllib.error.HTTPError as exc:
             if exc.code in (401, 403, 409):
                 lost.set()
@@ -818,8 +823,9 @@ def run_encoding(cfg, job, request):
             pass
         finally:
             update_lock.release()
-        if time.monotonic() - last_success[0] > 180:
-            lost.set()
+        if time.monotonic() - last_success[0] > 180 and not lost.is_set() and not connection_warning[0]:
+            connection_warning[0] = True
+            display.log("Server connection unavailable; continuing the local encode. Completed output will be kept for upload.")
 
     def heartbeat():
         while not stop.wait(5):
@@ -834,6 +840,13 @@ def run_encoding(cfg, job, request):
         with nullcontext(str(workspace)) as temporary:
             root = Path(temporary)
             source, output = root / "source.video", root / "directplay.mp4"
+            if not state.get("output_ready") and state.get("encoding_complete") and output.is_file() and output.stat().st_size == state.get("output_size"):
+                check = probe(cfg["ffprobe"], output)
+                if not any(stream.get("codec_name") == "h264" for stream in check["streams"]):
+                    raise RuntimeError("Retained completed conversion failed validation; local files kept.")
+                state["output_ready"] = True
+                save_transfer(workspace, state)
+                display.log("Recovered completed conversion after interruption; resuming upload without encoding again.")
             if not state.get("output_ready") or not output.is_file() or output.stat().st_size != state.get("output_size"):
                 required = int(job["bytes"]) * 3 + 1073741824
                 if shutil.disk_usage(root).free < required:
@@ -886,9 +899,13 @@ def run_encoding(cfg, job, request):
                                 wait_for_image_idle(cfg, request, lost, display)
                             phase("encode", "encoding (" + ENCODERS[encoder] + ")", 10)
                             update()
-                            # Remove stale progress before a CPU fallback restarts from the beginning.
+                            # Record local completion before probing or making another server request.
+                            state.update(encoding_complete=False, output_ready=False)
+                            save_transfer(workspace, state)
                             (root / "progress").unlink(missing_ok=True)
                             encode_video(command, cfg, lost, root, duration, status)
+                            state.update(encoding_complete=True, output_size=output.stat().st_size)
+                            save_transfer(workspace, state)
                         break
                     except EncoderProcessError as error:
                         if not hardware or not cfg.get("encoding_cpu_fallback", False):
@@ -961,7 +978,10 @@ def run_encoding(cfg, job, request):
         state["waiting_for_claim"] = lost.is_set() or not transient
         save_transfer(workspace, state)
         display.close()
-        print("Unconfirmed files retained for retry:", workspace)
+        if state.get("output_ready") or state.get("encoding_complete"):
+            print("Completed conversion retained for upload retry; it does not need encoding again:", workspace)
+        else:
+            print("Source retained, but the interrupted encode must restart from the beginning:", workspace)
         if not transient and not lost.is_set():
             try: request(base + "/fail", "POST", {"error": str(exc)}, headers, timeout=15)
             except Exception: pass
