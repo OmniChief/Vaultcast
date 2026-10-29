@@ -369,6 +369,37 @@ final class AIImages
         foreach ($worker['slots'] as $slot) if ((int)$slot['id']===$number) return !empty($slot[$kind]);
         return false;
     }
+    public static function encodingMode(array $worker): string {
+        $number=(int)($worker['slot_id'] ?? 0);
+        foreach ($worker['slots'] ?? [] as $slot) {
+            if ((int)$slot['id']===$number && !empty($slot['encoding'])) {
+                return in_array($slot['encoding_encoder'] ?? '', ['h264_nvenc','h264_qsv','h264_amf'], true) ? 'hardware' : 'cpu';
+            }
+        }
+        // Contributors predating explicit encoder reports used CPU encoding.
+        return 'cpu';
+    }
+
+    /** Online encoding types, restricted to active accounts with Library access. */
+    public static function encodingContributors(): array {
+        $contributors=[];
+        foreach (self::read(self::WORKERS) as $worker) {
+            if (empty($worker['ready']) || empty($worker['capabilities']['encoding']['verified']) ||
+                (int)($worker['last_seen'] ?? 0)<time()-self::ONLINE_SECONDS) continue;
+            $owner=Auth::findById((string)$worker['user_id']);
+            if (!$owner || ($owner['role'] ?? '')==='guest' || empty(Access::state($owner)['active']) || !AreaAccess::allowed($owner,'library')) continue;
+            $modes=[];
+            if (!isset($worker['slots'])) $modes['cpu']=true;
+            foreach ($worker['slots'] ?? [] as $slot) {
+                if (empty($slot['encoding'])) continue;
+                $mode=in_array($slot['encoding_encoder'] ?? '', ['h264_nvenc','h264_qsv','h264_amf'], true) ? 'hardware' : 'cpu';
+                $modes[$mode]=true;
+            }
+            if ($modes) $contributors[]=['account'=>$owner,'modes'=>$modes];
+        }
+        return $contributors;
+    }
+
     private static function touchWorker(array $worker, array $status = []): void {
         self::mutate(self::WORKERS, static function (&$workers) use ($worker, $status) { if (isset($workers[$worker['id']])) {
             $workers[$worker['id']]['last_seen'] = time();
@@ -387,7 +418,10 @@ final class AIImages
                     if (!is_array($slot)) continue;
                     $number=(int)($slot['id'] ?? 0);
                     if ($number<1 || $number>32) continue;
-                    $slots[$number]=['id'=>$number,'images'=>!empty($slot['images']),'encoding'=>!empty($slot['encoding'])];
+                    $encoder=(string)($slot['encoding_encoder'] ?? 'libx264');
+                    if (!in_array($encoder,['libx264','h264_nvenc','h264_qsv','h264_amf'],true)) $encoder='libx264';
+                    $slots[$number]=['id'=>$number,'images'=>!empty($slot['images']),'encoding'=>!empty($slot['encoding']),
+                        'encoding_encoder'=>$encoder,'encoding_mode'=>$encoder==='libx264' ? 'cpu' : 'hardware'];
                 }
                 $workers[$worker['id']]['slots']=array_values($slots);
             }
