@@ -186,7 +186,8 @@ class Manager(tk.Tk):
         self.settings = settings_page.body
         self.activity = ttk.Frame(self.tabs, padding=20)
         self.setup = setup_page.body
-        for tab, title in ((worker_page, "Workers"), (setup_page, "Setup & models"), (settings_page, "Connection & settings"), (self.activity, "Activity")):
+        update_page = ScrollPage(self.tabs)
+        for tab, title in ((worker_page, "Workers"), (setup_page, "Setup & models"), (settings_page, "Connection & settings"), (self.activity, "Activity"), (update_page, "Updates")):
             self.tabs.add(tab, text=title)
             index = len(self.nav_buttons)
             nav_button = ttk.Button(nav, text=title, style="Nav.TButton", command=lambda i=index: self.select_page(i))
@@ -196,6 +197,8 @@ class Manager(tk.Tk):
         self.build_workers()
         self.build_settings()
         self.build_setup()
+        from worker_updates_ui import Updates
+        self.updates = Updates(self, update_page.body)
         self.logs = tk.Text(self.activity, wrap="word", state="disabled", font=("Consolas", 10))
         scrollbar = ttk.Scrollbar(self.activity, command=self.logs.yview)
         self.logs.configure(yscrollcommand=scrollbar.set)
@@ -515,6 +518,8 @@ class Manager(tk.Tk):
                 self.events.put(("pair_error", str(error)))
         threading.Thread(target=connect, daemon=True, name="vaultcast-pairing").start()
     def poll(self):
+        if self.updates.poll():
+            return
         self.dashboard.update()
         for slot_id in list(self.pending_removals):
             item = self.controller.running.get(slot_id)
@@ -525,7 +530,9 @@ class Manager(tk.Tk):
                 event = self.events.get_nowait()
             except queue.Empty:
                 break
-            if event[0] == "setup_progress":
+            if event[0].startswith("update_"):
+                self.updates.event(event)
+            elif event[0] == "setup_progress":
                 self.setup_status.set(event[1])
                 self.setup_bar.configure(value=100 * event[2] / event[3] if event[3] else 0)
             elif event[0] in ("setup_done", "setup_error"):
