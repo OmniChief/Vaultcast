@@ -149,7 +149,7 @@ def stage(plan, progress, cancel):
 def launch(manifest):
     manifest = Path(manifest)
     subprocess.Popen([sys.executable, str(manifest.parent / "apply-helper.py"), "--apply", str(manifest)],
-                     cwd=manifest.parent, creationflags=FLAGS)
+                     cwd=manifest.parent, creationflags=FLAGS | (0x01000000 if os.name == "nt" else 0))
 
 
 def replace(source, target):
