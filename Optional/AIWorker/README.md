@@ -1,4 +1,4 @@
-# Vaultcast Worker Manager 1.5.1
+# Vaultcast Worker Manager
 
 Windows only. Extract this entire folder and double-click **start-worker.cmd**.
 The lightweight Python/Tkinter manager replaces the default console menu.
@@ -69,9 +69,9 @@ model compatibility and generation quality require checking on the target PC.
 
 Open **Updates** to check for and install worker updates. Startup checks can be
 disabled there; installing is always your choice. Preview follows
-`feat/ai-images-worker`, while Stable follows `main`. Until the worker is released
-on main, use Preview. This updates only versions published on that channel, not
-unmerged pull requests. The current development build defaults to Preview.
+`feat/ai-images-worker`, while Stable follows `main`. Stable (main) is the default for new installations and invalid saved channels.
+An explicitly selected channel is preserved. Preview is optional. Updates only
+include versions published on the selected channel, not unmerged pull requests.
 
 The updater pins one GitHub commit, verifies downloaded Git blob hashes, stages
 all files, then finishes running jobs before closing and replacing worker files.
