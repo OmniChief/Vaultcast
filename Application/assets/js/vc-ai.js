@@ -1,7 +1,7 @@
 /* Vaultcast AI → Images */
 (function(root){
   'use strict';
-  var A, h, api, timer = 0, host = null, busy = false, imageDimensions = null, modelPicker = null, currentTab = 'images';
+  var A, h, api, timer = 0, host = null, busy = false, imageDimensions = null, modelPicker = null, currentTab = 'images', videoRefresh = null, viewEpoch = 0;
   function call(path, opts){ return api(path, opts).then(function(j){ if (!j || !j.ok) throw j || {}; return j; }); }
   function button(label, fn, cls){ return h('button', { type:'button', className:'btn ' + (cls || ''), text:label, onClick:fn }); }
   function statusLabel(job){ return ({queued:'Queued',running:'Generating',completed:'Ready',failed:'Failed',canceled:'Canceled'})[job.status] || job.status; }
@@ -40,7 +40,7 @@
     if (summaryHost) summaryHost.replaceChildren(summary); if (jobsHost) jobsHost.replaceChildren(library);
     if (!document.hidden) schedule(active ? 5000 : 15000); else clearTimeout(timer);
   }
-  function showError(e){ if (A && A.toast) A.toast((e && (e.error || e.message)) || 'AI Images could not load.', { kind:'bad' }); }
+  function showError(e){ if (A && A.toast) A.toast((e && (e.error || e.message)) || 'AI Studio could not load.', { kind:'bad' }); }
   function refresh(){ if (!host || !host.isConnected || busy || currentTab !== 'images') return Promise.resolve(); busy = true; return call('/ai/state').then(paint).catch(function(e){ showError(e); }).finally(function(){ busy = false; }); }
   function schedule(ms){ clearTimeout(timer); timer = setTimeout(refresh, ms); }
   function renderLibrary(){
@@ -131,18 +131,48 @@
   }
   function renderVideos(){
     clearTimeout(timer); currentTab='video'; host.replaceChildren();
-    var prompt=h('textarea',{required:true,maxLength:2000,placeholder:'Describe the scene and movement…','aria-label':'Video description'});
-    var negative=h('textarea',{maxLength:2000,placeholder:'Things to avoid (optional)','aria-label':'Negative prompt'});
+    var epoch=viewEpoch;
+    function current(){return host&&host.isConnected&&currentTab==='video'&&epoch===viewEpoch;}
+    var prompt=h('textarea',{required:true,maxLength:2000,rows:4,className:'ai-prompt',placeholder:'Describe the scene and movement…','aria-label':'Video description'});
+    var negative=h('textarea',{maxLength:2000,rows:2,className:'ai-negative',placeholder:'Things to avoid (optional)','aria-label':'Negative prompt'});
     var size=h('select',{'aria-label':'Video size'},[h('option',{value:'512x320',text:'512 × 320 · faster'}),h('option',{value:'768x448',text:'768 × 448 · more detail'})]);
     var length=h('select',{'aria-label':'Video length'},[h('option',{value:'49',text:'About 2 seconds'}),h('option',{value:'81',text:'About 3.3 seconds'}),h('option',{value:'121',text:'About 5 seconds'})]);
     var list=h('div',{className:'ai-job-list'}),submit=h('button',{type:'submit',className:'btn primary',text:'Queue video'});
-    var form=h('form',{className:'hub-panel vc-panel',onSubmit:function(event){event.preventDefault();submit.disabled=true;call('/ai/video',{method:'POST',body:{prompt:prompt.value,negative_prompt:negative.value,size:size.value,frames:Number(length.value)}}).then(load).catch(showError).finally(function(){submit.disabled=false;});}},[h('div',{className:'hub-panel-body'},[h('h1',{text:'AI video generation'}),h('p',{text:'Describe a short clip. A connected AI video worker generates it using Wan 2.2. Generation may take several minutes. Up to three videos can wait at once; this initial video feature does not charge contribution points.'}),prompt,negative,size,length,submit,button('Back to images',function(){currentTab='images';render(host,'images');},'ghost')])]);
-    host.append(form,list);
+    var form=h('form',{className:'hub-panel vc-panel',onSubmit:function(event){
+      event.preventDefault();submit.disabled=true;
+      call('/ai/video',{method:'POST',body:{prompt:prompt.value,negative_prompt:negative.value,size:size.value,frames:Number(length.value)}})
+        .then(function(){if(current())return load();}).catch(function(error){if(current())showError(error);})
+        .finally(function(){if(form.isConnected)submit.disabled=false;});
+    }},[
+      h('div',{className:'hub-panel-head'},[h('h2',{text:'Create a video'})]),
+      h('div',{className:'hub-panel-body'},[
+        h('label',{className:'vc-field'},[h('span',{text:'Describe your video'}),prompt]),
+        h('label',{className:'vc-field'},[h('span',{text:'Things to avoid (optional)'}),negative]),
+        h('div',{className:'ai-settings-grid'},[
+          h('label',{className:'vc-field'},[h('span',{text:'Resolution'}),size]),
+          h('label',{className:'vc-field'},[h('span',{text:'Length'}),length])
+        ]),
+        h('div',{className:'ai-form-actions'},[
+          h('p',{className:'muted ai-note',text:'A connected AI video worker generates your clip using Wan 2.2. This can take several minutes. Up to three requests can wait at once. Video generation currently has no contribution-point charge.'}),submit
+        ])
+      ])
+    ]);
+    host.append(
+      h('header',{className:'vc-hero ai-hero'},[h('div',{className:'vc-hero-copy'},[
+        h('span',{className:'eyebrow',text:'AI Studio'}),h('h1',{text:'Videos'}),
+        h('p',{className:'muted',text:'Create short clips using available AI video workers.'})
+      ])]),form,
+      h('section',{className:'hub-panel vc-panel ai-jobs'},[
+        h('div',{className:'hub-panel-head'},[h('h2',{text:'Your videos'})]),
+        h('div',{className:'hub-panel-body'},[list])
+      ])
+    );
     function load(){
-      if(!host||!host.isConnected||currentTab!=='video')return;
+      if(!current()||document.hidden)return;
       return call('/ai/video').then(function(data){
-        if(!host||currentTab!=='video')return;
+        if(!current())return;
         list.replaceChildren();
+        if(!(data.jobs||[]).length)list.appendChild(h('p',{className:'muted',text:'Your queued and generated videos will appear here.'}));
         (data.jobs||[]).forEach(function(job){
           var children=[h('h3',{text:job.prompt}),h('p',{text:statusLabel(job)+(job.status==='running'?' · '+job.progress+'%':'')})];
           if(job.error)children.push(h('p',{className:'bad',text:job.error}));
@@ -150,12 +180,16 @@
           children.push(button(job.status==='queued'||job.status==='running'?'Cancel':'Delete',function(){call('/ai/video/'+job.id+'/'+(job.status==='queued'||job.status==='running'?'cancel':'delete'),{method:'POST',body:{}}).then(load).catch(showError);},'ghost'));
           list.appendChild(h('article',{className:'ai-job'},children));
         });
-      }).catch(showError).finally(function(){clearTimeout(timer);if(host&&currentTab==='video')timer=setTimeout(load,10000);});
+      }).catch(function(error){if(current())showError(error);}).finally(function(){if(current()){clearTimeout(timer);if(!document.hidden)timer=setTimeout(load,10000);}});
     }
+    videoRefresh=load;
+    document.addEventListener('visibilitychange',onVisibility);
     load();
   }
   function render(target, tab){
+    document.removeEventListener('visibilitychange',onVisibility);viewEpoch++;videoRefresh=null;
     host = target; currentTab = tab || 'images'; imageDimensions = null; modelPicker = null; clearTimeout(timer); host.replaceChildren(); host.classList.add('vc-ai');
+    if(tab==='video'){renderVideos();return;}
     if(tab==='library'){renderLibrary();return;}
     if(tab==='moderation'){renderModeration();return;}
     var prompt = h('textarea', { rows:'4', maxlength:'1200', placeholder:'Describe the image you want to create…', required:true, className:'ai-prompt' });
@@ -233,11 +267,10 @@
     ]);
     var summaryHost = h('div', { className:'ai-summary-host' }), jobsHost = h('div', { className:'ai-jobs-host' });
     host.append(h('header', { className:'vc-hero ai-hero' }, [h('div', { className:'vc-hero-copy' }, [h('span', { className:'eyebrow', text:'AI Studio' }), h('h1', { text:'Images' }), h('p', { className:'muted', text:'Create images with the Vaultcast community’s available computers.' })])]), summaryHost, form, jobsHost, worker);
-    host.prepend(button('AI video generation',renderVideos,'ghost'));
     refresh();
     document.addEventListener('visibilitychange', onVisibility);
   }
-  function onVisibility(){ if (document.hidden) clearTimeout(timer); else refresh(); }
-  function stop(){ clearTimeout(timer); document.removeEventListener('visibilitychange', onVisibility); host = null; modelPicker = null; }
+  function onVisibility(){ if (document.hidden) clearTimeout(timer); else if(currentTab==='video'&&videoRefresh)videoRefresh(); else refresh(); }
+  function stop(){ viewEpoch++;videoRefresh=null;clearTimeout(timer); document.removeEventListener('visibilitychange', onVisibility); host = null; modelPicker = null; }
   root.VaultcastAI = { init:function(app){ A=app; h=app.h; api=app.api; }, render:render, stop:stop };
 })(this);
