@@ -1,7 +1,26 @@
 """Compact worker table with vector controls, independent of system icon fonts."""
 import tkinter as tk
+import math
 from tkinter import ttk
 from tkinter import font as tkfont
+
+
+def eta_label(data):
+    if str(data.get("stage", "")).startswith("joining"):
+        return "ETA: unavailable"
+    seconds = data.get("display_eta_seconds")
+    if "display_eta_seconds" not in data:
+        rate, total = data.get("bytes_per_second"), data.get("bytes_total")
+        if isinstance(rate, (int, float)) and rate > 0 and isinstance(total, (int, float)) and total > 0:
+            seconds = max(0, total-data.get("bytes_done", 0)) / rate
+    if isinstance(seconds, (int, float)) and math.isfinite(seconds) and seconds >= 0:
+        seconds = math.ceil(seconds)
+        hours, seconds = divmod(seconds, 3600)
+        minutes, seconds = divmod(seconds, 60)
+        return "ETA: %d:%02d:%02d" % (hours, minutes, seconds) if hours else "ETA: %02d:%02d" % (minutes, seconds)
+    if data.get("phase") in ("upload", "download", "encode") and data.get("stage") != "waiting for GPU":
+        return "ETA: calculating..."
+    return "ETA: unavailable"
 
 
 def progress_label(data):
@@ -92,6 +111,7 @@ class Dashboard:
     def __init__(self, app, Tooltip):
         self.app, self.controls = app, {}
         self.file_labels = {}
+        self.eta_labels = {}
         self.host = ttk.Frame(app.workers)
         self.host.pack(fill="both", expand=True)
         header = ttk.Frame(self.host)
@@ -139,6 +159,10 @@ class Dashboard:
             file_label.status_widget = label
             file_label.pack_forget()
             bar=ttk.Progressbar(tile,maximum=100,length=100)
+            eta=tk.StringVar(value="ETA: --")
+            eta_widget=ttk.Label(tile,textvariable=eta,style="Muted.Card.TLabel")
+            Tooltip(eta_widget,"Estimated time remaining for the current step, based on measured progress. Unavailable when that step cannot report enough information.")
+            self.eta_labels[number]=(eta,eta_widget)
             actions=ttk.Frame(tile,style="Card.TFrame")
             actions.pack(fill="x",pady=(3,0))
             buttons={}
@@ -168,6 +192,10 @@ class Dashboard:
         text, full, label, _, _ = self.file_labels[number]
         self.file_labels[number] = (text, full, label, str(name), size)
         self.draw_file(number)
+
+    def set_eta(self, number, data=None):
+        if number in self.eta_labels:
+            self.eta_labels[number][0].set(eta_label(data) if data is not None else "ETA: --")
 
     def draw_file(self, number):
         text, full, label, name, size = self.file_labels[number]
@@ -232,10 +260,14 @@ class Dashboard:
                 buttons[key].pack(side="left",padx=2)
                 buttons[key].enable(not busy and not removing and not (key=="edit" and running) and not (key=="finish" and draining) and not (key=="stop" and stopping))
             if running:
-                bar.pack(fill="x",pady=(2,0),before=bar.master.winfo_children()[-1])
+                eta_widget=self.eta_labels[number][1]
+                eta_widget.pack(fill="x",pady=(2,0),before=bar.master.winfo_children()[-1])
+                bar.pack(fill="x",pady=(2,0),before=eta_widget)
             else:
                 bar.stop()
                 bar.pack_forget()
+                self.eta_labels[number][1].pack_forget()
+                self.set_eta(number)
             self.controls[number]=(buttons,bar,state)
         self.summary.set("%d workers / %d running" % (len(app.cards),active))
         if active:
