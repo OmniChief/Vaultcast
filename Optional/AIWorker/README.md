@@ -118,3 +118,15 @@ AI generation can need restarting. Server-side leases expire normally; shutdown
 does not wait for an unavailable server. Existing external AI engines and
 unrelated applications are not terminated. The updater helper is explicitly
 separate so an in-app update can still apply files and restart the manager.
+
+## NVIDIA driver compatibility
+
+NVIDIA setup first checks the configured/current FFmpeg. If that build requires
+an NVENC API newer than the installed driver, drivers supporting NVENC 12.2 can
+use a private FFmpeg 7.1 compatibility runtime downloaded and SHA-256 verified
+by setup. The encoder is checked again before saving the worker. This older
+runtime is selected only for the NVIDIA slot; other workers and system FFmpeg
+are not replaced. A current driver remains preferable for using current FFmpeg.
+Unsupported drivers/devices show a short error with details in Activity. No
+silent switch to CPU encoding is made. Runtime files are installed automatically
+by setup; updater delivery includes the compatibility-selection code.
