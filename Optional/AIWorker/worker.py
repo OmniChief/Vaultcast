@@ -664,6 +664,7 @@ def main():
     def start_slot(slot):
         local = dict(cfg, slot_id=slot["id"], contributions={"images":slot.get("images",False),"encoding":slot.get("encoding",False)},
             encoding_threads=max(1,len(slot.get("cpu_cores",[]))), cpu_cores=slot.get("cpu_cores",[]), _stop_event=stop,
+            ffmpeg=slot.get("ffmpeg") or cfg.get("ffmpeg"), ffprobe=slot.get("ffprobe") or cfg.get("ffprobe"),
             parallel_workers=len(cfg["slots"]), encoding_encoder=slot.get("encoding_encoder", "libx264"),
             encoding_device=slot.get("encoding_device", 0), _slot_kind=slot_kind(slot))
         try: run_slot(local,stop)

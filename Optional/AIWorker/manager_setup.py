@@ -90,7 +90,13 @@ def prepare(config, slots, log, progress, cancel):
                     if not engine.idle():
                         raise ValueError("Wait for the AI engine to finish its current work before checking hardware encoding.")
                     engine.free()
-                check_encoder(ffmpeg, ffprobe, encoder, slot.get("encoding_device", 0), len(cores), temp)
+                selected_ffmpeg, selected_probe = ffmpeg, ffprobe
+                if encoder == "h264_nvenc":
+                    from nvidia_encoder import checked_runtime
+                    selected_ffmpeg, selected_probe = checked_runtime(ffmpeg, ffprobe, slot.get("encoding_device", 0), len(cores), temp, log, progress, cancel)
+                else:
+                    check_encoder(ffmpeg, ffprobe, encoder, slot.get("encoding_device", 0), len(cores), temp)
+                slot.update(ffmpeg=selected_ffmpeg, ffprobe=selected_probe)
         cfg.update(ffmpeg=ffmpeg, ffprobe=ffprobe)
         caps["encoding"] = {"verified": True, "profile": "mp4-h264-aac"}
     else:

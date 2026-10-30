@@ -87,6 +87,7 @@ class Controller:
             cfg = copy.deepcopy(self.config)
             cfg.update(slot_id=slot["id"], contributions={k: bool(slot.get(k)) for k in ("images", "encoding", "video")},
                        cpu_cores=cores, encoding_threads=max(1, len(cores)),
+                       ffmpeg=slot.get("ffmpeg") or cfg.get("ffmpeg"), ffprobe=slot.get("ffprobe") or cfg.get("ffprobe"),
                        encoding_encoder=slot.get("encoding_encoder", "libx264"), encoding_device=slot.get("encoding_device", 0),
                        _console=self, _gpu_coordinator=self.gpu, _stop_event=stop, _drain_event=drain,
                        _slot_kind=slot_kind(slot), _images_enabled=any(s.get("images") or s.get("video") for s in self.config.get("slots", [])))
