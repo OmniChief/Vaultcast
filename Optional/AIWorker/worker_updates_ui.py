@@ -13,9 +13,9 @@ class Updates:
         self.app, self.plan, self.pending = app, None, None
         self.checking = False
         self.preferences = updater.read_json(updater.STATE / "preferences.json", {})
-        self.channel = tk.StringVar(value=self.preferences.get("channel", "Preview"))
+        self.channel = tk.StringVar(value=self.preferences.get("channel", "Stable"))
         if self.channel.get() not in updater.CHANNELS:
-            self.channel.set("Preview")
+            self.channel.set("Stable")
         self.automatic = tk.BooleanVar(value=self.preferences.get("automatic", True) is not False)
         self.status = tk.StringVar(value="Check for worker updates here. Installed: " + VERSION)
         result = updater.read_json(updater.STATE / "result.json")
