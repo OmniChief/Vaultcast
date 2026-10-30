@@ -3,6 +3,43 @@ import tkinter as tk
 from tkinter import ttk
 
 
+def progress_label(data):
+    """Format actual metrics, never terminal-rendered text."""
+    phase = data.get("phase")
+    percent = data.get("phase_progress")
+    if data.get("stage") == "waiting for GPU":
+        return "Waiting for GPU"
+    if phase in ("upload", "download"):
+        rate = max(0, float(data.get("bytes_per_second") or 0)) / 1000000
+        label = "Upload" if phase == "upload" else "Download"
+        suffix = " - %.0f%%" % max(0, min(100, percent)) if isinstance(percent, (int, float)) else ""
+        return "%s: %.1f MB/s%s" % (label, rate, suffix)
+    if phase in ("wait_upload", "wait_download"):
+        return "Waiting to upload" if phase == "wait_upload" else "Waiting to download"
+    if phase == "verify":
+        return "Finalising"
+    if phase == "done":
+        return "Completed"
+    label = "Encoding" if phase == "encode" else "Generating"
+    return "%s: %.0f%%" % (label, max(0, min(100, percent))) if isinstance(percent, (int, float)) else label
+
+
+def status_label(message):
+    text = message.lower()
+    for fragment, label in (("stopped", "Stopped"), ("connection", "Reconnecting"),
+                            ("reconnect", "Reconnecting"), ("unavailable", "Reconnecting"),
+                            ("failed", "Needs attention"), ("error", "Needs attention"),
+                            ("paused:", "Needs attention"), ("finishing", "Finishing current job"),
+                            ("stopping", "Stopping"), ("retry", "Retrying")):
+        if fragment in text:
+            return label
+    if "waiting" in text:
+        return "Waiting for GPU" if "gpu" in text else "Waiting for job"
+    if "generat" in text:
+        return "Generating"
+    return "Completed" if "delivered" in text else "Working"
+
+
 class IconButton(tk.Canvas):
     def __init__(self, parent, icon, action, tooltip, Tooltip):
         super().__init__(parent, width=27, height=27, background="white", highlightthickness=1,

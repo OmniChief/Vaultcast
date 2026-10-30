@@ -43,11 +43,17 @@ class Controller:
         self.shutdown = threading.Event()
         self.config = {}
         self.pairing = False
+        self.last_status = {}
         if Path(worker.CONFIG_PATH).exists():
             self.config = json.loads(Path(worker.CONFIG_PATH).read_text(encoding="utf-8"))
         threading.Thread(target=self.heartbeat_loop, daemon=True, name="manager-heartbeat").start()
     def set_status(self, slot, text):
-        self.events.put(("status", slot, str(text).replace("\ufffd", "-")))
+        from worker_dashboard import status_label
+        text = str(text)
+        if self.last_status.get(slot) != text:
+            self.log("Worker %s: %s" % (slot, text))
+            self.last_status[slot] = text
+        self.events.put(("status", slot, status_label(text)))
     def set_progress(self, slot, data):
         self.events.put(("progress", slot, dict(data)))
     def set_limits(self, limits):
@@ -551,9 +557,13 @@ class Manager(tk.Tk):
                     status.set(event[2])
                 elif event[0] == "finished":
                     bar.stop()
-                    status.set("Stopped \xc2\xb7 details in Activity or worker.log")
+                    status.set("Stopped")
                 else:
+                    from worker_dashboard import progress_label
+                    status.set(progress_label(event[2]))
                     value = event[2].get("phase_progress")
+                    if event[2].get("phase") in ("verify", "wait_upload", "wait_download") or event[2].get("stage") == "waiting for GPU":
+                        value = None
                     bar.stop()
                     if isinstance(value, (int, float)):
                         bar.configure(mode="determinate", value=max(0, min(100, value)))

@@ -38,9 +38,9 @@ def generate(cfg, job, engine, stop):
     base = cfg["server"] + "/api/ai/worker/video/jobs/" + job["id"]
     headers = dict(worker.worker_headers(cfg), **{"X-Vaultcast-Lease": job["lease"]})
     last = [0]
-    def progress(value, message):
+    def progress(value, message, **metrics):
         worker.slot_status(cfg, message)
-        cfg["_console"].set_progress(cfg["slot_id"], {"phase_progress": value})
+        cfg["_console"].set_progress(cfg["slot_id"], dict({"phase_progress": value}, **metrics))
         if time.monotonic() - last[0] >= 25:
             worker.request(base + "/progress", "POST", {"progress": value or 1}, headers)
             last[0] = time.monotonic()
@@ -52,7 +52,13 @@ def generate(cfg, job, engine, stop):
             worker.request(base + "/fail", "POST", {"error": str(error)}, headers)
             return
         url, _ = engine.output(outputs, video=True)
-        download(url, output, progress=lambda _text, done, total: progress(95, "Saving generated video locally"), cancel=stop)
+        sample = [time.monotonic(), 0]
+        def download_progress(_text, done, total):
+            now = time.monotonic()
+            rate = max(0, done-sample[1]) / max(0.001, now-sample[0])
+            sample[:] = [now, done]
+            progress(100*done/total if total else None, "Saving generated video locally", phase="download", bytes_per_second=rate)
+        download(url, output, progress=download_progress, cancel=stop)
     size = output.stat().st_size
     if not 0 < size <= 67108864:
         worker.request(base + "/fail", "POST", {"error": "Generated video exceeds the 64 MiB upload limit."}, headers)
@@ -75,13 +81,15 @@ def generate(cfg, job, engine, stop):
             block = source.read(min(2097152, size-offset))
             request = urllib.request.Request(base + "/chunk", block, dict(headers, **{
                 "Content-Type": "application/octet-stream", "X-Vaultcast-Offset": str(offset)}), method="POST")
+            started = time.monotonic()
             with urllib.request.urlopen(request, timeout=120) as response:
                 result = json.loads(response.read())
             confirmed = int(result["offset"])
             if not 0 <= confirmed <= size or confirmed == offset:
                 raise RuntimeError("The video upload made no progress; output is retained for retry.")
+            rate = max(0, confirmed-offset) / max(0.001, time.monotonic()-started)
             offset = confirmed
-            progress(95 + 4*offset/size, "Uploading video: %.1f%%" % (100*offset/size))
+            progress(100*offset/size, "Uploading video", phase="upload", bytes_per_second=rate)
     try:
         worker.request(base + "/complete", "POST", {"size": size, "sha256": digest.hexdigest()}, headers, timeout=90)
     except urllib.error.HTTPError as error:
