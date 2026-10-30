@@ -21,6 +21,7 @@ import urllib.request
 import urllib.parse
 import zipfile
 from contributor_setup import DATA, yes
+from worker_eta import RateWindow
 from worker_cache import cache_use
 
 FLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -341,6 +342,7 @@ class ConsoleProgress:
         self.width = 0
         self.last_emit = 0
         self.sample = None
+        self.eta_window = RateWindow()
         self.closed = False
         self.thread = threading.Thread(target=self._run, daemon=True)
 
@@ -369,27 +371,13 @@ class ConsoleProgress:
             if changed: self.sample = {"phase": phase, "at": now, "done": done, "rate": 0, "started": now}
             sample = self.sample
             eta = None
-            elapsed = now - sample["at"]
-            if elapsed >= 0.5:
-                rate = max(0, done - sample["done"]) / elapsed
-                sample["rate"] = rate if not sample["rate"] else sample["rate"] * 0.5 + rate * 0.5
-                sample.update(at=now, done=done)
-            if phase in ("download", "upload") and total > 0 and sample["rate"] > 0:
-                eta = max(0, total-done) / sample["rate"]
-            elif phase == "encode":
-                if percent < sample.get("last_percent", percent):
-                    sample.pop("encode_origin", None)
-                sample["last_percent"] = percent
-                if data.get("stage") == "waiting for GPU" or str(data.get("stage", "")).startswith("joining"):
-                    sample.pop("encode_origin", None)
-                else:
-                    origin = sample.setdefault("encode_origin", (now, percent))
-                    advanced = percent-origin[1]
-                    elapsed_encode = now-origin[0]
-                    if percent >= 100:
-                        eta = 0
-                    elif advanced > 0 and elapsed_encode >= 2:
-                        eta = elapsed_encode * (100-percent) / advanced
+            if phase in ("download", "upload") and total > 0:
+                sample["rate"], eta = self.eta_window.measure(now, done, max(0, total-done), (phase, total))
+            elif phase == "encode" and data.get("stage") != "waiting for GPU" and not str(data.get("stage", "")).startswith("joining"):
+                _, eta = self.eta_window.measure(now, data.get("encode_work_seconds"), data.get("encode_remaining_seconds"), (phase, data.get("encode_encoder")))
+            else:
+                self.eta_window.reset()
+            sample.update(at=now, done=done)
             if not self.terminal and not self.dashboard and not force and not changed: return
             labels = {"download": "Download", "encode": "Encoding", "upload": "Upload", "verify": "Finalising", "done": "Completed"}
             filled = int(percent / 100 * 20)
@@ -400,9 +388,9 @@ class ConsoleProgress:
             if phase in ("download", "upload"):
                 text += f"  {self.size(done)} / {self.size(total)}"
                 if sample["rate"] > 0:
-                    text += f"  {self.size(sample['rate'])}/s  ETA {self.remaining((total-done)/sample['rate'])}"
+                    text += f"  {self.size(sample['rate'])}/s  ETA {(self.remaining(eta) if eta is not None else 'calculating')}"
             elif phase == "encode" and 0 < percent < 100:
-                text += "  ETA " + self.remaining((now - sample["started"]) * (100 - percent) / percent)
+                text += "  ETA " + (self.remaining(eta) if eta is not None else "calculating")
             elif phase == "encode" and data.get("stage") == "waiting for GPU":
                 text = "Waiting for GPU (image generation or another hardware encode)..."
             elif phase == "verify":
@@ -663,6 +651,10 @@ class EncoderProcessError(RuntimeError):
 def encode_video(command, cfg, lost, root, duration, status, completed_seconds=0, total_duration=None):
     with (root / "ffmpeg.log").open("wb") as log:
         process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=log, creationflags=FLAGS)
+        work_before = float(status.get("encode_work_seconds", 0))
+        status.update(encode_work_seconds=work_before,
+                      encode_encoder=command[command.index("-c:v")+1] if "-c:v" in command else "copy",
+                      encode_remaining_seconds=max(0, (total_duration or duration)-completed_seconds))
         try:
             try:
                 set_encoding_affinity(process, cfg.get("cpu_cores"))
@@ -677,7 +669,10 @@ def encode_video(command, cfg, lost, root, duration, status, completed_seconds=0
                         content = progress_file.read().decode(errors="replace")
                     values = re.findall(r"out_time_us=(\d+)", content)
                     if values and duration > 0:
-                        fraction = min(1, (completed_seconds + min(duration, int(values[-1]) / 1000000)) / (total_duration or duration))
+                        section_done = min(duration, int(values[-1]) / 1000000)
+                        status["encode_work_seconds"] = work_before + section_done
+                        status["encode_remaining_seconds"] = max(0, (total_duration or duration)-completed_seconds-section_done)
+                        fraction = min(1, (completed_seconds + section_done) / (total_duration or duration))
                         status["progress"] = round(10 + fraction * 80, 1)
                         status["phase_progress"] = round(fraction * 100, 1)
                 except OSError:
@@ -686,6 +681,9 @@ def encode_video(command, cfg, lost, root, duration, status, completed_seconds=0
             if process.returncode:
                 check_stopping(cfg, lost)
                 raise EncoderProcessError((root / "ffmpeg.log").read_text(errors="replace")[-1500:] or "FFmpeg failed.")
+            if duration > 0 and math.isfinite(duration):
+                status["encode_work_seconds"] = work_before + duration
+                status["encode_remaining_seconds"] = max(0, (total_duration or duration)-completed_seconds-duration)
         finally:
             if process.poll() is None:
                 process.terminate()
