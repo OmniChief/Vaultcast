@@ -5150,6 +5150,7 @@ try {
       [['board','Board'],['calendar','Calendar'],['drop','Drop'],['ambient','Ambient']].forEach(function(t){ items.push({ label:t[1], active:(state.miscTab||'board')===t[0], go:function(){ state.miscTab=t[0]; state.miscSub=''; if(state.view!=='misc')navigate('misc'); else { pushNav(); render(); } } }); });
     } else if (mode === 'ai') {
       items.push({ label:'Images', active:(state.aiTab||'images')==='images', go:function(){ state.aiTab='images'; if(state.view!=='ai')navigate('ai'); else { pushNav(); render(); } } });
+      items.push({ label:'Videos', active:state.aiTab==='video', go:function(){ state.aiTab='video'; if(state.view!=='ai')navigate('ai'); else { pushNav(); render(); } } });
       items.push({ label:'Library', active:state.aiTab==='library', go:function(){ state.aiTab='library'; if(state.view!=='ai')navigate('ai'); else { pushNav(); render(); } } });
       if (state.user && state.user.role === 'admin') items.push({ label:'Moderation', active:state.aiTab==='moderation', go:function(){ state.aiTab='moderation'; if(state.view!=='ai')navigate('ai'); else { pushNav(); render(); } } });
     } else {
