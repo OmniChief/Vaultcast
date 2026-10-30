@@ -1976,6 +1976,13 @@ select option:focus {
   align-items: flex-end;
   gap: 8px;
 }
+.cv-glass-transfer {
+  margin-top: 5px;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: normal;
+  font-variant-numeric: tabular-nums;
+}
 .cv-glass-pct {
   font-variant-numeric: tabular-nums;
   font-weight: 700;

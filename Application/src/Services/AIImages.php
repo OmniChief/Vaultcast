@@ -1,0 +1,533 @@
+<?php
+declare(strict_types=1);
+
+/** AI → Images job queue and optional contributor workers. */
+final class AIImages
+{
+    private const JOBS = 'ai-image-jobs';
+    private const WORKERS = 'ai-image-workers';
+    private const PAIRS = 'ai-image-pairs';
+    private const LIBRARY = 'ai-image-library';
+    private const ONLINE_SECONDS = 45;
+    private static function q(string $sql, array $p = []): PDOStatement { return Arcade::query($sql, $p); }
+
+    /** Serialize read/modify/write operations with a row lock on the existing documents table. */
+    private static function mutate(string $name, callable $fn, bool $retrySafe = false)
+    {
+        $nested=\Vaultcast\Database::connection()->inTransaction();
+        for ($attempt=0; ; $attempt++) {
+            try {
+                return \Vaultcast\Database::transaction(static function (PDO $pdo) use ($name, $fn) {
+                    // Acquire an exclusive lock directly, avoiding shared duplicate-key lock upgrades.
+                    $insert=$pdo->prepare('INSERT INTO vaultcast_documents(name,payload) VALUES (?,?) ON DUPLICATE KEY UPDATE name=VALUES(name)');
+                    $insert->execute([$name,'{}']);
+                    $read=$pdo->prepare('SELECT payload FROM vaultcast_documents WHERE name=? FOR UPDATE');
+                    $read->execute([$name]);
+                    $value=json_decode((string)$read->fetchColumn(),true);
+                    if (!is_array($value)) $value=[];
+                    $result=$fn($value);
+                    \Vaultcast\Repository::putDocument($name,$value);
+                    return $result;
+                });
+            } catch (PDOException $error) {
+                // Retry only explicitly database-only callbacks, never image/file publication.
+                if (!$retrySafe || $nested || $attempt>=2 || !in_array((int)($error->errorInfo[1] ?? 0),[1213,1205],true)) throw $error;
+                Store::invalidate();
+                usleep(random_int(25000,75000)*($attempt+1));
+            }
+        }
+    }
+    private static function read(string $name): array {
+        $value = \Vaultcast\Repository::document($name, []);
+        return is_array($value) ? $value : [];
+    }
+    private static function id(): string { return bin2hex(random_bytes(8)); }
+    private static function libraryDocument(array $user): string { return self::LIBRARY . '-' . substr(hash('sha256', (string)$user['id']), 0, 24); }
+    private static function signed(array $user): void { Arcade::signed($user); }
+    private static function imageCapacity(array $worker): int {
+        if (empty($worker['models']) || (int)($worker['models_seen'] ?? 0)<time()-self::ONLINE_SECONDS) return 0;
+        if (($worker['model_base'] ?? '') !== 'sdxl') return 0;
+        if (!isset($worker['capabilities'])) return 1048576; // Existing contributors keep working until upgraded.
+        $profile = $worker['capabilities']['images']['sdxl'] ?? [];
+        return !empty($profile['verified']) ? (int)($profile['max_pixels'] ?? 0) : 0;
+    }
+    private static function modelReport(array $models): array {
+        $result=[];
+        foreach (array_slice($models,0,256) as $model) {
+            if (!is_array($model) || ($model['base'] ?? '')!=='sdxl' || ($model['type'] ?? '')!=='main') continue;
+            $hash=strtolower(trim((string)($model['hash'] ?? '')));
+            $name=mb_substr(trim((string)($model['name'] ?? '')),0,128);
+            if ($name==='' || $hash==='' || strlen($hash)>128) continue;
+            $id=hash('sha256',"sdxl\n".$hash);
+            $result[$id]=['id'=>$id,'hash'=>$hash,'name'=>$name,'base'=>'sdxl','type'=>'main'];
+        }
+        return array_values($result);
+    }
+    private static function hasModel(array $worker, string $id): bool {
+        foreach ($worker['models'] ?? [] as $model) if (($model['id'] ?? '')===$id) return true;
+        return false;
+    }
+    private static function capabilityReport(array $body): array {
+        $caps = is_array($body['capabilities'] ?? null) ? $body['capabilities'] : [];
+        $images = is_array($caps['images'] ?? null) ? $caps['images'] : [];
+        $encoding = is_array($caps['encoding'] ?? null) ? $caps['encoding'] : [];
+        $profile = $images['sdxl'] ?? [];
+        if (!is_array($profile)) $profile = [];
+        $pixels = (int)($profile['max_pixels'] ?? 0);
+        $verified = !empty($profile['verified']) && in_array($pixels, [262144, 1048576], true);
+        return ['images'=>['sdxl'=>['verified'=>$verified, 'max_pixels'=>$verified ? $pixels : 0,
+            'checked_at'=>max(0, min(time(), (int)($profile['checked_at'] ?? 0))),
+            'seconds'=>max(0, min(1800, (float)($profile['seconds'] ?? 0))),
+            'model_hash'=>mb_substr((string)($profile['model_hash'] ?? ''), 0, 128)]], 'video'=>['verified'=>!empty($caps['video']['verified'])],
+            'encoding'=>['verified'=>!empty($encoding['verified']), 'profile'=>'mp4-h264-aac']];
+    }
+    private static function hardwareReport(array $body): array {
+        $hardware = is_array($body['hardware'] ?? null) ? $body['hardware'] : [];
+        $gpus = [];
+        foreach (array_slice(is_array($hardware['gpus'] ?? null) ? $hardware['gpus'] : [], 0, 8) as $gpu) {
+            if (!is_array($gpu)) continue;
+            $gpus[] = ['name'=>mb_substr((string)($gpu['name'] ?? ''), 0, 100), 'vram_mb'=>max(0, min(1048576, (int)($gpu['vram_mb'] ?? 0))), 'compute_capability'=>mb_substr((string)($gpu['compute_capability'] ?? ''), 0, 16)];
+        }
+        return ['platform'=>mb_substr((string)($hardware['platform'] ?? ''), 0, 24), 'ram_gb'=>max(0, min(4096, (float)($hardware['ram_gb'] ?? 0))), 'gpus'=>$gpus];
+    }
+
+    public static function state(array $user): array {
+        self::signed($user);
+        $pictures = Pictures::ownedIds((string)$user['id']);
+        $jobs = array_values(array_filter(self::read(self::JOBS), static function ($j) use ($user, $pictures) {
+            if ((string)($j['user_id'] ?? '') !== (string)$user['id']) return false;
+            return ($j['status'] ?? '') !== 'completed' || isset($pictures[(string)($j['picture_id'] ?? '')]);
+        }));
+        usort($jobs, static function ($a, $b) { return (int)($b['created_at'] ?? 0) <=> (int)($a['created_at'] ?? 0); });
+        $queue = array_values(array_filter(self::read(self::JOBS), static function ($j) { return in_array($j['status'] ?? '', ['queued', 'running'], true); }));
+        usort($queue, static function ($a, $b) { return (int)($a['created_at'] ?? 0) <=> (int)($b['created_at'] ?? 0); });
+        $positions = [];
+        $position = 0;
+        foreach ($queue as $job) { if (($job['status'] ?? '') === 'queued') $positions[(string)$job['id']] = ++$position; }
+        foreach ($jobs as &$job) {
+            $job['queue_position'] = $positions[(string)$job['id']] ?? null;
+            $job['image_url'] = !empty($job['picture_id']) ? '/api/misc/pictures/' . rawurlencode((string)$job['picture_id']) : null;
+            unset($job['user_id'], $job['worker_id']);
+        }
+        unset($job);
+        $workers = self::workersOnline();
+        foreach ($jobs as &$job) if (($job['status'] ?? '')==='queued' && !empty($job['model_id'])) {
+            $available=false;
+            foreach ($workers['models'] as $model) if ($model['id']===$job['model_id'] && $model['max_image_pixels']>=(int)$job['width']*(int)$job['height']) { $available=true; break; }
+            if (!$available) $job['waiting_reason']='Waiting for a contributor with this model and image capacity.';
+        }
+        unset($job);
+        return ['ok' => true, 'jobs' => array_slice($jobs, 0, 100), 'queue' => ['waiting' => $position, 'running' => count($queue) - $position], 'workers' => $workers, 'points'=>ContributionPoints::summary((string)$user['id'])];
+    }
+
+    /** Long-lived per-user index for generated images; queue jobs can be pruned without losing library entries. */
+    public static function library(array $user, array $query = []): array {
+        self::signed($user);
+        return self::libraryPage(self::libraryItems($user), $query);
+    }
+    private static function libraryItems(array $user): array {
+        $document = self::libraryDocument($user);
+        $meta = self::read($document);
+        $rows = self::q('SELECT * FROM vaultcast_pictures WHERE user_id=? ORDER BY created_at DESC, id', [$user['id']])->fetchAll(PDO::FETCH_ASSOC);
+        $pictures = array_fill_keys(array_column($rows, 'id'), true);
+        $backfill = [];
+        foreach (self::read(self::JOBS) as $job) {
+            $pictureId = (string)($job['picture_id'] ?? '');
+            if ((string)($job['user_id'] ?? '') !== (string)$user['id'] || ($job['status'] ?? '') !== 'completed' || !isset($pictures[$pictureId]) || !preg_match('/^[a-f0-9]{16}$/D', $pictureId) || isset($meta[$pictureId])) continue;
+            $meta[$pictureId] = ['prompt'=>(string)($job['prompt'] ?? ''), 'negative_prompt'=>(string)($job['negative_prompt'] ?? ''),
+                'created_at'=>(int)($job['finished_at'] ?? $job['created_at'] ?? time()), 'width'=>(int)($job['width'] ?? 0), 'height'=>(int)($job['height'] ?? 0),
+                'seed'=>$job['seed'] ?? null, 'steps'=>(int)($job['steps'] ?? 0), 'cfg_scale'=>(float)($job['cfg_scale'] ?? 0), 'scheduler'=>(string)($job['scheduler'] ?? ''), 'favorite'=>false];
+            $backfill[$pictureId] = $meta[$pictureId];
+        }
+        if ($backfill) self::mutate($document, static function (&$all) use ($backfill) { foreach ($backfill as $id=>$entry) if (!isset($all[$id])) $all[$id] = $entry; });
+        $items = [];
+        foreach ($rows as $row) {
+            $id = (string)$row['id']; $entry = $meta[$id] ?? null;
+            if (!is_array($entry)) continue;
+            $entry['id'] = $id; $entry['name'] = (string)$row['name']; $entry['url'] = '/api/misc/pictures/' . $id;
+            $entry['width'] = (int)$row['width']; $entry['height'] = (int)$row['height']; $entry['bytes'] = (int)$row['bytes'];
+            $items[] = $entry;
+        }
+        return $items;
+    }
+    private static function libraryPage(array $items, array $query): array {
+        $limit = max(1, min(60, (int)($query['limit'] ?? 24)));
+        $offset = max(0, (int)($query['offset'] ?? 0));
+        $term = mb_strtolower(mb_substr(trim((string)($query['q'] ?? '')), 0, 1200));
+        $favoritesOnly = filter_var($query['favorites'] ?? false, FILTER_VALIDATE_BOOLEAN);
+        $sort = (string)($query['sort'] ?? 'newest') === 'oldest' ? 'oldest' : 'newest';
+        $items = array_values(array_filter($items, static function ($entry) use ($term, $favoritesOnly) {
+            if ($favoritesOnly && empty($entry['favorite'])) return false;
+            return $term === '' || mb_strpos(mb_strtolower((string)($entry['prompt'] ?? '') . ' ' . (string)($entry['negative_prompt'] ?? '') . ' ' . (string)$entry['name'] . ' ' . (string)($entry['owner_name'] ?? '')), $term) !== false;
+        }));
+        usort($items, static function ($a, $b) use ($sort) { return $sort === 'oldest' ? (int)$a['created_at'] <=> (int)$b['created_at'] : (int)$b['created_at'] <=> (int)$a['created_at']; });
+        return ['ok'=>true, 'items'=>array_slice($items, $offset, $limit), 'total'=>count($items), 'offset'=>$offset, 'limit'=>$limit, 'has_more'=>$offset + $limit < count($items)];
+    }
+    public static function moderationLibrary(array $admin, array $query = []): array {
+        if (($admin['role'] ?? '') !== 'admin') json_error('Administrator access required.', 403);
+        $items = []; $owners = [];
+        $ownerFilter = (string)($query['owner_id'] ?? '');
+        foreach (Auth::users() as $owner) {
+            if (($owner['id'] ?? '') === '' || (string)$owner['id'] === 'public') continue;
+            $owners[] = ['id'=>(string)$owner['id'], 'name'=>(string)($owner['username'] ?? $owner['id'])];
+            if ($ownerFilter !== '' && (string)$owner['id'] !== $ownerFilter) continue;
+            foreach (self::libraryItems($owner) as $entry) {
+                $entry['owner_id'] = (string)$owner['id'];
+                $entry['owner_name'] = (string)($owner['username'] ?? $owner['id']);
+                $entry['url'] = '/api/ai/moderation/pictures/' . $entry['id'];
+                $items[] = $entry;
+            }
+        }
+        return self::libraryPage($items, $query) + ['owners'=>$owners];
+    }
+    public static function moderationPicture(array $admin, string $id): void {
+        $owner = self::moderationOwner($admin, $id);
+        Pictures::serveForModeration($admin, (string)$owner['id'], $id);
+    }
+    public static function moderationDelete(array $admin, string $id): array {
+        $owner = self::moderationOwner($admin, $id);
+        Pictures::delete($owner, [$id]);
+        self::mutate(self::libraryDocument($owner), static function (&$all) use ($id) { unset($all[$id]); });
+        return ['ok'=>true, 'deleted'=>1];
+    }
+    private static function moderationOwner(array $admin, string $id): array {
+        if (($admin['role'] ?? '') !== 'admin') json_error('Administrator access required.', 403);
+        $uid = self::q('SELECT user_id FROM vaultcast_pictures WHERE id=?', [$id])->fetchColumn();
+        $owner = $uid !== false ? Auth::findById((string)$uid) : null;
+        if (!$owner) json_error('Generated image not found.', 404);
+        // Admin review is limited to indexed AI generations, not personal picture uploads.
+        $meta = self::read(self::libraryDocument($owner));
+        $generated = isset($meta[$id]) && is_array($meta[$id]);
+        if (!$generated) foreach (self::read(self::JOBS) as $job) {
+            if (($job['picture_id'] ?? '') === $id && (string)($job['user_id'] ?? '') === (string)$owner['id'] && ($job['status'] ?? '') === 'completed') { $generated = true; break; }
+        }
+        if ($generated) return $owner;
+        json_error('Generated image not found.', 404);
+    }
+    public static function favorite(array $user, string $id, bool $favorite): array {
+        self::signed($user);
+        // Confirm ownership in the picture store before changing library metadata.
+        Pictures::serveExists($user, $id);
+        $document = self::libraryDocument($user);
+        self::mutate($document, static function (&$all) use ($id, $favorite) {
+            if (!isset($all[$id])) throw new DomainException('Generated image not found.');
+            $all[$id]['favorite'] = $favorite;
+        });
+        return ['ok'=>true, 'favorite'=>$favorite];
+    }
+    public static function deleteLibrary(array $user, array $ids): array {
+        self::signed($user);
+        $ids = array_slice(array_values(array_unique(array_map('strval', $ids))), 0, 500);
+        $document = self::libraryDocument($user); $known = self::read($document);
+        $deleting = array_values(array_filter($ids, static function ($id) use ($known) { return isset($known[$id]); }));
+        if ($deleting) Pictures::delete($user, $deleting);
+        self::mutate($document, static function (&$all) use ($deleting) { foreach ($deleting as $id) unset($all[$id]); });
+        return ['ok'=>true, 'deleted'=>count($deleting)];
+    }
+    private static function indexGenerated(array $user, array $job, array $picture): void {
+        $entry = ['prompt'=>(string)$job['prompt'], 'negative_prompt'=>(string)($job['negative_prompt'] ?? ''), 'created_at'=>(int)($job['finished_at'] ?? time()),
+            'width'=>(int)$job['width'], 'height'=>(int)$job['height'], 'seed'=>$job['seed'] ?? null, 'steps'=>(int)$job['steps'],
+            'cfg_scale'=>(float)$job['cfg_scale'], 'scheduler'=>(string)$job['scheduler'], 'model_id'=>$job['model_id'] ?? null, 'model_name'=>$job['model_name'] ?? '',
+            'model_hash'=>$job['model_hash'] ?? '', 'favorite'=>false, 'picture_created_at'=>(int)($picture['created_at'] ?? time())];
+        $document = self::libraryDocument($user);
+        self::mutate($document, static function (&$all) use ($picture, $entry) { $all[(string)$picture['id']] = $entry; });
+    }
+    private static function workersOnline(): array {
+        $all = self::read(self::WORKERS); $online = []; $configuredMax = 0; $onlineMax = 0; $encoders=0; $models=[];
+        foreach ($all as $worker) {
+            if (!empty($worker['ready']) && !empty($worker['capabilities']['encoding']['verified']) && (int)($worker['last_seen'] ?? 0)>=time()-self::ONLINE_SECONDS) {
+                $owner=Auth::findById((string)$worker['user_id']);
+                if ($owner && !empty(Access::state($owner)['active']) && AreaAccess::allowed($owner,'library')) $encoders++;
+            }
+            $pixels = self::imageCapacity($worker); $configuredMax = max($configuredMax, $pixels);
+            if (!empty($worker['ready']) && $pixels > 0 && (int)($worker['last_seen'] ?? 0) >= time() - self::ONLINE_SECONDS) {
+                $onlineMax = max($onlineMax, $pixels);
+                foreach ($worker['models'] as $model) {
+                    $id=$model['id'];
+                    if (!isset($models[$id])) $models[$id]=$model+['online_workers'=>0,'max_image_pixels'=>0];
+                    $models[$id]['online_workers']++;
+                    $models[$id]['max_image_pixels']=max($models[$id]['max_image_pixels'],$pixels);
+                }
+                $online[] = ['id'=>$worker['id'], 'name'=>$worker['name'] ?? 'Contributor PC', 'model'=>$worker['model_name'] ?? '', 'last_seen'=>(int)$worker['last_seen'], 'max_image_pixels'=>$pixels,
+                    'models'=>$worker['models'],
+                    'verified'=>!empty($worker['capabilities']['images']['sdxl']['verified'])];
+            }
+        }
+        $models=array_values($models); usort($models,static function ($a,$b) { return strcasecmp($a['name'],$b['name']); });
+        return ['online'=>count($online), 'encoding_online'=>$encoders, 'connected'=>count(array_filter($all, static function ($w) { return (int)($w['last_seen'] ?? 0) >= time() - self::ONLINE_SECONDS; })), 'total'=>count($all), 'list'=>$online, 'models'=>$models, 'max_image_pixels'=>$onlineMax, 'configured_max_image_pixels'=>$configuredMax];
+    }
+    public static function contributorStatus(): array { return self::workersOnline(); }
+
+    public static function createJob(array $user, array $body): array {
+        self::signed($user);
+        $prompt = trim((string)($body['prompt'] ?? ''));
+        if ($prompt === '' || mb_strlen($prompt) > 1200) throw new DomainException('Enter a prompt of up to 1,200 characters.');
+        $negative = trim((string)($body['negative_prompt'] ?? ''));
+        if (mb_strlen($negative) > 600) throw new DomainException('The negative prompt must be 600 characters or fewer.');
+        $width = filter_var($body['width'] ?? 1024, FILTER_VALIDATE_INT); $height = filter_var($body['height'] ?? 1024, FILTER_VALIDATE_INT);
+        if ($width === false || $height === false || $width < 512 || $height < 512 || $width > 1536 || $height > 1536 || $width % 8 !== 0 || $height % 8 !== 0 || $width * $height > 1048576) throw new DomainException('Use dimensions from 512 to 1536 pixels, in multiples of 8, with no more than 1 megapixel total.');
+        $models=self::workersOnline()['models'];
+        if (!$models) throw new DomainException('No image models are available. Connect an image contributor with an installed SDXL model.');
+        $modelId=(string)($body['model_id'] ?? ''); $selected=null;
+        foreach ($models as $model) if ($model['id']===$modelId) { $selected=$model; break; }
+        if (!$selected) throw new DomainException('The selected image model is no longer available. Choose an available model.');
+        if ($selected['max_image_pixels']<$width*$height) throw new DomainException('No contributor with this model supports this image size. Choose a smaller size.');
+        $steps = filter_var($body['steps'] ?? 30, FILTER_VALIDATE_INT);
+        if ($steps === false || $steps < 1 || $steps > 100) throw new DomainException('Choose between 1 and 100 generation steps.');
+        $count = filter_var($body['count'] ?? 1, FILTER_VALIDATE_INT);
+        if ($count === false || $count < 1 || $count > 3) throw new DomainException('Choose between 1 and 3 images per request.');
+        $cfgScale = filter_var($body['cfg_scale'] ?? 7, FILTER_VALIDATE_FLOAT);
+        if ($cfgScale === false || !is_finite((float)$cfgScale) || $cfgScale < 0 || $cfgScale > 30) throw new DomainException('CFG scale must be between 0 and 30.');
+        $hiT1 = filter_var($body['hidiffusion_t1_ratio'] ?? 0.4, FILTER_VALIDATE_FLOAT);
+        $hiT2 = filter_var($body['hidiffusion_t2_ratio'] ?? 0, FILTER_VALIDATE_FLOAT);
+        if ($hiT1 === false || !is_finite((float)$hiT1) || $hiT1 < 0 || $hiT1 > 1 || $hiT2 === false || !is_finite((float)$hiT2) || $hiT2 < 0 || $hiT2 > 1) throw new DomainException('HiDiffusion ratios must be between 0 and 1.');
+        $schedulers = ['ddim','ddpm','deis','deis_k','lms','lms_k','pndm','heun','heun_k','euler','euler_k','euler_a','kdpm_2','kdpm_2_k','kdpm_2_a','kdpm_2_a_k','dpmpp_2s','dpmpp_2s_k','dpmpp_2m','dpmpp_2m_k','dpmpp_2m_sde','dpmpp_2m_sde_k','dpmpp_3m','dpmpp_3m_k','dpmpp_sde','dpmpp_sde_k','er_sde','unipc','unipc_k','lcm','tcd'];
+        $scheduler = (string)($body['scheduler'] ?? 'euler_a');
+        if (!in_array($scheduler, $schedulers, true)) throw new DomainException('Choose a scheduler supported by InvokeAI.');
+        $seed = null;
+        if (array_key_exists('seed', $body) && $body['seed'] !== null && $body['seed'] !== '') {
+            $seed = filter_var($body['seed'], FILTER_VALIDATE_INT);
+            if ($seed === false || $seed < 0 || $seed > 4294967295) throw new DomainException('Seed must be a whole number from 0 to 4,294,967,295, or leave it blank for a random seed.');
+        }
+        $boolean = static function (string $key, bool $default = false) use ($body): bool { return filter_var($body[$key] ?? $default, FILTER_VALIDATE_BOOLEAN); };
+        $settings = ['model_id'=>$selected['id'],'model_name'=>$selected['name'],'model_hash'=>$selected['hash'],'steps'=>$steps, 'cfg_scale'=>(float)$cfgScale, 'scheduler'=>$scheduler, 'seed'=>$seed,
+            'hidiffusion'=>$boolean('hidiffusion'), 'hidiffusion_raunet'=>$boolean('hidiffusion_raunet', true), 'hidiffusion_window_attn'=>$boolean('hidiffusion_window_attn', true),
+            'hidiffusion_t1_ratio'=>(float)$hiT1, 'hidiffusion_t2_ratio'=>(float)$hiT2, 'fp32'=>$boolean('fp32',true), 'tiled'=>$boolean('tiled',true),
+            'seamless_x'=>$boolean('seamless_x'), 'seamless_y'=>$boolean('seamless_y')];
+        $now = time(); $ids = [];
+        for ($i = 0; $i < $count; $i++) $ids[] = self::id();
+        self::mutate(self::JOBS, static function (&$jobs) use ($user, $prompt, $negative, $width, $height, $settings, $now, $ids, $count) {
+            $ownQueued = 0;
+            foreach ($jobs as $job) if ((string)($job['user_id'] ?? '') === (string)$user['id'] && in_array($job['status'] ?? '', ['queued', 'running'], true)) $ownQueued++;
+            if ($ownQueued + $count > 3) throw new DomainException('You can have up to three image requests queued or generating at a time.');
+            foreach ($ids as $i => $id) {
+                ContributionPoints::chargeImage((string)$user['id'],$id);
+                $jobSettings = $settings;
+                if ($jobSettings['seed'] !== null) $jobSettings['seed'] = ($jobSettings['seed'] + $i) % 4294967296;
+                $jobs[] = ['id' => $id, 'user_id' => (string)$user['id'], 'prompt' => $prompt, 'negative_prompt' => $negative, 'width' => $width, 'height' => $height] + $jobSettings + [
+                    'status' => 'queued', 'progress' => 0, 'created_at' => $now + $i, 'updated_at' => $now, 'picture_id' => null, 'error' => '', 'points_cost'=>2];
+            }
+            if (count($jobs) > 2000) $jobs = array_values(array_filter($jobs, static function ($j) { return in_array($j['status'] ?? '', ['queued', 'running'], true) || (int)($j['created_at'] ?? 0) > time() - 86400 * 7; }));
+        });
+        return ['ok' => true, 'job_ids' => $ids];
+    }
+    public static function cancel(array $user, string $id): array {
+        self::signed($user);
+        $found = self::mutate(self::JOBS, static function (&$jobs) use ($user, $id) {
+            foreach ($jobs as &$job) if (($job['id'] ?? '') === $id && (string)($job['user_id'] ?? '') === (string)$user['id']) {
+                if (($job['status'] ?? '') === 'running') throw new DomainException('This image has already started generating.');
+                if (($job['status'] ?? '') !== 'queued') throw new DomainException('This request can no longer be canceled.');
+                ContributionPoints::refundImage($job);
+                $job['status'] = 'canceled'; $job['updated_at'] = time(); return true;
+            }
+            return false;
+        });
+        if (!$found) throw new DomainException('Image request not found.');
+        return ['ok' => true];
+    }
+
+    public static function pair(array $user): array {
+        self::signed($user);
+        $code = bin2hex(random_bytes(16)); $hash = hash('sha256', $code); $expires = time() + 600;
+        self::mutate(self::PAIRS, static function (&$pairs) use ($user, $hash, $expires) {
+            foreach ($pairs as $key => $pair) if ((int)($pair['expires_at'] ?? 0) < time()) unset($pairs[$key]);
+            $pairs[$hash] = ['user_id' => (string)$user['id'], 'expires_at' => $expires];
+        });
+        return ['ok' => true, 'pair_code' => $code, 'expires_at' => $expires];
+    }
+    public static function registerWorker(array $body): array {
+        $code = strtolower(trim((string)($body['pair_code'] ?? '')));
+        if (!preg_match('/^[a-f0-9]{32}$/D', $code)) throw new DomainException('Enter the pairing code shown in Vaultcast.');
+        $codeHash = hash('sha256', $code); $token = bin2hex(random_bytes(32)); $tokenHash = hash('sha256', $token); $id = self::id();
+        $name = mb_substr(trim((string)($body['name'] ?? 'Contributor PC')), 0, 60) ?: 'Contributor PC';
+        $modelName = mb_substr(trim((string)($body['model_name'] ?? '')), 0, 100);
+        $modelBase = trim((string)($body['model_base'] ?? ''));
+        $encoding=!empty(self::capabilityReport($body)['encoding']['verified']);
+        if (!$encoding && empty($body['capabilities']['video']['verified']) && ($modelName === '' || !in_array($modelBase, ['sd-1', 'sd-2', 'sdxl'], true))) throw new DomainException('Choose image generation or encoding for this contributor.');
+        $worker = self::mutate(self::PAIRS, static function (&$pairs) use ($codeHash, $tokenHash, $id, $name, $modelName, $modelBase, $encoding) {
+            $pair = $pairs[$codeHash] ?? null;
+            if (!is_array($pair) || (int)$pair['expires_at'] < time()) throw new DomainException('Pairing code expired or was already used. Generate a new one in Vaultcast.');
+            $owner=Auth::findById((string)$pair['user_id']);
+            if (!$owner || ($owner['role'] ?? '')==='guest' || empty(Access::state($owner)['active'])) throw new DomainException('Pairing requires an active Vaultcast account.');
+            if ($encoding && !AreaAccess::allowed($owner,'library')) throw new DomainException('Encoding contribution requires Library access. Ask an administrator to enable Library access for your account.');
+            unset($pairs[$codeHash]);
+            return ['id' => $id, 'name' => $name, 'user_id' => $pair['user_id'], 'token_hash' => $tokenHash, 'model_name' => $modelName, 'model_base' => $modelBase, 'ready' => true, 'last_seen' => time(), 'created_at' => time()];
+        });
+        if (isset($body['capabilities'])) {
+            $worker['capabilities'] = self::capabilityReport($body);
+            $worker['models']=self::modelReport(is_array($body['models'] ?? null) ? $body['models'] : []); $worker['models_seen']=time();
+            $worker['ready'] = self::imageCapacity($worker) > 0 || $encoding || !empty($worker['capabilities']['video']['verified']);
+        }
+        $worker['invoke_version'] = mb_substr((string)($body['invoke_version'] ?? ''), 0, 40);
+        if (isset($body['hardware'])) $worker['hardware'] = self::hardwareReport($body);
+        self::mutate(self::WORKERS, static function (&$workers) use ($worker) { $workers[$worker['id']] = $worker; });
+        return ['ok' => true, 'worker_id' => $id, 'worker_token' => $token, 'server_time' => time()];
+    }
+    private static function authenticateWorker(): array {
+        $token = (string)($_SERVER['HTTP_X_VAULTCAST_WORKER'] ?? '');
+        if (!preg_match('/^[a-f0-9]{64}$/D', $token)) json_error('Worker credential required.', 401);
+        $hash = hash('sha256', $token);
+        foreach (self::read(self::WORKERS) as $worker) if (hash_equals((string)($worker['token_hash'] ?? ''), $hash)) {
+            $owner=Auth::findById((string)$worker['user_id']);
+            if (!$owner || ($owner['role'] ?? '')==='guest' || empty(Access::state($owner)['active'])) json_error('The contributor account is no longer active.',403);
+            return $worker;
+        }
+        json_error('Worker credential is invalid.', 401);
+    }
+    private static function slotAllows(array $worker,string $kind): bool {
+        $number=(int)($worker['slot_id'] ?? 0);
+        if (!isset($worker['slots'])) return $number===0;
+        foreach ($worker['slots'] as $slot) if ((int)$slot['id']===$number) return !empty($slot[$kind]);
+        return false;
+    }
+    public static function encodingMode(array $worker): string {
+        $number=(int)($worker['slot_id'] ?? 0);
+        foreach ($worker['slots'] ?? [] as $slot) {
+            if ((int)$slot['id']===$number && !empty($slot['encoding'])) {
+                return in_array($slot['encoding_encoder'] ?? '', ['h264_nvenc','h264_qsv','h264_amf'], true) ? 'hardware' : 'cpu';
+            }
+        }
+        // Contributors predating explicit encoder reports used CPU encoding.
+        return 'cpu';
+    }
+
+    private static function touchWorker(array $worker, array $status = []): void {
+        self::mutate(self::WORKERS, static function (&$workers) use ($worker, $status) { if (isset($workers[$worker['id']])) {
+            $workers[$worker['id']]['last_seen'] = time();
+            if (isset($status['ready'])) $workers[$worker['id']]['ready'] = (bool)$status['ready'];
+            if (isset($status['model_name'])) $workers[$worker['id']]['model_name'] = mb_substr(trim((string)$status['model_name']), 0, 100);
+            if (isset($status['model_base']) && in_array($status['model_base'], ['sd-1','sd-2','sdxl'], true)) $workers[$worker['id']]['model_base'] = $status['model_base'];
+            if (isset($status['capabilities'])) $workers[$worker['id']]['capabilities'] = self::capabilityReport($status);
+            if (isset($status['invoke_version'])) $workers[$worker['id']]['invoke_version'] = mb_substr((string)$status['invoke_version'], 0, 40);
+            if (isset($status['hardware'])) $workers[$worker['id']]['hardware'] = self::hardwareReport($status);
+            if (isset($status['models']) && is_array($status['models'])) {
+                $workers[$worker['id']]['models']=self::modelReport($status['models']); $workers[$worker['id']]['models_seen']=time();
+            }
+            if (isset($status['slots']) && is_array($status['slots'])) {
+                $slots=[];
+                foreach (array_slice($status['slots'],0,32) as $slot) {
+                    if (!is_array($slot)) continue;
+                    $number=(int)($slot['id'] ?? 0);
+                    if ($number<1 || $number>32) continue;
+                    $encoder=(string)($slot['encoding_encoder'] ?? 'libx264');
+                    if (!in_array($encoder,['libx264','h264_nvenc','h264_qsv','h264_amf'],true)) $encoder='libx264';
+                    $slots[$number]=['id'=>$number,'images'=>!empty($slot['images']),'video'=>!empty($slot['video']),'encoding'=>!empty($slot['encoding']),
+                        'encoding_encoder'=>$encoder,'encoding_mode'=>$encoder==='libx264' ? 'cpu' : 'hardware'];
+                }
+                $workers[$worker['id']]['slots']=array_values($slots);
+            }
+            if (isset($workers[$worker['id']]['capabilities']) && self::imageCapacity($workers[$worker['id']]) === 0 && empty($workers[$worker['id']]['capabilities']['encoding']['verified']) && empty($workers[$worker['id']]['capabilities']['video']['verified'])) $workers[$worker['id']]['ready'] = false;
+        } }, true);
+    }
+    public static function worker(string $action, string $id = ''): void {
+        $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
+        if ($action === 'register' && $method === 'POST') json_out(self::registerWorker(body_json()));
+        $worker = self::authenticateWorker();
+        $worker['slot_id']=max(0,min(32,(int)($_SERVER['HTTP_X_VAULTCAST_SLOT'] ?? 0)));
+        if (strpos($action,'video-')===0 && $method==='POST') {
+            if (!self::slotAllows($worker,'video')) json_error('This slot is not enabled for AI video generation.',403);
+            json_out(AIVideos::worker($worker,substr($action,6),$id));
+        }
+        if ($action==='unregister' && $method==='POST') {
+            self::mutate(self::WORKERS,static function (&$workers) use($worker) { unset($workers[$worker['id']]); });
+            json_out(['ok'=>true]);
+        }
+        if ($action === 'heartbeat' && $method === 'POST') { self::touchWorker($worker, body_json()); json_out(['ok' => true, 'worker_id' => $worker['id'], 'slot_protocol'=>1, 'image_model_protocol'=>1, 'transfer_protocol'=>1, 'transfer_scope'=>'machine', 'transfer_limits'=>Convert::transferLimits()]); }
+        if ($action!=='claim' && $action!=='encoding-chunk' && (int)($worker['last_seen'] ?? 0)<time()-15) self::touchWorker($worker);
+        if ($action==='encoding-claim' || strpos($action,'encoding-')===0) {
+            $owner=Auth::findById((string)$worker['user_id']);
+            if (!$owner || !AreaAccess::allowed($owner,'library') || empty($worker['capabilities']['encoding']['verified'])) json_error('Encoding contribution requires Library access and a checked encoding profile.',403);
+            $worker['account']=$owner;
+            $lease=(string)($_SERVER['HTTP_X_VAULTCAST_LEASE'] ?? '');
+            if ($action==='encoding-claim' && $method==='POST') {
+                if (empty($worker['ready'])) json_out(['ok'=>true,'job'=>null,'waiting_reason'=>'Contributor is not ready; check its heartbeat and encoding profile.']);
+                if (!self::slotAllows($worker,'encoding')) json_out(['ok'=>true,'job'=>null,'waiting_reason'=>'This slot is not registered for video encoding; restart the contributor.']);
+                json_out(Convert::externalClaim($worker));
+            }
+            if ($action==='encoding-source' && $method==='GET') Convert::externalSource($worker,$id,$lease);
+            if ($method==='POST') {
+                $result=Convert::externalUpdate($worker,$id,$lease,substr($action,9),$action==='encoding-chunk' ? [] : body_json());
+                if ($action==='encoding-chunk') {
+                    // Explicit framing lets contributors reuse the same HTTP connection.
+                    $json=json_encode($result,JSON_UNESCAPED_SLASHES);
+                    header('Content-Type: application/json'); header('Content-Length: '.strlen($json));
+                    echo $json; exit;
+                }
+                json_out($result);
+            }
+            json_error('Encoding endpoint not found.',404);
+        }
+        if ($action === 'claim' && $method === 'POST') {
+            $body=body_json();
+            if (!is_array($body['models'] ?? null)) json_out(['ok'=>true,'job'=>null,'upgrade_required'=>'Update the contributor to report installed image models.']);
+            self::touchWorker($worker,['models'=>$body['models'],'ready'=>true]);
+            $worker['models']=self::modelReport($body['models']); $worker['models_seen']=time(); $worker['ready']=true;
+            if (empty($worker['ready']) || self::imageCapacity($worker) === 0 || !self::slotAllows($worker,'images')) json_out(['ok'=>true, 'job'=>null]);
+            $job = self::mutate(self::JOBS, static function (&$jobs) use ($worker) {
+                $now = time();
+                foreach ($jobs as &$stale) if (($stale['status'] ?? '') === 'running' && (int)($stale['updated_at'] ?? 0) < $now - 180) { $stale['status'] = 'queued'; $stale['worker_id'] = null; $stale['progress'] = 0; }
+                unset($stale);
+                foreach ($jobs as $active) if (($active['status'] ?? '')==='running' && ($active['worker_id'] ?? '')===$worker['id'] && (int)($active['worker_slot'] ?? 0)===$worker['slot_id']) return null;
+                usort($jobs, static function ($a, $b) { return (int)($a['created_at'] ?? 0) <=> (int)($b['created_at'] ?? 0); });
+                foreach ($jobs as &$candidate) if (($candidate['status'] ?? '') === 'queued') {
+                    if (!empty($candidate['model_id']) && !self::hasModel($worker,(string)$candidate['model_id'])) continue;
+                    if ((int)$candidate['width'] * (int)$candidate['height'] > self::imageCapacity($worker)) continue;
+                    if (empty($candidate['model_id'])) { $model=$worker['models'][0]; $candidate['model_id']=$model['id']; $candidate['model_name']=$model['name']; $candidate['model_hash']=$model['hash']; }
+                    $candidate['status'] = 'running'; $candidate['worker_id'] = $worker['id']; $candidate['worker_slot']=$worker['slot_id']; $candidate['started_at'] = $now; $candidate['updated_at'] = $now; $candidate['progress'] = 1; return $candidate;
+                }
+                return null;
+            });
+            json_out(['ok' => true, 'job' => $job ? array_intersect_key($job, array_flip(['id','model_id','model_name','model_hash','prompt','negative_prompt','width','height','steps','cfg_scale','scheduler','seed','hidiffusion','hidiffusion_raunet','hidiffusion_window_attn','hidiffusion_t1_ratio','hidiffusion_t2_ratio','fp32','tiled','seamless_x','seamless_y'])) : null]);
+        }
+        if ($action === 'progress' && $method === 'POST') {
+            $pct = max(1, min(99, (int)(body_json()['progress'] ?? 1)));
+            $ok = self::mutate(self::JOBS, static function (&$jobs) use ($worker, $id, $pct) {
+                foreach ($jobs as &$job) if (($job['id'] ?? '') === $id && ($job['status'] ?? '') === 'running' && ($job['worker_id'] ?? '') === $worker['id'] && (int)($job['worker_slot'] ?? 0)===$worker['slot_id']) { $job['progress'] = $pct; $job['updated_at'] = time(); return true; }
+                return false;
+            });
+            if (!$ok) json_error('This job is no longer assigned to this worker.', 409);
+            json_out(['ok' => true]);
+        }
+        if ($action === 'unavailable' && $method === 'POST') {
+            $body=body_json();
+            self::touchWorker($worker,['models'=>is_array($body['models'] ?? null) ? $body['models'] : []]);
+            $ok=self::mutate(self::JOBS,static function (&$jobs) use ($worker,$id) {
+                foreach ($jobs as &$job) if (($job['id'] ?? '')===$id && ($job['status'] ?? '')==='running' && ($job['worker_id'] ?? '')===$worker['id'] && (int)($job['worker_slot'] ?? 0)===$worker['slot_id']) {
+                    $job['status']='queued'; $job['progress']=0; $job['updated_at']=time();
+                    unset($job['worker_id'],$job['worker_slot'],$job['started_at']); return true;
+                }
+                return false;
+            });
+            if (!$ok) json_error('This image is no longer assigned to this worker.',409);
+            json_out(['ok'=>true,'requeued'=>true]);
+        }
+        if ($action === 'complete' && $method === 'POST') {
+            $pictureId=self::mutate(self::JOBS, static function (&$jobs) use ($worker,$id) {
+                foreach ($jobs as &$job) {
+                    if (($job['id'] ?? '')!==$id || ($job['worker_id'] ?? '')!==$worker['id'] || (int)($job['worker_slot'] ?? 0)!==$worker['slot_id']) continue;
+                    if (($job['status'] ?? '')==='completed') return (string)$job['picture_id'];
+                    if (($job['status'] ?? '')!=='running') break;
+                    if (empty($_FILES['file']['tmp_name'])) throw new DomainException('Upload the generated image as file.');
+                    $owner=Auth::findById((string)$job['user_id']);
+                    if (!$owner) throw new DomainException('The image owner no longer exists.');
+                    $picture=Pictures::saveGenerated($owner,(string)$_FILES['file']['tmp_name'],(string)($_FILES['file']['name'] ?? 'generated.png'));
+                    self::indexGenerated($owner,$job,$picture);
+                    ContributionPoints::rewardImage((string)$worker['user_id'],$id);
+                    $job['status']='completed'; $job['picture_id']=$picture['id']; $job['progress']=100;
+                    $job['updated_at']=time(); $job['finished_at']=time();
+                    return (string)$picture['id'];
+                }
+                throw new DomainException('This job is no longer assigned to this worker.');
+            });
+            json_out(['ok'=>true,'picture_id'=>$pictureId]);
+        }
+        if ($action === 'fail' && $method === 'POST') {
+            $msg = mb_substr(trim((string)(body_json()['error'] ?? 'Generation failed.')), 0, 300);
+            self::mutate(self::JOBS, static function (&$jobs) use ($worker, $id, $msg) {
+                foreach ($jobs as &$job) if (($job['id'] ?? '') === $id && ($job['status'] ?? '') === 'running' && ($job['worker_id'] ?? '') === $worker['id'] && (int)($job['worker_slot'] ?? 0)===$worker['slot_id']) { ContributionPoints::refundImage($job); $job['status'] = 'failed'; $job['error'] = $msg; $job['updated_at'] = time(); $job['finished_at'] = time(); return; }
+            });
+            json_out(['ok' => true]);
+        }
+        json_error('AI worker endpoint not found.', 404);
+    }
+}

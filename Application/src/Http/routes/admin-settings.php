@@ -193,6 +193,7 @@ if ($path === '/admin/users' && $method === 'GET') {
         unset($u['password_hash']);
         $u['access_state'] = Access::state($u);
         $u['is_self'] = (string)$u['id'] === (string)$me['id'];
+        $u['contribution_points']=ContributionPoints::summary((string)$u['id']);
     }
     unset($u);
     $__parental = Parental::summaries();
@@ -201,6 +202,10 @@ if ($path === '/admin/users' && $method === 'GET') {
     json_out(['ok' => true, 'users' => $users, 'now' => time(), 'role_counts'=>array_count_values(array_column($users,'role')),'permission_choices'=>Permissions::CAPABILITIES,'roles'=>Permissions::roles(),'user_role_capabilities'=>Permissions::USER_ROLE_CAPABILITIES,'user_role_defaults'=>Permissions::userRoleDefaults()]);
 }
 
+if (preg_match('#^/admin/users/([A-Za-z0-9_-]{1,64})/points$#D',$path,$m) && $method==='POST') {
+    try { json_out(ContributionPoints::grant(Auth::requireAdmin(),$m[1],body_json())); }
+    catch (DomainException $e) { json_error($e->getMessage(),422); }
+}
 if ($path==='/admin/roles' && $method==='POST') {
     Auth::requireAdmin();try{json_out(Permissions::saveRole(body_json()));}catch(InvalidArgumentException $e){json_error($e->getMessage());}
 }

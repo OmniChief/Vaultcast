@@ -87,6 +87,8 @@ final class Access
      */
     public static function gate(string $path, ?array $session, callable $findUser, bool $requireLogin, callable $token, ?int $now = null): ?array
     {
+        // Contributor workers authenticate with their own scoped credential in the AI handler.
+        if (strpos($path, '/ai/worker/') === 0) return null;
         if (in_array($path, self::OPEN_PATHS, true) || strpos($path, '/player-assets/') === 0) return null;
         // External-player M3U/EPG and their media bridges do not carry a browser session.
         if (in_array($path, ['/live/playlist', '/live/m3u', '/live/tune', '/live/xmltv', '/live/file', '/live/local_file'], true)) return null;

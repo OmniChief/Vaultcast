@@ -59,6 +59,22 @@ class MediaProbe {
         return $seconds > 0 ? $seconds : null;
     }
 
+    /** Container duration only, independent of stream/codec inspection and its cached results. */
+    public static function durationOnly(string $path, int $timeout = 8): ?float {
+        if (!is_file($path)) return null;
+        clearstatcache(true,$path);
+        $stat=@stat($path);
+        $key='duration-only|'.hash('sha256',$path.'|'.($stat['size'] ?? 0).'|'.($stat['mtime'] ?? 0));
+        $cached=\Vaultcast\Repository::cacheGet($key);
+        if (is_numeric($cached) && (float)$cached>0 && is_finite((float)$cached)) return (float)$cached;
+        $output=Process::capture([self::ffprobeBin(),'-v','error','-show_entries','format=duration','-of','default=noprint_wrappers=1:nokey=1',$path],max(1,min(15,$timeout)));
+        $value=trim((string)$output);
+        if (!is_numeric($value) || (float)$value<=0 || !is_finite((float)$value)) return null;
+        $seconds=(float)$value;
+        \Vaultcast\Repository::cachePut($key,$seconds,86400);
+        return $seconds;
+    }
+
     public static function probeSummary(string $path, int $timeout = 3, bool $useCache = true): array {
         $data = self::inspect($path, $timeout, $useCache);
         $tracks = self::tracks($data ?? []);

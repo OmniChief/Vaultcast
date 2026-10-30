@@ -4787,6 +4787,7 @@ try {
     live: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="2.3" fill="currentColor"/><path d="M8.2 8.2a5.4 5.4 0 0 0 0 7.6M15.8 8.2a5.4 5.4 0 0 1 0 7.6M5.3 5.3a9.5 9.5 0 0 0 0 13.4M18.7 5.3a9.5 9.5 0 0 1 0 13.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
     play: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.2 7.5h9.6a4.2 4.2 0 0 1 4.2 4.2v.9a3.9 3.9 0 0 1-6.9 2.5l-.5-.6h-3.2l-.5.6a3.9 3.9 0 0 1-6.9-2.5v-.9a4.2 4.2 0 0 1 4.2-4.2z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M7.6 9.9v3M6.1 11.4h3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="15.6" cy="10.5" r="1.05" fill="currentColor"/><circle cx="17.6" cy="12.6" r="1.05" fill="currentColor"/></svg>',
     misc: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="3.5" width="7.2" height="7.2" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="3.5" y="13.3" width="7.2" height="7.2" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="13.3" y="13.3" width="7.2" height="7.2" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M16.9 3.2l1.05 2.35 2.35 1.05-2.35 1.05-1.05 2.35-1.05-2.35-2.35-1.05 2.35-1.05z" fill="currentColor"/></svg>',
+    ai: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l1.8 6.2L20 11l-6.2 1.8L12 19l-1.8-6.2L4 11l6.2-2.3z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M19 15l.9 2.6 2.6.9-2.6.9L19 22l-.9-2.6-2.6-.9 2.6-.9z" fill="currentColor"/></svg>',
     search: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="1.9"/><path d="M16 16l4.2 4.2" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>',
     user: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8.6" r="3.8" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M4.8 20a7.2 7.2 0 0 1 14.4 0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
     chevL: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 5.5L8 12l6.5 6.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
@@ -4820,6 +4821,7 @@ try {
     if (v === 'live') return 'live';
     if (v === 'play' || v === 'game') return 'play';
     if (v === 'misc') return 'misc';
+    if (v === 'ai') return 'ai';
     if (v === 'section' && state.sectionType === 'roms') return 'play';
     if (v === 'admin' || v === 'settings' || v === 'login' || v === 'welcome') return '';
     return 'vod';
@@ -4829,6 +4831,7 @@ try {
     if (mode === 'live') goLiveTab('now');
     else if (mode === 'play') { state.sectionQ = ''; state.sectionSystem = ''; if (!state.playTab || (state.playTab === 'games' && !romsSection())) state.playTab = romsSection() ? 'games' : 'arcade'; state.playSub = ''; navigate('play'); }
     else if (mode === 'misc') { if (!state.miscTab) state.miscTab = 'board'; state.miscSub = ''; navigate('misc'); }
+    else if (mode === 'ai') { navigate('ai'); }
     else if (mode === 'home') { state.hubTab=(state.user && state.user.prefs || {}).home_landing || 'overview';state.cinemaId=null;navigate('home'); }
     else navigate('library');
   }
@@ -4842,7 +4845,7 @@ try {
     if (state.view === 'game' && state.gamePath && !extra.live) return R.build({ view:'play', gamePath: state.gamePath, roomId:state.gameLobby ? state.gameLobby.session.id : null });
     return R.build({ systemSlug: state.view === 'play' && state.sectionSystem ? (state.sectionSystemSlug || null) : null, view: state.view, movieSlug: state.movieSlug, movieId: state.movieId, showSlug: state.showSlug, showKey: state.showKey,
       season: state.showSeason, episode: state.showEpisode, liveCh: extra.live || state.liveChannel || null, liveTab:state.liveTab, playTab: state.playTab, playSub: state.playSub, miscTab: state.miscTab, miscSub: state.miscSub, section: state.section,
-      collectionId: state.collectionId, searchQuery: state.searchQuery, settingsSection: state.settingsSection, adminTab: state.adminTab,
+      collectionId: state.collectionId, searchQuery: state.searchQuery, settingsSection: state.settingsSection, adminTab: state.adminTab, aiTab:state.aiTab,
       sectionLetter:state.sectionLetter, collectionsLetter:state.collectionsLetter, hubTab:state.hubTab, cinemaId:state.cinemaId, requestsTab:state.requestsTab });
   }
   function navUrl(extra){ return BASE + routePath(extra); }
@@ -4874,6 +4877,7 @@ try {
       });
     }
     if (r.view === 'misc') { state.view = 'misc'; state.miscTab = r.miscTab || 'board'; state.miscSub = r.miscSub || ''; return Promise.resolve(); }
+    if (r.view === 'ai') { state.view = 'ai'; state.aiTab = r.aiTab || 'images'; return Promise.resolve(); }
     if (r.view === 'live') { state.view = 'live'; state.liveTab=r.liveCh?(String(r.liveCh).indexOf('radio:')===0?'radio':String(r.liveCh).indexOf('iptv:')===0?'iptv':'relay'):(r.liveTab||'now'); state.liveChannel=r.liveCh||null; state._openLiveCh=null; return Promise.resolve(); }
     if (r.view === 'play' || r.view === 'game') {
       state.view = 'play'; state.playTab = r.playTab || 'games'; state.playSub = r.playSub || '';
@@ -5144,6 +5148,10 @@ try {
       if (achievementsOn()) items.push({ label: 'Achievements', active: tab === 'achievements', go: function(){ goPlayTab('achievements'); } });
     } else if (mode === 'misc') {
       [['board','Board'],['calendar','Calendar'],['drop','Drop'],['ambient','Ambient']].forEach(function(t){ items.push({ label:t[1], active:(state.miscTab||'board')===t[0], go:function(){ state.miscTab=t[0]; state.miscSub=''; if(state.view!=='misc')navigate('misc'); else { pushNav(); render(); } } }); });
+    } else if (mode === 'ai') {
+      items.push({ label:'Images', active:(state.aiTab||'images')==='images', go:function(){ state.aiTab='images'; if(state.view!=='ai')navigate('ai'); else { pushNav(); render(); } } });
+      items.push({ label:'Library', active:state.aiTab==='library', go:function(){ state.aiTab='library'; if(state.view!=='ai')navigate('ai'); else { pushNav(); render(); } } });
+      if (state.user && state.user.role === 'admin') items.push({ label:'Moderation', active:state.aiTab==='moderation', go:function(){ state.aiTab='moderation'; if(state.view!=='ai')navigate('ai'); else { pushNav(); render(); } } });
     } else {
       return null;
     }
@@ -5298,10 +5306,12 @@ try {
       ['vod', 'Library', 'Films, shows and music'],
       ['live', 'Live', 'Relay, IPTV, radio & programme guides'],
       ['play', 'Play', 'Retro games, arcade, quiz nights and leaderboards'],
+      ['ai', 'AI', 'Image generation and AI tools'],
       ['misc', 'Misc', 'Dashboards, private file drop and ambient screens']
     ];
     modes = modes.filter(function(m){
       if (m[0] === 'misc') return !!(state.user && state.user.id && state.user.role !== 'guest');
+      if (m[0] === 'ai') return !!(state.user && state.user.id && state.user.role !== 'guest');
       if (m[0] !== 'home' && !userAreaAllowed({vod:'library', live:'live', play:'games'}[m[0]])) return false;
       if (m[0] === 'live') return !!(state.home && state.home.features && state.home.features.live);
       return true;
@@ -8521,6 +8531,7 @@ try {
         h('h2', { text: 'Account' }),
         h('p', { className: 'muted', text: u.username ? ('Signed in as ' + (u.display_name || u.username)) : 'Browsing as guest — sign in to sync preferences.' }),
         u.username ? h('div', { className: 'stack settings-card' }, [
+          h('p',{className:'muted',text:'Contribution points: '+Number((u.contribution_points||{}).balance||0)+' available · '+Number((u.contribution_points||{}).earned||0)+' earned'}),
           h('label', {}, ['Display name', h('input', { id: 'dn', value: u.display_name || '' })]),
           h('div', {className:'profile-avatar-editor'}, [profileAvatar(u), h('label', {}, ['Avatar (JPEG, PNG or WebP, up to 1 MB)', h('input', {id:'profile_avatar', type:'file', accept:'image/jpeg,image/png,image/webp'})])]),
           h('label', {className:'check-label'}, [h('input', {id:'remove_avatar', type:'checkbox'}), 'Remove avatar (use initials)']),
@@ -10143,10 +10154,27 @@ try {
           });
         }});
         var edit = h('button', {className:'btn ghost', type:'button', text:'Edit user', onClick:function(){editUserAreas(u);}});
-        table.appendChild(h('tr', {}, [ h('td',{}, [ h('strong', { text:u.username }), u.display_name && u.display_name !== u.username ? h('div', { className:'muted', text:u.display_name }) : null ].filter(Boolean)), h('td',{text:(state.userRoles[u.role]||{}).name||u.role}), h('td',{}, [accessBadge(u)]), h('td',{}, [expires]), h('td',{}, [ctrl]), h('td',{}, [h('div', {className:'row-actions'}, [edit, del])]) ]));
+        table.appendChild(h('tr', {}, [ h('td',{}, [ h('strong', { text:u.username }), h('div',{className:'muted',text:Number((u.contribution_points||{}).balance||0)+' points · '+Number((u.contribution_points||{}).earned||0)+' earned'}), u.display_name && u.display_name !== u.username ? h('div', { className:'muted', text:u.display_name }) : null ].filter(Boolean)), h('td',{text:(state.userRoles[u.role]||{}).name||u.role}), h('td',{}, [accessBadge(u)]), h('td',{}, [expires]), h('td',{}, [ctrl]), h('td',{}, [h('div', {className:'row-actions'}, [h('button',{className:'btn ghost',type:'button',text:'Add points',onClick:function(){grantContributionPoints(u);}}), edit, del])]) ]));
       });
       el.appendChild(h('div', { className:'table-scroll' }, [table]));
     });
+  }
+
+  function grantContributionPoints(user,onSaved){
+    var amount=h('input',{type:'number',min:'1',max:'1000000',step:'1',value:'10',required:true});
+    var note=h('input',{type:'text',maxlength:'200',placeholder:'Optional reason'}),status=h('p',{className:'muted',role:'status'});
+    var requestId=Array.from(crypto.getRandomValues(new Uint8Array(16))).map(function(n){return n.toString(16).padStart(2,'0');}).join('');
+    var submit=h('button',{type:'submit',className:'btn primary',text:'Add points'});
+    var form=h('form',{className:'stack',onSubmit:function(e){
+      e.preventDefault();if(submit.disabled)return;submit.disabled=true;
+      api('/admin/users/'+encodeURIComponent(user.id)+'/points',{method:'POST',body:{amount:Number(amount.value),note:note.value,request_id:requestId}}).then(function(r){
+        if(!r.ok)throw new Error(r.error||'Could not add points.');
+        if(state.user&&state.user.id===user.id)state.user.contribution_points=r.points;
+        dialog.close();if($('#user_list'))loadUsers();if(onSaved)onSaved(r.points);
+        toast('Points added. Balance: '+r.points.balance,{kind:'ok'});
+      }).catch(function(e){status.textContent=e.message||'Could not add points.';submit.disabled=false;});
+    }},[h('p',{text:'Add contribution points to '+(user.display_name||user.name||user.username)+'.'}),h('label',{},['Points',amount]),h('label',{},['Reason',note]),status,submit]);
+    var dialog=permissionDialog('Add contribution points',form);
   }
 
   function renderRoles(){
@@ -11071,7 +11099,7 @@ h('div', { className:'cv-find-bar' }, [
     var playbackGroup=h('fieldset',{className:'settings-fieldset dp-settings-group'},[h('legend',{text:'Playback policy & transcoding'})]);
     Array.from(root.children).forEach(function(child){playbackGroup.appendChild(child);});root.appendChild(playbackGroup);
     root.appendChild(h('h3',{text:'Background library conversion'}));
-    root.appendChild(h('p',{className:'muted',text:'These settings control manually queued full-file conversions, independently of playback transcoding. Originals stay on disk until you explicitly replace them.'}));
+    root.appendChild(h('p',{className:'muted',text:'These settings control queued full-file conversions, independently of playback transcoding. Completed batch conversions replace the original after upload, retaining the existing library entry.'}));
     var backgroundSettings=renderConvertAdminPanel(s,true);backgroundSettings.classList.add('settings-fieldset');root.appendChild(backgroundSettings);return root;
   }
   function renderConvertAdminPanel(s,settingsOnly){
@@ -11116,7 +11144,62 @@ h('div', { className:'cv-find-bar' }, [
         scopes: { movies: true, tv: true, anime: true },
         gen: 0
       };
-      var lastQueue = [];
+      var lastQueue = [], convertRefreshing = false, pendingConvertRefresh = false;
+      var externalOnly = !!c.external_workers_only, policySave = null, policyRevision = 0;
+      var transferSave = null, transferDraft = false, transferRevision = 0;
+      function applyTransferLimits(limits){
+        ['download','upload'].forEach(function(kind){
+          var value=limits[kind],input=root.querySelector('#cv_batch_'+kind+'_slots');
+          if(input)input.value=String(value);
+          c['external_'+kind+'_slots']=value;
+          if(state.settings){state.settings.convert=state.settings.convert||{};state.settings.convert['external_'+kind+'_slots']=value;}
+        });
+      }
+      function saveTransferLimits(){
+        if(transferSave)return;
+        var body={},valid=true;
+        ['download','upload'].forEach(function(kind){
+          var input=root.querySelector('#cv_batch_'+kind+'_slots'),value=Number(input.value);
+          if(!Number.isInteger(value)||value<1||value>32){valid=false;input.setAttribute('aria-invalid','true');}
+          else input.removeAttribute('aria-invalid');
+          body['external_'+kind+'_slots']=value;
+        });
+        if(!valid){toast('Transfer slots must be whole numbers from 1 to 32.',{kind:'bad'});return;}
+        transferRevision++;
+        var button=root.querySelector('#cv_batch_save_slots'),note=root.querySelector('#cv_batch_slots_status');
+        button.disabled=true;note.textContent='Saving transfer slots...';
+        root.querySelectorAll('.cv-transfer-slots input').forEach(function(input){input.disabled=true;});
+        transferSave=api('/admin/convert/policy',{method:'POST',body:body}).then(function(r){
+          if(!r.ok)throw new Error(r.error||'Could not save transfer slots.');
+          applyTransferLimits(r.transfer_limits);transferDraft=false;
+          note.textContent='Saved. New transfers use these limits; active transfers can finish.';
+          toast('Saved transfer slots per computer',{kind:'ok'});
+        }).catch(function(error){note.textContent='Not saved. '+error.message;toast(error.message,{kind:'bad'});}).finally(function(){
+          transferSave=null;button.disabled=false;
+          root.querySelectorAll('.cv-transfer-slots input').forEach(function(input){input.disabled=false;});
+        });
+      }
+      function paintRoutingPolicy(){
+        root.querySelectorAll('#cv_external_only,#cv_batch_external_only').forEach(function(input){input.checked=externalOnly;input.disabled=!!policySave;});
+        var note=root.querySelector('#cv_batch_policy_status');
+        if(note)note.textContent=policySave?'Saving conversion routing…':externalOnly?'External workers only: queued files wait for a contributing computer.':'Server conversion is allowed. Enable external workers only to keep encoding off this server.';
+      }
+      function saveRoutingPolicy(value){
+        var previous=externalOnly; externalOnly=value; policyRevision++;
+        policySave=api('/admin/convert/policy',{method:'POST',body:{external_workers_only:value}}).then(function(r){
+          if(!r.ok)throw new Error(r.error||'Could not save conversion routing.');
+          externalOnly=!!r.external_workers_only;
+          if(state.settings){state.settings.convert=state.settings.convert||{};state.settings.convert.external_workers_only=externalOnly;}
+          toast(externalOnly?'Saved: external workers only':'Saved: server conversion allowed',{kind:'ok'});
+        }).catch(function(e){externalOnly=previous;toast(e.message||'Could not save conversion routing.',{kind:'bad'});throw e;}).finally(function(){policySave=null;paintRoutingPolicy();});
+        paintRoutingPolicy();
+        return policySave;
+      }
+      function queueWithRouting(path,body){
+        return (policySave||Promise.resolve()).then(function(){
+          return api(path,{method:'POST',body:Object.assign({},body,{external_workers_only:externalOnly})});
+        });
+      }
 
       var QUALITY_MODES = [
         { id:'original', title:'Original / lossless', blurb:'Remux only (stream-copy). No re-encode \u2014 same quality & ~same size. Tiny server load. A copy is preferred only after browser-compatible codecs are verified.' },
@@ -11224,10 +11307,10 @@ h('div', { className:'cv-find-bar' }, [
         opts = opts || {};
         if (!req || !req.id) return;
         var doStart = function(){
-          api('/admin/convert/requests/'+req.id, { method:'POST', body:{ action:'start' } }).then(function(res){
+          queueWithRouting('/admin/convert/requests/'+req.id, {action:'start'}).then(function(res){
             toast(res.ok ? (res.convert && res.convert.message || 'Accepted - convert queued') : (res.error||'Failed'), { kind: res.ok ? 'ok' : 'bad' });
             refreshConvertAdmin();
-          });
+          }).catch(function(e){toast(e.message||'Could not queue conversion.',{kind:'bad'});});
         };
         if (opts.skipConfirm) return doStart();
         confirmDialog('Accept convert request for "'+(req.title||req.item_id||'item')+'" and add it to the batch converter?', { okText:'Accept & queue' }).then(function(ok){
@@ -11253,10 +11336,12 @@ h('div', { className:'cv-find-bar' }, [
       }
       function removeConvertOriginal(job, btn){
         if (!job || !job.id) return;
+        var source=String(job.src||''),converted=String(job.dest||''),extension=(converted.match(/\.([^.\/\\]+)$/)||[])[1]||'mp4';
+        var replacement=source.replace(/\.[^.\/\\]+$/,'.'+extension);
         var msg = 'Replace original with converted file for "' + (job.title || job.item_id || 'item') + '"?\n\n'
-          + 'Delete: ' + (job.src || '?') + '\n\n'
-          + 'Keep (same folder): ' + (job.dest || '?') + '\n\n'
-          + 'The converted file is checked first (size + duration). The catalogue, watch progress and collection links move to the converted file, and the job is marked done. This cannot be undone.';
+          + 'Replace: ' + (job.src || '?') + '\n\n'
+          + 'Rename converted file to: ' + replacement + '\n\n'
+          + 'The original library entry, watch progress and collection links are kept. The old file is removed after the catalogue update succeeds. This cannot be undone.';
         confirmDialog(msg, { okText:'Replace original', danger:true }).then(function(ok){
           if (!ok) return;
           if (btn) { btn.disabled = true; btn.textContent = 'Replacing\u2026'; }
@@ -11265,7 +11350,7 @@ h('div', { className:'cv-find-bar' }, [
               if (btn) { btn.disabled = false; btn.textContent = 'Replace'; }
               return toast((res && res.error) || 'Remove failed - original kept', { kind:'bad', ms: 6500 });
             }
-            toast('Original removed - marked done' + (res.requests_resolved ? (' (' + res.requests_resolved + ' TV request' + (res.requests_resolved === 1 ? '' : 's') + ' closed)') : ''), { kind:'ok' });
+            toast(res.warning || 'Original replaced; library entry retained' + (res.requests_resolved ? (' (' + res.requests_resolved + ' TV request' + (res.requests_resolved === 1 ? '' : 's') + ' closed)') : ''), { kind:res.warning?'warn':'ok' });
             refreshConvertAdmin();
           }).catch(function(){
             if (btn) { btn.disabled = false; btn.textContent = 'Replace'; }
@@ -11305,6 +11390,25 @@ h('div', { className:'cv-find-bar' }, [
         var cap = job.status === 'running' ? 99.5 : 100;
         return Math.max(0, Math.min(cap, +p));
       }
+      function transferSize(bytes){
+        bytes=Math.max(0,Number(bytes)||0);
+        return bytes>=1073741824?(bytes/1073741824).toFixed(2)+' GiB':bytes>=1048576?(bytes/1048576).toFixed(1)+' MiB':(bytes/1024).toFixed(1)+' KiB';
+      }
+      function transferDetails(job){
+        if(!job||job.status!=='running'||!job.phase)return null;
+        if(job.phase==='wait_download'||job.phase==='wait_upload')return h('div',{className:'muted cv-glass-transfer',role:'status',text:'Waiting for '+(job.phase==='wait_download'?'download':'upload')+' slot on this computer'});
+        var phase=job.phase,pct=Math.max(0,Math.min(100,Number(job.phase_progress)||0));
+        var download=phase==='download'?pct:100,encode=phase==='download'?0:phase==='encode'?pct:100;
+        var upload=phase==='upload'?pct:phase==='verify'?100:0;
+        var text='Download '+download.toFixed(1)+'% · Encode '+encode.toFixed(1)+'% · Upload '+upload.toFixed(1)+'%';
+        if(phase==='download'||phase==='upload'){
+          text+=' · '+transferSize(job.transfer_bytes)+' / '+transferSize(job.transfer_total);
+          if(job.transfer_rate>0)text+=' · '+transferSize(job.transfer_rate)+'/s';
+          if(job.transfer_eta>0){var secs=Number(job.transfer_eta);text+=' · ~'+(secs>=60?Math.ceil(secs/60)+' min':Math.ceil(secs)+' sec')+' left';}
+        }else if(phase==='hash')text+=' · Checking local file';
+        else if(phase==='verify')text+=' · Replacing original';
+        return h('div',{className:'muted cv-glass-transfer',role:'status',text:text});
+      }
 
       function jobByItemId(){
         var map = {};
@@ -11343,13 +11447,13 @@ h('div', { className:'cv-find-bar' }, [
       function enqueueIds(ids, label){
         ids = (ids || []).filter(Boolean);
         if (!ids.length) return toast('Nothing selected');
-        api('/admin/convert', { method:'POST', body:{ item_ids: ids } }).then(function(r){
+        queueWithRouting('/admin/convert', {item_ids:ids}).then(function(r){
           if (!r.ok) return toast(r.error || 'Enqueue failed', { kind:'bad' });
           toast((label || 'Queued') + ': ' + (r.queued||0) + (r.skipped ? (', skipped ' + r.skipped) : ''), { kind:'ok' });
           ids.forEach(function(id){ delete findState.selected[id]; });
           refreshConvertAdmin();
           paintUnified();
-        });
+        }).catch(function(e){toast(e.message||'Could not queue conversion.',{kind:'bad'});});
       }
 
       function cancelJob(job){
@@ -11459,7 +11563,7 @@ h('div', { className:'cv-find-bar' }, [
           el.textContent = 'Scan complete \u2014 ' + findState.found + ' need DirectPlay convert' +
             (findState.total ? (' (' + findState.scanned + ' / ' + findState.total + ' videos in ' + scopeNote + ')') : '');
         } else {
-          el.textContent = 'Choose Movies / TV / Anime, then Find all. Scans real codecs (not extension). Games are skipped. TV series stay in accordions.';
+          el.textContent = 'Choose Movies / TV / Anime, then Find all. Checks for MP4 files with H.264 video and AAC audio. Games are skipped. TV series stay in accordions.';
         }
         var btn = $('#cv_find_all_btn');
         if (btn) {
@@ -11515,11 +11619,13 @@ h('div', { className:'cv-find-bar' }, [
       function paintJobRow(job){
         var actions = [];
         var needsAction = job.status === 'done' && !job.resolved;
+        if(job.status==='done' && job.original_removed && /\.directplay\.[^.]+$/i.test(job.dest||'')) actions.push(h('button',{className:'btn primary cv-glass-btn',text:'Finish replacement',title:'Rename the converted file and repair its library entry',onClick:function(e){removeConvertOriginal(job,e.currentTarget);}}));
         var pct = jobProgressPct(job);
         if (job.status === 'queued' || job.status === 'running') {
           actions.push(h('button', { className:'btn ghost cv-glass-btn', text:'Cancel', onClick: function(){ cancelJob(job); }}));
         }
         if (job.status === 'cancelled' || job.status === 'failed') {
+          actions.push(h('button',{className:'btn ghost cv-glass-btn',text:'Retry',onClick:function(){api('/admin/convert/'+job.id+'/retry',{method:'POST',body:{}}).then(function(r){if(!r.ok)return toast(r.error||'Could not retry',{kind:'bad'});refreshConvertAdmin();});}}));
           actions.push(h('button', {
             className: 'btn ghost cv-trash cv-glass-btn',
             title: 'Remove from queue and clean partial convert files',
@@ -11542,7 +11648,7 @@ h('div', { className:'cv-find-bar' }, [
           }}));
         }
         var stateLabel = String(job.status||'').toUpperCase();
-        if (job.status === 'running') stateLabel = 'Converting ' + Math.round(pct) + '%';
+        if (job.status === 'running') stateLabel = ({download:'Downloading',encode:'Encoding',hash:'Checking file',upload:'Uploading',verify:'Finalising'}[job.phase] || 'Converting') + ' · ' + Math.round(pct) + '% overall';
         if (job.status === 'queued') stateLabel = 'Queued \u2014 waiting';
         if (job.status === 'done') stateLabel = job.resolved ? 'Done' : 'Converted \u2014 choose what to keep';
         var saveModes = { audio:'Audio only', video:'Video only', both:'Video + audio' };
@@ -11566,6 +11672,7 @@ h('div', { className:'cv-find-bar' }, [
             h('div', { className:'cv-glass-main' }, [
               h('div', { className:'cv-glass-title', text: job.title || job.item_id || 'Job' }),
               h('div', { className:'cv-glass-reason muted', text: reason }),
+              transferDetails(job),
               h('div', { className:'muted cv-glass-path', text: (job.src || '') + (job.dest ? (' \u2192 ' + job.dest) : '') })
             ]),
             h('div', { className:'cv-glass-side' }, [
@@ -11627,7 +11734,8 @@ h('div', { className:'cv-find-bar' }, [
               h('div', { className:'cv-glass-title', text: title }),
               h('div', { className:'cv-glass-reason', text: active
                 ? ((job.status === 'running' ? ('Converting ' + Math.round(pct) + '%') : 'Queued') + ' \u00b7 ' + convertReason(it))
-                : convertReason(it) })
+                : convertReason(it) }),
+              transferDetails(job)
             ]),
             h('div', { className:'cv-glass-side' }, [
               active && job.status === 'running'
@@ -11925,6 +12033,10 @@ h('div', { className:'cv-find-bar' }, [
 
       function refreshConvertAdmin(opts){
         opts = opts || {};
+        if(convertRefreshing){if(!opts.quiet)pendingConvertRefresh=true;return;}
+        convertRefreshing=true;
+        var routingRevision=policyRevision;
+        var limitsRevision=transferRevision;
         api('/admin/convert').then(function(r){
           var pending = r.pending_requests || [];
           updateConvertNotif(pending.length);
@@ -11997,15 +12109,29 @@ h('div', { className:'cv-find-bar' }, [
             });
           }
           lastQueue = r.queue || [];
+          var contributors = $('#cv_contributors');
+          if (contributors) contributors.textContent = String((r.contributors || {}).encoding_online || 0) + ' encoding computers online';
+          var batchContributors=root.querySelector('#cv_batch_contributors');
+          if(batchContributors)batchContributors.textContent=String((r.contributors||{}).encoding_online||0)+' encoding computers online';
+          if(!transferSave&&!transferDraft&&limitsRevision===transferRevision&&r.transfer_limits)applyTransferLimits(r.transfer_limits);
+          if(!policySave && routingRevision===policyRevision && typeof r.external_workers_only==='boolean'){
+            externalOnly=r.external_workers_only;
+            if(state.settings){state.settings.convert=state.settings.convert||{};state.settings.convert.external_workers_only=externalOnly;}
+            paintRoutingPolicy();
+          }
           paintUnified();
         }).catch(function(){
           if (!opts.quiet) toast('Could not refresh convert status', { kind:'bad' });
+        }).finally(function(){
+          convertRefreshing=false;
+          if(pendingConvertRefresh){pendingConvertRefresh=false;refreshConvertAdmin();}
         });
       }
 
       function collectConvertSettings(){
         return {
           enabled: !!( $('#cv_en') && $('#cv_en').checked ),
+          external_workers_only: externalOnly,
           one_job_at_a_time: true,
           threads: cvThreadsValue() || 1,
           quality_mode: modeState.mode || 'directplay',
@@ -12077,7 +12203,7 @@ h('div', { className:'cv-find-bar' }, [
 
         h('section', { className:'cv-section settings-card' }, [
           h('h3', { className:'admin-section-title', text:'Output & server load' }),
-          h('p', { className:'muted', text:'Output is saved beside the original as <name>.directplay.<container> and shown as an alternate under the same library title. CPU nice and disk I/O class apply on Linux; thread limits apply on every platform.' }),
+          h('p', { className:'muted', text:'Completed batch output is renamed to the original basename with the converted extension, and replaces the original under the same library ID. CPU nice and disk I/O class apply on Linux; thread limits apply on every platform.' }),
           selectEl('target_container', 'Container', c.target_container||'mp4', [
             { value:'mp4', label:'MP4 (best DirectPlay)' },
             { value:'m4v', label:'M4V' },
@@ -12086,7 +12212,10 @@ h('div', { className:'cv-find-bar' }, [
           ]),
           h('div', { className:'feature-card cv-feature-card' }, [
             cvToggleRow('cv_en', 'Enable ffmpeg convert queue', 'Start queued library conversions. Turning this off pauses new jobs; an existing job can finish.', !!c.enabled),
-            h('p',{className:'muted',text:'Background conversions run one at a time. Playback transcoding has its own slot limit above.'}),
+            cvToggleRow('cv_external_only', 'Only use external workers for conversion', 'Saves immediately. Queued conversions wait for a contributing computer. Existing jobs can finish; playback transcoding is controlled separately.', !!c.external_workers_only),
+            h('p',{id:'cv_contributors',className:'muted',text:'Refresh the conversion queue to see encoding computers online.'}),
+            h('p',{className:'muted',text:'External workers produce MP4 with H.264 video and AAC audio. Pair encoding computers using the contributor’s own account in AI → Images → Contribute a computer. Library access is required.'}),
+            h('p',{className:'muted',text:'Server conversions run one at a time. Each external computer can handle one conversion, so several contributors can work on different files. Playback transcoding has its own slot limit above.'}),
             h('label', { className:'feature-row', 'for':'cv_threads' }, [
               h('span', { className:'feature-text' }, [
                 h('strong', { text:'Conversion threads' }),
@@ -12127,7 +12256,22 @@ h('div', { className:'cv-find-bar' }, [
 
         h('section', { className:'cv-section settings-card cv-batch-section' }, [
           h('h3', { className:'admin-section-title', text:'Batch video converter' }),
-          h('p', { className:'muted', text:'Glass queue + Find all for DirectPlay gaps (real H.264/AAC). Restrict to Movies / TV / Anime — games are never scanned. Results stream in live; Stop keeps what was found. TV series stay in accordions.' }),
+          cvToggleRow('cv_batch_external_only', 'Only use external workers', 'Saves immediately and shares the policy with DirectPlay Settings. Batch jobs wait for contributors; they do not fall back to server encoding.', externalOnly),
+          h('p',{id:'cv_batch_policy_status',className:'muted',role:'status'}),
+          h('p',{id:'cv_batch_contributors',className:'muted',text:'Checking encoding computers…'}),
+          h('div',{className:'cv-transfer-slots'},[
+            h('h4',{text:'Contributor transfer slots'}),
+            h('p',{className:'muted',text:'Limits apply separately to each contributing computer. Encoding can continue in parallel. Lower limits leave active transfers running until they finish.'}),
+            h('div',{className:'cv-custom-grid'},['download','upload'].map(function(kind){
+              return h('label',{className:'cv-field'},[
+                h('span',{className:'cv-field-label',text:(kind==='download'?'Download':'Upload')+' slots per computer'}),
+                h('input',{id:'cv_batch_'+kind+'_slots',type:'number',min:'1',max:'32',step:'1',value:String(c['external_'+kind+'_slots']||1),onInput:function(){transferDraft=true;var note=root.querySelector('#cv_batch_slots_status');if(note)note.textContent='Unsaved changes.';}})
+              ]);
+            })),
+            h('div',{className:'row-actions'},[h('button',{id:'cv_batch_save_slots',className:'btn',text:'Save transfer slots',onClick:saveTransferLimits})]),
+            h('p',{id:'cv_batch_slots_status',className:'muted',role:'status',text:'Default: one download and one upload per computer.'})
+          ]),
+          h('p', { className:'muted', text:'Find all checks for MP4 files with H.264 video and AAC audio. Other containers appear even when their codecs already match. Restrict to Movies / TV / Anime — games are never scanned. Completed conversions automatically replace their originals after upload. Results stream in live; Stop keeps what was found. TV series stay in accordions.' }),
           h('div', { id:'cv_batch_list', className:'cv-batch-list cv-glass-wrap' }, [ pendingContent({ className:'muted', }) ]),
           h('div', { className:'row-actions' }, [
             h('button', { className:'btn', text:'Refresh queue', onClick: function(){ refreshConvertAdmin(); } }),
@@ -12198,6 +12342,8 @@ h('div', { className:'cv-find-bar' }, [
         setTimeout(refreshPlaybackJobs,0);
       }
       setTimeout(function(){
+        root.querySelectorAll('#cv_external_only,#cv_batch_external_only').forEach(function(input){input.onchange=function(){saveRoutingPolicy(input.checked).catch(function(){});};});
+        paintRoutingPolicy();
         syncModeUi();
         updateCrfHint(c.crf!=null?+c.crf:18);
         if(!settingsOnly)refreshConvertAdmin();
@@ -15827,6 +15973,7 @@ function viewCollectionDetail(){
     else if (state.view === 'requests') root.appendChild(shell(lazyView('vc-requests.js', 'VaultcastRequests', 'requests-view', function(mod, host){ mod.render(host); })));
     else if (state.view === 'inbox') { root.appendChild(shell(lazyView('vc-inbox.js', 'VaultcastInbox', 'inbox-view', function(mod, host){ mod.render(host); }))); updateAccountIndicators(); }
     else if (state.view === 'misc') root.appendChild(shell(lazyView('vc-misc.js', 'VaultcastMisc', 'misc-view', function(mod, host){ mod.render(host, state.miscTab || 'board', state.miscSub || ''); })));
+    else if (state.view === 'ai') root.appendChild(shell(lazyView('vc-ai.js', 'VaultcastAI', 'ai-view', function(mod, host){ mod.render(host, state.aiTab || 'images'); })));
     else root.appendChild(viewHome());
   }
 
@@ -15931,7 +16078,7 @@ function viewCollectionDetail(){
   });
 
   /* helpers for assets/js/matching.js (Ingest inbox / Fix matching / Label reports) */
-  window.NSApp = { h: h, swap: swapChildren, api: api, toast: toast, dialog: permissionDialog, base: BASE, rowEl: rowEl, emptyState: emptyState, confirmDialog: confirmDialog, render: render, state: state, can:can,
+  window.NSApp = { grantPoints:grantContributionPoints, h: h, swap: swapChildren, api: api, toast: toast, dialog: permissionDialog, base: BASE, rowEl: rowEl, emptyState: emptyState, confirmDialog: confirmDialog, render: render, state: state, can:can,
     openSettings: openSettings, openShow: openShow, openMovie: openMovie, openGame:openGame, navigate:navigate, refreshArtwork:refreshArtwork, fmtSize: fmtSize, version: APP_VERSION,
     shell:shell,communityPoster:communityPoster,refreshCommunityRating:refreshCommunityRating,heroClock:heroClock,homePosterEl:homePosterEl,homeSectionPosterEl:homeSectionPosterEl,collectionsPosterEl:collectionsPosterEl,librarySummary:librarySummary,cardEl:cardEl,homeActivitySections:homeActivitySections,applyRoute:applyRoute,replaceNav:replaceNav,openPlayer:openPlayer,playItem:playItem,copyText:copyText,shareUrl:shareUrl,startLobbyHost:startLobbyHost,captureGameState:lobbyCaptureState,loadGameState:loadGameState,restoreMultiplayerState:restoreMultiplayerState,quitGame:function(){closePlayer();} };
   var moduleLoads = {};
@@ -15960,7 +16107,7 @@ function viewCollectionDetail(){
   function loadModule(file, globalName){
     if (globalName && window[globalName]) return Promise.resolve(window[globalName]);
     if (moduleLoads[file]) return moduleLoads[file];
-    var css = /^vc-(play|misc|games|calendar)\.js$/.test(file) ? loadExtraCss() : Promise.resolve();
+    var css = /^vc-(play|misc|games|calendar|ai)\.js$/.test(file) ? loadExtraCss() : Promise.resolve();
     moduleLoads[file] = new Promise(function(resolve, reject){
       var sm = document.createElement('script');
       sm.src = BASE + 'index.php?asset=assets/js/' + file + '&v=' + encodeURIComponent(window.__ASSET_VERSION__ || APP_VERSION);
