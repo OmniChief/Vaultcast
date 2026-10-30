@@ -562,11 +562,15 @@ class Manager(tk.Tk):
                 status, bar = self.cards[event[1]]
                 if event[0] == "status":
                     status.set(event[2])
+                    if event[2] in ("Waiting for job", "Stopped"):
+                        self.dashboard.clear_file(event[1])
                 elif event[0] == "finished":
                     bar.stop()
                     status.set("Stopped")
+                    self.dashboard.clear_file(event[1])
                 else:
                     from worker_dashboard import progress_label
+                    self.dashboard.set_file(event[1], event[2])
                     status.set(progress_label(event[2]))
                     value = event[2].get("phase_progress")
                     if event[2].get("phase") in ("verify", "wait_upload", "wait_download") or event[2].get("stage") == "waiting for GPU":

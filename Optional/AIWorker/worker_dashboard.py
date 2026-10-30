@@ -1,6 +1,7 @@
 """Compact worker table with vector controls, independent of system icon fonts."""
 import tkinter as tk
 from tkinter import ttk
+from tkinter import font as tkfont
 
 
 def progress_label(data):
@@ -90,6 +91,7 @@ class IconButton(tk.Canvas):
 class Dashboard:
     def __init__(self, app, Tooltip):
         self.app, self.controls = app, {}
+        self.file_labels = {}
         self.host = ttk.Frame(app.workers)
         self.host.pack(fill="both", expand=True)
         header = ttk.Frame(self.host)
@@ -123,10 +125,19 @@ class Dashboard:
             label=ttk.Label(tile,text=resources,style="Muted.Card.TLabel")
             label.pack(anchor="w",pady=(2,0))
             Tooltip(label,"CPU cores: "+(", ".join(map(str,slot.get("cpu_cores",[]))) or "managed by AI engine"))
+            file_text=tk.StringVar(value="")
+            file_label=ttk.Label(tile,textvariable=file_text,style="Muted.Card.TLabel",width=21,anchor="w")
+            file_label.pack(fill="x",pady=(2,0))
+            full_text=tk.StringVar(value="")
+            Tooltip(file_label,lambda value=full_text:value.get())
+            self.file_labels[number] = (file_text, full_text, file_label, "", None)
+            file_label.bind("<Configure>",lambda _event,i=number:self.draw_file(i))
             status=tk.StringVar(value="Stopped")
             label=ttk.Label(tile,textvariable=status,style="Muted.Card.TLabel",width=21,anchor="w")
             label.pack(fill="x",pady=(2,0))
             Tooltip(label,lambda value=status:value.get())
+            file_label.status_widget = label
+            file_label.pack_forget()
             bar=ttk.Progressbar(tile,maximum=100,length=100)
             actions=ttk.Frame(tile,style="Card.TFrame")
             actions.pack(fill="x",pady=(3,0))
@@ -143,6 +154,51 @@ class Dashboard:
         self.table.bind("<Configure>",lambda event:self.reflow(event.width))
         self.reflow(940)
         self.update()
+
+    def set_file(self, number, data):
+        if number not in self.file_labels:
+            return
+        output = data.get("phase") in ("upload", "wait_upload", "verify", "done")
+        name = (data.get("output_name") if output else data.get("source_name")) or data.get("filename") or data.get("title")
+        size = data.get("output_bytes") if output else data.get("source_bytes")
+        if size is None:
+            size = data.get("bytes_total")
+        if not name:
+            return
+        text, full, label, _, _ = self.file_labels[number]
+        self.file_labels[number] = (text, full, label, str(name), size)
+        self.draw_file(number)
+
+    def draw_file(self, number):
+        text, full, label, name, size = self.file_labels[number]
+        if not name:
+            text.set("")
+            label.pack_forget()
+            return
+        if not label.winfo_manager():
+            label.pack(fill="x",pady=(2,0),before=label.status_widget)
+        suffix = ""
+        if isinstance(size, (int, float)) and size >= 0:
+            amount, unit = size, "B"
+            for unit in ("B", "KB", "MB", "GB", "TB"):
+                if amount < 1000 or unit == "TB":
+                    break
+                amount /= 1000
+            suffix = " | %.1f %s" % (amount, unit)
+        full.set(name + suffix)
+        font = tkfont.Font(font=("Segoe UI", 9))
+        available = max(40, label.winfo_width()-4)
+        short = name
+        while short and font.measure(short + ("..." if short != name else "") + suffix) > available:
+            short = short[:-1]
+        text.set(short + ("..." if short != name else "") + suffix)
+
+    def clear_file(self, number):
+        if number in self.file_labels:
+            text, full, label, _, _ = self.file_labels[number]
+            self.file_labels[number] = (text, full, label, "", None)
+            full.set("")
+            self.draw_file(number)
 
     def reflow(self, width):
         columns=max(1,width//186)

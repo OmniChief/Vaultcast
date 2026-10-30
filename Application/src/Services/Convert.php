@@ -1427,6 +1427,7 @@ class Convert {
                 self::saveQueue($q);
                 return ['ok'=>true,'job'=>['id'=>$job['id'],'title'=>$job['title'],'lease'=>$job['lease_token'],
                     'bytes'=>$job['source_stat']['size'],'source_mtime'=>$job['source_stat']['mtime'],'duration'=>$job['duration_s'],
+                    'source_name'=>basename($src),'output_name'=>basename($dest),
                     'upload_chunk_bytes'=>4194304,
                     'crf'=>max(0,min(28,(int)($quality['crf'] ?? 18))),
                     'preset'=>self::sanitizePreset((string)($quality['preset'] ?? 'medium')),
