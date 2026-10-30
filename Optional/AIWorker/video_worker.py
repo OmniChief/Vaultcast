@@ -1,5 +1,6 @@
 """Claim Vaultcast video jobs; generate under the shared GPU lock and resume uploads."""
 import hashlib
+import logging
 import json
 from pathlib import Path
 import time
@@ -8,6 +9,7 @@ import urllib.error
 
 from comfy_backend import Engine, ROOT, video_graph, stopped, download
 import worker
+from worker_cache import cache_use
 
 
 def run(cfg, stop):
@@ -34,6 +36,7 @@ def run(cfg, stop):
             stop.wait(10)
 
 
+@cache_use
 def generate(cfg, job, engine, stop):
     base = cfg["server"] + "/api/ai/worker/video/jobs/" + job["id"]
     headers = dict(worker.worker_headers(cfg), **{"X-Vaultcast-Lease": job["lease"]})
@@ -72,6 +75,11 @@ def generate(cfg, job, engine, stop):
     # asks the server for its confirmed offset, and does not regenerate the clip.
     status = worker.request(base + "/status", "POST", {}, headers)
     if status.get("completed"):
+        try:
+            output.unlink(missing_ok=True)
+        except OSError:
+            logging.exception("Confirmed video local cleanup failed")
+        engine.release_output(cfg["server"] + ":video:" + job["id"])
         return
     offset = int(status["offset"])
     with output.open("rb") as source:
@@ -97,4 +105,9 @@ def generate(cfg, job, engine, stop):
             worker.request(base + "/fail", "POST", {"error": "Vaultcast rejected the generated video format or integrity check."}, headers)
             return
         raise
+    try:
+        output.unlink(missing_ok=True)
+    except OSError:
+        logging.exception("Confirmed video local cleanup failed")
+    engine.release_output(cfg["server"] + ":video:" + job["id"])
     worker.slot_status(cfg, "Video delivered to Vaultcast")

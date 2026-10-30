@@ -21,6 +21,7 @@ from encoding_worker import prepare_encoding, run_encoding, pending_encodings, r
 from image_checks import check_image, BlankGenerationError
 from worker_console import WorkerConsole, slot_kind
 from worker_version import VERSION
+from worker_cache import cache_use
 
 APPDATA = os.environ.get("APPDATA", os.path.expanduser("~"))
 CONFIG_DIR = os.path.join(APPDATA, "VaultcastAIWorker")
@@ -393,6 +394,7 @@ def worker_models(cfg):
     return installed_models(request, cfg["invoke"])
 
 
+@cache_use
 def run_comfy_image(cfg, job):
     from comfy_backend import Engine, image_graph
     engine = Engine(cfg)
@@ -417,6 +419,7 @@ def run_comfy_image(cfg, job):
     for attempt in range(5):
         try:
             multipart(base + "/complete", cfg["worker_token"], filename, data, cfg.get("slot_id", 0))
+            engine.release_output(cfg["server"] + ":image:" + job["id"])
             return
         except Exception as error:
             if not retryable_upload(error) or attempt == 4:
