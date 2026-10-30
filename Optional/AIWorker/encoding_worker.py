@@ -919,6 +919,8 @@ def run_encoding(cfg, job, request):
     stop = threading.Event()
     lost = threading.Event()
     status = {"title":job["title"], "progress": 0, "stage": "downloading source", "phase": "download", "phase_progress": 0,
+        "source_name":job.get("source_name") or job["title"], "source_bytes":job["bytes"],
+        "output_name":job.get("output_name") or job.get("source_name") or job["title"], "output_bytes":None,
         "bytes_done": 0, "bytes_total": job["bytes"], "rate_bps": 0, "eta_seconds": 0}
     last_success = [time.monotonic()]
     connection_warning = [False]
@@ -928,6 +930,8 @@ def run_encoding(cfg, job, request):
         dashboard=cfg.get("_console"), slot=cfg.get("slot_id",1))
 
     def phase(name, label, progress, total=0):
+        if name in ("upload", "wait_upload") and total:
+            status["output_bytes"] = total
         status.update(phase=name, stage=label, progress=progress, phase_progress=0,
             bytes_done=0, bytes_total=total, rate_bps=0, eta_seconds=0)
 
