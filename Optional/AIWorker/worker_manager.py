@@ -9,39 +9,31 @@ import sys
 import threading
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
-
 import worker
 import pairing
 from encoding_worker import GpuCoordinator
 from worker_console import slot_kind
 from worker_version import VERSION
-
-
 class Tooltip:
     def __init__(self, widget, text):
         self.widget, self.text, self.window = widget, text, None
         widget.bind("<Enter>", self.show, add=True)
         widget.bind("<Leave>", self.hide, add=True)
         widget.bind("<Destroy>", self.hide, add=True)
-
     def show(self, _event=None):
         if self.window:
             return
         self.window = tk.Toplevel(self.widget)
         self.window.overrideredirect(True)
         self.window.geometry("+%d+%d" % (self.widget.winfo_rootx(), self.widget.winfo_rooty() + 28))
-        ttk.Label(self.window, text=self.text, wraplength=340, padding=10).pack()
-
+        ttk.Label(self.window, text=self.text() if callable(self.text) else self.text, wraplength=340, padding=10).pack()
     def hide(self, _event=None):
         if self.window:
             self.window.destroy()
             self.window = None
-
-
 class Controller:
     """Own worker threads; communicate with Tk only through a message queue."""
     enabled = True
-
     def __init__(self, events):
         self.events = events
         self.running = {}
@@ -54,22 +46,16 @@ class Controller:
         if Path(worker.CONFIG_PATH).exists():
             self.config = json.loads(Path(worker.CONFIG_PATH).read_text(encoding="utf-8"))
         threading.Thread(target=self.heartbeat_loop, daemon=True, name="manager-heartbeat").start()
-
     def set_status(self, slot, text):
-        self.events.put(("status", slot, str(text)))
-
+        self.events.put(("status", slot, str(text).replace("\ufffd", "-")))
     def set_progress(self, slot, data):
         self.events.put(("progress", slot, dict(data)))
-
     def set_limits(self, limits):
         self.events.put(("limits", limits))
-
     def set_kind(self, slot, kind):
         self.events.put(("kind", slot, kind))
-
     def log(self, *parts):
         self.events.put(("log", " ".join(map(str, parts))))
-
     def live_config(self):
         with self.lock:
             cfg = copy.deepcopy(self.config)
@@ -77,7 +63,6 @@ class Controller:
         cfg["contributions"] = {kind: any(s.get(kind) for s in cfg["slots"]) for kind in ("images", "encoding", "video")}
         cfg["_console"] = self
         return cfg
-
     def start(self, slot):
         with self.lock:
             if self.pairing:
@@ -114,19 +99,16 @@ class Controller:
             thread = threading.Thread(target=target, daemon=True, name="worker-" + str(slot["id"]))
             self.running[slot["id"]] = (thread, stop, drain, copy.deepcopy(slot))
             thread.start()
-
     def stop(self, slot_id, finish=True):
         with self.lock:
             item = self.running.get(slot_id)
             if item and item[0].is_alive():
                 item[2 if finish else 1].set()
                 self.set_status(slot_id, "Finishing current job, then stopping" if finish else "Stopping; retaining conversion checkpoints")
-
     def send_heartbeat(self):
         with self.heartbeat_lock:
             cfg = self.live_config()
             return worker.heartbeat(cfg, bool(cfg["slots"]))
-
     def heartbeat_loop(self):
         while not self.shutdown.wait(10):
             try:
@@ -135,8 +117,6 @@ class Controller:
                     self.send_heartbeat()
             except Exception as error:
                 self.log("Vaultcast connection:", error)
-
-
 class ScrollPage(ttk.Frame):
     def __init__(self, parent):
         super().__init__(parent)
@@ -149,17 +129,16 @@ class ScrollPage(ttk.Frame):
         window = canvas.create_window((0, 0), window=self.body, anchor="nw")
         canvas.bind("<Configure>", lambda event: canvas.itemconfigure(window, width=event.width))
         self.body.bind("<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox("all")))
-
-
 class Manager(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Vaultcast Worker Manager " + VERSION)
-        self.geometry("1080x760")
-        self.minsize(850, 600)
+        self.geometry("1040x740")
+        self.minsize(760, 520)
         self.events = queue.Queue()
         self.controller = Controller(self.events)
         self.cards = {}
+        self.pending_removals = set()
         self.closing = False
         self.pairing_busy = False
         self.setup_busy = False
@@ -169,14 +148,33 @@ class Manager(tk.Tk):
         style.theme_use("clam")
         style.configure("TFrame", background="#f3f5f8")
         style.configure("TLabel", background="#f3f5f8", foreground="#18243a", font=("Segoe UI", 10))
-        style.configure("Title.TLabel", font=("Segoe UI", 22, "bold"))
-        style.configure("TButton", padding=(12, 8), font=("Segoe UI", 10))
-        header = ttk.Frame(self, padding=24)
+        self.configure(background="#f3f5f8")
+        style.configure("Card.TFrame", background="#ffffff")
+        style.configure("Card.TLabel", background="#ffffff", foreground="#18243a", font=("Segoe UI", 10))
+        style.configure("CardTitle.TLabel", background="#ffffff", foreground="#18243a", font=("Segoe UI", 10, "bold"))
+        style.configure("Muted.Card.TLabel", background="#ffffff", foreground="#64748b", font=("Segoe UI", 9))
+        style.configure("Primary.TButton", background="#2559d6", foreground="#ffffff", borderwidth=0)
+        style.map("Primary.TButton", background=[("active", "#1948bc")], foreground=[("active", "#ffffff")])
+        style.configure("Danger.TButton", foreground="#b42332")
+        style.configure("TNotebook", background="#f3f5f8", borderwidth=0)
+        style.configure("TNotebook.Tab", padding=(18, 10), font=("Segoe UI", 10))
+        style.configure("Horizontal.TProgressbar", background="#2559d6", troughcolor="#e9eef6", borderwidth=0, thickness=6)
+        style.configure("Title.TLabel", font=("Segoe UI", 16, "bold"))
+        style.configure("TButton", padding=(9, 5), font=("Segoe UI", 9))
+        style.configure("Nav.TButton", padding=(14, 7), background="#f3f5f8", foreground="#64748b", borderwidth=0, font=("Segoe UI", 10))
+        style.map("Nav.TButton", background=[("pressed", "#e4ecfa"), ("active", "#eaf0f9")])
+        style.configure("Selected.Nav.TButton", background="#e4ecfa", foreground="#1d4ed8")
+        style.layout("Compact.TNotebook.Tab", [])
+        style.configure("Compact.TNotebook", borderwidth=0, background="#f3f5f8")
+        header = ttk.Frame(self, padding=(20, 12))
         header.pack(fill="x")
         ttk.Label(header, text="Vaultcast workers", style="Title.TLabel").pack(side="left")
         ttk.Label(header, text="Version " + VERSION).pack(side="right")
-        self.tabs = ttk.Notebook(self)
-        self.tabs.pack(fill="both", expand=True, padx=24, pady=(0, 24))
+        nav = ttk.Frame(self, padding=(20, 0, 20, 6))
+        nav.pack(fill="x")
+        self.nav_buttons = []
+        self.tabs = ttk.Notebook(self, style="Compact.TNotebook")
+        self.tabs.pack(fill="both", expand=True, padx=0, pady=(0, 8))
         worker_page, settings_page, setup_page = [ScrollPage(self.tabs) for _ in range(3)]
         self.workers = worker_page.body
         self.settings = settings_page.body
@@ -184,6 +182,11 @@ class Manager(tk.Tk):
         self.setup = setup_page.body
         for tab, title in ((worker_page, "Workers"), (setup_page, "Setup & models"), (settings_page, "Connection & settings"), (self.activity, "Activity")):
             self.tabs.add(tab, text=title)
+            index = len(self.nav_buttons)
+            nav_button = ttk.Button(nav, text=title, style="Nav.TButton", command=lambda i=index: self.select_page(i))
+            nav_button.pack(side="left", padx=(0, 4))
+            self.nav_buttons.append(nav_button)
+        self.select_page(0)
         self.build_workers()
         self.build_settings()
         self.build_setup()
@@ -194,43 +197,59 @@ class Manager(tk.Tk):
         self.logs.pack(fill="both", expand=True)
         self.protocol("WM_DELETE_WINDOW", self.close)
         self.after(150, self.poll)
-
+    def select_page(self, index):
+        self.tabs.select(index)
+        for i, button in enumerate(self.nav_buttons):
+            button.configure(style="Selected.Nav.TButton" if i == index else "Nav.TButton")
     def button(self, parent, text, command, help_text=None):
         result = ttk.Button(parent, text=text, command=lambda: self.action(command))
         result.pack(side="left", padx=(0, 8))
         if help_text:
             Tooltip(result, help_text)
         return result
-
     def action(self, command):
         try:
             command()
         except Exception as error:
             messagebox.showerror("Vaultcast", str(error), parent=self)
-
+    def rebuild_workers(self):
+        previous = {key: (status.get(), float(bar["value"])) for key, (status, bar) in self.cards.items()}
+        for child in self.workers.winfo_children():
+            child.destroy()
+        self.cards.clear()
+        self.build_workers()
+        for key, (text, value) in previous.items():
+            if key in self.cards:
+                self.cards[key][0].set(text)
+                self.cards[key][1].configure(value=value)
     def build_workers(self):
-        ttk.Label(self.workers, text="Jobs come from Vaultcast. Workers never generate images or videos manually.", wraplength=880).pack(anchor="w", pady=(0, 16))
-        actions = ttk.Frame(self.workers)
-        actions.pack(fill="x", pady=(0, 16))
-        self.button(actions, "Start all", lambda: [self.controller.start(s) for s in self.controller.config.get("slots", [])])
-        self.button(actions, "Finish jobs & stop all", lambda: [self.controller.stop(s) for s in self.cards], "Current jobs finish before workers stop claiming more work.")
-        slots = self.controller.config.get("slots", [])
-        if not slots:
-            ttk.Label(self.workers, text="No workers configured. Open Setup & models to add workers, then connect your Vaultcast account.", wraplength=850).pack(anchor="w")
-        for slot in slots:
-            box = ttk.LabelFrame(self.workers, text="Worker %s · %s" % (slot["id"], slot_kind(slot)), padding=12)
-            box.pack(fill="x", pady=(0, 12))
-            status = tk.StringVar(value="Stopped")
-            ttk.Label(box, textvariable=status, wraplength=830).pack(anchor="w")
-            progress = ttk.Progressbar(box, maximum=100)
-            progress.pack(fill="x", pady=8)
-            row = ttk.Frame(box)
-            row.pack(fill="x")
-            self.button(row, "Start", lambda s=slot: self.controller.start(s))
-            self.button(row, "Finish & stop", lambda i=slot["id"]: self.controller.stop(i))
-            self.button(row, "Stop now", lambda i=slot["id"]: self.controller.stop(i, False), "Interrupts the current operation. Conversion checkpoints are kept for resuming; AI generation may restart.")
-            self.cards[slot["id"]] = (status, progress)
-
+        from worker_dashboard import Dashboard
+        self.dashboard = Dashboard(self, Tooltip)
+    def delete_worker(self, slot_id, confirmed=False):
+        if self.setup_busy or self.pairing_busy:
+            raise ValueError("Wait for setup or pairing to finish before removing a worker.")
+        item = self.controller.running.get(slot_id)
+        if item and item[0].is_alive():
+            if slot_id in self.pending_removals:
+                return
+            choice = messagebox.askyesnocancel("Remove running worker?", "Finish this worker's current job before removing it?\n\nYes: finish the job, then remove.\nNo: stop now, then remove.\nConversion checkpoints and models are kept.", parent=self)
+            if choice is None:
+                return
+            self.pending_removals.add(slot_id)
+            self.controller.stop(slot_id, finish=choice)
+            self.rebuild_workers()
+            return
+        if not confirmed and not messagebox.askyesno("Delete worker?", "Remove Worker %s from this computer? Models, pairing and conversion files will be kept." % slot_id, parent=self):
+            return
+        with self.controller.lock:
+            config = copy.deepcopy(self.controller.config)
+            config["slots"] = [s for s in config.get("slots", []) if s["id"] != slot_id]
+            config["contributions"] = {k: any(s.get(k) for s in config["slots"]) for k in ("images", "encoding", "video")}
+            worker.save_config(config)
+            self.controller.config = config
+            self.controller.running.pop(slot_id, None)
+        self.pending_removals.discard(slot_id)
+        self.rebuild_workers()
     def build_settings(self):
         ttk.Label(self.settings, text="Vaultcast connection", style="Title.TLabel").pack(anchor="w", pady=(0, 12))
         ttk.Label(self.settings, text="Changes require all workers to stop, so an active upload keeps its original server.", wraplength=850).pack(anchor="w", pady=(0, 16))
@@ -248,7 +267,7 @@ class Manager(tk.Tk):
         self.username, self.password, self.pair_code = tk.StringVar(), tk.StringVar(), tk.StringVar()
         for title, variable, hidden in (("Vaultcast username", self.username, False), ("Password", self.password, True), ("One-time pairing code (alternative to sign-in)", self.pair_code, True)):
             ttk.Label(self.settings, text=title).pack(anchor="w")
-            ttk.Entry(self.settings, textvariable=variable, show="•" if hidden else "", width=56).pack(anchor="w", pady=(3, 8))
+            ttk.Entry(self.settings, textvariable=variable, show="\xe2\u20ac\xa2" if hidden else "", width=56).pack(anchor="w", pady=(3, 8))
         buttons = ttk.Frame(self.settings)
         buttons.pack(fill="x", pady=8)
         self.login_button = self.button(buttons, "Sign in & pair", lambda: self.begin_pair(False))
@@ -256,7 +275,6 @@ class Manager(tk.Tk):
         self.pair_status = tk.StringVar(value="Paired" if self.controller.config.get("worker_token") else "Not paired")
         ttk.Label(self.settings, textvariable=self.pair_status, wraplength=850).pack(anchor="w")
         ttk.Label(self.settings, text="Your existing pairing and conversion checkpoints are preserved. This manager does not remove InvokeAI installations or models.", wraplength=850).pack(anchor="w", pady=24)
-
     def save_settings(self):
         from urllib.parse import urlsplit
         if self.pairing_busy or self.setup_busy:
@@ -273,7 +291,6 @@ class Manager(tk.Tk):
         self.controller.config["server"] = address
         worker.save_config(self.controller.config)
         messagebox.showinfo("Vaultcast", "Settings saved.", parent=self)
-
     def build_setup(self):
         from comfy_backend import ROOT
         ttk.Label(self.setup, text="Set up this computer", style="Title.TLabel").pack(anchor="w", pady=(0, 10))
@@ -308,19 +325,17 @@ class Manager(tk.Tk):
         self.setup_bar = ttk.Progressbar(self.setup)
         self.setup_bar.pack(fill="x", pady=8)
         ttk.Label(self.setup, text="Image generation, AI video generation and hardware encoding share the GPU in turns. CPU conversion workers can run alongside them. Engine setup does not generate media.", wraplength=880).pack(anchor="w", pady=16)
-
     def choose_engine_folder(self):
         path = filedialog.askdirectory(parent=self, title="Choose AI engine folder")
         if path:
             self.engine_folder.set(path)
-
     def background_setup(self, operation):
         if self.setup_busy or self.pairing_busy or any(item[0].is_alive() for item in self.controller.running.values()):
             raise ValueError("Stop workers and wait for other setup or pairing operations to finish first.")
         self.setup_busy = True
         self.controller.pairing = True
         self.setup_cancel.clear()
-        self.setup_status.set("Working…")
+        self.setup_status.set("Working\xe2\u20ac\xa6")
         def run():
             try:
                 value = operation()
@@ -328,10 +343,8 @@ class Manager(tk.Tk):
             except Exception as error:
                 self.events.put(("setup_error", str(error)))
         threading.Thread(target=run, daemon=True, name="vaultcast-setup").start()
-
     def setup_progress(self, text, done, total):
         self.events.put(("setup_progress", text, done, total))
-
     def engine_task(self, action):
         from comfy_backend import Engine
         import manager_setup
@@ -357,11 +370,9 @@ class Manager(tk.Tk):
             manager_setup.save(config)
             return config
         self.background_setup(operation)
-
     def stop_engine(self):
         if self.engine:
             self.background_setup(lambda: (self.engine.stop(), None)[1])
-
     def import_model(self):
         source = filedialog.askopenfilename(parent=self, title="Import SDXL checkpoint", filetypes=[("SafeTensor models", "*.safetensors")])
         if not source:
@@ -386,12 +397,11 @@ class Manager(tk.Tk):
             finally:
                 temporary.unlink(missing_ok=True)
         self.background_setup(operation)
-
-    def edit_workers(self):
+    def edit_workers(self, selected=None, add_new=False):
         if self.setup_busy or self.pairing_busy or any(item[0].is_alive() for item in self.controller.running.values()):
             raise ValueError("Stop workers before reconfiguring them.")
         dialog = tk.Toplevel(self)
-        dialog.title("Configure workers")
+        dialog.title("Add worker" if add_new else "Edit worker" if selected is not None else "Configure workers")
         dialog.transient(self)
         dialog.grab_set()
         rows = []
@@ -411,13 +421,25 @@ class Manager(tk.Tk):
             ttk.Entry(table, textvariable=variables[1], width=30).grid(row=index, column=2, padx=8)
             ttk.Spinbox(table, textvariable=variables[2], from_=0, to=15, width=6).grid(row=index, column=3, padx=8)
             rows.append((slot.get("id", max([item[0] for item in rows], default=0) + 1), variables))
-        for slot in self.controller.config.get("slots", []):
-            add(slot)
+        existing = self.controller.config.get("slots", [])
+        if add_new:
+            ids = {slot["id"] for slot in existing}
+            number = next((i for i in range(1, 33) if i not in ids), None)
+            if number is None:
+                dialog.destroy()
+                raise ValueError("This computer already has 32 workers.")
+            used = {c for slot in existing for c in slot.get("cpu_cores", [])}
+            add({"id": number, "cpu_cores": [c for c in worker.available_cpu_cores() if c not in used]})
+        else:
+            for slot in existing:
+                if selected is None or slot["id"] == selected:
+                    add(slot)
         if not rows:
             add({"cpu_cores": worker.available_cpu_cores()})
         buttons = ttk.Frame(dialog, padding=12)
         buttons.pack(fill="x")
-        self.button(buttons, "Add worker", add)
+        if selected is None and not add_new:
+            self.button(buttons, "Add worker", add)
         def apply():
             slots = []
             for slot_id, (role, cores, gpu) in rows:
@@ -428,6 +450,8 @@ class Manager(tk.Tk):
                 if len(cpu) != len(set(cpu)):
                     raise ValueError("CPU core numbers must not repeat within a worker.")
                 slots.append({"id": slot_id, "images": kind == "images", "video": kind == "video", "encoding": kind not in ("images", "video"), "cpu_cores": cpu if kind not in ("images", "video") else [], "encoding_encoder": kind if kind != "images" else "libx264", "encoding_device": int(gpu.get()), "encoding_mode": "cpu" if kind == "libx264" else "hardware"})
+            if selected is not None or add_new:
+                slots = [s for s in existing if s["id"] != selected] + slots
             if not slots or len(slots) > 32:
                 raise ValueError("Configure between 1 and 32 workers.")
             cfg = copy.deepcopy(self.controller.config)
@@ -449,7 +473,6 @@ class Manager(tk.Tk):
             dialog.destroy()
             self.background_setup(operation)
         self.button(buttons, "Check & save workers", apply, "Checks installed models and runs a short FFmpeg encoder check. No AI image or video is generated.")
-
     def begin_pair(self, with_code):
         if self.setup_busy:
             raise ValueError("Wait for setup to finish before pairing.")
@@ -474,7 +497,7 @@ class Manager(tk.Tk):
         self.controller.pairing = True
         self.login_button.configure(state="disabled")
         self.code_button.configure(state="disabled")
-        self.pair_status.set("Pairing with Vaultcast…")
+        self.pair_status.set("Pairing with Vaultcast\xe2\u20ac\xa6")
         def connect():
             try:
                 result = pairing.pair(config, server, username, password, code)
@@ -485,8 +508,12 @@ class Manager(tk.Tk):
             except Exception as error:
                 self.events.put(("pair_error", str(error)))
         threading.Thread(target=connect, daemon=True, name="vaultcast-pairing").start()
-
     def poll(self):
+        self.dashboard.update()
+        for slot_id in list(self.pending_removals):
+            item = self.controller.running.get(slot_id)
+            if not item or not item[0].is_alive():
+                self.action(lambda i=slot_id: self.delete_worker(i, confirmed=True))
         for _ in range(200):
             try:
                 event = self.events.get_nowait()
@@ -524,7 +551,7 @@ class Manager(tk.Tk):
                     status.set(event[2])
                 elif event[0] == "finished":
                     bar.stop()
-                    status.set("Stopped · details in Activity or worker.log")
+                    status.set("Stopped \xc2\xb7 details in Activity or worker.log")
                 else:
                     value = event[2].get("phase_progress")
                     bar.stop()
@@ -545,7 +572,6 @@ class Manager(tk.Tk):
             self.destroy()
             return
         self.after(150, self.poll)
-
     def close(self):
         if self.setup_busy:
             self.setup_cancel.set()
@@ -563,8 +589,6 @@ class Manager(tk.Tk):
         else:
             self.controller.shutdown.set()
             self.destroy()
-
-
 def main():
     try:
         import truststore
@@ -580,7 +604,5 @@ def main():
     if sys.stderr is None:
         sys.stderr = sys.stdout
     Manager().mainloop()
-
-
 if __name__ == "__main__":
     main()
