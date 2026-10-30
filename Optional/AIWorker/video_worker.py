@@ -10,6 +10,7 @@ import urllib.error
 from comfy_backend import Engine, ROOT, video_graph, stopped, download
 import worker
 from worker_cache import cache_use
+from worker_eta import RateWindow
 
 
 def run(cfg, stop):
@@ -41,7 +42,12 @@ def generate(cfg, job, engine, stop):
     base = cfg["server"] + "/api/ai/worker/video/jobs/" + job["id"]
     headers = dict(worker.worker_headers(cfg), **{"X-Vaultcast-Lease": job["lease"]})
     last = [0]
+    eta_window = RateWindow()
     def progress(value, message, **metrics):
+        if metrics.get("phase") in ("download", "upload") and metrics.get("bytes_total"):
+            rate, eta = eta_window.measure(time.monotonic(), metrics.get("bytes_done", 0),
+                max(0, metrics["bytes_total"]-metrics.get("bytes_done", 0)), (metrics["phase"], metrics["bytes_total"]))
+            metrics.update(bytes_per_second=rate, display_eta_seconds=eta)
         worker.slot_status(cfg, message)
         cfg["_console"].set_progress(cfg["slot_id"], dict({"phase_progress": value}, **metrics))
         if time.monotonic() - last[0] >= 25:
