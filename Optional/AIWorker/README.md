@@ -64,3 +64,21 @@ explicit separate choice. No models are bundled in Git.
 
 Validation for this change is syntax-only. Windows GUI behavior, GPU capability,
 model compatibility and generation quality require checking on the target PC.
+
+## In-app updates (1.5.6 and later)
+
+Open **Updates** to check for and install worker updates. Startup checks can be
+disabled there; installing is always your choice. Preview follows
+`feat/ai-images-worker`, while Stable follows `main`. Until the worker is released
+on main, use Preview. This updates only versions published on that channel, not
+unmerged pull requests. The current development build defaults to Preview.
+
+The updater pins one GitHub commit, verifies downloaded Git blob hashes, stages
+all files, then finishes running jobs before closing and replacing worker files.
+It backs up originals and attempts rollback on installation errors. It restarts
+through the normal launcher so missing Python dependencies can be installed.
+Workers remain stopped after restart. Pairing, configuration, models and retained
+conversions are kept. **Update logs & backups** opens the update working folder.
+Network failures, GitHub rate limits and channels without a worker release are
+shown in the update status. The updater cannot automatically install itself into
+older workers; install an update-capable worker once to enable future in-app updates.
