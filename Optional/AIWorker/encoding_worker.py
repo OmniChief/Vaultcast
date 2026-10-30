@@ -394,8 +394,11 @@ class ConsoleProgress:
             if data.get("title"): text += " | " + str(data["title"])
             if self.dashboard:
                 if hasattr(self.dashboard, "set_progress"):
-                    self.dashboard.set_progress(self.slot, data)
-                self.dashboard.set_status(self.slot, text)
+                    self.dashboard.set_progress(self.slot, dict(data, bytes_per_second=sample["rate"]))
+                    if changed or force:
+                        self.dashboard.log("Worker %s: %s | %s" % (self.slot, data.get("stage") or phase, data.get("title", "")))
+                else:
+                    self.dashboard.set_status(self.slot, text)
             elif self.terminal:
                 if self.label: text = "[" + self.label + "] " + text
                 columns = max(40, shutil.get_terminal_size((120, 25)).columns)
