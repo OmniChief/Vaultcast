@@ -277,7 +277,7 @@ class Manager(tk.Tk):
         self.username, self.password, self.pair_code = tk.StringVar(), tk.StringVar(), tk.StringVar()
         for title, variable, hidden in (("Vaultcast username", self.username, False), ("Password", self.password, True), ("One-time pairing code (alternative to sign-in)", self.pair_code, True)):
             ttk.Label(self.settings, text=title).pack(anchor="w")
-            ttk.Entry(self.settings, textvariable=variable, show="\xe2\u20ac\xa2" if hidden else "", width=56).pack(anchor="w", pady=(3, 8))
+            ttk.Entry(self.settings, textvariable=variable, show="*" if hidden else "", width=56).pack(anchor="w", pady=(3, 8))
         buttons = ttk.Frame(self.settings)
         buttons.pack(fill="x", pady=8)
         self.login_button = self.button(buttons, "Sign in & pair", lambda: self.begin_pair(False))
@@ -657,22 +657,23 @@ class Manager(tk.Tk):
             return
         self.after(150, self.poll)
     def close(self):
-        if self.setup_busy:
-            self.setup_cancel.set()
-            messagebox.showinfo("Stopping setup", "Setup is stopping. Close the manager once it has finished; downloads are retained for resuming.", parent=self)
+        if self.closing:
             return
-        if self.pairing_busy:
-            messagebox.showinfo("Pairing in progress", "Wait for pairing to finish before closing.", parent=self)
-            return
-        if any(item[0].is_alive() for item in self.controller.running.values()):
-            if not messagebox.askyesno("Close Vaultcast workers?", "Stop workers and close when their current operations have stopped? Conversion checkpoints will be kept.", parent=self):
+        active = any(item[0].is_alive() for item in self.controller.running.values())
+        owned_engine = self.engine and self.engine.process and self.engine.process.poll() is None
+        if active or owned_engine or self.setup_busy or self.pairing_busy:
+            if not messagebox.askyesno("Close Vaultcast workers?", "Stop all workers and close immediately? Running operations and this manager's AI engine will be interrupted. Saved checkpoints are kept; an incomplete section or AI generation may need to restart.", parent=self):
                 return
-            self.closing = True
-            for slot_id in self.cards:
-                self.controller.stop(slot_id, False)
-        else:
-            self.controller.shutdown.set()
-            self.destroy()
+        self.closing = True
+        self.controller.shutdown.set()
+        self.setup_cancel.set()
+        with self.controller.lock:
+            for _thread, stop, drain, _slot in self.controller.running.values():
+                stop.set()
+                drain.set()
+        from worker_lifetime import force_exit
+        force_exit()
+
 def main():
     try:
         import truststore
@@ -687,6 +688,11 @@ def main():
         sys.stdout = open(path.with_name("worker-console.log"), "a", encoding="utf-8", buffering=1)
     if sys.stderr is None:
         sys.stderr = sys.stdout
+    from worker_lifetime import install
+    try:
+        install()
+    except OSError:
+        logging.exception("Windows process job unavailable; using process-tree shutdown fallback")
     Manager().mainloop()
 if __name__ == "__main__":
     main()

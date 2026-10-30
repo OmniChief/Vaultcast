@@ -107,3 +107,14 @@ silently: inspect retained bytes and explicitly discard it if no longer needed.
 Shared system pip/uv caches, external InvokeAI files and installed models are not
 cleared. New managed AI engine installs disable uv package caching to avoid an
 extra copy of large GPU packages.
+
+## Closing the manager
+
+Confirming the window's Close prompt now exits immediately without waiting for
+server requests. It terminates the manager's owned Windows process group,
+including native encoding/probe processes, managed ComfyUI and setup children.
+Saved checkpoints and downloads remain, but an unfinished checkpoint section or
+AI generation can need restarting. Server-side leases expire normally; shutdown
+does not wait for an unavailable server. Existing external AI engines and
+unrelated applications are not terminated. The updater helper is explicitly
+separate so an in-app update can still apply files and restart the manager.
