@@ -70,6 +70,8 @@ class Updates:
             try:
                 plan = updater.check(Path(__file__).parent, channel)
                 self.app.events.put(("update_checked", plan))
+            except updater.MissingBranch as error:
+                self.app.events.put(("update_branch_missing", {"channel": channel, "branch": error.branch}))
             except Exception as error:
                 self.app.events.put(("update_check_error", str(error)))
         threading.Thread(target=run, daemon=True, name="worker-update-check").start()
@@ -101,7 +103,7 @@ class Updates:
 
     def event(self, event):
         kind, value = event
-        if kind in ("update_checked", "update_check_error"):
+        if kind in ("update_checked", "update_check_error", "update_branch_missing"):
             self.checking = False
             self.check_button.configure(state="normal")
         if kind == "update_checked":
@@ -111,6 +113,18 @@ class Updates:
             self.status.set("Worker %s is available." % value["version"] if value["available"] else "No newer worker update is available on this channel.")
             self.details.set("%d changed files. Source commit: %s" % (len(value["changed"]), value["commit"][:12]))
             self.install_button.configure(state="normal" if value["available"] else "disabled")
+        elif kind == "update_branch_missing":
+            if value["channel"] != self.channel.get():
+                return
+            self.plan = None
+            self.details.set("")
+            self.install_button.configure(state="disabled")
+            self.status.set("Update branch '%s' no longer exists." % value["branch"])
+            if value["branch"] == updater.CHANNELS["Stable"]:
+                return
+            if messagebox.askyesno("Update branch unavailable", "The update branch '%s' no longer exists. Switch to Stable (main) and check for updates there?" % value["branch"], parent=self.app):
+                self.channel.set("Stable")
+                self.check()
         elif kind == "update_check_error":
             self.status.set("Could not check for updates: " + value)
         elif kind == "update_progress":
