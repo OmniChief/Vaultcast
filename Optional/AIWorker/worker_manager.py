@@ -145,6 +145,7 @@ class Manager(tk.Tk):
         self.controller = Controller(self.events)
         self.cards = {}
         self.pending_removals = set()
+        self.cache_busy = False
         self.closing = False
         self.pairing_busy = False
         self.setup_busy = False
@@ -284,6 +285,51 @@ class Manager(tk.Tk):
         self.pair_status = tk.StringVar(value="Paired" if self.controller.config.get("worker_token") else "Not paired")
         ttk.Label(self.settings, textvariable=self.pair_status, wraplength=850).pack(anchor="w")
         ttk.Label(self.settings, text="Your existing pairing and conversion checkpoints are preserved. This manager does not remove InvokeAI installations or models.", wraplength=850).pack(anchor="w", pady=24)
+        ttk.Separator(self.settings).pack(fill="x", pady=16)
+        ttk.Label(self.settings, text="Worker cache", font=("Segoe UI", 13, "bold")).pack(anchor="w")
+        self.cache_status = tk.StringVar(value="Calculating cache size...")
+        ttk.Label(self.settings, textvariable=self.cache_status, wraplength=820).pack(anchor="w", pady=8)
+        self.discard_cache = tk.BooleanVar(value=False)
+        ttk.Checkbutton(self.settings, text="Also discard retained downloads and unfinished conversions (loses resumable progress)", variable=self.discard_cache).pack(anchor="w")
+        row = ttk.Frame(self.settings)
+        row.pack(fill="x", pady=8)
+        self.button(row, "Refresh size", self.refresh_cache)
+        self.button(row, "Clear cache", self.clear_cache)
+        ttk.Label(self.settings, text="Models, installed engines and Python environments are not cache and are never cleared. The latest update backup and recent update transactions are kept.", wraplength=820).pack(anchor="w")
+        self.after(1500, self.refresh_cache)
+    def refresh_cache(self):
+        if self.cache_busy:
+            return
+        self.cache_busy = True
+        def scan():
+            try:
+                from worker_cache import inventory, maintenance
+                maintenance()
+                self.events.put(("cache_scanned", inventory()))
+            except Exception as error:
+                self.events.put(("cache_error", str(error)))
+        threading.Thread(target=scan, daemon=True, name="cache-scan").start()
+    def clear_cache(self):
+        if self.cache_busy or self.setup_busy or self.pairing_busy:
+            raise ValueError("Wait for other operations to finish first.")
+        if any(item[0].is_alive() for item in self.controller.running.values()):
+            raise ValueError("Stop workers before clearing cache. Close older worker versions running elsewhere on this computer too.")
+        discard = self.discard_cache.get()
+        prompt = "Clear downloaded installers and confirmed-job cache? Settings, models and Python environments are kept."
+        if discard:
+            prompt += "\n\nRetained downloads, AI outputs and unfinished conversion files will also be deleted. Those jobs will need to restart or regenerate."
+        if not messagebox.askyesno("Clear worker cache?", prompt, parent=self):
+            return
+        self.cache_busy = True
+        self.setup_busy = True
+        self.controller.pairing = True
+        def clean():
+            try:
+                from worker_cache import clear
+                self.events.put(("cache_cleared", clear(discard)))
+            except Exception as error:
+                self.events.put(("cache_clear_error", str(error)))
+        threading.Thread(target=clean, daemon=True, name="cache-clear").start()
     def save_settings(self):
         from urllib.parse import urlsplit
         if self.pairing_busy or self.setup_busy:
@@ -530,7 +576,24 @@ class Manager(tk.Tk):
                 event = self.events.get_nowait()
             except queue.Empty:
                 break
-            if event[0].startswith("update_"):
+            if event[0] in ("cache_scanned", "cache_error", "cache_cleared", "cache_clear_error"):
+                from worker_cache import size_text
+                self.cache_busy = False
+                if event[0] in ("cache_cleared", "cache_clear_error"):
+                    self.setup_busy = False
+                    self.controller.pairing = False
+                if event[0] == "cache_scanned":
+                    data = event[1]
+                    self.cache_status.set("Cache: %s total | %s reclaimable | %s retained for resume%s" % (size_text(data["reclaimable"]+data["resumable"]+data["protected"]), size_text(data["reclaimable"]), size_text(data["resumable"]), " | %s update backup/staging protected%s" % (size_text(data["protected"]), " | Some files could not be measured" if data["errors"] else "")))
+                    self.after(30000, self.refresh_cache)
+                elif event[0] == "cache_cleared":
+                    freed, errors = event[1]
+                    self.controller.log("Cache cleared:", size_text(freed), "Errors:", "; ".join(errors))
+                    self.cache_status.set("Cleared %s. %d cleanup errors; details in Activity." % (size_text(freed), len(errors)))
+                    self.after(1500, self.refresh_cache)
+                else:
+                    self.cache_status.set("Cache operation failed: " + event[1])
+            elif event[0].startswith("update_"):
                 self.updates.event(event)
             elif event[0] == "setup_progress":
                 self.setup_status.set(event[1])

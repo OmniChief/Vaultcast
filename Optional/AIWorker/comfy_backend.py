@@ -14,6 +14,7 @@ import urllib.parse
 import urllib.request
 import uuid
 import zipfile
+from worker_cache import cache_use
 
 ROOT = Path(os.environ.get("USERPROFILE", str(Path.home()))) / ".vaultcast"
 ENGINE_VERSION = "v0.43.0"
@@ -167,6 +168,7 @@ class Engine:
         if self.idle():
             self.call("/free", "POST", {"unload_models": True, "free_memory": True})
 
+    @cache_use
     def install(self, log, progress, cancel, accelerator="cu128"):
         marker = self.root / ".vaultcast-managed"
         if self.root.exists() and any(self.root.iterdir()) and not marker.exists():
@@ -191,8 +193,9 @@ class Engine:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 with source.open(member) as incoming, target.open("wb") as output:
                     shutil.copyfileobj(incoming, output)
+        archive.unlink(missing_ok=True)
         python = self.root / ".venv" / "Scripts" / "python.exe"
-        uv = [sys.executable, "-m", "uv"]
+        uv = [sys.executable, "-m", "uv", "--no-cache"]
         if not python.exists():
             run(uv + ["venv", "--python", "3.12", "--managed-python", str(python.parent.parent)], log, cancel)
         if accelerator not in ("cu128", "cu126", "cpu"):
@@ -368,6 +371,28 @@ class Engine:
             except Exception:
                 logging.exception("Could not confirm interrupted AI job has stopped")
             raise
+
+    def release_output(self, task):
+        """Delete only this worker's known generated files after server acknowledgement."""
+        journal = ROOT / "generations" / (hashlib.sha256(task.encode()).hexdigest() + ".json")
+        try:
+            record = json.loads(journal.read_text(encoding="utf-8"))
+            from worker_cache import remove
+            record["delivered"] = True
+            record["engine_root"] = str(self.root)
+            atomic_json(journal, record)
+            allowed = self.root / "output" / "Vaultcast"
+            for node in record.get("outputs", {}).values():
+                for key in ("images", "videos", "gifs"):
+                    for item in node.get(key, []):
+                        if item.get("type", "output") != "output":
+                            continue
+                        path = self.root / "output" / item.get("subfolder", "") / item.get("filename", "")
+                        if item.get("filename") and path.is_file() and path.resolve().is_relative_to(allowed.resolve()):
+                            remove(path, allowed)
+            journal.unlink(missing_ok=True)
+        except (OSError, ValueError, KeyError):
+            logging.exception("Delivered AI output cache cleanup failed")
 
     def output(self, outputs, video=False):
         for node in outputs.values():

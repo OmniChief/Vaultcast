@@ -87,3 +87,23 @@ If a selected update branch is deleted, checking for updates offers to switch
 to Stable (main). Accepting saves the channel and immediately checks main.
 Declining keeps the existing choice. Network errors and rate limits do not
 trigger a channel switch.
+
+## Cache and disk space
+
+Connection & settings shows total worker cache, reclaimable bytes, retained job
+bytes and protected update backups. Refresh size rescans; it also refreshes every
+30 seconds. Models, installed Python environments and engines are excluded.
+Clear cache requires stopped workers. Normal clearing preserves resumable work;
+selecting the discard option also removes unfinished conversions/downloads and
+AI output caches, so those jobs may need to restart. Close older worker copies
+before using that option. New workers share a process-safe cache lock.
+
+Validated conversions release the downloaded source and checkpoint copies before
+uploading; the final MP4 remains for upload recovery. Confirmed uploads remove
+the whole job workspace. Delivered AI images/videos release their generated files.
+Old update staging/backups are pruned after seven days while retaining the latest
+rollback backup and all recent transactions. Unconfirmed work is not expired
+silently: inspect retained bytes and explicitly discard it if no longer needed.
+Shared system pip/uv caches, external InvokeAI files and installed models are not
+cleared. New managed AI engine installs disable uv package caching to avoid an
+extra copy of large GPU packages.

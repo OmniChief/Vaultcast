@@ -21,6 +21,7 @@ import urllib.request
 import urllib.parse
 import zipfile
 from contributor_setup import DATA, yes
+from worker_cache import cache_use
 
 FLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 BUILD = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
@@ -883,6 +884,7 @@ def prepare_encoding(config, force=False):
             "gpu_policy": "exclusive" if encoder != "libx264" else "cpu"}}
 
 
+@cache_use
 def run_encoding(cfg, job, request):
     base = cfg["server"] + "/api/ai/worker/encoding/jobs/" + job["id"]
     headers = {"X-Vaultcast-Worker": cfg["worker_token"], "X-Vaultcast-Lease": job["lease"], "X-Vaultcast-Slot":str(cfg.get("slot_id",0))}
@@ -1064,6 +1066,17 @@ def run_encoding(cfg, job, request):
                 save_transfer(workspace, state)
             else:
                 display.log("Reusing retained conversion; resuming upload.")
+            # The validated final MP4 is sufficient for upload retries. Retaining
+            # source + all checkpoint sets here can triple per-job disk usage.
+            if state.get("output_ready"):
+                try:
+                    source.unlink(missing_ok=True)
+                    for directory in root.glob("checkpoints-*"):
+                        from worker_cache import remove
+                        remove(directory, root)
+                    (root / "checkpoints.ffconcat").unlink(missing_ok=True)
+                except (OSError, ValueError) as error:
+                    display.log("Redundant conversion cache cleanup will retry:", error)
             size = output.stat().st_size
             if lost.is_set(): raise RuntimeError("Conversion canceled or lease lost.")
             with transfer_slot(cfg, base, "upload", request, headers, status, phase, update, display, lost, size):

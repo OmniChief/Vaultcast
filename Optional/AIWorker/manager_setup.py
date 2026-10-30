@@ -9,6 +9,7 @@ from comfy_backend import Engine, ROOT, FLAGS, download, stopped
 from contributor_setup import hardware
 from encoding_worker import BUILD, GpuCoordinator, check_encoder
 import worker
+from worker_cache import cache_use
 
 
 def save(config):
@@ -16,6 +17,7 @@ def save(config):
     worker.save_config(config)
 
 
+@cache_use
 def prepare(config, slots, log, progress, cancel):
     cfg = copy.deepcopy(config)
     cfg["image_backend"] = "comfyui"
@@ -64,6 +66,7 @@ def prepare(config, slots, log, progress, cancel):
                     target.parent.mkdir(parents=True, exist_ok=True)
                     with package.open(item) as source, target.open("wb") as output:
                         shutil.copyfileobj(source, output)
+            archive.unlink(missing_ok=True)
             ffmpeg, ffprobe = str(ROOT / "ffmpeg/ffmpeg.exe"), str(ROOT / "ffmpeg/ffprobe.exe")
         used = set()
         for slot in slots:
