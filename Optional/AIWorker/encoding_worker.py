@@ -368,11 +368,28 @@ class ConsoleProgress:
             changed = self.sample is None or self.sample["phase"] != phase
             if changed: self.sample = {"phase": phase, "at": now, "done": done, "rate": 0, "started": now}
             sample = self.sample
+            eta = None
             elapsed = now - sample["at"]
             if elapsed >= 0.5:
                 rate = max(0, done - sample["done"]) / elapsed
                 sample["rate"] = rate if not sample["rate"] else sample["rate"] * 0.5 + rate * 0.5
                 sample.update(at=now, done=done)
+            if phase in ("download", "upload") and total > 0 and sample["rate"] > 0:
+                eta = max(0, total-done) / sample["rate"]
+            elif phase == "encode":
+                if percent < sample.get("last_percent", percent):
+                    sample.pop("encode_origin", None)
+                sample["last_percent"] = percent
+                if data.get("stage") == "waiting for GPU" or str(data.get("stage", "")).startswith("joining"):
+                    sample.pop("encode_origin", None)
+                else:
+                    origin = sample.setdefault("encode_origin", (now, percent))
+                    advanced = percent-origin[1]
+                    elapsed_encode = now-origin[0]
+                    if percent >= 100:
+                        eta = 0
+                    elif advanced > 0 and elapsed_encode >= 2:
+                        eta = elapsed_encode * (100-percent) / advanced
             if not self.terminal and not self.dashboard and not force and not changed: return
             labels = {"download": "Download", "encode": "Encoding", "upload": "Upload", "verify": "Finalising", "done": "Completed"}
             filled = int(percent / 100 * 20)
@@ -395,7 +412,7 @@ class ConsoleProgress:
             if data.get("title"): text += " | " + str(data["title"])
             if self.dashboard:
                 if hasattr(self.dashboard, "set_progress"):
-                    self.dashboard.set_progress(self.slot, dict(data, bytes_per_second=sample["rate"]))
+                    self.dashboard.set_progress(self.slot, dict(data, bytes_per_second=sample["rate"], display_eta_seconds=eta))
                     if changed or force:
                         self.dashboard.log("Worker %s: %s | %s" % (self.slot, data.get("stage") or phase, data.get("title", "")))
                 else:

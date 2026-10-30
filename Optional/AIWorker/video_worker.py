@@ -60,7 +60,7 @@ def generate(cfg, job, engine, stop):
             now = time.monotonic()
             rate = max(0, done-sample[1]) / max(0.001, now-sample[0])
             sample[:] = [now, done]
-            progress(100*done/total if total else None, "Saving generated video locally", phase="download", bytes_per_second=rate)
+            progress(100*done/total if total else None, "Saving generated video locally", phase="download", bytes_per_second=rate, bytes_done=done, bytes_total=total)
         download(url, output, progress=download_progress, cancel=stop)
     size = output.stat().st_size
     if not 0 < size <= 67108864:
@@ -97,7 +97,7 @@ def generate(cfg, job, engine, stop):
                 raise RuntimeError("The video upload made no progress; output is retained for retry.")
             rate = max(0, confirmed-offset) / max(0.001, time.monotonic()-started)
             offset = confirmed
-            progress(100*offset/size, "Uploading video", phase="upload", bytes_per_second=rate)
+            progress(100*offset/size, "Uploading video", phase="upload", bytes_per_second=rate, bytes_done=offset, bytes_total=size)
     try:
         worker.request(base + "/complete", "POST", {"size": size, "sha256": digest.hexdigest()}, headers, timeout=90)
     except urllib.error.HTTPError as error:
