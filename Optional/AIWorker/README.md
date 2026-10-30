@@ -130,3 +130,23 @@ are not replaced. A current driver remains preferable for using current FFmpeg.
 Unsupported drivers/devices show a short error with details in Activity. No
 silent switch to CPU encoding is made. Runtime files are installed automatically
 by setup; updater delivery includes the compatibility-selection code.
+
+## Independent hardware encoders (1.5.16)
+
+NVIDIA conversions also use hardware decoding and GPU pixel conversion for
+supported even-sized sources, keeping video frames on the selected GPU instead
+of feeding NVENC through CPU decoding and padding. Unsupported sources retry
+with software decoding while retaining NVIDIA encoding; CPU encoding still
+requires the configured CPU fallback option. Quality settings are unchanged.
+Encoder usage varies with the source, audio work and hardware; 100% is not a
+guaranteed sustained target. Existing software-path checkpoints stay available;
+the GPU path saves its own compatible checkpoint set.
+
+Intel Quick Sync and NVIDIA NVENC can encode simultaneously. Different NVENC
+device indices also have separate locks; workers using the same device still
+take turns. QSV/AMF currently auto-select an adapter, so each vendor shares one
+conservative resource group. AI generation retains an exclusive gate across
+hardware encoders to avoid GPU contention. CPU workers remain independent.
+Resource locks coordinate updated worker windows under the same Windows user.
+Close older worker versions before mixing hardware encoders; their old global
+lock protocol cannot participate in the new resource gates.

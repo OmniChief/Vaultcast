@@ -48,10 +48,16 @@ def remove(path, parent):
     return size
 
 
+class CacheBusy(RuntimeError):
+    pass
+
+
 @contextmanager
-def guard(exclusive=False):
+def guard(exclusive=False, lock_name="cache.lock"):
+    if lock_name not in ("cache.lock", "gpu-gate.lock"):
+        raise ValueError("Invalid worker resource lock.")
     ROOT.mkdir(parents=True, exist_ok=True)
-    with (ROOT / "cache.lock").open("a+b") as file:
+    with (ROOT / lock_name).open("a+b") as file:
         if os.name == "nt":
             import ctypes
             from ctypes import wintypes
@@ -63,14 +69,17 @@ def guard(exclusive=False):
             kernel.UnlockFileEx.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(Overlapped)]
             handle, overlapped = msvcrt.get_osfhandle(file.fileno()), Overlapped()
             if not kernel.LockFileEx(handle, 1 | (2 if exclusive else 0), 0, 1, 0, ctypes.byref(overlapped)):
-                raise RuntimeError("Cache is in use by another worker or cleanup operation. Try again when workers are stopped.")
+                raise CacheBusy("Worker resource is in use by another operation. Try again when workers are stopped.")
             try:
                 yield
             finally:
                 kernel.UnlockFileEx(handle, 0, 1, 0, ctypes.byref(overlapped))
         else:
             import fcntl
-            fcntl.flock(file, (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | fcntl.LOCK_NB)
+            try:
+                fcntl.flock(file, (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | fcntl.LOCK_NB)
+            except BlockingIOError as error:
+                raise CacheBusy("Worker resource is in use by another operation.") from error
             try:
                 yield
             finally:
