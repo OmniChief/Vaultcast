@@ -12,6 +12,7 @@ import sys
 import time
 import urllib.parse
 import urllib.request
+import urllib.error
 import uuid
 
 REPO = "OmniChief/Vaultcast"
@@ -19,6 +20,12 @@ PREFIX = "Optional/AIWorker/"
 CHANNELS = {"Stable": "main", "Preview": "feat/ai-images-worker"}
 STATE = Path(os.environ.get("APPDATA", str(Path.home()))) / "VaultcastAIWorker" / "updates"
 FLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+class MissingBranch(RuntimeError):
+    def __init__(self, branch):
+        self.branch = branch
+        super().__init__("The update branch '%s' no longer exists." % branch)
 
 
 def read_json(path, default=None):
@@ -64,7 +71,18 @@ def check(root, channel):
     root = Path(root).resolve()
     branch = CHANNELS[channel]
     api = "https://api.github.com/repos/" + REPO
-    commit = json.loads(fetch(api + "/commits/" + urllib.parse.quote(branch, safe="")))
+    try:
+        branch_info = json.loads(fetch(api + "/branches/" + urllib.parse.quote(branch, safe="")))
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            raise
+        # A repository/access failure can also return 404. Confirm the repository
+        # is available before calling this a deleted branch and offering a switch.
+        repository = json.loads(fetch(api))
+        if str(repository.get("full_name", "")).lower() != REPO.lower():
+            raise RuntimeError("The worker update repository is unavailable.") from error
+        raise MissingBranch(branch) from error
+    commit = branch_info["commit"]
     sha = commit["sha"]
     if not re.fullmatch(r"[0-9a-f]{40}", sha):
         raise ValueError("GitHub did not return a valid update commit.")

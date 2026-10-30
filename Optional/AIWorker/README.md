@@ -82,3 +82,8 @@ conversions are kept. **Update logs & backups** opens the update working folder.
 Network failures, GitHub rate limits and channels without a worker release are
 shown in the update status. The updater cannot automatically install itself into
 older workers; install an update-capable worker once to enable future in-app updates.
+
+If a selected update branch is deleted, checking for updates offers to switch
+to Stable (main). Accepting saves the channel and immediately checks main.
+Declining keeps the existing choice. Network errors and rate limits do not
+trigger a channel switch.
