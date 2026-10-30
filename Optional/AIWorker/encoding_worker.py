@@ -37,7 +37,10 @@ ENCODERS = {"libx264": "CPU (libx264)", "h264_nvenc": "NVIDIA NVENC",
 def machine_gpu_slot(cfg, lost=None):
     """Coordinate separate contributor windows running as the same OS user."""
     NATIVE_DATA.mkdir(parents=True, exist_ok=True)
-    with (NATIVE_DATA / "gpu.lock").open("a+b") as file:
+    name = cfg.get("_gpu_lock_name", "gpu.lock")
+    if not re.fullmatch(r"gpu(?:-(?:ai|nvidia-\d+|intel-\d+|amd-\d+))?\.lock", name):
+        raise ValueError("Invalid GPU resource lock.")
+    with (NATIVE_DATA / name).open("a+b") as file:
         if file.seek(0, 2) == 0:
             file.write(b"0")
             file.flush()
@@ -72,37 +75,79 @@ def machine_gpu_slot(cfg, lost=None):
 
 
 class GpuCoordinator:
-    """FIFO admission shared by all image and hardware-encoding slots in this process."""
+    """Allow independent hardware encoders; keep same-device work and AI exclusive."""
     def __init__(self):
         self.condition = threading.Condition()
         self.queue = []
-        self.busy = False
+        self.busy = set()
+
+    @staticmethod
+    def resource(cfg):
+        modes = cfg.get("contributions", {})
+        if modes.get("images") or modes.get("video"):
+            return "ai"
+        vendor = {"h264_nvenc":"nvidia", "h264_qsv":"intel", "h264_amf":"amd"}.get(cfg.get("encoding_encoder"))
+        # NVENC explicitly selects a device. QSV/AMF currently choose their default
+        # adapter, so group each vendor conservatively rather than inventing IDs.
+        device = max(0, int(cfg.get("encoding_device", 0))) if vendor == "nvidia" else 0
+        return vendor + "-" + str(device) if vendor else "ai"
+
+    @staticmethod
+    def conflicts(left, right):
+        return left == "ai" or right == "ai" or left == right
+
+    def blocked(self, ticket, resource):
+        if any(self.conflicts(resource, active) for active in self.busy):
+            return True
+        for prior_ticket, prior_resource in self.queue:
+            if prior_ticket is ticket:
+                return False
+            if self.conflicts(resource, prior_resource):
+                return True
+        return False
 
     @contextmanager
     def reserve(self, cfg, lost=None, waiting=None):
         ticket = object()
+        resource = self.resource(cfg)
         acquired = False
         with self.condition:
-            self.queue.append(ticket)
+            self.queue.append((ticket, resource))
             try:
-                while self.busy or self.queue[0] is not ticket:
+                while self.blocked(ticket, resource):
                     check_stopping(cfg, lost or threading.Event())
                     if waiting:
                         waiting()
                     self.condition.wait(0.5)
                 check_stopping(cfg, lost or threading.Event())
-                self.queue.pop(0)
-                self.busy = acquired = True
+                self.queue.remove((ticket, resource))
+                self.busy.add(resource)
+                acquired = True
             finally:
                 if not acquired:
-                    self.queue.remove(ticket)
+                    self.queue.remove((ticket, resource))
                     self.condition.notify_all()
         try:
-            with machine_gpu_slot(cfg, lost):
-                yield
+            from worker_cache import guard, CacheBusy
+            gate = None
+            while gate is None:
+                check_stopping(cfg, lost or threading.Event())
+                candidate = guard(exclusive=resource == "ai", lock_name="gpu-gate.lock")
+                try:
+                    candidate.__enter__()
+                    gate = candidate
+                except CacheBusy:
+                    if waiting:
+                        waiting()
+                    time.sleep(0.25)
+            try:
+                with machine_gpu_slot(dict(cfg, _gpu_lock_name="gpu-" + resource + ".lock"), lost):
+                    yield
+            finally:
+                gate.__exit__(None, None, None)
         finally:
             with self.condition:
-                self.busy = False
+                self.busy.remove(resource)
                 self.condition.notify_all()
 
 
@@ -1066,7 +1111,21 @@ def run_encoding(cfg, job, request):
                             state.update(encoding_complete=False, output_ready=False)
                             save_transfer(workspace, state)
                             (root / "progress").unlink(missing_ok=True)
-                            encode_with_checkpoints(command, cfg, lost, root, duration, status, state, display)
+                            accelerated = None
+                            if hardware and encoder == "h264_nvenc":
+                                from nvidia_pipeline import accelerated_command
+                                accelerated = accelerated_command(command, video, cfg.get("encoding_device", 0))
+                            if accelerated:
+                                display.log("NVIDIA hardware decode and pixel conversion enabled; video frames stay on the GPU.")
+                                try:
+                                    encode_with_checkpoints(accelerated, cfg, lost, root, duration, status, state, display)
+                                except EncoderProcessError as error:
+                                    check_stopping(cfg, lost)
+                                    display.log("GPU decoding/filtering failed; retrying software decoding with NVIDIA encoding:", error)
+                                    status.update(encode_work_seconds=0, encode_remaining_seconds=duration)
+                                    encode_with_checkpoints(command, cfg, lost, root, duration, status, state, display)
+                            else:
+                                encode_with_checkpoints(command, cfg, lost, root, duration, status, state, display)
                             state.update(encoding_complete=True, output_size=output.stat().st_size)
                             save_transfer(workspace, state)
                         break
