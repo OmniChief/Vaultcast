@@ -101,7 +101,7 @@ function iptv_hls_default_referrer($url, $ref) {
     return null;
 }
 
-function iptv_hls_proxy_request() {
+function iptv_hls_proxy_request(?callable $providerRetry = null) {
     $url = isset($_GET['u']) ? $_GET['u'] : (isset($_GET['url']) ? $_GET['url'] : '');
     $url = iptv_hls_validate_url($url);
     $jar = isset($_GET['jar']) ? $_GET['jar'] : '';
@@ -233,7 +233,20 @@ function iptv_hls_proxy_request() {
     curl_close($ch);
 
     if ($sent) exit;
+    // Some Stalker media gateways reject the emulated STB media headers or a
+    // stale link with 405. A caller may refresh it once; ordinary IPTV is unchanged.
+    if ($code===405 && $providerRetry!==null) {
+        $replacement=$providerRetry();
+        if(is_array($replacement)&&!empty($replacement['url'])){
+            $_GET['u']=iptv_hls_validate_url($replacement['url']);
+            $_GET['ua']=(string)($replacement['ua']??$ua);
+            iptv_hls_proxy_request();
+            return;
+        }
+    }
     if ($code >= 400) {
+        header('X-Vaultcast-Error-Origin: provider');
+        header('X-Vaultcast-Upstream-Status: '.(string)$code);
         http_response_code($code);
         header('Content-Type: text/plain; charset=utf-8');
         header('Cache-Control: no-store');
