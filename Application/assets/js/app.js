@@ -11131,6 +11131,7 @@ h('div', { className:'cv-find-bar' }, [
       }
       var modeState = { mode: String(c.quality_mode || 'directplay') };
       var batchPoll = { timer: null };
+      var refreshPlayback = null;
       var findState = {
         running: false,
         cancelled: false,
@@ -11292,13 +11293,14 @@ h('div', { className:'cv-find-bar' }, [
       function stopBatchPoll(){
         if (batchPoll.timer) { clearInterval(batchPoll.timer); batchPoll.timer = null; }
       }
-      function ensureBatchPoll(hasActive){
-        if (hasActive) {
+      function ensureBatchPoll(){
+        if (!settingsOnly && root.isConnected) {
           if (batchPoll.timer) return;
           batchPoll.timer = setInterval(function(){
-            if (!$('#cv_batch_list')) { stopBatchPoll(); return; }
+            if (!root.isConnected) { stopBatchPoll(); return; }
             refreshConvertAdmin({ quiet: true });
-          }, 2000);
+            if (refreshPlayback) refreshPlayback();
+          }, 60000);
         } else {
           stopBatchPoll();
         }
@@ -11826,8 +11828,16 @@ h('div', { className:'cv-find-bar' }, [
       }
 
       function paintUnified(){
-        var host = $('#cv_batch_list'); if (!host) return;
-        host.innerHTML = '';
+        var currentHost = root.querySelector('#cv_batch_list'); if (!currentHost || !root.isConnected) return;
+        var previousList = currentHost.querySelector('.cv-glass-list');
+        var listScrollTop = previousList ? previousList.scrollTop : 0;
+        var listScrollLeft = previousList ? previousList.scrollLeft : 0;
+        var scrollParents = [];
+        for (var parent = currentHost; parent; parent = parent.parentElement) {
+          scrollParents.push({ element:parent, top:parent.scrollTop, left:parent.scrollLeft });
+        }
+        // Build off-DOM so clearing the list cannot temporarily collapse the page.
+        var host = document.createDocumentFragment();
         var queue = lastQueue || [];
         var active = queue.filter(function(j){ return j.status === 'queued' || j.status === 'running'; });
         var awaiting = queue.filter(function(j){ return j.status === 'done' && !j.resolved; });
@@ -11897,7 +11907,6 @@ h('div', { className:'cv-find-bar' }, [
           }})
         ]));
         host.appendChild(h('div', { id:'cv_find_status', className:'cv-find-status' + (findState.running ? ' is-searching' : '') }));
-        updateFindIndicator();
 
         if (orderedJobs.length) {
           host.appendChild(h('div', { className:'cv-glass-label', text: 'Queue' }));
@@ -11926,7 +11935,12 @@ h('div', { className:'cv-find-bar' }, [
           host.appendChild(list);
         }
 
-        ensureBatchPoll(active.length > 0);
+        currentHost.replaceChildren(host);
+        updateFindIndicator();
+        var nextList = currentHost.querySelector('.cv-glass-list');
+        if (nextList) { nextList.scrollTop = listScrollTop; nextList.scrollLeft = listScrollLeft; }
+        scrollParents.forEach(function(saved){ saved.element.scrollTop = saved.top; saved.element.scrollLeft = saved.left; });
+        ensureBatchPoll();
       }
 
       function mergeFindItems(chunk){
@@ -12034,11 +12048,14 @@ h('div', { className:'cv-find-bar' }, [
 
       function refreshConvertAdmin(opts){
         opts = opts || {};
+        if (!root.isConnected) return;
+        if (!opts.quiet) { stopBatchPoll(); ensureBatchPoll(); }
         if(convertRefreshing){if(!opts.quiet)pendingConvertRefresh=true;return;}
         convertRefreshing=true;
         var routingRevision=policyRevision;
         var limitsRevision=transferRevision;
         api('/admin/convert').then(function(r){
+          if (!root.isConnected) return;
           var pending = r.pending_requests || [];
           updateConvertNotif(pending.length);
           var box = $('#cv_requests'); if (box) {
@@ -12273,6 +12290,7 @@ h('div', { className:'cv-find-bar' }, [
             h('p',{id:'cv_batch_slots_status',className:'muted',role:'status',text:'Default: one download and one upload per computer.'})
           ]),
           h('p', { className:'muted', text:'Find all checks for MP4 files with H.264 video and AAC audio. Other containers appear even when their codecs already match. Restrict to Movies / TV / Anime — games are never scanned. Completed conversions automatically replace their originals after upload. Results stream in live; Stop keeps what was found. TV series stay in accordions.' }),
+          h('p', { className:'muted', text:'Progress updates every minute. Use Refresh queue to update it now.' }),
           h('div', { id:'cv_batch_list', className:'cv-batch-list cv-glass-wrap' }, [ pendingContent({ className:'muted', }) ]),
           h('div', { className:'row-actions' }, [
             h('button', { className:'btn', text:'Refresh queue', onClick: function(){ refreshConvertAdmin(); } }),
@@ -12296,16 +12314,15 @@ h('div', { className:'cv-find-bar' }, [
         Array.from(root.children).slice(0,3).forEach(function(child){child.remove();});
         root.insertBefore(h('div',{className:'settings-card'},[h('h3',{text:'Encoding configuration'}),h('p',{className:'muted',text:'Playback policy, encoder options, threads and output configuration have moved to DirectPlay Settings.'}),h('button',{className:'btn',text:'Open DirectPlay Settings',onClick:function(){openSettings('directplay');}})]),root.firstChild);
         var playbackJobs=h('div',{className:'cv-batch-list','aria-live':'polite'},[pendingContent({className:'muted'})]);
-        var playbackTimer=null,playbackBusy=false,knownCompleted={};
+        var playbackBusy=false;
         function refreshPlaybackJobs(){
-          clearTimeout(playbackTimer);
           if(!root.isConnected||playbackBusy)return;
-          if(document.hidden){playbackTimer=setTimeout(refreshPlaybackJobs,5000);return;}
+          if(document.hidden)return;
           playbackBusy=true;
           api('/admin/transcode').then(function(r){
             if(!root.isConnected)return;
             if(!r.ok)throw new Error(r.error||'Could not load playback conversions.');
-            playbackJobs.innerHTML='';var completed=false;
+            var cards=document.createDocumentFragment();
             (r.sessions||[]).forEach(function(job){
               var running=['queued','running','saving'].indexOf(job.status)>=0;
               var duration=Math.max(0,Number(job.duration||0)-Number(job.offset||0));
@@ -12326,15 +12343,15 @@ h('div', { className:'cv-find-bar' }, [
                   return api('/admin/transcode/'+job.id+'/stop',{method:'POST'}).then(function(j){if(!j.ok)throw new Error(j.error||'Could not stop conversion.');toast('Stop requested · original retained.');refreshPlaybackJobs();});
                 }).catch(function(e){button.disabled=false;toast(e.message||String(e),{kind:'bad'});});
               }}));
-              playbackJobs.appendChild(card);
-              if(job.conversion_job_id&&!knownCompleted[job.id]){knownCompleted[job.id]=true;completed=true;}
+              cards.appendChild(card);
             });
-            if(!(r.sessions||[]).length)playbackJobs.appendChild(h('p',{className:'muted',text:'No playback conversions. Start one from a video player.'}));
-            if(completed)refreshConvertAdmin({quiet:true});
-          }).catch(function(e){if(root.isConnected){playbackJobs.innerHTML='';playbackJobs.appendChild(h('p',{className:'muted',text:e.message||'Could not load playback conversions.'}));}}).then(function(){
-            playbackBusy=false;if(root.isConnected)playbackTimer=setTimeout(refreshPlaybackJobs,5000);
+            if(!(r.sessions||[]).length)cards.appendChild(h('p',{className:'muted',text:'No playback conversions. Start one from a video player.'}));
+            playbackJobs.replaceChildren(cards);
+          }).catch(function(e){if(root.isConnected){playbackJobs.replaceChildren(h('p',{className:'muted',text:e.message||'Could not load playback conversions.'}));}}).then(function(){
+            playbackBusy=false;
           });
         }
+        refreshPlayback=refreshPlaybackJobs;
         root.insertBefore(h('section',{className:'cv-section settings-card'},[
           h('h3',{text:'Playback conversions'}),
           h('p',{className:'muted',text:'Watch & save copy keeps converting after you leave the player. Completed copies appear in the batch converter below for review or replacement; originals are kept. Temporary playback stops after the player closes and is not saved as a reusable copy. Recent sessions remain here until their playback cache expires.'}),
@@ -12353,7 +12370,7 @@ h('div', { className:'cv-find-bar' }, [
       if (typeof MutationObserver !== 'undefined') {
         setTimeout(function(){
           var obs = new MutationObserver(function(){
-            if (!$('#cv_batch_list')) {
+            if (!root.isConnected) {
               findState.cancelled = true;
               findState.running = false;
               stopBatchPoll();
