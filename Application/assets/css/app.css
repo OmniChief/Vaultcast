@@ -1081,6 +1081,77 @@ input[type=checkbox], input[type=radio], input[type=range] { accent-color: var(-
 .stalker-folders { padding:0 12px 12px; }
 .stalker-category { border-top:1px solid rgba(255,255,255,.08); }
 .stalker-category > .stalker-channel-list { margin:0 0 10px 14px; }
+.stalker-browse-tools { display:grid; gap:12px; margin:16px 0; }
+.stalker-category-chips { display:flex; align-items:center; gap:8px; overflow-x:auto; padding:4px 0 10px; }
+.stalker-category-chips > * { flex-shrink:0; }
+.stalker-vod-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); gap:18px; align-items:start; }
+.stalker-vod-card { overflow:hidden; border:1px solid rgba(255,255,255,.1); border-radius:var(--radius-lg); background:rgba(255,255,255,.025); }
+.stalker-vod-cover { position:relative; display:block; width:100%; aspect-ratio:2/3; padding:0; overflow:hidden; border:0; cursor:pointer; background:linear-gradient(145deg,#26354b,#141b28); color:#fff; }
+.stalker-vod-cover img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+.stalker-vod-placeholder { display:grid; place-items:center; width:100%; height:100%; font-size:64px; opacity:.5; }
+.stalker-vod-badge { position:absolute; bottom:12px; left:12px; padding:6px 10px; border-radius:20px; background:rgba(0,0,0,.75); }
+.stalker-vod-copy { padding:14px; }
+.stalker-vod-copy h3 { font-size:1rem; margin:0; overflow-wrap:anywhere; }
+.stalker-vod-copy .row-head { align-items:start; gap:6px; }
+.stalker-vod-copy h3 { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+.stalker-vod-copy .row-actions { display:flex; flex-wrap:wrap; gap:6px; }
+.stalker-save { flex-shrink:0; min-width:38px; }
+.stalker-vod-description { margin-top:12px; font-size:.9rem; }
+.stalker-vod-description summary { cursor:pointer; }
+.stalker-vod-hero { display:grid; grid-template-columns:minmax(150px,240px) minmax(0,1fr); gap:28px; align-items:start; margin:20px 0; }
+.stalker-vod-detail-poster { aspect-ratio:2/3; border-radius:var(--radius-lg); overflow:hidden; background:linear-gradient(145deg,#26354b,#141b28); display:grid; place-items:center; font-size:64px; }
+.stalker-vod-detail-poster img { width:100%; height:100%; object-fit:cover; }
+.stalker-vod-detail-copy h1 { margin:8px 0 12px; }
+.stalker-vod-detail-copy > p { max-width:75ch; }
+.stalker-vod-inline { position:relative; width:100%; background:#000; border-radius:var(--radius-lg); overflow:hidden; }
+.detail-player .stalker-vod-inline { aspect-ratio:16/9; min-height:220px; display:block; }
+.stalker-hub { max-width:1600px; margin:0 auto; }
+.stalker-hub-header { display:flex; justify-content:space-between; align-items:center; gap:24px; padding:28px 0 22px; }
+.stalker-hub-header h1 { margin:8px 0; font-size:clamp(2rem,4vw,3rem); letter-spacing:-.045em; }
+.stalker-hub-header p { margin:0; }
+.stalker-header-actions { display:flex; align-items:end; gap:12px; }
+.stalker-connection { display:grid; gap:6px; color:var(--muted); font-size:.8rem; }
+.stalker-connection select { min-width:180px; max-width:270px; }
+.stalker-navigation { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:0 0 20px; border-bottom:1px solid var(--border); }
+.stalker-tabs { display:flex; gap:5px; padding:5px; background:var(--surface-1); border:1px solid var(--border); border-radius:14px; }
+.stalker-tabs .btn { border:0; background:transparent; color:var(--muted); padding:10px 22px; border-radius:10px; }
+.stalker-tabs .btn.primary { background:var(--surface-3); color:var(--text); box-shadow:0 2px 8px #0003; }
+.stalker-workspace { display:grid; grid-template-columns:210px minmax(0,1fr); gap:28px; padding-top:24px; align-items:start; }
+.stalker-downloads .stalker-workspace { grid-template-columns:minmax(0,1fr); }
+.stalker-browse-tools[hidden] { display:none; }
+.stalker-browse-tools { margin:0; min-width:0; position:sticky; top:calc(var(--nav-h) + 16px); }
+.stalker-content { min-width:0; }
+.stalker-filter-panel { border:0; background:transparent; }
+.stalker-filter-panel > summary { padding:10px 8px; font-size:.8rem; font-weight:700; color:var(--muted); cursor:pointer; }
+.stalker-category-nav { display:flex; flex-direction:column; gap:4px; max-height:55vh; overflow:auto; padding:4px; }
+.stalker-nav-item { text-align:left; background:transparent; color:var(--muted); border:0; border-radius:8px; padding:10px 12px; cursor:pointer; overflow-wrap:anywhere; }
+.stalker-nav-item:hover,.stalker-nav-item.selected { background:var(--surface-2); color:var(--text); }
+.stalker-nav-item.selected { box-shadow:inset 3px 0 var(--accent); font-weight:600; }
+.stalker-searchbar { display:flex; align-items:center; gap:8px; padding:7px; background:var(--surface-1); border:1px solid var(--border); border-radius:14px; }
+.stalker-search-input { display:flex; align-items:center; gap:10px; flex:1; min-width:0; padding-left:10px; color:var(--muted); }
+.stalker-search-input input { width:100%; min-width:0; border:0; background:transparent; box-shadow:none; }
+.stalker-content-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:22px; }
+.stalker-content-heading h2 { margin:0; font-size:1.25rem; letter-spacing:-.02em; }
+.stalker-content > [role=status] { font-size:.85rem; margin:10px 0 18px; }
+.stalker-breadcrumbs { display:flex; flex-wrap:wrap; align-items:center; gap:2px; }
+.stalker-breadcrumbs:not(:empty) { margin-top:12px; }
+.stalker-pagination { display:flex; justify-content:center; padding:26px 0; }
+.stalker-hub .stalker-vod-grid { grid-template-columns:repeat(auto-fill,minmax(175px,1fr)); gap:20px; }
+.stalker-hub .stalker-vod-card { background:transparent; border:0; border-radius:12px; }
+.stalker-hub .stalker-vod-cover { border-radius:12px; transition:transform .18s var(--ease),box-shadow .18s var(--ease); }
+.stalker-hub .stalker-vod-cover:hover { transform:translateY(-3px); box-shadow:var(--shadow); }
+.stalker-hub .stalker-vod-copy { padding:12px 2px; }
+.stalker-hub .stalker-vod-copy > .row-actions { display:none; }
+.stalker-hub .stalker-save { border:0; padding:4px; background:transparent; }
+.stalker-hub .stalker-vod-badge { font-size:.75rem; opacity:0; transition:opacity .18s; }
+.stalker-hub .stalker-vod-cover:hover .stalker-vod-badge,.stalker-hub .stalker-vod-cover:focus-visible .stalker-vod-badge { opacity:1; }
+.stalker-hub .stalker-root { border-color:var(--border); background:var(--surface-1); }
+.stalker-hub .stalker-channel-list { border-color:var(--border); background:var(--bg2); }
+.stalker-hub .stalker-channel-row:hover { background:var(--surface-1); }
+@media(max-width:800px) { .stalker-hub-header { align-items:start; } .stalker-header-actions { align-items:stretch; flex-direction:column; } .stalker-workspace { grid-template-columns:170px minmax(0,1fr); gap:16px; } .stalker-hub .stalker-vod-grid { grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; } }
+@media(max-width:560px) { .stalker-hub-header { flex-direction:column; gap:16px; padding-top:16px; } .stalker-header-actions { flex-direction:row; align-items:end; width:100%; } .stalker-connection { flex:1; } .stalker-connection select { min-width:0; max-width:none; width:100%; } .stalker-navigation { align-items:stretch; flex-direction:column; } .stalker-tabs .btn { flex:1; padding:10px 12px; } .stalker-workspace { display:flex; flex-direction:column; } .stalker-workspace > * { width:100%; } .stalker-browse-tools { position:static; } .stalker-category-nav { max-height:180px; } }
+@media(max-width:600px) { .stalker-vod-hero { grid-template-columns:110px minmax(0,1fr); gap:16px; } .stalker-vod-detail-copy h1 { font-size:1.4rem; } }
+@media(max-width:600px) { .stalker-vod-grid { grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; } .stalker-vod-copy { padding:10px; } .stalker-vod-copy .row-actions { flex-direction:column; align-items:stretch; } }
 @media(max-width:600px) { .stalker-channel-row { gap:8px; padding:7px 10px; } .stalker-channel-group { display:none; } }
 .live-table { width:100%; border-collapse: collapse; font-size: .88rem; }
 .live-table th, .live-table td { padding: 8px 10px; text-align:left; border-bottom: 1px solid rgba(255,255,255,.06); vertical-align: top; }

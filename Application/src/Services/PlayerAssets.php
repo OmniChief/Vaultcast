@@ -20,6 +20,10 @@ final class PlayerAssets {
             'emulatorVersion' => '4.2.1',
             'emulatorData' => $local ? $base . 'emulatorjs/4.2.1/data/' : self::EMULATOR,
             'hls' => $local ? $base . 'hls/1.5.17/hls.min.js' : self::HLS,
+            'stalkerStream' => \Vaultcast\Database::basePath() . 'index.php?asset=assets/js/stalker-stream.js&v=' . substr(hash_file('sha256',dirname(__DIR__,2).'/assets/js/stalker-stream.js'),0,16),
+            'mpegts' => \Vaultcast\Database::basePath() . 'index.php?asset=assets/js/mpegts-1-7-3.js&v=' . substr(hash_file('sha256',dirname(__DIR__,2).'/assets/js/mpegts-1-7-3.js'),0,16),
+            'stalkerAc3' => \Vaultcast\Database::basePath() . 'index.php?asset=assets/js/stalker-ac3.js&v=' . substr(hash_file('sha256',dirname(__DIR__,2).'/assets/js/stalker-ac3.js'),0,16),
+            'stalkerAc3Worker' => \Vaultcast\Database::basePath() . 'index.php?asset=assets/js/stalker-ac3-worker.js&v=' . substr(hash_file('sha256',dirname(__DIR__,2).'/assets/js/stalker-ac3-worker.js'),0,16),
             'source' => $local ? 'local' : 'cdn',
         ];
     }
