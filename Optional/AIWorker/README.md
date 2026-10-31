@@ -152,8 +152,8 @@ software decode path with hardware encoding. No driver or manual setup changes
 are needed, including for existing workers updated inside the manager.
 
 With two or more assigned CPU threads, an accelerated Intel conversion overlaps
-two five-minute sections of the same job. Each section gets one assigned thread;
-both stay inside the worker's CPU allocation and shared GPU reservation. Each
+two five-minute sections of the same job. Both sections stay inside the worker's
+CPU allocation and shared GPU reservation. Each
 completed section is validated and saved immediately, progress and ETA combine
 fresh work across both sections, and the final MP4 is joined in source order.
 One-thread Intel workers keep a single section running. NVIDIA keeps its single
@@ -176,3 +176,21 @@ hardware encoders to avoid GPU contention. CPU workers remain independent.
 Resource locks coordinate updated worker windows under the same Windows user.
 Close older worker versions before mixing hardware encoders; their old global
 lock protocol cannot participate in the new resource gates.
+
+## Intel CPU allocation fix (1.5.18)
+
+The two Intel sections now share the entire CPU allocation selected in the GUI.
+The previous per-section single-processor affinity also restricted audio and
+driver threads, and ignored allocations beyond the first two processors.
+Codec/filter thread counts are divided across the active sections; both native
+processes remain confined to the worker's selected CPU pool. A final unpaired
+section can use the whole allocation. Activity shows the CPU pool in use.
+
+For an Iris Xe trial on a four-core/eight-thread machine, select four logical
+processors such as 0,2,4,6 if those belong to separate cores on that computer.
+The GUI setting now takes effect for all four processors. Two assigned threads
+remain supported, but can still limit audio processing and GPU submission.
+There is no change to quality, GPU session count, driver installation, AI
+exclusion or server protocol, and no promise of a particular GPU percentage.
+Existing two-thread checkpoints remain compatible; larger allocations use a
+separate checkpoint set while keeping previous work available.
