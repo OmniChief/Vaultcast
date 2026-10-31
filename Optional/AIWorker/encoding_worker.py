@@ -586,7 +586,7 @@ def pending_encodings(cfg):
     for file in sorted(transfer_root(cfg).glob("*/state.json")):
         try:
             state = json.loads(file.read_text(encoding="utf-8"))
-            if not state.get("waiting_for_claim") and state.get("worker_slot", cfg.get("slot_id", 0)) == cfg.get("slot_id", 0):
+            if not state.get("upload_confirmed") and not state.get("waiting_for_claim") and state.get("worker_slot", cfg.get("slot_id", 0)) == cfg.get("slot_id", 0):
                 jobs.append(state["job"])
         except (OSError, ValueError, KeyError):
             print("Could not read retained conversion state:", file)
@@ -1001,6 +1001,9 @@ def run_encoding(cfg, job, request):
         raise RuntimeError("Source changed; retained conversion files kept at " + str(workspace))
     state.update(job=job, waiting_for_claim=False, worker_slot=cfg.get("slot_id", 0))
     save_transfer(workspace, state)
+    if state.get("upload_confirmed"):
+        cleanup_transfer(workspace, cfg)
+        return
     try:
         remote = retry_request(request, base + "/status", {}, headers, cfg, threading.Event(), timeout=30)
     except urllib.error.HTTPError as error:

@@ -603,6 +603,12 @@ class Convert {
         }
         unset($job);
 
+        // Recover at most one known contributor completion blocked by the new
+        // NAS-probe requirement. Its recorded output identity is still checked
+        // by removeOriginal; unrelated replacement failures are not retried.
+        if(!$completed)foreach($q as $job){
+            if(($job['status']??'')==='done'&&!empty($job['external_worker_id'])&&isset($job['output_stat'])&&empty($job['resolved'])&&empty($job['original_removed'])&&empty($job['dest_deleted'])&&strpos((string)($job['message']??''),'Could not verify both videos with ffprobe.')!==false){$completed[]=$job['id'];break;}
+        }
         if ($completed) {
             self::saveQueue($q);
             foreach ($completed as $completedId) self::autoReplace($completedId);
@@ -1220,7 +1226,12 @@ class Convert {
                 if(empty($remaining['probed'])||empty($remaining['video_codec']))$reject('The remaining copy could not be verified. It was retained.',409);
                 $verified=['source'=>null,'output'=>self::fileIdentity($destReal)];
             }else{
-                try{$verified=self::verifyReplacement($srcReal,$destReal,!in_array($job['quality_mode']??'',['original','custom'],true));}
+                // Contributor outputs have already been validated on the worker.
+                // Keep normal finalisation independent of NAS probe availability
+                // and do not hold the shared queue lock across two probe processes.
+                // Recovery tokens were probed during their explicit review step.
+                $needsProbe=!$automatic&&empty($job['external_worker_id']);
+                try{$verified=$needsProbe?self::verifyReplacement($srcReal,$destReal,!in_array($job['quality_mode']??'',['original','custom'],true)):['source'=>self::fileIdentity($srcReal),'output'=>self::fileIdentity($destReal)];}
                 catch(RuntimeException $error){$reject($error->getMessage(),409);}
             }
             if(isset($job['output_stat'])&&$verified['output']!==$job['output_stat'])$reject('The output changed after conversion. Both files were retained.',409);
