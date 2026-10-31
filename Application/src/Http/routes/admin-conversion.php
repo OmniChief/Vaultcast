@@ -1,5 +1,12 @@
 <?php
 declare(strict_types=1);
+if($path==='/admin/convert/review-copy'&&$method==='POST'){
+    try{json_out(Convert::reviewExistingCopy((string)(body_json()['item_id']??'')));}catch(RuntimeException $e){json_error($e->getMessage(),409);}
+}
+if($path==='/admin/convert/recover-copy'&&$method==='POST'){
+    $body=body_json();if(($body['confirm']??false)!==true)json_error('Confirm the reviewed replacement first.',422);
+    try{json_out(Convert::recoverExistingCopy((string)($body['token']??'')));}catch(RuntimeException|DomainException $e){json_error($e->getMessage(),409);}
+}
 if ($path==='/admin/transcode' && $method==='GET') json_out(Transcode::status());
 if(preg_match('#^/admin/convert/([a-f0-9]+)/preview$#D',$path,$match) && $method==='POST') {
     try {json_out(Convert::preview($match[1],!empty(body_json()['original'])));}catch(RuntimeException $e){json_error($e->getMessage(),409);}

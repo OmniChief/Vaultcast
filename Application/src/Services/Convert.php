@@ -137,6 +137,64 @@ class Convert {
         return $dir . '/' . $base . '.directplay.' . $container;
     }
 
+    /** Discovery only: an existing filename is never proof that a source is safe to delete. */
+    private static function existingCopy(array $item): ?array {
+        $src=(string)($item['path']??'');if($src===''||preg_match('/\.directplay\.[^.]+$/i',$src))return null;
+        foreach(array_keys(self::CONTAINERS) as $container){$dest=self::destFor($src,$container);if(is_file($dest))return ['path'=>$dest];}
+        return null;
+    }
+
+    private static function fileIdentity(string $path): array {
+        clearstatcache(true,$path);$stat=@stat($path);
+        if(!$stat||!is_file($path))throw new RuntimeException('A replacement file is no longer available. Both files were retained.');
+        return ['size'=>(int)$stat['size'],'mtime'=>(int)$stat['mtime'],'ino'=>(int)$stat['ino'],'dev'=>(int)$stat['dev']];
+    }
+
+    /** Metadata checks, not a full decode: refuse uncertainty instead of deleting the fallback. */
+    private static function verifyReplacement(string $src,string $dest,bool $directPlay=true): array {
+        $before=[self::fileIdentity($src),self::fileIdentity($dest)];
+        if($src===$dest||($before[0]['ino']>0&&$before[0]['ino']===$before[1]['ino']&&$before[0]['dev']===$before[1]['dev']))throw new RuntimeException('Source and output refer to the same file. Nothing was removed.');
+        $source=MediaProbe::probeSummary($src,8,false);$output=MediaProbe::probeSummary($dest,8,false);
+        if(empty($source['probed'])||empty($output['probed'])||empty($source['video_codec'])||empty($output['video_codec']))throw new RuntimeException('Could not verify both videos with ffprobe. Both files were retained. Check ffprobe in Advanced settings.');
+        $a=(float)($source['duration']??0);$b=(float)($output['duration']??0);
+        if(!is_finite($a)||!is_finite($b)||$a<=0||$b<=0||abs($a-$b)>2)throw new RuntimeException('The source and converted durations could not be matched within two seconds. Both files were retained.');
+        if($directPlay&&(!self::isH264($output['video_codec'])||!in_array($output['pixel_format']??'',['yuv420p','yuvj420p'],true)))throw new RuntimeException('The existing copy is not verified browser-compatible H.264 video. Both files were retained.');
+        if(count($source['audio_tracks']??[])>count($output['audio_tracks']??[]))throw new RuntimeException('The converted copy has fewer audio tracks. Review it manually; both files were retained.');
+        if($directPlay)foreach($output['audio_tracks']??[] as $track)if(!self::isAac($track['codec']??null))throw new RuntimeException('The converted copy has unsupported audio. Both files were retained.');
+        if($before!==[self::fileIdentity($src),self::fileIdentity($dest)])throw new RuntimeException('A file changed during verification. Both files were retained.');
+        return ['source'=>$before[0],'output'=>$before[1],'source_seconds'=>$a,'output_seconds'=>$b];
+    }
+
+    public static function reviewExistingCopy(string $itemId): array {
+        $item=Catalogue::item($itemId);if(!$item)throw new RuntimeException('Library item not found.');
+        $copy=self::existingCopy($item);if(!$copy)throw new RuntimeException('No existing DirectPlay copy was found. Refresh the scan.');
+        $src=\Vaultcast\Paths::real((string)$item['path']);$dest=\Vaultcast\Paths::real($copy['path']);
+        if(!$src||!$dest||!self::underLibraryRoot($src)||!self::underLibraryRoot($dest)||dirname($src)!==dirname($dest))throw new RuntimeException('Both files must be beside each other inside a library folder.');
+        $job=null;
+        foreach(array_reverse(self::queue()) as $candidate)if(($candidate['status']??'')==='done'&&($candidate['src']??'')===$item['path']&&\Vaultcast\Paths::real((string)($candidate['dest']??''))===$dest&&empty($candidate['original_removed'])&&isset($candidate['source_stat'])){$job=$candidate;break;}
+        $result=['ok'=>true,'eligible'=>false,'source'=>basename($src),'copy'=>basename($dest),'reason'=>'No completed conversion record matches these files. The original will not be deleted. Use Merge versions to keep the copy as a library variant.'];
+        if(!$job)return $result;
+        $result['job_id']=$job['id'];
+        try{
+            $proof=self::verifyReplacement($src,$dest);
+            if(isset($job['output_stat'])&&$proof['output']!==$job['output_stat'])throw new RuntimeException('The output changed after conversion. Both files were retained.');
+            if($proof['source']['size']!==(int)$job['source_stat']['size']||$proof['source']['mtime']!==(int)$job['source_stat']['mtime'])throw new RuntimeException('The source changed since this conversion. Both files were retained.');
+            $token=bin2hex(random_bytes(24));\Vaultcast\Repository::cachePut('convert-recovery:'.$token,['job'=>$job['id'],'src'=>$src,'dest'=>$dest,'proof'=>$proof],600);
+            return array_replace($result,['eligible'=>true,'token'=>$token,'job_id'=>$job['id'],'source_seconds'=>$proof['source_seconds'],'copy_seconds'=>$proof['output_seconds'],'reason'=>'Completed job, unchanged source, compatible streams and matching durations verified. Preview the copy before confirming replacement.']);
+        }catch(RuntimeException $error){$result['reason']=$error->getMessage();return $result;}
+    }
+
+    public static function recoverExistingCopy(string $token): array {
+        $lock=self::editQueueLock();
+        try{
+            $proof=\Vaultcast\Repository::cacheGet('convert-recovery:'.$token);if(!$proof)throw new RuntimeException('Review expired. Review the existing copy again.');
+            $queue=self::queue();$index=self::findJob($queue,$proof['job']);$job=$index>=0?$queue[$index]:[];
+            if(($job['status']??'')!=='done'||\Vaultcast\Paths::real((string)($job['src']??''))!==$proof['src']||\Vaultcast\Paths::real((string)($job['dest']??''))!==$proof['dest'])throw new RuntimeException('The conversion record changed after review. No files were removed.');
+            if(self::fileIdentity($proof['src'])!==$proof['proof']['source']||self::fileIdentity($proof['dest'])!==$proof['proof']['output'])throw new RuntimeException('A file changed after review. Both files were retained; review again.');
+            return self::removeOriginal($proof['job'],true);
+        }finally{self::unlockQueue($lock);}
+    }
+
     private static $queueLock = null;
     private static $queueLockDepth = 0;
     private static function lockQueue() {
@@ -362,6 +420,10 @@ class Convert {
         MediaFacts::preload($slice);
         $hits = [];
         foreach ($slice as $it) {
+            if(self::existingCopy($it)){
+                $pub=Catalogue::publicItem($it,false);$pub['existing_copy']=true;$pub['needs_convert']=false;
+                $pub['convert_reason']='Existing DirectPlay copy — review replacement instead of converting again';$hits[]=$pub;continue;
+            }
             $probe = null;
             $facts = MediaFacts::get($it);
             if ($facts) {
@@ -514,6 +576,7 @@ class Convert {
                         $job['finished_at'] = date('c');
                         if ($ok) {
                             $job['status'] = 'done';
+                            $job['output_stat']=self::fileIdentity($dest);
                             $job['progress'] = 100;
                             $job['message'] = 'Completed - saved beside original';
                             if (!empty($job['progress_file'])) @unlink((string)$job['progress_file']);
@@ -1144,10 +1207,24 @@ class Convert {
             if (!isset(self::CONTAINERS[$extension])) $reject('Unsupported converted container',409);
             $target=$parent.'/'.pathinfo($src,PATHINFO_FILENAME).'.'.$extension;
             $srcReal=\Vaultcast\Paths::real($src); $srcExists=$srcReal!==false && is_file($srcReal);
+            if($srcExists)clearstatcache(true,$srcReal);
             if ($srcExists && $srcReal===$destReal) $reject('Source and converted file are the same path',409);
             if ($srcExists && isset($job['source_stat']) && ((int)filesize($srcReal)!==$job['source_stat']['size'] || (int)filemtime($srcReal)!==$job['source_stat']['mtime'])) $reject('The original changed after conversion; it was kept',409);
             if (file_exists($target) && (!$srcExists || \Vaultcast\Paths::real($target)!==$srcReal)) $reject('Replacement filename already exists; no files were changed: '.$target,409);
             if (!is_writable($parent)) $reject('Folder is not writable: '.$parent,403);
+            if(!$srcExists){
+                if(empty($job['original_removed']))$reject('The source is unavailable; replacement cannot be verified. The converted file was retained.',409);
+                // Legacy replacement already removed its source. Only rename the
+                // remaining output and repair its identity; never delete a file.
+                $remaining=MediaProbe::probeSummary($destReal,8,false);
+                if(empty($remaining['probed'])||empty($remaining['video_codec']))$reject('The remaining copy could not be verified. It was retained.',409);
+                $verified=['source'=>null,'output'=>self::fileIdentity($destReal)];
+            }else{
+                try{$verified=self::verifyReplacement($srcReal,$destReal,!in_array($job['quality_mode']??'',['original','custom'],true));}
+                catch(RuntimeException $error){$reject($error->getMessage(),409);}
+            }
+            if(isset($job['output_stat'])&&$verified['output']!==$job['output_stat'])$reject('The output changed after conversion. Both files were retained.',409);
+            if($srcExists&&isset($job['source_stat'])&&($verified['source']['size']!==(int)$job['source_stat']['size']||$verified['source']['mtime']!==(int)$job['source_stat']['mtime']))$reject('The source changed during verification. Both files were retained.',409);
             $outputStat=['size'=>(int)filesize($destReal),'mtime'=>(int)filemtime($destReal)];
             Store::invalidate('catalogue');
             $cat=Catalogue::get(); $oldId=(string)($job['item_id'] ?? '');
@@ -1185,6 +1262,7 @@ class Convert {
 
             // Preserve rollback bytes until the database changes have committed.
             $backup=$parent.'/.vaultcast-replace-'.$jobId.'-'.bin2hex(random_bytes(4)).'.bak';
+            if(($srcExists&&$verified['source']!==self::fileIdentity($srcReal))||$verified['output']!==self::fileIdentity($destReal))$reject('A file changed before replacement. Both files were retained.',409);
             if ($srcExists && !@rename($srcReal,$backup)) $reject('Could not move the original aside; no files were replaced',500);
             if (!@rename($destReal,$target)) {
                 if ($srcExists && !@rename($backup,$srcReal)) throw new RuntimeException('Replacement failed; original remains at '.$backup);
@@ -1210,7 +1288,11 @@ class Convert {
             }
             Store::invalidate('catalogue');
             $warning=null;
-            if ($srcExists && !@unlink($backup)) $warning='Replaced successfully; the old file could not be removed from '.$backup;
+            try{$targetVerified=$verified['output']===self::fileIdentity($target);}catch(RuntimeException $error){$targetVerified=false;}
+            try{$backupVerified=!$srcExists||$verified['source']===self::fileIdentity($backup);}catch(RuntimeException $error){$backupVerified=false;}
+            if(!$targetVerified||!$backupVerified)$warning='Replacement or backup changed after publication. The original backup was retained at '.$backup;
+            elseif ($srcExists && !@unlink($backup)) $warning='Replaced successfully; the old file could not be removed from '.$backup;
+            if($warning){$job['replacement_backup']=$backup;$job['message']=$warning;$q[$i]=$job;self::saveQueue($q);}
             self::audit('replace job='.$jobId.' src='.$src.' target='.$target.' id='.$oldId.' aliases='.implode(',',$oldIds));
             return ['ok'=>true,'job'=>$job,'deleted'=>$srcExists ? $src : null,'kept'=>$target,'new_item_id'=>$oldId,'removed_item_ids'=>$oldIds,'warning'=>$warning]+$result;
         } finally { self::unlockQueue($queueLock); }
@@ -1367,7 +1449,7 @@ class Convert {
         $queueLock = self::editQueueLock();
         try {
         $q = array_values(array_filter(self::queue(), function ($job) {
-            return in_array($job['status'] ?? '', ['queued', 'running'], true);
+            return in_array($job['status'] ?? '', ['queued', 'running'], true)||(($job['status']??'')==='done'&&empty($job['resolved'])&&empty($job['original_removed'])&&empty($job['dest_deleted']));
         }));
         self::saveQueue($q);
         return ['ok' => true, 'queue' => $q];
@@ -1669,6 +1751,7 @@ class Convert {
                 if (is_file($job['dest'])) json_error('Output already exists; it was not overwritten.',409);
                 if (!rename($part,$job['dest'])) throw new RuntimeException('Could not publish converted file.');
                 $published=true;
+                $job['output_stat']=self::fileIdentity($job['dest']);
                 $job['status']='done'; $job['progress']=100; $job['finished_at']=date('c');
                 $job['message']='Completed by '.$worker['name'].' — saved beside original';
             } elseif ($action==='fail') {

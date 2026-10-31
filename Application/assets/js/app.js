@@ -11711,6 +11711,7 @@ h('div', { className:'cv-find-bar' }, [
 
       function enqueueIds(ids, label){
         ids = (ids || []).filter(Boolean);
+        ids = ids.filter(function(id){return !findState.items.some(function(item){return item.id===id&&item.existing_copy;});});
         if (!ids.length) return toast('Nothing selected');
         queueWithRouting('/admin/convert', {item_ids:ids}).then(function(r){
           if (!r.ok) return toast(r.error || 'Enqueue failed', { kind:'bad' });
@@ -11950,6 +11951,26 @@ h('div', { className:'cv-find-bar' }, [
         ]);
       }
 
+      function reviewExistingCopy(it){
+        toast('Checking the existing copy. Neither file is being removed.');
+        api('/admin/convert/review-copy',{method:'POST',body:{item_id:it.id}}).then(function(result){
+          if(!result.ok)throw new Error(result.error||'Could not review this copy.');
+          window.VaultcastHub.modal('Review existing converted copy',function(body,close){
+            body.appendChild(h('p',{text:result.source+' → '+result.copy}));
+            body.appendChild(h('p',{className:result.eligible?'muted':'bad',text:result.reason}));
+            if(result.eligible)body.appendChild(h('p',{className:'muted',text:'Duration: '+result.source_seconds.toFixed(2)+'s original · '+result.copy_seconds.toFixed(2)+'s converted. These are metadata checks, not a full decode. Preview the result before replacing the original.'}));
+            var job=(lastQueue||[]).find(function(j){return j.id===result.job_id;});
+            if(job)body.appendChild(h('div',{className:'row-actions'},[h('button',{className:'btn',text:'Preview converted copy',onClick:function(){previewConvertJob(job);}}),h('button',{className:'btn ghost',text:'Compare original',onClick:function(){previewConvertJob(job,true);}})]));
+            if(result.eligible)body.appendChild(h('button',{className:'btn danger',text:'Finish verified replacement',onClick:function(e){
+              var button=e.currentTarget;
+              confirmDialog('Replace '+result.source+' with the reviewed converted copy? The files will be checked again. The original backup is removed only after the replacement and library update succeed.',{okText:'Replace original',danger:true}).then(function(ok){
+                if(!ok)return;button.disabled=true;
+                api('/admin/convert/recover-copy',{method:'POST',body:{token:result.token,confirm:true}}).then(function(done){if(!done.ok)throw new Error(done.error||'Replacement was not completed.');close();findState.items=findState.items.filter(function(item){return item.id!==it.id;});delete findState.selected[it.id];toast(done.warning||'Verified replacement completed.',{kind:done.warning?'bad':'ok'});refreshConvertAdmin();paintUnified();}).catch(function(error){toast(error.message,{kind:'bad'});button.disabled=false;});
+              });
+            }}));
+          });
+        }).catch(function(error){toast(error.message,{kind:'bad'});});
+      }
       function paintItemRow(it, opts){
         opts = opts || {};
         var jobs = jobByItemId();
@@ -11960,6 +11981,8 @@ h('div', { className:'cv-find-bar' }, [
         var actions = [];
         if (active) {
           actions.push(h('button', { className:'btn ghost cv-glass-btn', text:'Cancel', onClick: function(){ cancelJob(job); }}));
+        } else if(it.existing_copy){
+          actions.push(h('button',{className:'btn primary cv-glass-btn',text:'Review existing copy',onClick:function(){reviewExistingCopy(it);}}));
         } else {
           actions.push(h('button', { className:'btn primary cv-glass-btn', text:'Convert', onClick: function(){
             enqueueIds([it.id], 'Queued');
@@ -11986,7 +12009,7 @@ h('div', { className:'cv-find-bar' }, [
               h('input', {
                 type:'checkbox',
                 checked: checked,
-                disabled: active,
+                disabled: active || !!it.existing_copy,
                 onChange: function(e){
                   if (e.target.checked) findState.selected[it.id] = true;
                   else delete findState.selected[it.id];
@@ -12005,7 +12028,7 @@ h('div', { className:'cv-find-bar' }, [
             h('div', { className:'cv-glass-side' }, [
               active && job.status === 'running'
                 ? h('span', { className:'cv-glass-pct', text: Math.round(pct) + '%' })
-                : h('span', { className:'cv-codec-pill needs', text: codecLabel(it) }),
+                : h('span', { className:'cv-codec-pill needs', text: it.existing_copy?'Review copy':codecLabel(it) }),
               h('div', { className:'row-actions' }, actions)
             ])
           ])
