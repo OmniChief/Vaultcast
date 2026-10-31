@@ -1070,6 +1070,18 @@ input[type=checkbox], input[type=radio], input[type=range] { accent-color: var(-
 .live-roll-time { display:flex; flex-wrap:wrap; gap:12px; }
 .live-roll-time label { display:flex; flex-direction:column; gap:4px; min-width: 110px; }
 .live-table-wrap { overflow:auto; max-height: min(52vh, 560px); border-radius: var(--radius-lg); box-shadow: inset 0 0 0 1px rgba(255,255,255,.06); }
+.stalker-channel-list { display:flex; flex-direction:column; border:1px solid rgba(255,255,255,.1); border-radius:var(--radius-lg); overflow:hidden; }
+.stalker-channel-row { display:flex; align-items:center; gap:16px; min-height:52px; padding:8px 14px; border-bottom:1px solid rgba(255,255,255,.08); }
+.stalker-channel-row:last-child { border-bottom:0; }
+.stalker-channel-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
+.stalker-channel-group { max-width:30%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.stalker-channel-row .btn { flex-shrink:0; }
+.stalker-directory summary { cursor:pointer; padding:12px 14px; font-weight:600; }
+.stalker-root { border:1px solid rgba(255,255,255,.1); border-radius:var(--radius-lg); }
+.stalker-folders { padding:0 12px 12px; }
+.stalker-category { border-top:1px solid rgba(255,255,255,.08); }
+.stalker-category > .stalker-channel-list { margin:0 0 10px 14px; }
+@media(max-width:600px) { .stalker-channel-row { gap:8px; padding:7px 10px; } .stalker-channel-group { display:none; } }
 .live-table { width:100%; border-collapse: collapse; font-size: .88rem; }
 .live-table th, .live-table td { padding: 8px 10px; text-align:left; border-bottom: 1px solid rgba(255,255,255,.06); vertical-align: top; }
 .live-table th { position: sticky; top: 0; background: rgba(12,14,20,.94); z-index: 1; font-size: .75rem; letter-spacing: .04em; text-transform: uppercase; color: var(--muted, #9aa3b5); }

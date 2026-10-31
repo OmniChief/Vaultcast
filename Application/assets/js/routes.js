@@ -23,6 +23,7 @@
       }
       return p;
     }
+    if(v==='live'&&String(st.liveCh||'').indexOf('stalker:')===0){var sc=String(st.liveCh).split(':');return 'live/stalker/'+enc(sc[1])+'/'+enc(sc.slice(2).join(':'));}
     if (v === 'live') return st.liveCh ? (String(st.liveCh).indexOf('radio:')===0?'live/radio/'+enc(String(st.liveCh).slice(6)):'live/' + enc(st.liveCh)) : (st.liveTab && st.liveTab!=='now' ? 'live/'+enc(st.liveTab) : 'live');
     if (v === 'play') {
       if (st.playTab === 'lobby') return 'games/lobby';
@@ -76,6 +77,7 @@
     if (head === 'movies') return { view:'home' };
     if (head === 'tvshows' && parts[1]) return { view:'show', slug:parts[1], resolve:true };
     if (head === 'tvshows') return { view:'home' };
+    if(head==='live'&&parts[1]==='stalker'&&parts[2]&&parts[3])return {view:'live',liveTab:'stalker',liveCh:'stalker:'+parts[2]+':'+parts[3]};
     if (head === 'live') return ['now','relay','iptv','stalker','radio','guide'].indexOf(parts[1])>=0 ? {view:'live',liveTab:parts[1]==='guide'?'now':parts[1],liveCh:parts[1]==='radio'&&parts[2]?'radio:'+parts[2]:null} : {view:'live',liveTab:'now',liveCh:parts[1]||null};
     if (head === 'play') {
       var pt = parts[1] || 'arcade';

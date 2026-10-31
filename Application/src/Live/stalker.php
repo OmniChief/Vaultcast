@@ -135,15 +135,14 @@ function stalker_channel_url(string $feed, string $id): string {
 }
 
 function stalker_index(array $feed, bool $refresh = false): array {
-    $key = 'stalker_channels_'.hash('sha256', json_encode($feed));
+    $key = 'stalker_channels_v2_'.hash('sha256', json_encode($feed));
     $cached = \Vaultcast\Repository::cacheGet($key) ?? [];
     if (!$refresh && ($cached['expires'] ?? 0)>time()) return $cached;
-    $groups = [];
-    try { $genres = stalker_call($feed, 'get_genres'); } catch (RuntimeException $e) { $genres = []; }
-    foreach ($genres as $g) if (is_array($g)) $groups[(string)($g['id'] ?? '')] = (string)($g['title'] ?? '');
+    $groups = stalker_live_groups($feed);
     $result = stalker_call($feed, 'get_all_channels');
     $rows = $result['data'] ?? $result; $channels = []; $commands = [];
     if (!is_array($rows)) throw new RuntimeException('Provider returned an invalid live channel list.');
+    if((int)($result['total_items']??0)>count($rows))throw new RuntimeException('Provider returned a partial live catalogue; use its paginated channel endpoint.');
     foreach ($rows as $row) {
         if (!is_array($row) || empty($row['id']) || empty($row['cmd'])) continue;
         $id = (string)$row['id']; $group = $groups[(string)($row['tv_genre_id'] ?? '')] ?? '';
@@ -232,6 +231,53 @@ function stalker_ordered_page(array $feed, string $type, array $params, int $pag
     return stalker_call($feed,'get_ordered_list',$params,$type);
 }
 
+function stalker_live_scan_key(array $feed): string {return 'stalker_live_search_v1_'.hash('sha256',json_encode($feed));}
+
+function stalker_live_groups(array $feed): array {
+    $key='stalker_live_groups_'.hash('sha256',json_encode($feed));$cached=\Vaultcast\Repository::cacheGet($key);if($cached!==null)return $cached;
+    $groups=[];
+    try{$genres=stalker_call($feed,'get_genres');foreach(($genres['data']??$genres) as $genre)if(is_array($genre)&&isset($genre['id']))$groups[(string)$genre['id']]=(string)($genre['title']??$genre['name']??'Other channels');}
+    catch(RuntimeException $ignored){}
+    \Vaultcast\Repository::cachePut($key,$groups,900);return $groups;
+}
+
+/** Advance a complete live-channel index by one provider page per request. */
+function stalker_live_search_index(array $feed,bool $refresh=false): array {
+    $key=stalker_live_scan_key($feed);
+    $initial=['rows'=>[],'next'=>1,'processed'=>0,'total'=>null,'done'=>false,'signatures'=>[]];
+    $dir=sys_get_temp_dir().'/vaultcast_stalker';if(!is_dir($dir))@mkdir($dir,0700,true);
+    $lock=@fopen($dir.'/scan-'.hash('sha256',$key).'.lock','c');
+    if(!$lock)throw new RuntimeException('Could not open channel search storage.');
+    if(!flock($lock,LOCK_EX|LOCK_NB)){fclose($lock);return \Vaultcast\Repository::cacheGet($key)??$initial;}
+    try{
+        $state=$refresh?$initial:(\Vaultcast\Repository::cacheGet($key)??$initial);
+        if($state['done'])return $state;
+        $groups=stalker_live_groups($feed);
+        if($state['next']>10000)throw new RuntimeException('The provider channel list exceeded the search limit.');
+        // Do not trust provider-side search or genre filters: fetch every channel,
+        // then apply the user's query to the accumulated catalogue ourselves.
+        $result=stalker_ordered_page($feed,'itv',['sortby'=>'number','genre'=>'*','search'=>'','fav'=>0],$state['next']);
+        $rows=$result['data']??null;
+        if(!is_array($rows))throw new RuntimeException('Provider returned an invalid channel page.');
+        $signature=hash('sha256',json_encode(array_column($rows,'id')));
+        if($rows&&isset($state['signatures'][$signature]))throw new RuntimeException('The provider repeated a channel page. Search could not finish scanning the full catalogue.');
+        if($rows)$state['signatures'][$signature]=true;
+        foreach($rows as $row){
+            if(!is_array($row)||!isset($row['id'])||empty($row['cmd']))continue;
+            $id=(string)$row['id'];
+            $genre=(string)($row['tv_genre_id']??'');
+            $state['rows'][$id]=['id'=>$id,'name'=>(string)($row['name']??$id),'description'=>$groups[$genre]??'Other channels','kind'=>'live','genre'=>$genre];
+            \Vaultcast\Repository::cachePut('stalker_live_'.hash('sha256',json_encode([$feed,$id])),['cmd'=>(string)$row['cmd']],7200);
+        }
+        $state['processed']+=count($rows);$state['next']++;
+        if(isset($result['total_items'])&&is_numeric($result['total_items'])&&((int)$result['total_items']>0||!$rows))$state['total']=max(0,(int)$result['total_items']);
+        $state['done']=$state['total']!==null?$state['processed']>=$state['total']:!$rows;
+        if(!$rows&&!$state['done'])throw new RuntimeException('The provider stopped returning channels before the catalogue was complete.');
+        \Vaultcast\Repository::cachePut($key,$state,3600);
+        return $state;
+    }finally{flock($lock,LOCK_UN);fclose($lock);}
+}
+
 /** Paginated provider catalogue. Playback commands stay in the server cache. */
 function stalker_catalogue(array $feed, array $opts): array {
     $kind = (string)($opts['kind'] ?? 'live');
@@ -240,7 +286,7 @@ function stalker_catalogue(array $feed, array $opts): array {
     $query = mb_substr(trim((string)($opts['q'] ?? '')),0,200);
     $category = mb_substr((string)($opts['category'] ?? ''),0,120);
     $parent = mb_substr((string)($opts['parent'] ?? ''),0,120);
-    $cacheKey = 'stalker_catalogue_'.hash('sha256',json_encode([$feed,$kind,$page,$query,$category,$parent]));
+    $cacheKey = 'stalker_catalogue_v2_'.hash('sha256',json_encode([$feed,$kind,$page,$query,$category,$parent]));
     if (empty($opts['refresh'])) {
         $cached = \Vaultcast\Repository::cacheGet($cacheKey);
         if ($cached) return $cached;
@@ -253,20 +299,35 @@ function stalker_catalogue(array $feed, array $opts): array {
             $index = stalker_index($feed,!empty($opts['refresh']));
         }
         catch (RuntimeException $originalError) {
+            \Vaultcast\Repository::cachePut($liveModeKey,['ordered'=>true],3600);
+            $completeIndex=\Vaultcast\Repository::cacheGet(stalker_live_scan_key($feed));
+            if($query!==''||$category!==''||(!empty($completeIndex['done'])&&empty($opts['refresh']))){
+                $scan=stalker_live_search_index($feed,!empty($opts['refresh']));
+                $matches=array_values(array_filter($scan['rows'],static function($row)use($query,$category){return ($query===''||mb_stripos($row['name'],$query)!==false)&&($category===''||$row['genre']===$category);}));
+                $items=array_slice($matches,($page-1)*60,60);foreach($items as &$item)unset($item['genre']);unset($item);
+                $categories=[];foreach(stalker_live_groups($feed) as $genre=>$name)$categories[]=['id'=>(string)$genre,'name'=>$name];
+                $out=['ok'=>true,'items'=>$items,'categories'=>$categories,'page'=>$page,'total'=>count($matches),'hasMore'=>$page*60<count($matches),'indexing'=>!$scan['done'],'scanned'=>$scan['processed'],'catalogueTotal'=>$scan['total']];
+                // A partial result must not prevent the next request advancing the scan.
+                if($scan['done'])\Vaultcast\Repository::cachePut($cacheKey,$out,900);
+                return $out;
+            }
+            if(!empty($opts['refresh']))\Vaultcast\Repository::cachePut(stalker_live_scan_key($feed),['rows'=>[],'next'=>1,'processed'=>0,'total'=>null,'done'=>false,'signatures'=>[]],3600);
             // Some portals expose only the paginated live endpoint. Never fetch every
             // page in one HTTP request, which can exhaust the server request timeout.
             $params=['p'=>$page,'sortby'=>'number','genre'=>$category!==''?$category:'*','search'=>$query,'fav'=>0];
             try { $result=stalker_ordered_page($feed,'itv',$params,$page); }
             catch (RuntimeException $e) { throw new RuntimeException($originalError->getMessage().' The alternate channel endpoint also failed.'); }
+            $groups=stalker_live_groups($feed);$categories=[];foreach($groups as $genre=>$name)$categories[]=['id'=>(string)$genre,'name'=>$name];
             foreach (($result['data'] ?? []) as $row) {
                 if (!is_array($row) || !isset($row['id']) || empty($row['cmd'])) continue;
                 $id=(string)$row['id'];
                 \Vaultcast\Repository::cachePut('stalker_live_'.hash('sha256',json_encode([$feed,$id])),['cmd'=>(string)$row['cmd']],7200);
-                $items[]=['id'=>$id,'name'=>(string)($row['name'] ?? $id),'description'=>'Provider live channel','kind'=>'live'];
+                $items[]=['id'=>$id,'name'=>(string)($row['name'] ?? $id),'description'=>$groups[(string)($row['tv_genre_id']??'')]??'Other channels','kind'=>'live'];
+                \Vaultcast\Repository::cachePut('stalker_channel_'.hash('sha256',json_encode([$feed,$id])),end($items),7200);
             }
             $total=max(0,(int)($result['total_items'] ?? count($items)));
             $perPage=max(1,(int)($result['max_page_items'] ?? count($items)));
-            $out=['ok'=>true,'items'=>$items,'categories'=>[],'page'=>$page,'total'=>$total,'hasMore'=>$page*$perPage<$total];
+            $out=['ok'=>true,'items'=>$items,'categories'=>$categories,'page'=>$page,'total'=>$total,'hasMore'=>$page*$perPage<$total];
             \Vaultcast\Repository::cachePut($liveModeKey,['ordered'=>true],3600);
             \Vaultcast\Repository::cachePut($cacheKey,$out,900);
             return $out;
@@ -330,4 +391,25 @@ function stalker_vod_resolve(array $feed, string $id, ?array $item = null): stri
     if (!$parts || isset($parts['user']) || isset($parts['pass']) || preg_match('/[\r\n]/',$url)) throw new RuntimeException('Provider returned an invalid video link.');
     stalker_public_addresses($url);
     return $url;
+}
+
+function stalker_channel_detail(array $feed,string $id,bool $refresh=false): array {
+    $item=\Vaultcast\Repository::cacheGet('stalker_channel_'.hash('sha256',json_encode([$feed,$id])));
+    $scan=\Vaultcast\Repository::cacheGet(stalker_live_scan_key($feed));
+    if(!$item)$item=$scan['rows'][$id]??null;
+    if(!$item){
+        $index=stalker_index($feed);
+        foreach($index['channels'] as $row)if($row['url']===stalker_channel_url($feed['id'],$id)){$item=['name'=>$row['name'],'description'=>$row['group']];break;}
+    }
+    if(!$item)throw new RuntimeException('Channel unavailable. Refresh the Stalker channel list and select it again.');
+    $guideError='';$programs=[];
+    try{
+        $key='stalker_channel_epg_'.hash('sha256',json_encode($feed));$guide=$refresh?null:\Vaultcast\Repository::cacheGet($key);
+        if($guide===null){$guide=stalker_guide($feed);\Vaultcast\Repository::cachePut($key,$guide,300);}
+        if(!empty($guide['__unavailable']))$guideError='The provider programme guide is currently unavailable.';
+        $stableId='stalker-'.substr(hash('sha256',$feed['id'].':'.$id),0,20);$programs=$guide[$stableId]??[];
+    }catch(RuntimeException $e){$guideError='The provider programme guide is currently unavailable.';\Vaultcast\Repository::cachePut($key,['__unavailable'=>true],300);}
+    usort($programs,static function($a,$b){return $a['startUnix']<=>$b['startUnix'];});
+    $now=(int)round(microtime(true)*1000);$programs=array_values(array_filter($programs,static function($p)use($now){return $p['endUnix']>$now-3600000;}));
+    return ['ok'=>true,'channel'=>['id'=>'stalker:'.$feed['id'].':'.$id,'provider'=>'stalker','kind'=>'iptv','number'=>ctype_digit($id)?(int)$id:0,'name'=>$item['name'],'slogan'=>($item['description']??'')?:$feed['name'],'logo'=>'','programs'=>$programs],'guideError'=>$guideError];
 }
