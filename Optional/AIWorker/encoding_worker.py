@@ -1001,9 +1001,6 @@ def run_encoding(cfg, job, request):
         raise RuntimeError("Source changed; retained conversion files kept at " + str(workspace))
     state.update(job=job, waiting_for_claim=False, worker_slot=cfg.get("slot_id", 0))
     save_transfer(workspace, state)
-    if state.get("upload_confirmed"):
-        cleanup_transfer(workspace, cfg)
-        return
     try:
         remote = retry_request(request, base + "/status", {}, headers, cfg, threading.Event(), timeout=30)
     except urllib.error.HTTPError as error:
@@ -1012,6 +1009,13 @@ def run_encoding(cfg, job, request):
             save_transfer(workspace, state)
         raise
     if remote.get("uploaded"):
+        if not remote.get("replaced"):
+            remote = retry_request(request, base + "/complete", {"bytes": int(state.get("output_size") or 0)}, headers, cfg, threading.Event(), timeout=120)
+            if not remote.get("uploaded"):
+                raise RuntimeError("Server did not confirm the retained output; local files were kept.")
+        print("Conversion uploaded and original replaced." if remote.get("replaced") else "Conversion uploaded; replacement needs administrator attention.")
+        if remote.get("warning"):
+            print("Server note:", remote["warning"])
         state["upload_confirmed"] = True
         save_transfer(workspace, state)
         cleanup_transfer(workspace, cfg)
@@ -1245,7 +1249,10 @@ def run_encoding(cfg, job, request):
                 # Completion owns the queue lock while replacing the original; stop progress first.
                 stop.set()
                 thread.join(timeout=25)
-                confirmation = remote if remote.get("uploaded") else None
+                # Receipt and replacement are separate commits on the server.
+                # A resumed upload must still run idempotent finalisation when
+                # only receipt is confirmed, otherwise its source stays behind.
+                confirmation = remote if remote.get("uploaded") and remote.get("replaced") else None
                 for attempt in range(5):
                     if confirmation:
                         break
@@ -1259,7 +1266,7 @@ def run_encoding(cfg, job, request):
                             raise
                         # A completion response can be lost after the server published the file.
                         remote = get_status()
-                        if remote.get("uploaded"):
+                        if remote.get("uploaded") and remote.get("replaced"):
                             confirmation = remote
                             break
                         if attempt == 4:
