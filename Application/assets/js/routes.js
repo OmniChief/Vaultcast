@@ -76,7 +76,7 @@
     if (head === 'movies') return { view:'home' };
     if (head === 'tvshows' && parts[1]) return { view:'show', slug:parts[1], resolve:true };
     if (head === 'tvshows') return { view:'home' };
-    if (head === 'live') return ['now','relay','iptv','radio','guide'].indexOf(parts[1])>=0 ? {view:'live',liveTab:parts[1]==='guide'?'now':parts[1],liveCh:parts[1]==='radio'&&parts[2]?'radio:'+parts[2]:null} : {view:'live',liveTab:'now',liveCh:parts[1]||null};
+    if (head === 'live') return ['now','relay','iptv','stalker','radio','guide'].indexOf(parts[1])>=0 ? {view:'live',liveTab:parts[1]==='guide'?'now':parts[1],liveCh:parts[1]==='radio'&&parts[2]?'radio:'+parts[2]:null} : {view:'live',liveTab:'now',liveCh:parts[1]||null};
     if (head === 'play') {
       var pt = parts[1] || 'arcade';
       if (['arcade','quiz','social','achievements'].indexOf(pt) < 0) return { view:'notfound', path:path };

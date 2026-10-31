@@ -2616,9 +2616,11 @@ class Acquisition {
 
     public static function torrentsForIngest(): array {
         $tr = Store::settings()['acquisition']['transmission'] ?? [];
-        return self::listTorrentsRaw($tr);
+        $torrents=!empty($tr['enabled'])?self::listTorrentsRaw($tr):[];
+        return array_merge($torrents,StalkerOffline::torrents());
     }
     public static function ingestQueueEntry(array $tor): ?array {
+        if(!empty($tor['stalker_offline']))return null;
         $q = Store::get('acquire_queue', []);
         return self::matchQueueEntry($tor, is_array($q) ? $q : []);
     }
@@ -2630,6 +2632,7 @@ class Acquisition {
     }
     /** Large, non-sample video files of a torrent still present in the download folder. */
     public static function ingestVideoFiles(array $tor): array {
+        if(!empty($tor['stalker_offline']))return StalkerOffline::files($tor);
         $dir = (string)($tor['downloadDir'] ?? '');
         if ($dir === '' || !is_dir($dir)) return [];
         if (!self::downloadDirAllowsDelete($dir) && !self::dirIsDownloadRoot($dir)) return [];
@@ -2654,6 +2657,7 @@ class Acquisition {
     }
     /** Record a reviewed ingest, mark queue done and (when nothing else is left) remove the torrent + leftovers. */
     public static function finishIngest(array $tor, array $dests, bool $removeTorrent = true): array {
+        if(!empty($tor['stalker_offline']))return StalkerOffline::imported($tor);
         $name = (string)($tor['name'] ?? '');
         $hash = strtolower((string)($tor['hashString'] ?? ''));
         $tid = (int)($tor['id'] ?? 0);
