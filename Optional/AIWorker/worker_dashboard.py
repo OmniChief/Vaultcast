@@ -139,12 +139,12 @@ class Dashboard:
             ttk.Label(top,text="#%02d" % number,style="CardTitle.TLabel").pack(side="left")
             role = "AI images" if slot.get("images") else "AI video" if slot.get("video") else "CPU encode" if slot.get("encoding_encoder","libx264")=="libx264" else "GPU encode"
             ttk.Label(top,text=role,style="Card.TLabel").pack(side="right")
-            resources = "GPU %s" % slot.get("encoding_device",0) if slot.get("images") or slot.get("video") else "%d CPU cores" % len(slot.get("cpu_cores",[]))
+            resources = "GPU %s" % slot.get("encoding_device",0) if slot.get("images") or slot.get("video") else "%d CPU threads" % len(slot.get("cpu_cores",[]))
             if role=="GPU encode":
                 resources += " / " + {"h264_nvenc":"NVIDIA","h264_qsv":"Intel","h264_amf":"AMD"}.get(slot.get("encoding_encoder"),"GPU")
             label=ttk.Label(tile,text=resources,style="Muted.Card.TLabel")
             label.pack(anchor="w",pady=(2,0))
-            Tooltip(label,"CPU cores: "+(", ".join(map(str,slot.get("cpu_cores",[]))) or "managed by AI engine"))
+            Tooltip(label,"Logical CPU processors: "+(", ".join(map(str,slot.get("cpu_cores",[]))) or "managed by AI engine")+". Two threads can share one physical core. GPU workers also use CPU time for audio and feeding the GPU.")
             file_text=tk.StringVar(value="")
             file_label=ttk.Label(tile,textvariable=file_text,style="Muted.Card.TLabel",width=21,anchor="w")
             file_label.pack(fill="x",pady=(2,0))

@@ -27,6 +27,22 @@ def checked_runtime(ffmpeg, ffprobe, device, threads, temporary, log, progress, 
         if supported < (12, 2):
             raise RuntimeError("The NVIDIA driver supports NVENC %d.%d. No compatible bundled runtime is available for this driver. Update the NVIDIA driver or choose CPU conversion. Details are in Activity." % supported) from error
     log("Current FFmpeg needs a newer NVENC API than the driver provides. Installing the private NVENC 12.2-compatible runtime for this NVIDIA worker.")
+    selected, probe = compatibility_runtime(progress, cancel)
+    try:
+        check_encoder(selected, probe, "h264_nvenc", device, threads, temporary)
+    except RuntimeError as error:
+        log("Compatible NVIDIA runtime check failed:", error)
+        raise RuntimeError("NVIDIA encoding could not start on GPU %s, including with the compatible runtime. Check Activity for the driver/device error or choose another GPU." % device) from error
+    log("NVIDIA hardware encoding is ready with the driver-compatible runtime.")
+    return selected, probe
+
+
+def compatibility_runtime(progress, cancel):
+    """Reuse the verified private build for legacy NVENC or Intel QSV drivers.
+
+    Callers hold GPU admission: setup has exclusive admission, and only one
+    Intel conversion can install here at a time. Existing files stay untouched.
+    """
     directory = ROOT / "ffmpeg-nvenc-12-2"
     selected = directory / "ffmpeg.exe"
     probe = directory / "ffprobe.exe"
@@ -43,10 +59,4 @@ def checked_runtime(ffmpeg, ffprobe, device, threads, temporary, log, progress, 
                 temporary_file.replace(directory / name)
         archive.unlink(missing_ok=True)
     stopped(cancel)
-    try:
-        check_encoder(str(selected), str(probe), "h264_nvenc", device, threads, temporary)
-    except RuntimeError as error:
-        log("Compatible NVIDIA runtime check failed:", error)
-        raise RuntimeError("NVIDIA encoding could not start on GPU %s, including with the compatible runtime. Check Activity for the driver/device error or choose another GPU." % device) from error
-    log("NVIDIA hardware encoding is ready with the driver-compatible runtime.")
     return str(selected), str(probe)

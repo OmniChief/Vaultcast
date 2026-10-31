@@ -758,6 +758,16 @@ def inspect_checkpoint(cfg, path, seconds):
     return info
 
 
+def checkpoint_command(command, start, seconds, part):
+    section = list(command)
+    at = section.index("-i")
+    section[at:at] = ["-ss", format(start, ".6f")]
+    section[section.index("-map_chapters") + 1] = "-1"
+    section[-1] = str(part)
+    section[-1:-1] = ["-t", format(seconds, ".6f")]
+    return section
+
+
 def encode_with_checkpoints(command, cfg, lost, root, duration, status, state, display):
     encoder = command[command.index("-c:v") + 1]
     if encoder == "copy" or not math.isfinite(duration) or duration <= 0:
@@ -767,6 +777,9 @@ def encode_with_checkpoints(command, cfg, lost, root, duration, status, state, d
     identity = {"command": command, "ffmpeg_version": cfg.get("ffmpeg_version"),
         "source_bytes": state["job"]["bytes"], "source_mtime": state["job"].get("source_mtime"),
         "checkpoint_seconds": CHECKPOINT_SECONDS, "protocol": 1}
+    lanes = 2 if encoder == "h264_qsv" and "qsv" == command[command.index("-pix_fmt")+1] and len(cfg.get("cpu_cores", [])) >= 2 else 1
+    if lanes > 1:
+        identity["parallel_sections"] = lanes
     signature = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:24]
     checkpoints = state.setdefault("checkpoint_sets", {}).setdefault(signature, {"parts": {}})
     if state.get("checkpoint_active") not in (None, signature):
@@ -776,6 +789,39 @@ def encode_with_checkpoints(command, cfg, lost, root, duration, status, state, d
     directory.mkdir(exist_ok=True)
     save_transfer(root, state)
     count = math.ceil(duration / CHECKPOINT_SECONDS)
+    if lanes > 1:
+        from encoding_parallel import encode_batch
+        display.log(ENCODERS[encoder], ": overlapping two resumable sections, one CPU thread per section within this worker's allocation.")
+        parallel_streams = []
+        for first in range(0, count, lanes):
+            check_stopping(cfg, lost)
+            tasks, details = [], {}
+            completed = min(duration, first * CHECKPOINT_SECONDS)
+            for index in range(first, min(count, first+lanes)):
+                start = index * CHECKPOINT_SECONDS
+                seconds = min(CHECKPOINT_SECONDS, duration-start)
+                part = directory / ("part-" + str(index).zfill(6) + ".mp4")
+                record = checkpoints["parts"].get(str(index), {})
+                if part.is_file() and part.stat().st_size == record.get("bytes"):
+                    inspect_checkpoint(cfg, part, seconds)
+                    completed += seconds
+                    continue
+                details[index] = part, seconds
+                tasks.append((index, seconds, checkpoint_command(command, start, seconds, part)))
+            def saved(index):
+                part, seconds = details[index]
+                streams = checkpoint_streams(inspect_checkpoint(cfg, part, seconds))
+                if parallel_streams and streams != parallel_streams[0]:
+                    raise RuntimeError("Parallel GPU checkpoints have incompatible streams; local files kept.")
+                if not parallel_streams:
+                    parallel_streams.append(streams)
+                checkpoints["parts"][str(index)] = {"bytes": part.stat().st_size, "seconds": seconds}
+                save_transfer(root, state)
+                display.log("Saved GPU checkpoint", str(index+1) + "/" + str(count))
+            status.update(encode_encoder=encoder, encode_remaining_seconds=max(0, duration-completed))
+            if tasks:
+                status["stage"] = "encoding (" + ENCODERS[encoder] + ") sections " + ",".join(str(item[0]+1) for item in tasks) + "/" + str(count)
+                encode_batch(tasks, cfg, lost, root, duration, status, completed, encode_video, check_stopping, saved)
     reference = None
     entries = []
     for index in range(count):
@@ -791,13 +837,8 @@ def encode_with_checkpoints(command, cfg, lost, root, duration, status, state, d
         else:
             status["stage"] = "encoding (" + ENCODERS[encoder] + ") section " + str(index+1) + "/" + str(count)
             display.log("Encoding checkpoint", str(index+1) + "/" + str(count), "from", round(start), "seconds.")
-            section = list(command)
             # Accurate input seeking decodes/discards to the requested timestamp when transcoding.
-            at = section.index("-i")
-            section[at:at] = ["-ss", format(start, ".6f")]
-            section[section.index("-map_chapters") + 1] = "-1"
-            section[-1] = str(part)
-            section[-1:-1] = ["-t", format(seconds, ".6f")]
+            section = checkpoint_command(command, start, seconds, part)
             (root / "progress").unlink(missing_ok=True)
             encode_video(section, cfg, lost, root, seconds, status, start, duration)
             info = inspect_checkpoint(cfg, part, seconds)
@@ -809,7 +850,8 @@ def encode_with_checkpoints(command, cfg, lost, root, duration, status, state, d
             checkpoints["parts"][str(index)] = {"bytes": part.stat().st_size, "seconds": seconds}
             save_transfer(root, state)
         done = min(duration, start+seconds)
-        status.update(progress=round(10+done/duration*80, 1), phase_progress=round(done/duration*100, 1))
+        if lanes == 1:
+            status.update(progress=round(10+done/duration*80, 1), phase_progress=round(done/duration*100, 1))
         # Generated relative filenames contain no user-controlled quoting or path components.
         entries += ["file '" + directory.name + "/" + part.name + "'", "duration " + format(seconds, ".6f")]
     manifest = root / "checkpoints.ffconcat"
@@ -1115,15 +1157,41 @@ def run_encoding(cfg, job, request):
                             if hardware and encoder == "h264_nvenc":
                                 from nvidia_pipeline import accelerated_command
                                 accelerated = accelerated_command(command, video, cfg.get("encoding_device", 0))
+                            elif hardware and encoder == "h264_qsv":
+                                from intel_pipeline import accelerated_command
+                                accelerated = accelerated_command(command, video, cfg.get("_qsv_compat_ffmpeg"))
                             if accelerated:
-                                display.log("NVIDIA hardware decode and pixel conversion enabled; video frames stay on the GPU.")
+                                display.log(ENCODERS[encoder], "hardware decode and pixel conversion enabled; video frames stay on the GPU.")
                                 try:
                                     encode_with_checkpoints(accelerated, cfg, lost, root, duration, status, state, display)
                                 except EncoderProcessError as error:
                                     check_stopping(cfg, lost)
-                                    display.log("GPU decoding/filtering failed; retrying software decoding with NVIDIA encoding:", error)
-                                    status.update(encode_work_seconds=0, encode_remaining_seconds=duration)
-                                    encode_with_checkpoints(command, cfg, lost, root, duration, status, state, display)
+                                    failure = error
+                                    if encoder == "h264_qsv" and os.name == "nt" and not cfg.get("_qsv_compat_ffmpeg"):
+                                        from intel_pipeline import needs_compatibility_runtime
+                                        if needs_compatibility_runtime(error):
+                                            display.log("Intel driver rejected the current FFmpeg GPU frame allocation. Preparing the verified compatibility runtime.")
+                                            phase("encode", "preparing Intel GPU runtime", 10)
+                                            def runtime_progress(*args):
+                                                check_stopping(cfg, lost)
+                                            try:
+                                                from nvidia_encoder import compatibility_runtime
+                                                runtime, _probe = compatibility_runtime(runtime_progress, cfg.get("_stop_event"))
+                                                check_stopping(cfg, lost)
+                                                accelerated[0] = runtime
+                                                phase("encode", "encoding (Intel Quick Sync)", 10)
+                                                status.update(encode_work_seconds=0, encode_remaining_seconds=duration)
+                                                encode_with_checkpoints(accelerated, cfg, lost, root, duration, status, state, display)
+                                                cfg["_qsv_compat_ffmpeg"] = runtime
+                                                failure = None
+                                            except (RuntimeError, OSError) as compatible_error:
+                                                check_stopping(cfg, lost)
+                                                failure = compatible_error
+                                    if failure is not None:
+                                        display.log("GPU decoding/filtering failed; retrying software decoding with", ENCODERS[encoder], "encoding:", failure)
+                                        phase("encode", "encoding (" + ENCODERS[encoder] + "; CPU decode)", 10)
+                                        status.update(encode_work_seconds=0, encode_remaining_seconds=duration)
+                                        encode_with_checkpoints(command, cfg, lost, root, duration, status, state, display)
                             else:
                                 encode_with_checkpoints(command, cfg, lost, root, duration, status, state, display)
                             state.update(encoding_complete=True, output_size=output.stat().st_size)
