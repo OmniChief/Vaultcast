@@ -780,6 +780,10 @@ def encode_with_checkpoints(command, cfg, lost, root, duration, status, state, d
     lanes = 2 if encoder == "h264_qsv" and "qsv" == command[command.index("-pix_fmt")+1] and len(cfg.get("cpu_cores", [])) >= 2 else 1
     if lanes > 1:
         identity["parallel_sections"] = lanes
+        if len(cfg.get("cpu_cores", [])) > 2:
+            # Larger allocations now feed the native codec/filter thread
+            # budget too; retain older sections as a separate checkpoint set.
+            identity["parallel_cpu_pool"] = len(cfg["cpu_cores"])
     signature = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:24]
     checkpoints = state.setdefault("checkpoint_sets", {}).setdefault(signature, {"parts": {}})
     if state.get("checkpoint_active") not in (None, signature):
@@ -791,7 +795,7 @@ def encode_with_checkpoints(command, cfg, lost, root, duration, status, state, d
     count = math.ceil(duration / CHECKPOINT_SECONDS)
     if lanes > 1:
         from encoding_parallel import encode_batch
-        display.log(ENCODERS[encoder], ": overlapping two resumable sections, one CPU thread per section within this worker's allocation.")
+        display.log(ENCODERS[encoder], ": overlapping two resumable sections sharing all", len(cfg["cpu_cores"]), "assigned CPU threads:", ",".join(map(str, cfg["cpu_cores"])))
         parallel_streams = []
         for first in range(0, count, lanes):
             check_stopping(cfg, lost)

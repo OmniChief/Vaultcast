@@ -5,6 +5,13 @@ import threading
 
 def encode_batch(tasks, cfg, lost, root, duration, status, completed, encode, check, saved):
     cancel = threading.Event()
+    cores = list(cfg["cpu_cores"])
+    # Both sections share the worker's full affinity pool. Restricting each
+    # section to one processor also restricted its audio and driver threads,
+    # and silently discarded every allocated processor after the first two.
+    # The shared affinity still caps their combined CPU use to this worker's
+    # allocation; divide codec/filter thread budgets across the active sections.
+    threads = max(1, len(cores) // max(1, len(tasks)))
     initial_work = float(status.get("encode_work_seconds", 0))
     states = []
     pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="gpu-section")
@@ -18,8 +25,8 @@ def encode_batch(tasks, cfg, lost, root, duration, status, completed, encode, ch
             command[command.index("-progress") + 1] = str(work / "progress")
             for at, value in enumerate(command[:-1]):
                 if value in ("-threads", "-filter_threads"):
-                    command[at + 1] = "1"
-            local = dict(cfg, cpu_cores=[cfg["cpu_cores"][lane]], _stop_event=cancel)
+                    command[at + 1] = str(threads)
+            local = dict(cfg, cpu_cores=cores, encoding_threads=threads, _stop_event=cancel)
             progress = {"encode_work_seconds": 0}
             states.append(progress)
             future = pool.submit(encode, command, local, lost, work, seconds, progress)
