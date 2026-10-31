@@ -76,7 +76,7 @@ function iptv_hls_rewrite_playlist($body, $finalUrl, $jar, $ua, $ref) {
             if (stripos($trim, 'URI="') !== false) {
                 $line = preg_replace_callback('/URI="([^"]+)"/i', function ($m) use ($finalUrl, $jar, $ua, $ref) {
                     $abs = iptv_hls_resolve_uri($finalUrl, $m[1]);
-                    if (iptv_hls_should_proxy($abs)) {
+                    if (strpos($jar, 'st') === 0 || iptv_hls_should_proxy($abs)) {
                         return 'URI="' . iptv_hls_proxy_link($abs, $jar, $ua, $ref) . '"';
                     }
                     return 'URI="' . $abs . '"';
@@ -86,7 +86,7 @@ function iptv_hls_rewrite_playlist($body, $finalUrl, $jar, $ua, $ref) {
             continue;
         }
         $abs = iptv_hls_resolve_uri($finalUrl, $trim);
-        if (iptv_hls_should_proxy($abs)) {
+        if (strpos($jar, 'st') === 0 || iptv_hls_should_proxy($abs)) {
             $out[] = iptv_hls_proxy_link($abs, $jar, $ua, $ref);
         } else {
             $out[] = $abs;

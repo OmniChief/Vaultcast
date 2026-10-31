@@ -1,5 +1,6 @@
 <?php
 if (!defined('STREAM_ROOT')) require_once dirname(__DIR__) . '/bootstrap.php';
+require_once __DIR__ . '/stalker.php';
 
 
 function iptv_cache_dir() {
@@ -79,13 +80,25 @@ function iptv_normalize_feed($incoming, $fallbackId = '') {
     $id = preg_replace('/[^A-Za-z0-9._-]+/', '-', $id);
     $id = trim($id, '-.');
     if ($id === '') $id = 'feed-' . substr(sha1($url), 0, 8);
-    return array(
+    $extra = [];
+    if (($incoming['type'] ?? '') === 'stalker') {
+        stalker_validate_url($url);
+        $mac = strtoupper(trim((string)($incoming['mac'] ?? '')));
+        if (!preg_match('/^(?:[A-F0-9]{2}:){5}[A-F0-9]{2}$/D', $mac)) throw new InvalidArgumentException('Enter the MAC address registered with your provider (AA:BB:CC:DD:EE:FF).');
+        $extra = ['type'=>'stalker','mac'=>$mac];
+        foreach (['username','password','serial','deviceId','deviceId2'] as $key) {
+            $value = (string)($incoming[$key] ?? '');
+            if (strlen($value)>512 || preg_match('/[\r\n\x00]/', $value)) throw new InvalidArgumentException('Invalid portal device or account field.');
+            $extra[$key] = $value;
+        }
+    }
+    return array_merge($extra, array(
         'id' => $id,
         'name' => $name,
         'url' => $url,
         'enabled' => !isset($incoming['enabled']) || !!$incoming['enabled'],
         'preinstalled' => !empty($incoming['preinstalled']),
-    );
+    ));
 }
 
 function iptv_migrate_state($state) {
@@ -432,6 +445,11 @@ function iptv_channel_categories($group) {
  * 10k-entry source (iptv-org) is parsed once per download, not on every browse page.
  */
 function iptv_feed_index($feed, $forceRefresh = false) {
+    if (($feed['type'] ?? '') === 'stalker') {
+        $index = stalker_index($feed, $forceRefresh);
+        unset($index['commands']);
+        return $index;
+    }
     $body = iptv_fetch_feed_body($feed, 86400, $forceRefresh);
     $raw = iptv_cache_path_feed($feed['id']);
     $sig = is_file($raw) ? (filemtime($raw) . ':' . filesize($raw)) : sha1($body);
@@ -490,6 +508,9 @@ function iptv_resolve_browse_feeds($opts, $state = null) {
 
 function iptv_browse($opts) {
     $state = iptv_load();
+    foreach ($state['feeds'] as $feed) {
+        if (($feed['type'] ?? '')==='stalker' && !empty($feed['enabled']) && (empty($opts['feed']) || $opts['feed']==='all' || $opts['feed']===$feed['id'])) { Permissions::require('iptv_manage'); break; }
+    }
     $kind = isset($opts['kind']) ? strtolower(trim($opts['kind'])) : '';
     $key = isset($opts['key']) ? $opts['key'] : '';
     $q = isset($opts['q']) ? trim($opts['q']) : '';
@@ -566,7 +587,7 @@ function iptv_browse($opts) {
     foreach ($channelsRaw as $ch) {
         if (!isset($ch['country'])) $ch['country'] = iptv_channel_country($ch);
         if (!isset($ch['categories'])) $ch['categories'] = iptv_channel_categories($ch['group']);
-        if ($hlsOnly && !iptv_url_likely_hls($ch['url'])) {
+        if ($hlsOnly && !iptv_url_likely_hls($ch['url']) && strpos($ch['url'], '/api/live/stalker_stream?') === false) {
             continue;
         }
         if ($group !== '' && stripos($ch['group'], $group) === false) {
@@ -622,7 +643,7 @@ function iptv_browse($opts) {
         'sources' => $sources,
         'cache' => $cache,
         'activeFeedId' => isset($state['activeFeedId']) ? $state['activeFeedId'] : 'all',
-        'feeds' => $state['feeds'],
+        'feeds' => array_map('stalker_public_feed', $state['feeds']),
     );
 }
 
@@ -644,7 +665,13 @@ function iptv_normalize_channel($incoming) {
     if ($url === '' || $name === '') {
         throw new InvalidArgumentException('Channel needs name and url');
     }
-    if (!preg_match('#^https?://#i', $url)) {
+    $portalChannel = false;
+    $query = []; parse_str((string)parse_url($url, PHP_URL_QUERY), $query);
+    if (!empty($query['feed']) && !empty($query['channel']) && $url === stalker_channel_url((string)$query['feed'],(string)$query['channel'])) {
+        // Preserve saved channels even while their provider is offline or removed.
+        $portalChannel = true;
+    }
+    if (!$portalChannel && !preg_match('#^https?://#i', $url)) {
         throw new InvalidArgumentException('Channel url must be http(s)');
     }
     $tvgId = isset($incoming['tvgId']) ? trim($incoming['tvgId']) : '';
@@ -732,6 +759,12 @@ function iptv_update_meta($incoming) {
         $norm = array();
         $seen = array();
         foreach ($incoming['feeds'] as $f) {
+            $old = iptv_feed_by_id($state, (string)($f['id'] ?? ''));
+            if ($old && ($f['type'] ?? '') === 'stalker' && empty($f['replaceCredentials'])) {
+                foreach (['mac','username','password','serial','deviceId','deviceId2'] as $secret) {
+                    if (!isset($f[$secret]) || $f[$secret] === '') $f[$secret] = $old[$secret] ?? '';
+                }
+            }
             $nf = iptv_normalize_feed($f);
             $base = $nf['id'];
             $n = 2;
@@ -765,7 +798,7 @@ function iptv_update_meta($incoming) {
         $state['channels'] = $norm;
     }
     iptv_save($state);
-    return array('ok' => true, 'iptv' => $state);
+    return array('ok' => true, 'iptv' => stalker_public_state($state));
 }
 
 function iptv_lineup_channels($state = null) {
@@ -863,6 +896,13 @@ function iptv_status_key($url) {
  */
 function iptv_probe_url($url, $timeout = 8) {
     $url = trim((string)$url);
+    $displayUrl = $url; $portal = false;
+    $query = []; parse_str((string)parse_url($url,PHP_URL_QUERY),$query);
+    if (isset($query['feed'],$query['channel']) && $url===stalker_channel_url((string)$query['feed'],(string)$query['channel'])) {
+        $feed = iptv_feed_by_id(iptv_load(),(string)$query['feed']);
+        if (!$feed || ($feed['type'] ?? '')!=='stalker' || empty($feed['enabled'])) throw new InvalidArgumentException('Portal source is unavailable.');
+        $url = stalker_resolve($feed,(string)$query['channel']); $portal = true;
+    }
     if ($url === '' || !preg_match('#^https?://#i', $url)) {
         throw new InvalidArgumentException('Invalid stream url');
     }
@@ -930,18 +970,18 @@ function iptv_probe_url($url, $timeout = 8) {
 
     $ms = (int) round((microtime(true) - $started) * 1000);
     $entry = array(
-        'url' => $url,
+        'url' => $displayUrl,
         'ok' => $ok,
         'code' => $code,
         'ms' => $ms,
         'method' => $method,
         'error' => $err !== '' ? $err : null,
         'checkedAt' => gmdate('c'),
-        'finalUrl' => $finalUrl,
+        'finalUrl' => $portal ? $displayUrl : $finalUrl,
     );
 
     $state = iptv_status_load();
-    $key = iptv_status_key($url);
+    $key = iptv_status_key($displayUrl);
     $state['entries'][$key] = array(
         'ok' => $entry['ok'],
         'code' => $entry['code'],
@@ -949,7 +989,7 @@ function iptv_probe_url($url, $timeout = 8) {
         'method' => $entry['method'],
         'error' => $entry['error'],
         'checkedAt' => $entry['checkedAt'],
-        'url' => $url,
+        'url' => $displayUrl,
     );
     if (count($state['entries']) > 5000) {
         uasort($state['entries'], function ($a, $b) {
@@ -1011,7 +1051,7 @@ function iptv_toggle_channel($id, $enabled) {
         throw new RuntimeException('Channel not in favourites: ' . $id);
     }
     iptv_save($state);
-    return array('ok' => true, 'id' => $id, 'enabled' => !!$enabled, 'iptv' => $state);
+    return array('ok' => true, 'id' => $id, 'enabled' => !!$enabled, 'iptv' => stalker_public_state($state));
 }
 
 function iptv_attach_status($channels) {
