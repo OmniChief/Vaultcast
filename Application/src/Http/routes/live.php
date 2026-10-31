@@ -223,7 +223,7 @@ function live_bridge_tv_export(string $kind): void {
 $__liveAction = live_bridge_action();
 if ($__liveAction !== null) {
     if (empty(Store::settings()['features']['live'])) live_bridge_deny(404, 'Live channels are disabled in Settings → Integrations.');
-    $readActions = ['guide', 'now', 'iptv', 'iptv_status', 'file', 'iptv_hls', 'logo', 'local_file', 'station', 'catalogue', 'programme_source', 'duration', 'channel_logo', 'iptv_browse', 'epg_refresh', 'm3u', 'tune', 'tv_studio', 'tv_preview', 'tv_health', 'xmltv', 'playlist', 'channels', 'radio', 'radio_search', 'epg_channels'];
+    $readActions = ['stalker_stream', 'guide', 'now', 'iptv', 'iptv_status', 'file', 'iptv_hls', 'logo', 'local_file', 'station', 'catalogue', 'programme_source', 'duration', 'channel_logo', 'iptv_browse', 'epg_refresh', 'm3u', 'tune', 'tv_studio', 'tv_preview', 'tv_health', 'xmltv', 'playlist', 'channels', 'radio', 'radio_search', 'epg_channels'];
     $writeActions = ['tv_slot_preview','iptv_preview','station', 'iptv_add', 'iptv_remove', 'iptv_toggle', 'iptv_probe', 'iptv_save', 'epg_refresh', 'tv_studio', 'tv_channels', 'channel_logo', 'radio_save', 'epg_map'];
     $m = $_SERVER['REQUEST_METHOD'] ?? 'GET';
     $isWrite = ($m === 'POST' || $m === 'PUT' || $m === 'PATCH' || $m === 'DELETE');
@@ -262,6 +262,56 @@ if ($__liveAction !== null) {
       catch(RuntimeException $error) {json_error($error->getMessage(),502);}
     $_GET['action'] = $__liveAction;
 
+    if ($__liveAction === 'stalker_stream') {
+        require_once STREAM_ROOT.'/src/bootstrap.php';
+        $portalViewer = Auth::requireUser();
+        require_once STREAM_ROOT.'/src/Live/iptv.php';
+        require_once STREAM_ROOT.'/src/Live/iptv_hls.php';
+        try {
+            $feed = iptv_feed_by_id(iptv_load(), (string)($_GET['feed'] ?? ''));
+            if (!$feed || ($feed['type'] ?? '') !== 'stalker' || empty($feed['enabled'])) live_bridge_deny(404, 'Portal source is unavailable.');
+            $id = (string)($_GET['channel'] ?? '');
+            $saved = false;
+            foreach (iptv_lineup_channels() as $channel) if ($channel['url'] === stalker_channel_url($feed['id'], $id)) { $saved = true; break; }
+            if (!$saved) Permissions::require('iptv_manage');
+            $playback = (string)($_GET['playback'] ?? bin2hex(random_bytes(16)));
+            if (!preg_match('/^[a-zA-Z0-9_-]{1,80}$/D',$playback)) live_bridge_deny(422,'Invalid playback session.');
+            $playbackKey = 'stalker_playback_'.hash('sha256',json_encode([$portalViewer['id'],$feed,$id,$playback]));
+            $playbackState = \Vaultcast\Repository::cacheGet($playbackKey);
+            if (function_exists('release_request_locks')) release_request_locks();
+            if (!$playbackState) {
+                $playbackState = ['url'=>stalker_resolve($feed,$id),'jar'=>'st'.substr(hash('sha256',$playbackKey),0,32)];
+                $jarPath = iptv_hls_jar_path($playbackState['jar']);
+                if (!@copy(stalker_cookie_path($feed),$jarPath)) throw new RuntimeException('Could not create portal playback storage.');
+                @chmod($jarPath,0600);
+                \Vaultcast\Repository::cachePut($playbackKey,$playbackState,300);
+            }
+            $_GET['u'] = $playbackState['url'];
+            $_GET['jar'] = $playbackState['jar'];
+            $_GET['ua'] = 'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 MAG250 stbapp ver: 4 rev: 1812 Mobile Safari/533.3';
+            $_GET['ref'] = preg_replace('#/(?:server/load|portal)\.php$#', '/c/', stalker_endpoint($feed));
+            $host = strtolower((string)parse_url($_GET['u'], PHP_URL_HOST));
+            $allow = live_bridge_allow_file($_GET['jar']);
+            if (!is_dir(dirname($allow)) && !@mkdir(dirname($allow),0700,true)) throw new RuntimeException('Could not create portal playback storage.');
+            // Preserve hosts discovered in nested playlists on subsequent playlist reloads.
+            if (!is_file($allow) && @file_put_contents($allow,$host."\n",LOCK_EX)===false) throw new RuntimeException('Could not authorise portal playback.');
+            @chmod($allow,0600);
+            iptv_hls_proxy_request();
+        } catch (InvalidArgumentException $e) { live_bridge_deny(422,$e->getMessage()); }
+          catch (RuntimeException $e) { live_bridge_deny(502,$e->getMessage()); }
+        exit;
+    }
+    if ($__liveAction === 'iptv_save' && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
+        // Connection checking uses the same authenticated, CSRF-protected management action.
+        $checkBody=body_json();
+        if (($checkBody['portalAction'] ?? '') === 'check') {
+            require_once STREAM_ROOT.'/src/Live/iptv.php';
+            $feed=iptv_feed_by_id(iptv_load(),(string)($checkBody['feedId'] ?? ''));
+            if (!$feed || ($feed['type'] ?? '')!=='stalker') live_bridge_deny(422,'Save a Stalker source first.');
+            try { stalker_session($feed,true);$index=stalker_index($feed,true);json_out(['ok'=>true,'channelCount'=>count($index['channels'])]); }
+            catch (RuntimeException $e) { live_bridge_deny(502,$e->getMessage()); }
+        }
+    }
     if ($__liveAction === 'iptv_preview') {
         $body=body_json();
         if(($body['action']??'')==='stop'){
@@ -272,6 +322,13 @@ if ($__liveAction !== null) {
             json_out(['ok'=>true]);
         }
         $url=trim((string)($body['url']??''));
+        require_once STREAM_ROOT.'/src/Live/iptv.php';
+        $portalQuery=[];parse_str((string)parse_url($url,PHP_URL_QUERY),$portalQuery);
+        if (isset($portalQuery['feed'],$portalQuery['channel']) && $url===stalker_channel_url((string)$portalQuery['feed'],(string)$portalQuery['channel'])) {
+            $feed=iptv_feed_by_id(iptv_load(),(string)$portalQuery['feed']);
+            if (!$feed || ($feed['type'] ?? '')!=='stalker' || empty($feed['enabled'])) live_bridge_deny(404,'Portal source is unavailable.');
+            json_out(['ok'=>true,'jar'=>'','source'=>['url'=>$url]]);
+        }
         if(strlen($url)>8000||!preg_match('#^https?://#i',$url)||!filter_var($url,FILTER_VALIDATE_URL))live_bridge_deny(422,'Invalid preview stream URL.');
         $host=strtolower((string)parse_url($url,PHP_URL_HOST));
         if(live_bridge_host_blocked($host))live_bridge_deny(403,'Upstream not allowed.');
@@ -489,10 +546,10 @@ try {
         $state = iptv_load();
         echo json_encode(array(
             'ok' => true,
-            'iptv' => $state,
+            'iptv' => stalker_public_state($state),
             'favourites' => iptv_favourites_with_status($state),
             'lineup' => iptv_lineup_channels($state),
-            'feeds' => $state['feeds'],
+            'feeds' => array_map('stalker_public_feed', $state['feeds']),
             'activeFeedId' => isset($state['activeFeedId']) ? $state['activeFeedId'] : 'all',
             'countries' => iptv_countries(),
             'categories' => iptv_categories(),

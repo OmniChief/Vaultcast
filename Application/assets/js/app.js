@@ -6365,9 +6365,10 @@ try {
   }
   function attachIptvStream(video,source,options){
     var current=options.current||function(){return true;},url=source.url;
+    var portalStream=url.indexOf('/api/live/stalker_stream?')!==-1;
     // Keep normal viewing and browse previews on exactly the same playback path.
     if(!/\.m3u8(?:[?#]|$)/i.test(url)){video.src=url;options.play();if(options.note)options.note('Non-HLS stream: browser DirectPlay attempted.');return Promise.resolve();}
-    var proxy=LIVE_API+'iptv_hls?u='+encodeURIComponent(url)+'&jar='+encodeURIComponent(options.jar||hlsJar());
+    var proxy=portalStream?url+'&playback='+encodeURIComponent(liveUid('st')):LIVE_API+'iptv_hls?u='+encodeURIComponent(url)+'&jar='+encodeURIComponent(options.jar||hlsJar());
     if(source.userAgent)proxy+='&ua='+encodeURIComponent(source.userAgent);
     if(source.referrer)proxy+='&ref='+encodeURIComponent(source.referrer);
     function nativeFallback(message){if(!current())return;if(video.canPlayType('application/vnd.apple.mpegurl')){video.src=proxy;options.play();}else options.error(message);}
@@ -15301,8 +15302,8 @@ function viewCollectionDetail(){
 
     // Feeds card
     host.appendChild(h('div', { className: 'settings-card' }, [
-      h('h3', { text: 'Playlist feeds (' + feeds.length + ')' }),
-      h('p', { className: 'muted', text: 'Each feed is a name + URL to an .m3u / .m3u8 index. Browse uses the active feed (or All, which merges every enabled feed, de-duplicated by stream URL). Playlists cache ~24h on the server \u2014 Reload playlist forces a redownload. HLS plays through the same-origin proxy.' }),
+      h('h3', { text: 'IPTV sources (' + feeds.length + ')' }),
+      h('p', { className: 'muted', text: 'Add M3U playlists or Stalker / Ministra portals. Browse one source or all enabled sources, then add channels to your lineup. Reload refreshes the channel list; portal playback requests a fresh stream link when you tune in.' }),
       feeds.length ? h('div', { className: 'live-table-wrap' }, [
         h('table', { className: 'live-table' }, [
           h('thead', {}, [h('tr', {}, ['Name','URL','On',''].map(function(t){ return h('th', { text: t }); }))]),
@@ -15317,6 +15318,7 @@ function viewCollectionDetail(){
                 }}), ' On'
               ])]),
               h('td', { className: 'row-actions' }, [
+                f.type==='stalker'?h('button',{className:'btn ghost',type:'button',text:'Check connection',onClick:function(ev){var button=ev.currentTarget;button.disabled=true;liveApiPost('iptv_save',{portalAction:'check',feedId:f.id}).then(function(result){if(!result.ok||!result.body||!result.body.ok)throw new Error(result.body&&result.body.error||'Connection failed');liveSetMsg('Connected to '+(f.name||f.id)+' — '+result.body.channelCount+' live channels.',false);}).catch(function(error){liveSetMsg(error.message||'Connection failed.',true);}).finally(function(){button.disabled=false;});}}):null,
                 h('button', { className: 'btn ghost', type: 'button', text: 'Edit', onClick: function(){ liveSet.feedEditId = f.id; paintLiveIptv(host); }}),
                 h('button', { className: 'btn ghost', type: 'button', text: 'Remove', onClick: function(){
                   if (!confirm('Remove feed ' + (f.name||f.id) + '?' + (f.preinstalled ? ' It will not be added back automatically; you can re-add it any time with its URL.' : ''))) return;
@@ -15332,24 +15334,42 @@ function viewCollectionDetail(){
       ]) : h('p', { className: 'muted', text: 'No feeds configured.' }),
       h('div', { className: 'stack', style: 'margin-top:12px' }, [
         h('label', {}, ['Feed name', h('input', { id: 'iptvFeedName', value: editFeed ? (editFeed.name||'') : '', placeholder: 'e.g. iptv-org' })]),
-        h('label', {}, ['Playlist URL', h('input', { id: 'iptvFeedUrl', value: editFeed ? (editFeed.url||'') : '', placeholder: 'https://example.com/playlist.m3u' })]),
+        h('label', {}, ['Source type', h('select', {id:'iptvFeedType',onChange:function(e){$('#iptvPortalFields').hidden=e.target.value!=='stalker';}}, [h('option',{value:'m3u',text:'M3U playlist',selected:!editFeed||editFeed.type!=='stalker'}),h('option',{value:'stalker',text:'Stalker / Ministra portal',selected:editFeed&&editFeed.type==='stalker'})])]),
+        h('label', {}, ['Playlist or portal URL', h('input', { id: 'iptvFeedUrl', value: editFeed ? (editFeed.url||'') : '', placeholder: 'https://provider.example/stalker_portal/c/' })]),
+        h('div',{id:'iptvPortalFields',className:'stack',hidden:!editFeed||editFeed.type!=='stalker'},[
+          h('p',{className:'muted',text:'Use the device details registered with your provider. Saved private fields stay on the server; leave them blank when editing to keep them.'}),
+          h('label',{},['Registered MAC address',h('input',{id:'iptvPortalMac',placeholder:editFeed&&editFeed.configured?'Saved — leave blank to keep':'AA:BB:CC:DD:EE:FF',autocomplete:'off'})]),
+          h('label',{},['Username (if required)',h('input',{id:'iptvPortalUsername',autocomplete:'off'})]),
+          h('label',{},['Password (if required)',h('input',{id:'iptvPortalPassword',type:'password',autocomplete:'new-password'})]),
+          h('label',{},['Serial number (if required)',h('input',{id:'iptvPortalSerial',autocomplete:'off'})]),
+          h('label',{},['Device ID (if required)',h('input',{id:'iptvPortalDeviceId',autocomplete:'off'})]),
+          h('label',{},['Second device ID (if required)',h('input',{id:'iptvPortalDeviceId2',autocomplete:'off'})]),
+          editFeed&&editFeed.configured?h('label',{},[h('input',{id:'iptvPortalReplace',type:'checkbox'}),' Replace all saved private fields (re-enter the registered MAC address)']):null,
+          h('p',{className:'muted',text:'Save the source, select it in the channel browser and refresh to check the connection and load live channels. Portal streams must be playable by your browser; HLS works best.'})
+        ]),
         editFeed ? h('p', { className: 'muted', text: 'Editing feed id ' + editFeed.id }) : null,
         h('div', { className: 'row-actions', style: 'flex-wrap:wrap' }, [
           h('button', { className: 'btn', type: 'button', text: editFeed ? 'Update feed' : 'Add feed', onClick: function(){
             var name = (($('#iptvFeedName')||{}).value || '').trim();
             var url = (($('#iptvFeedUrl')||{}).value || '').trim();
+            var portal={type:$('#iptvFeedType').value};
+            if(portal.type==='stalker'){
+              portal.replaceCredentials=!!($('#iptvPortalReplace')&&$('#iptvPortalReplace').checked);
+              ['Mac','Username','Password','Serial','DeviceId','DeviceId2'].forEach(function(key){portal[key.charAt(0).toLowerCase()+key.slice(1)]=$('#iptvPortal'+key).value;});
+              if(!portal.mac&&(portal.replaceCredentials||!(editFeed&&editFeed.configured))){liveSetMsg('The registered MAC address is required.',true);return;}
+            }
             if (!url) { liveSetMsg('Playlist URL is required.', true); return; }
             if (!/^https?:\/\//i.test(url)) { liveSetMsg('Playlist URL must start with http:// or https://', true); return; }
             if (!name) name = 'Feed';
             var next = feeds.slice();
             if (liveSet.feedEditId) {
               if (!next.some(function(f){ return f.id === liveSet.feedEditId; })) { liveSetMsg('Feed not found.', true); return; }
-              next = next.map(function(f){ return f.id === liveSet.feedEditId ? Object.assign({}, f, { name: name, url: url }) : f; });
+              next = next.map(function(f){ return f.id === liveSet.feedEditId ? Object.assign({}, f, portal, { name: name, url: url }) : f; });
             } else {
               var id = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || liveUid('feed');
               var base = id, n = 2;
               while (next.some(function(f){ return f.id === id; })) { id = base + '-' + n; n++; }
-              next.push({ id: id, name: name, url: url, enabled: true });
+              next.push(Object.assign({ id: id, name: name, url: url, enabled: true },portal));
             }
             liveSet.feedEditId = null;
             persistIptvFeeds(next, null);

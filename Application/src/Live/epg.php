@@ -177,9 +177,9 @@ function epg_refresh($force = false) {
 }
 
 function epg_refresh_locked($force) {
-    if (!class_exists('XMLReader')) throw new RuntimeException('PHP XMLReader is required to import XMLTV programme guides.');
     $iptv = iptv_load();
     $urls = $iptv['epgUrls'];
+    if ($urls && !class_exists('XMLReader')) throw new RuntimeException('PHP XMLReader is required to import XMLTV programme guides.');
     $wanted = epg_wanted_ids($iptv);
     $fetched = array();
     $errors = array();
@@ -206,8 +206,21 @@ function epg_refresh_locked($force) {
         }
     }
     $slim = array();
+    $portalPrograms = [];
+    $failedPortalFeeds = [];
+    foreach ($iptv['feeds'] as $feed) {
+        if (($feed['type'] ?? '') !== 'stalker' || empty($feed['enabled'])) continue;
+        $selected = false;
+        foreach ($iptv['channels'] as $channel) if (($channel['sourceFeedId'] ?? '') === $feed['id']) { $selected = true; break; }
+        if (!$selected) continue;
+        try { $portalPrograms = array_merge($portalPrograms, stalker_guide($feed)); }
+        catch (RuntimeException $e) { $errors[] = ['url'=>$feed['url'],'error'=>$e->getMessage()];$failedPortalFeeds[$feed['id']]=true; }
+    }
+    $previousPortalGuide = $failedPortalFeeds ? epg_load_iptv_index() : [];
     foreach ($iptv['channels'] as $ch) {
         $list = epg_pick_for_channel($programsById, $ch);
+        if (empty($ch['epgId']) && isset($portalPrograms[$ch['id']])) $list = $portalPrograms[$ch['id']];
+        if (!$list && isset($failedPortalFeeds[$ch['sourceFeedId'] ?? ''])) $list = $previousPortalGuide['programs'][$ch['id']] ?? [];
         // dedupe by start
         $seen = array();
         $deduped = array();
