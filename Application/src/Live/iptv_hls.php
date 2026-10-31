@@ -234,6 +234,8 @@ function iptv_hls_proxy_request() {
 
     if ($sent) exit;
     if ($code >= 400) {
+        header('X-Vaultcast-Error-Origin: provider');
+        header('X-Vaultcast-Upstream-Status: '.(string)$code);
         http_response_code($code);
         header('Content-Type: text/plain; charset=utf-8');
         header('Cache-Control: no-store');
