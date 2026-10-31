@@ -142,6 +142,32 @@ Encoder usage varies with the source, audio work and hardware; 100% is not a
 guaranteed sustained target. Existing software-path checkpoints stay available;
 the GPU path saves its own compatible checkpoint set.
 
+## GPU checkpoint overlap and CPU allocation (1.5.17)
+
+Intel workers now decode and convert supported even-sized sources using Quick
+Sync as well as encoding on it. A specific legacy Intel texture-allocation
+failure automatically selects the existing checksum-verified FFmpeg 7.1 private
+runtime; it is downloaded only if needed. Other GPU decode failures retain the
+software decode path with hardware encoding. No driver or manual setup changes
+are needed, including for existing workers updated inside the manager.
+
+With two or more assigned CPU threads, an accelerated Intel conversion overlaps
+two five-minute sections of the same job. Each section gets one assigned thread;
+both stay inside the worker's CPU allocation and shared GPU reservation. Each
+completed section is validated and saved immediately, progress and ETA combine
+fresh work across both sections, and the final MP4 is joined in source order.
+One-thread Intel workers keep a single section running. NVIDIA keeps its single
+session: on the measured P4000, two sessions raised utilization but reduced
+combined throughput compared with one session. Hardware quality settings are
+unchanged; CPU encoding fallback remains opt-in.
+
+The manager now calls its CPU allocation **threads**: these are logical
+processors, not physical cores. On the measured i7-8700K, logical processors
+0,1 share one physical core and 4,5 share another; numbering differs on other
+computers. One physical core per GPU was substantially better than one logical
+processor. GPU percentages depend on the source, audio, encoding mode and driver;
+continuous 90% on both GPUs cannot be promised for every file or during transfers.
+
 Intel Quick Sync and NVIDIA NVENC can encode simultaneously. Different NVENC
 device indices also have separate locks; workers using the same device still
 take turns. QSV/AMF currently auto-select an adapter, so each vendor shares one

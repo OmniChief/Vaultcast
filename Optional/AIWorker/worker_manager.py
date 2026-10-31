@@ -461,10 +461,10 @@ class Manager(tk.Tk):
         dialog.transient(self)
         dialog.grab_set()
         rows = []
-        ttk.Label(dialog, text="Choose each worker's role. CPU cores are numbered from 0; use commas, for example 0,1,2,3.", wraplength=800, padding=12).pack()
+        ttk.Label(dialog, text="Choose each worker's role. CPU thread numbers are logical processors, starting at 0; use commas, for example 0,1. Two threads may share one physical core. GPU workers still need CPU time for audio and feeding the GPU.", wraplength=800, padding=12).pack()
         table = ttk.Frame(dialog, padding=12)
         table.pack(fill="both", expand=True)
-        for column, title in enumerate(("Worker", "Role", "CPU cores", "GPU number")):
+        for column, title in enumerate(("Worker", "Role", "CPU threads", "GPU number")):
             ttk.Label(table, text=title).grid(row=0, column=column, padx=8)
         roles = {"AI images": "images", "AI video generation": "video", "CPU conversion": "libx264", "NVIDIA conversion": "h264_nvenc", "Intel conversion": "h264_qsv", "AMD conversion": "h264_amf"}
         def add(slot=None):
