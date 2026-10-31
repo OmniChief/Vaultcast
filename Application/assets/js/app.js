@@ -4878,7 +4878,7 @@ try {
     }
     if (r.view === 'misc') { state.view = 'misc'; state.miscTab = r.miscTab || 'board'; state.miscSub = r.miscSub || ''; return Promise.resolve(); }
     if (r.view === 'ai') { state.view = 'ai'; state.aiTab = r.aiTab || 'images'; return Promise.resolve(); }
-    if (r.view === 'live') { state.view = 'live'; state.liveTab=r.liveCh?(String(r.liveCh).indexOf('radio:')===0?'radio':String(r.liveCh).indexOf('iptv:')===0?'iptv':'relay'):(r.liveTab||'now'); state.liveChannel=r.liveCh||null; state._openLiveCh=null; return Promise.resolve(); }
+    if (r.view === 'live') { state.view = 'live'; state.liveTab=r.liveCh?(String(r.liveCh).indexOf('stalker:')===0?'stalker':String(r.liveCh).indexOf('radio:')===0?'radio':String(r.liveCh).indexOf('iptv:')===0?'iptv':'relay'):(r.liveTab||'now'); state.liveChannel=r.liveCh||null; state._openLiveCh=null; return Promise.resolve(); }
     if (r.view === 'play' || r.view === 'game') {
       state.view = 'play'; state.playTab = r.playTab || 'games'; state.playSub = r.playSub || '';
       var rs = romsSection();
@@ -6038,7 +6038,7 @@ try {
       results.appendChild(h('p',{className:'muted',text:'Choose Search stations to explore the directory. No station audio is loaded until you press Listen live.'}));
     });
   }
-  function openLiveChannel(id){state.liveChannel=id;state.liveTab=String(id).indexOf('radio:')===0?'radio':String(id).indexOf('iptv:')===0?'iptv':'relay';state.view='live';pushNav();render();try{window.scrollTo(0,0);}catch(e){}}
+  function openLiveChannel(id){state.liveChannel=id;state.liveTab=String(id).indexOf('stalker:')===0?'stalker':String(id).indexOf('radio:')===0?'radio':String(id).indexOf('iptv:')===0?'iptv':'relay';state.view='live';pushNav();render();try{window.scrollTo(0,0);}catch(e){}}
   function viewLiveChannel(id){
     var wrap=h('div',{id:'live-channel-page',className:'live-channel-page'}),player=h('div',{id:'live-channel-player',className:'detail-player live-channel-player'}),info=h('section',{id:'live-channel-information',className:'live-channel-information'});
     wrap.appendChild(h('div',{className:'row-actions live-channel-back'},[h('button',{className:'btn',text:'← Back to Live',onClick:function(){goLiveTab(String(id).indexOf('radio:')===0?'radio':'now');}})]));wrap.appendChild(player);wrap.appendChild(info);
@@ -6050,7 +6050,7 @@ try {
   }
   function paintChannelInformation(ch){
     var host=document.getElementById('live-channel-information');if(!host)return;
-    var nn=progNowAndNext(ch),copy=h('div',{className:'live-channel-copy'},[h('span',{className:'eyebrow',text:ch.kind==='iptv'?'IPTV':'Relay'}),h('h1',{text:ch.name}),h('p',{className:'muted',text:ch.slogan||'Live television'}),h('h2',{text:nn.now?nn.now.title:'On air'}),nn.now&&nn.now.subtitle?h('p',{text:nn.now.subtitle}):null,h('div',{className:'row-actions'},[shareButton(function(){return 'live/'+encodeURIComponent(ch.id);},'Copy channel link'),can('iptv_manage')&&ch.kind==='iptv'?h('button',{className:'btn',text:'Match programme guide',onClick:function(){matchChannelEpg(ch.iptvId||ch.id.replace(/^iptv:/,''));}}):null])]);
+    var nn=progNowAndNext(ch),copy=h('div',{className:'live-channel-copy'},[h('span',{className:'eyebrow',text:ch.provider==='stalker'?'Stalker':ch.kind==='iptv'?'IPTV':'Relay'}),h('h1',{text:ch.name}),h('p',{className:'muted',text:ch.slogan||'Live television'}),h('h2',{text:nn.now?nn.now.title:'On air'}),nn.now&&nn.now.subtitle?h('p',{text:nn.now.subtitle}):null,h('div',{className:'row-actions'},[shareButton(function(){return liveChannelPath(ch.id);},'Copy channel link'),can('iptv_manage')&&ch.kind==='iptv'&&ch.provider!=='stalker'?h('button',{className:'btn',text:'Match programme guide',onClick:function(){matchChannelEpg(ch.iptvId||ch.id.replace(/^iptv:/,''));}}):null])]);
     host.replaceChildren(h('div',{className:'live-channel-summary'},[h('div',{className:'live-channel-art'},[chanLogoEl(ch)]),copy]),h('section',{className:'live-channel-guide'},[h('h2',{text:'On this channel'}),guideEl([ch])]));
   }
   function matchChannelEpg(id){
@@ -6066,6 +6066,7 @@ try {
     return liveApiPost(action,body).then(function(result){if(!result.ok||!result.body||!result.body.ok)throw new Error(result.body&&result.body.error||'Provider request failed.');return result.body;});
   }
   function playStalkerItem(feed,item,button){
+    if(item.kind==='live'){openLiveChannel('stalker:'+feed+':'+item.id);return;}
     button.disabled=true;
     stalkerPost('stalker_play',{feed:feed,kind:item.kind,id:item.id}).then(function(result){
       if(!button.isConnected)return;
@@ -6078,6 +6079,24 @@ try {
       video.addEventListener('error',function(){status.textContent='This provider stream could not play. Its format or codec may be unsupported by this browser.';});
       attachIptvStream(video,result.source,{current:function(){return alive;},play:function(){var p=video.play();if(p&&p.catch)p.catch(function(){status.textContent='Press play to start watching.';});},stream:function(value){stream=value;},error:function(message){status.textContent=message;}});
     }).catch(function(error){toast(error.message,{kind:'bad'});}).finally(function(){button.disabled=false;});
+  }
+  function liveChannelPath(id){
+    if(String(id).indexOf('stalker:')===0){var parts=String(id).split(':');return 'live/stalker/'+encodeURIComponent(parts[1])+'/'+encodeURIComponent(parts.slice(2).join(':'));}
+    return 'live/'+encodeURIComponent(id);
+  }
+  function viewStalkerChannel(id){
+    var parts=id.split(':'),feed=parts[1],channelId=parts.slice(2).join(':'),context=null;
+    var player=h('div',{id:'live-channel-player',className:'detail-player live-channel-player'}),info=h('section',{id:'live-channel-information',className:'live-channel-information'}),status=h('p',{role:'status',className:'muted',text:'Loading channel and programme guide…'}),wrap=h('div',{id:'live-channel-page',className:'live-channel-page'});
+    function current(){return wrap.isConnected&&state.liveChannel===id;}
+    function refreshGuide(force){return liveApi('stalker_channel','feed='+encodeURIComponent(feed)+'&id='+encodeURIComponent(channelId)+(force===true?'&refresh=1':'')).then(function(result){if(!current())return;if(!result||!result.ok)throw new Error(result&&result.error||'Could not load this channel.');context.channels=[result.channel];context.guideMessage=result.guideError||'';status.textContent=result.guideError||(result.channel.programs.length?'':'No programme listings were supplied for this channel.');return result;});}
+    function play(){
+      if(!context||!context.channels.length)return;status.className='muted';status.textContent='Connecting…';
+      stalkerPost('stalker_play',{feed:feed,kind:'live',id:channelId}).then(function(result){if(!current())return;context.sources[id]=result.source;startLivePlayer(id,player,context);status.textContent=context.guideMessage||(context.channels[0].programs.length?'':'No programme listings were supplied for this channel.');}).catch(function(error){if(current()){status.className='bad';status.textContent=error.message;}});
+    }
+    wrap.appendChild(h('div',{className:'row-actions live-channel-back'},[h('button',{className:'btn',text:'← Back to Stalker',onClick:function(){closePlayer();goLiveTab('stalker');}}),h('button',{className:'btn',text:'Watch channel',onClick:play}),h('button',{className:'btn ghost',text:'Stop playback',onClick:function(){closePlayer();status.textContent='Playback stopped.';}}),h('button',{className:'btn ghost',text:'Refresh guide',onClick:function(){refreshGuide(true).then(function(){if(current())paintChannelInformation(context.channels[0]);}).catch(function(error){status.textContent=error.message;});}})]));
+    wrap.appendChild(player);wrap.appendChild(status);wrap.appendChild(info);
+    setTimeout(function(){if(!current())return;context={channels:[],sources:{},refresh:refreshGuide};refreshGuide().then(function(){if(current()){paintChannelInformation(context.channels[0]);play();}}).catch(function(error){if(current()){status.className='bad';status.textContent=error.message;}});},0);
+    return shell(wrap);
   }
   function showStalkerOffline(host){
     host.replaceChildren(h('h2',{text:'Offline downloads'}),pendingContent());
@@ -6116,32 +6135,47 @@ try {
     var owner=state.user&&state.user.id,sequence=0,kind=state._stalkerStartKind||'live',parent='',page=1,loaded=[],connections=[];
     state._stalkerStartKind=null;
     function current(){return root.isConnected&&owner===(state.user&&state.user.id);}
+    var folderState=new Map(),drawingSearch=false,availableGroups=[];
     var status=h('p',{role:'status',className:'muted'}),results=h('div',{className:'stack'}),feed=h('select',{'aria-label':'Provider connection'}),query=h('input',{placeholder:'Search provider titles','aria-label':'Search provider titles'}),category=h('select',{'aria-label':'Category'}),next=h('button',{className:'btn',text:'Load more',hidden:true}),back=h('button',{className:'btn ghost',text:'Back to catalogue',hidden:true});
     var tabs=h('div',{className:'row-actions'},['live','vod','series'].map(function(value){return h('button',{className:'btn',text:{live:'Live TV',vod:'Movies',series:'Series'}[value],onClick:function(){kind=value;parent='';back.hidden=true;category.value='';page=1;load(false,true);}});}));
     root.replaceChildren(h('section',{className:'settings-card'},[h('h1',{text:'Stalker'}),h('p',{className:'muted',text:'Your provider’s live channels, movies and series. Choose the connection you want to use on this TV. Downloads also use a provider stream, so choose an unused connection.'}),h('div',{className:'row-actions'},[feed,can('iptv_manage')?h('button',{className:'btn',text:'Stalker settings',onClick:function(){openSettings('live-stalker');}}):null,h('button',{className:'btn ghost',text:'Open library',onClick:function(){navigate('library');}}),can('ingest_view')&&userAreaAllowed('library')?h('button',{className:'btn ghost',text:'Offline downloads',onClick:function(){sequence++;next.hidden=true;showStalkerOffline(results);}}):null]),tabs,h('form',{className:'row-actions',onSubmit:function(e){e.preventDefault();page=1;load(false);}},[query,category,h('button',{className:'btn',type:'submit',text:'Search'}),h('button',{className:'btn ghost',type:'button',text:'Refresh',onClick:function(){page=1;load(true);}}),back]),status]),results,next);
     function draw(){
-      results.replaceChildren();
+      if(!drawingSearch)results.querySelectorAll('details[data-folder]').forEach(function(folder){folderState.set(folder.getAttribute('data-folder'),folder.open);});
+      results.replaceChildren();results.className=kind==='live'?'stalker-directory':'stack';results.setAttribute('role','region');
+      drawingSearch=kind==='live'&&!!query.value.trim();
+      var groups=new Map(),counts=new Map(),groupRoot=results;
+      if(kind==='live'){
+        loaded.forEach(function(item){var group=item.description||'Other channels';counts.set(group,(counts.get(group)||0)+1);});
+        var key=JSON.stringify([feed.value,'root']),content=h('div',{className:'stalker-folders'}),rootFolder=h('details',{className:'stalker-root','data-folder':key,open:drawingSearch||!folderState.has(key)||folderState.get(key)},[h('summary',{text:(feed.options[feed.selectedIndex]&&feed.options[feed.selectedIndex].text||'Provider')+' · '+loaded.length+' channels'}),content]);results.appendChild(rootFolder);groupRoot=content;
+      }
+      function channelGroup(label){
+        if(groups.has(label))return groups.get(label);
+        var key=JSON.stringify([feed.value,label]),rows=h('div',{className:'stalker-channel-list',role:'list'}),folder=h('details',{className:'stalker-category','data-folder':key,open:drawingSearch||folderState.get(key)===true},[h('summary',{text:label+(counts.has(label)?' · '+counts.get(label):'')}),rows]);if(!counts.has(label)){var entry=availableGroups.find(function(group){return group.name===label;});if(entry)rows.appendChild(h('button',{className:'btn',text:'Load channels in this folder',onClick:function(){folderState.set(key,true);category.value=entry.id;page=1;load(false);}}));}groupRoot.appendChild(folder);groups.set(label,rows);return rows;
+      }
+      if(kind==='live'&&!drawingSearch)availableGroups.forEach(function(group){channelGroup(group.name);});
       loaded.forEach(function(item){
         var button=h('button',{className:'btn',text:item.kind==='live'||item.playable?'Watch':'Open',onClick:function(){if(item.kind==='live'||item.playable)playStalkerItem(feed.value,item,button);else{parent=item.id;page=1;back.hidden=false;load(false,true);}}});
         var download=item.kind!=='live'&&item.playable&&can('downloads_request')&&can('ingest_view')&&userAreaAllowed('library')?h('button',{className:'btn ghost',text:'Download for library',onClick:function(e){var b=e.currentTarget;b.disabled=true;stalkerPost('stalker_download',{feed:feed.value,id:item.id,name:item.name}).then(function(){toast('Download queued. Match it in the import inbox when it finishes.');}).catch(function(error){toast(error.message,{kind:'bad'});}).finally(function(){b.disabled=false;});}}):null;
-        results.appendChild(h('article',{className:'settings-card'},[h('div',{className:'row-head'},[h('h3',{text:item.name}),h('div',{className:'row-actions'},[button,download])]),item.year?h('span',{className:'muted',text:item.year}):null,item.description?h('p',{className:'muted',text:item.description}):null]));
+        if(item.kind==='live')channelGroup(item.description||'Other channels').appendChild(h('div',{className:'stalker-channel-row',role:'listitem'},[h('span',{className:'stalker-channel-name',text:item.name,title:item.name}),item.description&&item.description!=='Provider live channel'?h('span',{className:'stalker-channel-group muted',text:item.description,title:item.description}):null,button]));else results.appendChild(h('article',{className:'settings-card'},[h('div',{className:'row-head'},[h('h3',{text:item.name}),h('div',{className:'row-actions'},[button,download])]),item.year?h('span',{className:'muted',text:item.year}):null,item.description?h('p',{className:'muted',text:item.description}):null]));
       });
     }
-    function load(refresh,resetCategories){
-      var token=++sequence;
+    function load(refresh,resetCategories,advancing){
+      clearTimeout(query._searchTimer);var token=++sequence;
       if(!feed.value){status.textContent='No enabled Stalker connections. Add one in Stalker settings.';results.replaceChildren();return;}
       status.className='muted';status.textContent='Loading '+({live:'channels',vod:'movies',series:'series'}[kind])+'…';next.disabled=true;
-      if(page===1){loaded=[];results.replaceChildren();next.hidden=true;}
+      if(page===1&&!advancing){loaded=[];results.replaceChildren();next.hidden=true;}
       var params='feed='+encodeURIComponent(feed.value)+'&kind='+kind+'&page='+page+'&q='+encodeURIComponent(query.value.trim())+'&category='+encodeURIComponent(resetCategories?'':category.value)+'&parent='+encodeURIComponent(parent)+(refresh?'&refresh=1':'');
       liveApi('stalker_browse',params).then(function(result){
         if(!current()||token!==sequence)return;
         if(!result||!result.ok)throw new Error(result&&result.error||'Provider catalogue could not be loaded.');
-        loaded=page===1?result.items:loaded.concat(result.items||[]);draw();
+        if(page===1&&result.categories)availableGroups=result.categories;loaded=page===1?result.items:loaded.concat(result.items||[]);draw();
         if(page===1){var selected=resetCategories?'':category.value;category.replaceChildren(h('option',{value:'',text:'All categories'}));(result.categories||[]).forEach(function(row){category.appendChild(h('option',{value:row.id,text:row.name,selected:row.id===selected}));});}
         status.textContent=loaded.length?'Showing '+loaded.length+' · '+result.total+' available':'No titles returned. Try another category or Refresh. If this persists, use Check connection in Stalker settings.';
+        if(result.indexing){status.textContent='Searching all channels · '+result.scanned+(result.catalogueTotal?' of '+result.catalogueTotal:'')+' checked · '+result.total+' matches';next.hidden=true;next.disabled=true;setTimeout(function(){if(current()&&token===sequence)load(false,false,true);},150);return;}
         next.hidden=!result.hasMore;next.disabled=false;
       }).catch(function(error){if(current()&&token===sequence){status.className='bad';status.textContent=error.message;if(page>1)page--;next.disabled=false;}});
     }
+    query.addEventListener('input',function(){if(kind!=='live')return;clearTimeout(query._searchTimer);category.value='';sequence++;query._searchTimer=setTimeout(function(){if(current()){page=1;load(false);}},300);});
     next.onclick=function(){page++;load(false);};
     back.onclick=function(){parent='';page=1;back.hidden=true;load(false,true);};
     feed.onchange=function(){try{localStorage.setItem('vaultcast-stalker-'+owner,feed.value);}catch(ignore){}parent='';page=1;back.hidden=true;load(false,true);};
@@ -6186,6 +6220,7 @@ try {
     }).catch(function(error){if(host.isConnected)host.replaceChildren(h('p',{className:'bad',text:error.message}));});
   }
   function viewLive(){
+    if(state.liveChannel&&String(state.liveChannel).indexOf('stalker:')===0)return viewStalkerChannel(state.liveChannel);
     if(state.liveTab==='stalker'){stopLiveTimers();var stalkerRoot=h('div',{className:'live-view'});setTimeout(function(){if(stalkerRoot.isConnected)paintStalkerPage(stalkerRoot);},0);return shell(stalkerRoot);}
     if(state.liveChannel)return viewLiveChannel(state.liveChannel);
     if(state.liveTab==='radio'){stopLiveTimers();var radioRoot=h('div',{id:'live-view',className:'live-view'});setTimeout(function(){if(radioRoot.isConnected)paintRadioPage(radioRoot);},0);return shell(radioRoot);}
@@ -6548,10 +6583,11 @@ try {
     container.appendChild(button);update();
   }
 
-  function startLivePlayer(chId,inlineHost){
+  function startLivePlayer(chId,inlineHost,providerContext){
+    function playerChannels(){return providerContext?providerContext.channels:liveChannels();}
     if(restoreMiniVideo('live:'+chId,inlineHost))return;
     closePlayer();stopRadio();
-    var list = liveChannels();
+    var list = playerChannels();
     if (!list.length) { toast('No live channels'); return; }
     var idx = 0;
     for (var i = 0; i < list.length; i++) if (list[i].id === chId) { idx = i; break; }
@@ -6588,10 +6624,10 @@ try {
       h('div', { className:'lp-tuning' }, [ h('div', { className:'spinner' }) ]),
       h('div', { className:'lp-chrome' }, [
         h('div', { className:'lp-top' }, [
-          h('button', { className:'lp-btn lp-back', type:'button', title:'Hide player controls', 'aria-label':'Hide player controls', onClick: function(e){ e.currentTarget.blur(); clearTimeout(lp.idleT); overlay.classList.add('idle'); } }, [ icon('close') ]),
+          h('button', { className:'lp-btn lp-back', type:'button', title:providerContext?'Close player':'Hide player controls', 'aria-label':providerContext?'Close player':'Hide player controls', onClick: function(e){if(providerContext){closePlayer();goLiveTab('stalker');return;} e.currentTarget.blur(); clearTimeout(lp.idleT); overlay.classList.add('idle'); } }, [ icon('close') ]),
           h('div', { className:'lp-chan' }, [ elNum, elName, elPill ]),
           h('div', { className:'lp-spacer' }),
-          shareButton(function(){ var c = liveChannels()[lp.idx] || list[lp.idx]; return 'live/' + encodeURIComponent(c ? c.id : ''); }, 'Copy link to this channel'),
+          shareButton(function(){ var c = playerChannels()[lp.idx] || list[lp.idx]; return liveChannelPath(c ? c.id : ''); }, 'Copy link to this channel'),
           elClock
         ]),
         h('div', { className:'lp-bottom' }, [
@@ -6617,6 +6653,7 @@ try {
       guide,
       epgFull
     ]);
+    if(providerContext&&list.length<2)overlay.querySelectorAll('.lp-zap').forEach(function(button){button.hidden=true;});
     overlay._miniKey='live:'+chId;overlay._miniTitle=(list[idx]&&list[idx].name)||'Live television';overlay._miniReturn=function(){openLiveChannel(lp.ch?lp.ch.id:chId);};
     addCentrePlay(overlay,video,safePlay);
     if(inlineHost)overlay.setAttribute('tabindex','0');
@@ -6625,9 +6662,9 @@ try {
     var achTimer = setInterval(function(){
       if (!overlay.isConnected) { clearInterval(achTimer); return; }
       if (video.paused || video.readyState < 2 || document.hidden) return;
-      var c = liveChannels()[lp.idx] || list[lp.idx]; var cid = String((c && c.id) || '');
+      var c = playerChannels()[lp.idx] || list[lp.idx]; var cid = String((c && c.id) || '');
       if (!cid || cid.indexOf('radio:') === 0) return;
-      achievementTick(cid.indexOf('iptv:') === 0 ? 'live' : 'relay');
+      achievementTick(providerContext||cid.indexOf('iptv:') === 0 ? 'live' : 'relay');
     }, 60000);
 
     function msg(t){ elMsg.textContent = t || ''; }
@@ -6692,7 +6729,7 @@ try {
     }
     function paintFullEpg(){
       epgBody.innerHTML = '';
-      var chans = liveChannels();
+      var chans = playerChannels();
       var panel = guideEl(chans, { onPick: function(id){
         toggleFullEpg(false);
         var i = 0;
@@ -6895,7 +6932,7 @@ try {
     function tuneIptv(){
       var tok = lp.token;
       var c = lp.ch;
-      var src = iptvSource(c);
+      var src = providerContext?providerContext.sources[c.id]:iptvSource(c);
       paintNow(null);
       if (!src || !src.url) { msg('Channel is not in the IPTV lineup any more.'); return; }
       setTuning(true);
@@ -6918,8 +6955,8 @@ try {
       elEpg.innerHTML = '';
       if (lp.guideOpen) paintGuideList();
       if (lp.epgOpen) paintFullEpg();
-      if(inlineHost&&overlay.classList.contains('player-inline')){state.liveChannel=lp.ch.id;state.liveTab=lp.ch.kind==='iptv'?'iptv':'relay';paintChannelInformation(lp.ch);document.querySelectorAll('.subnav .subnav-btn').forEach(function(button){button.classList.toggle('active',button.textContent===(lp.ch.kind==='iptv'?'IPTV':'Relay'));});}
-      try { if(!overlay.classList.contains('player-mini'))history.replaceState(Object.assign({}, history.state || {}, { live: lp.ch.id,liveChannel:lp.ch.id,liveTab:lp.ch.kind==='iptv'?'iptv':'relay' }), '', navUrl({ live: lp.ch.id })); } catch (e) {}
+      if(inlineHost&&overlay.classList.contains('player-inline')){state.liveChannel=lp.ch.id;state.liveTab=providerContext?'stalker':lp.ch.kind==='iptv'?'iptv':'relay';paintChannelInformation(lp.ch);document.querySelectorAll('.subnav .subnav-btn').forEach(function(button){button.classList.toggle('active',button.textContent===(providerContext?'Stalker':lp.ch.kind==='iptv'?'IPTV':'Relay'));});}
+      try { if(!overlay.classList.contains('player-mini'))history.replaceState(Object.assign({}, history.state || {}, { live: lp.ch.id,liveChannel:lp.ch.id,liveTab:providerContext?'stalker':lp.ch.kind==='iptv'?'iptv':'relay' }), '', navUrl({ live: lp.ch.id })); } catch (e) {}
       if (lp.ch.kind === 'iptv') tuneIptv(); else tuneRelay(0);
       wake();
     }
@@ -7011,7 +7048,7 @@ try {
     document.addEventListener('keydown', lp.keyH);
     lp.guideAt=Date.now();
     lp.tickT = setInterval(function(){
-      if(inlineHost&&overlay.classList.contains('player-inline')&&!document.hidden&&!lp.guideRefreshing&&Date.now()-lp.guideAt>90000){lp.guideAt=Date.now();lp.guideRefreshing=true;ensureLiveData(false).then(function(){if(!overlay.isConnected)return;list=liveChannels();var current=list.find(function(ch){return ch.id===lp.ch.id;});if(current){lp.ch=current;lp.idx=list.indexOf(current);if(overlay.classList.contains('player-inline'))paintChannelInformation(current);paintChannelEpg();}}).catch(function(){}).finally(function(){lp.guideRefreshing=false;});}
+      if(inlineHost&&overlay.classList.contains('player-inline')&&!document.hidden&&!lp.guideRefreshing&&Date.now()-lp.guideAt>90000){lp.guideAt=Date.now();lp.guideRefreshing=true;(providerContext?providerContext.refresh():ensureLiveData(false)).then(function(){if(!overlay.isConnected)return;list=playerChannels();var current=list.find(function(ch){return ch.id===lp.ch.id;});if(current){lp.ch=current;lp.idx=list.indexOf(current);if(overlay.classList.contains('player-inline'))paintChannelInformation(current);paintChannelEpg();}}).catch(function(){}).finally(function(){lp.guideRefreshing=false;});}
       elClock.textContent = fmtClock(Date.now());
       var c = lp.ch;
       if (!c) return;

@@ -227,7 +227,7 @@ function live_bridge_tv_export(string $kind): void {
 $__liveAction = live_bridge_action();
 if ($__liveAction !== null) {
     if (empty(Store::settings()['features']['live'])) live_bridge_deny(404, 'Live channels are disabled in Settings → Integrations.');
-    $readActions = ['stalker_offline','stalker_update_status','stalker','stalker_browse','stalker_stream', 'guide', 'now', 'iptv', 'iptv_status', 'file', 'iptv_hls', 'logo', 'local_file', 'station', 'catalogue', 'programme_source', 'duration', 'channel_logo', 'iptv_browse', 'epg_refresh', 'm3u', 'tune', 'tv_studio', 'tv_preview', 'tv_health', 'xmltv', 'playlist', 'channels', 'radio', 'radio_search', 'epg_channels'];
+    $readActions = ['stalker_channel','stalker_offline','stalker_update_status','stalker','stalker_browse','stalker_stream', 'guide', 'now', 'iptv', 'iptv_status', 'file', 'iptv_hls', 'logo', 'local_file', 'station', 'catalogue', 'programme_source', 'duration', 'channel_logo', 'iptv_browse', 'epg_refresh', 'm3u', 'tune', 'tv_studio', 'tv_preview', 'tv_health', 'xmltv', 'playlist', 'channels', 'radio', 'radio_search', 'epg_channels'];
     $writeActions = ['stalker_cancel','stalker_download','stalker_retry','stalker_updates','stalker_manage','stalker_play','tv_slot_preview','iptv_preview','station', 'iptv_add', 'iptv_remove', 'iptv_toggle', 'iptv_probe', 'iptv_save', 'epg_refresh', 'tv_studio', 'tv_channels', 'channel_logo', 'radio_save', 'epg_map'];
     $m = $_SERVER['REQUEST_METHOD'] ?? 'GET';
     $isWrite = ($m === 'POST' || $m === 'PUT' || $m === 'PATCH' || $m === 'DELETE');
@@ -297,7 +297,7 @@ if ($__liveAction !== null) {
          catch(RuntimeException $e){live_bridge_deny(502,$e->getMessage());}
          catch(DomainException $e){live_bridge_deny(422,$e->getMessage());}
     }
-    if (in_array($__liveAction,['stalker','stalker_browse','stalker_manage','stalker_play'],true)) {
+    if (in_array($__liveAction,['stalker','stalker_channel','stalker_browse','stalker_manage','stalker_play'],true)) {
         require_once STREAM_ROOT.'/src/Live/iptv.php';
         $viewer=Auth::requireUser();
         if (class_exists('Parental') && Parental::filtering()) live_bridge_deny(403,'Provider catalogues are unavailable for restricted profiles.');
@@ -336,6 +336,7 @@ if ($__liveAction !== null) {
             $feed=iptv_feed_by_id($state,(string)($body['feed'] ?? ''));
             if (!$feed || ($feed['type'] ?? '')!=='stalker' || empty($feed['enabled'])) throw new InvalidArgumentException('Select an enabled Stalker connection in settings.');
             if ($__liveAction==='stalker_browse') json_out(stalker_catalogue($feed,$body));
+            if ($__liveAction==='stalker_channel') json_out(stalker_channel_detail($feed,(string)($body['id']??''),!empty($body['refresh'])));
             $kind=(string)($body['kind'] ?? 'live');$id=(string)($body['id'] ?? '');
             if (!in_array($kind,['live','vod','series'],true)) throw new InvalidArgumentException('Unknown provider media type.');
             $url=$kind==='live'?stalker_resolve($feed,$id):stalker_vod_resolve($feed,$id);
