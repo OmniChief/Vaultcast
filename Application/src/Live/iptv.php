@@ -497,7 +497,7 @@ function iptv_resolve_browse_feeds($opts, $state = null) {
         $feedId = iptv_feed_by_id($state, 'iptv-org') ? 'iptv-org' : (isset($state['feeds'][0]['id']) ? $state['feeds'][0]['id'] : 'all');
     }
     if ($feedId === 'all') {
-        return array('mode' => 'all', 'feeds' => iptv_enabled_feeds($state), 'feedId' => 'all');
+        return array('mode' => 'all', 'feeds' => array_values(array_filter(iptv_enabled_feeds($state),static function($f){return ($f['type'] ?? '')!=='stalker';})), 'feedId' => 'all');
     }
     $f = iptv_feed_by_id($state, $feedId);
     if (!$f) {
@@ -508,8 +508,10 @@ function iptv_resolve_browse_feeds($opts, $state = null) {
 
 function iptv_browse($opts) {
     $state = iptv_load();
+    $requestedFeed=trim((string)($opts['feed'] ?? ''));
+    if ($requestedFeed==='') $requestedFeed=$state['activeFeedId'] ?? 'all';
     foreach ($state['feeds'] as $feed) {
-        if (($feed['type'] ?? '')==='stalker' && !empty($feed['enabled']) && (empty($opts['feed']) || $opts['feed']==='all' || $opts['feed']===$feed['id'])) { Permissions::require('iptv_manage'); break; }
+        if (($feed['type'] ?? '')==='stalker' && !empty($feed['enabled']) && $requestedFeed===$feed['id']) { Permissions::require('iptv_manage'); break; }
     }
     $kind = isset($opts['kind']) ? strtolower(trim($opts['kind'])) : '';
     $key = isset($opts['key']) ? $opts['key'] : '';

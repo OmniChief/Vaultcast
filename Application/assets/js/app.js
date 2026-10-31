@@ -1164,7 +1164,7 @@ function confirmDialog(message, opts){
     return !areas || areas[area] === true;
   }
   function can(permission){return !!(state.user&&(state.user.role==='admin'||state.user.role!=='user'&&state.user.capabilities&&state.user.capabilities[permission]===true));}
-  function canSettings(section){if(state.user&&state.user.role==='admin')return true;var permission={matching:'fix_match',ingest:'ingest_view','live-iptv':'iptv_manage','live-radio':'radio_manage','artwork-integrity':'artwork_manage'}[section];return !!permission&&can(permission)&&(['ingest','matching'].indexOf(section)<0||userAreaAllowed('library'));}
+  function canSettings(section){if(state.user&&state.user.role==='admin')return true;var permission={matching:'fix_match',ingest:'ingest_view','live-iptv':'iptv_manage','live-stalker':'iptv_manage','live-radio':'radio_manage','artwork-integrity':'artwork_manage'}[section];return !!permission&&can(permission)&&(['ingest','matching'].indexOf(section)<0||userAreaAllowed('library'));}
   function canSearchRss(){return can('rss_search')&&!!(state.home&&state.home.features&&state.home.features.downloads);}
   function canManageDownloads(){return can('downloads_request')&&!!(state.home&&state.home.features&&state.home.features.downloads);}
   /* Media requests (Library → Requests). The flags come from /me because custom roles and the User role are resolved server-side. */
@@ -5127,13 +5127,14 @@ try {
       [['overview','For you'],['watchlist','Watchlist'],['favourites','Favourites'],['calendar','Release calendar'],['arrivals','New episodes'],['lists','My collections'],['friends','Friends'],['cinema','Watch together'],['history','History'],['stats','Game stats'],['chat','Chat'],['inbox','Inbox']].forEach(function(t){items.push({label:t[1],chatKind:t[0]==='chat'?'dm':null,active:t[0]!=='inbox'&&(state.hubTab||'overview')===t[0],go:function(){if(t[0]==='inbox'){state.inboxPane=null;navigate('inbox');}else window.VaultcastHub.go(t[0]);}});});
     } else if (mode === 'vod') {
       items.push({ label:'Discover', active: state.view === 'library', go: function(){ navigate('library'); } });
+      if(state.settings&&state.settings.features&&state.settings.features.live&&userAreaAllowed('live'))items.push({label:'Provider movies & series',go:function(){state._stalkerStartKind='vod';goLiveTab('stalker');}});
       vodSections().forEach(function(s){
         items.push({ label: s.label, active: (state.view === 'section' && state.section === s.id), go: function(){ navigate('section', s.id); } });
       });
       items.push({ label:'Collections', active: state.view === 'collections' || state.view === 'collection', go: function(){ navigate('collections'); } });
       if (canRequestMedia()) items.push({ label:'Requests', active: state.view === 'requests', go: function(){ openRequests('discover'); } });
     } else if (mode === 'live') {
-      [['On now','now'],['Relay','relay'],['IPTV','iptv'],['Radio','radio']].forEach(function(page){
+      [['On now','now'],['Relay','relay'],['IPTV','iptv'],['Stalker','stalker'],['Radio','radio']].forEach(function(page){
         items.push({label:page[0],active:(state.liveTab||'now')===page[1],go:function(){goLiveTab(page[1]);}});
       });
     } else if (mode === 'play') {
@@ -5949,7 +5950,7 @@ try {
     goLiveTab('now');ensureLiveData(false).then(function(){var target=document.getElementById('live-guide');if(target)target.scrollIntoView({behavior:'smooth',block:'start'});});
   }
   function goLiveTab(tab){
-    state.liveTab=['now','relay','iptv','radio'].indexOf(tab)>=0?tab:'now';
+    state.liveTab=['now','relay','iptv','stalker','radio'].indexOf(tab)>=0?tab:'now';
     state._openLiveCh=null;state.liveChannel=null;navigate('live');
     try{window.scrollTo(0,0);}catch(e){}
   }
@@ -6061,7 +6062,131 @@ try {
       query.oninput=function(){clearTimeout(timer);timer=setTimeout(search,300);};body.appendChild(h('button',{className:'btn',text:'Use playlist matching',onClick:function(){attach('');}}));search();
     });
   }
+  function stalkerPost(action,body){
+    return liveApiPost(action,body).then(function(result){if(!result.ok||!result.body||!result.body.ok)throw new Error(result.body&&result.body.error||'Provider request failed.');return result.body;});
+  }
+  function playStalkerItem(feed,item,button){
+    button.disabled=true;
+    stalkerPost('stalker_play',{feed:feed,kind:item.kind,id:item.id}).then(function(result){
+      if(!button.isConnected)return;
+      closePlayer();stopRadio();
+      var overlay=h('div',{id:'player-overlay',className:'player-overlay player-simple player-inline'}),video=h('video',{controls:true,autoplay:true,playsinline:true,preload:'metadata',style:'width:100%;max-height:80vh'}),status=h('p',{role:'status',text:'Connecting…'}),stream=null,alive=true;
+      var close=function(){if(!alive)return;alive=false;if(stream)stream.destroy();video.pause();video.removeAttribute('src');video.load();overlay.remove();if(_liveCleanup===close)_liveCleanup=null;};
+      overlay.appendChild(h('div',{className:'settings-card'},[h('div',{className:'row-head'},[h('h2',{text:item.name}),h('button',{className:'btn',text:'Close',onClick:close})]),video,status]));
+      document.body.appendChild(overlay);_liveCleanup=close;
+      video.addEventListener('playing',function(){status.textContent='';});
+      video.addEventListener('error',function(){status.textContent='This provider stream could not play. Its format or codec may be unsupported by this browser.';});
+      attachIptvStream(video,result.source,{current:function(){return alive;},play:function(){var p=video.play();if(p&&p.catch)p.catch(function(){status.textContent='Press play to start watching.';});},stream:function(value){stream=value;},error:function(message){status.textContent=message;}});
+    }).catch(function(error){toast(error.message,{kind:'bad'});}).finally(function(){button.disabled=false;});
+  }
+  function showStalkerOffline(host){
+    host.replaceChildren(h('h2',{text:'Offline downloads'}),pendingContent());
+    liveApi('stalker_offline').then(function(result){
+      if(!host.isConnected)return;if(!result||!result.ok)throw new Error(result&&result.error||'Could not load offline downloads.');
+      host.replaceChildren(h('div',{className:'row-head'},[h('h2',{text:'Offline downloads'}),h('button',{className:'btn',text:'Refresh status',onClick:function(){showStalkerOffline(host);}})]),h('p',{className:'muted',text:'Downloads run on the server. Finished videos wait in the import inbox, where you can match the title and choose its library location.'}));
+      (result.items||[]).forEach(function(item){host.appendChild(h('div',{className:'settings-card'},[h('h3',{text:item.name}),h('p',{text:item.status+(item.bytes?' · '+Math.round(item.bytes/1048576)+' MB':'')}),item.error?h('p',{className:'bad',text:item.error}):null,
+        ['queued','downloading'].indexOf(item.status)>=0&&can('downloads_request')?h('button',{className:'btn ghost',text:'Cancel download',onClick:function(){stalkerPost('stalker_cancel',{id:item.id}).then(function(){showStalkerOffline(host);}).catch(function(error){toast(error.message,{kind:'bad'});});}}):null,item.status==='ready'&&can('ingest_import')?h('button',{className:'btn',text:'Match and add to library',onClick:function(){openSettings('ingest');}}):null,
+        ['failed','cancelled','queued','downloading'].indexOf(item.status)>=0&&can('downloads_request')?h('button',{className:'btn',text:'Retry interrupted download',onClick:function(e){var b=e.currentTarget;b.disabled=true;stalkerPost('stalker_retry',{id:item.id}).then(function(){showStalkerOffline(host);}).catch(function(error){toast(error.message,{kind:'bad'});}).finally(function(){b.disabled=false;});}}):null]));});
+      if(!(result.items||[]).length)host.appendChild(h('p',{className:'muted',text:'No provider videos have been downloaded yet.'}));
+    }).catch(function(error){if(host.isConnected)host.replaceChildren(h('p',{className:'bad',text:error.message}));});
+  }
+  function stalkerUpdateSettings(host,connections){
+    var card=h('section',{className:'settings-card stack'}),status=h('p',{role:'status',className:'muted'}),url=h('input',{type:'url',placeholder:'Provider update-page URL (leave blank to keep saved URL)',autocomplete:'off'}),paused=h('input',{type:'checkbox'}),discovered=h('div',{className:'stack'});
+    function error(e){status.className='bad';status.textContent=e.message;}
+    function refresh(){liveApi('stalker_update_status').then(function(result){if(!card.isConnected)return;if(!result||!result.ok)throw new Error(result&&result.error||'Could not read update status.');var s=result.status;paused.checked=!!s.paused;status.className='muted';status.textContent=s.message+(s.last_check?' Last checked: '+new Date(s.last_check*1000).toLocaleString()+'.':'')+(s.next_check&&!s.paused?' Next check: '+new Date(s.next_check*1000).toLocaleString()+'.':'')+(s.configured&&!s.paused&&!s.worker?' Background worker is not currently reporting; check the PHP worker settings if this persists.':'');}).catch(error);}
+    card.appendChild(h('h3',{text:'Check for updated feeds'}));
+    card.appendChild(h('p',{className:'muted',text:'Enter the page supplied by your provider. Vaultcast looks for clearly paired portal URLs and MAC addresses, then lets you choose how many to add or map. Pages requiring a website login or JavaScript may need manual setup.'}));
+    card.appendChild(h('label',{className:'stack'},['Provider update page',url]));card.appendChild(h('label',{},[paused,' Pause daily checks']));
+    card.appendChild(h('div',{className:'row-actions'},[
+      h('button',{className:'btn',text:'Save page settings',onClick:function(e){var b=e.currentTarget;b.disabled=true;stalkerPost('stalker_updates',{operation:'configure',url:url.value.trim(),paused:paused.checked}).then(refresh).catch(error).finally(function(){b.disabled=false;});}}),
+      h('button',{className:'btn',text:'Discover connections',onClick:function(e){var b=e.currentTarget;b.disabled=true;status.textContent='Reading provider page…';stalkerPost('stalker_updates',{operation:'discover',url:url.value.trim()}).then(function(result){
+        if(!card.isConnected)return;status.className='muted';status.textContent=result.message;discovered.replaceChildren();var rows=[];
+        (result.entries||[]).forEach(function(entry){
+          var chosen=h('input',{type:'checkbox',checked:true}),name=h('input',{value:entry.name}),target=h('select',{},[h('option',{value:'',text:'Add as a new connection'})].concat(connections.map(function(c){return h('option',{value:c.id,text:'Update '+c.name});}))),automatic=h('input',{type:'checkbox'}),position=h('input',{type:'checkbox'});
+          rows.push({entry:entry,chosen:chosen,name:name,target:target,automatic:automatic,position:position});
+          discovered.appendChild(h('div',{className:'settings-card stack'},[h('label',{},[chosen,' Include this connection']),h('p',{className:'file',text:entry.url+' · '+entry.mac}),h('label',{className:'stack'},['Name',name]),target,h('label',{},[automatic,' Automatically apply validated changes from this entry']),!entry.stable?h('label',{},[position,' Follow this entry’s page position when there are no labels (only if the number of entries stays the same)']):h('p',{className:'muted',text:'Future checks match this entry by its provider label.'})]));
+        });
+        if(rows.length)discovered.appendChild(h('button',{className:'btn primary',text:'Save selected connections',onClick:function(ev){var save=ev.currentTarget;save.disabled=true;var selected=rows.filter(function(row){return row.chosen.checked;}).map(function(row){return {key:row.entry.key,feed:row.target.value,name:row.name.value,auto:row.automatic.checked,allow_position:row.position.checked};});stalkerPost('stalker_updates',{operation:'accept',token:result.token,selected:selected}).then(function(){var panel=document.getElementById('live-native-panel');if(panel)paintStalkerSettings(panel);}).catch(error).finally(function(){save.disabled=false;});}}));
+      }).catch(error).finally(function(){b.disabled=false;});}}),
+      h('button',{className:'btn ghost',text:'Check mapped connections now',onClick:function(e){var b=e.currentTarget;b.disabled=true;status.textContent='Checking mapped connections…';stalkerPost('stalker_updates',{operation:'check'}).then(refresh).catch(error).finally(function(){b.disabled=false;});}}),
+      h('button',{className:'btn ghost',text:'Refresh status',onClick:refresh})
+    ]));card.appendChild(status);card.appendChild(discovered);host.appendChild(card);refresh();
+  }
+  function paintStalkerPage(root){
+    var owner=state.user&&state.user.id,sequence=0,kind=state._stalkerStartKind||'live',parent='',page=1,loaded=[],connections=[];
+    state._stalkerStartKind=null;
+    function current(){return root.isConnected&&owner===(state.user&&state.user.id);}
+    var status=h('p',{role:'status',className:'muted'}),results=h('div',{className:'stack'}),feed=h('select',{'aria-label':'Provider connection'}),query=h('input',{placeholder:'Search provider titles','aria-label':'Search provider titles'}),category=h('select',{'aria-label':'Category'}),next=h('button',{className:'btn',text:'Load more',hidden:true}),back=h('button',{className:'btn ghost',text:'Back to catalogue',hidden:true});
+    var tabs=h('div',{className:'row-actions'},['live','vod','series'].map(function(value){return h('button',{className:'btn',text:{live:'Live TV',vod:'Movies',series:'Series'}[value],onClick:function(){kind=value;parent='';back.hidden=true;category.value='';page=1;load(false,true);}});}));
+    root.replaceChildren(h('section',{className:'settings-card'},[h('h1',{text:'Stalker'}),h('p',{className:'muted',text:'Your provider’s live channels, movies and series. Choose the connection you want to use on this TV. Downloads also use a provider stream, so choose an unused connection.'}),h('div',{className:'row-actions'},[feed,can('iptv_manage')?h('button',{className:'btn',text:'Stalker settings',onClick:function(){openSettings('live-stalker');}}):null,h('button',{className:'btn ghost',text:'Open library',onClick:function(){navigate('library');}}),can('ingest_view')&&userAreaAllowed('library')?h('button',{className:'btn ghost',text:'Offline downloads',onClick:function(){sequence++;next.hidden=true;showStalkerOffline(results);}}):null]),tabs,h('form',{className:'row-actions',onSubmit:function(e){e.preventDefault();page=1;load(false);}},[query,category,h('button',{className:'btn',type:'submit',text:'Search'}),h('button',{className:'btn ghost',type:'button',text:'Refresh',onClick:function(){page=1;load(true);}}),back]),status]),results,next);
+    function draw(){
+      results.replaceChildren();
+      loaded.forEach(function(item){
+        var button=h('button',{className:'btn',text:item.kind==='live'||item.playable?'Watch':'Open',onClick:function(){if(item.kind==='live'||item.playable)playStalkerItem(feed.value,item,button);else{parent=item.id;page=1;back.hidden=false;load(false,true);}}});
+        var download=item.kind!=='live'&&item.playable&&can('downloads_request')&&can('ingest_view')&&userAreaAllowed('library')?h('button',{className:'btn ghost',text:'Download for library',onClick:function(e){var b=e.currentTarget;b.disabled=true;stalkerPost('stalker_download',{feed:feed.value,id:item.id,name:item.name}).then(function(){toast('Download queued. Match it in the import inbox when it finishes.');}).catch(function(error){toast(error.message,{kind:'bad'});}).finally(function(){b.disabled=false;});}}):null;
+        results.appendChild(h('article',{className:'settings-card'},[h('div',{className:'row-head'},[h('h3',{text:item.name}),h('div',{className:'row-actions'},[button,download])]),item.year?h('span',{className:'muted',text:item.year}):null,item.description?h('p',{className:'muted',text:item.description}):null]));
+      });
+    }
+    function load(refresh,resetCategories){
+      var token=++sequence;
+      if(!feed.value){status.textContent='No enabled Stalker connections. Add one in Stalker settings.';results.replaceChildren();return;}
+      status.className='muted';status.textContent='Loading '+({live:'channels',vod:'movies',series:'series'}[kind])+'…';next.disabled=true;
+      if(page===1){loaded=[];results.replaceChildren();next.hidden=true;}
+      var params='feed='+encodeURIComponent(feed.value)+'&kind='+kind+'&page='+page+'&q='+encodeURIComponent(query.value.trim())+'&category='+encodeURIComponent(resetCategories?'':category.value)+'&parent='+encodeURIComponent(parent)+(refresh?'&refresh=1':'');
+      liveApi('stalker_browse',params).then(function(result){
+        if(!current()||token!==sequence)return;
+        if(!result||!result.ok)throw new Error(result&&result.error||'Provider catalogue could not be loaded.');
+        loaded=page===1?result.items:loaded.concat(result.items||[]);draw();
+        if(page===1){var selected=resetCategories?'':category.value;category.replaceChildren(h('option',{value:'',text:'All categories'}));(result.categories||[]).forEach(function(row){category.appendChild(h('option',{value:row.id,text:row.name,selected:row.id===selected}));});}
+        status.textContent=loaded.length?'Showing '+loaded.length+' · '+result.total+' available':'No titles returned. Try another category or Refresh. If this persists, use Check connection in Stalker settings.';
+        next.hidden=!result.hasMore;next.disabled=false;
+      }).catch(function(error){if(current()&&token===sequence){status.className='bad';status.textContent=error.message;if(page>1)page--;next.disabled=false;}});
+    }
+    next.onclick=function(){page++;load(false);};
+    back.onclick=function(){parent='';page=1;back.hidden=true;load(false,true);};
+    feed.onchange=function(){try{localStorage.setItem('vaultcast-stalker-'+owner,feed.value);}catch(ignore){}parent='';page=1;back.hidden=true;load(false,true);};
+    liveApi('stalker').then(function(result){if(!current())return;if(!result||!result.ok)throw new Error(result&&result.error||'Could not load Stalker connections.');connections=result.connections||[];var remembered='';try{remembered=localStorage.getItem('vaultcast-stalker-'+owner)||'';}catch(ignore){}connections.filter(function(c){return c.enabled;}).forEach(function(c){feed.appendChild(h('option',{value:c.id,text:c.name,selected:c.id===remembered}));});load(false,true);}).catch(function(error){if(current()){status.className='bad';status.textContent=error.message;}});
+  }
+  function paintStalkerSettings(host){
+    var owner=state.user&&state.user.id;
+    host.replaceChildren(pendingContent());
+    liveApi('stalker').then(function(result){
+      if(!host.isConnected||owner!==(state.user&&state.user.id))return;
+      if(!result||!result.ok)throw new Error(result&&result.error||'Could not load connections.');
+      var message=h('p',{role:'status',className:'muted'}),list=h('div',{className:'stack'}),editor=h('div',{className:'settings-card'});
+      host.replaceChildren(h('p',{text:'Each connection has its own provider URL and registered MAC. Name them so either TV can choose the connection that is free.'}),h('button',{className:'btn',text:'Open Stalker',onClick:function(){goLiveTab('stalker');}}),message,list,editor);
+      function showError(error){message.className='bad';message.textContent=error.message;}
+      function edit(connection){
+        connection=connection||{};
+        var fields={},enabled=h('input',{type:'checkbox',checked:connection.enabled!==false}),replace=h('input',{type:'checkbox'});
+        editor.replaceChildren(h('h3',{text:connection.id?'Edit connection':'Add connection'}));
+        [['name','Connection name','text'],['url','Portal URL','url'],['mac','Registered MAC address','text'],['username','Username (if required)','text'],['password','Password (if required)','password'],['serial','Serial number (if required)','text'],['deviceId','Device ID (if required)','text'],['deviceId2','Second device ID (if required)','text']].forEach(function(spec){
+          var privateField=['name','url'].indexOf(spec[0])<0;
+          fields[spec[0]]=h('input',{type:spec[2],value:privateField?'':connection[spec[0]]||'',autocomplete:spec[0]==='password'?'new-password':'off',placeholder:privateField&&connection.configured?'Saved — leave blank to keep':spec[0]==='mac'?'AA:BB:CC:DD:EE:FF':spec[0]==='url'?'https://provider.example/c/':''});
+          editor.appendChild(h('label',{className:'stack'},[spec[1],fields[spec[0]]]));
+        });
+        editor.appendChild(h('label',{},[enabled,' Enabled']));
+        if(connection.configured)editor.appendChild(h('label',{},[replace,' Replace all saved private fields (re-enter MAC)']));
+        editor.appendChild(h('p',{className:'muted',text:'Private fields stay on the server. Blank fields keep saved values unless you select Replace all saved private fields.'}));
+        editor.appendChild(h('button',{className:'btn primary',text:'Save connection',onClick:function(e){
+          var value={enabled:enabled.checked,replaceCredentials:replace.checked};Object.keys(fields).forEach(function(key){value[key]=fields[key].value;});
+          if(!value.name.trim()||!value.url.trim()||(!value.mac.trim()&&(!connection.configured||replace.checked))){showError(new Error('Enter a name, portal URL and registered MAC address.'));return;}
+          var button=e.currentTarget;button.disabled=true;
+          stalkerPost('stalker_manage',{operation:'save',id:connection.id||'',connection:value}).then(function(){if(host.isConnected)paintStalkerSettings(host);}).catch(showError).finally(function(){button.disabled=false;});
+        }}));
+      }
+      (result.connections||[]).forEach(function(connection){
+        list.appendChild(h('div',{className:'settings-card'},[h('h3',{text:connection.name}),h('p',{className:'muted',text:connection.url+(connection.enabled?'':' · Disabled')}),h('div',{className:'row-actions'},[
+          h('button',{className:'btn',text:'Edit',onClick:function(){edit(connection);}}),h('button',{className:'btn ghost',text:'Restore previous details',onClick:function(){stalkerPost('stalker_updates',{operation:'rollback',feed:connection.id}).then(function(){if(host.isConnected)paintStalkerSettings(host);}).catch(showError);}}),
+          h('button',{className:'btn',text:'Check connection',onClick:function(e){var button=e.currentTarget;button.disabled=true;message.className='muted';message.textContent='Checking provider connection…';stalkerPost('stalker_manage',{operation:'check',id:connection.id}).then(function(res){message.textContent='Connected · '+res.channelCount+' live channels · '+res.endpoint;}).catch(showError).finally(function(){button.disabled=false;});}}),
+          h('button',{className:'btn danger',text:'Remove',onClick:function(){if(!confirm('Remove '+connection.name+'?'))return;stalkerPost('stalker_manage',{operation:'remove',id:connection.id}).then(function(){if(host.isConnected)paintStalkerSettings(host);}).catch(showError);}})
+        ])]));
+      });
+      edit();stalkerUpdateSettings(host,result.connections||[]);
+    }).catch(function(error){if(host.isConnected)host.replaceChildren(h('p',{className:'bad',text:error.message}));});
+  }
   function viewLive(){
+    if(state.liveTab==='stalker'){stopLiveTimers();var stalkerRoot=h('div',{className:'live-view'});setTimeout(function(){if(stalkerRoot.isConnected)paintStalkerPage(stalkerRoot);},0);return shell(stalkerRoot);}
     if(state.liveChannel)return viewLiveChannel(state.liveChannel);
     if(state.liveTab==='radio'){stopLiveTimers();var radioRoot=h('div',{id:'live-view',className:'live-view'});setTimeout(function(){if(radioRoot.isConnected)paintRadioPage(radioRoot);},0);return shell(radioRoot);}
     var wrap = h('div', { id:'live-view', className:'live-view' }, [
@@ -8474,7 +8599,7 @@ try {
       {title:'Your account',description:'Your identity, personal preferences and saved games.',items:[{id:'inbox',label:'Inbox',hint:'Messages, invitations and anything that needs you'},{id:'settings-home',label:'Settings overview',hint:'Find a setting or choose a task'},{id:'account',label:'Profile & security',hint:'Display name, avatar, password and sign out'},{id:'parental',label:'Parental controls',hint:'Kids profile, age limits and PIN'},{id:'appearance',label:'Appearance & motion',hint:'Themes, animation and reduced motion'},{id:'playback',label:'Playback & skipping',hint:'Autoplay, mini player, intros and credits'},{id:'home-preferences',label:'Home & spoilers',hint:'Start page, compact layout and unwatched episode details'},{id:'cloud-saves',label:'Cloud saves',hint:'Save slots, backups, uploads and sharing'}]},
       {title:'Library & metadata',description:'Connect folders, organise titles and correct missing information.',admin:true,items:[{id:'sections',label:'Libraries & folders',section:'Sources',hint:'Media types, paths and enabled libraries'},{id:'scan',label:'Scan for media',section:'Sources',hint:'Discover new or removed files'},{id:'ingest',label:'Import inbox',section:'Sources',hint:'Review incoming downloads before importing'},{id:'media',label:'Media manager',section:'Organise',hint:'Search and edit library records'},{id:'collections',label:'Collections',section:'Organise',hint:'Film sets and series groups'},{id:'library',label:'Find & rename',section:'Organise',hint:'Match names and organise files'},{id:'matching',label:'Metadata matching',section:'Metadata',hint:'Fix titles, posters and descriptions'},{id:'reports',label:'User reports',section:'Metadata',hint:'Review incorrect labels reported by users'}]},
       {title:'Artwork & design',description:'Site branding, bundled posters and library artwork.',admin:true,items:[{id:'site-artwork',label:'Site & theme posters',hint:'Replace default artwork and create smaller WebP images'},{id:'posters',label:'Library artwork',hint:'Fetch missing movie, show, season and game images'},{id:'artwork-integrity',label:'Repair missing images',hint:'Find broken records and missing files'},{id:'poster-optimise',label:'Optimise library images',hint:'Generate full, grid and search WebP variants'}]},
-      {title:'Live broadcasting',description:'Build channels, schedule programmes and manage public streams.',admin:true,items:[{id:'live-studio',label:'PseudoTV Studio',section:'Relay',hint:'Schedule programmes, filler and advertising'},{id:'live-channels',label:'Relay channels',section:'Relay',hint:'Create channels and manage rotations'},{id:'live-library',label:'Live media library',section:'Relay',hint:'Import programmes and prepare durations'},{id:'live-playlists',label:'Rotation playlists',section:'Relay',hint:'Reusable channel programme rotations'},{id:'live-schedule',label:'Rotation rules',section:'Relay',hint:'Legacy rotation scheduling; Studio manages weekly slots'},{id:'live-iptv',label:'IPTV & guide matching',section:'Sources',hint:'Feeds, channel mapping and EPG'},{id:'live-radio',label:'Radio stations',section:'Sources',hint:'Add stations or browse the public directory'},{id:'live-station',label:'Station & outputs',section:'Outputs',hint:'Streams, guide exports and station configuration'}]},
+      {title:'Live broadcasting',description:'Build channels, schedule programmes and manage public streams.',admin:true,items:[{id:'live-studio',label:'PseudoTV Studio',section:'Relay',hint:'Schedule programmes, filler and advertising'},{id:'live-channels',label:'Relay channels',section:'Relay',hint:'Create channels and manage rotations'},{id:'live-library',label:'Live media library',section:'Relay',hint:'Import programmes and prepare durations'},{id:'live-playlists',label:'Rotation playlists',section:'Relay',hint:'Reusable channel programme rotations'},{id:'live-schedule',label:'Rotation rules',section:'Relay',hint:'Legacy rotation scheduling; Studio manages weekly slots'},{id:'live-stalker',label:'Stalker portals',section:'Sources',hint:'Provider connections, live channels, movies and series'},{id:'live-iptv',label:'IPTV & guide matching',section:'Sources',hint:'Feeds, channel mapping and EPG'},{id:'live-radio',label:'Radio stations',section:'Sources',hint:'Add stations or browse the public directory'},{id:'live-station',label:'Station & outputs',section:'Outputs',hint:'Streams, guide exports and station configuration'}]},
       {title:'People & permissions',description:'Control who can access content and administrative tools.',admin:true,items:[{id:'users',label:'Accounts, roles & permissions',hint:'Create users and roles; assign individual access'}]},
       {title:'Playback & delivery',description:'Server delivery options and player dependencies.',admin:true,items:[{id:'directplay',label:'DirectPlay Settings',hint:'Playback policy, transcoding, threads and reusable copies'},{id:'trailers',label:'Trailers & extras',hint:'Online trailers, the muted hero trailer and extras thumbnails'},{id:'streaming',label:'Delivery & subtitles',hint:'Seeking, playback tokens and subtitles'},{id:'players',label:'Player assets',hint:'Local or CDN player files and emulator cores'},{id:'video-optimise',label:'Video conversion',hint:'Convert files, review requests and manage encoding jobs'}]},
       {title:'Downloads',description:'Configure providers and review download activity.',admin:true,items:[{id:'acquisition',label:'Providers & integrations',hint:'RSS search, download clients and API connections'},{id:'queue',label:'Download queue',hint:'Active downloads, imports and errors'}]},
@@ -13635,6 +13760,7 @@ function viewCollectionDetail(){
       'live-playlists': { title: 'Playlists & programming', blurb: 'Set programs air first, in order; under the fill window Relay fills at random from the channel library. Commercial breaks, bumpers and the random seed live here too.' },
       'live-schedule': { title: 'Rolling schedule', blurb: '24-hour wall-clock slots: rotate a movie nightly, or advance one TV episode per day. Deterministic from the calendar day.' },
       'live-radio': { title:'Radio stations', blurb:'Your shared radio lineup. Find public stations or add a direct stream, then listen while browsing.' },
+      'live-stalker': { title:'Stalker portals', blurb:'Manage provider URLs, registered devices and connection checks. Watch channels, movies and series under Live → Stalker.' },
       'live-iptv': { title: 'IPTV feeds', blurb: 'M3U playlist feeds, browse and search channels, favourites lineup, on-demand stream Check, inactive filter, and XMLTV EPG.' },
       'live-station': { title: 'Station & outputs', blurb: 'Station identity, media base URL, timeshift history, guide lookahead, external-player stream URLs, and JSON backup / merge import.' }
     };
@@ -13644,7 +13770,7 @@ function viewCollectionDetail(){
   function liveNativeSettingsKids(sec){
     if (sec === 'live') sec = 'live-channels';
     var meta = liveSectionMeta(sec);
-    var stationSection = sec !== 'live-iptv' && sec !== 'live-studio' && sec !== 'live-radio';
+    var stationSection = sec !== 'live-stalker' && sec !== 'live-iptv' && sec !== 'live-studio' && sec !== 'live-radio';
     setTimeout(function(){ fillLiveNativePanel(sec); }, 0);
     return [
       h('div', { className: 'settings-live-head' }, [
@@ -13681,6 +13807,7 @@ function viewCollectionDetail(){
     var p;
     if (sec === 'live-studio') { paintTvStudio(host); return; }
     if (sec === 'live-radio') {host.replaceChildren(h('div',{className:'row-actions'},[h('button',{className:'btn primary',text:'Browse public directory',onClick:radioDirectory}),h('button',{className:'btn',text:'Add stream URL',onClick:function(){editRadio();}}),h('button',{className:'btn',text:'Open Radio',onClick:function(){goLiveTab('radio');}})]));loadRadio(true).then(function(stations){if(!host.isConnected)return;stations.forEach(function(station){host.appendChild(h('div',{className:'radio-directory-row'},[h('div',{},[h('strong',{text:station.name}),h('p',{className:'muted',text:radioMeta(station)})]),h('button',{className:'btn',text:'Edit station',onClick:function(){editRadio(station);}})]));});if(!stations.length)host.appendChild(emptyState('No stations yet','Search the public directory or add a stream URL.'));}).catch(function(e){if(host.isConnected)host.appendChild(h('p',{text:e.message}));});return;}
+    if (sec === 'live-stalker') {paintStalkerSettings(host);return;}
     if (sec === 'live-iptv') p = liveLoadIptv(true).then(function(){if(host.isConnected&&state.settingsSection===sec)paintLiveIptv(host);});
     else p = liveLoadStation(!liveSet.dirty).then(function(){
       if(!host.isConnected||state.settingsSection!==sec)return;
@@ -15286,7 +15413,8 @@ function viewCollectionDetail(){
     if(!host||!host.isConnected)return;
     var previousScroll=host.childElementCount?window.scrollY:null;
     var iptv = liveSet.iptv || { channels: [], feeds: [], epgUrls: [], numberStart: 100, activeFeedId: 'all' };
-    var feeds = iptv.feeds || [];
+    var portalFeeds=(iptv.feeds||[]).filter(function(f){return f.type==='stalker';});
+    var feeds = (iptv.feeds || []).filter(function(f){return f.type!=='stalker';});
     var favs = liveSet.favView || (iptv.channels || []).map(function(ch, i){
       return Object.assign({}, ch, {
         number: (iptv.numberStart || 100) + i,
@@ -15303,7 +15431,7 @@ function viewCollectionDetail(){
     // Feeds card
     host.appendChild(h('div', { className: 'settings-card' }, [
       h('h3', { text: 'IPTV sources (' + feeds.length + ')' }),
-      h('p', { className: 'muted', text: 'Add M3U playlists or Stalker / Ministra portals. Browse one source or all enabled sources, then add channels to your lineup. Reload refreshes the channel list; portal playback requests a fresh stream link when you tune in.' }),
+      h('p', { className: 'muted', text: 'Add M3U playlists and manage their saved channels. Stalker connections have their own page under Live and their own settings.' }),
       feeds.length ? h('div', { className: 'live-table-wrap' }, [
         h('table', { className: 'live-table' }, [
           h('thead', {}, [h('tr', {}, ['Name','URL','On',''].map(function(t){ return h('th', { text: t }); }))]),
@@ -15334,30 +15462,13 @@ function viewCollectionDetail(){
       ]) : h('p', { className: 'muted', text: 'No feeds configured.' }),
       h('div', { className: 'stack', style: 'margin-top:12px' }, [
         h('label', {}, ['Feed name', h('input', { id: 'iptvFeedName', value: editFeed ? (editFeed.name||'') : '', placeholder: 'e.g. iptv-org' })]),
-        h('label', {}, ['Source type', h('select', {id:'iptvFeedType',onChange:function(e){$('#iptvPortalFields').hidden=e.target.value!=='stalker';}}, [h('option',{value:'m3u',text:'M3U playlist',selected:!editFeed||editFeed.type!=='stalker'}),h('option',{value:'stalker',text:'Stalker / Ministra portal',selected:editFeed&&editFeed.type==='stalker'})])]),
-        h('label', {}, ['Playlist or portal URL', h('input', { id: 'iptvFeedUrl', value: editFeed ? (editFeed.url||'') : '', placeholder: 'https://provider.example/stalker_portal/c/' })]),
-        h('div',{id:'iptvPortalFields',className:'stack',hidden:!editFeed||editFeed.type!=='stalker'},[
-          h('p',{className:'muted',text:'Use the device details registered with your provider. Saved private fields stay on the server; leave them blank when editing to keep them.'}),
-          h('label',{},['Registered MAC address',h('input',{id:'iptvPortalMac',placeholder:editFeed&&editFeed.configured?'Saved — leave blank to keep':'AA:BB:CC:DD:EE:FF',autocomplete:'off'})]),
-          h('label',{},['Username (if required)',h('input',{id:'iptvPortalUsername',autocomplete:'off'})]),
-          h('label',{},['Password (if required)',h('input',{id:'iptvPortalPassword',type:'password',autocomplete:'new-password'})]),
-          h('label',{},['Serial number (if required)',h('input',{id:'iptvPortalSerial',autocomplete:'off'})]),
-          h('label',{},['Device ID (if required)',h('input',{id:'iptvPortalDeviceId',autocomplete:'off'})]),
-          h('label',{},['Second device ID (if required)',h('input',{id:'iptvPortalDeviceId2',autocomplete:'off'})]),
-          editFeed&&editFeed.configured?h('label',{},[h('input',{id:'iptvPortalReplace',type:'checkbox'}),' Replace all saved private fields (re-enter the registered MAC address)']):null,
-          h('p',{className:'muted',text:'Save the source, select it in the channel browser and refresh to check the connection and load live channels. Portal streams must be playable by your browser; HLS works best.'})
-        ]),
+        h('label',{},['Playlist URL',h('input',{id:'iptvFeedUrl',value:editFeed?editFeed.url||'':'',placeholder:'https://provider.example/playlist.m3u'})]),
         editFeed ? h('p', { className: 'muted', text: 'Editing feed id ' + editFeed.id }) : null,
         h('div', { className: 'row-actions', style: 'flex-wrap:wrap' }, [
           h('button', { className: 'btn', type: 'button', text: editFeed ? 'Update feed' : 'Add feed', onClick: function(){
             var name = (($('#iptvFeedName')||{}).value || '').trim();
             var url = (($('#iptvFeedUrl')||{}).value || '').trim();
-            var portal={type:$('#iptvFeedType').value};
-            if(portal.type==='stalker'){
-              portal.replaceCredentials=!!($('#iptvPortalReplace')&&$('#iptvPortalReplace').checked);
-              ['Mac','Username','Password','Serial','DeviceId','DeviceId2'].forEach(function(key){portal[key.charAt(0).toLowerCase()+key.slice(1)]=$('#iptvPortal'+key).value;});
-              if(!portal.mac&&(portal.replaceCredentials||!(editFeed&&editFeed.configured))){liveSetMsg('The registered MAC address is required.',true);return;}
-            }
+            var portal={type:'m3u'};
             if (!url) { liveSetMsg('Playlist URL is required.', true); return; }
             if (!/^https?:\/\//i.test(url)) { liveSetMsg('Playlist URL must start with http:// or https://', true); return; }
             if (!name) name = 'Feed';
@@ -15542,7 +15653,7 @@ function viewCollectionDetail(){
       }).catch(function(e){ liveSetMsg(String(e.message || e), true); });
     }
     function persistIptvFeeds(nextFeeds, extra, okMsg){
-      var body = { feeds: nextFeeds };
+      var body = { feeds: nextFeeds.concat(portalFeeds) };
       if (extra) Object.keys(extra).forEach(function(k){ body[k] = extra[k]; });
       liveApiPost('iptv_save', body).then(function(res){
         if (!res.ok || !res.body || !res.body.ok) { liveSetMsg((res.body && res.body.error) || 'Feed save failed', true); paintLiveIptv(host); return; }
@@ -15986,7 +16097,7 @@ function viewCollectionDetail(){
       if (!state.settingsSection || state.settingsSection === 'account') state.settingsSection = state.adminTab || 'general';
     }
     if (state.view === 'settings') {
-      var adminOnly = { 'site-artwork':1,maintenance:1, players:1, features:1, diagnostics:1, sections:1, libraries:1, scan:1, library:1, media:1, collections:1, streaming:1, directplay:1, convert:1, queue:1, acquisition:1, system:1, general:1, users:1, advanced:1, ingest:1, matching:1, reports:1, live:1, 'live-channels':1, 'live-library':1, 'live-playlists':1, 'live-iptv':1, 'live-schedule':1, 'live-station':1, 'live-studio':1, 'live-radio':1 };
+      var adminOnly = { 'site-artwork':1,maintenance:1, players:1, features:1, diagnostics:1, sections:1, libraries:1, scan:1, library:1, media:1, collections:1, streaming:1, directplay:1, convert:1, queue:1, acquisition:1, system:1, general:1, users:1, advanced:1, ingest:1, matching:1, reports:1, live:1, 'live-channels':1, 'live-library':1, 'live-playlists':1, 'live-iptv':1, 'live-stalker':1, 'live-schedule':1, 'live-station':1, 'live-studio':1, 'live-radio':1 };
       if (adminOnly[state.settingsSection] && !canSettings(state.settingsSection)) {
         state._wantAdmin = true;
         state._settingsAfterLogin = state.settingsSection;

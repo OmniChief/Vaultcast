@@ -16,6 +16,8 @@ require __DIR__ . '/bootstrap.php';
 try {
     set_time_limit(0);
     switch ($command) {
+        case 'stalker-download': $result=StalkerOffline::run($argv[2] ?? ''); break;
+        case 'stalker-updates': $result=StalkerUpdates::run(); break;
         case 'transcode': $result=Transcode::run($argv[2] ?? ''); break;
         case 'maintenance':
             $result = Maintenance::run($argv[2] ?? '');

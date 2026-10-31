@@ -162,13 +162,10 @@ class Ingest {
         $out = ['ok' => true, 'mode' => self::mode($acq), 'items' => [], 'sections' => self::sectionsByKind(), 'transmission' => true];
         if (empty($tr['enabled']) || !Acquisition::transmissionReachable($tr)) {
             $out['transmission'] = false;
-            $out['error'] = 'Transmission RPC unreachable';
-            $out['pending'] = 0;
-            @file_put_contents(STREAM_SHM . '/ingest_count.json', json_encode(['n' => 0, 'at' => time()]));
-            return $out;
+            $out['warning'] = 'Transmission is unavailable; provider downloads can still be imported.';
         }
         $st = self::store();
-        $raw = Acquisition::torrentsForIngest();
+        $raw = $out['transmission'] ? Acquisition::torrentsForIngest() : StalkerOffline::torrents();
         $pending = 0;
         foreach ($raw as $tor) {
             if (!is_array($tor) || (float)($tor['percentDone'] ?? 0) < 0.999) continue;
@@ -230,7 +227,8 @@ class Ingest {
     }
 
     private static function findTorrent(string $hash): ?array {
-        foreach (Acquisition::torrentsForIngest() as $tor) {
+        $torrents=strpos($hash,'stalker-')===0?StalkerOffline::torrents():Acquisition::torrentsForIngest();
+        foreach ($torrents as $tor) {
             if (is_array($tor) && self::hashOf($tor) === $hash) return $tor;
         }
         return null;

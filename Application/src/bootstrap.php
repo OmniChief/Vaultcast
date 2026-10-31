@@ -47,3 +47,5 @@ if (PHP_SAPI !== 'cli') Cors::handle();
 
 // Apply pending storage migrations once per schema version (durable stamp check).
 Migrations::runIfNeeded();
+// Only configured installations start the lightweight provider-update worker.
+if(PHP_SAPI!=='cli' && is_file(STREAM_DATA.'/runtime/stalker-updates.enabled')) StalkerUpdates::ensureWorker();
