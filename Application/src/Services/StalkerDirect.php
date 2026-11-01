@@ -71,7 +71,7 @@ final class StalkerDirect {
     }
     /** Cache the provider's complete Live list once, never one SQL record per channel. */
     private static function liveRows(array $feed): array {
-        $key=self::key($feed,'live:all');
+        $key=self::key($feed,'live:all:v2');
         $cached=\Vaultcast\Repository::cacheGet($key);
         if($cached!==null)return $cached;
         $result=stalker_call($feed,'get_all_channels');
@@ -98,7 +98,7 @@ final class StalkerDirect {
         return $items;
     }
     public static function liveEntry(array $feed,string $id): ?array {
-        $cached=\Vaultcast\Repository::cacheGet(self::key($feed,'live:all'));
+        $cached=\Vaultcast\Repository::cacheGet(self::key($feed,'live:all:v2'));
         return $cached[$id]??null;
     }
     public static function countries(array $state,array $opts): array {
@@ -112,7 +112,7 @@ final class StalkerDirect {
         // Only contact one uncached provider per request to protect a six-worker NAS.
         $requested=false;
         foreach($feeds as $feed){
-            $key=self::key($feed,'live:all');
+            $key=self::key($feed,'live:all:v2');
             $rows=\Vaultcast\Repository::cacheGet($key);
             if($rows===null&&!$requested){
                 $requested=true;
