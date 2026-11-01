@@ -137,14 +137,31 @@ final class StalkerDirect {
             return ['ok'=>false,'error'=>$state['error']];
         }finally{flock($lock,LOCK_UN);fclose($lock);}
     }
+    /** Advance a short batch when the portal responds quickly; release after a time budget. */
+    public static function runLive(string $feedId): array {
+        if(PHP_SAPI!=='cli')throw new RuntimeException('Provider indexing must run in PHP CLI.');
+        $started=microtime(true);$result=['ok'=>true];
+        for($page=0;$page<6&&microtime(true)-$started<18;$page++){
+            $result=self::advanceLive($feedId);
+            if(empty($result['ok'])||!empty($result['done'])||!empty($result['busy'])||!empty($result['skipped']))break;
+        }
+        return $result;
+    }
     private static function launchLive(array $feed): void {
         $dir=STREAM_DATA.'/runtime';if(!is_dir($dir))@mkdir($dir,0700,true);
         $lock=@fopen($dir.'/stalker-direct-'.hash('sha256',self::key($feed,'live:pages:v2')).'.launch','c+');
         if(!$lock)return;
         if(!flock($lock,LOCK_EX|LOCK_NB)){fclose($lock);return;}
+        // Do not start another PHP process while the current batch owns the worker lock.
+        $worker=@fopen($dir.'/stalker-direct-live.worker.lock','c');
+        if(!$worker||!flock($worker,LOCK_EX|LOCK_NB)){
+            if($worker)fclose($worker);
+            flock($lock,LOCK_UN);fclose($lock);return;
+        }
+        flock($worker,LOCK_UN);fclose($worker);
         try {
             $last=(int)stream_get_contents($lock);
-            if($last>time()-45)return;
+            if($last>time()-5)return;
             ftruncate($lock,0);rewind($lock);fwrite($lock,(string)time());fflush($lock);
             try{Process::startPhpWorker('stalker-direct-live',(string)$feed['id']);}
             catch(Throwable $e){
