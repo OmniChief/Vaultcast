@@ -3024,6 +3024,14 @@ html[data-motion="reduced"] .vca-overall span,html[data-motion="reduced"] .vca-b
 .stalker-country-results .stalker-channel-row{border-radius:0;padding:1rem;gap:1rem}
 @media(max-width:600px){.stalker-country-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.stalker-country-tile{min-height:120px}.stalker-country-results .stalker-channel-row{flex-wrap:nowrap}}
 
+/* Country selection: show only the flag, retaining the clickable tile. */
+.stalker-country-grid{grid-template-columns:repeat(auto-fill,minmax(72px,1fr));gap:10px}
+.stalker-country-tile{min-height:76px;padding:10px;gap:0;font-size:0;line-height:0}
+.stalker-country-tile> :not(img):not(span){display:none!important}
+.stalker-country-tile>span{font-size:2.5rem;line-height:1.2}
+.stalker-country-tile img{max-width:46px;max-height:34px}
+@media(max-width:600px){.stalker-country-grid{grid-template-columns:repeat(auto-fill,minmax(66px,1fr))}.stalker-country-tile{min-height:70px;padding:8px}}
+
 /* Stalker show details and compact season accordions. */
 .stalker-series-hero[hidden]{display:none!important}
 .stalker-series-hero .stalker-vod-hero{grid-template-columns:minmax(110px,190px) minmax(0,1fr);margin:12px 0 28px}
