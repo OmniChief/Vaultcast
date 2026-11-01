@@ -22,7 +22,7 @@ window.VaultcastStalkerVod=function(host,options){
     return kind+'|'+name+'|'+year(item);
   }
   function initial(item){var m=title(item).match(/[A-Za-z0-9]/);return m?m[0].toUpperCase():'#';}
-  function fits(item){return (!query||title(item).toLocaleLowerCase().includes(query.toLocaleLowerCase()))&&initial(item)===letter;}
+  function fits(item){return (!query||title(item).toLocaleLowerCase().includes(query.toLocaleLowerCase()))&&(letter==='#'||initial(item)===letter);}
   function reset(){
     serial++;progress={};titles=[];seen={};loading=false;
     feeds=options.connections.filter(function(f){return f.enabled;});
@@ -39,11 +39,11 @@ window.VaultcastStalkerVod=function(host,options){
     next=h('button',{className:'btn',text:'Load more provider pages',onClick:function(){scan(false);}});
     letters=h('div',{className:'row-actions',role:'group','aria-label':'Browse titles by first letter'});
     '#ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').forEach(function(ch){
-      var b=h('button',{className:'btn ghost',text:ch,'aria-label':'Titles starting with '+(ch==='#'?'numbers and symbols':ch),onClick:function(){if(letter===ch)return;letter=ch;reset();renderLetters();scan(false);}});
+      var b=h('button',{className:'btn ghost',text:ch==='\#'?'All':ch,'aria-label':ch==='#'?'All provider titles (diagnostic view)':'Titles starting with '+ch,onClick:function(){if(letter===ch)return;letter=ch;reset();renderLetters();scan(false);}});
       b.dataset.letter=ch;letters.appendChild(b);
     });
     host.append(h('div',{className:'stalker-vod-library-heading'},[
-      h('div',{},[h('h2',{text:kind==='vod'?'Movies':'Series'}),h('p',{className:'muted',text:'Live portal pages from all enabled connections. No catalogue import.'})]),
+      h('div',{},[h('h2',{text:kind==='vod'?'Movies':'Series'}),h('p',{className:'muted',text:'Portal-direct paging. Select All to inspect raw provider titles before alphabetical filtering.'})]),
       h('button',{className:'btn ghost',text:'Refresh',onClick:function(){reset();scan(true);}})
     ]),letters,h('form',{className:'stalker-searchbar',onSubmit:function(e){e.preventDefault();renderResults();}},[search]),status,results,next);
     renderLetters();
@@ -57,7 +57,7 @@ window.VaultcastStalkerVod=function(host,options){
   }
   function add(rows,feed){
     (rows||[]).forEach(function(item){
-      if(!item||!item.name||!item.id||initial(item)!==letter)return;
+      if(!item||!item.name||!item.id||(letter!=='#'&&initial(item)!==letter))return;
       var source={id:item.id,feed:feed.id,connection:feed.name,kind:item.kind,playable:item.playable};
       var k=key(item),group=seen[k];
       // Without a year, avoid merging unrelated similarly named releases.
@@ -100,10 +100,10 @@ window.VaultcastStalkerVod=function(host,options){
         ])
       ]));
     });
-    if(!ordered.length)results.appendChild(h('p',{className:'muted',text:'No matching titles found in the retrieved pages. Try Load more provider pages.'}));
+    if(!ordered.length)results.appendChild(h('p',{className:'muted',text:'No provider titles in the pages retrieved. Check connection and pagination.'}));
     var done=feeds.filter(function(f){return progress[f.id]&&progress[f.id].done;}).length;
     var failed=feeds.filter(function(f){return progress[f.id]&&progress[f.id].failed;}).length;
-    status.textContent=ordered.length+' titles for '+letter+' (loaded so far) · '+done+'/'+feeds.length+' connections finished'+(failed?' · '+failed+' unavailable':'');
+    status.textContent=ordered.length+' titles for '+(letter==='#'?'All':letter)+' (loaded so far) · '+done+'/'+feeds.length+' connections finished'+(failed?' · '+failed+' unavailable':'');
     next.hidden=!feeds.some(function(f){return progress[f.id]&&!progress[f.id].done;});
     next.disabled=loading;
   }
