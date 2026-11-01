@@ -8,17 +8,17 @@ window.VaultcastStalkerVod=function(host,options){
   // These are not part of the title and must not decide its A-Z letter.
   function title(item){
     var name=String(item.name||'').trim();
-    name=name.replace(/^(?:(?:\\[\\s*(?:4K|8K|UHD|FHD|HD|SD)\\s*\\]|(?:4K|8K|UHD|FHD|HD|SD|FULL HD))\\s*[-|:]?\\s*)+/i,'');
+    name=name.replace(/^(?:(?:\[\s*(?:4K|8K|UHD|FHD|HD|SD)\s*\]|(?:4K|8K|UHD|FHD|HD|SD|FULL HD))\s*[-|:]?\s*)+/i,'');
     return name.trim();
   }
   function year(item){
     var explicit=String(item.year||'').trim();
-    if(/^\\d{4}$/.test(explicit))return explicit;
-    var match=title(item).match(/\\((19\\d{2}|20\\d{2})\\)\\s*$/);
+    if(/^\d{4}$/.test(explicit))return explicit;
+    var match=title(item).match(/\((19\d{2}|20\d{2})\)\s*$/);
     return match?match[1]:'';
   }
   function key(item){
-    var name=title(item).replace(/\\s*\\((?:19|20)\\d{2}\\)\\s*$/,'').replace(/\\s*\\[(?:4K|8K|UHD|FHD|HD|SD)\\]\\s*/gi,' ').toLocaleLowerCase().replace(/[^\\p{L}\\p{N}]+/gu,' ').trim();
+    var name=title(item).replace(/\s*\((?:19|20)\d{2}\)\s*$/,'').replace(/\s*\[(?:4K|8K|UHD|FHD|HD|SD)\]\s*/gi,' ').toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim();
     return kind+'|'+name+'|'+year(item);
   }
   function initial(item){var m=title(item).match(/[A-Za-z0-9]/);return m?m[0].toUpperCase():'#';}
