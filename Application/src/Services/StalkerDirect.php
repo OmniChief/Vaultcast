@@ -69,37 +69,92 @@ final class StalkerDirect {
         \Vaultcast\Repository::cachePut($key,$out,600);
         return $out;
     }
-    /** Cache the provider's complete Live list once, never one SQL record per channel. */
-    private static function liveRows(array $feed): array {
-        $key=self::key($feed,'live:all');
-        $cached=\Vaultcast\Repository::cacheGet($key);
-        if($cached!==null)return $cached;
-        $result=stalker_call($feed,'get_all_channels');
-        $rows=$result['data']??$result;
-        if(!is_array($rows))throw new RuntimeException('Provider returned an invalid live-channel list.');
-        $total=(int)($result['total_items']??0);
-        if($total>count($rows))throw new RuntimeException('Provider returned only part of its channel list; complete country browsing is unavailable.');
-        if(count($rows)>50000)throw new RuntimeException('Provider channel list exceeds the safe NAS limit.');
-        $items=[];
-        $genres=stalker_live_groups($feed);
-        foreach($rows as $row){
-            if(!is_array($row)||!isset($row['id'])||empty($row['cmd']))continue;
-            $id=(string)$row['id'];if($id===''||strlen($id)>120)continue;
-            $name=mb_substr((string)($row['name']??$id),0,300);
-            $genreId=(string)($row['tv_genre_id']??'');
-            $groupName=mb_substr((string)($row['group_title']??$genres[$genreId]??''),0,180);
-            $items[$id]=['id'=>$id,'name'=>$name,'description'=>$groupName,'kind'=>'live',
-                'country'=>StalkerCountries::country($name)??StalkerCountries::country($groupName)??'ZZ',
-                'group'=>StalkerCountries::group($name,$groupName),
-                'playback'=>stalker_live_entry($row)];
-        }
-        // A shorter TTL bounds memory and disk without reimporting entire SQL tables.
-        \Vaultcast\Repository::cachePut($key,$items,1800);
-        return $items;
+    /**
+     * One ordered provider page per CLI invocation. Browsers only read the
+     * file-backed snapshot, so slow portals never occupy an HTTP PHP worker.
+     */
+    private static function liveState(array $feed): array {
+        return \Vaultcast\Repository::cacheGet(self::key($feed,'live:pages:v2'))
+            ?? ['rows'=>[],'next'=>1,'processed'=>0,'total'=>null,'done'=>false,'signatures'=>[],'error'=>null,'retryAfter'=>0];
+    }
+    private static function liveStore(array $feed,array $state): void {
+        \Vaultcast\Repository::cachePut(self::key($feed,'live:pages:v2'),$state,86400);
     }
     public static function liveEntry(array $feed,string $id): ?array {
-        $cached=\Vaultcast\Repository::cacheGet(self::key($feed,'live:all'));
-        return $cached[$id]??null;
+        $legacy=\Vaultcast\Repository::cacheGet(self::key($feed,'live:all'));
+        if(isset($legacy[$id]))return $legacy[$id];
+        $state=self::liveState($feed);
+        return $state['rows'][$id]??null;
+    }
+    public static function advanceLive(string $id): array {
+        if(PHP_SAPI!=='cli')throw new RuntimeException('Provider indexing must run in PHP CLI.');
+        require_once STREAM_ROOT.'/src/Live/iptv.php';
+        $feed=iptv_feed_by_id(iptv_load(),$id);
+        if(!$feed||($feed['type']??'')!=='stalker'||empty($feed['enabled']))return ['ok'=>false,'error'=>'Connection unavailable'];
+        $dir=STREAM_DATA.'/runtime';if(!is_dir($dir))@mkdir($dir,0700,true);
+        // One active portal request across all country connections on the NAS.
+        $lock=@fopen($dir.'/stalker-direct-live.worker.lock','c');
+        if(!$lock)return ['ok'=>false,'error'=>'Worker lock unavailable'];
+        if(!flock($lock,LOCK_EX|LOCK_NB)){fclose($lock);return ['ok'=>true,'busy'=>true];}
+        try {
+            $state=self::liveState($feed);
+            if(!empty($state['done'])||($state['retryAfter']??0)>time())return ['ok'=>true,'skipped'=>true];
+            if(($state['next']??1)>10000)throw new RuntimeException('Provider exceeded page limit.');
+            $page=max(1,(int)$state['next']);
+            // Do not attempt get_all_channels: this portal may return an incomplete
+            // list. Ask for only the next ordered channel page.
+            $result=stalker_ordered_page($feed,'itv',['sortby'=>'number','genre'=>'*','search'=>'','fav'=>0],$page);
+            $rows=$result['data']??$result;
+            if(!is_array($rows))throw new RuntimeException('Provider returned an invalid live page.');
+            $signature=hash('sha256',json_encode(array_column($rows,'id')));
+            if($rows&&isset($state['signatures'][$signature]))throw new RuntimeException('Provider repeated a channel page.');
+            if($rows)$state['signatures'][$signature]=true;
+            $genres=stalker_live_groups($feed);
+            foreach($rows as $row){
+                if(!is_array($row)||!isset($row['id'])||empty($row['cmd']))continue;
+                $channelId=(string)$row['id'];
+                if($channelId===''||strlen($channelId)>120)continue;
+                $name=mb_substr((string)($row['name']??$channelId),0,300);
+                $genreId=(string)($row['tv_genre_id']??'');
+                $groupName=mb_substr((string)($row['group_title']??$genres[$genreId]??''),0,180);
+                $state['rows'][$channelId]=['id'=>$channelId,'name'=>$name,'description'=>$groupName,'kind'=>'live',
+                    'country'=>StalkerCountries::country($name)??StalkerCountries::country($groupName)??'ZZ',
+                    'group'=>StalkerCountries::group($name,$groupName),'playback'=>stalker_live_entry($row)];
+            }
+            $state['processed']+=count($rows);
+            $state['next']=$page+1;
+            if(isset($result['total_items'])&&is_numeric($result['total_items'])&&(int)$result['total_items']>0)$state['total']=(int)$result['total_items'];
+            if(count($state['rows'])>50000)throw new RuntimeException('Provider channel list exceeded safe storage limit.');
+            $state['done']=!$rows||($state['total']!==null&&$state['processed']>=$state['total']);
+            $state['error']=null;$state['retryAfter']=0;
+            self::liveStore($feed,$state);
+            return ['ok'=>true,'done'=>$state['done'],'scanned'=>count($state['rows'])];
+        }catch(RuntimeException $error){
+            $state=self::liveState($feed);
+            $state['error']='Could not load the next provider channel page. Check the connection and retry.';
+            $state['retryAfter']=time()+120;
+            self::liveStore($feed,$state);
+            return ['ok'=>false,'error'=>$state['error']];
+        }finally{flock($lock,LOCK_UN);fclose($lock);}
+    }
+    private static function launchLive(array $feed): void {
+        $dir=STREAM_DATA.'/runtime';if(!is_dir($dir))@mkdir($dir,0700,true);
+        $lock=@fopen($dir.'/stalker-direct-'.hash('sha256',self::key($feed,'live:pages:v2')).'.launch','c+');
+        if(!$lock)return;
+        if(!flock($lock,LOCK_EX|LOCK_NB)){fclose($lock);return;}
+        try {
+            $last=(int)stream_get_contents($lock);
+            if($last>time()-45)return;
+            ftruncate($lock,0);rewind($lock);fwrite($lock,(string)time());fflush($lock);
+            try{Process::startPhpWorker('stalker-direct-live',(string)$feed['id']);}
+            catch(Throwable $e){
+                ftruncate($lock,0);
+                $state=self::liveState($feed);
+                $state['error']='Could not start the PHP CLI channel worker.';
+                $state['retryAfter']=time()+60;
+                self::liveStore($feed,$state);
+            }
+        }finally{flock($lock,LOCK_UN);fclose($lock);}
     }
     public static function countries(array $state,array $opts): array {
         $country=strtoupper((string)($opts['country']??''));
@@ -109,18 +164,18 @@ final class StalkerDirect {
         $query=mb_strtolower(mb_substr(trim((string)($opts['q']??'')),0,160));
         $offset=max(0,min(1000000,(int)($opts['offset']??0)));
         $counts=array_fill_keys(StalkerCountries::GROUPS,0);$items=[];$total=0;$progress=[];$indexing=false;
-        // Only contact one uncached provider per request to protect a six-worker NAS.
-        $requested=false;
+        $launched=false;
         foreach($feeds as $feed){
-            $key=self::key($feed,'live:all');
-            $rows=\Vaultcast\Repository::cacheGet($key);
-            if($rows===null&&!$requested){
-                $requested=true;
-                try{$rows=self::liveRows($feed);}
-                catch(RuntimeException $e){$progress[]=['name'=>$feed['name'],'scanned'=>0,'total'=>null,'done'=>false,'error'=>'Provider could not supply a complete channel list.'];continue;}
+            $legacy=\Vaultcast\Repository::cacheGet(self::key($feed,'live:all'));
+            $scan=self::liveState($feed);
+            $rows=$legacy!==null?$legacy:$scan['rows'];
+            $done=$legacy!==null||!empty($scan['done']);
+            if(!$done&&!$launched&&($scan['retryAfter']??0)<=time()){
+                self::launchLive($feed);$launched=true;
             }
-            if($rows===null){$indexing=true;$progress[]=['name'=>$feed['name'],'scanned'=>0,'total'=>null,'done'=>false,'error'=>null];continue;}
-            $progress[]=['name'=>$feed['name'],'scanned'=>count($rows),'total'=>count($rows),'done'=>true,'error'=>null];
+            $indexing=$indexing||(!$done&&empty($scan['error']));
+            $progress[]=['name'=>$feed['name'],'scanned'=>count($rows),'total'=>$legacy!==null?count($legacy):$scan['total'],
+                'done'=>$done,'error'=>$legacy!==null?null:($scan['error']??null)];
             foreach($rows as $row){
                 if($row['country']!==$country||($query!==''&&mb_strpos(mb_strtolower($row['name'].' '.$row['description']),$query)===false))continue;
                 $counts[$row['group']]++;
