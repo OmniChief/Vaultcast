@@ -85,6 +85,39 @@ final class StalkerCountries {
             if(\Vaultcast\Repository::cacheGet($key)===null)throw new RuntimeException('Could not save the channel catalogue. Check server storage.');
         }finally{flock($lock,LOCK_UN);fclose($lock);}
     }
+    /** Advance a single provider page in a short-lived CLI worker, never in a web request. */
+    public static function run(string $feedId): array {
+        if (PHP_SAPI !== 'cli') throw new RuntimeException('Stalker indexing requires CLI.');
+        require_once STREAM_ROOT.'/src/Live/iptv.php';
+        $feed=iptv_feed_by_id(iptv_load(),$feedId);
+        if (!$feed || ($feed['type']??'')!=='stalker' || empty($feed['enabled'])) return ['ok'=>false,'error'=>'Connection unavailable'];
+        // One provider scan at a time across the NAS, regardless of concurrent viewers.
+        $path=STREAM_DATA.'/stalker-countries.worker.lock';
+        $lock=@fopen($path,'c');
+        if (!$lock) return ['ok'=>false,'error'=>'Index lock unavailable'];
+        if (!flock($lock,LOCK_EX|LOCK_NB)) { fclose($lock);return ['ok'=>true,'busy'=>true]; }
+        try { self::advance($feed); return ['ok'=>true]; }
+        finally { flock($lock,LOCK_UN); fclose($lock); }
+    }
+    private static function queue(array $feed): void {
+        $dir=STREAM_DATA.'/runtime';
+        if (!is_dir($dir)) @mkdir($dir,0700,true);
+        $path=$dir.'/stalker-country-'.hash('sha256',self::key($feed)).'.launch';
+        $lock=@fopen($path,'c+');
+        if (!$lock) return;
+        if (!flock($lock,LOCK_EX|LOCK_NB)) { fclose($lock);return; }
+        try {
+            // Avoid repeated spawns while a slow portal request is still outstanding.
+            $last=(int)stream_get_contents($lock);
+            if ($last>time()-35) return;
+            ftruncate($lock,0);rewind($lock);fwrite($lock,(string)time());fflush($lock);
+            try { Process::startPhpWorker('stalker-countries',(string)$feed['id']); }
+            catch (Throwable $e) {
+                // Permit a retry on the next browse rather than holding a stale throttle.
+                ftruncate($lock,0);
+            }
+        } finally { flock($lock,LOCK_UN);fclose($lock); }
+    }
     public static function browse(array $state,array $opts): array {
         $country=strtoupper((string)($opts['country']??''));
         if(!preg_match('/^[A-Z]{2}$/D',$country)||($country!=='ZZ'&&strpos(' '.self::CODES.' ',' '.$country.' ')===false))throw new InvalidArgumentException('Choose a country.');
@@ -96,7 +129,7 @@ final class StalkerCountries {
             if(empty($index['done'])&&($index['retryAfter']??0)<=time()&&($index['processed']??0)<$least){$candidate=$feed;$least=$index['processed']??0;}
             unset($index);
         }
-        if($candidate)self::advance($candidate);
+        if($candidate)self::queue($candidate);
         $offset=max(0,(int)($opts['offset']??0));$query=mb_strtolower(mb_substr(trim((string)($opts['q']??'')),0,200));$selected=(string)($opts['group']??'');
         $items=[];$counts=array_fill_keys(self::GROUPS,0);$total=0;$indexing=false;$progress=[];
         foreach($feeds as $feed){
