@@ -309,7 +309,7 @@ if ($__liveAction !== null) {
             $body=$isWrite?body_json():$_GET;
             if ($__liveAction==='stalker_catalogue_status') {Permissions::require('iptv_manage');json_out(StalkerCatalogues::status());}
             if ($__liveAction==='stalker_catalogue_control') {Permissions::require('iptv_manage');json_out(StalkerCatalogues::control($body));}
-            if ($__liveAction==='stalker_vod_catalogue') json_out(StalkerVod::browse($state,$body));
+            if ($__liveAction==='stalker_vod_catalogue') json_out(StalkerDirect::browse($state,$body));
             if ($__liveAction==='stalker_countries') json_out(StalkerCountries::browse($state,$body));
             if ($__liveAction==='stalker_manage') {
                 $operation=(string)($body['operation'] ?? 'save');
@@ -341,7 +341,7 @@ if ($__liveAction !== null) {
             }
             $feed=iptv_feed_by_id($state,(string)($body['feed'] ?? ''));
             if (!$feed || ($feed['type'] ?? '')!=='stalker' || empty($feed['enabled'])) throw new InvalidArgumentException('Select an enabled Stalker connection in settings.');
-            if ($__liveAction==='stalker_browse') json_out(stalker_catalogue($feed,$body));
+            if ($__liveAction==='stalker_browse') json_out(in_array((string)($body['kind']??'live'),['vod','series'],true)?StalkerDirect::browse(['feeds'=>[$feed]],$body):stalker_catalogue($feed,$body));
             if ($__liveAction==='stalker_vod_detail') {
                 $item=stalker_vod_entry($feed,(string)($body['id']??''));
                 if(!$item)throw new RuntimeException('This catalogue entry has expired. Return to Stalker and refresh the catalogue.');
