@@ -12,7 +12,6 @@ final class StalkerCatalogues {
     }
     public static function active(array $feed,string $kind): string {$record=self::read()['sources'][$feed['id'].'/'.$kind]??null;return $record&&$record['config']===self::config($feed)&&!empty($record['active'])?$record['active']:hash('sha256',json_encode($feed));}
     public static function status(): array {
-        self::ensureWorker();
         $state=self::read(true);$feeds=[];foreach(iptv_load()['feeds'] as $feed)$feeds[$feed['id']]=$feed;$rows=[];
         foreach($state['sources'] as $record){$feed=$feeds[$record['feed']]??null;if(!$feed||empty($feed['enabled']))continue;$summary=StalkerVod::summary($record['building']?:$record['active'],$record['kind']);$rows[]=['feed'=>$feed['id'],'name'=>$feed['name'],'kind'=>$record['kind'],'status'=>$record['status'],'scanned'=>$summary['scanned'],'error'=>$record['error']??$summary['error'],'updated'=>$record['updated']??null];}
         return ['ok'=>true,'sources'=>$rows,'worker'=>is_file(STREAM_DATA.'/runtime/stalker-catalogue.heartbeat')&&filemtime(STREAM_DATA.'/runtime/stalker-catalogue.heartbeat')>time()-120];
@@ -21,13 +20,14 @@ final class StalkerCatalogues {
         $operation=(string)($opts['operation']??'load');if(!in_array($operation,['load','refresh','pause'],true))throw new InvalidArgumentException('Unknown catalogue operation.');
         $kind=(string)($opts['kind']??'all');if(!in_array($kind,['all','live','vod','series'],true))throw new InvalidArgumentException('Choose a catalogue.');$kinds=$kind==='all'?['live','vod','series']:[$kind];
         $feeds=array_values(array_filter(iptv_load()['feeds'],static function($feed)use($opts){return ($feed['type']??'')==='stalker'&&!empty($feed['enabled'])&&(empty($opts['feed'])||$feed['id']===$opts['feed']);}));
+        if($operation!=='pause')throw new RuntimeException('Legacy Stalker catalogue indexing has been retired. Browse provider categories on demand.');
         self::mutate(static function(&$state)use($feeds,$kinds,$operation){foreach($feeds as $feed)foreach($kinds as $kind){$key=$feed['id'].'/'.$kind;$record=$state['sources'][$key]??['feed'=>$feed['id'],'kind'=>$kind,'config'=>self::config($feed),'active'=>self::active($feed,$kind),'building'=>'','status'=>'new'];
             if($operation==='pause'){if($record['building'])$record['status']='paused';}
             elseif($operation==='refresh'||$record['config']!==self::config($feed)||(!$record['building']&&$record['status']!=='complete')){if($record['building']&&$record['building']!==$record['active'])$state['retired'][]=['fingerprint'=>$record['building'],'kind'=>$record['kind']];$record['config']=self::config($feed);$record['building']=hash('sha256',random_bytes(32));$record['status']='queued';$record['promoted']=false;}
             elseif($record['building']){$record['status']='queued';$q=\Vaultcast\Database::connection()->prepare("UPDATE vaultcast_stalker_scans SET error='' WHERE fingerprint=?");$q->execute([$record['building']]);}
             $record['error']='';$record['updated']=time();$state['sources'][$key]=$record;
         }});
-        self::launch();return self::status();
+        return self::status();
     }
     public static function connectionsChanged(array $before,array $after): void {
         $feeds=[];foreach($after as $feed)if(($feed['type']??'')==='stalker'&&!empty($feed['enabled']))$feeds[$feed['id']]=$feed;
@@ -40,18 +40,14 @@ final class StalkerCatalogues {
             foreach($state['sources'] as $key=>$record){$feed=$feeds[$record['feed']]??null;if($feed&&$record['config']===self::config($feed))continue;foreach(['active','building'] as $field)if(!empty($record[$field]))$state['retired'][]=['fingerprint'=>$record[$field],'kind'=>$record['kind']];
             if(!$feed){unset($state['sources'][$key]);continue;}
             $record['config']=self::config($feed);$record['active']='';$record['building']=hash('sha256',random_bytes(32));$record['status']='queued';$record['promoted']=false;$record['error']='';$record['updated']=time();$state['sources'][$key]=$record;
-        }});self::launch();
+        }});
     }
     private static function launch(): void {
-        $state=self::read();$pending=$state['retired']||array_filter($state['sources'],static function($record){return in_array($record['status'],['queued','running'],true);});
-        $flag=STREAM_DATA.'/runtime/stalker-catalogue.enabled';if(!$pending){@unlink($flag);return;}file_put_contents($flag,'1');self::ensureWorker();
+        // The SQL-backed recursive catalogue is retired. Never queue or restart it.
+        @unlink(STREAM_DATA.'/runtime/stalker-catalogue.enabled');
     }
     public static function ensureWorker(): void {
-        $dir=STREAM_DATA.'/runtime';if(!is_file($dir.'/stalker-catalogue.enabled'))return;$probe=fopen($dir.'/stalker-catalogue.worker.lock','c');if(!$probe)return;if(!flock($probe,LOCK_EX|LOCK_NB)){fclose($probe);return;}flock($probe,LOCK_UN);fclose($probe);
-        $launch=fopen($dir.'/stalker-catalogue.launch','c+');if(!$launch||!flock($launch,LOCK_EX|LOCK_NB))return;
-        try{$last=(int)stream_get_contents($launch);if($last>time()-15)return;ftruncate($launch,0);rewind($launch);fwrite($launch,(string)time());fflush($launch);Process::startPhpWorker('stalker-catalogue','stalkercatalogue');}
-        catch(Throwable $error){self::mutate(static function(&$state){foreach($state['sources'] as &$record)if(in_array($record['status'],['queued','running'],true))$record['error']='Catalogue worker could not start. Check the PHP CLI path in Advanced settings, then resume loading.';unset($record);});}
-        finally{flock($launch,LOCK_UN);fclose($launch);}
+        self::launch();
     }
     private static function cleanup(): void {
         $state=self::read(true);$keep=[];foreach($state['sources'] as $record)foreach(['active','building'] as $field)if(!empty($record[$field]))$keep[]=$record[$field];
@@ -60,7 +56,10 @@ final class StalkerCatalogues {
         $directory=STREAM_DATA.'/live/iptv_cache/art';$removed=0;if(is_dir($directory))foreach(new DirectoryIterator($directory) as $file)if($file->isFile()&&!$file->isLink()&&preg_match('/^[a-f0-9]{64}$/D',$file->getFilename())){ @unlink($file->getPathname());if(++$removed>=200)break;}
     }
     public static function run(): array {
-        if(PHP_SAPI!=='cli')throw new RuntimeException('Background worker only.');require_once STREAM_ROOT.'/src/Live/iptv.php';$dir=STREAM_DATA.'/runtime';$lock=fopen($dir.'/stalker-catalogue.worker.lock','c');if(!$lock||!flock($lock,LOCK_EX|LOCK_NB))return ['ok'=>true,'busy'=>true];
+        if(PHP_SAPI!=='cli')throw new RuntimeException('Background worker only.');
+        self::launch();
+        return ['ok'=>true,'retired'=>true];
+        require_once STREAM_ROOT.'/src/Live/iptv.php';$dir=STREAM_DATA.'/runtime';$lock=fopen($dir.'/stalker-catalogue.worker.lock','c');if(!$lock||!flock($lock,LOCK_EX|LOCK_NB))return ['ok'=>true,'busy'=>true];
         $revision=hash_file('sha256',__FILE__).hash_file('sha256',__DIR__.'/StalkerVod.php');$heartbeat=0;
         try{self::cleanup();while($revision===hash_file('sha256',__FILE__).hash_file('sha256',__DIR__.'/StalkerVod.php')){
             clearstatcache();if($heartbeat<time()-10){file_put_contents($dir.'/stalker-catalogue.heartbeat',(string)time());$heartbeat=time();}$state=self::read(true);
