@@ -111,7 +111,6 @@ final class StalkerDirect {
         $requested=false;
         foreach($feeds as $feed){
             $key=self::key($feed,'live:all');
-            if(!empty($opts['refresh']))$requested=true; // Refresh is handled by cache expiry; do not stampede providers.
             $rows=\Vaultcast\Repository::cacheGet($key);
             if($rows===null&&!$requested){
                 $requested=true;
