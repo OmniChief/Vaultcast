@@ -8,10 +8,26 @@ final class StalkerCountries {
 
     public static function entry(array $feed,string $id): ?array {return StalkerLiveBrowse::entry($feed,$id)??StalkerVod::entry($feed,$id,'live');}
     public static function country(string $text): ?string {
-        $aliases=['UK'=>'GB','USA'=>'US','UAE'=>'AE','GER'=>'DE','DEU'=>'DE','FRA'=>'FR','JPN'=>'JP','CAN'=>'CA','AUS'=>'AU'];
-        // Bracketed markers can occur anywhere; bare codes must be a prefix.
-        preg_match_all('/\[\s*([A-Z]{2,3})\s*\]|\(\s*([A-Z]{2,3})\s*\)|^\s*([A-Z]{2,3})\s*[|:._-]/i',$text,$matches,PREG_SET_ORDER);
-        foreach($matches as $match){$code=strtoupper(($match[1]??'')?:($match[2]??'')?:($match[3]??''));$code=$aliases[$code]??$code;if(strpos(' '.self::CODES.' ',' '.$code.' ')!==false)return $code;}
+        $aliases=['UK'=>'GB','ENG'=>'GB','USA'=>'US','UAE'=>'AE','GER'=>'DE','DEU'=>'DE','FRA'=>'FR','JPN'=>'JP','CAN'=>'CA','AUS'=>'AU','NZL'=>'NZ','IRL'=>'IE','NLD'=>'NL','ESP'=>'ES','ITA'=>'IT','POR'=>'PT','TUR'=>'TR','IND'=>'IN','BRA'=>'BR','POL'=>'PL'];
+        // Provider genre labels use flags, full names, aliases, and code prefixes.
+        if(preg_match('/[\x{1F1E6}-\x{1F1FF}]{2}/u',$text,$flag)){
+            preg_match_all('/[\x{1F1E6}-\x{1F1FF}]/u',$flag[0],$letters);
+            if(count($letters[0])===2){
+                $hex=static function($char){$v=unpack('C*',$char);return (($v[1]&7)<<18)|(($v[2]&63)<<12)|(($v[3]&63)<<6)|($v[4]&63);};
+                $code=chr(65+$hex($letters[0][0])-0x1F1E6).chr(65+$hex($letters[0][1])-0x1F1E6);
+                if(strpos(' '.self::CODES.' ',' '.$code.' ')!==false)return $code;
+            }
+        }
+        if(preg_match('/^\s*(?:UNITED KINGDOM|GREAT BRITAIN|BRITAIN|ENGLAND|SCOTLAND|WALES)\b/i',$text))return 'GB';
+        if(preg_match('/^\s*(?:UNITED STATES(?: OF AMERICA)?|AMERICAN)\b/i',$text))return 'US';
+        $names=['CANADA'=>'CA','AUSTRALIA'=>'AU','NEW ZEALAND'=>'NZ','IRELAND'=>'IE','FRANCE'=>'FR','GERMANY'=>'DE','SPAIN'=>'ES','ITALY'=>'IT','PORTUGAL'=>'PT','NETHERLANDS'=>'NL','BELGIUM'=>'BE','SWITZERLAND'=>'CH','AUSTRIA'=>'AT','POLAND'=>'PL','TURKEY'=>'TR','GREECE'=>'GR','INDIA'=>'IN','JAPAN'=>'JP','BRAZIL'=>'BR','MEXICO'=>'MX','ARABIC'=>'AE'];
+        foreach($names as $label=>$code)if(preg_match('/^\s*'.preg_quote($label,'/').'\b/i',$text))return $code;
+        preg_match_all('/\[\s*([A-Z]{2,3})\s*\]|\(\s*([A-Z]{2,3})\s*\)|(?:^|[|\/])\s*([A-Z]{2,3})(?=\s*(?:[|:._\-\s]|$))/i',$text,$matches,PREG_SET_ORDER);
+        foreach($matches as $match){
+            $code=strtoupper(($match[1]??'')?:($match[2]??'')?:($match[3]??''));
+            $code=$aliases[$code]??$code;
+            if(strpos(' '.self::CODES.' ',' '.$code.' ')!==false)return $code;
+        }
         return null;
     }
     public static function group(string $name,string $genre): string {
