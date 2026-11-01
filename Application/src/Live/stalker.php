@@ -195,6 +195,11 @@ function stalker_index(array $feed, bool $refresh = false): array {
 
 function stalker_resolve(array $feed, string $id): string {
     $cached=\Vaultcast\Repository::cacheGet('stalker_live_v2_'.hash('sha256',json_encode([$feed,$id])));
+    if (!$cached) {
+        $countryEntry=StalkerCountries::entry($feed,$id);
+        $cached=$countryEntry['playback']??null;
+        if($cached)\Vaultcast\Repository::cachePut('stalker_live_v2_'.hash('sha256',json_encode([$feed,$id])),$cached,7200);
+    }
     if ($cached) {
         $direct=stalker_static_live_url($cached);
         if($direct!==null)return $direct;
@@ -415,6 +420,7 @@ function stalker_channel_detail(array $feed,string $id,bool $refresh=false,bool 
     $item=\Vaultcast\Repository::cacheGet('stalker_channel_'.hash('sha256',json_encode([$feed,$id])));
     $scan=\Vaultcast\Repository::cacheGet(stalker_live_scan_key($feed));
     if(!$item)$item=$scan['rows'][$id]??null;
+    if(!$item){$item=StalkerCountries::entry($feed,$id);if($item)unset($item['playback']);}
     if(!$item&&$includeGuide){
         $index=stalker_index($feed);
         foreach($index['channels'] as $row)if($row['url']===stalker_channel_url($feed['id'],$id)){$item=['name'=>$row['name'],'description'=>$row['group']];break;}
