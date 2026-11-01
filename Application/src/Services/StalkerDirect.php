@@ -81,11 +81,13 @@ final class StalkerDirect {
         if($total>count($rows))throw new RuntimeException('Provider returned only part of its channel list; complete country browsing is unavailable.');
         if(count($rows)>50000)throw new RuntimeException('Provider channel list exceeds the safe NAS limit.');
         $items=[];
+        $genres=stalker_live_groups($feed);
         foreach($rows as $row){
             if(!is_array($row)||!isset($row['id'])||empty($row['cmd']))continue;
             $id=(string)$row['id'];if($id===''||strlen($id)>120)continue;
             $name=mb_substr((string)($row['name']??$id),0,300);
-            $groupName=mb_substr((string)($row['group_title']??$row['tv_genre_id']??''),0,180);
+            $genreId=(string)($row['tv_genre_id']??'');
+            $groupName=mb_substr((string)($row['group_title']??$genres[$genreId]??''),0,180);
             $items[$id]=['id'=>$id,'name'=>$name,'description'=>$groupName,'kind'=>'live',
                 'country'=>StalkerCountries::country($name)??StalkerCountries::country($groupName)??'ZZ',
                 'group'=>StalkerCountries::group($name,$groupName),
