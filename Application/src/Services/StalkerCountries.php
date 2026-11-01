@@ -20,12 +20,12 @@ final class StalkerCountries {
         }
         if(preg_match('/^\s*(?:UNITED KINGDOM|GREAT BRITAIN|BRITAIN|ENGLAND|SCOTLAND|WALES)\b/i',$text))return 'GB';
         if(preg_match('/^\s*(?:UNITED STATES(?: OF AMERICA)?|AMERICAN)\b/i',$text))return 'US';
-        $names=['CANADA'=>'CA','AUSTRALIA'=>'AU','NEW ZEALAND'=>'NZ','IRELAND'=>'IE','FRANCE'=>'FR','GERMANY'=>'DE','SPAIN'=>'ES','ITALY'=>'IT','PORTUGAL'=>'PT','NETHERLANDS'=>'NL','BELGIUM'=>'BE','SWITZERLAND'=>'CH','AUSTRIA'=>'AT','POLAND'=>'PL','TURKEY'=>'TR','GREECE'=>'GR','INDIA'=>'IN','JAPAN'=>'JP','BRAZIL'=>'BR','MEXICO'=>'MX','ARABIC'=>'AE'];
+        $names=['CANADA'=>'CA','AUSTRALIA'=>'AU','NEW ZEALAND'=>'NZ','IRELAND'=>'IE','FRANCE'=>'FR','GERMANY'=>'DE','SPAIN'=>'ES','ITALY'=>'IT','PORTUGAL'=>'PT','NETHERLANDS'=>'NL','BELGIUM'=>'BE','SWITZERLAND'=>'CH','AUSTRIA'=>'AT','POLAND'=>'PL','TURKEY'=>'TR','GREECE'=>'GR','INDIA'=>'IN','JAPAN'=>'JP','BRAZIL'=>'BR','MEXICO'=>'MX','ALGERIA'=>'DZ','BAHRAIN'=>'BH','ARGENTINA'=>'AR'];
         foreach($names as $label=>$code)if(preg_match('/^\s*'.preg_quote($label,'/').'\b/i',$text))return $code;
         preg_match_all('/\[\s*([A-Z]{2,3})\s*\]|\(\s*([A-Z]{2,3})\s*\)|(?:^|[|\/])\s*([A-Z]{2,3})(?=\s*(?:[|:._\-\s]|$))/i',$text,$matches,PREG_SET_ORDER);
         foreach($matches as $match){
             $code=strtoupper(($match[1]??'')?:($match[2]??'')?:($match[3]??''));
-            $code=$aliases[$code]??$code;
+            if($code==='AR')continue; // Ambiguous portal regional prefix, not reliably Argentina.\n            $code=$aliases[$code]??$code;
             if(strpos(' '.self::CODES.' ',' '.$code.' ')!==false)return $code;
         }
         return null;
