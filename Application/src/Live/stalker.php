@@ -343,8 +343,23 @@ function stalker_vod_entry(array $feed,string $id): ?array {
 function stalker_vod_resolve(array $feed, string $id, ?array $item = null): string {
     $item=$item ?? stalker_vod_entry($feed,$id);
     if (!$item) throw new RuntimeException('This catalogue entry has expired. Refresh the Stalker page and select it again.');
-    $result=stalker_call($feed,'create_link',['cmd'=>$item['cmd'],'series'=>$item['series'],'forced_storage'=>'undefined','disable_ad'=>0,'download'=>0],'vod');
-    if (!preg_match('#(?:^|\s)(https?://[^\s]+)#',(string)($result['cmd'] ?? ''),$match)) throw new RuntimeException('Provider did not return a playable video link.');
+    $command=(string)($item['cmd']??'');
+    if($command==='')throw new RuntimeException('The selected provider title has no playback command. Refresh the provider page.');
+    $params=['cmd'=>$command,'series'=>(string)($item['series']??''),'forced_storage'=>'undefined','disable_ad'=>0,'download'=>0];
+    $link='';
+    try {
+        $result=stalker_call($feed,'create_link',$params,'vod');
+        $link=(string)($result['cmd']??$result['url']??'');
+    } catch(RuntimeException $error) {
+        // A few Ministra portals route series playback through the series API.
+        if(strpos($id,'series:')===0){
+            try{$result=stalker_call($feed,'create_link',$params,'series');$link=(string)($result['cmd']??$result['url']??'');}
+            catch(RuntimeException $ignored){}
+        }
+        if($link==='')$link=$command;
+        if(!preg_match('#(?:^|\\s)(https?://[^\\s]+)#',$link))throw $error;
+    }
+    if(!preg_match('#(?:^|\\s)(https?://[^\\s]+)#',$link,$match))throw new RuntimeException('Provider did not return a playable video link.');
     $url=$match[1];$parts=parse_url($url);
     if (!$parts || isset($parts['user']) || isset($parts['pass']) || preg_match('/[\r\n]/',$url)) throw new RuntimeException('Provider returned an invalid video link.');
     stalker_public_addresses($url);
