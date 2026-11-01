@@ -45,7 +45,7 @@ window.VaultcastStalkerVod=function(host,options){
   }
   function add(rows,feed){
     (rows||[]).forEach(function(item){
-      if(!item||!item.name||!item.id||!fits(item))return;
+      if(!item||!item.name||!item.id||initial(item)!==letter)return;
       var source={id:item.id,feed:feed.id,connection:feed.name,kind:item.kind,playable:item.playable};
       var k=key(item),group=seen[k];
       // Without a year, avoid merging unrelated similarly named releases.
@@ -88,10 +88,10 @@ window.VaultcastStalkerVod=function(host,options){
         ])
       ]));
     });
-    if(!ordered.length)results.appendChild(h('p',{className:'muted',text:'No matching titles in the pages loaded yet.'}));
+    if(!ordered.length)results.appendChild(h('p',{className:'muted',text:'No matching titles found in the retrieved pages. Try Load more provider pages.'}));
     var done=feeds.filter(function(f){return progress[f.id]&&progress[f.id].done;}).length;
     var failed=feeds.filter(function(f){return progress[f.id]&&progress[f.id].failed;}).length;
-    status.textContent=ordered.length+' titles for '+letter+' · '+done+'/'+feeds.length+' connections finished'+(failed?' · '+failed+' unavailable':'');
+    status.textContent=ordered.length+' titles for '+letter+' (loaded so far) · '+done+'/'+feeds.length+' connections finished'+(failed?' · '+failed+' unavailable':'');
     next.hidden=!feeds.some(function(f){return progress[f.id]&&!progress[f.id].done;});
     next.disabled=loading;
   }
@@ -99,20 +99,28 @@ window.VaultcastStalkerVod=function(host,options){
     if(loading||!active)return;
     loading=true;var token=++serial;
     var pending=feeds.filter(function(f){return progress[f.id]&&!progress[f.id].done;});
-    var index=0;
+    // Fetch a small bounded batch per provider; a single page often has no titles
+    // starting with the selected letter, even when the portal contains many.
+    var pagesPerFeed=3;
+    var index=0,attempts=0;
     function step(){
       if(!valid(token))return;
       if(index>=pending.length){loading=false;renderResults();return;}
-      var feed=pending[index++],p=progress[feed.id];
+      var feed=pending[index],p=progress[feed.id];
+      if(attempts>=pagesPerFeed){index++;attempts=0;step();return;}
+      attempts++;
       if(!p||p.done){step();return;}
       status.textContent='Loading '+feed.name+' (page '+p.page+')…';
-      var params=new URLSearchParams({kind:kind,feed:feed.id,page:String(p.page),refresh:refresh?'1':''});
+      // Ask the provider to narrow results first, then filter strict initials in the browser.
+      // The Stalker search parameter is not guaranteed to be prefix-only.
+      var params=new URLSearchParams({kind:kind,feed:feed.id,q:letter==='#'?'':letter,page:String(p.page),refresh:refresh?'1':''});
       options.api('stalker_vod_catalogue',params.toString()).then(function(result){
         if(!valid(token))return;
         if(!result||!result.ok)throw Error(result&&result.error||'Portal unavailable');
         add(result.items,feed);p.page++;
         p.done=!result.hasMore||p.page>10000;
-      }).catch(function(){if(valid(token)){p.done=true;p.failed=true;}}).then(function(){if(valid(token)){renderResults();step();}});
+        if(p.done){index++;attempts=0;}
+      }).catch(function(){if(valid(token)){p.done=true;p.failed=true;index++;attempts=0;}}).then(function(){if(valid(token)){renderResults();step();}});
     }
     step();
   }
