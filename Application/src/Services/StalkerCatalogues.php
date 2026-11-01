@@ -17,32 +17,15 @@ final class StalkerCatalogues {
         return ['ok'=>true,'sources'=>$rows,'worker'=>is_file(STREAM_DATA.'/runtime/stalker-catalogue.heartbeat')&&filemtime(STREAM_DATA.'/runtime/stalker-catalogue.heartbeat')>time()-120];
     }
     public static function control(array $opts): array {
-        $operation=(string)($opts['operation']??'load');if(!in_array($operation,['load','refresh','pause'],true))throw new InvalidArgumentException('Unknown catalogue operation.');
-        $kind=(string)($opts['kind']??'all');if(!in_array($kind,['all','live','vod','series'],true))throw new InvalidArgumentException('Choose a catalogue.');$kinds=$kind==='all'?['live','vod','series']:[$kind];
-        $feeds=array_values(array_filter(iptv_load()['feeds'],static function($feed)use($opts){return ($feed['type']??'')==='stalker'&&!empty($feed['enabled'])&&(empty($opts['feed'])||$feed['id']===$opts['feed']);}));
-        if($operation!=='pause')throw new RuntimeException('Legacy Stalker catalogue indexing has been retired. Browse provider categories on demand.');
-        self::mutate(static function(&$state)use($feeds,$kinds,$operation){foreach($feeds as $feed)foreach($kinds as $kind){$key=$feed['id'].'/'.$kind;$record=$state['sources'][$key]??['feed'=>$feed['id'],'kind'=>$kind,'config'=>self::config($feed),'active'=>self::active($feed,$kind),'building'=>'','status'=>'new'];
-            if($operation==='pause'){if($record['building'])$record['status']='paused';}
-            elseif($operation==='refresh'||$record['config']!==self::config($feed)||(!$record['building']&&$record['status']!=='complete')){if($record['building']&&$record['building']!==$record['active'])$state['retired'][]=['fingerprint'=>$record['building'],'kind'=>$record['kind']];$record['config']=self::config($feed);$record['building']=hash('sha256',random_bytes(32));$record['status']='queued';$record['promoted']=false;}
-            elseif($record['building']){$record['status']='queued';$q=\Vaultcast\Database::connection()->prepare("UPDATE vaultcast_stalker_scans SET error='' WHERE fingerprint=?");$q->execute([$record['building']]);}
-            $record['error']='';$record['updated']=time();$state['sources'][$key]=$record;
-        }});
+        $operation=(string)($opts['operation']??'load');
+        if(!in_array($operation,['load','refresh','pause'],true))throw new InvalidArgumentException('Unknown catalogue operation.');
+        if($operation!=='pause')throw new RuntimeException('Legacy Stalker catalogue indexing is retired. Browse provider categories on demand.');
+        self::launch();
         return self::status();
     }
     public static function connectionsChanged(array $before,array $after): void {
-        $feeds=[];foreach($after as $feed)if(($feed['type']??'')==='stalker'&&!empty($feed['enabled']))$feeds[$feed['id']]=$feed;
+        // Feed configuration changes must not queue legacy SQL indexing jobs.
         self::launch();
-        return;
-        self::mutate(static function(&$state)use($feeds,$before){
-            foreach($before as $old){if(($old['type']??'')!=='stalker')continue;$new=$feeds[$old['id']]??null;if($new&&self::config($old)===self::config($new))continue;$oldFingerprint=hash('sha256',json_encode($old));
-                foreach(['live','vod','series'] as $kind){$state['retired'][]=['fingerprint'=>$oldFingerprint,'kind'=>$kind];$key=$old['id'].'/'.$kind;
-                    if($new&&!isset($state['sources'][$key])&&StalkerVod::scan($oldFingerprint,$kind)['processed']>0)$state['sources'][$key]=['feed'=>$new['id'],'kind'=>$kind,'config'=>self::config($new),'active'=>'','building'=>hash('sha256',random_bytes(32)),'status'=>'queued','promoted'=>false,'error'=>'','updated'=>time()];
-                }
-            }
-            foreach($state['sources'] as $key=>$record){$feed=$feeds[$record['feed']]??null;if($feed&&$record['config']===self::config($feed))continue;foreach(['active','building'] as $field)if(!empty($record[$field]))$state['retired'][]=['fingerprint'=>$record[$field],'kind'=>$record['kind']];
-            if(!$feed){unset($state['sources'][$key]);continue;}
-            $record['config']=self::config($feed);$record['active']='';$record['building']=hash('sha256',random_bytes(32));$record['status']='queued';$record['promoted']=false;$record['error']='';$record['updated']=time();$state['sources'][$key]=$record;
-        }});
     }
     private static function launch(): void {
         // The SQL-backed recursive catalogue is retired. Never queue or restart it.
