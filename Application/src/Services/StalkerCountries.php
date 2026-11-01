@@ -25,7 +25,8 @@ final class StalkerCountries {
         preg_match_all('/\[\s*([A-Z]{2,3})\s*\]|\(\s*([A-Z]{2,3})\s*\)|(?:^|[|\/])\s*([A-Z]{2,3})(?=\s*(?:[|:._\-\s]|$))/i',$text,$matches,PREG_SET_ORDER);
         foreach($matches as $match){
             $code=strtoupper(($match[1]??'')?:($match[2]??'')?:($match[3]??''));
-            if($code==='AR')continue; // Ambiguous portal regional prefix, not reliably Argentina.\n            $code=$aliases[$code]??$code;
+            if($code==='AR')continue; // Ambiguous portal regional prefix, not reliably Argentina.
+            $code=$aliases[$code]??$code;
             if(strpos(' '.self::CODES.' ',' '.$code.' ')!==false)return $code;
         }
         return null;
