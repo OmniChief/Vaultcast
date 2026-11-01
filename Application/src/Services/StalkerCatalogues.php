@@ -31,6 +31,8 @@ final class StalkerCatalogues {
     }
     public static function connectionsChanged(array $before,array $after): void {
         $feeds=[];foreach($after as $feed)if(($feed['type']??'')==='stalker'&&!empty($feed['enabled']))$feeds[$feed['id']]=$feed;
+        self::launch();
+        return;
         self::mutate(static function(&$state)use($feeds,$before){
             foreach($before as $old){if(($old['type']??'')!=='stalker')continue;$new=$feeds[$old['id']]??null;if($new&&self::config($old)===self::config($new))continue;$oldFingerprint=hash('sha256',json_encode($old));
                 foreach(['live','vod','series'] as $kind){$state['retired'][]=['fingerprint'=>$oldFingerprint,'kind'=>$kind];$key=$old['id'].'/'.$kind;
@@ -49,29 +51,10 @@ final class StalkerCatalogues {
     public static function ensureWorker(): void {
         self::launch();
     }
-    private static function cleanup(): void {
-        $state=self::read(true);$keep=[];foreach($state['sources'] as $record)foreach(['active','building'] as $field)if(!empty($record[$field]))$keep[]=$record[$field];
-        foreach(iptv_load()['feeds'] as $feed)if(($feed['type']??'')==='stalker'&&!empty($feed['enabled']))$keep[]=hash('sha256',json_encode($feed));
-        {$q=\Vaultcast\Database::connection()->prepare('SELECT DISTINCT fingerprint FROM vaultcast_stalker_titles'.($keep?' WHERE fingerprint NOT IN ('.implode(',',array_fill(0,count($keep),'?')).')':'').' LIMIT 20');$q->execute($keep);foreach($q->fetchAll(PDO::FETCH_COLUMN) as $fingerprint)self::mutate(static function(&$fresh)use($fingerprint){$entry=['fingerprint'=>$fingerprint,'kind'=>null];if(!in_array($entry,$fresh['retired'],true))$fresh['retired'][]=$entry;});}
-        $directory=STREAM_DATA.'/live/iptv_cache/art';$removed=0;if(is_dir($directory))foreach(new DirectoryIterator($directory) as $file)if($file->isFile()&&!$file->isLink()&&preg_match('/^[a-f0-9]{64}$/D',$file->getFilename())){ @unlink($file->getPathname());if(++$removed>=200)break;}
-    }
+    // The previous recursive SQL indexing and cleanup worker are intentionally
+    // unavailable. Legacy rows remain untouched until separately migrated.
     public static function run(): array {
-        if(PHP_SAPI!=='cli')throw new RuntimeException('Background worker only.');
         self::launch();
         return ['ok'=>true,'retired'=>true];
-        require_once STREAM_ROOT.'/src/Live/iptv.php';$dir=STREAM_DATA.'/runtime';$lock=fopen($dir.'/stalker-catalogue.worker.lock','c');if(!$lock||!flock($lock,LOCK_EX|LOCK_NB))return ['ok'=>true,'busy'=>true];
-        $revision=hash_file('sha256',__FILE__).hash_file('sha256',__DIR__.'/StalkerVod.php');$heartbeat=0;
-        try{self::cleanup();while($revision===hash_file('sha256',__FILE__).hash_file('sha256',__DIR__.'/StalkerVod.php')){
-            clearstatcache();if($heartbeat<time()-10){file_put_contents($dir.'/stalker-catalogue.heartbeat',(string)time());$heartbeat=time();}$state=self::read(true);
-            if($state['retired']){$retired=$state['retired'][0];if(StalkerVod::discard($retired['fingerprint'],$retired['kind']))self::mutate(static function(&$fresh)use($retired){$fresh['retired']=array_values(array_filter($fresh['retired'],static function($item)use($retired){return $item!==$retired;}));});usleep(50000);continue;}
-            $candidates=array_filter($state['sources'],static function($record){return in_array($record['status'],['queued','running'],true)&&$record['building']!=='';});if(!$candidates)break;uasort($candidates,static function($a,$b){return ($a['step']??0)<=>($b['step']??0);});$key=array_key_first($candidates);$record=$candidates[$key];$feed=iptv_feed_by_id(iptv_load(),$record['feed']);
-            if(!$feed||empty($feed['enabled'])||self::config($feed)!==$record['config']){self::connectionsChanged([],iptv_load()['feeds']);continue;}
-            $summary=StalkerVod::step($feed,$record['kind'],$record['building']);$root=StalkerVod::scan($record['building'],$record['kind']);
-            self::mutate(static function(&$fresh)use($key,$record,$summary,$root){if(($fresh['sources'][$key]['building']??'')!==$record['building']){if(($fresh['sources'][$key]['active']??'')!==$record['building'])$fresh['retired'][]=['fingerprint'=>$record['building'],'kind'=>$record['kind']];return;}$next=&$fresh['sources'][$key];
-                if($root['done']&&!$root['error']&&empty($next['promoted'])){if($next['active']&&$next['active']!==$record['building'])$fresh['retired'][]=['fingerprint'=>$next['active'],'kind'=>$record['kind']];$next['active']=$record['building'];$next['promoted']=true;}
-                if($next['status']!=='paused')$next['status']=$summary['error']?'error':($summary['done']?'complete':'running');$next['error']=$summary['error'];$next['step']=microtime(true);$next['updated']=time();if($summary['done'])$next['building']='';
-            });\Vaultcast\Database::releaseForStreaming();usleep(200000);
-        }}finally{@unlink($dir.'/stalker-catalogue.heartbeat');flock($lock,LOCK_UN);fclose($lock);self::$cached=null;self::launch();}
-        return ['ok'=>true];
     }
 }
