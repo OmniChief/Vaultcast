@@ -329,3 +329,38 @@ CREATE TABLE IF NOT EXISTS vaultcast_achievement_marks (
  user_id VARCHAR(64) NOT NULL, mark VARCHAR(96) CHARACTER SET ascii NOT NULL, created_at BIGINT NOT NULL DEFAULT 0,
  PRIMARY KEY (user_id, mark), INDEX ach_mark_time (user_id, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
+CREATE TABLE IF NOT EXISTS vaultcast_stalker_scans (
+ fingerprint CHAR(64) NOT NULL,
+ kind VARCHAR(8) NOT NULL,
+ parent_id VARCHAR(120) NOT NULL DEFAULT '',
+ depth TINYINT UNSIGNED NOT NULL DEFAULT 0,
+ next_page INT UNSIGNED NOT NULL DEFAULT 1,
+ processed INT UNSIGNED NOT NULL DEFAULT 0,
+ total INT UNSIGNED NULL,
+ done TINYINT NOT NULL DEFAULT 0,
+ last_hash CHAR(64) NOT NULL DEFAULT '',
+ error VARCHAR(250) NOT NULL DEFAULT '',
+ PRIMARY KEY(fingerprint,kind,parent_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS vaultcast_stalker_titles (
+ fingerprint CHAR(64) NOT NULL,
+ kind VARCHAR(8) NOT NULL,
+ parent_id VARCHAR(120) NOT NULL DEFAULT '',
+ item_id VARCHAR(120) NOT NULL,
+ group_key CHAR(64) NOT NULL,
+ title VARCHAR(500) NOT NULL,
+ year SMALLINT UNSIGNED NULL,
+ genres VARCHAR(500) NOT NULL,
+ language VARCHAR(80) NOT NULL,
+ quality VARCHAR(20) NOT NULL,
+ category VARCHAR(190) NOT NULL,
+ rating DECIMAL(4,2) NULL,
+ playable TINYINT NOT NULL DEFAULT 0,
+ payload MEDIUMTEXT NOT NULL,
+ PRIMARY KEY(fingerprint,kind,parent_id,item_id),
+ KEY stalker_group(kind,group_key),
+ KEY stalker_year(kind,year)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

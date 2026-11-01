@@ -52,7 +52,7 @@ window.VaultcastStalkerCountries=function(host,options){
     search=h('input',{type:'search',value:query,placeholder:'Find a channel…','aria-label':'Search channels in '+name(country)});
     groups=h('nav',{className:'stalker-category-nav','aria-label':'TV groups'});list=h('div',{className:'stalker-country-results'});
     search.oninput=function(){query=search.value;offset=0;serial++;clearTimeout(timer);remember();timer=setTimeout(function(){load(false);},300);};
-    var form=h('form',{className:'stalker-searchbar',onSubmit:function(e){e.preventDefault();query=search.value;offset=0;load(false);}},[search,h('button',{className:'btn ghost',type:'button',text:'Refresh',onClick:function(){offset=0;load(true);}})]);
+    var form=h('form',{className:'stalker-searchbar',onSubmit:function(e){e.preventDefault();query=search.value;offset=0;load(false);}},[search,h('button',{className:'btn ghost',type:'button',text:'Refresh results',onClick:function(){offset=0;load(true);}})]);
     host.append(h('div',{className:'stalker-country-heading'},[h('button',{className:'btn ghost',text:'← Countries',onClick:picker}),flag(country),h('h2',{text:name(country)})]),form,h('div',{className:'stalker-workspace'},[h('aside',{className:'stalker-browse-tools'},[h('h3',{text:'TV groups'}),groups]),h('main',{className:'stalker-content'},[status,list,next])]));
   }
   function draw(result){
@@ -76,11 +76,11 @@ window.VaultcastStalkerCountries=function(host,options){
     if(!active||!country||!host.isConnected||!options.current())return;
     clearTimeout(timer);var token=++serial;next.disabled=true;
     if(!append){offset=0;items=[];}status.textContent='Loading channels from your Stalker connections…';
-    var params='country='+encodeURIComponent(country)+'&q='+encodeURIComponent(query)+'&group='+encodeURIComponent(group)+'&offset='+offset+(refresh?'&refresh=1':'');
+    var params='country='+encodeURIComponent(country)+'&q='+encodeURIComponent(query)+'&group='+encodeURIComponent(group)+'&offset='+offset;
     options.api('stalker_countries',params).then(function(result){
       if(!current(token))return;if(!result||!result.ok)throw new Error(result&&result.error||'Could not load channels.');
       items=append?items.concat(result.items||[]):result.items||[];draw(result);
-      if(result.indexing)timer=setTimeout(function(){if(current(token))load(false);},400);
+
     }).catch(function(error){if(current(token)){status.className='bad';status.textContent=error.message;next.disabled=false;if(append)offset=items.length;}});
   }
   return {show:function(){if(active)return;active=true;if(country){selected();load(false);}else picker();},stop:stop};
