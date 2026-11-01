@@ -17,12 +17,16 @@ final class StalkerDirect {
         $cached=\Vaultcast\Repository::cacheGet($key);
         if($cached!==null)return $cached;
         $categories=[];
-        $result=stalker_call($feed,'get_categories',[],$kind);
-        foreach(($result['data']??$result) as $row)if(is_array($row)&&isset($row['id'])){
+        try {
+            $result=stalker_call($feed,'get_categories',[],$kind);
+            foreach(($result['data']??$result) as $row)if(is_array($row)&&isset($row['id'])){
             $categories[]=['id'=>(string)$row['id'],'name'=>(string)($row['title']??$row['name']??$row['id'])];
             if(count($categories)>=500)break;
+            }
+        } catch (RuntimeException $ignored) {
+            // Categories are optional; a provider may allow page browsing without them.
         }
-        \Vaultcast\Repository::cachePut($key,$categories,3600);
+        \Vaultcast\Repository::cachePut($key,$categories,$categories?3600:300);
         return $categories;
     }
     private static function page(array $feed,string $kind,int $page,string $category,string $query,string $parent,bool $refresh): array {
@@ -89,6 +93,8 @@ final class StalkerDirect {
         unset($item);
         $result['ok']=true;$result['facets']=['category'=>array_map(static function($c){return ['value'=>$c['id'],'name'=>$c['name']];},$categories)];
         $result['categories']=$categories;$result['page']=$page;
+        $result['expandedEpisodes']=$parent!=='';$result['catalogueLoading']=false;
+        if($parent!==''){$parentItem=self::item($feed,$parent);$result['show']=$parentItem['metadata']??null;}
         $result['connections']=[['name'=>$feed['name'],'scanned'=>count($result['items']),'total'=>$result['total'],'done'=>true,'error'=>'']];
         $result['selectedFeed']=$feed['id'];$result['shared']=false;$result['indexing']=false;
         return $result;
