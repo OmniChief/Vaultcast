@@ -90,7 +90,7 @@ window.VaultcastStalkerCountries=function(host,options){
           (data.categories||[]).forEach(function(c){folders.push({feed:feed.id,connection:feed.name,id:String(c.id),name:c.name,country:c.country||'ZZ'});});
         }).catch(function(error){if(current(token))failures.push(feed.name+': '+error.message);}).then(function(){
           if(!current(token))return;
-          remaining--;renderCountries();if(remaining>0)next();
+          remaining--;if(country)renderCategories();else renderCountries();if(remaining>0)next();
         });
       }
       for(var i=0;i<Math.min(2,feeds.length);i++)next();
