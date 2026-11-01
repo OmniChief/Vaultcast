@@ -341,7 +341,7 @@ if ($__liveAction !== null) {
             }
             $feed=iptv_feed_by_id($state,(string)($body['feed'] ?? ''));
             if (!$feed || ($feed['type'] ?? '')!=='stalker' || empty($feed['enabled'])) throw new InvalidArgumentException('Select an enabled Stalker connection in settings.');
-            if ($__liveAction==='stalker_live_categories') json_out(StalkerLiveBrowse::categories($feed));
+            if ($__liveAction==='stalker_live_categories') json_out(StalkerLiveBrowse::categories($feed,!empty($body['refresh'])));
             if ($__liveAction==='stalker_live_channels') json_out(StalkerLiveBrowse::channels($feed,$body));
             if ($__liveAction==='stalker_browse') json_out(in_array((string)($body['kind']??'live'),['vod','series'],true)?StalkerDirect::browse(['feeds'=>[$feed]],$body):stalker_catalogue($feed,$body));
             if ($__liveAction==='stalker_vod_detail') {
