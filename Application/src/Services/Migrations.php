@@ -6,7 +6,7 @@
  */
 final class Migrations
 {
-    const VERSION = 17; // 17: achievements and badges; 16: trailers and extras index; 15: media requests (and requests.create for existing custom roles); 14: unified inbox; 13: smart collections and their facts index; 12: age ratings and parental controls / kids profiles; 11: site-wide webcam registry (Ambient); 10: calendars, events, reminders and personal pictures (Misc); 9: leaderboard covering indexes, Drop anonymous origin column and MEDIUMTEXT notes; 8: play scores/points and drop storage; 2: library folder access pass for nginx (step 5); 3: re-run it, recording results; 4: media facts table; 5: arrival timestamps and indexed running times; 6: chat storage; 7: prepared browsing
+    const VERSION = 19; // 19: admin-owned shared provider catalogues; 18: incremental Stalker on-demand catalogue; 17: achievements and badges; 16: trailers and extras index; 15: media requests (and requests.create for existing custom roles); 14: unified inbox; 13: smart collections and their facts index; 12: age ratings and parental controls / kids profiles; 11: site-wide webcam registry (Ambient); 10: calendars, events, reminders and personal pictures (Misc); 9: leaderboard covering indexes, Drop anonymous origin column and MEDIUMTEXT notes; 8: play scores/points and drop storage; 2: library folder access pass for nginx (step 5); 3: re-run it, recording results; 4: media facts table; 5: arrival timestamps and indexed running times; 6: chat storage; 7: prepared browsing
 
     public static function stampFile(): string
     {
@@ -116,12 +116,24 @@ final class Migrations
         } catch (\Throwable $e) { error_log('Vaultcast request role defaults: ' . $e->getMessage()); return 0; }
     }
 
+    private static function stalkerSchema(PDO $pdo): void {
+        foreach(['vaultcast_stalker_scans','vaultcast_stalker_titles'] as $table){
+            $columns=$pdo->query('SHOW COLUMNS FROM '.$table)->fetchAll(PDO::FETCH_COLUMN);
+            if(!in_array('parent_id',$columns,true))$pdo->exec("ALTER TABLE ".$table." ADD COLUMN parent_id VARCHAR(120) NOT NULL DEFAULT ''");
+            if($table==='vaultcast_stalker_scans'&&!in_array('depth',$columns,true))$pdo->exec('ALTER TABLE '.$table.' ADD COLUMN depth TINYINT UNSIGNED NOT NULL DEFAULT 0');
+            $keys=$pdo->query("SHOW INDEX FROM ".$table." WHERE Key_name='PRIMARY'")->fetchAll(PDO::FETCH_ASSOC);if(!in_array('parent_id',array_column($keys,'Column_name'),true))$pdo->exec('ALTER TABLE '.$table.' DROP PRIMARY KEY, ADD PRIMARY KEY(fingerprint,kind,parent_id'.($table==='vaultcast_stalker_titles'?',item_id':'').')');
+        }
+        $pdo->exec("DELETE FROM vaultcast_documents WHERE name='stalker_series_matches'");
+    }
     public static function run(PDO $pdo): array
     {
         $log = [];
         foreach (explode(';', (string)file_get_contents(dirname(__DIR__) . '/schema.sql')) as $sql) {
-            if (preg_match('/CREATE TABLE IF NOT EXISTS vaultcast_(chat_|browse_items|show_summaries|play_|drop_|cal_|pictures\b|webcams\b|content_ratings\b|parental\b|smart_|inbox|media_request|extras\b|achievement)/i',$sql)) $pdo->exec($sql);
+            if (preg_match('/CREATE TABLE IF NOT EXISTS vaultcast_(stalker_|chat_|browse_items|show_summaries|play_|drop_|cal_|pictures\b|webcams\b|content_ratings\b|parental\b|smart_|inbox|media_request|extras\b|achievement)/i',$sql)) $pdo->exec($sql);
         }
+        self::stalkerSchema($pdo);
+        if (is_file(STREAM_DATA.'/runtime/migrations-v18.done')) return ['shared_stalker_catalogue'=>true];
+        if (is_file(STREAM_DATA.'/runtime/migrations-v17.done')) return ['stalker_catalogue'=>true];
         $upgrade = self::playDropUpgrade($pdo);
         $roles = self::requestRoleDefaults();
         // v11: the registry table only; existing webcams are imported lazily (Webcams::ensureBackfill) on first use.

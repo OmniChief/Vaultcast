@@ -229,8 +229,8 @@ function live_bridge_tv_export(string $kind): void {
 $__liveAction = live_bridge_action();
 if ($__liveAction !== null) {
     if (empty(Store::settings()['features']['live'])) live_bridge_deny(404, 'Live channels are disabled in Settings → Integrations.');
-    $readActions = ['stalker_vod_detail','stalker_art','stalker_channel','stalker_offline','stalker_update_status','stalker','stalker_countries','stalker_browse','stalker_stream', 'guide', 'now', 'iptv', 'iptv_status', 'file', 'iptv_hls', 'logo', 'local_file', 'station', 'catalogue', 'programme_source', 'duration', 'channel_logo', 'iptv_browse', 'epg_refresh', 'm3u', 'tune', 'tv_studio', 'tv_preview', 'tv_health', 'xmltv', 'playlist', 'channels', 'radio', 'radio_search', 'epg_channels'];
-    $writeActions = ['stalker_check_media','stalker_cancel','stalker_download','stalker_retry','stalker_updates','stalker_manage','stalker_play','tv_slot_preview','iptv_preview','station', 'iptv_add', 'iptv_remove', 'iptv_toggle', 'iptv_probe', 'iptv_save', 'epg_refresh', 'tv_studio', 'tv_channels', 'channel_logo', 'radio_save', 'epg_map'];
+    $readActions = ['stalker_vod_detail','stalker_art','stalker_channel','stalker_offline','stalker_update_status','stalker','stalker_catalogue_status','stalker_vod_catalogue','stalker_countries','stalker_browse','stalker_stream', 'guide', 'now', 'iptv', 'iptv_status', 'file', 'iptv_hls', 'logo', 'local_file', 'station', 'catalogue', 'programme_source', 'duration', 'channel_logo', 'iptv_browse', 'epg_refresh', 'm3u', 'tune', 'tv_studio', 'tv_preview', 'tv_health', 'xmltv', 'playlist', 'channels', 'radio', 'radio_search', 'epg_channels'];
+    $writeActions = ['stalker_catalogue_control','stalker_check_media','stalker_cancel','stalker_download','stalker_retry','stalker_updates','stalker_manage','stalker_play','tv_slot_preview','iptv_preview','station', 'iptv_add', 'iptv_remove', 'iptv_toggle', 'iptv_probe', 'iptv_save', 'epg_refresh', 'tv_studio', 'tv_channels', 'channel_logo', 'radio_save', 'epg_map'];
     $m = $_SERVER['REQUEST_METHOD'] ?? 'GET';
     $isWrite = ($m === 'POST' || $m === 'PUT' || $m === 'PATCH' || $m === 'DELETE');
 
@@ -299,7 +299,7 @@ if ($__liveAction !== null) {
          catch(RuntimeException $e){live_bridge_deny(502,$e->getMessage());}
          catch(DomainException $e){live_bridge_deny(422,$e->getMessage());}
     }
-    if (in_array($__liveAction,['stalker','stalker_check_media','stalker_vod_detail','stalker_channel','stalker_countries','stalker_browse','stalker_manage','stalker_play'],true)) {
+    if (in_array($__liveAction,['stalker_catalogue_control','stalker','stalker_check_media','stalker_vod_detail','stalker_channel','stalker_catalogue_status','stalker_vod_catalogue','stalker_countries','stalker_browse','stalker_manage','stalker_play'],true)) {
         require_once STREAM_ROOT.'/src/Live/iptv.php';
         $viewer=Auth::requireUser();
         if (class_exists('Parental') && Parental::filtering()) live_bridge_deny(403,'Provider catalogues are unavailable for restricted profiles.');
@@ -307,6 +307,9 @@ if ($__liveAction !== null) {
             $state=iptv_load();
             if ($__liveAction==='stalker') json_out(['ok'=>true,'connections'=>array_values(array_map('stalker_public_feed',array_filter($state['feeds'],static function($f){return ($f['type'] ?? '')==='stalker';})))]);
             $body=$isWrite?body_json():$_GET;
+            if ($__liveAction==='stalker_catalogue_status') {Permissions::require('iptv_manage');json_out(StalkerCatalogues::status());}
+            if ($__liveAction==='stalker_catalogue_control') {Permissions::require('iptv_manage');json_out(StalkerCatalogues::control($body));}
+            if ($__liveAction==='stalker_vod_catalogue') json_out(StalkerVod::browse($state,$body));
             if ($__liveAction==='stalker_countries') json_out(StalkerCountries::browse($state,$body));
             if ($__liveAction==='stalker_manage') {
                 $operation=(string)($body['operation'] ?? 'save');
@@ -340,7 +343,7 @@ if ($__liveAction !== null) {
             if (!$feed || ($feed['type'] ?? '')!=='stalker' || empty($feed['enabled'])) throw new InvalidArgumentException('Select an enabled Stalker connection in settings.');
             if ($__liveAction==='stalker_browse') json_out(stalker_catalogue($feed,$body));
             if ($__liveAction==='stalker_vod_detail') {
-                $item=\Vaultcast\Repository::cacheGet(stalker_item_key($feed,(string)($body['id']??'')));
+                $item=stalker_vod_entry($feed,(string)($body['id']??''));
                 if(!$item)throw new RuntimeException('This catalogue entry has expired. Return to Stalker and refresh the catalogue.');
                 json_out(['ok'=>true,'item'=>$item['metadata']??['id'=>(string)$body['id'],'name'=>'Provider video','kind'=>'vod','playable'=>true]]);
             }
@@ -353,7 +356,7 @@ if ($__liveAction !== null) {
             $url=$kind==='live'?stalker_resolve($feed,$id):stalker_vod_resolve($feed,$id);
             $ticket=bin2hex(random_bytes(16));
             $key='stalker_play_ticket_'.hash('sha256',$ticket);
-            \Vaultcast\Repository::cachePut($key,['viewer'=>(string)$viewer['id'],'feed'=>$feed['id'],'fingerprint'=>hash('sha256',json_encode($feed)),'kind'=>$kind,'id'=>$id,'url'=>$url,'created'=>time(),'item'=>$kind==='live'?null:\Vaultcast\Repository::cacheGet(stalker_item_key($feed,$id))],21600);
+            \Vaultcast\Repository::cachePut($key,['viewer'=>(string)$viewer['id'],'feed'=>$feed['id'],'fingerprint'=>hash('sha256',json_encode($feed)),'kind'=>$kind,'id'=>$id,'url'=>$url,'created'=>time(),'item'=>$kind==='live'?null:stalker_vod_entry($feed,$id)],21600);
             $source=rtrim(\Vaultcast\Database::basePath(),'/').'/api/live/stalker_stream?feed='.rawurlencode($feed['id']).'&channel='.rawurlencode($id).'&ticket='.$ticket;
             if ($kind==='live' || preg_match('/\.m3u8(?:[?#]|$)/i',$url)) $source.='&format=.m3u8';
             json_out(['ok'=>true,'source'=>['url'=>$source,'kind'=>$kind]]);
@@ -367,11 +370,8 @@ if ($__liveAction !== null) {
         $art=\Vaultcast\Repository::cacheGet('stalker-art:'.$key);if(!$art)live_bridge_deny(404,'Artwork expired.');
         require_once STREAM_ROOT.'/src/Live/iptv.php';$feed=iptv_feed_by_id(iptv_load(),$art['feed']);
         if(!$feed||empty($feed['enabled'])||($feed['type']??'')!=='stalker')live_bridge_deny(404,'Artwork unavailable.');
-        try{
-            $dir=STREAM_DATA.'/live/iptv_cache/art';if(!is_dir($dir))@mkdir($dir,0700,true);$file=$dir.'/'.$key;
-            if(!is_file($file)||filemtime($file)<time()-86400){$response=WebFetch::get($art['url'],8,4194304);$info=@getimagesizefromstring($response['body']);if($response['status']!==200||!$info||!in_array($info['mime'],['image/jpeg','image/png','image/webp','image/gif','image/avif'],true)||$info[0]>4096||$info[1]>4096)live_bridge_deny(404,'Artwork unavailable.');if(@file_put_contents($file,$response['body'],LOCK_EX)===false)live_bridge_deny(503,'Artwork cache unavailable.');}
-            $info=@getimagesize($file);if(!$info)live_bridge_deny(404,'Artwork unavailable.');header('Content-Type: '.$info['mime']);header('X-Content-Type-Options: nosniff');header('Cache-Control: private, max-age=3600');if($m!=='HEAD')readfile($file);exit;
-        }catch(Throwable $e){live_bridge_deny(404,'Artwork unavailable.');}
+        $url=(string)($art['url']??'');$parts=parse_url($url);if(!$parts||!in_array($parts['scheme']??'',['http','https'],true)||isset($parts['user'])||isset($parts['pass'])||preg_match('/[\r\n]/',$url))live_bridge_deny(404,'Artwork unavailable.');
+        header('Location: '.$url,true,302);header('Cache-Control: private, max-age=300');exit;
     }
     if ($__liveAction === 'stalker_stream') {
         require_once STREAM_ROOT.'/src/bootstrap.php';

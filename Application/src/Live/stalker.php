@@ -177,7 +177,7 @@ function stalker_index(array $feed, bool $refresh = false): array {
         if (!is_array($row) || empty($row['id']) || empty($row['cmd'])) continue;
         $id = (string)$row['id']; $group = $groups[(string)($row['tv_genre_id'] ?? '')] ?? '';
         $commands[$id] = (string)$row['cmd'];
-        \Vaultcast\Repository::cachePut('stalker_live_v2_'.hash('sha256',json_encode([$feed,$id])),stalker_live_entry($row),7200);
+        \Vaultcast\Repository::cachePut(stalker_live_key($feed,$id),stalker_live_entry($row),7200);
         $channel = ['id'=>'stalker-'.substr(hash('sha256',$feed['id'].':'.$id),0,20), 'tvgId'=>(string)($row['xmltv_id'] ?? ''),
             'name'=>(string)($row['name'] ?? $id),'url'=>stalker_channel_url($feed['id'],$id), 'logo'=>(string)($row['logo'] ?? ''),
             'group'=>$group,'quality'=>'','country'=>'','categories'=>iptv_channel_categories($group),'labels'=>[]];
@@ -193,12 +193,14 @@ function stalker_index(array $feed, bool $refresh = false): array {
     return $out;
 }
 
+function stalker_live_key(array $feed,string $id): string {return 'stalker_live_v3_'.hash('sha256',json_encode([$feed,$id,StalkerCatalogues::active($feed,'live')])) ;}
+
 function stalker_resolve(array $feed, string $id): string {
-    $cached=\Vaultcast\Repository::cacheGet('stalker_live_v2_'.hash('sha256',json_encode([$feed,$id])));
+    $cached=\Vaultcast\Repository::cacheGet(stalker_live_key($feed,$id));
     if (!$cached) {
         $countryEntry=StalkerCountries::entry($feed,$id);
         $cached=$countryEntry['playback']??null;
-        if($cached)\Vaultcast\Repository::cachePut('stalker_live_v2_'.hash('sha256',json_encode([$feed,$id])),$cached,7200);
+        if($cached)\Vaultcast\Repository::cachePut(stalker_live_key($feed,$id),$cached,7200);
     }
     if ($cached) {
         $direct=stalker_static_live_url($cached);
@@ -206,11 +208,7 @@ function stalker_resolve(array $feed, string $id): string {
         $command=$cached['cmd'];
     }
     else {
-        $index = stalker_index($feed);
-        if (!isset($index['commands'][$id])) throw new InvalidArgumentException('Unknown portal channel. Refresh the source.');
-        $command=$index['commands'][$id];
-        $entry=\Vaultcast\Repository::cacheGet('stalker_live_v2_'.hash('sha256',json_encode([$feed,$id])));
-        if($entry){$direct=stalker_static_live_url($entry);if($direct!==null)return $direct;}
+        throw new InvalidArgumentException('This channel is not in the shared catalogue. Ask an administrator to load it in Stalker settings.');
     }
     $result = stalker_call($feed,'create_link',['cmd'=>$command,'series'=>'','forced_storage'=>'undefined','disable_ad'=>0,'download'=>0]);
     $cmd = (string)($result['cmd'] ?? '');
@@ -249,7 +247,7 @@ function stalker_guide(array $feed): array {
 }
 
 function stalker_item_key(array $feed, string $id): string {
-    return 'stalker_item_'.hash('sha256',json_encode([$feed,$id]));
+    return 'stalker_item_v2_'.hash('sha256',json_encode([$feed,$id,StalkerCatalogues::active($feed,strpos($id,'series:')===0?'series':'vod')]));
 }
 
 /** Learn whether this portal numbers ordered-list pages from zero or one. */
@@ -310,7 +308,7 @@ function stalker_live_search_index(array $feed,bool $refresh=false): array {
             $id=(string)$row['id'];
             $genre=(string)($row['tv_genre_id']??'');
             $state['rows'][$id]=['id'=>$id,'name'=>(string)($row['name']??$id),'description'=>$groups[$genre]??'Other channels','kind'=>'live','genre'=>$genre];
-            \Vaultcast\Repository::cachePut('stalker_live_v2_'.hash('sha256',json_encode([$feed,$id])),stalker_live_entry($row),7200);
+            \Vaultcast\Repository::cachePut(stalker_live_key($feed,$id),stalker_live_entry($row),7200);
         }
         $state['processed']+=count($rows);$state['next']++;
         if(isset($result['total_items'])&&is_numeric($result['total_items'])&&((int)$result['total_items']>0||!$rows))$state['total']=max(0,(int)$result['total_items']);
@@ -329,84 +327,19 @@ function stalker_catalogue(array $feed, array $opts): array {
     $query = mb_substr(trim((string)($opts['q'] ?? '')),0,200);
     $category = mb_substr((string)($opts['category'] ?? ''),0,120);
     $parent = mb_substr((string)($opts['parent'] ?? ''),0,120);
-    if($kind==='live'&&$query===''&&empty($opts['load'])){
-        $categories=[];foreach(stalker_live_groups($feed) as $id=>$name)$categories[]=['id'=>(string)$id,'name'=>$name];
-        if(!$categories)$categories[]=['id'=>'*','name'=>'All channels'];
-        return ['ok'=>true,'items'=>[],'categories'=>$categories,'page'=>1,'total'=>0,'hasMore'=>false,'foldersOnly'=>true];
-    }
-    $cacheKey = ($kind==='live'?'stalker_catalogue_v7_':'stalker_catalogue_v6_').hash('sha256',json_encode([$feed,$kind,$page,$query,$category,$parent]));
-    if (empty($opts['refresh'])) {
-        $cached = \Vaultcast\Repository::cacheGet($cacheKey);
-        if ($cached) return $cached;
-    }
-    $categories = []; $items = [];
-    if ($kind==='live') {
-        $groups=stalker_live_groups($feed);foreach($groups as $genre=>$name)$categories[]=['id'=>(string)$genre,'name'=>$name];
-        if($query!==''){
-            $scan=stalker_live_search_index($feed,!empty($opts['refresh']));
-            $matches=array_values(array_filter($scan['rows'],static function($row)use($query,$category){return mb_stripos($row['name'],$query)!==false&&($category===''||$category==='*'||$row['genre']===$category);}));
-            $items=array_slice($matches,($page-1)*60,60);foreach($items as &$item)unset($item['genre']);unset($item);
-            $out=['ok'=>true,'items'=>$items,'categories'=>$categories,'page'=>$page,'total'=>count($matches),'hasMore'=>$page*60<count($matches),'indexing'=>!$scan['done'],'scanned'=>$scan['processed'],'catalogueTotal'=>$scan['total']];
-            if($scan['done'])\Vaultcast\Repository::cachePut($cacheKey,$out,900);return $out;
-        }
-        // Like VOD, fetch just the selected category/page. No full catalogue build.
-        $result=stalker_ordered_page($feed,'itv',['sortby'=>'number','genre'=>$category!==''?$category:'*','search'=>'','fav'=>0],$page);
-        $rows=$result['data']??[];if(!is_array($rows))throw new RuntimeException('Provider returned an invalid channel page.');
-        foreach($rows as $row){
-            if(!is_array($row)||!isset($row['id'])||empty($row['cmd']))continue;
-            $id=(string)$row['id'];$item=['id'=>$id,'name'=>(string)($row['name']??$id),'description'=>$groups[(string)($row['tv_genre_id']??'')]??'Live channel','kind'=>'live'];
-            \Vaultcast\Repository::cachePut('stalker_live_v2_'.hash('sha256',json_encode([$feed,$id])),stalker_live_entry($row),7200);
-            \Vaultcast\Repository::cachePut('stalker_channel_'.hash('sha256',json_encode([$feed,$id])),$item,7200);$items[]=$item;
-        }
-        $total=max(0,(int)($result['total_items']??count($items)));$perPage=max(1,(int)($result['max_page_items']??count($rows)));$hasMore=$page*$perPage<$total;
-    } else {
-        if ($parent==='') {
-            try {
-                $genres = stalker_call($feed,'get_categories',[],$kind);
-                foreach (($genres['data'] ?? $genres) as $genre) if (is_array($genre) && isset($genre['id'])) $categories[]=['id'=>(string)$genre['id'],'name'=>(string)($genre['title'] ?? $genre['name'] ?? $genre['id'])];
-            } catch (RuntimeException $e) { /* Categories are optional; report catalogue errors below. */ }
-        }
-        $params=['p'=>$page,'sortby'=>'name','category'=>$category!==''?$category:'*','search'=>$query];
-        if ($parent!=='') $params['movie_id']=$parent;
-        $result=stalker_ordered_page($feed,$kind,$params,$page);
-        $rows=$result['data'] ?? $result;
-        if (!is_array($rows)) throw new RuntimeException('Provider returned an invalid catalogue.');
-        $total=max(0,(int)($result['total_items'] ?? count($rows)));
-        $perPage=max(1,(int)($result['max_page_items'] ?? count($rows)));
-        $hasMore=$page*$perPage<$total;
-        foreach ($rows as $row) {
-            if (!is_array($row) || !isset($row['id'])) continue;
-            $id=(string)$row['id']; $cmd=(string)($row['cmd'] ?? '');
-            $episodes=is_array($row['series'] ?? null)?$row['series']:[];
-            if ($episodes && $cmd!=='') {
-                foreach ($episodes as $episode) {
-                    if (!is_scalar($episode)) continue;
-                    $episodeId=$kind.':'.$id.':'.(string)$episode;
-                    \Vaultcast\Repository::cachePut(stalker_item_key($feed,$episodeId),['cmd'=>$cmd,'series'=>(string)$episode,'metadata'=>['id'=>$episodeId,'name'=>(string)($row['name']??'Season').' · Episode '.(string)$episode,'kind'=>'vod','playable'=>true]],7200);
-                    $items[]=['id'=>$episodeId,'name'=>(string)($row['name'] ?? 'Season').' · Episode '.(string)$episode,'description'=>'Provider series','kind'=>'vod','playable'=>true];
-                }
-                continue;
-            }
-            $playable=$cmd!=='' && empty($row['is_series']) && ($kind==='vod' || $parent!=='');
-            $poster='';$art=trim((string)($row['screenshot_uri']??$row['cover']??$row['poster']??''));
-            if($art!==''){
-                require_once __DIR__.'/iptv_hls.php';$art=iptv_hls_resolve_uri(stalker_endpoint($feed),$art);
-                if(preg_match('#^https?://#i',$art)){$artKey=hash('sha256',json_encode([$feed,$art]));\Vaultcast\Repository::cachePut('stalker-art:'.$artKey,['url'=>$art,'feed'=>$feed['id']],86400);$poster=rtrim(\Vaultcast\Database::basePath(),'/').'/api/live/stalker_art?art='.$artKey;}
-            }
-            $publicId=$playable?$kind.':'.$id:$id;
-            if ($playable) \Vaultcast\Repository::cachePut(stalker_item_key($feed,$publicId),['cmd'=>$cmd,'series'=>(string)($row['series_number'] ?? ''),'metadata'=>['id'=>$publicId,'name'=>(string)($row['name']??$row['o_name']??$id),'description'=>mb_substr(strip_tags((string)($row['description']??$row['descr']??'')),0,1500),'year'=>(string)($row['year']??''),'poster'=>$poster,'kind'=>$kind,'playable'=>true]],7200);
-            $items[]=['id'=>$publicId,'name'=>(string)($row['name'] ?? $row['o_name'] ?? $id),'description'=>mb_substr(strip_tags((string)($row['description'] ?? $row['descr'] ?? '')),0,1500),
-                'year'=>(string)($row['year'] ?? ''),'poster'=>$poster,'kind'=>$kind,'playable'=>$playable];
-        }
-    }
-    $out=['ok'=>true,'items'=>$items,'categories'=>$categories,'page'=>$page,'total'=>$total,'hasMore'=>$hasMore];
-    // Catalogue pages expire before their cached playback commands.
-    \Vaultcast\Repository::cachePut($cacheKey,$out,900);
-    return $out;
+    if($kind==='live')return StalkerVod::liveBrowse(['feeds'=>[$feed]],$opts);
+    if($parent!=='')return StalkerVod::children($feed,$opts);
+    return StalkerVod::browse(['feeds'=>[$feed]],$opts);
+}
+
+function stalker_vod_entry(array $feed,string $id): ?array {
+    $key=stalker_item_key($feed,$id);$item=\Vaultcast\Repository::cacheGet($key);
+    if(!$item){$item=StalkerVod::entry($feed,$id);if($item)\Vaultcast\Repository::cachePut($key,$item,7200);}
+    return $item;
 }
 
 function stalker_vod_resolve(array $feed, string $id, ?array $item = null): string {
-    $item=$item ?? \Vaultcast\Repository::cacheGet(stalker_item_key($feed,$id));
+    $item=$item ?? stalker_vod_entry($feed,$id);
     if (!$item) throw new RuntimeException('This catalogue entry has expired. Refresh the Stalker page and select it again.');
     $result=stalker_call($feed,'create_link',['cmd'=>$item['cmd'],'series'=>$item['series'],'forced_storage'=>'undefined','disable_ad'=>0,'download'=>0],'vod');
     if (!preg_match('#(?:^|\s)(https?://[^\s]+)#',(string)($result['cmd'] ?? ''),$match)) throw new RuntimeException('Provider did not return a playable video link.');
@@ -417,14 +350,10 @@ function stalker_vod_resolve(array $feed, string $id, ?array $item = null): stri
 }
 
 function stalker_channel_detail(array $feed,string $id,bool $refresh=false,bool $includeGuide=true): array {
-    $item=\Vaultcast\Repository::cacheGet('stalker_channel_'.hash('sha256',json_encode([$feed,$id])));
+    $item=\Vaultcast\Repository::cacheGet('stalker_channel_v2_'.hash('sha256',json_encode([$feed,$id,StalkerCatalogues::active($feed,'live')])));
     $scan=\Vaultcast\Repository::cacheGet(stalker_live_scan_key($feed));
     if(!$item)$item=$scan['rows'][$id]??null;
     if(!$item){$item=StalkerCountries::entry($feed,$id);if($item)unset($item['playback']);}
-    if(!$item&&$includeGuide){
-        $index=stalker_index($feed);
-        foreach($index['channels'] as $row)if($row['url']===stalker_channel_url($feed['id'],$id)){$item=['name'=>$row['name'],'description'=>$row['group']];break;}
-    }
     if(!$item)$item=['name'=>'Channel '.$id,'description'=>$feed['name']];
     $guideError='';$programs=[];
     if($includeGuide)try{
@@ -443,7 +372,7 @@ function stalker_check_media(array $feed,string $id,string $kind,string $profile
     require_once __DIR__.'/iptv_hls.php';
     if(!in_array($profile,['stb','http1','vlc','browser'],true)||($kind!=='live'&&$profile!=='stb'))throw new InvalidArgumentException('Unknown playback check profile.');
     $url=$kind==='live'?stalker_resolve($feed,$id):stalker_vod_resolve($feed,$id);
-    $entry=$kind==='live'?\Vaultcast\Repository::cacheGet('stalker_live_v2_'.hash('sha256',json_encode([$feed,$id]))):null;
+    $entry=$kind==='live'?\Vaultcast\Repository::cacheGet(stalker_live_key($feed,$id)):null;
     $linkMode=$entry&&stalker_static_live_url($entry)!==null?'static':'create_link';
     $ua='Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 MAG250 stbapp ver: 4 rev: 1812 Mobile Safari/533.3';
     if($profile==='vlc')$ua='VLC/3.0.21 LibVLC/3.0.21';

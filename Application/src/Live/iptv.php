@@ -446,7 +446,7 @@ function iptv_channel_categories($group) {
  */
 function iptv_feed_index($feed, $forceRefresh = false) {
     if (($feed['type'] ?? '') === 'stalker') {
-        $index = stalker_index($feed, $forceRefresh);
+        $index=StalkerVod::legacyLiveIndex($feed);
         unset($index['commands']);
         return $index;
     }
@@ -743,6 +743,7 @@ function iptv_remove_channel($id) {
 
 function iptv_update_meta($incoming) {
     $state = iptv_load();
+    $oldFeeds=$state['feeds'];
     if (isset($incoming['epgUrls']) && is_array($incoming['epgUrls'])) {
         $urls = array();
         foreach ($incoming['epgUrls'] as $u) {
@@ -800,6 +801,7 @@ function iptv_update_meta($incoming) {
         $state['channels'] = $norm;
     }
     iptv_save($state);
+    if(isset($incoming['feeds']))StalkerCatalogues::connectionsChanged($oldFeeds,$state['feeds']);
     return array('ok' => true, 'iptv' => stalker_public_state($state));
 }
 

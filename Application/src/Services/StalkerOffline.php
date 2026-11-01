@@ -12,7 +12,7 @@ final class StalkerOffline {
     }
     public static function enqueue(array $feed,string $itemId,string $name): array {
         require_once STREAM_ROOT.'/src/Live/iptv.php';
-        $item=\Vaultcast\Repository::cacheGet(stalker_item_key($feed,$itemId));
+        $item=stalker_vod_entry($feed,$itemId);
         if(!$item)throw new RuntimeException('Refresh the provider catalogue and select the title again.');
         foreach(\Vaultcast\Repository::rows("SELECT payload FROM vaultcast_documents WHERE name LIKE 'stalker-offline:%'") as $existing)if(($existing['feed']??'')===$feed['id']&&($existing['item_id']??'')===$itemId&&in_array($existing['status'],['queued','downloading','ready'],true))throw new RuntimeException('This title is already in Offline downloads.');
         if(count(array_filter(self::listing(),static function($j){return in_array($j['status'],['queued','downloading'],true);}))>=20)throw new RuntimeException('The offline queue is full. Wait for a download to finish.');

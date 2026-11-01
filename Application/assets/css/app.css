@@ -3023,3 +3023,37 @@ html[data-motion="reduced"] .vca-overall span,html[data-motion="reduced"] .vca-b
 .stalker-country-warning{color:var(--warning,#edc477)}
 .stalker-country-results .stalker-channel-row{border-radius:0;padding:1rem;gap:1rem}
 @media(max-width:600px){.stalker-country-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.stalker-country-tile{min-height:120px}.stalker-country-results .stalker-channel-row{flex-wrap:nowrap}}
+
+/* Stalker show details and compact season accordions. */
+.stalker-series-hero[hidden]{display:none!important}
+.stalker-series-hero .stalker-vod-hero{grid-template-columns:minmax(110px,190px) minmax(0,1fr);margin:12px 0 28px}
+.stalker-series-hero .stalker-vod-detail-copy h2{font-size:clamp(1.5rem,3vw,2.3rem);margin:4px 0 12px}
+.stalker-series-hero .stalker-vod-detail-copy>p{line-height:1.6;max-width:75ch}
+.stalker-series-hero .stalker-vod-detail-copy>a{display:inline-block;margin-right:16px}
+.stalker-season{border:1px solid var(--border,#303744);border-radius:12px;margin-bottom:14px;overflow:hidden}
+.stalker-season summary{cursor:pointer;font-size:1rem;font-weight:650;padding:18px;background:var(--panel,#161c27)}
+.stalker-episode-row{display:flex;align-items:center;gap:12px;padding:14px 18px;border-top:1px solid var(--border,#303744)}
+.stalker-episode-number{color:var(--muted,#96a1b2);font-variant-numeric:tabular-nums;min-width:34px}
+.stalker-episode-copy{display:flex;flex-direction:column;gap:5px;flex:1;min-width:0;overflow-wrap:anywhere}
+.stalker-show-match{display:flex;align-items:start;gap:16px;border:1px solid var(--border,#303744);border-radius:12px;padding:16px}
+.stalker-show-match>img{width:70px;aspect-ratio:2/3;object-fit:cover;border-radius:6px}
+.stalker-show-match>div{flex:1;min-width:0}
+.stalker-show-match p{font-size:.9rem;line-height:1.5}
+@media(max-width:700px){.stalker-episode-row{flex-wrap:wrap;gap:10px;padding:12px}.stalker-episode-copy{flex-basis:calc(100% - 54px)}.stalker-show-match{flex-wrap:wrap}.stalker-series-hero .stalker-vod-hero{grid-template-columns:100px minmax(0,1fr);gap:16px}}
+
+/* Combined Stalker on-demand catalogue. */
+.stalker-vod-library[hidden]{display:none!important}
+.stalker-vod-library-heading{display:flex;align-items:center;justify-content:space-between;gap:20px;margin:24px 0}
+.stalker-vod-library-heading h2{font-size:clamp(1.8rem,3vw,2.5rem);margin:6px 0}
+.stalker-vod-filters{display:flex;flex-direction:column;gap:16px}
+.stalker-vod-filter{display:flex;flex-direction:column;gap:6px;min-width:0;font-size:.85rem}
+.stalker-vod-filter>span{font-weight:600}
+.stalker-vod-filter select{width:100%;min-width:0;text-overflow:ellipsis}
+.stalker-vod-filter-note{font-size:.8rem;line-height:1.6}
+.stalker-catalogue-progress{display:flex;flex-wrap:wrap;gap:8px 16px;margin-bottom:16px}
+.stalker-scan-line{display:flex;flex-direction:column;gap:4px;padding:10px 14px;border:1px solid var(--border,#303744);border-radius:10px;font-size:.8rem}
+.stalker-vod-library .stalker-vod-copy{gap:9px}
+.stalker-vod-library .stalker-vod-copy .row-actions{flex-wrap:wrap}
+.stalker-vod-library .stalker-vod-copy select{font-size:.8rem;max-width:100%}
+.stalker-vod-library .stalker-searchbar input{flex:1;min-width:120px}
+@media(max-width:850px){.stalker-vod-library-heading{align-items:start;flex-direction:column}.stalker-vod-filters{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.stalker-vod-filters>h3,.stalker-vod-filter-note{grid-column:1/-1}}
