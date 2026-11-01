@@ -7,7 +7,7 @@ declare(strict_types=1);
  */
 final class StalkerDirect {
     private static function key(array $feed,string $suffix): string {
-        return 'stalker_direct_v1_'.hash('sha256',json_encode([$feed,$suffix]));
+        return 'stalker_direct_v2_'.hash('sha256',json_encode([$feed,$suffix]));
     }
     public static function item(array $feed,string $id): ?array {
         return \Vaultcast\Repository::cacheGet(self::key($feed,'item:'.$id));
