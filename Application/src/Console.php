@@ -18,6 +18,7 @@ try {
     switch ($command) {
         case 'stalker-download': $result=StalkerOffline::run($argv[2] ?? ''); break;
         case 'stalker-updates': $result=StalkerUpdates::run(); break;
+        case 'stalker-countries': $result=StalkerCountries::run($argv[2] ?? ''); break;
         case 'transcode': $result=Transcode::run($argv[2] ?? ''); break;
         case 'maintenance':
             $result = Maintenance::run($argv[2] ?? '');
