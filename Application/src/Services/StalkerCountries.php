@@ -9,9 +9,32 @@ final class StalkerCountries {
     public static function entry(array $feed,string $id): ?array {return StalkerDirect::liveEntry($feed,$id)??StalkerVod::entry($feed,$id,'live');}
     public static function country(string $text): ?string {
         $aliases=['UK'=>'GB','USA'=>'US','UAE'=>'AE','GER'=>'DE','DEU'=>'DE','FRA'=>'FR','JPN'=>'JP','CAN'=>'CA','AUS'=>'AU'];
-        // Bracketed markers can occur anywhere; bare codes must be a prefix.
-        preg_match_all('/\[\s*([A-Z]{2,3})\s*\]|\(\s*([A-Z]{2,3})\s*\)|^\s*([A-Z]{2,3})\s*[|:._-]/i',$text,$matches,PREG_SET_ORDER);
-        foreach($matches as $match){$code=strtoupper(($match[1]??'')?:($match[2]??'')?:($match[3]??''));$code=$aliases[$code]??$code;if(strpos(' '.self::CODES.' ',' '.$code.' ')!==false)return $code;}
+        // Explicit country names take precedence over ambiguous portal prefixes.
+        $names=[
+            'DZ'=>'algeria','BH'=>'bahrain','IE'=>'ireland|irish','GB'=>'united kingdom|great britain|britain|british|england|scotland|wales',
+            'US'=>'united states|america','CA'=>'canada','AU'=>'australia','NZ'=>'new zealand',
+            'FR'=>'france','DE'=>'germany','ES'=>'spain','IT'=>'italy','PT'=>'portugal',
+            'TR'=>'turkey|turkiye','GR'=>'greece','NL'=>'netherlands','BE'=>'belgium',
+            'IN'=>'india','PK'=>'pakistan','BD'=>'bangladesh','JP'=>'japan','KR'=>'south korea',
+            'CN'=>'china','TW'=>'taiwan','SA'=>'saudi arabia','AE'=>'united arab emirates',
+            'QA'=>'qatar','KW'=>'kuwait','OM'=>'oman','EG'=>'egypt','MA'=>'morocco',
+            'TN'=>'tunisia','LB'=>'lebanon','JO'=>'jordan','IQ'=>'iraq','SY'=>'syria',
+            'IL'=>'israel','PL'=>'poland','RO'=>'romania','UA'=>'ukraine','RU'=>'russia',
+            'ZA'=>'south africa','NG'=>'nigeria','KE'=>'kenya','BR'=>'brazil',
+            'AR'=>'argentina','MX'=>'mexico','CO'=>'colombia','CL'=>'chile'
+        ];
+        foreach($names as $code=>$pattern) {
+            if(preg_match('/(?<![\\pL])(?:'.$pattern.')(?![\\pL])/iu',$text))return $code;
+        }
+        // A leading pipe is a common portal naming convention: "| IE | Channel".
+        // AR is frequently used by portals as a regional marker, not Argentina.
+        preg_match_all('/\\[\\s*([A-Z]{2,3})\\s*\\]|\\(\\s*([A-Z]{2,3})\\s*\\)|^\\s*\\|?\\s*([A-Z]{2,3})\\s*[|:._-]/i',$text,$matches,PREG_SET_ORDER);
+        foreach($matches as $match) {
+            $code=strtoupper(($match[1]??'')?:($match[2]??'')?:($match[3]??''));
+            if($code==='AR')continue;
+            $code=$aliases[$code]??$code;
+            if(strpos(' '.self::CODES.' ',' '.$code.' ')!==false)return $code;
+        }
         return null;
     }
     public static function group(string $name,string $genre): string {
