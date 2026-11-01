@@ -39,7 +39,7 @@ window.VaultcastStalkerVod=function(host,options){
     next=h('button',{className:'btn',text:'Load more provider pages',onClick:function(){scan(false);}});
     letters=h('div',{className:'row-actions',role:'group','aria-label':'Browse titles by first letter'});
     '#ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').forEach(function(ch){
-      var b=h('button',{className:'btn ghost',text:ch==='\#'?'All':ch,'aria-label':ch==='#'?'All provider titles (diagnostic view)':'Titles starting with '+ch,onClick:function(){if(letter===ch)return;letter=ch;reset();renderLetters();scan(false);}});
+      var b=h('button',{className:'btn ghost',text:ch==='#'?'All':ch,'aria-label':ch==='#'?'All provider titles (diagnostic view)':'Titles starting with '+ch,onClick:function(){if(letter===ch)return;letter=ch;reset();renderLetters();scan(false);}});
       b.dataset.letter=ch;letters.appendChild(b);
     });
     host.append(h('div',{className:'stalker-vod-library-heading'},[
