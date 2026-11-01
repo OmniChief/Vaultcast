@@ -10,10 +10,10 @@ final class StalkerLiveBrowse {
     private static function key(array $feed,string $suffix): string {
         return 'stalker_live_direct_v1_'.hash('sha256',json_encode([$feed,$suffix]));
     }
-    public static function categories(array $feed): array {
+    public static function categories(array $feed,bool $refresh=false): array {
         $key=self::key($feed,'genres');
         $cached=\Vaultcast\Repository::cacheGet($key);
-        if($cached!==null)return ['ok'=>true,'categories'=>$cached];
+        if($cached!==null&&!$refresh)return ['ok'=>true,'categories'=>$cached];
         $result=stalker_call($feed,'get_genres',[],'itv');
         $rows=$result['data']??$result;
         if(!is_array($rows))throw new RuntimeException('Provider returned invalid Live TV categories.');
@@ -39,7 +39,7 @@ final class StalkerLiveBrowse {
         $page=max(1,min(10000,(int)($opts['page']??1)));
         $key=self::key($feed,'channels:'.json_encode([$category,$page]));
         $cached=\Vaultcast\Repository::cacheGet($key);
-        if($cached!==null)return $cached;
+        if($cached!==null&&empty($opts['refresh']))return $cached;
         $result=stalker_ordered_page($feed,'itv',['sortby'=>'number','genre'=>$category,'search'=>'','fav'=>0],$page);
         $rows=$result['data']??$result;
         if(!is_array($rows))throw new RuntimeException('Provider returned invalid channels.');
