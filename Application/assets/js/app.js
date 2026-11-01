@@ -6201,7 +6201,16 @@ try {
     if(resume){kind=resume.kind;parent=resume.parent||'';}
     state._stalkerStartKind=null;root.classList.add('stalker-hub');
     function current(){return root.isConnected&&owner===(state.user&&state.user.id);}
-    var liveRequested=false;
+    var liveRequested=false,countryBrowser=null,countryLoading=null,countryHost=h('section',{className:'stalker-country-browser',hidden:true});
+    function countryView(){
+      var workspace=root.querySelector('.stalker-workspace'),label=feed.closest('label');
+      workspace.hidden=kind==='live';label.hidden=kind==='live';countryHost.hidden=kind!=='live';
+      if(kind!=='live'){if(countryBrowser)countryBrowser.stop();return;}
+      state._stalkerBrowse={owner:owner,kind:'live',parent:''};
+      if(countryBrowser){countryBrowser.show();return;}
+      if(!countryLoading){countryLoading=window.VaultcastStalkerCountries?Promise.resolve():new Promise(function(resolve,reject){var script=document.createElement('script');script.src=window.VaultcastDependencies.stalkerCountries;script.onload=resolve;script.onerror=function(){script.remove();reject(new Error('Could not load country browsing.'));};document.head.appendChild(script);});}
+      countryLoading.then(function(){if(!current()||kind!=='live'||root.classList.contains('stalker-downloads'))return;if(!countryBrowser)countryBrowser=window.VaultcastStalkerCountries(countryHost,{h:h,api:liveApi,play:playStalkerItem,current:function(){return current()&&kind==='live'&&!root.classList.contains('stalker-downloads');},saved:state._stalkerCountryBrowse&&state._stalkerCountryBrowse.owner===owner?state._stalkerCountryBrowse:null,save:function(value){value.owner=owner;state._stalkerCountryBrowse=value;}});countryBrowser.show();}).catch(function(error){countryLoading=null;if(current()){countryHost.replaceChildren(h('p',{className:'bad',text:error.message}),h('button',{className:'btn',text:'Retry',onClick:countryView}));}});
+    }
     var folderState=new Map(resume&&resume.folders||[]),drawingSearch=false,availableGroups=[],trail=[],tools=h('div',{className:'stalker-browse-tools'});
     function saved(){try{return JSON.parse(localStorage.getItem('stalker-favourites-'+owner+'-'+feed.value)||'[]').filter(function(x){return x&&typeof x.id==='string'&&typeof x.name==='string';}).slice(0,100);}catch(ignore){return [];}}
     function chooseCategory(id){liveRequested=kind==='live';parent='';trail=[];query.value='';category.value=id;page=1;load(false);}
@@ -6229,8 +6238,9 @@ try {
     var breadcrumbs=h('div'),heading=h('h2',{text:'Live channels'}),clear=h('button',{className:'btn ghost',type:'button',text:'Clear',onClick:function(){query.value='';page=1;load(false);}});
     query.type='search';category.hidden=true;
     var search=h('form',{className:'stalker-searchbar',onSubmit:function(e){e.preventDefault();page=1;load(false);}},[h('label',{className:'stalker-search-input'},[icon('search'),query]),category,clear,h('button',{className:'btn ghost',type:'button',title:'Refresh catalogue','aria-label':'Refresh catalogue',onClick:function(){page=1;load(true);}},[h('span',{'aria-hidden':'true',text:'↻'})])]);
-    var downloads=can('ingest_view')&&userAreaAllowed('library')?h('button',{className:'btn ghost',text:'Downloads',onClick:function(){sequence++;next.hidden=true;root.classList.add('stalker-downloads');downloads.classList.add('primary');tools.hidden=true;results.className='stack';status.textContent='';breadcrumbs.replaceChildren();heading.textContent='Downloads';showStalkerOffline(results);}}):null;
+    var downloads=can('ingest_view')&&userAreaAllowed('library')?h('button',{className:'btn ghost',text:'Downloads',onClick:function(){sequence++;if(countryBrowser)countryBrowser.stop();countryHost.hidden=true;root.querySelector('.stalker-workspace').hidden=false;next.hidden=true;root.classList.add('stalker-downloads');downloads.classList.add('primary');tools.hidden=true;results.className='stack';status.textContent='';breadcrumbs.replaceChildren();heading.textContent='Downloads';showStalkerOffline(results);}}):null;
     root.replaceChildren(h('header',{className:'stalker-hub-header'},[h('div',{},[h('span',{className:'eyebrow',text:'Your provider · Live & on demand'}),h('h1',{text:'Stalker'}),h('p',{className:'muted',text:'Find something worth watching.'})]),h('div',{className:'stalker-header-actions'},[h('label',{className:'stalker-connection'},[h('span',{text:'Connection'}),feed]),can('iptv_manage')?h('button',{className:'btn ghost',text:'Settings',onClick:function(){openSettings('live-stalker');}}):null])]),h('div',{className:'stalker-navigation'},[tabs,h('div',{className:'row-actions'},[downloads,h('button',{className:'btn ghost',text:'My library',onClick:function(){navigate('library');}})])]),h('div',{className:'stalker-workspace'},[tools,h('main',{className:'stalker-content'},[search,breadcrumbs,h('div',{className:'stalker-content-heading'},[heading,back]),status,results,h('div',{className:'stalker-pagination'},[next])]) ]));
+    root.appendChild(countryHost);
     function draw(){
       browseTools();
       if(!drawingSearch)results.querySelectorAll('details[data-folder]').forEach(function(folder){folderState.set(folder.getAttribute('data-folder'),folder.open);});
@@ -6244,7 +6254,7 @@ try {
       });
     }
     function load(refresh,resetCategories,advancing){
-      clearTimeout(query._searchTimer);back.hidden=!parent;var token=++sequence;browseTools();
+      clearTimeout(query._searchTimer);back.hidden=!parent;var token=++sequence;browseTools();countryView();if(kind==='live')return;
       if(!feed.value){status.textContent='No enabled Stalker connections. Add one in Stalker settings.';results.replaceChildren();return;}
       state._stalkerBrowse={owner:owner,kind:kind,parent:parent,query:query.value,category:resetCategories?'':category.value,categoryName:category.selectedOptions&&category.selectedOptions[0]?category.selectedOptions[0].text:'',trail:trail.slice()};
       status.className='muted';status.textContent='Loading '+({live:'channels',vod:'movies',series:'series'}[kind])+'…';next.disabled=true;
