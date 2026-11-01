@@ -80,7 +80,9 @@ window.VaultcastStalkerCountries=function(host,options){
     options.api('stalker_countries',params).then(function(result){
       if(!current(token))return;if(!result||!result.ok)throw new Error(result&&result.error||'Could not load channels.');
       items=append?items.concat(result.items||[]):result.items||[];draw(result);
-
+      // Catalogue pages arrive from the short-lived CLI worker; refresh the visible
+      // country while indexing, without launching any network calls from the browser.
+      if(result.indexing)timer=setTimeout(function(){load(false);},2000);
     }).catch(function(error){if(current(token)){status.className='bad';status.textContent=error.message;next.disabled=false;if(append)offset=items.length;}});
   }
   return {show:function(){if(active)return;active=true;if(country){selected();load(false);}else picker();},stop:stop};
