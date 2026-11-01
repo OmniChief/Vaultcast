@@ -3057,3 +3057,20 @@ html[data-motion="reduced"] .vca-overall span,html[data-motion="reduced"] .vca-b
 .stalker-vod-library .stalker-vod-copy select{font-size:.8rem;max-width:100%}
 .stalker-vod-library .stalker-searchbar input{flex:1;min-width:120px}
 @media(max-width:850px){.stalker-vod-library-heading{align-items:start;flex-direction:column}.stalker-vod-filters{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.stalker-vod-filters>h3,.stalker-vod-filter-note{grid-column:1/-1}}
+
+
+/* Provider-first Stalker browser: compact cards rather than bare text rows. */
+.stalker-country-browser .stalker-country-results{display:flex;flex-direction:column;gap:10px;min-width:0}
+.stalker-country-browser .stalker-country-grid{width:100%}
+.stalker-provider-folder,.stalker-channel-card{display:flex;gap:14px;align-items:center;min-width:0;padding:14px 16px;border:1px solid var(--border);border-radius:14px;background:var(--surface-1);box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.stalker-provider-folder:hover,.stalker-channel-card:hover{border-color:var(--accent)}
+.stalker-provider-folder-open{display:flex;flex-direction:column;align-items:flex-start;gap:4px;flex:1;min-width:0;border:0;background:transparent;color:var(--text);text-align:left;cursor:pointer;font:inherit}
+.stalker-provider-folder-open strong,.stalker-channel-card strong{font-weight:650;overflow-wrap:anywhere}
+.stalker-provider-folder select{flex:0 1 190px;min-width:115px;max-width:45%;font-size:.83rem}
+.stalker-channel-card-icon{display:grid;place-items:center;width:44px;height:44px;flex:none;border-radius:12px;background:var(--surface-2);color:var(--accent);font-size:1.05rem}
+.stalker-channel-card .stalker-country-channel-copy{display:flex;flex-direction:column;gap:4px;flex:1;min-width:0}
+.stalker-channel-card .stalker-country-channel-copy small{overflow-wrap:anywhere}
+.stalker-channel-card .btn{margin-left:auto;flex:none}
+.stalker-country-browser .stalker-country-heading{margin-bottom:12px}
+.stalker-country-browser .stalker-country-results>.row-actions{margin:3px 0 10px}
+@media(max-width:560px){.stalker-provider-folder{flex-wrap:wrap}.stalker-provider-folder select{max-width:none;flex:1 1 100%}.stalker-channel-card{gap:10px;padding:12px}.stalker-channel-card-icon{width:36px;height:36px}}
