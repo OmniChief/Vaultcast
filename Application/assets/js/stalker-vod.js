@@ -4,13 +4,25 @@ window.VaultcastStalkerVod=function(host,options){
   var h=options.h,active=false,kind='vod',serial=0,timer=null,letter='A',query='',feeds=[],progress={},titles=[],seen={},loading=false;
   var status,results,next,search,letters;
   function valid(token){return active&&host.isConnected&&options.current()&&token===serial;}
-  function key(item){
-    var name=String(item.name||'').toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim();
-    var year=String(item.year||'').trim();
-    return kind+'|'+name+'|'+year;
+  // Provider names often begin with quality tags (e.g. "4K - Borderlands").
+  // These are not part of the title and must not decide its A-Z letter.
+  function title(item){
+    var name=String(item.name||'').trim();
+    name=name.replace(/^(?:(?:\\[\\s*(?:4K|8K|UHD|FHD|HD|SD)\\s*\\]|(?:4K|8K|UHD|FHD|HD|SD|FULL HD))\\s*[-|:]?\\s*)+/i,'');
+    return name.trim();
   }
-  function initial(item){var m=String(item.name||'').trim().match(/[A-Za-z0-9]/);return m?m[0].toUpperCase():'#';}
-  function fits(item){return (!query||String(item.name||'').toLocaleLowerCase().includes(query.toLocaleLowerCase()))&&initial(item)===letter;}
+  function year(item){
+    var explicit=String(item.year||'').trim();
+    if(/^\\d{4}$/.test(explicit))return explicit;
+    var match=title(item).match(/\\((19\\d{2}|20\\d{2})\\)\\s*$/);
+    return match?match[1]:'';
+  }
+  function key(item){
+    var name=title(item).replace(/\\s*\\((?:19|20)\\d{2}\\)\\s*$/,'').replace(/\\s*\\[(?:4K|8K|UHD|FHD|HD|SD)\\]\\s*/gi,' ').toLocaleLowerCase().replace(/[^\\p{L}\\p{N}]+/gu,' ').trim();
+    return kind+'|'+name+'|'+year(item);
+  }
+  function initial(item){var m=title(item).match(/[A-Za-z0-9]/);return m?m[0].toUpperCase():'#';}
+  function fits(item){return (!query||title(item).toLocaleLowerCase().includes(query.toLocaleLowerCase()))&&initial(item)===letter;}
   function reset(){
     serial++;progress={};titles=[];seen={};loading=false;
     feeds=options.connections.filter(function(f){return f.enabled;});
@@ -49,7 +61,7 @@ window.VaultcastStalkerVod=function(host,options){
       var source={id:item.id,feed:feed.id,connection:feed.name,kind:item.kind,playable:item.playable};
       var k=key(item),group=seen[k];
       // Without a year, avoid merging unrelated similarly named releases.
-      if(!String(item.year||'').trim())k+='|'+feed.id;
+      if(!year(item))k+='|'+feed.id;
       group=seen[k];
       if(!group){group=Object.assign({},item,{sources:[]});seen[k]=group;titles.push(group);}
       if(!group.sources.some(function(x){return x.feed===source.feed&&x.id===source.id;}))group.sources.push(source);
@@ -81,8 +93,8 @@ window.VaultcastStalkerVod=function(host,options){
           h('span',{className:'stalker-vod-placeholder',text:item.name.slice(0,1)}),
           item.poster?h('img',{src:item.poster,alt:'',loading:'lazy',referrerpolicy:'no-referrer',onError:function(e){e.target.remove();}}):null]),
         h('div',{className:'stalker-vod-copy'},[
-          h('div',{className:'row-head'},[h('h3',{text:item.name,title:item.name}),star]),
-          h('p',{className:'muted',text:String(item.year||'')}),
+          h('div',{className:'row-head'},[h('h3',{text:title(item),title:item.name}),star]),
+          h('p',{className:'muted',text:year(item)}),
           select||h('small',{className:'muted',text:chosen.connection||''}),
           h('div',{className:'row-actions'},[button,download])
         ])
