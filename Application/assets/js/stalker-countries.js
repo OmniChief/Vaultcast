@@ -150,7 +150,7 @@ window.VaultcastStalkerCountries=function(host,options){
         }
         detail.addEventListener('toggle',function(){
           if(detail.open){if(!items.length)load(true,false);}
-          else sequence++;
+          else {sequence++;busy=false;}
         });
         find.oninput=function(){query=find.value.toLocaleLowerCase();draw();};
         more.onclick=function(){load(false,false);};
