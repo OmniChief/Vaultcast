@@ -11,7 +11,7 @@ final class StalkerLiveBrowse {
         return 'stalker_live_direct_v1_'.hash('sha256',json_encode([$feed,$suffix]));
     }
     public static function categories(array $feed,bool $refresh=false): array {
-        $key=self::key($feed,'genres');
+        $key=self::key($feed,'genres:v2');
         $cached=\Vaultcast\Repository::cacheGet($key);
         if($cached!==null&&!$refresh)return ['ok'=>true,'categories'=>$cached];
         $result=stalker_call($feed,'get_genres',[],'itv');
