@@ -6299,7 +6299,17 @@ try {
           if(seasonLabel==='Season unknown'&&match)seasonLabel='Season '+(match[1]||match[2]);
           var key=feed.value+':'+parent+':'+seasonLabel,folder=seasons.get(key);
           if(!folder){folder=h('details',{className:'stalker-season',open:query.value.trim()?true:seasonState.has(key)?seasonState.get(key):seasons.size===0,'data-season':key},[h('summary',{text:seasonLabel})]);folder._episodes=[];seasons.set(key,folder);}
-          folder._episodes.push(h('div',{className:'stalker-episode-row'},[h('span',{className:'stalker-episode-number',text:item.episode?'E'+item.episode:'▶'}),h('div',{className:'stalker-episode-copy'},[h('strong',{text:item.episodeTitle||'Episode '+(item.episode||'')}),h('small',{className:'muted',text:[item.airdate,item.runtime?item.runtime+' min':null].filter(Boolean).join(' · ')})]),star,button,download]));return;
+          var episodeNumber=String(item.episode||'').trim();
+          if(!episodeNumber){var idMatch=String(item.id||'').match(/:([^:]+)$/);if(idMatch&&/^\\d+$/.test(idMatch[1]))episodeNumber=idMatch[1];}
+          var episodeLabel=episodeNumber?'Episode '+episodeNumber:'Episode';
+          var episodeOpen=h('button',{className:'stalker-episode-open',type:'button','aria-label':'Open '+episodeLabel+(item.episodeTitle?' - '+item.episodeTitle:''),onClick:function(){button.click();}},[
+            h('span',{className:'stalker-episode-number',text:episodeNumber?'E'+episodeNumber:'▶'}),
+            h('div',{className:'stalker-episode-copy'},[
+              h('strong',{text:item.episodeTitle?(episodeLabel+' · '+item.episodeTitle):episodeLabel}),
+              h('small',{className:'muted',text:[item.airdate,item.runtime?item.runtime+' min':null].filter(Boolean).join(' · ')})
+            ])
+          ]);
+          folder._episodes.push(h('div',{className:'stalker-episode-row'},[episodeOpen,download]));return;
         }
         if(item.kind==='live')results.appendChild(h('div',{className:'stalker-channel-row',role:'listitem'},[h('span',{className:'stalker-channel-name',text:item.name,title:item.name}),item.description&&item.description!=='Provider live channel'?h('span',{className:'stalker-channel-group muted',text:item.description,title:item.description}):null,star,button]));else results.appendChild(h('article',{className:'stalker-vod-card'},[h('button',{className:'stalker-vod-cover',type:'button','aria-label':(item.playable?'Watch ':'Open ')+item.name,onClick:function(){button.click();}},[h('span',{className:'stalker-vod-placeholder',text:item.name.slice(0,1).toUpperCase()}),item.poster?h('img',{src:item.poster,alt:'',loading:'lazy',onError:function(e){e.target.remove();}}):null,h('span',{className:'stalker-vod-badge',text:item.playable?'View details':kind==='series'?'Browse series':'View options'})]),h('div',{className:'stalker-vod-copy'},[h('div',{className:'row-head'},[h('h3',{text:item.name,title:item.name}),star]),h('p',{className:'muted',text:[item.year,item.playable?'Available to watch':kind==='series'?'Seasons & episodes':'Choose a video'].filter(Boolean).join(' · ')}),h('div',{className:'row-actions'},[button])])]));
       });
