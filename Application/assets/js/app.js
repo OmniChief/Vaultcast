@@ -6067,7 +6067,7 @@ try {
     return liveApiPost(action,body).then(function(result){if(!result.ok||!result.body||!result.body.ok)throw new Error(result.body&&result.body.error||'Provider request failed.');return result.body;});
   }
   function playStalkerItem(feed,item,button){
-    if(item.kind==='live'){state._stalkerChannelHint={id:'stalker:'+feed+':'+item.id,name:item.name,slogan:item.description||'',sources:Array.isArray(item.sources)?item.sources:[]};openLiveChannel('stalker:'+feed+':'+item.id);return;}
+    if(item.kind==='live'){state._stalkerChannelHint={id:'stalker:'+feed+':'+item.id,name:item.name,slogan:item.description||'',sources:Array.isArray(item.sources)?item.sources:[],tried:Array.isArray(item._failoverTried)?item._failoverTried:[]};openLiveChannel('stalker:'+feed+':'+item.id);return;}
     state._stalkerVodHint={feed:feed,item:item};openLiveChannel('stalker-vod:'+feed+':'+item.id);
   }
   function liveChannelPath(id){
@@ -6141,12 +6141,29 @@ try {
       startStalkerSimple(player,source,status,current,context.onPlaying);
     }
     function play(){
-      if(!context||!context.channels.length)return;var mine=++attempt;closePlayer();stopRadio();context.playError=false;context.simpleTried=false;status.className='muted';status.textContent='Connecting…';
-      stalkerPost('stalker_play',{feed:feed,kind:'live',id:channelId}).then(function(result){if(!current()||mine!==attempt)return;context.sources[id]=result.source;startLivePlayer(id,player,context);status.textContent=context.guideMessage||(context.channels[0].programs.length?'':'No programme listings were supplied for this channel.');}).catch(function(error){if(current()&&mine===attempt){context.playError=true;status.className='bad';status.textContent=error.message;}});
+      failed=false;playing=false;if(!context||!context.channels.length)return;var mine=++attempt;closePlayer();stopRadio();context.playError=false;context.simpleTried=false;status.className='muted';status.textContent='Connecting…';
+      stalkerPost('stalker_play',{feed:feed,kind:'live',id:channelId}).then(function(result){if(!current()||mine!==attempt)return;context.sources[id]=result.source;startLivePlayer(id,player,context);status.textContent=context.guideMessage||(context.channels[0].programs.length?'':'No programme listings were supplied for this channel.');}).catch(function(error){if(current()&&mine===attempt){context.playError=true;failover(error.message);}});
     }
-    wrap.appendChild(h('div',{className:'row-actions live-channel-back'},[h('button',{className:'btn',text:'← Back to Stalker',onClick:function(){closePlayer();goLiveTab('stalker');}}),h('button',{className:'btn',text:'Watch channel',onClick:play}),h('button',{className:'btn ghost',text:'Use simple player',onClick:simple}),stalkerCheckButton(feed,channelId,'live',status,function(){attempt++;}),h('button',{className:'btn ghost',text:'Stop playback',onClick:function(){attempt++;closePlayer();status.textContent='Playback stopped.';}}),h('button',{className:'btn ghost',text:'Refresh guide',onClick:function(){refreshGuide(true).then(function(){if(current())paintChannelInformation(context.channels[0]);}).catch(function(error){status.textContent=error.message;});}})]));
+    wrap.appendChild(h('div',{className:'row-actions live-channel-back'},[h('button',{className:'btn',text:'← Back to Stalker',onClick:function(){attempt++;failed=true;closePlayer();goLiveTab('stalker');}}),h('button',{className:'btn',text:'Watch channel',onClick:play}),h('button',{className:'btn ghost',text:'Use simple player',onClick:simple}),stalkerCheckButton(feed,channelId,'live',status,function(){attempt++;}),h('button',{className:'btn ghost',text:'Stop playback',onClick:function(){attempt++;failed=true;closePlayer();status.textContent='Playback stopped.';}}),h('button',{className:'btn ghost',text:'Refresh guide',onClick:function(){refreshGuide(true).then(function(){if(current())paintChannelInformation(context.channels[0]);}).catch(function(error){status.textContent=error.message;});}})]));
     var liveHint=state._stalkerChannelHint&&state._stalkerChannelHint.id===id?state._stalkerChannelHint:{};
     var liveCopies=Array.isArray(liveHint.sources)?liveHint.sources.filter(function(src){return src&&src.feed&&src.id;}):[];
+    var tried=Array.isArray(liveHint.tried)?liveHint.tried.slice():[];
+    var playing=false,failed=false;
+    function failover(message){
+      if(!current()||playing||failed)return;
+      failed=true;
+      var currentKey=feed+'|'+channelId;
+      if(tried.indexOf(currentKey)<0)tried.push(currentKey);
+      var next=liveCopies.find(function(src){return tried.indexOf(src.feed+'|'+src.id)<0;});
+      if(next){
+        status.className='muted';status.textContent='Connection failed. Trying '+(next.connection||'another connection')+'…';
+        ++attempt;closePlayer();
+        playStalkerItem(next.feed,Object.assign({},next,{sources:liveCopies,_failoverTried:tried}),null);
+      }else{
+        context.playError=true;status.className='bad';
+        status.textContent=(message||'Stream unavailable')+' · All available connections were tried.';
+      }
+    }
     if(liveCopies.length>1){
       var liveSelect=h('select',{'aria-label':'Choose Live TV connection'});
       liveCopies.forEach(function(src,i){
@@ -6166,8 +6183,8 @@ try {
       if(!current())return;
       var hint=state._stalkerChannelHint&&state._stalkerChannelHint.id===id?state._stalkerChannelHint:{};
       context={channels:[{id:id,provider:'stalker',kind:'iptv',number:0,name:hint.name||'Channel '+channelId,slogan:hint.slogan||'Stalker',logo:'',programs:[]}],sources:{},refresh:refreshGuide,
-        onError:function(message){context.playError=true;if(current()){status.className='bad';status.textContent=message+' You can select Use simple player to try it manually.';}},
-        onPlaying:function(){if(!context.guideRequested){context.guideRequested=true;refreshGuide().catch(function(){if(current()&&!context.playError)status.textContent='Programme guide unavailable; playback can continue.';});}}
+        onError:function(message){if(current())failover(message);},
+        onPlaying:function(){playing=true;tried=[];if(!context.guideRequested){context.guideRequested=true;refreshGuide().catch(function(){if(current()&&!context.playError)status.textContent='Programme guide unavailable; playback can continue.';});}}
       };
       play();
       liveApi('stalker_channel','feed='+encodeURIComponent(feed)+'&id='+encodeURIComponent(channelId)+'&guide=0').then(function(result){if(!current()||!result||!result.ok)return;context.channels=[result.channel];if(context.updateChannel)context.updateChannel();}).catch(function(){});
