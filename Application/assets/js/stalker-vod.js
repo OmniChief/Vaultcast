@@ -234,13 +234,35 @@ window.VaultcastStalkerVod=function(host,options){
 
     // Order by purpose within each language: genre, service/company, then collections.
     // Classification affects display only; provider IDs and merged source lists are unchanged.
+    // Deliberate allowlist: new provider brands go into Other providers.
+    var providerDefs=[
+      ['netflix','Netflix',/^(?:NETFLIX)(?:\b|[ +_-])/,'netflix','E50914'],
+      ['apple','Apple TV+',/^APPLE(?:\+|\s*TV\+?|\b)/,'appletv','FFFFFF'],
+      ['disney','Disney+',/^DISNEY(?:\+|\b)/,'disneyplus','FFFFFF'],
+      ['amazon','Amazon Prime',/^(?:AMAZON|PRIME(?:\s*VIDEO)?)(?:\b|[ +_-])/,'amazonprime','00A8E1'],
+      ['hbo','HBO / Max',/^(?:HBO|MAX)(?:\b|[ +_-])/,'hbo','FFFFFF'],
+      ['bbc','BBC',/^BBC(?:\b|[ +_-])/,'bbc','FFFFFF'],
+      ['cnn','CNN',/^CNN(?:\b|[ +_-])/,'cnn','CC0000'],
+      ['espn','ESPN+',/^ESPN(?:\+|\b)/,'espn','D00A14'],
+      ['paramount','Paramount+',/^PARAMOUNT(?:\+|\b)/,'paramountplus','FFFFFF'],
+      ['peacock','Peacock',/^PEACOCK\b/,'peacock','FFFFFF'],
+      ['sky','Sky',/^SKY(?:\b|[ +_-])/,'sky','FFFFFF'],
+      ['hulu','Hulu',/^HULU\b/,'hulu','1CE783'],
+      ['discovery','Discovery+',/^DISCOVERY(?:\+|\b)/,'discoveryplus','FFFFFF'],
+      ['tubi','Tubi',/^TUBI\b/,'tubi','FFFFFF'],
+      ['bet','BET+',/^BET(?:\+|\b)/,'bet','FFFFFF'],
+      ['hallmark','Hallmark',/^HALLMARK\b/,'hallmarkchannel','FFFFFF'],
+      ['lifetime','Lifetime',/^LIFETIME\b/,'lifetime','FFFFFF']
+    ];
+    function providerFor(name){
+      var n=String(name||'').normalize('NFKC').toUpperCase().trim();
+      return providerDefs.find(function(def){return def[2].test(n);})||null;
+    }
     function folderType(name){
       var n=String(name||'').normalize('NFKC').toUpperCase().trim();
-      // Brand/service names take precedence: NETFLIX KIDS and DISNEY+ KIDS
-      // belong with their services, not with the standalone Kids genre.
-      if(/(?:NETFLIX|AMAZON|PRIME(?:\s*VIDEO)?|APPLE|DISNEY|HBO|HULU|BBC|CNN|ESPN|PARAMOUNT|PEACOCK|SKY|TUBI|HALLMARK|LIFETIME|BET\+|DISCOVERY|STARZ|SHOWTIME|MGM|ROKU|FOX|NBC|CBS|ITV|RTL|MAGENTA|JOYN|ZDF|ARD|VIAPLAY|CANAL\+|HAYU|SYFY|CRUNCHYROLL|RAI\s*PLAY|NOWTV|TVNOW|MAX|A&E|MTV|VH1|CW|TNT|AMC|ABC|FX|OWN|ZEUS|BRAVO)/.test(n))return 'Streaming services & companies';
-      // Match complete genre words between spaces, pipes or punctuation.
-      // A previous character class excluded the pipe in patterns such as HISTORY | WAR.
+      if(providerFor(n))return 'Streaming services & companies';
+      // Additional provider-like labels remain under Other providers, not genres.
+      if(/^(?:STARZ|SHOWTIME|MGM|ROKU|FOX|NBC|CBS|ITV|RTL|MAGENTA|JOYN|ZDF|ARD|VIAPLAY|CANAL\+|HAYU|SYFY|CRUNCHYROLL|RAI\s*PLAY|NOWTV|TVNOW|A&E|MTV|VH1|CW|TNT|AMC|ABC|FX|OWN|ZEUS|BRAVO)\b/.test(n))return 'Streaming services & companies';
       if(/(?:^|[^A-Z])(?:ACTION|ADVENTURE|COMEDY|COMEDIE|KOMÖDIE|DRAMA|DRAME|ROMANCE|ROMANTIK|CRIME|KRIMI|THRILLER|MYSTERY|MYSTERE|HORROR|HORREUR|FANTASY|FANTASIE|SCIENCE[\s-]*FICTION|SCI[\s-]*FI|DOCUMENTARY|DOCUMENTAIRE|DOCUMENTAIRES|DOKU|DOKUMENTAR|FAMILY|FAMILLE|FAMILIALE|HISTORY|HISTOIRE|HISTORIQUE|WAR|GUERRE|WESTERN|MUSIC|MUSIK|SPORT|KIDS|KINDER|ENFANTS|ANIME|ANIMATION|CHRISTMAS|WEIHNACHTS|NOEL|NATALE)(?:$|[^A-Z])/.test(n))return 'Genres';
       return 'Collections & other';
     }
@@ -260,11 +282,43 @@ window.VaultcastStalkerVod=function(host,options){
       subheading.style.margin='16px 0 10px';section.appendChild(subheading);
       var grid=h('div');
       grid.style.display='grid';grid.style.width='100%';grid.style.gridTemplateColumns='repeat(auto-fill,minmax(min(100%,220px),1fr))';grid.style.gap='12px';
-      part.items.forEach(function(c){
+      function folderButton(c){
         var card=btn(c.name+' · '+c.sources.length+' '+(c.sources.length===1?'source':'sources'),function(){beginBrowse(c.key);},category===c.key);
-        card.className='btn ghost';card.style.whiteSpace='normal';card.style.textAlign='left';card.style.display='flex';card.style.alignItems='center';card.style.justifyContent='space-between';card.style.minHeight='58px';card.style.width='100%';card.style.padding='12px';
-        grid.appendChild(card);
-      });
+        card.className='btn ghost';card.style.whiteSpace='normal';card.style.textAlign='left';card.style.minHeight='58px';card.style.width='100%';card.style.padding='12px';
+        return card;
+      }
+      if(part.label==='Streaming services & companies'){
+        var providerGroups={};
+        part.items.forEach(function(c){
+          var def=providerFor(c.name),id=def?def[0]:'other';
+          if(!providerGroups[id])providerGroups[id]={def:def,items:[]};
+          providerGroups[id].items.push(c);
+        });
+        var ids=Object.keys(providerGroups).sort(function(a,b){
+          if(a==='other')return 1;if(b==='other')return -1;
+          return providerGroups[a].def[1].localeCompare(providerGroups[b].def[1]);
+        });
+        ids.forEach(function(id){
+          var group=providerGroups[id],def=group.def,count=group.items.reduce(function(total,c){return total+c.sources.length;},0);
+          var details=h('details',{className:'stalker-provider-group'});
+          var artwork=h('span',{className:'stalker-provider-artwork'});
+          if(def){
+            var logo=h('img',{src:'https://cdn.simpleicons.org/'+def[3]+'/'+def[4],alt:'',loading:'lazy',referrerpolicy:'no-referrer'});
+            logo.onerror=function(){logo.remove();};
+            artwork.appendChild(logo);
+          }
+          artwork.appendChild(h('span',{className:'stalker-provider-monogram',text:def?def[1]:'Other providers'}));
+          details.appendChild(h('summary',{className:'stalker-provider-summary'},[
+            artwork,h('strong',{text:def?def[1]:'Other providers'}),
+            h('small',{className:'muted',text:group.items.length+' folders · '+count+' sources'})
+          ]));
+          var inner=h('div',{className:'stalker-provider-subfolders'});
+          group.items.sort(function(a,b){return a.name.localeCompare(b.name);}).forEach(function(c){inner.appendChild(folderButton(c));});
+          details.appendChild(inner);grid.appendChild(details);
+        });
+      }else{
+        part.items.forEach(function(c){grid.appendChild(folderButton(c));});
+      }
       section.appendChild(grid);
     });
     categoryStatus.appendChild(section);
