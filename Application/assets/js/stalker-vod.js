@@ -215,15 +215,17 @@ window.VaultcastStalkerVod=function(host,options){
       b.setAttribute('aria-pressed',String(!!chosen));return b;
     }
     if(groupsLoading){categoryStatus.appendChild(h('p',{className:'muted',text:'Loading provider folders…'}));return;}
-    var buckets=categoryBuckets(),languages=['UK','Iran','French','Italian','Arabic','Multisub','German','Spanish','Dutch','Portuguese','African','Turkish','Other'];
+    var buckets=categoryBuckets(),languages=['UK','African','Arabic','Dutch','French','German','Iran','Italian','Portuguese','Spanish','Turkish','Other'];
     var available=languages.filter(function(lang){return buckets.some(function(c){return c.language===lang;});});
     buckets.forEach(function(c){if(available.indexOf(c.language)<0)available.push(c.language);});
+    available.sort(function(a,b){if(a==='UK')return -1;if(b==='UK')return 1;return a.localeCompare(b);});
+    function languageLabel(lang){return lang==='UK'?'English':lang;}
     var activeLanguage=language||'';
     var wrap=h('div',{className:'row-actions'});
     wrap.style.display='flex';wrap.style.flexWrap='wrap';wrap.style.gap='8px';wrap.style.marginBottom='20px';
     wrap.appendChild(btn('All folders',function(){language='';showMoreCategories=false;renderCategories();},!activeLanguage));
     available.slice(0,5).forEach(function(lang){
-      wrap.appendChild(btn(lang,function(){language=lang;showMoreCategories=false;renderCategories();},activeLanguage===lang));
+      wrap.appendChild(btn(languageLabel(lang),function(){language=lang;showMoreCategories=false;renderCategories();},activeLanguage===lang));
     });
     if(available.length>5)wrap.appendChild(btn(showMoreCategories?'Fewer languages':'More languages',function(){showMoreCategories=!showMoreCategories;renderCategories();},false));
     if(showMoreCategories)available.slice(5).forEach(function(lang){
@@ -266,6 +268,20 @@ window.VaultcastStalkerVod=function(host,options){
       if(/(?:^|[^A-Z])(?:ACTION|ADVENTURE|COMEDY|COMEDIE|KOMÖDIE|DRAMA|DRAME|ROMANCE|ROMANTIK|CRIME|KRIMI|THRILLER|MYSTERY|MYSTERE|HORROR|HORREUR|FANTASY|FANTASIE|SCIENCE[\s-]*FICTION|SCI[\s-]*FI|DOCUMENTARY|DOCUMENTAIRE|DOCUMENTAIRES|DOKU|DOKUMENTAR|FAMILY|FAMILLE|FAMILIALE|HISTORY|HISTOIRE|HISTORIQUE|WAR|GUERRE|WESTERN|MUSIC|MUSIK|SPORT|KIDS|KINDER|ENFANTS|ANIME|ANIMATION|CHRISTMAS|WEIHNACHTS|NOEL|NATALE)(?:$|[^A-Z])/.test(n))return 'Genres';
       return 'Collections & other';
     }
+    function artworkFor(name,sectionName){
+      var n=String(name||'').toUpperCase();
+      var rules=sectionName==='Genres'?[
+        [/ACTION/,'⚡'],[/ADVENTURE/,'🧭'],[/CHRISTMAS/,'🎄'],[/COMEDY/,'🎭'],
+        [/CRIME/,'🕵'],[/DOCUMENTARY/,'🎥'],[/DRAMA|ROMANCE/,'🎬'],[/FAMILY/,'🏠'],
+        [/FANTASY/,'✨'],[/HORROR/,'👻'],[/HISTORY|WAR/,'🏛'],[/KIDS/,'🧸'],
+        [/MUSIC/,'🎵'],[/SCIENCE|SCI.FI/,'🚀'],[/SPORT/,'🏆'],[/THRILLER|MYSTERY/,'🔍'],[/WESTERN/,'🌵']
+      ]:[
+        [/4K/,'◈'],[/SUB/,'▤'],[/NEW ADDED/,'✚'],[/NEW RELEASED/,'★'],
+        [/TOP 100/,'🏆'],[/IMDB/,'★'],[/OTHERS/,'▦']
+      ];
+      var found=rules.find(function(x){return x[0].test(n);});
+      return found?found[1]:'▣';
+    }
     var sections=[
       {label:'Genres',items:[]},
       {label:'Streaming services & companies',items:[]},
@@ -273,7 +289,7 @@ window.VaultcastStalkerVod=function(host,options){
     ];
     shown.forEach(function(c){sections.find(function(g){return g.label===folderType(c.name);}).items.push(c);});
     var section=h('section');section.style.width='100%';section.style.marginBottom='20px';
-    var heading=h('h3',{text:activeLanguage?(activeLanguage+' folders'):'UK folders'});
+    var heading=h('h3',{text:activeLanguage?(languageLabel(activeLanguage)+' folders'):'English folders'});
     heading.style.margin='0 0 12px';section.appendChild(heading);
     sections.forEach(function(part){
       if(!part.items.length)return;
@@ -285,6 +301,10 @@ window.VaultcastStalkerVod=function(host,options){
       function folderButton(c){
         var card=btn(c.name+' · '+c.sources.length+' '+(c.sources.length===1?'source':'sources'),function(){beginBrowse(c.key);},category===c.key);
         card.className='btn ghost';card.style.whiteSpace='normal';card.style.textAlign='left';card.style.minHeight='58px';card.style.width='100%';card.style.padding='12px';
+        if(part.label!=='Streaming services & companies'){
+          card.className+=' stalker-folder-art-card';
+          card.prepend(h('span',{className:'stalker-folder-art',text:artworkFor(c.name,part.label),'aria-hidden':'true'}));
+        }
         return card;
       }
       if(part.label==='Streaming services & companies'){
@@ -303,8 +323,10 @@ window.VaultcastStalkerVod=function(host,options){
           var details=h('details',{className:'stalker-provider-group'});
           var artwork=h('span',{className:'stalker-provider-artwork'});
           if(def){
-            var logo=h('img',{src:'https://cdn.simpleicons.org/'+def[3]+'/'+def[4],alt:'',loading:'lazy',referrerpolicy:'no-referrer'});
-            logo.onerror=function(){logo.remove();};
+            var domains={netflix:'netflix.com',apple:'tv.apple.com',disney:'disneyplus.com',amazon:'primevideo.com',hbo:'hbomax.com',bbc:'bbc.co.uk',cnn:'cnn.com',espn:'espn.com',paramount:'paramountplus.com',peacock:'peacocktv.com',sky:'sky.com',hulu:'hulu.com',discovery:'discoveryplus.com',tubi:'tubitv.com',bet:'bet.com',hallmark:'hallmarkchannel.com',lifetime:'mylifetime.com'};
+            var logo=h('img',{src:'https://cdn.simpleicons.org/'+def[3]+'/'+def[4],alt:def[1]+' logo',loading:'lazy',referrerpolicy:'no-referrer'});
+            logo.onload=function(){artwork.classList.add('has-logo');};
+            logo.onerror=function(){if(logo.dataset.fallback)return;logo.dataset.fallback='1';logo.src='https://www.google.com/s2/favicons?domain='+encodeURIComponent(domains[id])+'&sz=128';logo.onerror=function(){logo.remove();artwork.classList.remove('has-logo');};};
             artwork.appendChild(logo);
           }
           artwork.appendChild(h('span',{className:'stalker-provider-monogram',text:def?def[1]:'Other providers'}));
