@@ -4,7 +4,7 @@ declare(strict_types=1);
 /** Play's HTML baseline. Interactive engines are loaded only on request. */
 trait CompatibilityPlay {
     private static function playTabs(): array {
-        return ['games'=>'Games','arcade'=>'Arcade','quiz'=>'Quiz nights','social'=>'Teams & friends','leaderboards'=>'Leaderboards','achievements'=>'Achievements'];
+        return ['games'=>'Games','arcade'=>'Arcade','nfs'=>'NFS','quiz'=>'Quiz nights','social'=>'Teams & friends','leaderboards'=>'Leaderboards','achievements'=>'Achievements'];
     }
     private static function playAsset(string $file): string {
         return self::$base.'index.php?asset='.rawurlencode('assets/js/'.$file).'&v='.substr(hash_file('sha256',STREAM_ROOT.'/assets/js/'.$file),0,16);
@@ -18,6 +18,10 @@ trait CompatibilityPlay {
         if($view==='game'||$view==='emulator')return self::gamePage($id,$view==='emulator');
         $tab=(string)($_GET['tab'] ?? 'games');if(!isset(self::playTabs()[$tab]))throw new RuntimeException('Play page not found.');
         $html=self::heading('PLAY',self::playTabs()[$tab]);
+        if($tab==='nfs'){
+            $url='https://nfsu2.xyz/';
+            return $html.'<p class="compat-note">This hosted game needs a modern browser with WebGPU. Older Samsung televisions may not support it. If embedding is blocked, open the game directly.</p><div style="width:100%;height:75vh;min-height:360px"><iframe title="NFS Underground 2" src="'.self::esc($url).'" allow="fullscreen; gamepad" allowfullscreen="allowfullscreen" style="display:block;width:100%;height:100%;border:0" loading="lazy"></iframe></div><p><a class="compat-button" href="'.self::esc($url).'" target="_blank" rel="noopener noreferrer">Open NFS in a new tab</a></p>';
+        }
         if($tab==='games'){
             $sections=array_values(array_filter($home['sections'] ?? [],static function($s){return ($s['type'] ?? '')==='roms';}));
             $sectionId=(string)($_GET['section'] ?? ($sections[0]['id'] ?? ''));$section=null;
