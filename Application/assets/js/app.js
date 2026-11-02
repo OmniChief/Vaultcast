@@ -6239,7 +6239,7 @@ try {
       if(!vodLoading)vodLoading=window.VaultcastStalkerVod?Promise.resolve():new Promise(function(resolve,reject){var script=document.createElement('script');script.src=window.VaultcastDependencies.stalkerVod;script.onload=resolve;script.onerror=function(){script.remove();reject(new Error('Could not load on-demand browsing.'));};document.head.appendChild(script);});
       vodLoading.then(function(){if(!current()||kind==='live'||parent||root.classList.contains('stalker-downloads'))return;
         if(!state._stalkerVodBrowse||state._stalkerVodBrowse.owner!==owner)state._stalkerVodBrowse={owner:owner,tabs:{}};
-        if(!vodBrowser)vodBrowser=window.VaultcastStalkerVod(vodHost,{h:h,api:liveApi,owner:owner,connections:connections,manage:can('iptv_manage')?function(){openSettings('live-stalker');}:null,current:function(){return current()&&kind!=='live'&&!parent&&!root.classList.contains('stalker-downloads');},saved:function(tab){return state._stalkerVodBrowse.tabs[tab];},save:function(tab,value){state._stalkerVodBrowse.tabs[tab]=value;},open:function(source,item,button){feed.value=source;if(item.playable)playStalkerItem(source,item,button);else{parent=item.id;trail=[{id:item.id,name:item.name}];query.value='';page=1;back.hidden=false;load(false,true);}},download:can('downloads_request')&&can('ingest_view')&&userAreaAllowed('library')?function(source,item){return stalkerPost('stalker_download',{feed:source,id:item.id,name:item.name});}:null});
+        if(!vodBrowser)vodBrowser=window.VaultcastStalkerVod(vodHost,{h:h,api:liveApi,owner:owner,connections:connections,manage:can('iptv_manage')?function(){openSettings('live-stalker');}:null,current:function(){return current()&&kind!=='live'&&!parent&&!root.classList.contains('stalker-downloads');},saved:function(tab){return state._stalkerVodBrowse.tabs[tab];},save:function(tab,value){state._stalkerVodBrowse.tabs[tab]=value;},open:function(source,item,button){feed.value=source;if(item.playable)playStalkerItem(source,item,button);else{parent=item.id;showContext=Object.assign({},item);trail=[{id:item.id,name:item.name}];query.value='';page=1;back.hidden=false;load(false,true);}},download:can('downloads_request')&&can('ingest_view')&&userAreaAllowed('library')?function(source,item){return stalkerPost('stalker_download',{feed:source,id:item.id,name:item.name});}:null});
         vodBrowser.show(kind);
       }).catch(function(error){vodLoading=null;if(current())vodHost.replaceChildren(h('p',{className:'bad',text:error.message}),h('button',{className:'btn',text:'Retry',onClick:onDemandView}));});
     }
@@ -6274,9 +6274,10 @@ try {
     root.replaceChildren(h('header',{className:'stalker-hub-header'},[h('div',{},[h('span',{className:'eyebrow',text:'Your provider · Live & on demand'}),h('h1',{text:'Stalker'}),h('p',{className:'muted',text:'Find something worth watching.'})]),h('div',{className:'stalker-header-actions'},[h('label',{className:'stalker-connection'},[h('span',{text:'Connection'}),feed]),can('iptv_manage')?h('button',{className:'btn ghost',text:'Settings',onClick:function(){openSettings('live-stalker');}}):null])]),h('div',{className:'stalker-navigation'},[tabs,h('div',{className:'row-actions'},[downloads,h('button',{className:'btn ghost',text:'My library',onClick:function(){navigate('library');}})])]),h('div',{className:'stalker-workspace'},[tools,h('main',{className:'stalker-content'},[search,breadcrumbs,seriesHero,h('div',{className:'stalker-content-heading'},[heading,back]),status,results,h('div',{className:'stalker-pagination'},[next])]) ]));
     root.appendChild(countryHost);root.appendChild(vodHost);
     function paintShow(){
+      search.hidden=kind==='series'&&!!parent;
       seriesHero.hidden=kind!=='series'||!parent||!showContext;if(seriesHero.hidden)return;
       var title=showContext.name||'Provider series';
-      seriesHero.replaceChildren(h('div',{className:'stalker-vod-hero'},[h('div',{className:'stalker-vod-detail-poster'},[showContext.poster?h('img',{src:showContext.poster,alt:title+' poster',loading:'lazy',referrerpolicy:'no-referrer',onError:function(e){e.target.replaceWith(h('span',{text:title.slice(0,1)}));}}):h('span',{text:title.slice(0,1)})]),h('div',{className:'stalker-vod-detail-copy'},[h('span',{className:'eyebrow',text:'Provider series'}),h('h2',{text:title}),showContext.year?h('p',{className:'muted',text:String(showContext.year)}):null,h('p',{text:showContext.description||'No description was supplied by this provider.'})])]));
+      seriesHero.replaceChildren(h('div',{className:'stalker-vod-hero'},[h('div',{className:'stalker-vod-detail-poster'},[showContext.poster?h('img',{src:showContext.poster,alt:title+' poster',loading:'lazy',referrerpolicy:'no-referrer',onError:function(e){e.target.replaceWith(h('span',{text:title}));}}):h('span',{text:title.slice(0,1)})]),h('div',{className:'stalker-vod-detail-copy'},[h('span',{className:'eyebrow',text:'Provider series'}),h('h2',{text:title}),showContext.year?h('p',{className:'muted',text:String(showContext.year)}):null,h('p',{text:showContext.description||'No description was supplied by this provider.'})])]));
     }
     function showMetadata(show){if(show)showContext=Object.assign({},showContext||{},show);paintShow();}
     function draw(){
@@ -6300,7 +6301,7 @@ try {
           var key=feed.value+':'+parent+':'+seasonLabel,folder=seasons.get(key);
           if(!folder){folder=h('details',{className:'stalker-season',open:query.value.trim()?true:seasonState.has(key)?seasonState.get(key):seasons.size===0,'data-season':key},[h('summary',{text:seasonLabel})]);folder._episodes=[];seasons.set(key,folder);}
           var episodeNumber=String(item.episode||'').trim();
-          if(!episodeNumber){var idMatch=String(item.id||'').match(/:([^:]+)$/);if(idMatch&&/^\\d+$/.test(idMatch[1]))episodeNumber=idMatch[1];}
+          if(!episodeNumber){var idMatch=String(item.id||'').match(/:([^:]+)$/);if(idMatch&&/^\d+$/.test(idMatch[1]))episodeNumber=idMatch[1];}
           var episodeLabel=episodeNumber?'Episode '+episodeNumber:'Episode';
           var episodeOpen=h('button',{className:'stalker-episode-open',type:'button','aria-label':'Open '+episodeLabel+(item.episodeTitle?' - '+item.episodeTitle:''),onClick:function(){button.click();}},[
             h('span',{className:'stalker-episode-number',text:episodeNumber?'E'+episodeNumber:'▶'}),
@@ -6317,7 +6318,7 @@ try {
       if(episodeView&&!results.childElementCount)results.appendChild(h('p',{className:'muted',text:query.value.trim()?'No matching episodes in the loaded seasons. Load more seasons or clear the search.':'No episodes are available in the shared catalogue yet.'}));
     }
     function load(refresh,resetCategories,advancing){
-      clearTimeout(query._searchTimer);back.hidden=!parent;var token=++sequence;browseTools();countryView();onDemandView();seriesHero.hidden=true;if(kind==='live'||!parent)return;
+      clearTimeout(query._searchTimer);search.hidden=kind==='series'&&!!parent;back.hidden=!parent;var token=++sequence;browseTools();countryView();onDemandView();seriesHero.hidden=true;if(kind==='live'||!parent)return;
       if(!feed.value){status.textContent='No enabled Stalker connections. Add one in Stalker settings.';results.replaceChildren();return;}
       state._stalkerBrowse={owner:owner,kind:kind,parent:parent,query:query.value,category:resetCategories?'':category.value,categoryName:category.selectedOptions&&category.selectedOptions[0]?category.selectedOptions[0].text:'',trail:trail.slice(),seasons:Array.from(seasonState)};
       status.className='muted';status.textContent='Loading '+({live:'channels',vod:'movies',series:'series'}[kind])+'…';next.disabled=true;
