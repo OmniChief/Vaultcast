@@ -380,7 +380,7 @@ window.VaultcastStalkerVod=function(host,options){
         sources.forEach(function(src,i){select.appendChild(h('option',{value:String(i),text:src.connection||('Connection '+(i+1))}));});
       }
       function selected(){return sources[select?Number(select.value):0]||chosen;}
-      function open(){var src=selected();options.open(src.feed,Object.assign({},item,src),button);}
+      function open(){var src=selected();options.open(src.feed,Object.assign({},item,src,{sources:sources}),button);}
       var button=h('button',{className:'btn',text:item.playable?'View details':kind==='series'?'Browse series':'Explore',onClick:open});
       var download=item.playable&&options.download?h('button',{className:'btn ghost',text:'Add to library',onClick:function(){var src=selected();download.disabled=true;options.download(src.feed,Object.assign({},item,src)).then(function(){download.textContent='Queued';}).catch(function(e){download.disabled=false;status.textContent=e.message;});}}):null;
       var star=h('button',{className:'btn ghost stalker-save'});
