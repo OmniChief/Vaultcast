@@ -66,12 +66,23 @@ window.VaultcastStalkerCountries=function(host,options){
       if(!byCategory.has(key))byCategory.set(key,{name:label,country:f.country,sources:[],feed:f.feed,id:f.id,connection:f.connection});
       byCategory.get(key).sources.push(f);
     });
-    var list=Array.from(byCategory.values()).sort(function(a,b){return a.name.localeCompare(b.name);});
+    var list=Array.from(byCategory.values()).sort(function(a,b){
+      function priority(f){var n=f.name.toUpperCase();return /^GENERAL(?:\s|$)/.test(n)?0:/^ENTERTAINMENT(?:\s|$)/.test(n)?1:2;}
+      return priority(a)-priority(b)||a.name.localeCompare(b.name);
+    });
     status.textContent=list.length+' categories across '+folders.filter(function(f){return f.country===country;}).length+' provider folders · select one to load current channels';
     if(!list.length)body.append(h('p',{className:'muted',text:'No provider categories for this country.'}));
     var ordered=['General & entertainment','Sports','Football','Live events & PPV','Movies & on-demand','Kids & family','News, documentary & music','Replays & catch-up','Other categories'];
     var groups=new Map(ordered.map(function(label){return [label,[]];}));
     list.forEach(function(f){groups.get(categorySection(f.name)).push(f);});
+    // Expand section headings directly into their channel listing, without an
+    // intermediate folder click. Only fetch the selected section on demand.
+    function openSection(sectionName,entries){
+      var sources=entries.reduce(function(all,f){return all.concat(f.sources);},[]);
+      selected={name:sectionName,country:country,sources:sources,
+        feed:sources[0]&&sources[0].feed,id:sources[0]&&sources[0].id};
+      page=1;channels=[];sourcePages={};search='';remember();loadChannels(false);
+    }
     var container=h('div',{className:'stalker-category-sections'});
     body.appendChild(container);
     function paint(){
@@ -81,8 +92,11 @@ window.VaultcastStalkerCountries=function(host,options){
         var entries=groups.get(sectionName).filter(function(f){return !needle||f.name.toLocaleLowerCase().includes(needle);});
         if(!entries.length)return;
         visible+=entries.length;
-        var section=h('details',{className:'stalker-folder-section',open:!!needle||sectionName==='General & entertainment'});
+        var section=h('details',{className:'stalker-folder-section',open:!!needle});
         section.appendChild(h('summary',{className:'stalker-folder-section-heading',text:sectionName+' ('+entries.length+')'}));
+        section.addEventListener('toggle',function(){
+          if(section.open&&!needle)openSection(sectionName,entries);
+        });
         entries.forEach(function(f){
           var row=h('div',{className:'stalker-provider-folder'});
           row.appendChild(h('button',{className:'stalker-provider-folder-open',onClick:function(){selected=f;page=1;channels=[];sourcePages={};search='';remember();loadChannels(false);}},[
