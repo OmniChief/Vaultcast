@@ -5952,7 +5952,8 @@ try {
   function goLiveTab(tab){
     state.liveTab=['now','relay','iptv','stalker','radio'].indexOf(tab)>=0?tab:'now';
     state._openLiveCh=null;state.liveChannel=null;navigate('live');
-    try{window.scrollTo(0,0);}catch(e){}
+    // Returning from a Stalker title restores its previous scroll position.
+    if(!(tab==='stalker'&&state._stalkerVodReturn))try{window.scrollTo(0,0);}catch(e){}
   }
   function livePageHero(tab,total){
     var info={relay:['Relay','Your library, on air. Continuous channels built from your collection.'],iptv:['IPTV','Your favourite live channels, together in one place.'],radio:['Radio','A world of sound. Your stations, ready whenever you are.']}[tab];
@@ -6235,7 +6236,7 @@ try {
       if(!combined){if(vodBrowser)vodBrowser.stop();return;}
       root.querySelector('.stalker-workspace').hidden=true;
       state._stalkerBrowse={owner:owner,kind:kind,parent:''};
-      if(vodBrowser){vodBrowser.show(kind);return;}
+      if(vodBrowser){var savedReturn=state._stalkerVodReturn;if(savedReturn&&savedReturn.kind===kind&&vodBrowser.restore(savedReturn))state._stalkerVodReturn=null;else vodBrowser.show(kind);return;}
       if(!vodLoading)vodLoading=window.VaultcastStalkerVod?Promise.resolve():new Promise(function(resolve,reject){var script=document.createElement('script');script.src=window.VaultcastDependencies.stalkerVod;script.onload=resolve;script.onerror=function(){script.remove();reject(new Error('Could not load on-demand browsing.'));};document.head.appendChild(script);});
       vodLoading.then(function(){if(!current()||kind==='live'||parent||root.classList.contains('stalker-downloads'))return;
         if(!state._stalkerVodBrowse||state._stalkerVodBrowse.owner!==owner)state._stalkerVodBrowse={owner:owner,tabs:{}};
