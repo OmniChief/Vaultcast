@@ -122,7 +122,9 @@ final class StalkerVod {
         $row=$stored['row'];$metadata=StalkerSeries::metadata($feed,$row,$show);$season=null;
         foreach(['season_number','season'] as $field)if(isset($row[$field])&&is_numeric($row[$field])){$season=(int)$row[$field];break;}
         if($season===null&&preg_match('/(?:season|сезон|^s)\s*(\d+)/iu',$metadata['name'],$m))$season=(int)$m[1];
-        $seasonName=$season!==null?($season===0?'Specials':'Season '.$season):$metadata['name'];
+        if($season===null&&preg_match('/\\bS(\\d{1,2})E\\d+\\b/i',$episode,$m))$season=(int)$m[1];
+        if($season===null&&preg_match('/\\b(?:season|saison|staffel)\\s*(\\d+)\\b/iu',(string)($row['name']??''),$m))$season=(int)$m[1];
+        $seasonName=$season!==null?($season===0?'Specials':'Season '.$season):'Season unknown';
         $title=is_array($row['episode_titles']??null)?self::text($row['episode_titles'][$episode]??''):'';
         return array_merge($metadata,['id'=>$kind.':'.$row['id'].':'.$episode,'name'=>($show['name']??$metadata['name']).' · '.$seasonName.' · '.($title?:'Episode '.$episode),'kind'=>'vod','playable'=>true,'season'=>$season,'seasonName'=>$seasonName,'seasonId'=>(string)$row['id'],'episode'=>$episode,'episodeTitle'=>$title,'showId'=>$show['showId']??$show['id']??'']);
     }
