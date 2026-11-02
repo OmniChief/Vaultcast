@@ -255,7 +255,7 @@ window.VaultcastStalkerVod=function(host,options){
       ['tubi','Tubi',/^TUBI\b/,'tubitv.com']
     ];
     var networks=[
-      ['ae','A&E',/^A&E\b/,'aetv.com'],['abc','ABC',/^ABC(?:\s*NETWORK)?\b/,'abc.com'],
+      ['ae','A&E',/^A&E(?:\s|$)/,'aetv.com'],['abc','ABC',/^ABC(?:\s*NETWORK)?\b/,'abc.com'],
       ['amc','AMC',/^AMC(?:\s*NETWORK)?\b/,'amc.com'],['bbc','BBC',/^BBC\b/,'bbc.co.uk'],
       ['bet','BET+',/^BET(?:\+|\b)/,'bet.com'],['bravo','Bravo',/^BRAVO\b/,'bravotv.com'],
       ['cbc','CBC',/^CBC(?:\s*NETWORK)?\b/,'cbc.ca'],['cbs','CBS',/^CBS(?:\s*NETWORK)?\b/,'cbs.com'],
@@ -321,7 +321,7 @@ window.VaultcastStalkerVod=function(host,options){
       function folderButton(c){
         var card=btn(c.name+' · '+c.sources.length+' '+(c.sources.length===1?'source':'sources'),function(){beginBrowse(c.key);},category===c.key);
         card.className='btn ghost';card.style.whiteSpace='normal';card.style.textAlign='left';card.style.minHeight='58px';card.style.width='100%';card.style.padding='12px';
-        if(part.label!=='Streaming services & companies'){
+        if(part.label==='Genres'||part.label==='Collections & special folders'){
           card.className+=' stalker-folder-art-card';
           card.prepend(h('span',{className:'stalker-folder-art',text:artworkFor(c.name,part.label),'aria-hidden':'true'}));
         }
