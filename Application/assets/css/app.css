@@ -3089,3 +3089,16 @@ html[data-motion="reduced"] .vca-overall span,html[data-motion="reduced"] .vca-b
 .stalker-numbered-group{width:100%;min-width:0}
 .stalker-numbered-group>summary{cursor:pointer;overflow-wrap:anywhere;font-weight:650;padding:8px 0;line-height:1.4}
 .stalker-numbered-group>button{display:block;width:100%;margin:6px 0;text-align:left;white-space:normal;overflow-wrap:anywhere}
+
+/* Stalker provider folders: a short, fixed brand allowlist with readable fallbacks. */
+.stalker-provider-group{min-width:0;border:1px solid #3d5675;border-radius:10px;background:#17263e;overflow:hidden}
+.stalker-provider-summary{display:flex;flex-direction:column;align-items:center;gap:7px;text-align:center;cursor:pointer;padding:12px;min-height:132px;list-style:none}
+.stalker-provider-summary::-webkit-details-marker{display:none}
+.stalker-provider-summary:focus-visible{outline:2px solid #69c7ff;outline-offset:-3px}
+.stalker-provider-artwork{position:relative;display:flex;align-items:center;justify-content:center;min-height:56px;width:100%;max-width:170px}
+.stalker-provider-artwork img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;z-index:1}
+.stalker-provider-monogram{font-size:1.05rem;font-weight:800;line-height:1.15;overflow-wrap:anywhere;letter-spacing:.01em}
+.stalker-provider-summary strong{font-size:.95rem}
+.stalker-provider-summary small{font-size:.75rem}
+.stalker-provider-subfolders{display:flex;flex-direction:column;gap:7px;padding:10px;border-top:1px solid #3d5675}
+.stalker-provider-group[open]{grid-column:span 1}
