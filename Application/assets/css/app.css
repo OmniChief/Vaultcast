@@ -3084,3 +3084,8 @@ html[data-motion="reduced"] .vca-overall span,html[data-motion="reduced"] .vca-b
 .stalker-country-browser .stalker-country-heading{margin-bottom:12px}
 .stalker-country-browser .stalker-country-results>.row-actions{margin:3px 0 10px}
 @media(max-width:560px){.stalker-provider-folder{flex-wrap:wrap}.stalker-provider-folder select{max-width:none;flex:1 1 100%}.stalker-channel-card{gap:10px;padding:12px}.stalker-channel-card-icon{width:36px;height:36px}}
+
+/* Numbered Stalker pseudo-series share one artwork tile and expandable parts list. */
+.stalker-numbered-group{width:100%;min-width:0}
+.stalker-numbered-group>summary{cursor:pointer;overflow-wrap:anywhere;font-weight:650;padding:8px 0;line-height:1.4}
+.stalker-numbered-group>button{display:block;width:100%;margin:6px 0;text-align:left;white-space:normal;overflow-wrap:anywhere}
