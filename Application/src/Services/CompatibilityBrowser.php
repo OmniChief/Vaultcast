@@ -224,21 +224,38 @@ final class CompatibilityBrowser {
         $category=mb_substr((string)($_GET['category']??''),0,120);
         try{
             $folders=StalkerLiveBrowse::categories($feed)['categories'];
+            $country=strtoupper(mb_substr((string)($_GET['country']??''),0,3));
+            if($country===''){
+                $counts=[];
+                foreach($folders as $folder){
+                    $code=(string)($folder['country']??'ZZ');
+                    $counts[$code]=($counts[$code]??0)+1;
+                }
+                ksort($counts);
+                $html.='<h3>Countries</h3><ul class="compat-list">';
+                foreach($counts as $code=>$count){
+                    $label=$code==='ZZ'?'Other / unlabelled':$code;
+                    $html.='<li>'.self::link($label.' ('.$count.')',$base+['country'=>$code]).'</li>';
+                }
+                return $html.'</ul>';
+            }
+            $html.=self::link('Countries',$base);
+            $folders=array_values(array_filter($folders,static function($item)use($country){return (string)($item['country']??'ZZ')===$country;}));
             if($category===''){
-                $html.='<ul class="compat-list">';
-                foreach($folders as $folder)$html.='<li>'.self::link($folder['name'], $base+['category'=>$folder['id']]).'</li>';
+                $html.='<h3>'.self::esc($country==='ZZ'?'Other / unlabelled':$country).'</h3><ul class="compat-list">';
+                foreach($folders as $folder)$html.='<li>'.self::link($folder['name'], $base+['country'=>$country,'category'=>$folder['id']]).'</li>';
                 return $html.'</ul>';
             }
             $chosen=null;foreach($folders as $folder)if($folder['id']===$category){$chosen=$folder;break;}
             if(!$chosen)return $html.'<p>Category no longer exists. Choose another category.</p>';
-            $html.=self::link('Categories',$base).'<h3>'.self::esc($chosen['name']).'</h3>';
+            $html.=self::link('Categories',$base+['country'=>$country]).'<h3>'.self::esc($chosen['name']).'</h3>';
             $data=StalkerLiveBrowse::channels($feed,['category'=>$category,'page'=>$page]);
             $selectedChannel=mb_substr((string)($_GET['channel']??''),0,120);
             $channel=null;
             foreach($data['items']??[] as $item)if($selectedChannel!==''&&(string)$item['id']===$selectedChannel)$channel=$item;
             if($selectedChannel!==''&&!$channel)$html.='<p class="compat-note">Channel unavailable on this page. Select a channel again.</p>';
             if($channel){
-                $html.=self::link('Back to channels',$base+['category'=>$category,'page'=>$page]);
+                $html.=self::link('Back to channels',$base+['country'=>$country,'category'=>$category,'page'=>$page]);
                 $html.='<h3>'.self::esc($channel['name']).'</h3>';
                 // Issue a viewer-scoped playback ticket using the same authenticated
                 // Stalker proxy as the standard interface. Never reveal portal URLs.
@@ -258,9 +275,9 @@ final class CompatibilityBrowser {
             }
             $html.='<ul class="compat-list">';
             foreach($data['items']??[] as $item){
-                $html.='<li>'.self::link((string)$item['name'],$base+['category'=>$category,'page'=>$page,'channel'=>$item['id']]).'</li>';
+                $html.='<li>'.self::link((string)$item['name'],$base+['country'=>$country,'category'=>$category,'page'=>$page,'channel'=>$item['id']]).'</li>';
             }
-            $html.='</ul>'.self::pages($base+['category'=>$category],$page,!empty($data['hasMore']));
+            $html.='</ul>'.self::pages($base+['country'=>$country,'category'=>$category],$page,!empty($data['hasMore']));
 
         }catch(Throwable $e){$html.='<p class="compat-note">Could not load provider channels. '.self::esc($e->getMessage()).'</p>';}
         return $html;
