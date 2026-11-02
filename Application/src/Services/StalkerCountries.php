@@ -8,7 +8,7 @@ final class StalkerCountries {
 
     public static function entry(array $feed,string $id): ?array {return StalkerLiveBrowse::entry($feed,$id)??StalkerVod::entry($feed,$id,'live');}
     public static function country(string $text): ?string {
-        $aliases=['UK'=>'GB','ENG'=>'GB','USA'=>'US','UAE'=>'AE','GER'=>'DE','DEU'=>'DE','FRA'=>'FR','JPN'=>'JP','CAN'=>'CA','AUS'=>'AU','NZL'=>'NZ','IRL'=>'IE','NLD'=>'NL','ESP'=>'ES','ITA'=>'IT','POR'=>'PT','TUR'=>'TR','IND'=>'IN','BRA'=>'BR','POL'=>'PL'];
+        $aliases=['UK'=>'GB','EN'=>'GB','ENG'=>'GB','USA'=>'US','UAE'=>'AE','GER'=>'DE','DEU'=>'DE','FRA'=>'FR','JPN'=>'JP','CAN'=>'CA','AUS'=>'AU','NZL'=>'NZ','IRL'=>'IE','NLD'=>'NL','ESP'=>'ES','ITA'=>'IT','POR'=>'PT','TUR'=>'TR','IND'=>'IN','BRA'=>'BR','POL'=>'PL'];
         // Provider genre labels use flags, full names, aliases, and code prefixes.
         if(preg_match('/[\x{1F1E6}-\x{1F1FF}]{2}/u',$text,$flag)){
             preg_match_all('/[\x{1F1E6}-\x{1F1FF}]/u',$flag[0],$letters);
@@ -22,7 +22,10 @@ final class StalkerCountries {
         if(preg_match('/^\s*(?:UNITED STATES(?: OF AMERICA)?|AMERICAN)\b/i',$text))return 'US';
         $names=['CANADA'=>'CA','AUSTRALIA'=>'AU','NEW ZEALAND'=>'NZ','IRELAND'=>'IE','FRANCE'=>'FR','GERMANY'=>'DE','SPAIN'=>'ES','ITALY'=>'IT','PORTUGAL'=>'PT','NETHERLANDS'=>'NL','BELGIUM'=>'BE','SWITZERLAND'=>'CH','AUSTRIA'=>'AT','POLAND'=>'PL','TURKEY'=>'TR','GREECE'=>'GR','INDIA'=>'IN','JAPAN'=>'JP','BRAZIL'=>'BR','MEXICO'=>'MX','ALGERIA'=>'DZ','BAHRAIN'=>'BH','ARGENTINA'=>'AR'];
         foreach($names as $label=>$code)if(preg_match('/(?<![\\pL])'.preg_quote($label,'/').'(?![\\pL])/iu',$text))return $code;
-        preg_match_all('/\[\s*([A-Z]{2,3})\s*\]|\(\s*([A-Z]{2,3})\s*\)|(?:^|[|\/])\s*([A-Z]{2,3})(?=\s*(?:[|:._\-\s]|$))/i',$text,$matches,PREG_SET_ORDER);
+        // Accept box-drawing and full-width provider separators, including
+        // directional Unicode marks often prepended to Stalker labels.
+        $clean=preg_replace('/[\x{200e}\x{200f}\x{202a}-\x{202e}\x{2066}-\x{2069}\x{feff}]/u','',$text);
+        preg_match_all('/[\[（(]\s*([A-Z]{2,3})\s*[\]）)]|[|┃│¦]\s*([A-Z]{2,3})\s*[|┃│¦]|(?:^|[|┃│¦\/])\s*([A-Z]{2,3})(?=\s*(?:[|┃│¦:._\-\s]|$))/iu',$clean,$matches,PREG_SET_ORDER);
         foreach($matches as $match){
             $code=strtoupper(($match[1]??'')?:($match[2]??'')?:($match[3]??''));
             if($code==='AR')continue; // Ambiguous portal regional prefix, not reliably Argentina.
