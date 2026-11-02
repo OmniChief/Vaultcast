@@ -357,8 +357,8 @@ window.VaultcastStalkerVod=function(host,options){
   }
   function numberedPart(item){
     // Provider pseudo-series such as "024 - Noreen mohammad sadiq..." are
-    // independent playable rows, not native Stalker series records.
-    if(kind!=='vod'||!item.playable)return null;
+    // independent playable rows in Movies or Series, not native series folders.
+    if(!item.playable)return null;
     var name=title(item),m=name.match(/^\s*(\d{1,4})\s*[-–—.)_]\s*(.+?)\s*$/u);
     if(!m||!m[2]||m[2].length<5)return null;
     var base=m[2].replace(/\s+/g,' ').trim(),poster=String(item.poster||'');
