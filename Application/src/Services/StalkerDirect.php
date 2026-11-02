@@ -159,6 +159,36 @@ final class StalkerDirect {
         $query=mb_substr(trim((string)($opts['q']??'')),0,160);
         $parent=mb_substr((string)($opts['parent']??''),0,120);
         $refresh=!empty($opts['refresh']);
+        if(!empty($opts['raw_categories_export'])){
+            // Explicit diagnostic only: use the provider response, not the simplified category cache.
+            // Allowlist descriptive and artwork fields; never return arbitrary provider fields,
+            // portal credentials, cookies, authorization headers or query tokens.
+            $result=stalker_call($feed,'get_categories',[],$kind);
+            $rows=$result['data']??$result;
+            if(!is_array($rows))throw new RuntimeException('Provider returned invalid category data.');
+            $fields=['id','title','name','description','logo','icon','image','poster','cover','pic','screenshot_uri','movie_image','thumbnail','thumb','image_url','poster_url','cover_url'];
+            $out=[];
+            foreach($rows as $row){
+                if(!is_array($row))continue;
+                $safe=[];
+                foreach($fields as $field){
+                    if(!isset($row[$field])||!is_scalar($row[$field]))continue;
+                    $value=mb_substr((string)$row[$field],0,1000);
+                    if(preg_match('~(?:^|[/?&=])(?:token|auth|key|pass|password|session|mac|cookie|signature|access_token)[=/&]~i',$value))$value='[redacted]';
+                    // For URL-like fields retain field presence and artwork path, but strip
+                    // authority and query strings to prevent exporting portal access details.
+                    if(in_array($field,['logo','icon','image','poster','cover','pic','screenshot_uri','movie_image','thumbnail','thumb','image_url','poster_url','cover_url'],true)){
+                        $parts=parse_url($value);
+                        if(is_array($parts)&&!empty($parts['host']))$value=(string)($parts['path']??'').' [host/query omitted]';
+                        else $value=explode('?', $value, 2)[0];
+                    }
+                    $safe[$field]=$value;
+                }
+                if($safe)$out[]=$safe;
+                if(count($out)>=500)break;
+            }
+            return ['ok'=>true,'kind'=>$kind,'selectedFeed'=>$feed['id'],'categories'=>$out,'count'=>count($out)];
+        }
         // Browse and playback do not require an administrator to have indexed anything.
         $categories=$parent===''?self::categories($feed,$kind):[];
         if(!empty($opts['categories_only']))return ['ok'=>true,'items'=>[],'total'=>null,'hasMore'=>false,'categories'=>$categories,'selectedFeed'=>$feed['id'],'shared'=>false];
