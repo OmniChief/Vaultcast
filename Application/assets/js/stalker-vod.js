@@ -547,6 +547,24 @@ window.VaultcastStalkerVod=function(host,options){
     }
     step();
   }
-  return {show:function(value){if(active&&kind===value)return;stop();active=true;kind=value;letter='#';query='';render();reset();loadCategories(false);},stop:stop};
+  function snapshot(){
+    return {kind:kind,language:language,category:category,query:query,searchAllMode:searchAllMode,
+      titles:titles.slice(),categories:categories.slice(),progress:JSON.parse(JSON.stringify(progress)),
+      tasks:tasks.map(function(t){return {key:t.key,feedId:t.feed&&t.feed.id,category:t.category};}),
+      titlesStarted:titlesStarted,scrollY:window.scrollY||document.documentElement.scrollTop||0};
+  }
+  function restore(saved){
+    if(!saved||saved.kind!==kind)return false;
+    stop();active=true;serial++;feeds=options.connections.filter(function(f){return f.enabled;});
+    language=saved.language||'';category=saved.category||'';query=saved.query||'';searchAllMode=!!saved.searchAllMode;
+    titles=(saved.titles||[]).slice();categories=(saved.categories||[]).slice();progress=saved.progress||{};
+    tasks=(saved.tasks||[]).map(function(t){return {key:t.key,feed:feeds.find(function(f){return f.id===t.feedId;}),category:t.category};}).filter(function(t){return !!t.feed;});
+    titlesStarted=!!saved.titlesStarted;seen={};loading=false;groupsLoading=false;
+    render();search.value=query;renderCategories();renderResults();
+    var target=Number(saved.scrollY)||0;
+    requestAnimationFrame(function(){requestAnimationFrame(function(){if(active&&host.isConnected)window.scrollTo(0,target);});});
+    return true;
+  }
+  return {show:function(value){if(active&&kind===value)return;stop();active=true;kind=value;letter='#';query='';render();reset();loadCategories(false);},stop:stop,snapshot:snapshot,restore:restore};
 };
 })();
