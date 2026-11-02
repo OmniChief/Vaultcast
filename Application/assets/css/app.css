@@ -3109,3 +3109,8 @@ html[data-motion="reduced"] .vca-overall span,html[data-motion="reduced"] .vca-b
 .stalker-provider-artwork.has-logo .stalker-provider-monogram{visibility:hidden}
 .stalker-provider-artwork img{max-height:54px;max-width:150px;left:50%;top:50%;width:auto;height:auto;transform:translate(-50%,-50%);object-fit:contain}
 .stalker-provider-artwork:not(.has-logo) .stalker-provider-monogram{visibility:visible}
+
+/* Provider tiles now browse all underlying categories directly. */
+.stalker-provider-action{display:block;width:100%;padding:0;color:inherit;font:inherit;text-align:inherit;cursor:pointer}
+.stalker-provider-action:hover{border-color:#70a8db;background:#203653}
+.stalker-provider-action:focus-visible{outline:2px solid #73c9ff;outline-offset:3px}
