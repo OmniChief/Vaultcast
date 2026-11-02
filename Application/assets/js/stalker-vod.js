@@ -232,18 +232,38 @@ window.VaultcastStalkerVod=function(host,options){
     categoryStatus.appendChild(wrap);
     var shown=buckets.filter(function(c){return activeLanguage?c.language===activeLanguage:c.language==='UK';});
 
-    shown.sort(function(a,b){return a.name.localeCompare(b.name);});
+    // Order by purpose within each language: genre, service/company, then collections.
+    // Classification affects display only; provider IDs and merged source lists are unchanged.
+    function folderType(name){
+      var n=String(name||'').normalize('NFKC').toUpperCase().trim();
+      if(/(?:^|[\s|/+-])(?:ACTION|ADVENTURE|COMEDY|COMEDIE|KOMÖDIE|DRAMA|DRAME|ROMANCE|ROMANTIK|CRIME|KRIMI|THRILLER|MYSTERY|MYSTERE|HORROR|HORREUR|FANTASY|FANTASIE|SCIENCE[\s-]*FICTION|SCI[\s-]*FI|DOCUMENTARY|DOCUMENTAIRE|DOCUMENTAIRES|DOKU|DOKUMENTAR|FAMILY|FAMILLE|FAMILIALE|HISTORY|HISTOIRE|HISTORIQUE|WAR|GUERRE|WESTERN|MUSIC|MUSIK|SPORT|KIDS|KINDER|ENFANTS|ANIME|ANIMATION)(?:$|[\s|/+-])/.test(n))return 'Genres';
+      if(/(?:NETFLIX|AMAZON|PRIME(?:\s*VIDEO)?|APPLE|DISNEY|HBO|HULU|BBC|CNN|ESPN|PARAMOUNT|PEACOCK|SKY|TUBI|HALLMARK|LIFETIME|BET\+|DISCOVERY|STARZ|SHOWTIME|MGM|ROKU|FOX|NBC|CBS|ITV|RTL|MAGENTA|JOYN|ZDF|ARD|VIAPLAY|CANAL\+|HAYU|SYFY|CRUNCHYROLL|RAI\s*PLAY|NOWTV|TVNOW|MAX|HBO|A&E|MTV|VH1|CW|TNT|AMC|ABC|FX|OWN|ZEUS|BRAVO)/.test(n))return 'Streaming services & companies';
+      return 'Collections & other';
+    }
+    var sections=[
+      {label:'Genres',items:[]},
+      {label:'Streaming services & companies',items:[]},
+      {label:'Collections & other',items:[]}
+    ];
+    shown.forEach(function(c){sections.find(function(g){return g.label===folderType(c.name);}).items.push(c);});
     var section=h('section');section.style.width='100%';section.style.marginBottom='20px';
     var heading=h('h3',{text:activeLanguage?(activeLanguage+' folders'):'UK folders'});
     heading.style.margin='0 0 12px';section.appendChild(heading);
-    var grid=h('div');
-    grid.style.display='grid';grid.style.width='100%';grid.style.gridTemplateColumns='repeat(auto-fill,minmax(min(100%,220px),1fr))';grid.style.gap='12px';
-    shown.forEach(function(c){
-      var card=btn(c.name+' · '+c.sources.length+' '+(c.sources.length===1?'source':'sources'),function(){beginBrowse(c.key);},category===c.key);
-      card.className='btn ghost';card.style.whiteSpace='normal';card.style.textAlign='left';card.style.display='flex';card.style.alignItems='center';card.style.justifyContent='space-between';card.style.minHeight='58px';card.style.width='100%';card.style.padding='12px';
-      grid.appendChild(card);
+    sections.forEach(function(part){
+      if(!part.items.length)return;
+      part.items.sort(function(a,b){return a.name.localeCompare(b.name);});
+      var subheading=h('h4',{text:part.label+' ('+part.items.length+')'});
+      subheading.style.margin='16px 0 10px';section.appendChild(subheading);
+      var grid=h('div');
+      grid.style.display='grid';grid.style.width='100%';grid.style.gridTemplateColumns='repeat(auto-fill,minmax(min(100%,220px),1fr))';grid.style.gap='12px';
+      part.items.forEach(function(c){
+        var card=btn(c.name+' · '+c.sources.length+' '+(c.sources.length===1?'source':'sources'),function(){beginBrowse(c.key);},category===c.key);
+        card.className='btn ghost';card.style.whiteSpace='normal';card.style.textAlign='left';card.style.display='flex';card.style.alignItems='center';card.style.justifyContent='space-between';card.style.minHeight='58px';card.style.width='100%';card.style.padding='12px';
+        grid.appendChild(card);
+      });
+      section.appendChild(grid);
     });
-    section.appendChild(grid);categoryStatus.appendChild(section);
+    categoryStatus.appendChild(section);
 
     if(!shown.length)categoryStatus.appendChild(h('p',{className:'muted',text:'No folders in this language.'}));
   }
