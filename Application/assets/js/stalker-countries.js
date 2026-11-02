@@ -162,11 +162,35 @@ window.VaultcastStalkerCountries=function(host,options){
     find.oninput=function(){search=find.value;display();};
     var list=h('div',{className:'stalker-country-results'});
     var next=h('button',{className:'btn',text:'Load next provider page',onClick:function(){page++;loadChannels(true);},hidden:!hasMore});
-    body.append(h('div',{className:'row-actions'},[back,refresh]),find,list,next);
+    // Format filters are presentation-only and never request more provider data.
+    // Untagged channels remain visible when all named formats are switched off.
+    var formats=['UHD','FHD','HEVC','HD','SD'],enabled={UHD:true,FHD:true,HEVC:true,HD:true,SD:true};
+    var controls=h('div',{className:'row-actions'},[back,refresh]);
+    formats.forEach(function(format){
+      var toggle=h('button',{type:'button',className:'btn',text:format,'aria-label':'Show '+format+' channels','aria-pressed':'true'});
+      toggle.onclick=function(){
+        enabled[format]=!enabled[format];
+        toggle.className=enabled[format]?'btn':'btn ghost';
+        toggle.setAttribute('aria-pressed',String(enabled[format]));
+        display();
+      };
+      controls.appendChild(toggle);
+    });
+    body.append(controls,find,list,next);
+    function channelFormats(name){
+      var text=String(name||'').toUpperCase();
+      var found=[];
+      if(/(?:^|[^A-Z0-9])(?:UHD|4K|2160P)(?=$|[^A-Z0-9])/.test(text))found.push('UHD');
+      if(/(?:^|[^A-Z0-9])(?:FHD|FULL\s*HD|1080P)(?=$|[^A-Z0-9])/.test(text))found.push('FHD');
+      if(/(?:^|[^A-Z0-9])(?:HEVC|H\.?265|X265)(?=$|[^A-Z0-9])/.test(text))found.push('HEVC');
+      if(/(?:^|[^A-Z0-9])(?:HD|720P)(?=$|[^A-Z0-9])/.test(text)&&!/FULL\s*HD/.test(text))found.push('HD');
+      if(/(?:^|[^A-Z0-9])(?:SD|480P|576P)(?=$|[^A-Z0-9])/.test(text))found.push('SD');
+      return found;
+    }
     function display(){
       list.replaceChildren();
       var grouped=groupedChannels();
-      var visible=grouped.filter(function(c){return c.name.toLowerCase().includes(search.toLowerCase());});
+      var visible=grouped.filter(function(c){return c.name.toLowerCase().includes(search.toLowerCase())&&channelFormats(c.name).every(function(format){return enabled[format];});});
       visible.forEach(function(item){
         var watch=h('button',{className:'btn',text:'Watch',onClick:function(){options.play(item.feed,item,watch);}});
         list.appendChild(h('article',{className:'stalker-channel-card'},[
