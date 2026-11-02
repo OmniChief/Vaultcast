@@ -278,38 +278,41 @@ window.VaultcastStalkerVod=function(host,options){
       updateStar();
       var posterButton=h('button',{className:'stalker-vod-cover','aria-label':'Open '+item.name,onClick:open},[
         h('span',{className:'stalker-vod-placeholder',text:title(item).slice(0,1).toUpperCase()})]);
-      var posterUrls=[],posterFields=[],tried={},posterIndex=0,posterLoading=false;
+      var posterUrls=[],posterFields=[];
+      // Preserve the original working poster URL first. Attach <img> to the DOM
+      // immediately: a detached loading="lazy" image may never start loading.
+      if(item.poster){posterUrls.push(item.poster);posterFields.push('listing');}
       sources.forEach(function(src){
+        if(src.poster&&posterUrls.indexOf(src.poster)<0){posterUrls.push(src.poster);posterFields.push('source');}
         (src.posterCandidates||[]).forEach(function(c){
           if(c&&c.url&&posterUrls.indexOf(c.url)<0){posterUrls.push(c.url);posterFields.push(c.field||'provider');}
         });
-        if(src.poster&&posterUrls.indexOf(src.poster)<0){posterUrls.push(src.poster);posterFields.push('poster');}
       });
-      if(item.poster&&posterUrls.indexOf(item.poster)<0){posterUrls.push(item.poster);posterFields.push('poster');}
-      var posterState=h('small',{className:'muted'});
+      var posterState=h('small',{className:'muted'}),posterIndex=0,posterImg=null;
       var retry=h('button',{className:'btn ghost',text:'Find poster',onClick:function(){
-        posterIndex=0;tryPoster();
+        posterIndex=0;showPoster();
       }});
       retry.hidden=!!item.poster;
-      function tryPoster(){
-        if(posterLoading)return;
-        if(posterIndex>=posterUrls.length){
-          posterState.textContent=posterUrls.length?'No working poster among '+posterUrls.length+' provider URLs':'Provider listing supplied no poster URLs';
-          retry.textContent='Retry poster';retry.disabled=posterUrls.length===0;retry.hidden=false;return;
+      function showPoster(){
+        if(!posterUrls.length){
+          posterState.textContent='No poster URL in provider listing';
+          retry.disabled=true;retry.hidden=false;return;
         }
-        var url=posterUrls[posterIndex],field=posterFields[posterIndex];posterIndex++;
-        posterLoading=true;posterState.textContent='Checking poster '+posterIndex+'/'+posterUrls.length+' ('+field+')';
-        var img=h('img',{alt:'',loading:'lazy',referrerpolicy:'no-referrer'});
-        img.onload=function(){
-          posterLoading=false;posterButton.appendChild(img);
-          posterState.textContent='Poster found: '+field;
-          retry.hidden=true;
-        };
-        img.onerror=function(){posterLoading=false;tryPoster();};
-        img.src=url;
+        if(posterIndex>=posterUrls.length){
+          posterState.textContent='No working poster among '+posterUrls.length+' provider URLs';
+          retry.hidden=false;retry.textContent='Retry poster';return;
+        }
+        var index=posterIndex++,url=posterUrls[index],field=posterFields[index];
+        if(!posterImg){
+          posterImg=h('img',{alt:'',loading:'lazy',referrerpolicy:'no-referrer'});
+          posterButton.appendChild(posterImg);
+        }
+        posterImg.onload=function(){posterState.textContent='';retry.hidden=true;};
+        posterImg.onerror=function(){showPoster();};
+        posterImg.src=url;
       }
-      // Normal poster loads remain lazy; alternate provider URLs are only checked after failure.
-      if(posterUrls.length)tryPoster();
+      // Initial image is attached to the card before the browser evaluates lazy loading.
+      if(posterUrls.length)showPoster();
       results.appendChild(h('article',{className:'stalker-vod-card'},[
         posterButton,
         h('div',{className:'stalker-vod-copy'},[
