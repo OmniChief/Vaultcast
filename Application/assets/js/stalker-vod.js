@@ -127,9 +127,9 @@ window.VaultcastStalkerVod=function(host,options){
     if(code==='PT'||/\bPORTUGUESE\b/.test(n))return 'Portuguese';
     if(code==='TR'||/\bTURKISH\b/.test(n))return 'Turkish';
     if(code==='AF'||/\bAFRICAN\b/.test(n))return 'African';
-    if(code==='EN'||code==='US'||code==='UK'||code==='GB'||/\bENGLISH\b|\bUSA\b|\bUNITED STATES\b|\bUNITED KINGDOM\b/.test(n))return 'English';
+    if(code==='EN'||code==='US'||code==='UK'||code==='GB'||/\bENGLISH\b|\bUSA\b|\bUNITED STATES\b|\bUNITED KINGDOM\b/.test(n))return 'UK';
     if(/\bMULTISUB\b/.test(n))return 'Multisub';
-    return 'Other';
+    return 'UK';
   }
   function categoryName(name){
     return String(name||'').normalize('NFKC').replace(/\u00a0/g,' ')
@@ -165,7 +165,7 @@ window.VaultcastStalkerVod=function(host,options){
     var searchRow=h('div',{className:'row-actions'},[searchAll]);
     searchRow.style.marginBottom='18px';categoryStatus.appendChild(searchRow);
     if(groupsLoading){categoryStatus.appendChild(h('p',{className:'muted',text:'Loading provider folders…'}));return;}
-    var buckets=categoryBuckets(),languages=['English','French','Italian','Arabic','Multisub','German','Spanish','Dutch','Portuguese','African','Turkish','Other'];
+    var buckets=categoryBuckets(),languages=['UK','French','Italian','Arabic','Multisub','German','Spanish','Dutch','Portuguese','African','Turkish','Other'];
     var available=languages.filter(function(lang){return buckets.some(function(c){return c.language===lang;});});
     var activeLanguage=language||'';
     var wrap=h('div',{className:'row-actions'});
@@ -179,11 +179,11 @@ window.VaultcastStalkerVod=function(host,options){
       wrap.appendChild(btn(lang,function(){language=lang;renderCategories();},activeLanguage===lang));
     });
     categoryStatus.appendChild(wrap);
-    var shown=buckets.filter(function(c){return activeLanguage?c.language===activeLanguage:c.language==='English';});
-    if(!shown.length&&!activeLanguage)shown=buckets.filter(function(c){return c.language==='Other';}).slice(0,12);
+    var shown=buckets.filter(function(c){return activeLanguage?c.language===activeLanguage:c.language==='UK';});
+
     shown.sort(function(a,b){return a.name.localeCompare(b.name);});
     var section=h('section');section.style.width='100%';section.style.marginBottom='20px';
-    var heading=h('h3',{text:activeLanguage?(activeLanguage+' folders'):'English / US / UK folders'});
+    var heading=h('h3',{text:activeLanguage?(activeLanguage+' folders'):'UK folders'});
     heading.style.margin='0 0 12px';section.appendChild(heading);
     var grid=h('div');
     grid.style.display='grid';grid.style.width='100%';grid.style.gridTemplateColumns='repeat(auto-fill,minmax(min(100%,220px),1fr))';grid.style.gap='12px';
@@ -193,10 +193,7 @@ window.VaultcastStalkerVod=function(host,options){
       grid.appendChild(card);
     });
     section.appendChild(grid);categoryStatus.appendChild(section);
-    if(!activeLanguage){
-      var browse=btn('Browse other languages and collections',function(){language='Other';showMoreCategories=true;renderCategories();},false);
-      categoryStatus.appendChild(h('div',{className:'row-actions'},[browse]));
-    }
+
     if(!shown.length)categoryStatus.appendChild(h('p',{className:'muted',text:'No folders in this language.'}));
   }
   function render(){
