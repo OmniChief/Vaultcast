@@ -3122,3 +3122,10 @@ html[data-motion="reduced"] .vca-overall span,html[data-motion="reduced"] .vca-b
 .stalker-folder-section-heading:hover{background:rgba(85,130,184,.12)}
 .stalker-folder-section-heading:focus-visible{outline:2px solid #6ec8ff;outline-offset:-2px}
 .stalker-folder-section>div{padding:12px}
+
+/* Compact Live TV country picker: flag and name only. */
+.stalker-country-grid{grid-template-columns:repeat(auto-fill,minmax(118px,1fr));gap:10px}
+.stalker-country-tile{min-height:100px;padding:12px 8px;gap:9px;border-radius:11px}
+.stalker-country-tile img{width:46px;height:32px;object-fit:cover}
+.stalker-country-tile strong{font-size:.86rem;line-height:1.3;text-align:center;overflow-wrap:break-word}
+.stalker-country-tile>span{font-size:1.7rem}
