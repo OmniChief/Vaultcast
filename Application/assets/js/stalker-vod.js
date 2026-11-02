@@ -374,12 +374,7 @@ window.VaultcastStalkerVod=function(host,options){
     var ordered=titles.filter(fits).sort(function(a,b){return title(a).localeCompare(title(b),undefined,{numeric:true});});
     ordered.forEach(function(item){
       var sources=item.sources||[],chosen=sources[0];
-      var select=null;
-      if(sources.length>1){
-        select=h('select',{'aria-label':'Available sources for '+item.name});
-        sources.forEach(function(src,i){select.appendChild(h('option',{value:String(i),text:src.connection||('Connection '+(i+1))}));});
-      }
-      function selected(){return sources[select?Number(select.value):0]||chosen;}
+      function selected(){return chosen;}
       function open(){var src=selected();options.open(src.feed,Object.assign({},item,src,{sources:sources}),button);}
       var button=h('button',{className:'btn',text:item.playable?'View details':kind==='series'?'Browse series':'Explore',onClick:open});
       var download=item.playable&&options.download?h('button',{className:'btn ghost',text:'Add to library',onClick:function(){var src=selected();download.disabled=true;options.download(src.feed,Object.assign({},item,src)).then(function(){download.textContent='Queued';}).catch(function(e){download.disabled=false;status.textContent=e.message;});}}):null;
@@ -387,7 +382,6 @@ window.VaultcastStalkerVod=function(host,options){
       function stored(){try{return JSON.parse(localStorage.getItem('stalker-favourites-'+options.owner+'-'+selected().feed)||'[]');}catch(e){return [];}}
       function updateStar(){var src=selected();star.textContent=stored().some(function(x){return x.id===src.id&&x.tab===kind;})?'★':'☆';star.setAttribute('aria-label','Toggle favourite: '+item.name);}
       star.onclick=function(){var src=selected(),list=stored(),exists=list.some(function(x){return x.id===src.id&&x.tab===kind;});list=list.filter(function(x){return !(x.id===src.id&&x.tab===kind);});if(!exists)list.unshift({id:src.id,name:item.name,tab:kind});try{localStorage.setItem('stalker-favourites-'+options.owner+'-'+src.feed,JSON.stringify(list.slice(0,100)));}catch(e){}updateStar();};
-      if(select)select.onchange=updateStar;
       updateStar();
       var posterButton=h('button',{className:'stalker-vod-cover','aria-label':'Open '+item.name,onClick:open},[
         h('span',{className:'stalker-vod-placeholder',text:title(item)||item.name||'Untitled'})
@@ -400,9 +394,8 @@ window.VaultcastStalkerVod=function(host,options){
       results.appendChild(h('article',{className:'stalker-vod-card'},[
         posterButton,
         h('div',{className:'stalker-vod-copy'},[
-          h('div',{className:'row-head'},[h('h3',{text:title(item),title:item.name}),star]),
-          h('p',{className:'muted',text:year(item)}),
-          select||h('small',{className:'muted',text:chosen.connection||''}),
+          h('h3',{text:title(item),title:item.name}),
+          h('div',{className:'row-head'},[h('span',{className:'muted',text:year(item)||' '}),star]),
           h('div',{className:'row-actions'},[button,download])
         ])
       ]));
