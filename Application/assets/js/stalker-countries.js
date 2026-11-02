@@ -54,72 +54,120 @@ window.VaultcastStalkerCountries=function(host,options){
     return 'Other categories';
   }
   function renderCategories(){
-    shell(name(country)+' · Provider categories');
+    shell(name(country)+' · Live TV categories');
     var back=h('button',{className:'btn ghost',text:'← Countries',onClick:function(){country='';selected=null;remember();renderCountries();}});
     var filter=h('input',{type:'search',placeholder:'Find a provider category…','aria-label':'Filter provider categories'});
     body.append(h('div',{className:'row-actions'},[back,h('button',{className:'btn ghost',text:'Refresh categories',onClick:function(){discover(true);}})]),filter);
-    // The visible inventory is recreated from the most recently fetched portal
-    // categories; grouping changes nothing about the feed-specific category IDs.
     var byCategory=new Map();
     folders.filter(function(f){return f.country===country;}).forEach(function(f){
       var label=categoryLabel(f.name),key=label.normalize('NFKC').toLocaleLowerCase().replace(/\s+/g,' ').trim();
-      if(!byCategory.has(key))byCategory.set(key,{name:label,country:f.country,sources:[],feed:f.feed,id:f.id,connection:f.connection});
+      if(!byCategory.has(key))byCategory.set(key,{name:label,country:f.country,sources:[]});
       byCategory.get(key).sources.push(f);
     });
     var list=Array.from(byCategory.values()).sort(function(a,b){
-      function priority(f){var n=f.name.toUpperCase();return /^GENERAL(?:\s|$)/.test(n)?0:/^ENTERTAINMENT(?:\s|$)/.test(n)?1:2;}
-      return priority(a)-priority(b)||a.name.localeCompare(b.name);
+      function rank(f){
+        var n=f.name.normalize('NFKC').toUpperCase().trim();
+        return n==='GENERAL'?0:n==='ENTERTAINMENT'?1:2;
+      }
+      return rank(a)-rank(b)||a.name.localeCompare(b.name);
     });
-    status.textContent=list.length+' categories across '+folders.filter(function(f){return f.country===country;}).length+' provider folders · select one to load current channels';
-    if(!list.length)body.append(h('p',{className:'muted',text:'No provider categories for this country.'}));
-    var ordered=['General & entertainment','Sports','Football','Live events & PPV','Movies & on-demand','Kids & family','News, documentary & music','Replays & catch-up','Other categories'];
-    var groups=new Map(ordered.map(function(label){return [label,[]];}));
-    list.forEach(function(f){groups.get(categorySection(f.name)).push(f);});
-    // Expand section headings directly into their channel listing, without an
-    // intermediate folder click. Only fetch the selected section on demand.
-    function openSection(sectionName,entries){
-      var sources=entries.reduce(function(all,f){return all.concat(f.sources);},[]);
-      selected={name:sectionName,country:country,sources:sources,
-        feed:sources[0]&&sources[0].feed,id:sources[0]&&sources[0].id};
-      page=1;channels=[];sourcePages={};search='';remember();loadChannels(false);
-    }
+    status.textContent=list.length+' categories · open a category to load its channels';
     var container=h('div',{className:'stalker-category-sections'});
     body.appendChild(container);
     function paint(){
       container.replaceChildren();
-      var needle=filter.value.trim().toLocaleLowerCase(),visible=0;
-      ordered.forEach(function(sectionName){
-        var entries=groups.get(sectionName).filter(function(f){return !needle||f.name.toLocaleLowerCase().includes(needle);});
-        if(!entries.length)return;
-        visible+=entries.length;
-        var section=h('details',{className:'stalker-folder-section',open:!!needle});
-        section.appendChild(h('summary',{className:'stalker-folder-section-heading',text:sectionName+' ('+entries.length+')'}));
-        section.addEventListener('toggle',function(){
-          if(section.open&&!needle)openSection(sectionName,entries);
-        });
-        entries.forEach(function(f){
-          var row=h('div',{className:'stalker-provider-folder'});
-          row.appendChild(h('button',{className:'stalker-provider-folder-open',onClick:function(){selected=f;page=1;channels=[];sourcePages={};search='';remember();loadChannels(false);}},[
-            h('strong',{text:f.name}),h('small',{className:'muted',text:f.sources.length+' '+(f.sources.length===1?'connection':'connections')})
-          ]));
-          // Country correction is available on demand, not repeated on every tile.
-          var edit=h('button',{className:'btn ghost',text:'Edit country','aria-label':'Change country for '+f.name});
-          edit.onclick=function(){
-            var editor=h('div',{className:'stack'});
-            f.sources.forEach(function(src){
-              var relocate=h('select',{'aria-label':'Country for '+f.name+' on '+src.connection});
-              relocate.appendChild(h('option',{value:src.country,text:src.connection+': '+name(src.country)}));
-              Object.keys(countries).sort().forEach(function(code){if(code!==src.country)relocate.appendChild(h('option',{value:code,text:name(code)}));});
-              relocate.onchange=function(){overrides[folderKey(src)]=relocate.value;src.country=relocate.value;saveOverrides();renderCategories();};
-              editor.appendChild(relocate);
+      var term=filter.value.trim().toLocaleLowerCase(),matching=list.filter(function(f){return f.name.toLocaleLowerCase().includes(term);});
+      matching.forEach(function(f){
+        var detail=h('details',{className:'stalker-folder-section'});
+        var summary=h('summary',{className:'stalker-folder-section-heading'},[
+          h('strong',{text:f.name}),h('small',{className:'muted',text:' · '+f.sources.length+' '+(f.sources.length===1?'connection':'connections')})
+        ]);
+        var content=h('div',{className:'stalker-country-results'});
+        detail.append(summary,content);container.appendChild(detail);
+        var items=[],progress=new Map(),busy=false,sequence=0,query='',hasNext=true;
+        function grouped(){
+          var result=new Map();
+          items.forEach(function(item){
+            var key=channelKey(item);
+            if(!key)return;
+            if(!result.has(key))result.set(key,Object.assign({},item,{sources:[]}));
+            var group=result.get(key);
+            if(!group.sources.some(function(src){return src.feed===item.feed&&String(src.id)===String(item.id);}))
+              group.sources.push({feed:item.feed,id:item.id,connection:item.connection,kind:'live',name:item.name,description:item.description});
+          });
+          return Array.from(result.values());
+        }
+        var message=h('p',{className:'muted',role:'status'});
+        var find=h('input',{type:'search',placeholder:'Filter loaded channels…','aria-label':'Filter channels in '+f.name});
+        var listHost=h('div',{className:'stalker-country-results'});
+        var more=h('button',{className:'btn ghost',text:'Load more channels'});
+        var refresh=h('button',{className:'btn ghost',text:'Refresh channels'});
+        var countryEdit=h('button',{className:'btn ghost',text:'Edit country'});
+        var controls=h('div',{className:'row-actions'},[refresh,countryEdit]);
+        content.append(controls,find,message,listHost,more);
+        function draw(){
+          listHost.replaceChildren();
+          var all=grouped(),visible=all.filter(function(ch){return ch.name.toLocaleLowerCase().includes(query);});
+          visible.forEach(function(item){
+            var watch=h('button',{className:'btn',text:'Watch',onClick:function(){options.play(item.feed,item,watch);}});
+            listHost.appendChild(h('article',{className:'stalker-channel-card'},[
+              h('span',{className:'stalker-channel-card-icon','aria-hidden':'true',text:'▶'}),
+              h('div',{className:'stalker-country-channel-copy'},[
+                h('strong',{text:item.name}),
+                h('small',{className:'muted',text:item.sources.length+' '+(item.sources.length===1?'connection':'connections')})
+              ]),watch
+            ]));
+          });
+          if(!visible.length&&!busy)listHost.appendChild(h('p',{className:'muted',text:'No matching channels in loaded pages.'}));
+          message.textContent=busy?'Loading channel pages…':all.length+' channels loaded';
+          more.hidden=!hasNext;more.disabled=busy;
+        }
+        function load(reset,force){
+          if(busy||!detail.open)return;
+          if(reset){items=[];progress=new Map();hasNext=true;}
+          busy=true;var token=++sequence,index=0,remaining=false;
+          draw();
+          function next(){
+            if(token!==sequence||!detail.isConnected||!detail.open){busy=false;return;}
+            if(index>=f.sources.length){busy=false;hasNext=remaining;draw();return;}
+            var source=f.sources[index++],key=folderKey(source),p=progress.get(key)||{page:1,more:true};
+            if(!p.more){next();return;}
+            var params='feed='+encodeURIComponent(source.feed)+'&category='+encodeURIComponent(source.id)+'&page='+p.page+(force?'&refresh=1':'');
+            options.api('stalker_live_channels',params).then(function(data){
+              if(token!==sequence||!detail.isConnected||!detail.open)return;
+              if(!data||!data.ok)throw Error(data&&data.error||'Could not load channel page.');
+              (data.items||[]).forEach(function(item){items.push(item);});
+              progress.set(key,{page:p.page+1,more:!!data.hasMore});
+              remaining=remaining||!!data.hasMore;
+              next();
+            }).catch(function(error){
+              if(token!==sequence||!detail.isConnected||!detail.open)return;
+              busy=false;message.textContent=error.message||'Could not load channels.';
+              more.hidden=false;more.disabled=false;
             });
-            row.replaceChildren(row.firstChild,editor);
-          };
-          row.appendChild(edit);section.appendChild(row);
+          }
+          next();
+        }
+        detail.addEventListener('toggle',function(){
+          if(detail.open){if(!items.length)load(true,false);}
+          else sequence++;
         });
-        container.appendChild(section);
+        find.oninput=function(){query=find.value.toLocaleLowerCase();draw();};
+        more.onclick=function(){load(false,false);};
+        refresh.onclick=function(){load(true,true);};
+        countryEdit.onclick=function(){
+          var editor=h('div',{className:'stack'});
+          f.sources.forEach(function(src){
+            var select=h('select',{'aria-label':'Country for '+f.name+' on '+src.connection});
+            select.appendChild(h('option',{value:src.country,text:src.connection+': '+name(src.country)}));
+            Object.keys(countries).sort().forEach(function(code){if(code!==src.country)select.appendChild(h('option',{value:code,text:name(code)}));});
+            select.onchange=function(){overrides[folderKey(src)]=select.value;src.country=select.value;saveOverrides();renderCategories();};
+            editor.appendChild(select);
+          });
+          countryEdit.replaceWith(editor);
+        };
       });
-      if(!visible&&needle)container.appendChild(h('p',{className:'muted',text:'No matching provider categories.'}));
+      if(!matching.length)container.appendChild(h('p',{className:'muted',text:'No matching provider categories.'}));
     }
     filter.oninput=paint;paint();
   }
