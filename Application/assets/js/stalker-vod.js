@@ -2,7 +2,7 @@
 'use strict';
 window.VaultcastStalkerVod=function(host,options){
   var h=options.h,active=false,kind='vod',serial=0,timer=null,letter='#',query='',feeds=[],progress={},titles=[],seen={},loading=false;
-  var status,results,next,search,letters;
+  var status,results,next,search,letters,exportButton;
   function valid(token){return active&&host.isConnected&&options.current()&&token===serial;}
   // Provider names often begin with quality tags (e.g. "4K - Borderlands").
   // These are not part of the title and must not decide its A-Z letter.
@@ -38,7 +38,62 @@ window.VaultcastStalkerVod=function(host,options){
     feeds.forEach(function(f){progress[f.id]={page:1,done:false,failed:false};});
     renderResults();
   }
-  function stop(){active=false;serial++;clearTimeout(timer);}
+  var exportJob=null;
+  function downloadText(lines){
+    var blob=new Blob([lines.join('\n')+'\n'],{type:'text/plain;charset=utf-8'});
+    var url=URL.createObjectURL(blob),a=document.createElement('a');
+    a.href=url;a.download='stalker-vod-raw-names-'+new Date().toISOString().slice(0,10)+'.txt';
+    document.body.appendChild(a);a.click();a.remove();
+    setTimeout(function(){URL.revokeObjectURL(url);},30000);
+  }
+  function exportRaw(){
+    if(exportJob){exportJob.cancelled=true;return;}
+    var job={cancelled:false,lines:['Stalker VOD raw name export','Generated: '+new Date().toISOString(),'Original titles only; no matching or filtering','']};
+    exportJob=job;var button=exportButton;button.textContent='Cancel export';
+    var kinds=['vod','series'],list=options.connections.filter(function(f){return f.enabled;});
+    var feedIndex=0,kindIndex=0,page=1,count=0,seenPages=new Set(),issues=[],limit=1000;
+    function finish(){
+      if(exportJob!==job)return;
+      job.lines.push('','EXPORT STATUS: '+(job.cancelled?'CANCELLED — PARTIAL':issues.length?'INCOMPLETE — see warnings':'Completed where provider indicated last page'));
+      job.lines.push('Total records: '+count);
+      issues.forEach(function(x){job.lines.push('WARNING: '+x);});
+      downloadText(job.lines);exportJob=null;button.textContent='Export raw VOD names (.txt)';
+      status.textContent='Raw VOD export '+(job.cancelled?'cancelled (partial text saved)':'downloaded')+' · '+count+' records'+(issues.length?' · '+issues.length+' warnings':'');
+    }
+    function run(){
+      if(exportJob!==job)return;
+      if(job.cancelled||feedIndex>=list.length){finish();return;}
+      var feed=list[feedIndex],k=kinds[kindIndex];
+      if(page===1){job.lines.push('','### '+feed.name+' / '+k);seenPages.clear();}
+      status.textContent='Exporting '+feed.name+' '+k+' page '+page+' · '+count+' records (Cancel export to save partial)';
+      var params=new URLSearchParams({kind:k,feed:feed.id,page:String(page)});
+      options.api('stalker_vod_catalogue',params.toString()).then(function(result){
+        if(!result||!result.ok)throw Error(result&&result.error||'API returned an error');
+        var items=Array.isArray(result.items)?result.items:[];
+        var signature=items.map(function(i){return i.id;}).join('|');
+        if(items.length&&seenPages.has(signature)){issues.push(feed.name+' '+k+': repeated provider page '+page);advance();return;}
+        if(items.length)seenPages.add(signature);
+        items.forEach(function(item){
+          if(!item||!item.name)return;
+          // Sanitize line separators; preserve original names, IDs and feed identity.
+          job.lines.push(String(item.id||'').replace(/[\r\n\t]/g,' ')+'\t'+String(item.name).replace(/[\r\n\t]/g,' '));
+          count++;
+        });
+        if(result.hasMore&&items.length&&page<limit){page++;schedule();}
+        else{
+          if(result.hasMore&&page>=limit)issues.push(feed.name+' '+k+': page safety limit '+limit+' reached');
+          if(result.hasMore&&!items.length)issues.push(feed.name+' '+k+': empty page despite hasMore');
+          if(!items.length&&page===1)issues.push(feed.name+' '+k+': no items returned on page 1');
+          advance();
+        }
+      }).catch(function(err){issues.push(feed.name+' '+k+' page '+page+': '+(err.message||err));advance();});
+    }
+    function advance(){page=1;kindIndex++;if(kindIndex>=kinds.length){kindIndex=0;feedIndex++;}schedule();}
+    function schedule(){setTimeout(run,150);}
+    if(!list.length){issues.push('No enabled Stalker connections');finish();return;}
+    run();
+  }
+  function stop(){active=false;serial++;clearTimeout(timer);if(exportJob)exportJob.cancelled=true;}
   function render(){
     host.replaceChildren();
     search=h('input',{type:'search',value:query,placeholder:'Search loaded provider titles…','aria-label':'Search Stalker VOD'});
@@ -46,6 +101,7 @@ window.VaultcastStalkerVod=function(host,options){
     status=h('p',{className:'muted',role:'status'});
     results=h('div',{className:'stalker-vod-grid'});
     next=h('button',{className:'btn',text:'Load more provider pages',onClick:function(){scan(false);}});
+    exportButton=h('button',{className:'btn ghost',text:'Export raw VOD names (.txt)',onClick:exportRaw});
     letters=h('div',{className:'row-actions',role:'group','aria-label':'Browse titles by first letter'});
     '#ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').forEach(function(ch){
       var b=h('button',{className:'btn ghost',text:ch==='#'?'All':ch,'aria-label':ch==='#'?'All provider titles (diagnostic view)':'Titles starting with '+ch,onClick:function(){if(letter===ch)return;letter=ch;renderLetters();renderResults();}});
@@ -53,7 +109,7 @@ window.VaultcastStalkerVod=function(host,options){
     });
     host.append(h('div',{className:'stalker-vod-library-heading'},[
       h('div',{},[h('h2',{text:kind==='vod'?'Movies':'Series'}),h('p',{className:'muted',text:'Browse the titles loaded from portal pages. All and A–Z reuse the same results; Load more fetches another small batch.'})]),
-      h('button',{className:'btn ghost',text:'Refresh',onClick:function(){reset();scan(true);}})
+      h('div',{className:'row-actions'},[exportButton,h('button',{className:'btn ghost',text:'Refresh',onClick:function(){reset();scan(true);}})])
     ]),letters,h('form',{className:'stalker-searchbar',onSubmit:function(e){e.preventDefault();renderResults();}},[search]),status,results,next);
     renderLetters();
   }
