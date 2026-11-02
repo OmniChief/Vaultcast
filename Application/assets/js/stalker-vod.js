@@ -355,15 +355,28 @@ window.VaultcastStalkerVod=function(host,options){
     search.parentElement.insertAdjacentElement('afterend',searchActions);
     renderCategories();
   }
+  function numberedPart(item){
+    // Provider pseudo-series such as "024 - Noreen mohammad sadiq..." are
+    // independent playable rows, not native Stalker series records.
+    if(kind!=='vod'||!item.playable)return null;
+    var name=title(item),m=name.match(/^\s*(\d{1,4})\s*[-–—.)_]\s*(.+?)\s*$/u);
+    if(!m||!m[2]||m[2].length<5)return null;
+    var base=m[2].replace(/\s+/g,' ').trim(),poster=String(item.poster||'');
+    // Require the same actual poster (not the common empty or TMDB base URL).
+    if(!poster||/\/t\/p\/[^/]+\/?(?:\?.*)?$/.test(poster))return null;
+    return {number:Number(m[1]),name:base,key:base.toLocaleLowerCase()+'|'+poster};
+  }
   function add(rows,feed){
     (rows||[]).forEach(function(item){
       if(!item||!item.name||!item.id)return;
       var source={id:item.id,feed:feed.id,connection:feed.name,kind:item.kind,playable:item.playable,labels:prefixParts(item).labels,poster:item.poster||'',posterCandidates:Array.isArray(item.posterCandidates)?item.posterCandidates:[]};
-      var k=key(item),group=seen[k];
+      var part=numberedPart(item);
+      var k=part?'numbered|'+part.key:key(item),group=seen[k];
       // Without a year, avoid merging unrelated similarly named releases.
-      if(!year(item))k+='|'+feed.id;
+      if(!part&&!year(item))k+='|'+feed.id;
       group=seen[k];
-      if(!group){group=Object.assign({},item,{sources:[],groupLabels:[]});seen[k]=group;titles.push(group);}
+      if(!group){group=Object.assign({},item,{sources:[],groupLabels:[]});if(part){group.name=part.name;group.numberedParts=[];}seen[k]=group;titles.push(group);}
+      if(part&&!group.numberedParts.some(function(p){return p.feed===feed.id&&p.id===item.id;}))group.numberedParts.push({number:part.number,name:item.name,id:item.id,feed:feed.id,connection:feed.name,item:item});
       if(!group.sources.some(function(x){return x.feed===source.feed&&x.id===source.id;}))group.sources.push(source);
       source.labels.forEach(function(label){if(group.groupLabels.indexOf(label)<0)group.groupLabels.push(label);});
     });
@@ -374,6 +387,22 @@ window.VaultcastStalkerVod=function(host,options){
     var ordered=titles.filter(fits).sort(function(a,b){return title(a).localeCompare(title(b),undefined,{numeric:true});});
     ordered.forEach(function(item){
       var sources=item.sources||[],chosen=sources[0];
+      if(item.numberedParts&&item.numberedParts.length>1){
+        var parts=item.numberedParts.slice().sort(function(a,b){return a.number-b.number||a.name.localeCompare(b.name);});
+        var details=h('details',{className:'stalker-numbered-group'});
+        details.appendChild(h('summary',{text:parts.length+' parts · '+item.name}));
+        parts.forEach(function(part){
+          var label=String(part.number).padStart(3,'0')+' · '+part.connection;
+          details.appendChild(h('button',{className:'btn ghost',text:label,onClick:function(){
+            options.open(part.feed,Object.assign({},part.item,{sources:[{id:part.id,feed:part.feed,connection:part.connection,kind:part.item.kind,playable:true}]}));
+          }}));
+        });
+        results.appendChild(h('article',{className:'stalker-vod-card'},[
+          h('div',{className:'stalker-vod-cover'},[h('span',{className:'stalker-vod-placeholder',text:item.name}),item.poster?h('img',{src:item.poster,alt:'',loading:'lazy',referrerpolicy:'no-referrer',onError:function(e){e.target.remove();}}):null]),
+          h('div',{className:'stalker-vod-copy'},[details])
+        ]));
+        return;
+      }
       function selected(){return chosen;}
       function open(){var src=selected();options.open(src.feed,Object.assign({},item,src,{sources:sources}),button);}
       var button=h('button',{className:'btn',text:item.playable?'View details':kind==='series'?'Browse series':'Explore',onClick:open});
