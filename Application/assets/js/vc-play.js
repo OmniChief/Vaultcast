@@ -73,8 +73,26 @@
   }
 
   // ------------------------------------------------------------------ Arcade hub
+  function nfs(host){
+    var url = 'https://nfsu2.xyz/';
+    host.appendChild(hero('NFS Underground 2', 'Hosted browser game. Requires WebGPU in a modern browser; Vaultcast does not host its game files.', [
+      btn('Back to Arcade', function(){ go('arcade'); }, 'ghost')
+    ], 'ARCADE'));
+    var stage = h('div', { className:'vc-nfs-stage', style:'width:100%;height:75vh;min-height:400px;position:relative;' });
+    var frame = h('iframe', { title:'NFS Underground 2', src:url, allow:'fullscreen; gamepad', allowfullscreen:'allowfullscreen', loading:'lazy',
+      style:'display:block;width:100%;height:100%;border:0;' });
+    stage.appendChild(frame);
+    host.appendChild(stage);
+    host.appendChild(h('div', { className:'vc-card-actions' }, [
+      btn('Fullscreen', function(){ if (frame.requestFullscreen) frame.requestFullscreen().catch(function(){}); }, 'primary'),
+      h('a', { href:url, target:'_blank', rel:'noopener noreferrer', className:'vc-button', text:'Open game in new tab' })
+    ]));
+    host.appendChild(h('p', { className:'muted', text:'If the game does not appear, the hosting site may prohibit embedding. Use Open game in new tab instead.' }));
+  }
+
   function arcade(host, sub){
     var parts = String(sub || '').split('/');
+    if (parts[0] === 'nfs') return nfs(host);
     if (RUN.indexOf(parts[0]) >= 0) return runGame(host, parts[0]);
     if (parts[0] === 'word') return dailyFive(host);
     if (parts[0] === 'chess') return chessView(host, parts[1] || '');
@@ -92,6 +110,13 @@
       ]);
       card._best = best; grid.appendChild(card);
     });
+    grid.appendChild(h('article', { className:'vc-game-card', style:'--vc-hue:215', tabindex:'0', role:'button', 'aria-label':'Play NFS Underground 2',
+      onClick:function(e){ if (e.target.closest('.vc-card-actions')) return; go('arcade','nfs'); },
+      onKeydown:function(e){ if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go('arcade','nfs'); } } }, [
+      h('div', { className:'vc-game-art', text:'NFS' }),
+      h('div', { className:'vc-game-copy' }, [h('h3', { text:'NFS Underground 2' }), h('p', { className:'muted', text:'Play the hosted browser revival. Requires WebGPU.' })]),
+      h('div', { className:'vc-card-actions' }, [btn('Play', function(){ go('arcade','nfs'); }, 'primary')])
+    ]));
     host.appendChild(grid);
     if (signed()) {
       call('/play/arcade/summary').then(function(j){ Array.prototype.forEach.call(grid.children, function(card, i){ var id = Object.keys(GAMES)[i]; if (j.bests[id] != null) card._best.textContent = j.bests[id] ? 'Your best ' + fmt(j.bests[id]) : 'No score yet'; else if (id === 'chess') card._best.textContent = 'Async with friends · vs computer'; }); }).catch(function(){});
