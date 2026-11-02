@@ -271,6 +271,62 @@ window.VaultcastStalkerVod=function(host,options){
 
     if(!shown.length)categoryStatus.appendChild(h('p',{className:'muted',text:'No folders in this language.'}));
   }
+  function favouriteEntries(){
+    var entries=[],seenFav={};
+    options.connections.forEach(function(feed){
+      var saved=[];
+      try{saved=JSON.parse(localStorage.getItem('stalker-favourites-'+options.owner+'-'+feed.id)||'[]');}catch(e){}
+      if(!Array.isArray(saved))return;
+      saved.forEach(function(item){
+        if(!item||item.tab!==kind||!item.name)return;
+        var normalized=title({name:item.name}).toLocaleLowerCase().replace(/[^\\p{L}\\p{N}]+/gu,' ').trim();
+        if(!normalized||seenFav[normalized])return;
+        seenFav[normalized]=true;entries.push({name:item.name,normalized:normalized});
+      });
+    });
+    return entries.sort(function(a,b){return a.name.localeCompare(b.name);});
+  }
+  function findFavourite(favourite,button){
+    if(button.disabled)return;
+    button.disabled=true;var original=button.textContent;button.textContent='Searching…';
+    var activeFeeds=options.connections.filter(function(f){return f.enabled;}),index=0,match=null;
+    function normalized(name){return title({name:name}).toLocaleLowerCase().replace(/[^\\p{L}\\p{N}]+/gu,' ').trim();}
+    function finish(){
+      button.disabled=false;button.textContent=original;
+      if(match){options.open(match.feed,Object.assign({},match.item,{feed:match.feed}),button);}
+      else status.textContent='Favourite "'+favourite.name+'" was not found on the enabled connections. It remains saved.';
+    }
+    function next(){
+      if(!active||!host.isConnected)return;
+      if(match||index>=activeFeeds.length){finish();return;}
+      var feed=activeFeeds[index++],page=1;
+      function searchPage(){
+        if(!active||!host.isConnected)return;
+        var params=new URLSearchParams({kind:kind,feed:feed.id,q:title({name:favourite.name}),page:String(page)});
+        options.api('stalker_vod_catalogue',params.toString()).then(function(data){
+          var candidates=data&&Array.isArray(data.items)?data.items:[];
+          var found=candidates.find(function(item){return item&&normalized(item.name)===favourite.normalized;});
+          if(found){match={item:found,feed:feed.id};finish();return;}
+          if(data&&data.hasMore&&candidates.length&&page<3){page++;searchPage();}
+          else next();
+        }).catch(function(){next();});
+      }
+      status.textContent='Finding '+favourite.name+' on '+feed.name+'…';
+      searchPage();
+    }
+    next();
+  }
+  function showFavourites(){
+    var favs=favouriteEntries();
+    results.replaceChildren();
+    next.hidden=true;
+    status.textContent=favs.length?favs.length+' saved favourites. Select one to find it on the current connections.':'No saved favourites for '+(kind==='vod'?'movies':'series')+'.';
+    favs.forEach(function(fav){
+      var button=h('button',{className:'btn ghost',text:fav.name,onClick:function(){findFavourite(fav,button);}});
+      button.style.whiteSpace='normal';button.style.textAlign='left';
+      results.appendChild(button);
+    });
+  }
   function render(){
     host.replaceChildren();
     search=h('input',{type:'search',value:query,placeholder:'Search all titles or filter loaded names…','aria-label':'Search Stalker VOD'});
@@ -291,7 +347,10 @@ window.VaultcastStalkerVod=function(host,options){
       searchAllMode=true;category='';reset();query=term;search.value=term;letter='#';
       renderCategories();titlesStarted=true;scan(false);
     }});
-    var searchActions=h('div',{className:'row-actions'},[searchAllButton]);
+    var favouritesButton=h('button',{className:'btn ghost',type:'button',text:'Favourites',onClick:function(){
+      serial++;titlesStarted=false;loading=false;searchAllMode=false;category='';tasks=[];renderCategories();showFavourites();
+    }});
+    var searchActions=h('div',{className:'row-actions'},[searchAllButton,favouritesButton]);
     searchActions.style.marginTop='8px';
     search.parentElement.insertAdjacentElement('afterend',searchActions);
     renderCategories();
