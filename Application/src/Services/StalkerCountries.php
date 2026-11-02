@@ -25,6 +25,13 @@ final class StalkerCountries {
         // Accept box-drawing and full-width provider separators, including
         // directional Unicode marks often prepended to Stalker labels.
         $clean=preg_replace('/[\x{200e}\x{200f}\x{202a}-\x{202e}\x{2066}-\x{2069}\x{feff}]/u','',$text);
+        // Many portals use a leading | IT |, ┃ IE ┃ or | UK | marker.
+        // Prefer that explicit marker over later names such as "UK" in a programme title.
+        if(preg_match('/^\s*[|┃│¦]\s*([A-Z]{2,3})\s*[|┃│¦]/iu',$clean,$prefix)){
+            $code=strtoupper($prefix[1]);
+            $code=$aliases[$code]??$code;
+            if($code!=='AR'&&strpos(' '.self::CODES.' ',' '.$code.' ')!==false)return $code;
+        }
         preg_match_all('/[\[（(]\s*([A-Z]{2,3})\s*[\]）)]|[|┃│¦]\s*([A-Z]{2,3})\s*[|┃│¦]|(?:^|[|┃│¦\/])\s*([A-Z]{2,3})(?=\s*(?:[|┃│¦:._\-\s]|$))/iu',$clean,$matches,PREG_SET_ORDER);
         foreach($matches as $match){
             $code=strtoupper(($match[1]??'')?:($match[2]??'')?:($match[3]??''));
