@@ -364,14 +364,19 @@ window.VaultcastStalkerVod=function(host,options){
     var base=m[2].replace(/\s+/g,' ').trim(),poster=String(item.poster||'');
     // Require the same actual poster (not the common empty or TMDB base URL).
     if(!poster||/\/t\/p\/[^/]+\/?(?:\?.*)?$/.test(poster))return null;
-    return {number:Number(m[1]),name:base,key:base.toLocaleLowerCase()+'|'+poster};
+    // For numbered collections, each part often has a different subtitle.
+    // Match a substantial shared creator/series prefix as well as the exact poster.
+    // Keep groups scoped to the provider connection to avoid unrelated matches.
+    var words=base.split(/\s+/),shared=words.length>=4?words.slice(0,3).join(' '):base;
+    if(shared.length<12)return null;
+    return {number:Number(m[1]),name:shared,key:shared.toLocaleLowerCase()+'|'+poster};
   }
   function add(rows,feed){
     (rows||[]).forEach(function(item){
       if(!item||!item.name||!item.id)return;
       var source={id:item.id,feed:feed.id,connection:feed.name,kind:item.kind,playable:item.playable,labels:prefixParts(item).labels,poster:item.poster||'',posterCandidates:Array.isArray(item.posterCandidates)?item.posterCandidates:[]};
       var part=numberedPart(item);
-      var k=part?'numbered|'+part.key:key(item),group=seen[k];
+      var k=part?'numbered|'+feed.id+'|'+part.key:key(item),group=seen[k];
       // Without a year, avoid merging unrelated similarly named releases.
       if(!part&&!year(item))k+='|'+feed.id;
       group=seen[k];
@@ -392,7 +397,7 @@ window.VaultcastStalkerVod=function(host,options){
         var details=h('details',{className:'stalker-numbered-group'});
         details.appendChild(h('summary',{text:parts.length+' parts · '+item.name}));
         parts.forEach(function(part){
-          var label=String(part.number).padStart(3,'0')+' · '+part.connection;
+          var label=String(part.number).padStart(3,'0')+' · '+title(part.item);
           details.appendChild(h('button',{className:'btn ghost',text:label,onClick:function(){
             options.open(part.feed,Object.assign({},part.item,{sources:[{id:part.id,feed:part.feed,connection:part.connection,kind:part.item.kind,playable:true}]}));
           }}));
