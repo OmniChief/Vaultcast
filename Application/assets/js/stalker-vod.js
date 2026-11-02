@@ -229,7 +229,7 @@ window.VaultcastStalkerVod=function(host,options){
   function add(rows,feed){
     (rows||[]).forEach(function(item){
       if(!item||!item.name||!item.id)return;
-      var source={id:item.id,feed:feed.id,connection:feed.name,kind:item.kind,playable:item.playable,labels:prefixParts(item).labels};
+      var source={id:item.id,feed:feed.id,connection:feed.name,kind:item.kind,playable:item.playable,labels:prefixParts(item).labels,poster:item.poster||'',posterCandidates:Array.isArray(item.posterCandidates)?item.posterCandidates:[]};
       var k=key(item),group=seen[k];
       // Without a year, avoid merging unrelated similarly named releases.
       if(!year(item))k+='|'+feed.id;
@@ -276,14 +276,47 @@ window.VaultcastStalkerVod=function(host,options){
       star.onclick=function(){var src=selected(),list=stored(),exists=list.some(function(x){return x.id===src.id&&x.tab===kind;});list=list.filter(function(x){return !(x.id===src.id&&x.tab===kind);});if(!exists)list.unshift({id:src.id,name:item.name,tab:kind});try{localStorage.setItem('stalker-favourites-'+options.owner+'-'+src.feed,JSON.stringify(list.slice(0,100)));}catch(e){}updateStar();};
       if(select)select.onchange=updateStar;
       updateStar();
+      var posterButton=h('button',{className:'stalker-vod-cover','aria-label':'Open '+item.name,onClick:open},[
+        h('span',{className:'stalker-vod-placeholder',text:title(item).slice(0,1).toUpperCase()})]);
+      var posterUrls=[],posterFields=[],tried={},posterIndex=0,posterLoading=false;
+      sources.forEach(function(src){
+        (src.posterCandidates||[]).forEach(function(c){
+          if(c&&c.url&&posterUrls.indexOf(c.url)<0){posterUrls.push(c.url);posterFields.push(c.field||'provider');}
+        });
+        if(src.poster&&posterUrls.indexOf(src.poster)<0){posterUrls.push(src.poster);posterFields.push('poster');}
+      });
+      if(item.poster&&posterUrls.indexOf(item.poster)<0){posterUrls.push(item.poster);posterFields.push('poster');}
+      var posterState=h('small',{className:'muted'});
+      var retry=h('button',{className:'btn ghost',text:'Find poster',onClick:function(){
+        posterIndex=0;tryPoster();
+      }});
+      retry.hidden=!!item.poster;
+      function tryPoster(){
+        if(posterLoading)return;
+        if(posterIndex>=posterUrls.length){
+          posterState.textContent=posterUrls.length?'No working poster among '+posterUrls.length+' provider URLs':'Provider listing supplied no poster URLs';
+          retry.textContent='Retry poster';retry.disabled=posterUrls.length===0;retry.hidden=false;return;
+        }
+        var url=posterUrls[posterIndex],field=posterFields[posterIndex];posterIndex++;
+        posterLoading=true;posterState.textContent='Checking poster '+posterIndex+'/'+posterUrls.length+' ('+field+')';
+        var img=h('img',{alt:'',loading:'lazy',referrerpolicy:'no-referrer'});
+        img.onload=function(){
+          posterLoading=false;posterButton.appendChild(img);
+          posterState.textContent='Poster found: '+field;
+          retry.hidden=true;
+        };
+        img.onerror=function(){posterLoading=false;tryPoster();};
+        img.src=url;
+      }
+      // Normal poster loads remain lazy; alternate provider URLs are only checked after failure.
+      if(posterUrls.length)tryPoster();
       results.appendChild(h('article',{className:'stalker-vod-card'},[
-        h('button',{className:'stalker-vod-cover','aria-label':'Open '+item.name,onClick:open},[
-          h('span',{className:'stalker-vod-placeholder',text:title(item).slice(0,1).toUpperCase()}),
-          item.poster?h('img',{src:item.poster,alt:'',loading:'lazy',referrerpolicy:'no-referrer',onError:function(e){e.target.remove();}}):null]),
+        posterButton,
         h('div',{className:'stalker-vod-copy'},[
           h('div',{className:'row-head'},[h('h3',{text:title(item),title:item.name}),star]),
           h('p',{className:'muted',text:year(item)}),
           select||h('small',{className:'muted',text:chosen.connection||''}),
+          retry,posterState,
           h('div',{className:'row-actions'},[button,download])
         ])
       ]));
