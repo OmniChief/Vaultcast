@@ -164,7 +164,7 @@ window.VaultcastStalkerCountries=function(host,options){
     var next=h('button',{className:'btn',text:'Load next provider page',onClick:function(){page++;loadChannels(true);},hidden:!hasMore});
     // Format filters are presentation-only and never request more provider data.
     // Untagged channels remain visible when all named formats are switched off.
-    var formats=['UHD','FHD','HEVC','HD','SD'],enabled={UHD:true,FHD:true,HEVC:true,HD:true,SD:true};
+    var formats=['UHD','FHD','HD'],enabled={UHD:true,FHD:true,HD:true};
     var controls=h('div',{className:'row-actions'},[back,refresh]);
     formats.forEach(function(format){
       var toggle=h('button',{type:'button',className:'btn primary',text:format,'aria-label':'Show '+format+' channels','aria-pressed':'true'});
@@ -182,9 +182,7 @@ window.VaultcastStalkerCountries=function(host,options){
       var found=[];
       if(/(?:^|[^A-Z0-9])(?:UHD|4K|2160P)(?=$|[^A-Z0-9])/.test(text))found.push('UHD');
       if(/(?:^|[^A-Z0-9])(?:FHD|FULL\s*HD|1080P)(?=$|[^A-Z0-9])/.test(text))found.push('FHD');
-      if(/(?:^|[^A-Z0-9])(?:HEVC|H\.?265|X265)(?=$|[^A-Z0-9])/.test(text))found.push('HEVC');
       if(/(?:^|[^A-Z0-9])(?:HD|720P)(?=$|[^A-Z0-9])/.test(text)&&!/FULL\s*HD/.test(text))found.push('HD');
-      if(/(?:^|[^A-Z0-9])(?:SD|480P|576P)(?=$|[^A-Z0-9])/.test(text))found.push('SD');
       return found;
     }
     function display(){
