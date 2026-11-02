@@ -2,7 +2,7 @@
 'use strict';
 window.VaultcastStalkerVod=function(host,options){
   var h=options.h,active=false,kind='vod',serial=0,timer=null,letter='#',query='',feeds=[],progress={},titles=[],seen={},loading=false;
-  var status,results,next,search,letters,exportButton,groupExportButton,groups,group='',categories=[],category='',groupsLoading=false,titlesStarted=false,categoryStatus=null,prefixGroups=null,showMoreCategories=false,searchAllMode=false,language='',tasks=[];
+  var status,results,next,search,letters,exportButton,groupExportButton,groups,group='',categories=[],category='',groupsLoading=false,titlesStarted=false,categoryStatus=null,prefixGroups=null,showMoreCategories=false,searchAllMode=false,language='',tasks=[],providerSelections={};
   function valid(token){return active&&host.isConnected&&options.current()&&token===serial;}
   // Discover provider-defined leading labels from retrieved names, never from a hardcoded provider list.
   // Require an explicit delimiter so ordinary titles (e.g. "A Beautiful Mind") remain intact.
@@ -215,6 +215,7 @@ window.VaultcastStalkerVod=function(host,options){
       b.setAttribute('aria-pressed',String(!!chosen));return b;
     }
     if(groupsLoading){categoryStatus.appendChild(h('p',{className:'muted',text:'Loading provider folders…'}));return;}
+    providerSelections={};
     var buckets=categoryBuckets(),languages=['UK','African','Arabic','Dutch','French','German','Iran','Italian','Portuguese','Spanish','Turkish','Other'];
     var available=languages.filter(function(lang){return buckets.some(function(c){return c.language===lang;});});
     buckets.forEach(function(c){if(available.indexOf(c.language)<0)available.push(c.language);});
@@ -320,7 +321,9 @@ window.VaultcastStalkerVod=function(host,options){
         });
         ids.forEach(function(id){
           var group=providerGroups[id],def=group.def,count=group.items.reduce(function(total,c){return total+c.sources.length;},0);
-          var details=h('details',{className:'stalker-provider-group'});
+          var providerKey='provider|'+(activeLanguage||'UK')+'|'+id;
+          providerSelections[providerKey]={name:def?def[1]:'Other providers',sources:group.items.reduce(function(all,c){return all.concat(c.sources);},[])};
+          var details=h('button',{className:'stalker-provider-group stalker-provider-action',type:'button',onClick:function(){beginBrowse(providerKey);}});
           var artwork=h('span',{className:'stalker-provider-artwork'});
           if(def){
             var domains={netflix:'netflix.com',apple:'tv.apple.com',disney:'disneyplus.com',amazon:'primevideo.com',hbo:'hbomax.com',bbc:'bbc.co.uk',cnn:'cnn.com',espn:'espn.com',paramount:'paramountplus.com',peacock:'peacocktv.com',sky:'sky.com',hulu:'hulu.com',discovery:'discoveryplus.com',tubi:'tubitv.com',bet:'bet.com',hallmark:'hallmarkchannel.com',lifetime:'mylifetime.com'};
@@ -330,13 +333,11 @@ window.VaultcastStalkerVod=function(host,options){
             artwork.appendChild(logo);
           }
           artwork.appendChild(h('span',{className:'stalker-provider-monogram',text:def?def[1]:'Other providers'}));
-          details.appendChild(h('summary',{className:'stalker-provider-summary'},[
+          details.appendChild(h('span',{className:'stalker-provider-summary'},[
             artwork,h('strong',{text:def?def[1]:'Other providers'}),
             h('small',{className:'muted',text:group.items.length+' folders · '+count+' sources'})
           ]));
-          var inner=h('div',{className:'stalker-provider-subfolders'});
-          group.items.sort(function(a,b){return a.name.localeCompare(b.name);}).forEach(function(c){inner.appendChild(folderButton(c));});
-          details.appendChild(inner);grid.appendChild(details);
+          grid.appendChild(details);
         });
       }else{
         part.items.forEach(function(c){grid.appendChild(folderButton(c));});
@@ -520,7 +521,7 @@ window.VaultcastStalkerVod=function(host,options){
   function scan(refresh){
     if(loading||!active||!titlesStarted)return;
     if(!tasks.length){
-      var bucket=categoryBuckets().find(function(c){return c.key===category;});
+      var bucket=providerSelections[category]||categoryBuckets().find(function(c){return c.key===category;});
       tasks=bucket?bucket.sources.map(function(c){return {key:c.feed+'|'+c.id,feed:feeds.find(function(f){return f.id===c.feed;}),category:c.id};}):
         feeds.map(function(f){return {key:f.id+'|*',feed:f,category:''};});
       tasks=tasks.filter(function(t){return !!t.feed;});
