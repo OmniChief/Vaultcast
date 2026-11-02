@@ -277,49 +277,19 @@ window.VaultcastStalkerVod=function(host,options){
       if(select)select.onchange=updateStar;
       updateStar();
       var posterButton=h('button',{className:'stalker-vod-cover','aria-label':'Open '+item.name,onClick:open},[
-        h('span',{className:'stalker-vod-placeholder',text:title(item).slice(0,1).toUpperCase()})]);
-      var posterUrls=[],posterFields=[];
-      // Preserve the original working poster URL first. Attach <img> to the DOM
-      // immediately: a detached loading="lazy" image may never start loading.
-      if(item.poster){posterUrls.push(item.poster);posterFields.push('listing');}
-      sources.forEach(function(src){
-        if(src.poster&&posterUrls.indexOf(src.poster)<0){posterUrls.push(src.poster);posterFields.push('source');}
-        (src.posterCandidates||[]).forEach(function(c){
-          if(c&&c.url&&posterUrls.indexOf(c.url)<0){posterUrls.push(c.url);posterFields.push(c.field||'provider');}
-        });
-      });
-      var posterState=h('small',{className:'muted'}),posterIndex=0,posterImg=null;
-      var retry=h('button',{className:'btn ghost',text:'Find poster',onClick:function(){
-        posterIndex=0;showPoster();
-      }});
-      retry.hidden=!!item.poster;
-      function showPoster(){
-        if(!posterUrls.length){
-          posterState.textContent='No poster URL in provider listing';
-          retry.disabled=true;retry.hidden=false;return;
-        }
-        if(posterIndex>=posterUrls.length){
-          posterState.textContent='No working poster among '+posterUrls.length+' provider URLs';
-          retry.hidden=false;retry.textContent='Retry poster';return;
-        }
-        var index=posterIndex++,url=posterUrls[index],field=posterFields[index];
-        if(!posterImg){
-          posterImg=h('img',{alt:'',loading:'lazy',referrerpolicy:'no-referrer'});
-          posterButton.appendChild(posterImg);
-        }
-        posterImg.onload=function(){posterState.textContent='';retry.hidden=true;};
-        posterImg.onerror=function(){showPoster();};
-        posterImg.src=url;
+        h('span',{className:'stalker-vod-placeholder',text:title(item)||item.name||'Untitled'})
+      ]);
+      if(item.poster){
+        var posterImg=h('img',{src:item.poster,alt:'',loading:'lazy',referrerpolicy:'no-referrer'});
+        posterImg.onerror=function(){posterImg.remove();};
+        posterButton.appendChild(posterImg);
       }
-      // Initial image is attached to the card before the browser evaluates lazy loading.
-      if(posterUrls.length)showPoster();
       results.appendChild(h('article',{className:'stalker-vod-card'},[
         posterButton,
         h('div',{className:'stalker-vod-copy'},[
           h('div',{className:'row-head'},[h('h3',{text:title(item),title:item.name}),star]),
           h('p',{className:'muted',text:year(item)}),
           select||h('small',{className:'muted',text:chosen.connection||''}),
-          retry,posterState,
           h('div',{className:'row-actions'},[button,download])
         ])
       ]));
