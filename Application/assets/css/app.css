@@ -3102,3 +3102,10 @@ html[data-motion="reduced"] .vca-overall span,html[data-motion="reduced"] .vca-b
 .stalker-provider-summary small{font-size:.75rem}
 .stalker-provider-subfolders{display:flex;flex-direction:column;gap:7px;padding:10px;border-top:1px solid #3d5675}
 .stalker-provider-group[open]{grid-column:span 1}
+
+/* Stalker folder artwork tiles */
+.stalker-folder-art-card{display:flex!important;flex-direction:column;align-items:center;justify-content:center;gap:9px;min-height:132px!important;text-align:center!important;line-height:1.4}
+.stalker-folder-art{display:grid;place-items:center;width:74px;height:64px;border-radius:13px;background:linear-gradient(135deg,#263c60,#111e35);font-size:2.2rem;line-height:1;border:1px solid #476282;text-shadow:0 1px 12px rgba(0,0,0,.3)}
+.stalker-provider-artwork.has-logo .stalker-provider-monogram{visibility:hidden}
+.stalker-provider-artwork img{max-height:54px;max-width:150px;left:50%;top:50%;width:auto;height:auto;transform:translate(-50%,-50%);object-fit:contain}
+.stalker-provider-artwork:not(.has-logo) .stalker-provider-monogram{visibility:visible}
