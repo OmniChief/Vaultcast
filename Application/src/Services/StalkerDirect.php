@@ -161,6 +161,7 @@ final class StalkerDirect {
         $refresh=!empty($opts['refresh']);
         // Browse and playback do not require an administrator to have indexed anything.
         $categories=$parent===''?self::categories($feed,$kind):[];
+        if(!empty($opts['categories_only']))return ['ok'=>true,'items'=>[],'total'=>null,'hasMore'=>false,'categories'=>$categories,'selectedFeed'=>$feed['id'],'shared'=>false];
         $result=self::page($feed,$kind,$page,$category,$query,$parent,$refresh);
         foreach($result['items'] as &$item)$item['sources']=[array_intersect_key($item,array_flip(['id','feed','connection','kind','playable']))];
         unset($item);
