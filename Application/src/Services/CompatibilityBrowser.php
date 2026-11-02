@@ -235,14 +235,11 @@ final class CompatibilityBrowser {
             $data=StalkerLiveBrowse::channels($feed,['category'=>$category,'page'=>$page]);
             $html.='<ul class="compat-list">';
             foreach($data['items']??[] as $item){
-                $html.='<li>'.self::esc($item['name']).' '.self::link('Open channel in standard player',['view'=>'live','tab'=>'stalker','feed'=>$feed['id'],'category'=>$category,'channel'=>$item['id']]).'</li>';
+                $playUrl=self::$base.'live/stalker/'.rawurlencode((string)$feed['id']).'/'.rawurlencode((string)$item['id']);
+                $html.='<li>'.self::esc($item['name']).' <a class="compat-button" href="'.self::esc($playUrl).'">Watch in standard player</a></li>';
             }
             $html.='</ul>'.self::pages($base+['category'=>$category],$page,!empty($data['hasMore']));
-            $channel=mb_substr((string)($_GET['channel']??''),0,120);
-            if($channel!==''){
-                $found=false;foreach($data['items']??[] as $item)if((string)$item['id']===$channel){$found=true;break;}
-                if($found)$html.='<p class="compat-note">Stalker playback requires a session-specific playback ticket. Use the standard Stalker player to watch this channel.</p>';
-            }
+
         }catch(Throwable $e){$html.='<p class="compat-note">Could not load provider channels. '.self::esc($e->getMessage()).'</p>';}
         return $html;
     }
