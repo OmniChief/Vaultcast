@@ -92,31 +92,49 @@ window.VaultcastStalkerVod=function(host,options){
     if(!list.length){issues.push('No enabled Stalker connections');finish();return;}
     run();
   }
+  var groupExportJob=null;
   function exportGroups(){
-    if(groupsLoading)return;
-    var button=groupExportButton,items=[],warnings=[];
-    button.disabled=true;button.textContent='Exporting groups…';
+    if(groupExportJob){groupExportJob.cancelled=true;groupExportJob.advance();return;}
+    var button=groupExportButton,items=[],warnings=[],job={cancelled:false,advance:function(){}};
+    groupExportJob=job;button.textContent='Save partial export';
     var enabled=options.connections.filter(function(f){return f.enabled;}),jobs=[];
     enabled.forEach(function(feed){['vod','series'].forEach(function(k){jobs.push({feed:feed,kind:k});});});
+    function finish(){
+      if(groupExportJob!==job)return;
+      groupExportJob=null;
+      var output={generated:new Date().toISOString(),complete:!job.cancelled&&!warnings.length,
+        description:'Sanitized VOD category fields; poster URL hosts and queries omitted',
+        checked:items.length,expected:jobs.length,connections:items,warnings:warnings};
+      var blob=new Blob([JSON.stringify(output,null,2)],{type:'application/json;charset=utf-8'});
+      var url=URL.createObjectURL(blob),a=document.createElement('a');
+      a.href=url;a.download='stalker-vod-raw-groups-'+new Date().toISOString().slice(0,10)+'.json';
+      document.body.appendChild(a);a.click();a.remove();
+      setTimeout(function(){URL.revokeObjectURL(url);},30000);
+      button.textContent='Export raw VOD groups (.json)';
+      status.textContent='Group export saved: '+items.length+'/'+jobs.length+' responses'+(warnings.length?' · '+warnings.length+' warnings':'');
+    }
     function next(index){
-      if(index>=jobs.length){
-        var output={generated:new Date().toISOString(),description:'Sanitized provider VOD category fields; host/query values omitted from artwork URLs',connections:items,warnings:warnings};
-        var blob=new Blob([JSON.stringify(output,null,2)],{type:'application/json;charset=utf-8'});
-        var url=URL.createObjectURL(blob),a=document.createElement('a');
-        a.href=url;a.download='stalker-vod-raw-groups-'+new Date().toISOString().slice(0,10)+'.json';
-        document.body.appendChild(a);a.click();a.remove();
-        setTimeout(function(){URL.revokeObjectURL(url);},30000);
-        button.disabled=false;button.textContent='Export raw VOD groups (.json)';
-        status.textContent='Group export downloaded: '+items.length+' connection/type responses'+(warnings.length?' · '+warnings.length+' warnings':'');
-        return;
+      if(groupExportJob!==job)return;
+      if(job.cancelled||index>=jobs.length){finish();return;}
+      var current=jobs[index],finished=false,timer;
+      function advance(result,error){
+        if(finished)return;
+        finished=true;clearTimeout(timer);
+        if(result&&result.ok)items.push({connection:current.feed.name,kind:current.kind,categories:result.categories||[]});
+        else if(error)warnings.push(current.feed.name+' '+current.kind+': '+error);
+        next(index+1);
       }
-      var job=jobs[index];
-      status.textContent='Exporting raw '+job.kind+' groups from '+job.feed.name+'…';
-      var params=new URLSearchParams({kind:job.kind,feed:job.feed.id,raw_categories_export:'1'});
-      options.api('stalker_vod_catalogue',params.toString()).then(function(result){
-        if(!result||!result.ok)throw Error(result&&result.error||'Unavailable');
-        items.push({connection:job.feed.name,kind:job.kind,categories:result.categories||[]});
-      }).catch(function(e){warnings.push(job.feed.name+' '+job.kind+': '+(e.message||e));}).then(function(){next(index+1);});
+      job.advance=function(){advance(null,'Skipped by user');};
+      status.textContent='Exporting groups '+(index+1)+'/'+jobs.length+': '+current.feed.name+' '+current.kind+' (Save partial export to stop)';
+      // A provider request may never settle. A timeout must still produce a downloadable file.
+      timer=setTimeout(function(){advance(null,'Timed out after 12 seconds');},12000);
+      var params=new URLSearchParams({kind:current.kind,feed:current.feed.id,raw_categories_export:'1'});
+      try{
+        Promise.resolve(options.api('stalker_vod_catalogue',params.toString())).then(function(result){
+          if(!result||!result.ok)advance(null,result&&result.error||'Provider request failed');
+          else advance(result,null);
+        },function(error){advance(null,String(error&&error.message||error));});
+      }catch(error){advance(null,String(error&&error.message||error));}
     }
     next(0);
   }
