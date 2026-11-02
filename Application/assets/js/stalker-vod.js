@@ -2,7 +2,7 @@
 'use strict';
 window.VaultcastStalkerVod=function(host,options){
   var h=options.h,active=false,kind='vod',serial=0,timer=null,letter='#',query='',feeds=[],progress={},titles=[],seen={},loading=false;
-  var status,results,next,search,letters,exportButton,groups,group='',categories=[],category='',groupsLoading=false,titlesStarted=false,categoryStatus=null,prefixGroups=null;
+  var status,results,next,search,letters,exportButton,groups,group='',categories=[],category='',groupsLoading=false,titlesStarted=false,categoryStatus=null,prefixGroups=null,showMoreCategories=false,searchAllMode=false;
   function valid(token){return active&&host.isConnected&&options.current()&&token===serial;}
   // Discover provider-defined leading labels from retrieved names, never from a hardcoded provider list.
   // Require an explicit delimiter so ordinary titles (e.g. "A Beautiful Mind") remain intact.
@@ -95,7 +95,7 @@ window.VaultcastStalkerVod=function(host,options){
   function stop(){active=false;serial++;clearTimeout(timer);if(exportJob)exportJob.cancelled=true;}
   function loadCategories(refresh){
     var token=++serial,index=0;
-    groupsLoading=true;categories=[];category='';renderCategories();
+    groupsLoading=true;categories=[];category='';showMoreCategories=false;renderCategories();
     function nextFeed(){
       if(!valid(token))return;
       if(index>=feeds.length){groupsLoading=false;renderCategories();renderResults();return;}
@@ -114,22 +114,46 @@ window.VaultcastStalkerVod=function(host,options){
     }
     nextFeed();
   }
+  function categoryPriority(name){
+    var n=String(name||'').toUpperCase();
+    if(/(?:\[(?:EN|US|UK|GB)\]|\b(?:ENGLISH|USA|UNITED STATES|UNITED KINGDOM|UK|US)\b)/.test(n))return 0;
+    if(/(?:\[(?:FR|DE|IT|AR|AF|ES|PT|MULTISUB)\]|\b(?:FRENCH|GERMAN|ITALY|ITALIAN|ARABIC|SPANISH|AFRICAN)\b)/.test(n))return 2;
+    return 1;
+  }
+  function chooseCategory(value){
+    if(category===value&&!searchAllMode)return;
+    category=value;searchAllMode=false;query='';search.value='';letter='#';
+    reset();renderLetters();renderCategories();titlesStarted=true;scan(false);
+  }
   function renderCategories(){
     if(!categoryStatus)return;
-    var filtered=categories.slice().sort(function(a,b){return a.name.localeCompare(b.name);});
-    var opts=[{value:'',text:'All provider groups'}];
-    filtered.forEach(function(c){opts.push({value:c.feed+'|'+c.id,text:c.feedName+' · '+c.name});});
-    var select=h('select',{'aria-label':'Stalker provider group'});
-    opts.forEach(function(o){select.appendChild(h('option',{value:o.value,text:o.text}));});
-    select.value=category;
-    select.disabled=groupsLoading;
-    select.onchange=function(){category=select.value;letter='#';reset();renderLetters();renderResults();};
-    categoryStatus.replaceChildren(select,h('small',{className:'muted',text:groupsLoading?'Loading provider groups…':categories.length+' provider groups available · Choose a letter to load titles'}));
+    var ordered=categories.slice().sort(function(a,b){return categoryPriority(a.name)-categoryPriority(b.name)||a.name.localeCompare(b.name)||a.feedName.localeCompare(b.feedName);});
+    var preferred=ordered.filter(function(c){return categoryPriority(c.name)===0;});
+    var others=ordered.filter(function(c){return categoryPriority(c.name)!==0;});
+    categoryStatus.replaceChildren();
+    function addButton(label,fn,selected){
+      var btn=h('button',{className:selected?'btn':'btn ghost',text:label,onClick:fn});
+      btn.setAttribute('aria-pressed',String(!!selected));categoryStatus.appendChild(btn);
+    }
+    addButton('Search all titles',function(){searchAllMode=true;category='';reset();renderCategories();search.focus();},searchAllMode);
+    addButton('All provider folders',function(){chooseCategory('');},!category&&!searchAllMode);
+    if(groupsLoading){categoryStatus.appendChild(h('small',{className:'muted',text:'Loading provider folders…'}));return;}
+    if(!categories.length){categoryStatus.appendChild(h('small',{className:'muted',text:'No provider folders available. All titles can still be browsed.'}));return;}
+    categoryStatus.appendChild(h('h3',{text:'English / US first'}));
+    preferred.forEach(function(c){addButton(c.name+' · '+c.feedName,function(){chooseCategory(c.feed+'|'+c.id);},category===c.feed+'|'+c.id);});
+    if(!preferred.length)categoryStatus.appendChild(h('small',{className:'muted',text:'No clearly labelled English / US folders'}));
+    if(others.length){
+      addButton(showMoreCategories?'Show fewer folders':'Show more folders ('+others.length+')',function(){showMoreCategories=!showMoreCategories;renderCategories();},false);
+      if(showMoreCategories||others.some(function(c){return c.feed+'|'+c.id===category;})){
+        categoryStatus.appendChild(h('h3',{text:'Other provider folders'}));
+        others.forEach(function(c){addButton(c.name+' · '+c.feedName,function(){chooseCategory(c.feed+'|'+c.id);},category===c.feed+'|'+c.id);});
+      }
+    }
   }
   function render(){
     host.replaceChildren();
-    search=h('input',{type:'search',value:query,placeholder:'Search loaded provider titles…','aria-label':'Search Stalker VOD'});
-    search.oninput=function(){query=search.value;renderResults();};
+    search=h('input',{type:'search',value:query,placeholder:'Search all titles or filter loaded names…','aria-label':'Search Stalker VOD'});
+    search.oninput=function(){query=search.value;if(!searchAllMode)renderResults();};
     status=h('p',{className:'muted',role:'status'});
     categoryStatus=h('div',{className:'row-actions','aria-label':'Available Stalker provider groups'});
     groups=h('div',{className:'row-actions',role:'group','aria-label':'Detected title prefix groups'});
@@ -142,9 +166,9 @@ window.VaultcastStalkerVod=function(host,options){
       b.dataset.letter=ch;letters.appendChild(b);
     });
     host.append(h('div',{className:'stalker-vod-library-heading'},[
-      h('div',{},[h('h2',{text:kind==='vod'?'Movies':'Series'}),h('p',{className:'muted',text:'Provider groups load first. Choose a group and a letter to fetch VOD titles. Prefix groups appear from loaded names.'})]),
+      h('div',{},[h('h2',{text:kind==='vod'?'Movies':'Series'}),h('p',{className:'muted',text:'Browse English / US folders first, open other folders with Show more, or search all connections. Choose a folder to load its titles.'})]),
       h('div',{className:'row-actions'},[exportButton,h('button',{className:'btn ghost',text:'Refresh',onClick:function(){reset();loadCategories(true);}})])
-    ]),categoryStatus,groups,letters,h('form',{className:'stalker-searchbar',onSubmit:function(e){e.preventDefault();renderResults();}},[search]),status,results,next);
+    ]),categoryStatus,groups,letters,h('form',{className:'stalker-searchbar',onSubmit:function(e){e.preventDefault();if(searchAllMode){reset();query=search.value.trim();titlesStarted=true;scan(false);}else renderResults();}},[search]),status,results,next);
     renderLetters();renderCategories();
   }
   function renderLetters(){
@@ -216,7 +240,7 @@ window.VaultcastStalkerVod=function(host,options){
         ])
       ]));
     });
-    if(!ordered.length)results.appendChild(h('p',{className:'muted',text:titlesStarted?'No matching titles in loaded pages. Load more to continue.':'Choose a letter to retrieve titles.'}));
+    if(!ordered.length)results.appendChild(h('p',{className:'muted',text:titlesStarted?'No matching titles in loaded pages. Load more to continue.':'Select a provider folder or Search all titles to begin.'}));
     var done=feeds.filter(function(f){return progress[f.id]&&progress[f.id].done;}).length;
     var failed=feeds.filter(function(f){return progress[f.id]&&progress[f.id].failed;}).length;
     status.textContent=ordered.length+' titles in '+(group||'All groups')+' for '+(letter==='#'?'All':letter)+' (loaded so far) · '+done+'/'+feeds.length+' connections finished'+(failed?' · '+failed+' unavailable':'');
@@ -241,7 +265,7 @@ window.VaultcastStalkerVod=function(host,options){
       if(!p||p.done){step();return;}
       status.textContent='Loading '+feed.name+' (page '+p.page+')…';
       // Never use provider single-letter search; sort and filter loaded pages locally.
-      var params=new URLSearchParams({kind:kind,feed:feed.id,category:selected?selected.id:'',page:String(p.page),refresh:refresh?'1':''});
+      var params=new URLSearchParams({kind:kind,feed:feed.id,category:selected?selected.id:'',q:searchAllMode?query:'',page:String(p.page),refresh:refresh?'1':''});
       options.api('stalker_vod_catalogue',params.toString()).then(function(result){
         if(!valid(token))return;
         if(!result||!result.ok)throw Error(result&&result.error||'Portal unavailable');
