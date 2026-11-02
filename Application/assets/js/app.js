@@ -6067,7 +6067,7 @@ try {
     return liveApiPost(action,body).then(function(result){if(!result.ok||!result.body||!result.body.ok)throw new Error(result.body&&result.body.error||'Provider request failed.');return result.body;});
   }
   function playStalkerItem(feed,item,button){
-    if(item.kind==='live'){state._stalkerChannelHint={id:'stalker:'+feed+':'+item.id,name:item.name,slogan:item.description||''};openLiveChannel('stalker:'+feed+':'+item.id);return;}
+    if(item.kind==='live'){state._stalkerChannelHint={id:'stalker:'+feed+':'+item.id,name:item.name,slogan:item.description||'',sources:Array.isArray(item.sources)?item.sources:[]};openLiveChannel('stalker:'+feed+':'+item.id);return;}
     state._stalkerVodHint={feed:feed,item:item};openLiveChannel('stalker-vod:'+feed+':'+item.id);
   }
   function liveChannelPath(id){
@@ -6145,6 +6145,22 @@ try {
       stalkerPost('stalker_play',{feed:feed,kind:'live',id:channelId}).then(function(result){if(!current()||mine!==attempt)return;context.sources[id]=result.source;startLivePlayer(id,player,context);status.textContent=context.guideMessage||(context.channels[0].programs.length?'':'No programme listings were supplied for this channel.');}).catch(function(error){if(current()&&mine===attempt){context.playError=true;status.className='bad';status.textContent=error.message;}});
     }
     wrap.appendChild(h('div',{className:'row-actions live-channel-back'},[h('button',{className:'btn',text:'← Back to Stalker',onClick:function(){closePlayer();goLiveTab('stalker');}}),h('button',{className:'btn',text:'Watch channel',onClick:play}),h('button',{className:'btn ghost',text:'Use simple player',onClick:simple}),stalkerCheckButton(feed,channelId,'live',status,function(){attempt++;}),h('button',{className:'btn ghost',text:'Stop playback',onClick:function(){attempt++;closePlayer();status.textContent='Playback stopped.';}}),h('button',{className:'btn ghost',text:'Refresh guide',onClick:function(){refreshGuide(true).then(function(){if(current())paintChannelInformation(context.channels[0]);}).catch(function(error){status.textContent=error.message;});}})]));
+    var liveHint=state._stalkerChannelHint&&state._stalkerChannelHint.id===id?state._stalkerChannelHint:{};
+    var liveCopies=Array.isArray(liveHint.sources)?liveHint.sources.filter(function(src){return src&&src.feed&&src.id;}):[];
+    if(liveCopies.length>1){
+      var liveSelect=h('select',{'aria-label':'Choose Live TV connection'});
+      liveCopies.forEach(function(src,i){
+        liveSelect.appendChild(h('option',{value:String(i),text:src.connection||src.feed}));
+        if(String(src.feed)===String(feed)&&String(src.id)===String(channelId))liveSelect.value=String(i);
+      });
+      liveSelect.onchange=function(){
+        var src=liveCopies[Number(liveSelect.value)];
+        if(!src||String(src.feed)===String(feed)&&String(src.id)===String(channelId))return;
+        attempt++;closePlayer();
+        playStalkerItem(src.feed,Object.assign({},src,{sources:liveCopies}),null);
+      };
+      wrap.appendChild(h('label',{className:'stalker-vod-source-select'},[h('span',{text:'Connection'}),liveSelect]));
+    }
     wrap.appendChild(player);wrap.appendChild(status);wrap.appendChild(info);
     setTimeout(function(){
       if(!current())return;
