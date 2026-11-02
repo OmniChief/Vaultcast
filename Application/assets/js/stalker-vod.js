@@ -7,9 +7,9 @@ window.VaultcastStalkerVod=function(host,options){
   // Discover provider-defined leading labels from retrieved names, never from a hardcoded provider list.
   // Require an explicit delimiter so ordinary titles (e.g. "A Beautiful Mind") remain intact.
   function prefixParts(item){
-    var name=String(item.name||'').trim(),labels=[];
+    var name=String(item.name||'').replace(/^[\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff\s]+/g,'').trim(),labels=[];
     for(var n=0;n<8;n++){
-      var match=name.match(/^(?:[┃|]\s*([A-Za-z]{2,5})\s*[┃|]\s*|\[\s*([A-Za-z]{2,5})\s*\]\s*[-:|]?\s*|((?:[A-Za-z]{2,5}|[A-Za-z]\s*\+|4K|8K|FULL HD))\s*[-:]\s+)/i);
+      var match=name.match(/^(?:[┃|│¦]\s*([A-Za-z]{2,5})\s*[┃|│¦]\s*|\[\s*([A-Za-z]{2,5})\s*\]\s*[-:|]?\s*|((?:[A-Za-z]{2,5}|[A-Za-z]\s*\+|4K|8K|FULL HD))\s*[-:]\s+)/i);
       if(!match)break;
       var label=(match[1]||match[2]||match[3]).replace(/\s+/g,'').toUpperCase();
       if(!label||!name.slice(match[0].length).trim())break;
@@ -278,7 +278,7 @@ window.VaultcastStalkerVod=function(host,options){
       updateStar();
       results.appendChild(h('article',{className:'stalker-vod-card'},[
         h('button',{className:'stalker-vod-cover','aria-label':'Open '+item.name,onClick:open},[
-          h('span',{className:'stalker-vod-placeholder',text:item.name.slice(0,1)}),
+          h('span',{className:'stalker-vod-placeholder',text:title(item).slice(0,1).toUpperCase()}),
           item.poster?h('img',{src:item.poster,alt:'',loading:'lazy',referrerpolicy:'no-referrer',onError:function(e){e.target.remove();}}):null]),
         h('div',{className:'stalker-vod-copy'},[
           h('div',{className:'row-head'},[h('h3',{text:title(item),title:item.name}),star]),
