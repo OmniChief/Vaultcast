@@ -8,7 +8,7 @@ final class StalkerCountries {
 
     public static function entry(array $feed,string $id): ?array {return StalkerLiveBrowse::entry($feed,$id)??StalkerVod::entry($feed,$id,'live');}
     public static function country(string $text): ?string {
-        $aliases=['UK'=>'GB','EN'=>'GB','ENG'=>'GB','USA'=>'US','UAE'=>'AE','GER'=>'DE','DEU'=>'DE','FRA'=>'FR','JPN'=>'JP','CAN'=>'CA','AUS'=>'AU','NZL'=>'NZ','IRL'=>'IE','NLD'=>'NL','ESP'=>'ES','ITA'=>'IT','POR'=>'PT','TUR'=>'TR','IND'=>'IN','BRA'=>'BR','POL'=>'PL'];
+        $aliases=['UK'=>'GB','EN'=>'GB','ENG'=>'GB','USA'=>'US','NA'=>'US','UAE'=>'AE','GER'=>'DE','DEU'=>'DE','FRA'=>'FR','JPN'=>'JP','CAN'=>'CA','AUS'=>'AU','NZL'=>'NZ','IRL'=>'IE','NLD'=>'NL','ESP'=>'ES','ITA'=>'IT','POR'=>'PT','TUR'=>'TR','IND'=>'IN','BRA'=>'BR','POL'=>'PL'];
         // Provider genre labels use flags, full names, aliases, and code prefixes.
         if(preg_match('/[\x{1F1E6}-\x{1F1FF}]{2}/u',$text,$flag)){
             preg_match_all('/[\x{1F1E6}-\x{1F1FF}]/u',$flag[0],$letters);
