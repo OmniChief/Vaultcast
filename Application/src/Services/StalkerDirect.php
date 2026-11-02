@@ -52,6 +52,12 @@ final class StalkerDirect {
                     $episode=(string)$episode;$publicId=$kind.':'.$id.':'.$episode;
                     $item=array_merge($meta,['id'=>$publicId,'kind'=>'vod','playable'=>true,'feed'=>$feed['id'],'connection'=>$feed['name']]);
                     $item['name'].=' · Episode '.$episode;
+                    $item['episode']=(string)$episode;
+                    $item['episodeTitle']='';
+                    $seasonRaw=$row['season_number']??$row['season']??null;
+                    if(is_scalar($seasonRaw)&&preg_match('/^\\d+$/D',(string)$seasonRaw))$item['season']=(int)$seasonRaw;
+                    $item['seasonName']=isset($item['season'])?'Season '.$item['season']:'Season unknown';
+                    $item['seasonId']=$id;
                     \Vaultcast\Repository::cachePut(self::key($feed,'item:'.$publicId),['cmd'=>$cmd,'series'=>$episode,'metadata'=>$item],7200);
                     $items[]=$item;
                 }
