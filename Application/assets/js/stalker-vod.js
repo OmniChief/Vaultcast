@@ -92,11 +92,13 @@ window.VaultcastStalkerVod=function(host,options){
     if(!list.length){issues.push('No enabled Stalker connections');finish();return;}
     run();
   }
-  var groupExportJob=null;
+  var groupExportJob=null,groupExportUrl=null,groupDownloadLink=null;
   function exportGroups(){
     if(groupExportJob){groupExportJob.cancelled=true;groupExportJob.advance();return;}
     var button=groupExportButton,items=[],warnings=[],job={cancelled:false,advance:function(){}};
     groupExportJob=job;button.textContent='Save partial export';
+    if(groupDownloadLink){groupDownloadLink.remove();groupDownloadLink=null;}
+    if(groupExportUrl){URL.revokeObjectURL(groupExportUrl);groupExportUrl=null;}
     var enabled=options.connections.filter(function(f){return f.enabled;}),jobs=[];
     enabled.forEach(function(feed){['vod','series'].forEach(function(k){jobs.push({feed:feed,kind:k});});});
     function finish(){
@@ -106,12 +108,19 @@ window.VaultcastStalkerVod=function(host,options){
         description:'Sanitized VOD category fields; poster URL hosts and queries omitted',
         checked:items.length,expected:jobs.length,connections:items,warnings:warnings};
       var blob=new Blob([JSON.stringify(output,null,2)],{type:'application/json;charset=utf-8'});
-      var url=URL.createObjectURL(blob),a=document.createElement('a');
-      a.href=url;a.download='stalker-vod-raw-groups-'+new Date().toISOString().slice(0,10)+'.json';
-      document.body.appendChild(a);a.click();a.remove();
-      setTimeout(function(){URL.revokeObjectURL(url);},30000);
+      if(groupExportUrl)URL.revokeObjectURL(groupExportUrl);
+      groupExportUrl=URL.createObjectURL(blob);
+      if(groupDownloadLink)groupDownloadLink.remove();
+      groupDownloadLink=document.createElement('a');
+      groupDownloadLink.href=groupExportUrl;
+      groupDownloadLink.download='stalker-vod-raw-groups-'+new Date().toISOString().slice(0,10)+'.json';
+      groupDownloadLink.textContent='Download exported groups JSON';
+      groupDownloadLink.className='btn';
+      groupDownloadLink.style.display='inline-block';
+      groupDownloadLink.style.marginTop='8px';
+      button.insertAdjacentElement('afterend',groupDownloadLink);
       button.textContent='Export raw VOD groups (.json)';
-      status.textContent='Group export saved: '+items.length+'/'+jobs.length+' responses'+(warnings.length?' · '+warnings.length+' warnings':'');
+      status.textContent='Group export ready: '+items.length+'/'+jobs.length+' responses. Click Download exported groups JSON.'+(warnings.length?' '+warnings.length+' warnings.':'');
     }
     function next(index){
       if(groupExportJob!==job)return;
