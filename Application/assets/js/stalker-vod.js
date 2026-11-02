@@ -258,12 +258,14 @@ window.VaultcastStalkerVod=function(host,options){
       ['lifetime','Lifetime',/^LIFETIME\b/,'lifetime','FFFFFF']
     ];
     function providerFor(name){
-      var n=String(name||'').normalize('NFKC').toUpperCase().trim();
+      var n=String(name||'').normalize('NFKC').toUpperCase().trim().replace(/^(?:SRS|SERIES)\s*[-:|]\s*/,'');
       return providerDefs.find(function(def){return def[2].test(n);})||null;
     }
     function folderType(name){
       var n=String(name||'').normalize('NFKC').toUpperCase().trim();
       if(providerFor(n))return 'Streaming services & companies';
+      if(kind==='series'&&/^(?:SRS|SERIES)\s*[-:|]\s*(?:NETFLIX|APPLE|DISNEY|HULU|HBO|MAX|AMAZON|PRIME|PARAMOUNT|PEACOCK|SKY|DISCOVERY|STARZ|SHOWTIME|NICKELODEON|WOW|CBC)\b/.test(n))return 'Streaming services & companies';
+      if(kind==='series'&&/^(?:CBC NETWORK|NICKELODEON|SKYSHOWTIME|STARZPLAY|WOW TV)\b/.test(n))return 'Streaming services & companies';
       // Additional provider-like labels remain under Other providers, not genres.
       if(/^(?:STARZ|SHOWTIME|MGM|ROKU|FOX|NBC|CBS|ITV|RTL|MAGENTA|JOYN|ZDF|ARD|VIAPLAY|CANAL\+|HAYU|SYFY|CRUNCHYROLL|RAI\s*PLAY|NOWTV|TVNOW|A&E|MTV|VH1|CW|TNT|AMC|ABC|FX|OWN|ZEUS|BRAVO)\b/.test(n))return 'Streaming services & companies';
       if(/(?:^|[^A-Z])(?:ACTION|ADVENTURE|COMEDY|COMEDIE|KOMÖDIE|DRAMA|DRAME|ROMANCE|ROMANTIK|CRIME|KRIMI|THRILLER|MYSTERY|MYSTERE|HORROR|HORREUR|FANTASY|FANTASIE|SCIENCE[\s-]*FICTION|SCI[\s-]*FI|DOCUMENTARY|DOCUMENTAIRE|DOCUMENTAIRES|DOKU|DOKUMENTAR|FAMILY|FAMILLE|FAMILIALE|HISTORY|HISTOIRE|HISTORIQUE|WAR|GUERRE|WESTERN|MUSIC|MUSIK|SPORT|KIDS|KINDER|ENFANTS|ANIME|ANIMATION|CHRISTMAS|WEIHNACHTS|NOEL|NATALE)(?:$|[^A-Z])/.test(n))return 'Genres';
@@ -308,7 +310,25 @@ window.VaultcastStalkerVod=function(host,options){
         }
         return card;
       }
-      if(part.label==='Streaming services & companies'){
+      if(part.label==='Streaming services & companies'&&kind==='series'){
+        // Show the complete original series provider folder list for review.
+        // Retain the logo artwork for recognised brands; no merging or hidden Other bucket.
+        var domains={netflix:'netflix.com',apple:'tv.apple.com',disney:'disneyplus.com',amazon:'primevideo.com',hbo:'hbomax.com',bbc:'bbc.co.uk',cnn:'cnn.com',espn:'espn.com',paramount:'paramountplus.com',peacock:'peacocktv.com',sky:'sky.com',hulu:'hulu.com',discovery:'discoveryplus.com',tubi:'tubitv.com',bet:'bet.com',hallmark:'hallmarkchannel.com',lifetime:'mylifetime.com'};
+        part.items.forEach(function(c){
+          var def=providerFor(c.name),artwork=h('span',{className:'stalker-provider-artwork'});
+          if(def){
+            var logo=h('img',{src:'https://cdn.simpleicons.org/'+def[3]+'/'+def[4],alt:def[1]+' logo',loading:'lazy',referrerpolicy:'no-referrer'});
+            logo.onload=function(){artwork.classList.add('has-logo');};
+            logo.onerror=function(){if(logo.dataset.fallback)return;logo.dataset.fallback='1';logo.src='https://www.google.com/s2/favicons?domain='+encodeURIComponent(domains[def[0]])+'&sz=128';logo.onerror=function(){logo.remove();artwork.classList.remove('has-logo');};};
+            artwork.appendChild(logo);
+          }
+          artwork.appendChild(h('span',{className:'stalker-provider-monogram',text:def?def[1]:'TV'}));
+          var card=h('button',{type:'button',className:'stalker-provider-group stalker-provider-action',onClick:function(){beginBrowse(c.key);}},[
+            h('span',{className:'stalker-provider-summary'},[artwork,h('strong',{text:c.name}),h('small',{className:'muted',text:c.sources.length+' '+(c.sources.length===1?'source':'sources')})])
+          ]);
+          grid.appendChild(card);
+        });
+      }else if(part.label==='Streaming services & companies'){
         var providerGroups={};
         part.items.forEach(function(c){
           var def=providerFor(c.name),id=def?def[0]:'other';
