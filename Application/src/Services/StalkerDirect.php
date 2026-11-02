@@ -7,7 +7,7 @@ declare(strict_types=1);
  */
 final class StalkerDirect {
     private static function key(array $feed,string $suffix): string {
-        return 'stalker_direct_v1_'.hash('sha256',json_encode([$feed,$suffix]));
+        return 'stalker_direct_v2_'.hash('sha256',json_encode([$feed,$suffix]));
     }
     public static function item(array $feed,string $id): ?array {
         return \Vaultcast\Repository::cacheGet(self::key($feed,'item:'.$id));
@@ -63,9 +63,16 @@ final class StalkerDirect {
             if($playable)\Vaultcast\Repository::cachePut(self::key($feed,'item:'.$publicId),['cmd'=>$cmd,'series'=>(string)($row['series_number']??''),'metadata'=>$item],7200);
             $items[]=$item;
         }
-        $total=max(0,(int)($result['total_items']??count($items)));
-        $perPage=max(1,(int)($result['max_page_items']??count($rows)));
-        $out=['items'=>$items,'total'=>$total,'hasMore'=>$page*$perPage<$total];
+        $reportedTotal=(int)($result['total_items']??0);
+        $reportedSize=(int)($result['max_page_items']??0);
+        $received=count($rows);
+        // Many Stalker portals omit or misreport totals. Don't treat a full
+        // provider page as the end merely because total_items is absent.
+        $perPage=$reportedSize>0?$reportedSize:max(1,$received);
+        $hasMore=$reportedTotal>0
+            ? $page*$perPage<$reportedTotal
+            : $received>0&&$reportedSize>0&&$received>=$reportedSize;
+        $out=['items'=>$items,'total'=>$reportedTotal>0?$reportedTotal:null,'hasMore'=>$hasMore];
         \Vaultcast\Repository::cachePut($key,$out,600);
         return $out;
     }
