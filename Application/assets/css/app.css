@@ -1088,7 +1088,7 @@ input[type=checkbox], input[type=radio], input[type=range] { accent-color: var(-
 .stalker-vod-card { overflow:hidden; border:1px solid rgba(255,255,255,.1); border-radius:var(--radius-lg); background:rgba(255,255,255,.025); }
 .stalker-vod-cover { position:relative; display:block; width:100%; aspect-ratio:2/3; padding:0; overflow:hidden; border:0; cursor:pointer; background:linear-gradient(145deg,#26354b,#141b28); color:#fff; }
 .stalker-vod-cover img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
-.stalker-vod-placeholder { display:grid; place-items:center; width:100%; height:100%; font-size:64px; opacity:.5; }
+.stalker-vod-placeholder { display:grid; place-items:center; width:100%; height:100%; padding:14px; text-align:center; overflow-wrap:anywhere; font-size:clamp(.9rem,1.4vw,1.2rem); line-height:1.35; font-weight:650; opacity:.85; }
 .stalker-vod-badge { position:absolute; bottom:12px; left:12px; padding:6px 10px; border-radius:20px; background:rgba(0,0,0,.75); }
 .stalker-vod-copy { padding:14px; }
 .stalker-vod-copy h3 { font-size:1rem; margin:0; overflow-wrap:anywhere; }
