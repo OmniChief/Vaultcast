@@ -128,16 +128,26 @@ window.VaultcastStalkerCountries=function(host,options){
     }
     filter.oninput=paint;paint();
   }
+  function channelDisplayName(raw){
+    var value=String(raw||'').normalize('NFKC').trim();
+    // Presentation only. Repeated country markers sometimes appear on a channel.
+    for(var i=0;i<3;i++){
+      var next=value.replace(/^\s*(?:[|┃│¦]\s*(?:UK|GB)\s*[|┃│¦]|\[\s*(?:UK|GB)\s*\]|(?:UK|GB)\s*[-–—:|])\s*/i,'').trim();
+      if(next===value||!next)break;
+      value=next;
+    }
+    return value;
+  }
   function channelKey(item){
     // Match only within the selected category/country. Preserve all provider IDs.
-    return String(item.name||'').normalize('NFKC').toLocaleLowerCase().replace(/\s+/g,' ').trim();
+    return channelDisplayName(item.name).toLocaleLowerCase().replace(/\s+/g,' ').trim();
   }
   function groupedChannels(){
     var groups=new Map();
     channels.forEach(function(item){
       var key=channelKey(item);
       if(!key)return;
-      if(!groups.has(key))groups.set(key,Object.assign({},item,{sources:[]}));
+      if(!groups.has(key))groups.set(key,Object.assign({},item,{name:channelDisplayName(item.name),sources:[]}));
       var group=groups.get(key);
       if(!group.sources.some(function(src){return src.feed===item.feed&&String(src.id)===String(item.id);}))
         group.sources.push({feed:item.feed,id:item.id,connection:item.connection,kind:'live',name:item.name,description:item.description});
