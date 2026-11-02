@@ -2,7 +2,7 @@
 'use strict';
 window.VaultcastStalkerVod=function(host,options){
   var h=options.h,active=false,kind='vod',serial=0,timer=null,letter='#',query='',feeds=[],progress={},titles=[],seen={},loading=false;
-  var status,results,next,search,letters,exportButton,groups,group='',categories=[],category='',groupsLoading=false,titlesStarted=false,categoryStatus=null,prefixGroups=null,showMoreCategories=false,searchAllMode=false,language='',tasks=[];
+  var status,results,next,search,letters,exportButton,groupExportButton,groups,group='',categories=[],category='',groupsLoading=false,titlesStarted=false,categoryStatus=null,prefixGroups=null,showMoreCategories=false,searchAllMode=false,language='',tasks=[];
   function valid(token){return active&&host.isConnected&&options.current()&&token===serial;}
   // Discover provider-defined leading labels from retrieved names, never from a hardcoded provider list.
   // Require an explicit delimiter so ordinary titles (e.g. "A Beautiful Mind") remain intact.
@@ -91,6 +91,34 @@ window.VaultcastStalkerVod=function(host,options){
     function schedule(){setTimeout(run,150);}
     if(!list.length){issues.push('No enabled Stalker connections');finish();return;}
     run();
+  }
+  function exportGroups(){
+    if(groupsLoading)return;
+    var button=groupExportButton,items=[],warnings=[];
+    button.disabled=true;button.textContent='Exporting groups…';
+    var enabled=options.connections.filter(function(f){return f.enabled;}),jobs=[];
+    enabled.forEach(function(feed){['vod','series'].forEach(function(k){jobs.push({feed:feed,kind:k});});});
+    function next(index){
+      if(index>=jobs.length){
+        var output={generated:new Date().toISOString(),description:'Sanitized provider VOD category fields; host/query values omitted from artwork URLs',connections:items,warnings:warnings};
+        var blob=new Blob([JSON.stringify(output,null,2)],{type:'application/json;charset=utf-8'});
+        var url=URL.createObjectURL(blob),a=document.createElement('a');
+        a.href=url;a.download='stalker-vod-raw-groups-'+new Date().toISOString().slice(0,10)+'.json';
+        document.body.appendChild(a);a.click();a.remove();
+        setTimeout(function(){URL.revokeObjectURL(url);},30000);
+        button.disabled=false;button.textContent='Export raw VOD groups (.json)';
+        status.textContent='Group export downloaded: '+items.length+' connection/type responses'+(warnings.length?' · '+warnings.length+' warnings':'');
+        return;
+      }
+      var job=jobs[index];
+      status.textContent='Exporting raw '+job.kind+' groups from '+job.feed.name+'…';
+      var params=new URLSearchParams({kind:job.kind,feed:job.feed.id,raw_categories_export:'1'});
+      options.api('stalker_vod_catalogue',params.toString()).then(function(result){
+        if(!result||!result.ok)throw Error(result&&result.error||'Unavailable');
+        items.push({connection:job.feed.name,kind:job.kind,categories:result.categories||[]});
+      }).catch(function(e){warnings.push(job.feed.name+' '+job.kind+': '+(e.message||e));}).then(function(){next(index+1);});
+    }
+    next(0);
   }
   function stop(){active=false;serial++;clearTimeout(timer);if(exportJob)exportJob.cancelled=true;}
   function loadCategories(refresh){
@@ -207,9 +235,10 @@ window.VaultcastStalkerVod=function(host,options){
     results=h('div',{className:'stalker-vod-grid'});
     next=h('button',{className:'btn',text:'Load more provider pages',onClick:function(){scan(false);}});
     exportButton=h('button',{className:'btn ghost',text:'Export raw VOD names (.txt)',onClick:exportRaw});
+    groupExportButton=h('button',{className:'btn ghost',text:'Export raw VOD groups (.json)',onClick:exportGroups});
     host.append(h('div',{className:'stalker-vod-library-heading'},[
       h('div',{},[h('h2',{text:kind==='vod'?'Movies':'Series'}),h('p',{className:'muted',text:'Search across connections or choose a language and collection. Select a folder to browse its titles.'})]),
-      h('div',{className:'row-actions'},[exportButton,h('button',{className:'btn ghost',text:'Refresh',onClick:function(){reset();loadCategories(true);}})])
+      h('div',{className:'row-actions'},[h('div',{style:'display:flex;flex-direction:column;gap:8px'},[exportButton,groupExportButton]),h('button',{className:'btn ghost',text:'Refresh',onClick:function(){reset();loadCategories(true);}})])
      ]),categoryStatus,h('form',{className:'stalker-searchbar',onSubmit:function(e){e.preventDefault();if(searchAllMode){reset();query=search.value.trim();titlesStarted=true;scan(false);}else renderResults();}},[search]),status,results,next);
     renderCategories();
   }
