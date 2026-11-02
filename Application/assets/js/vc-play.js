@@ -75,19 +75,12 @@
   // ------------------------------------------------------------------ Arcade hub
   function nfs(host){
     var url = 'https://nfsu2.xyz/';
-    host.appendChild(hero('NFS Underground 2', 'Hosted browser game. Requires WebGPU in a modern browser; Vaultcast does not host its game files.', [
+    host.appendChild(hero('NFS Underground 2', 'Launch the hosted browser game in a separate tab. The game site prevents embedding inside Vaultcast.', [
       btn('Back to Arcade', function(){ go('arcade'); }, 'ghost')
     ], 'ARCADE'));
-    var stage = h('div', { className:'vc-nfs-stage', style:'width:100%;height:75vh;min-height:400px;position:relative;' });
-    var frame = h('iframe', { title:'NFS Underground 2', src:url, allow:'fullscreen; gamepad', allowfullscreen:'allowfullscreen', loading:'lazy',
-      style:'display:block;width:100%;height:100%;border:0;' });
-    stage.appendChild(frame);
-    host.appendChild(stage);
-    host.appendChild(h('div', { className:'vc-card-actions' }, [
-      btn('Fullscreen', function(){ if (frame.requestFullscreen) frame.requestFullscreen().catch(function(){}); }, 'primary'),
-      h('a', { href:url, target:'_blank', rel:'noopener noreferrer', className:'vc-button', text:'Open game in new tab' })
-    ]));
-    host.appendChild(h('p', { className:'muted', text:'If the game does not appear, the hosting site may prohibit embedding. Use Open game in new tab instead.' }));
+    var link = h('a', { href:url, target:'_blank', rel:'noopener noreferrer', className:'vc-button', text:'Launch NFS' });
+    host.appendChild(h('div', { className:'vc-card-actions' }, [link]));
+    host.appendChild(h('p', { className:'muted', text:'The game runs in your browser, not on the NAS. A modern browser with WebGPU is required.' }));
   }
 
   function arcade(host, sub){
