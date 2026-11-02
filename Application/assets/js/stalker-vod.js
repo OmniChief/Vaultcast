@@ -123,7 +123,7 @@ window.VaultcastStalkerVod=function(host,options){
     if(code)return known[code]||code;
     if(/\bIRAN\b/.test(n))return 'Iran';
     if(/[\u0600-\u06ff]/.test(n))return 'Arabic';
-    if(/\bMULTISUB\b/.test(n))return 'Multisub';
+    if(/\bMULTISUB\b/.test(n))return 'UK';
     if(/\bFRENCH\b/.test(n))return 'French';
     if(/\bITAL(?:Y|IAN)\b/.test(n))return 'Italian';
     if(/\bGERMAN(?:Y)?\b/.test(n))return 'German';
