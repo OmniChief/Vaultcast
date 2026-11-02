@@ -314,8 +314,8 @@ window.VaultcastStalkerVod=function(host,options){
     sections.forEach(function(part){
       if(!part.items.length)return;
       part.items.sort(function(a,b){return a.name.localeCompare(b.name);});
-      var subheading=h('h4',{text:part.label+' ('+part.items.length+')'});
-      subheading.style.margin='16px 0 10px';section.appendChild(subheading);
+      var accordion=h('details',{className:'stalker-folder-section',open:part.label==='Genres'});
+      accordion.appendChild(h('summary',{className:'stalker-folder-section-heading',text:part.label+' ('+part.items.length+')'}));
       var grid=h('div');
       grid.style.display='grid';grid.style.width='100%';grid.style.gridTemplateColumns='repeat(auto-fill,minmax(min(100%,220px),1fr))';grid.style.gap='12px';
       function folderButton(c){
@@ -363,7 +363,8 @@ window.VaultcastStalkerVod=function(host,options){
           grid.appendChild(folderButton(c));
         });
       }
-      section.appendChild(grid);
+      accordion.appendChild(grid);
+      section.appendChild(accordion);
     });
     categoryStatus.appendChild(section);
 
