@@ -295,7 +295,7 @@ final class CompatibilityBrowser {
         }
         require_once STREAM_ROOT.'/src/Live/store.php';require_once STREAM_ROOT.'/src/Live/epg.php';require_once STREAM_ROOT.'/src/Live/schedule.php';
         $schedule=mb_substr((string)($_GET['schedule'] ?? ''),0,100);$station=relay_load_station();$guide=LiveGuideCache::read(2,$schedule==='',self::$viewer,static function($hours,$slim)use($station){return epg_unified_guide($station,$hours,$slim,self::$viewer);});
-        $html='<h2>Live</h2>'.self::link('Radio',['view'=>'live','tab'=>'radio']).self::link('Stalker',['view'=>'live','tab'=>'stalker']);
+        $html='<h2>Live</h2>'.self::link('Radio',['view'=>'live','tab'=>'radio']);
         $html.='<p class="compat-note">Type a channel number on your remote or keyboard. Three digits tune immediately; shorter numbers tune after a brief pause.</p><div id="compat-channel-number" role="status" aria-live="polite" style="display:none"></div><div id="compat-channel-map" style="display:none">';
         // Include the complete authorised lineup, regardless of pagination or search.
         foreach($guide['channels'] ?? [] as $ch){
@@ -379,8 +379,8 @@ final class CompatibilityBrowser {
         $headerSearch='';
         if($home && AreaAccess::allowed(self::$viewer,'library'))$headerSearch='<form class="compat-header-search" role="search" method="get" action="'.self::esc(self::$base).'"><input type="hidden" name="compat" value="on"><input type="hidden" name="view" value="search"><label class="compat-header-search-label" for="compat-header-query">Search movies and shows</label><input id="compat-header-query" type="text" name="q" value="'.self::esc($view==='search'?(string)($_GET['q'] ?? ''):'').'" placeholder="Search movies &amp; shows…" maxlength="200"><button type="submit">Search</button></form>';
         $nav='<div class="compat-header"><a class="compat-brand" href="'.self::esc(self::url()).'"><span class="compat-logo">&#9654;</span> '.self::esc($site).'</a>'.$headerSearch.'<div class="compat-major-nav">';
-        $tabs=['home'=>'Home'];if($home && AreaAccess::allowed(self::$viewer,'library'))$tabs['library']='Library';if(!empty($home['features']['live']))$tabs['live']='Live';if($home && AreaAccess::allowed(self::$viewer,'games'))$tabs['play']='Play';$tabs['account']=self::$signed?'Account':'Sign in';
-        foreach($tabs as $key=>$label){$target=$key==='account'&&!self::$signed?'login':$key;$selected=$view===$target || ($key==='play'&&in_array($view,['game','emulator'],true)) || ($key==='library'&&in_array($view,['section','show','item','search','collections','collection'],true));$nav.='<a'.($selected?' class="active" aria-current="page"':'').' href="'.self::esc(self::url(['view'=>$target])).'">'.self::esc($label).'</a>';}
+        $tabs=['home'=>'Home'];if($home && AreaAccess::allowed(self::$viewer,'library'))$tabs['library']='Library';if(!empty($home['features']['live'])){$tabs['live']='Live';if(AreaAccess::allowed(self::$viewer,'live'))$tabs['stalker']='Stalker';}if($home && AreaAccess::allowed(self::$viewer,'games'))$tabs['play']='Play';$tabs['account']=self::$signed?'Account':'Sign in';
+        foreach($tabs as $key=>$label){$target=$key==='account'&&!self::$signed?'login':$key;$selected=($key==='stalker'?$view==='live'&&($_GET['tab']??'now')==='stalker':($view===$target&&($key!=='live'||($_GET['tab']??'now')!=='stalker'))) || ($key==='play'&&in_array($view,['game','emulator'],true)) || ($key==='library'&&in_array($view,['section','show','item','search','collections','collection'],true));$nav.='<a'.($selected?' class="active" aria-current="page"':'').' href="'.self::esc(self::url($key==='stalker'?['view'=>'live','tab'=>'stalker']:['view'=>$target])).'">'.self::esc($label).'</a>';}
         $nav.='</div></div>';
         if($home){
             $nav.='<div class="compat-subnav">';
@@ -391,7 +391,7 @@ final class CompatibilityBrowser {
                 foreach($libraryTabs as $tab)$nav.='<a'.($tab['active']?' class="active" aria-current="page"':'').' href="'.self::esc(self::url($tab['params'])).'">'.self::esc($tab['label']).'</a>';
             }elseif(in_array($view,['play','game','emulator'],true)){
                 foreach(self::playTabs() as $tab=>$label)$nav.='<a'.(($view==='play'?($_GET['tab'] ?? 'games'):$tab)===$tab && ($view==='play'||$tab==='games')?' class="active" aria-current="page"':'').' href="'.self::esc(self::url(['view'=>'play','tab'=>$tab])).'">'.self::esc($label).'</a>';
-            }elseif($view==='live'){
+            }elseif($view==='live'&&($_GET['tab']??'now')!=='stalker'){
                 foreach(['now'=>'On now','relay'=>'Relay','iptv'=>'IPTV','radio'=>'Radio'] as $tab=>$label){$selected=($_GET['tab'] ?? 'now')===$tab;$nav.='<a'.($selected?' class="active" aria-current="page"':'').' href="'.self::esc(self::url(['view'=>'live','tab'=>$tab])).'">'.self::esc($label).'</a>';}
             }else{foreach(['home'=>'Overview','favourites'=>'Favourites','watchlist'=>'Watchlist','calendar'=>'Release calendar','history'=>'History','arrivals'=>'New arrivals','tonight'=>'Find a watch','cinema'=>'Watch together','invitations'=>'Invitations','home-options'=>'Customise Home','lists'=>'Custom lists','friends'=>'Friends','inbox'=>'Inbox','chat'=>'Chat'] as $key=>$label){if($key!=='home'&&!self::$signed)continue;$nav.='<a'.($view===$key?' class="active" aria-current="page"':'').' href="'.self::esc(self::url($key==='home'?['view'=>'home','overview'=>'1']:['view'=>$key])).'">'.self::esc($label).'</a>';}}
             $nav.='</div>';
