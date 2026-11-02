@@ -29,6 +29,17 @@ window.VaultcastStalkerCountries=function(host,options){
     list.forEach(function(code){grid.appendChild(h('button',{className:'stalker-country-tile',title:name(code)+' · '+count[code]+' categories','aria-label':name(code),onClick:function(){country=code;selected=null;remember();renderCategories();}},[flag(code),h('strong',{text:name(code)})]));});
     body.append(h('button',{className:'btn ghost',text:'Refresh provider categories',onClick:function(){discover(true);}}),grid);
   }
+  function categoryLabel(raw){
+    // Presentation only: retain the original provider label for country matching,
+    // overrides and feed category IDs. Strip leading region codes from visible names.
+    var label=String(raw||'').replace(/^[\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff\s]+/g,'');
+    for(var n=0;n<3;n++){
+      var next=label.replace(/^\s*(?:[|┃│¦]\s*[A-Z]{2,3}\s*[|┃│¦]|\[\s*[A-Z]{2,3}\s*\]|\(\s*[A-Z]{2,3}\s*\))\s*[-–—:|┃│¦]*\s*/i,'');
+      if(next===label)break;
+      label=next;
+    }
+    return label.trim()||String(raw||'').trim();
+  }
   function renderCategories(){
     shell(name(country)+' · Provider categories');
     var back=h('button',{className:'btn ghost',text:'← Countries',onClick:function(){country='';selected=null;remember();renderCountries();}});
@@ -37,7 +48,7 @@ window.VaultcastStalkerCountries=function(host,options){
     status.textContent=list.length+' categories · select a folder to load its channels';
     if(!list.length)body.append(h('p',{className:'muted',text:'No provider categories for this country.'}));
     list.forEach(function(f){
-      var row=h('div',{className:'stalker-provider-folder'},[h('button',{className:'stalker-provider-folder-open',onClick:function(){selected=f;page=1;channels=[];search='';remember();loadChannels(false);}},[h('strong',{text:f.name}),h('small',{className:'muted',text:f.connection})])]);
+      var row=h('div',{className:'stalker-provider-folder'},[h('button',{className:'stalker-provider-folder-open',onClick:function(){selected=f;page=1;channels=[];search='';remember();loadChannels(false);}},[h('strong',{text:categoryLabel(f.name)}),h('small',{className:'muted',text:f.connection})])]);
       var relocate=h('select',{'aria-label':'Country for '+f.name,onChange:function(){overrides[folderKey(f)]=relocate.value;f.country=relocate.value;saveOverrides();renderCategories();}});
       relocate.appendChild(h('option',{value:f.country,text:'Country: '+name(f.country)}));
       Object.keys(countries).sort().forEach(function(code){if(code!==f.country)relocate.appendChild(h('option',{value:code,text:name(code)}));});
@@ -45,7 +56,7 @@ window.VaultcastStalkerCountries=function(host,options){
     });
   }
   function drawChannels(){
-    shell(selected.name+' · '+selected.connection);
+    shell(categoryLabel(selected.name)+' · '+selected.connection);
     var back=h('button',{className:'btn ghost',text:'← Categories',onClick:renderCategories});
     var refresh=h('button',{className:'btn ghost',text:'Refresh channel list',onClick:function(){page=1;channels=[];loadChannels(false,true);}});
     var find=h('input',{type:'search',value:search,placeholder:'Filter loaded channels…','aria-label':'Filter channel names'});
@@ -60,18 +71,18 @@ window.VaultcastStalkerCountries=function(host,options){
         var watch=h('button',{className:'btn',text:'Watch',onClick:function(){options.play(item.feed,item,watch);}});
         list.appendChild(h('article',{className:'stalker-channel-card'},[
           h('span',{className:'stalker-channel-card-icon','aria-hidden':'true',text:'▶'}),
-          h('div',{className:'stalker-country-channel-copy'},[h('strong',{text:item.name}),h('small',{className:'muted',text:selected.connection+' · '+selected.name})]),watch
+          h('div',{className:'stalker-country-channel-copy'},[h('strong',{text:item.name}),h('small',{className:'muted',text:selected.connection+' · '+categoryLabel(selected.name)})]),watch
         ]));
       });
       if(!visible.length)list.appendChild(h('p',{className:'muted',text:'No channels on the loaded pages match your filter.'}));
-      status.textContent=channels.length+' channels loaded from '+selected.connection+' · '+selected.name;
+      status.textContent=channels.length+' channels loaded from '+selected.connection+' · '+categoryLabel(selected.name);
     }
     display();
   }
   function loadChannels(append,refresh){
     if(!selected||!active)return;
     var token=++serial,params='feed='+encodeURIComponent(selected.feed)+'&category='+encodeURIComponent(selected.id)+'&page='+page+(refresh?'&refresh=1':'');
-    shell('Loading '+selected.name+'…');status.textContent='Requesting provider channel page '+page+'…';
+    shell('Loading '+categoryLabel(selected.name)+'…');status.textContent='Requesting provider channel page '+page+'…';
     options.api('stalker_live_channels',params).then(function(result){
       if(!current(token))return;
       if(!result||!result.ok)throw Error(result&&result.error||'Provider channel page failed.');
