@@ -167,10 +167,10 @@ window.VaultcastStalkerCountries=function(host,options){
     var formats=['UHD','FHD','HEVC','HD','SD'],enabled={UHD:true,FHD:true,HEVC:true,HD:true,SD:true};
     var controls=h('div',{className:'row-actions'},[back,refresh]);
     formats.forEach(function(format){
-      var toggle=h('button',{type:'button',className:'btn',text:format,'aria-label':'Show '+format+' channels','aria-pressed':'true'});
+      var toggle=h('button',{type:'button',className:'btn primary',text:format,'aria-label':'Show '+format+' channels','aria-pressed':'true'});
       toggle.onclick=function(){
         enabled[format]=!enabled[format];
-        toggle.className=enabled[format]?'btn':'btn ghost';
+        toggle.className=enabled[format]?'btn primary':'btn ghost';
         toggle.setAttribute('aria-pressed',String(enabled[format]));
         display();
       };
