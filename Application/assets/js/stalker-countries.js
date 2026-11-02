@@ -40,11 +40,26 @@ window.VaultcastStalkerCountries=function(host,options){
     }
     return label.trim()||String(raw||'').trim();
   }
+  function categorySection(label){
+    // Classify the current portal names, never a fixed inventory of provider folders.
+    var n=label.normalize('NFKC').toUpperCase();
+    if(/\b(?:REPLAY|CATCH.?UP)\b/.test(n))return 'Replays & catch-up';
+    if(/\b(?:PPV|PAY PER VIEW|EVENTS?|UFC|BOXING|PDC|F1 TV|RACES)\b/.test(n))return 'Live events & PPV';
+    if(/\b(?:EPL|EFL|SOCCER|FOOTBALL|LEAGUE|CHAMPIONSHIP|LA LIGA|SERIE A|SPFL|SCOTTISH CUP|UEFA)\b/.test(n))return 'Football';
+    if(/\b(?:SPORTS?|ESPN|BEIN|DAZN|SUPERSPORT|VIAPLAY)\b/.test(n))return 'Sports';
+    if(/\b(?:KIDS?|BABY|CARTOON|CHILDREN|FAMILY)\b/.test(n))return 'Kids & family';
+    if(/^(?:OD\b|ON DEMAND\b)|\b(?:MOVIES?|CINEMA|SKY STORE|NETFLIX|DISNEY|IPLAY|CINE)\b/.test(n))return 'Movies & on-demand';
+    if(/\b(?:NEWS|DOCUMENTARY|LIFESTYLE|MUSIC|RADIO)\b/.test(n))return 'News, documentary & music';
+    if(/\b(?:GENERAL|ENTERTAINMENT|24\/7|AMAZON|ITVX|DISCOVERY|SKY MIX)\b/.test(n))return 'General & entertainment';
+    return 'Other categories';
+  }
   function renderCategories(){
     shell(name(country)+' · Provider categories');
     var back=h('button',{className:'btn ghost',text:'← Countries',onClick:function(){country='';selected=null;remember();renderCountries();}});
-    body.append(back);
-    // One visible category per logical folder; preserve every feed/category pair.
+    var filter=h('input',{type:'search',placeholder:'Find a provider category…','aria-label':'Filter provider categories'});
+    body.append(h('div',{className:'row-actions'},[back,h('button',{className:'btn ghost',text:'Refresh categories',onClick:function(){discover(true);}})]),filter);
+    // The visible inventory is recreated from the most recently fetched portal
+    // categories; grouping changes nothing about the feed-specific category IDs.
     var byCategory=new Map();
     folders.filter(function(f){return f.country===country;}).forEach(function(f){
       var label=categoryLabel(f.name),key=label.normalize('NFKC').toLocaleLowerCase().replace(/\s+/g,' ').trim();
@@ -52,15 +67,47 @@ window.VaultcastStalkerCountries=function(host,options){
       byCategory.get(key).sources.push(f);
     });
     var list=Array.from(byCategory.values()).sort(function(a,b){return a.name.localeCompare(b.name);});
-    status.textContent=list.length+' categories · select a folder to load its channels';
+    status.textContent=list.length+' categories across '+folders.filter(function(f){return f.country===country;}).length+' provider folders · select one to load current channels';
     if(!list.length)body.append(h('p',{className:'muted',text:'No provider categories for this country.'}));
-    list.forEach(function(f){
-      var row=h('div',{className:'stalker-provider-folder'},[h('button',{className:'stalker-provider-folder-open',onClick:function(){selected=f;page=1;channels=[];sourcePages={};search='';remember();loadChannels(false);}},[h('strong',{text:categoryLabel(f.name)}),h('small',{className:'muted',text:f.sources.length+' '+(f.sources.length===1?'connection':'connections')})])]);
-      var relocate=h('select',{'aria-label':'Country for '+f.name,onChange:function(){overrides[folderKey(f)]=relocate.value;f.country=relocate.value;saveOverrides();renderCategories();}});
-      relocate.appendChild(h('option',{value:f.country,text:'Country: '+name(f.country)}));
-      Object.keys(countries).sort().forEach(function(code){if(code!==f.country)relocate.appendChild(h('option',{value:code,text:name(code)}));});
-      row.appendChild(relocate);body.appendChild(row);
-    });
+    var ordered=['General & entertainment','Sports','Football','Live events & PPV','Movies & on-demand','Kids & family','News, documentary & music','Replays & catch-up','Other categories'];
+    var groups=new Map(ordered.map(function(label){return [label,[]];}));
+    list.forEach(function(f){groups.get(categorySection(f.name)).push(f);});
+    var container=h('div',{className:'stalker-category-sections'});
+    body.appendChild(container);
+    function paint(){
+      container.replaceChildren();
+      var needle=filter.value.trim().toLocaleLowerCase(),visible=0;
+      ordered.forEach(function(sectionName){
+        var entries=groups.get(sectionName).filter(function(f){return !needle||f.name.toLocaleLowerCase().includes(needle);});
+        if(!entries.length)return;
+        visible+=entries.length;
+        var section=h('details',{className:'stalker-folder-section',open:!!needle||sectionName==='General & entertainment'});
+        section.appendChild(h('summary',{className:'stalker-folder-section-heading',text:sectionName+' ('+entries.length+')'}));
+        entries.forEach(function(f){
+          var row=h('div',{className:'stalker-provider-folder'});
+          row.appendChild(h('button',{className:'stalker-provider-folder-open',onClick:function(){selected=f;page=1;channels=[];sourcePages={};search='';remember();loadChannels(false);}},[
+            h('strong',{text:f.name}),h('small',{className:'muted',text:f.sources.length+' '+(f.sources.length===1?'connection':'connections')})
+          ]));
+          // Country correction is available on demand, not repeated on every tile.
+          var edit=h('button',{className:'btn ghost',text:'Edit country','aria-label':'Change country for '+f.name});
+          edit.onclick=function(){
+            var editor=h('div',{className:'stack'});
+            f.sources.forEach(function(src){
+              var relocate=h('select',{'aria-label':'Country for '+f.name+' on '+src.connection});
+              relocate.appendChild(h('option',{value:src.country,text:src.connection+': '+name(src.country)}));
+              Object.keys(countries).sort().forEach(function(code){if(code!==src.country)relocate.appendChild(h('option',{value:code,text:name(code)}));});
+              relocate.onchange=function(){overrides[folderKey(src)]=relocate.value;src.country=relocate.value;saveOverrides();renderCategories();};
+              editor.appendChild(relocate);
+            });
+            row.replaceChildren(row.firstChild,editor);
+          };
+          row.appendChild(edit);section.appendChild(row);
+        });
+        container.appendChild(section);
+      });
+      if(!visible&&needle)container.appendChild(h('p',{className:'muted',text:'No matching provider categories.'}));
+    }
+    filter.oninput=paint;paint();
   }
   function channelKey(item){
     // Match only within the selected category/country. Preserve all provider IDs.
