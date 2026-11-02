@@ -115,9 +115,9 @@ window.VaultcastStalkerVod=function(host,options){
     nextFeed();
   }
   function categoryPriority(name){
-    var n=String(name||'').toUpperCase();
+    var n=String(name||'').toUpperCase().replace(/\u00a0/g,' ');
     if(/(?:\[(?:EN|US|UK|GB)\]|\b(?:ENGLISH|USA|UNITED STATES|UNITED KINGDOM|UK|US)\b)/.test(n))return 0;
-    if(/(?:\[(?:FR|DE|IT|AR|AF|ES|PT|MULTISUB)\]|\b(?:FRENCH|GERMAN|ITALY|ITALIAN|ARABIC|SPANISH|AFRICAN)\b)/.test(n))return 2;
+    if(/(?:\[(?:FR|DE|IT|AR|AF|ES|PT|MULTISUB)\]|\b(?:FRENCH|GERMAN|ITALY|ITALIAN|ARABIC|SPANISH|AFRICAN|MULTISUB)\b|[\u0600-\u06FF])/.test(n))return 2;
     return 1;
   }
   function chooseCategory(value){
@@ -129,19 +129,21 @@ window.VaultcastStalkerVod=function(host,options){
     if(!categoryStatus)return;
     var ordered=categories.slice().sort(function(a,b){return categoryPriority(a.name)-categoryPriority(b.name)||a.name.localeCompare(b.name)||a.feedName.localeCompare(b.feedName);});
     var preferred=ordered.filter(function(c){return categoryPriority(c.name)===0;});
-    var others=ordered.filter(function(c){return categoryPriority(c.name)!==0;});
+    var general=ordered.filter(function(c){return categoryPriority(c.name)===1;});
+    var others=ordered.filter(function(c){return categoryPriority(c.name)===2;});
     categoryStatus.replaceChildren();
     function addButton(label,fn,selected){
       var btn=h('button',{className:selected?'btn':'btn ghost',text:label,onClick:fn});
       btn.setAttribute('aria-pressed',String(!!selected));categoryStatus.appendChild(btn);
     }
-    addButton('Search all titles',function(){searchAllMode=true;category='';reset();renderCategories();search.focus();},searchAllMode);
+    addButton('Search all titles',function(){searchAllMode=true;category='';reset();letter='#';query='';search.value='';renderLetters();renderCategories();search.focus();},searchAllMode);
     addButton('All provider folders',function(){chooseCategory('');},!category&&!searchAllMode);
     if(groupsLoading){categoryStatus.appendChild(h('small',{className:'muted',text:'Loading provider folders…'}));return;}
     if(!categories.length){categoryStatus.appendChild(h('small',{className:'muted',text:'No provider folders available. All titles can still be browsed.'}));return;}
     categoryStatus.appendChild(h('h3',{text:'English / US first'}));
     preferred.forEach(function(c){addButton(c.name+' · '+c.feedName,function(){chooseCategory(c.feed+'|'+c.id);},category===c.feed+'|'+c.id);});
     if(!preferred.length)categoryStatus.appendChild(h('small',{className:'muted',text:'No clearly labelled English / US folders'}));
+    if(general.length){categoryStatus.appendChild(h('h3',{text:'Other collections'}));general.forEach(function(c){addButton(c.name+' · '+c.feedName,function(){chooseCategory(c.feed+'|'+c.id);},category===c.feed+'|'+c.id);});}
     if(others.length){
       addButton(showMoreCategories?'Show fewer folders':'Show more folders ('+others.length+')',function(){showMoreCategories=!showMoreCategories;renderCategories();},false);
       if(showMoreCategories||others.some(function(c){return c.feed+'|'+c.id===category;})){
@@ -240,7 +242,7 @@ window.VaultcastStalkerVod=function(host,options){
         ])
       ]));
     });
-    if(!ordered.length)results.appendChild(h('p',{className:'muted',text:titlesStarted?'No matching titles in loaded pages. Load more to continue.':'Select a provider folder or Search all titles to begin.'}));
+    if(!ordered.length)results.appendChild(h('p',{className:'muted',text:titlesStarted?'No matching titles in loaded pages. Load more to continue.':'Select a provider folder or use Search all titles to begin.'}));
     var done=feeds.filter(function(f){return progress[f.id]&&progress[f.id].done;}).length;
     var failed=feeds.filter(function(f){return progress[f.id]&&progress[f.id].failed;}).length;
     status.textContent=ordered.length+' titles in '+(group||'All groups')+' for '+(letter==='#'?'All':letter)+' (loaded so far) · '+done+'/'+feeds.length+' connections finished'+(failed?' · '+failed+' unavailable':'');
