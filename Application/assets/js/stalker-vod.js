@@ -116,27 +116,27 @@ window.VaultcastStalkerVod=function(host,options){
   }
   function categoryLanguage(name){
     var n=String(name||'').normalize('NFKC').toUpperCase().replace(/\u00a0/g,' ');
-    var match=n.match(/(?:^|\s|\|)\s*(EN|US|UK|GB|FR|IT|DE|AR|AF|ES|NL|PT|TR)\s*(?:\||$)/)||n.match(/\[\s*(EN|US|UK|GB|FR|IT|DE|AR|AF|ES|NL|PT|TR)\s*\]/);
-    var code=match&&match[1];
-    if(/[\u0600-\u06ff]/.test(n)||code==='AR')return 'Arabic';
-    if(code==='FR'||/\bFRENCH\b/.test(n))return 'French';
-    if(code==='IT'||/\bITAL(?:Y|IAN)\b/.test(n))return 'Italian';
-    if(code==='DE'||/\bGERMAN(?:Y)?\b/.test(n))return 'German';
-    if(code==='ES'||/\bSPANISH\b/.test(n))return 'Spanish';
-    if(code==='NL'||/\bDUTCH\b/.test(n))return 'Dutch';
-    if(code==='PT'||/\bPORTUGUESE\b/.test(n))return 'Portuguese';
-    if(code==='TR'||/\bTURKISH\b/.test(n))return 'Turkish';
-    if(code==='AF'||/\bAFRICAN\b/.test(n))return 'African';
-    if(code==='EN'||code==='US'||code==='UK'||code==='GB'||/\bENGLISH\b|\bUSA\b|\bUNITED STATES\b|\bUNITED KINGDOM\b/.test(n))return 'UK';
+    // Explicit markers take priority over the UK fallback. Never guess an unknown code is UK.
+    var m=n.match(/(?:^|\s)\|\s*([A-Z]{2,3})\s*\|/)||n.match(/\[\s*([A-Z]{2,3})\s*\]/);
+    var code=m?m[1]:'';
+    var known={EN:'UK',US:'UK',UK:'UK',GB:'UK',IR:'Iran',FR:'French',IT:'Italian',DE:'German',ES:'Spanish',NL:'Dutch',PT:'Portuguese',TR:'Turkish',AR:'Arabic',AF:'African'};
+    if(code)return known[code]||code;
+    if(/\bIRAN\b/.test(n))return 'Iran';
+    if(/[\u0600-\u06ff]/.test(n))return 'Arabic';
     if(/\bMULTISUB\b/.test(n))return 'Multisub';
+    if(/\bFRENCH\b/.test(n))return 'French';
+    if(/\bITAL(?:Y|IAN)\b/.test(n))return 'Italian';
+    if(/\bGERMAN(?:Y)?\b/.test(n))return 'German';
+    if(/\bSPANISH\b/.test(n))return 'Spanish';
+    if(/\bAFRICAN\b/.test(n))return 'African';
     return 'UK';
   }
   function categoryName(name){
     return String(name||'').normalize('NFKC').replace(/\u00a0/g,' ')
       .replace(/^\s*(?:VOD|MOVIES|SERIES)\s*[-:|]\s*/i,'')
       .replace(/^\s*\|\s*[A-Z]{2,3}\s*\|\s*/i,'')
-      .replace(/\s*\[\s*(?:EN|US|UK|GB|FR|IT|DE|AR|AF|ES|NL|PT|TR|MULTISUB)\s*\]\s*/gi,' ')
-      .replace(/\s*\|\s*(?:EN|US|UK|GB|FR|IT|DE|AR|AF|ES|NL|PT|TR)\s*\|\s*/gi,' ')
+      .replace(/\s*\[\s*(?:[A-Z]{2,3}|MULTISUB)\s*\]\s*/gi,' ')
+      .replace(/\s*\|\s*[A-Z]{2,3}\s*\|\s*/gi,' ')
       .replace(/\s*[-|]\s*$/,'').replace(/\s+/g,' ').trim()||String(name||'');
   }
   function categoryBuckets(){
@@ -165,8 +165,9 @@ window.VaultcastStalkerVod=function(host,options){
     var searchRow=h('div',{className:'row-actions'},[searchAll]);
     searchRow.style.marginBottom='18px';categoryStatus.appendChild(searchRow);
     if(groupsLoading){categoryStatus.appendChild(h('p',{className:'muted',text:'Loading provider folders…'}));return;}
-    var buckets=categoryBuckets(),languages=['UK','French','Italian','Arabic','Multisub','German','Spanish','Dutch','Portuguese','African','Turkish','Other'];
+    var buckets=categoryBuckets(),languages=['UK','Iran','French','Italian','Arabic','Multisub','German','Spanish','Dutch','Portuguese','African','Turkish','Other'];
     var available=languages.filter(function(lang){return buckets.some(function(c){return c.language===lang;});});
+    buckets.forEach(function(c){if(available.indexOf(c.language)<0)available.push(c.language);});
     var activeLanguage=language||'';
     var wrap=h('div',{className:'row-actions'});
     wrap.style.display='flex';wrap.style.flexWrap='wrap';wrap.style.gap='8px';wrap.style.marginBottom='20px';
