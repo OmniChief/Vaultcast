@@ -202,9 +202,90 @@ final class CompatibilityBrowser {
         if($view==='live')return self::live($id,$page,$query);
         throw new RuntimeException('Page not found.');
     }
+    /** Lightweight, provider-paged Stalker Live TV in Compatibility Mode. */
+    private static function stalker(int $page): string {
+        self::allow('live');
+        if(class_exists('Parental') && Parental::filtering())throw new RuntimeException('Provider catalogues are unavailable for restricted profiles.');
+        require_once STREAM_ROOT.'/src/Live/iptv.php';
+        $state=iptv_load();
+        $feeds=array_values(array_filter($state['feeds']??[],static function($f){return ($f['type']??'')==='stalker'&&!empty($f['enabled']);}));
+        $selected=(string)($_GET['feed']??'');
+        $feed=null;
+        foreach($feeds as $candidate)if((string)$candidate['id']===$selected){$feed=$candidate;break;}
+        $html='<h2>Stalker Live TV</h2>'.self::link('Back to Live TV',['view'=>'live']);
+        if(!$feeds)return $html.'<p>No enabled Stalker connections are available.</p>';
+        if(!$feed){
+            $html.='<ul class="compat-list">';
+            foreach($feeds as $candidate)$html.='<li>'.self::link((string)($candidate['name']??'Connection'),['view'=>'live','tab'=>'stalker','feed'=>$candidate['id']]).'</li>';
+            return $html.'</ul>';
+        }
+        $base=['view'=>'live','tab'=>'stalker','feed'=>$feed['id']];
+        $html.=self::link('Connections',['view'=>'live','tab'=>'stalker']).'<h3>'.self::esc($feed['name']??'Connection').'</h3>';
+        $category=mb_substr((string)($_GET['category']??''),0,120);
+        try{
+            $folders=StalkerLiveBrowse::categories($feed)['categories'];
+            $country=strtoupper(mb_substr((string)($_GET['country']??''),0,3));
+            if($country===''){
+                $counts=[];
+                foreach($folders as $folder){
+                    $code=(string)($folder['country']??'ZZ');
+                    $counts[$code]=($counts[$code]??0)+1;
+                }
+                ksort($counts);
+                $html.='<h3>Countries</h3><ul class="compat-list">';
+                foreach($counts as $code=>$count){
+                    $label=$code==='ZZ'?'Other / unlabelled':$code;
+                    $html.='<li>'.self::link($label.' ('.$count.')',$base+['country'=>$code]).'</li>';
+                }
+                return $html.'</ul>';
+            }
+            $html.=self::link('Countries',$base);
+            $folders=array_values(array_filter($folders,static function($item)use($country){return (string)($item['country']??'ZZ')===$country;}));
+            if($category===''){
+                $html.='<h3>'.self::esc($country==='ZZ'?'Other / unlabelled':$country).'</h3><ul class="compat-list">';
+                foreach($folders as $folder)$html.='<li>'.self::link($folder['name'], $base+['country'=>$country,'category'=>$folder['id']]).'</li>';
+                return $html.'</ul>';
+            }
+            $chosen=null;foreach($folders as $folder)if($folder['id']===$category){$chosen=$folder;break;}
+            if(!$chosen)return $html.'<p>Category no longer exists. Choose another category.</p>';
+            $html.=self::link('Categories',$base+['country'=>$country]).'<h3>'.self::esc($chosen['name']).'</h3>';
+            $data=StalkerLiveBrowse::channels($feed,['category'=>$category,'page'=>$page]);
+            $selectedChannel=mb_substr((string)($_GET['channel']??''),0,120);
+            $channel=null;
+            foreach($data['items']??[] as $item)if($selectedChannel!==''&&(string)$item['id']===$selectedChannel)$channel=$item;
+            if($selectedChannel!==''&&!$channel)$html.='<p class="compat-note">Channel unavailable on this page. Select a channel again.</p>';
+            if($channel){
+                $html.=self::link('Back to channels',$base+['country'=>$country,'category'=>$category,'page'=>$page]);
+                $html.='<h3>'.self::esc($channel['name']).'</h3>';
+                // Issue a viewer-scoped playback ticket using the same authenticated
+                // Stalker proxy as the standard interface. Never reveal portal URLs.
+                $id=(string)$channel['id'];
+                $ticket=bin2hex(random_bytes(16));
+                $url=stalker_resolve($feed,$id);
+                \Vaultcast\Repository::cachePut('stalker_play_ticket_'.hash('sha256',$ticket),[
+                    'viewer'=>(string)self::$viewer['id'],'feed'=>$feed['id'],
+                    'fingerprint'=>hash('sha256',json_encode($feed)),
+                    'kind'=>'live','id'=>$id,'url'=>$url,'created'=>time(),'item'=>null
+                ],21600);
+                $stream=self::$base.'api/live/stalker_stream?'.http_build_query([
+                    'feed'=>$feed['id'],'channel'=>$id,'ticket'=>$ticket,'format'=>'.m3u8'
+                ],'','&',PHP_QUERY_RFC3986);
+                $html.=self::player($stream,false,[],['hls'=>true]);
+                return $html;
+            }
+            $html.='<ul class="compat-list">';
+            foreach($data['items']??[] as $item){
+                $html.='<li>'.self::link((string)$item['name'],$base+['country'=>$country,'category'=>$category,'page'=>$page,'channel'=>$item['id']]).'</li>';
+            }
+            $html.='</ul>'.self::pages($base+['country'=>$country,'category'=>$category],$page,!empty($data['hasMore']));
+
+        }catch(Throwable $e){$html.='<p class="compat-note">Could not load provider channels. '.self::esc($e->getMessage()).'</p>';}
+        return $html;
+    }
     private static function live(string $id,int $page,string $query): string {
         self::allow('live');if(empty(Store::settings()['features']['live']))throw new RuntimeException('Live is disabled.');
-        $tab=in_array($_GET['tab'] ?? '',['now','relay','iptv','radio'],true)?$_GET['tab']:'now';
+        $tab=in_array($_GET['tab'] ?? '',['now','relay','iptv','radio','stalker'],true)?$_GET['tab']:'now';
+        if($tab==='stalker')return self::stalker($page);
         if($tab==='radio'){
             $stations=Radio::stations();$html='<h2>Radio</h2>'.self::link('Live television',['view'=>'live']);
             if($id!==''){foreach($stations as $radio)if($radio['id']===$id){$html.='<section class="compat-panel"><h3>'.self::esc($radio['name']).'</h3><audio controls="controls" preload="none" src="'.self::esc($radio['url']).'">Your browser needs support for this audio format.</audio><p>'.self::esc($radio['description'] ?: ($radio['tags'] ?? '')).'</p></section>';break;}}
@@ -214,7 +295,7 @@ final class CompatibilityBrowser {
         }
         require_once STREAM_ROOT.'/src/Live/store.php';require_once STREAM_ROOT.'/src/Live/epg.php';require_once STREAM_ROOT.'/src/Live/schedule.php';
         $schedule=mb_substr((string)($_GET['schedule'] ?? ''),0,100);$station=relay_load_station();$guide=LiveGuideCache::read(2,$schedule==='',self::$viewer,static function($hours,$slim)use($station){return epg_unified_guide($station,$hours,$slim,self::$viewer);});
-        $html='<h2>Live</h2>'.self::link('Radio',['view'=>'live','tab'=>'radio']);
+        $html='<h2>Live</h2>'.self::link('Radio',['view'=>'live','tab'=>'radio']).self::link('Stalker',['view'=>'live','tab'=>'stalker']);
         $html.='<p class="compat-note">Type a channel number on your remote or keyboard. Three digits tune immediately; shorter numbers tune after a brief pause.</p><div id="compat-channel-number" role="status" aria-live="polite" style="display:none"></div><div id="compat-channel-map" style="display:none">';
         // Include the complete authorised lineup, regardless of pagination or search.
         foreach($guide['channels'] ?? [] as $ch){
