@@ -214,11 +214,6 @@ window.VaultcastStalkerVod=function(host,options){
       var b=h('button',{className:chosen?'btn':'btn ghost',text:label,onClick:fn});
       b.setAttribute('aria-pressed',String(!!chosen));return b;
     }
-    var searchAll=btn('Search all '+(kind==='vod'?'movies':'series'),function(){
-      searchAllMode=true;category='';reset();query='';search.value='';letter='#';renderCategories();search.focus();
-    },searchAllMode);
-    var searchRow=h('div',{className:'row-actions'},[searchAll]);
-    searchRow.style.marginBottom='18px';categoryStatus.appendChild(searchRow);
     if(groupsLoading){categoryStatus.appendChild(h('p',{className:'muted',text:'Loading provider folders…'}));return;}
     var buckets=categoryBuckets(),languages=['UK','Iran','French','Italian','Arabic','Multisub','German','Spanish','Dutch','Portuguese','African','Turkish','Other'];
     var available=languages.filter(function(lang){return buckets.some(function(c){return c.language===lang;});});
@@ -267,6 +262,14 @@ window.VaultcastStalkerVod=function(host,options){
       h('div',{},[h('h2',{text:kind==='vod'?'Movies':'Series'}),h('p',{className:'muted',text:'Search across connections or choose a language and collection. Select a folder to browse its titles.'})]),
       h('div',{className:'row-actions'},[h('div',{style:'display:flex;flex-direction:column;gap:8px'},[exportButton,groupExportButton]),h('button',{className:'btn ghost',text:'Refresh',onClick:function(){reset();loadCategories(true);}})])
      ]),categoryStatus,h('form',{className:'stalker-searchbar',onSubmit:function(e){e.preventDefault();if(searchAllMode){reset();query=search.value.trim();titlesStarted=true;scan(false);}else renderResults();}},[search]),status,results,next);
+    var searchAllButton=h('button',{className:'btn',type:'button',text:'Search all '+(kind==='vod'?'movies':'series'),onClick:function(){
+      var term=search.value.trim();
+      searchAllMode=true;category='';reset();query=term;search.value=term;letter='#';
+      renderCategories();titlesStarted=true;scan(false);
+    }});
+    var searchActions=h('div',{className:'row-actions'},[searchAllButton]);
+    searchActions.style.marginTop='8px';
+    search.parentElement.insertAdjacentElement('afterend',searchActions);
     renderCategories();
   }
   function add(rows,feed){
