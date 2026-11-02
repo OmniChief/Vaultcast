@@ -233,10 +233,32 @@ final class CompatibilityBrowser {
             if(!$chosen)return $html.'<p>Category no longer exists. Choose another category.</p>';
             $html.=self::link('Categories',$base).'<h3>'.self::esc($chosen['name']).'</h3>';
             $data=StalkerLiveBrowse::channels($feed,['category'=>$category,'page'=>$page]);
+            $selectedChannel=mb_substr((string)($_GET['channel']??''),0,120);
+            $channel=null;
+            foreach($data['items']??[] as $item)if($selectedChannel!==''&&(string)$item['id']===$selectedChannel)$channel=$item;
+            if($selectedChannel!==''&&!$channel)$html.='<p class="compat-note">Channel unavailable on this page. Select a channel again.</p>';
+            if($channel){
+                $html.=self::link('Back to channels',$base+['category'=>$category,'page'=>$page]);
+                $html.='<h3>'.self::esc($channel['name']).'</h3>';
+                // Issue a viewer-scoped playback ticket using the same authenticated
+                // Stalker proxy as the standard interface. Never reveal portal URLs.
+                $id=(string)$channel['id'];
+                $ticket=bin2hex(random_bytes(16));
+                $url=stalker_resolve($feed,$id);
+                \Vaultcast\Repository::cachePut('stalker_play_ticket_'.hash('sha256',$ticket),[
+                    'viewer'=>(string)self::$viewer['id'],'feed'=>$feed['id'],
+                    'fingerprint'=>hash('sha256',json_encode($feed)),
+                    'kind'=>'live','id'=>$id,'url'=>$url,'created'=>time(),'item'=>null
+                ],21600);
+                $stream=self::$base.'api/live/stalker_stream?'.http_build_query([
+                    'feed'=>$feed['id'],'channel'=>$id,'ticket'=>$ticket,'format'=>'.m3u8'
+                ],'','&',PHP_QUERY_RFC3986);
+                $html.=self::player($stream,false,[],['hls'=>true]);
+                return $html;
+            }
             $html.='<ul class="compat-list">';
             foreach($data['items']??[] as $item){
-                $playUrl=self::$base.'live/stalker/'.rawurlencode((string)$feed['id']).'/'.rawurlencode((string)$item['id']);
-                $html.='<li>'.self::esc($item['name']).' <a class="compat-button" href="'.self::esc($playUrl).'">Watch in standard player</a></li>';
+                $html.='<li>'.self::link((string)$item['name'],$base+['category'=>$category,'page'=>$page,'channel'=>$item['id']]).'</li>';
             }
             $html.='</ul>'.self::pages($base+['category'=>$category],$page,!empty($data['hasMore']));
 
