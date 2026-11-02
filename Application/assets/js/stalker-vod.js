@@ -117,7 +117,7 @@ window.VaultcastStalkerVod=function(host,options){
   function categoryLanguage(name){
     var n=String(name||'').normalize('NFKC').toUpperCase().replace(/\u00a0/g,' ');
     // Explicit markers take priority over the UK fallback. Never guess an unknown code is UK.
-    var m=n.match(/(?:^|\s)\|\s*([A-Z]{2,3})\s*\|/)||n.match(/\[\s*([A-Z]{2,3})\s*\]/);
+    var m=n.match(/(?:^|\s)[|┃│¦]\s*([A-Z]{2,3})\s*[|┃│¦]/)||n.match(/\[\s*([A-Z]{2,3})\s*\]/);
     var code=m?m[1]:'';
     var known={EN:'UK',US:'UK',UK:'UK',GB:'UK',IR:'Iran',FR:'French',IT:'Italian',DE:'German',ES:'Spanish',NL:'Dutch',PT:'Portuguese',TR:'Turkish',AR:'Arabic',AF:'African'};
     if(code)return known[code]||code;
@@ -134,9 +134,9 @@ window.VaultcastStalkerVod=function(host,options){
   function categoryName(name){
     return String(name||'').normalize('NFKC').replace(/\u00a0/g,' ')
       .replace(/^\s*(?:VOD|MOVIES|SERIES)\s*[-:|]\s*/i,'')
-      .replace(/^\s*\|\s*[A-Z]{2,3}\s*\|\s*/i,'')
+      .replace(/^\s*[|┃│¦]\s*[A-Z]{2,3}\s*[|┃│¦]\s*/i,'')
       .replace(/\s*\[\s*(?:[A-Z]{2,3}|MULTISUB)\s*\]\s*/gi,' ')
-      .replace(/\s*\|\s*[A-Z]{2,3}\s*\|\s*/gi,' ')
+      .replace(/\s*[|┃│¦]\s*[A-Z]{2,3}\s*[|┃│¦]\s*/gi,' ')
       .replace(/\s*[-|]\s*$/,'').replace(/\s+/g,' ').trim()||String(name||'');
   }
   function categoryBuckets(){
