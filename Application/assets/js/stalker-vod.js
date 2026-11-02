@@ -476,8 +476,8 @@ window.VaultcastStalkerVod=function(host,options){
       var source={id:item.id,feed:feed.id,connection:feed.name,kind:item.kind,playable:item.playable,labels:prefixParts(item).labels,poster:item.poster||'',posterCandidates:Array.isArray(item.posterCandidates)?item.posterCandidates:[]};
       var part=numberedPart(item);
       var k=part?'numbered|'+feed.id+'|'+part.key:key(item),group=seen[k];
-      // Without a year, avoid merging unrelated similarly named releases.
-      if(!part&&!year(item))k+='|'+feed.id;
+      // Keep matching titles together across connections even without a release year.
+      // Provider-specific IDs remain separate entries in the item sources list.
       group=seen[k];
       if(!group){group=Object.assign({},item,{sources:[],groupLabels:[]});if(part){group.name=part.name;group.numberedParts=[];}seen[k]=group;titles.push(group);}
       if(part&&!group.numberedParts.some(function(p){return p.feed===feed.id&&p.id===item.id;}))group.numberedParts.push({number:part.number,name:item.name,id:item.id,feed:feed.id,connection:feed.name,item:item});
