@@ -370,7 +370,8 @@ function stalker_connection_check(array $feed): array {
         }
     }
     $expiry=stalker_account_expiry($feed);
-    return ['ok'=>true,'expiryDate'=>$expiry['date'],'expiryStatus'=>$expiry['status'],
+    return ['ok'=>true,'expiryDate'=>$expiry['date'],'expiryTime'=>$expiry['time']??null,
+        'expiryTimeZone'=>$expiry['timeZone']??null,'expiryStatus'=>$expiry['status'],
         'expirySources'=>$expiry['sources'],
         'channelCount'=>$reported!==null&&$reported>0?$reported:($sample>0?$sample:null),
         'sampleCount'=>$sample,'countEstimated'=>!($reported!==null&&$reported>0),
