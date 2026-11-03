@@ -210,8 +210,13 @@ final class CompatibilityBrowser {
         $state=iptv_load();
         $feeds=array_values(array_filter($state['feeds']??[],static function($f){return ($f['type']??'')==='stalker'&&!empty($f['enabled']);}));
         $base=['view'=>'live','tab'=>'stalker'];
-        $html='<h2>Stalker Live TV</h2>'.self::link('Back to Live TV',['view'=>'live']);
+        $kind=(string)($_GET['kind']??'live');
+        if(!in_array($kind,['live','vod','series'],true))$kind='live';
+        $html='<h2>Stalker</h2>'.self::link('Back to Live TV',['view'=>'live']);
+        foreach(['live'=>'Live TV','vod'=>'Movies','series'=>'Series'] as $tab=>$label)
+            $html.=self::link(($kind===$tab?'✓ ':'').$label,$base+['kind'=>$tab]);
         if(!$feeds)return $html.'<p>No enabled Stalker connections are available.</p>';
+        if($kind!=='live')return $html.self::stalkerOnDemand($feeds,$kind,$page);
         $country=strtoupper(mb_substr((string)($_GET['country']??''),0,3));
         $section=mb_substr((string)($_GET['section']??''),0,80);
         $folderId=mb_substr((string)($_GET['folder']??''),0,120);
@@ -383,6 +388,177 @@ final class CompatibilityBrowser {
         if($sourceOffset>0)$html.=self::link('Previous provider folders',$base+['country'=>$country]+($section!==''?['section'=>$section]:['folder'=>$folderId,'folder_feed'=>$folderFeed])+['source_offset'=>max(0,$sourceOffset-$window)]);
         if($sourceOffset+$window<count($target))$html.=self::link('More provider folders',$base+['country'=>$country]+($section!==''?['section'=>$section]:['folder'=>$folderId,'folder_feed'=>$folderFeed])+['source_offset'=>$sourceOffset+$window]);
         return $html;
+    }
+    /** Samsung-friendly Movies/Series browsing via the same direct provider pages. */
+    private static function stalkerOnDemand(array $feeds,string $kind,int $page): string {
+        $base=['view'=>'live','tab'=>'stalker','kind'=>$kind];
+        $lang=(string)($_GET['lang']??'UK');
+        $folderId=mb_substr((string)($_GET['folder']??''),0,120);
+        $folderFeed=mb_substr((string)($_GET['folder_feed']??''),0,120);
+        $query=mb_substr(trim((string)($_GET['q']??'')),0,160);
+        $parent=mb_substr((string)($_GET['parent']??''),0,120);
+        $selectedFeed=mb_substr((string)($_GET['feed']??''),0,120);
+        $selectedItem=mb_substr((string)($_GET['item']??''),0,120);
+        $sourceOffset=max(0,min(1000,(int)($_GET['source_offset']??0)));
+        $html='';
+        $language=static function(string $raw): string {
+            $name=mb_strtoupper($raw);
+            $code='';
+            if(preg_match('/(?:[|┃│¦]\s*([A-Z]{2,3})\s*[|┃│¦]|\[\s*([A-Z]{2,3})\s*\])/u',$name,$m))$code=(string)($m[1]?:($m[2]??''));
+            $codes=['EN'=>'UK','GB'=>'UK','UK'=>'UK','US'=>'UK','FR'=>'French','DE'=>'German','IT'=>'Italian','ES'=>'Spanish','PT'=>'Portuguese','NL'=>'Dutch','TR'=>'Turkish','IR'=>'Iran','AR'=>'Arabic'];
+            if($code!=='')return $codes[$code]??$code;
+            if(strpos($name,'MULTISUB')!==false)return 'UK';
+            return 'UK';
+        };
+        $name=static function(string $raw): string {
+            $value=preg_replace('/^\s*(?:[|┃│¦]\s*[A-Z]{2,3}\s*[|┃│¦]|\[\s*[A-Z]{2,3}\s*\])\s*/iu','',$raw);
+            return trim($value)!==''?trim($value):$raw;
+        };
+        $feedById=[];
+        foreach($feeds as $feed)$feedById[(string)$feed['id']]=$feed;
+        if($parent!==''){
+            $feed=$feedById[$selectedFeed]??null;
+            if(!$feed)return '<p>This series connection is no longer available.</p>'.self::link('Back to Series',$base+['lang'=>$lang]);
+            $html.=self::link('Back to Series',$base+['lang'=>$lang]).'<h3>Seasons and episodes</h3>';
+            try{$data=StalkerDirect::browse(['feeds'=>[$feed]],['kind'=>'series','feed'=>$feed['id'],'parent'=>$parent,'page'=>$page]);}
+            catch(Throwable $e){return $html.'<p>Could not retrieve the current episodes.</p>';}
+            $items=$data['items']??[];
+            usort($items,static function($a,$b){
+                return (int)($b['season']??0)<=>(int)($a['season']??0)
+                    ?: (int)($b['episode']??0)<=>(int)($a['episode']??0);
+            });
+            $html.='<ul class="compat-list">';
+            foreach($items as $item){
+                $label='Season '.($item['season']??'?').' · Episode '.($item['episode']??'?');
+                if(!empty($item['episodeTitle']))$label.=' · '.$item['episodeTitle'];
+                $html.='<li>'.self::link($label,$base+['lang'=>$lang,'parent'=>$parent,'feed'=>$feed['id'],'page'=>$page,'item'=>$item['id']]).'</li>';
+            }
+            $html.='</ul>'.self::pages($base+['lang'=>$lang,'parent'=>$parent,'feed'=>$feed['id']],$page,!empty($data['hasMore']));
+            if($selectedItem!==''){
+                foreach($items as $item)if((string)$item['id']===$selectedItem&&$item['playable']){
+                    return $html.self::stalkerOnDemandPlayer($feed,$item);
+                }
+                $html.='<p>The selected episode is no longer on this page.</p>';
+            }
+            return $html;
+        }
+        $folders=[];$errors=[];
+        foreach($feeds as $feed){
+            try{
+                $data=StalkerDirect::browse(['feeds'=>[$feed]],['kind'=>$kind,'feed'=>$feed['id'],'categories_only'=>1]);
+                foreach($data['categories']??[] as $category){
+                    $folders[]=['feed'=>$feed['id'],'connection'=>$feed['name'],'id'=>(string)$category['id'],
+                        'name'=>$name((string)$category['name']),'language'=>$language((string)$category['name'])];
+                }
+            }catch(Throwable $e){$errors[]=$feed['name'];}
+        }
+        $available=['UK'=>true];
+        foreach($folders as $folder)$available[$folder['language']]=true;
+        $langs=array_keys($available);
+        usort($langs,static function($a,$b){return $a==='UK'?-1:($b==='UK'?1:strcmp($a,$b));});
+        $html.='<p>Language:</p>';
+        foreach($langs as $value)$html.=self::link(($lang===$value?'✓ ':'').($value==='UK'?'English':$value),$base+['lang'=>$value]);
+        $html.=self::link(($lang==='all'?'✓ ':'').'All languages',$base+['lang'=>'all']);
+        $html.=self::searchForm($base+['lang'=>$lang]+($folderId!==''?['folder'=>$folderId,'folder_feed'=>$folderFeed]:[]),$query);
+        if($errors)$html.='<p class="compat-note">Some provider folders were unavailable.</p>';
+        $filtered=array_values(array_filter($folders,static function($f)use($lang){return $lang==='all'||$f['language']===$lang;}));
+        if($query===''&&$folderId===''){
+            $grouped=[];
+            foreach($filtered as $folder){
+                $key=mb_strtolower($folder['name']);
+                if(!isset($grouped[$key]))$grouped[$key]=['name'=>$folder['name'],'sources'=>[]];
+                $grouped[$key]['sources'][]=$folder;
+            }
+            $entries=array_values($grouped);
+            usort($entries,static function($a,$b){return strcasecmp($a['name'],$b['name']);});
+            $html.='<h3>Provider folders</h3><ul class="compat-list">';
+            foreach($entries as $entry){
+                $first=$entry['sources'][0];
+                $html.='<li>'.self::link($entry['name'].' · '.count($entry['sources']).' connection(s)',
+                    $base+['lang'=>$lang,'folder'=>$first['id'],'folder_feed'=>$first['feed']]).'</li>';
+            }
+            return $html.'</ul>'.(!$entries?'<p>No folders in this language.</p>':'');
+        }
+        if($folderId!==''){
+            $target=null;
+            foreach($folders as $folder)if($folder['feed']===$folderFeed&&$folder['id']===$folderId){$target=$folder;break;}
+            if(!$target)return $html.'<p>Provider folder no longer exists.</p>';
+            $filtered=array_values(array_filter($filtered,static function($f)use($target){return mb_strtolower($f['name'])===mb_strtolower($target['name']);}));
+            $html.='<h3>'.self::esc($target['name']).'</h3>'.self::link('All folders',$base+['lang'=>$lang]);
+        }else{
+            $html.='<h3>Search results</h3>';
+        }
+        $window=6;$sourceList=array_slice($filtered,$sourceOffset,$window);
+        $items=[];$failed=0;$more=false;
+        foreach($sourceList as $src){
+            $feed=$feedById[$src['feed']]??null;
+            if(!$feed)continue;
+            try{
+                $data=StalkerDirect::browse(['feeds'=>[$feed]],[
+                    'kind'=>$kind,'feed'=>$feed['id'],'category'=>$src['id'],'q'=>$query,'page'=>$page
+                ]);
+                $more=$more||!empty($data['hasMore']);
+                foreach($data['items']??[] as $item)$items[]=$item;
+            }catch(Throwable $e){$failed++;}
+        }
+        $groups=[];
+        foreach($items as $item){
+            $title=(string)($item['name']??'Untitled');
+            $key=mb_strtolower($title).'|'.($item['year']??'');
+            if(!isset($groups[$key]))$groups[$key]=['title'=>$title,'year'=>$item['year']??'','sources'=>[]];
+            $groups[$key]['sources'][]=$item;
+        }
+        uasort($groups,static function($a,$b){return strcasecmp($a['title'],$b['title']);});
+        $html.='<p class="compat-note">'.count($groups).' titles loaded'.($failed?' · '.$failed.' unavailable folders':'').'</p><ul class="compat-list">';
+        $params=$base+['lang'=>$lang,'q'=>$query,'source_offset'=>$sourceOffset]+($folderId!==''?['folder'=>$folderId,'folder_feed'=>$folderFeed]:[]);
+        foreach($groups as $group){
+            $first=$group['sources'][0];
+            $html.='<li>'.self::link($group['title'].($group['year']?' ('.$group['year'].')':''),
+                $params+['page'=>$page,'feed'=>$first['feed'],'item'=>$first['id']]);
+            if(count($group['sources'])>1)$html.='<small> · '.count($group['sources']).' connections</small>';
+            $html.='</li>';
+        }
+        $html.='</ul>';
+        if($selectedItem!==''){
+            $found=null;$copies=[];
+            foreach($groups as $group)foreach($group['sources'] as $item)
+                if((string)$item['id']===$selectedItem&&(string)$item['feed']===$selectedFeed){$found=$item;$copies=$group['sources'];break 2;}
+            if($found!==null){
+                if(count($copies)>1){
+                    $html.='<h3>Other available connections</h3><ul class="compat-list">';
+                    foreach($copies as $source)$html.='<li>'.self::link($source['connection'],
+                        $params+['page'=>$page,'feed'=>$source['feed'],'item'=>$source['id']]).'</li>';
+                    $html.='</ul>';
+                }
+                if(!empty($found['playable']))$html.=self::stalkerOnDemandPlayer($feedById[$selectedFeed],$found);
+                else $html.=self::link('Browse seasons and episodes',$base+['lang'=>$lang,'parent'=>$found['id'],'feed'=>$selectedFeed]);
+            }else $html.='<p>This title is no longer on the selected page.</p>';
+        }
+        $html.=self::pages($params,$page,$more);
+        if($sourceOffset>0)$html.=self::link('Previous provider folders',$base+['lang'=>$lang,'q'=>$query,'source_offset'=>max(0,$sourceOffset-$window)]+($folderId!==''?['folder'=>$folderId,'folder_feed'=>$folderFeed]:[]));
+        if($sourceOffset+$window<count($filtered))$html.=self::link('More provider folders',$base+['lang'=>$lang,'q'=>$query,'source_offset'=>$sourceOffset+$window]+($folderId!==''?['folder'=>$folderId,'folder_feed'=>$folderFeed]:[]));
+        return $html;
+    }
+    /** Playback remains ticket-scoped and uses the existing Samsung-safe player. */
+    private static function stalkerOnDemandPlayer(array $feed,array $item): string {
+        try{
+            $id=(string)$item['id'];$url=stalker_vod_resolve($feed,$id);
+            $ticket=bin2hex(random_bytes(16));
+            \Vaultcast\Repository::cachePut('stalker_play_ticket_'.hash('sha256',$ticket),[
+                'viewer'=>(string)self::$viewer['id'],'feed'=>$feed['id'],
+                'fingerprint'=>hash('sha256',json_encode($feed)),
+                'kind'=>(string)($item['kind']??'vod'),'id'=>$id,'url'=>$url,'created'=>time(),
+                'item'=>stalker_vod_entry($feed,$id)
+            ],21600);
+            $stream=self::$base.'api/live/stalker_stream?'.http_build_query([
+                'feed'=>$feed['id'],'channel'=>$id,'ticket'=>$ticket
+            ],'','&',PHP_QUERY_RFC3986);
+            $hls=(bool)preg_match('/\.m3u8(?:[?#]|$)/i',$url);
+            if($hls)$stream.='&format=.m3u8';
+            return '<h3>'.self::esc($item['name']??'Provider video').'</h3>'.self::player($stream,false,[],['hls'=>$hls]);
+        }catch(Throwable $e){
+            return '<p class="compat-note">Provider video unavailable. Try another connection or return to the catalogue.</p>';
+        }
     }
     private static function live(string $id,int $page,string $query): string {
         self::allow('live');if(empty(Store::settings()['features']['live']))throw new RuntimeException('Live is disabled.');
