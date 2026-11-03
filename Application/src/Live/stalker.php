@@ -272,6 +272,43 @@ function stalker_ordered_page(array $feed, string $type, array $params, int $pag
     return stalker_call($feed,'get_ordered_list',$params,$type);
 }
 
+/**
+ * Connection diagnostics inspect the provider directly, not the legacy SQL
+ * catalogue. A count reported by an empty local catalogue is not a portal count.
+ * Keep requests bounded and do not persist fetched channel rows.
+ */
+function stalker_connection_check(array $feed): array {
+    stalker_session($feed,true);
+    $lastError=null;$reported=null;$sample=0;
+    foreach ([0,1] as $page) {
+        try {
+            $result=stalker_call($feed,'get_ordered_list',['sortby'=>'number','genre'=>'*','search'=>'','fav'=>0,'p'=>$page],'itv');
+            $rows=$result['data']??null;
+            if(!is_array($rows))throw new RuntimeException('Portal returned an invalid ordered channel page.');
+            $sample=max($sample,count($rows));
+            if(isset($result['total_items'])&&is_numeric($result['total_items']))$reported=max((int)($reported??0),(int)$result['total_items']);
+            if($sample>0)break;
+        } catch (RuntimeException $e) {$lastError=$e;}
+    }
+    if($sample===0){
+        // Some portals only implement the bulk channel action. Use it only if
+        // the lightweight ordered-page probe returned no actual channels.
+        try {
+            $result=stalker_call($feed,'get_all_channels');
+            $rows=$result['data']??$result;
+            if(!is_array($rows))throw new RuntimeException('Portal returned an invalid channel list.');
+            $sample=count($rows);
+            if(isset($result['total_items'])&&is_numeric($result['total_items']))$reported=max((int)($reported??0),(int)$result['total_items']);
+        } catch (RuntimeException $e) {
+            if($lastError!==null)throw new RuntimeException('Portal session connected, but channel requests failed: '.$e->getMessage());
+            throw $e;
+        }
+    }
+    return ['ok'=>true,'channelCount'=>$reported!==null&&$reported>0?$reported:($sample>0?$sample:null),
+        'sampleCount'=>$sample,'countEstimated'=>!($reported!==null&&$reported>0),
+        'endpoint'=>stalker_endpoint($feed)];
+}
+
 function stalker_live_scan_key(array $feed): string {return 'stalker_live_search_v2_'.hash('sha256',json_encode($feed));}
 
 function stalker_live_groups(array $feed): array {
