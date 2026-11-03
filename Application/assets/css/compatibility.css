@@ -328,3 +328,16 @@ html{background:transparent}
   max-width:none;
   min-height:0;
 }
+
+/* Optional small overscan for Tizen video planes that reveal a pixel rim.
+   Applied on the video itself because some TVs do not expose fullscreen CSS
+   state to the document. Does not change the streamed video or its codecs. */
+#compat-media.compat-edge-crop{
+  -webkit-transform:scale(1.012);
+  -moz-transform:scale(1.012);
+  -ms-transform:scale(1.012);
+  transform:scale(1.012);
+  -webkit-transform-origin:50% 50%;
+  transform-origin:50% 50%;
+}
+.compat-video-stage{overflow:hidden;background:#000}
