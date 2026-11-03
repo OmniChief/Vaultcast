@@ -289,7 +289,8 @@ function stalker_account_expiry(array $feed): array {
             'hd'=>1,'stb_type'=>'MAG250','sn'=>$feed['serial']??'',
             'device_id'=>$feed['deviceId']??'','device_id2'=>$feed['deviceId2']??'',
             'auth_second_step'=>1,'image_version'=>218,'hw_version'=>'1.7-BD-00',
-            'num_banks'=>2,'not_valid_token'=>0,'client_type'=>'STB','video_out'=>'hdmi'
+            'num_banks'=>2,'not_valid_token'=>0,
+            'ver'=>'ImageDescription: 0.2.18-r14-pub-250; PORTAL version: 5.5.0; API Version: JS API version: 328; STB API version: 134; Player Engine version: 0x58c','client_type'=>'STB','video_out'=>'hdmi'
         ]]
     ];
     foreach ($requests as $request) {
