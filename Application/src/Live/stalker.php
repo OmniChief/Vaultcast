@@ -277,6 +277,25 @@ function stalker_ordered_page(array $feed, string $type, array $params, int $pag
  * catalogue. A count reported by an empty local catalogue is not a portal count.
  * Keep requests bounded and do not persist fetched channel rows.
  */
+/** Return only a validated expiry timestamp, never an account profile or credentials. */
+function stalker_account_expiry(array $feed): ?int {
+    $responses=[];
+    try {$responses[]=stalker_call($feed,'get_main_info',[],'account_info');} catch (RuntimeException $ignored) {}
+    try {$responses[]=stalker_call($feed,'get_profile',[],'stb');} catch (RuntimeException $ignored) {}
+    foreach ($responses as $response) {
+        $sources=[$response];
+        foreach (['data','account','profile','account_info'] as $field)if(isset($response[$field])&&is_array($response[$field]))$sources[]=$response[$field];
+        foreach ($sources as $data)foreach (['expire_billing_date','end_date','expire_date','expiration_date','expires_at','subscription_end'] as $field) {
+            if(!isset($data[$field])||!is_scalar($data[$field]))continue;
+            $value=trim((string)$data[$field]);
+            if($value===''||$value==='0'||$value==='0000-00-00')continue;
+            $timestamp=ctype_digit($value)?(int)$value:strtotime($value);
+            if($timestamp!==false&&$timestamp>946684800&&$timestamp<4102444800)return $timestamp;
+        }
+    }
+    return null;
+}
+
 function stalker_connection_check(array $feed): array {
     stalker_session($feed,true);
     $lastError=null;$reported=null;$sample=0;
@@ -304,7 +323,9 @@ function stalker_connection_check(array $feed): array {
             throw $e;
         }
     }
-    return ['ok'=>true,'channelCount'=>$reported!==null&&$reported>0?$reported:($sample>0?$sample:null),
+    $expiry=stalker_account_expiry($feed);
+    return ['ok'=>true,'expiryDate'=>$expiry===null?null:gmdate('Y-m-d',$expiry),
+        'channelCount'=>$reported!==null&&$reported>0?$reported:($sample>0?$sample:null),
         'sampleCount'=>$sample,'countEstimated'=>!($reported!==null&&$reported>0),
         'endpoint'=>stalker_endpoint($feed)];
 }
