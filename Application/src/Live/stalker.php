@@ -277,23 +277,56 @@ function stalker_ordered_page(array $feed, string $type, array $params, int $pag
  * catalogue. A count reported by an empty local catalogue is not a portal count.
  * Keep requests bounded and do not persist fetched channel rows.
  */
-/** Return only a validated expiry timestamp, never an account profile or credentials. */
-function stalker_account_expiry(array $feed): ?int {
-    $responses=[];
-    try {$responses[]=stalker_call($feed,'get_main_info',[],'account_info');} catch (RuntimeException $ignored) {}
-    try {$responses[]=stalker_call($feed,'get_profile',[],'stb');} catch (RuntimeException $ignored) {}
-    foreach ($responses as $response) {
-        $sources=[$response];
-        foreach (['data','account','profile','account_info'] as $field)if(isset($response[$field])&&is_array($response[$field]))$sources[]=$response[$field];
-        foreach ($sources as $data)foreach (['expire_billing_date','end_date','expire_date','expiration_date','expires_at','subscription_end'] as $field) {
-            if(!isset($data[$field])||!is_scalar($data[$field]))continue;
-            $value=trim((string)$data[$field]);
-            if($value===''||$value==='0'||$value==='0000-00-00')continue;
-            $timestamp=ctype_digit($value)?(int)$value:strtotime($value);
-            if($timestamp!==false&&$timestamp>946684800&&$timestamp<4102444800)return $timestamp;
+/**
+ * Check a small number of account endpoints, without exposing profile details.
+ * Missing expiry and failed account endpoints have different diagnostic outcomes.
+ */
+function stalker_account_expiry(array $feed): array {
+    $responses=[];$worked=[];$errors=[];
+    $requests=[
+        ['account_info','get_main_info',[]],
+        ['stb','get_profile',[
+            'hd'=>1,'stb_type'=>'MAG250','sn'=>$feed['serial']??'',
+            'device_id'=>$feed['deviceId']??'','device_id2'=>$feed['deviceId2']??'',
+            'auth_second_step'=>1,'image_version'=>218,'hw_version'=>'1.7-BD-00',
+            'num_banks'=>2,'not_valid_token'=>0,'client_type'=>'STB','video_out'=>'hdmi'
+        ]]
+    ];
+    foreach ($requests as $request) {
+        [$type,$action,$params]=$request;
+        try {
+            $data=stalker_call($feed,$action,$params,$type);
+            $responses[]=$data;$worked[]=$type.'/'.$action;
+        } catch (RuntimeException $ignored) {
+            $errors[]=$type.'/'.$action;
         }
     }
-    return null;
+    $fields=['expire_billing_date','end_date','expire_date','expiration_date','expires_at','subscription_end','expiration','expiry_date','expiry','exp_date'];
+    foreach ($responses as $response) {
+        $pending=[[$response,0]];
+        while($pending) {
+            [$data,$depth]=array_pop($pending);
+            if(!is_array($data))continue;
+            foreach ($data as $key=>$value) {
+                if(is_string($key)&&in_array(strtolower($key),$fields,true)&&is_scalar($value)) {
+                    $raw=trim((string)$value);
+                    if($raw===''||in_array($raw,['0','0000-00-00','unlimited','null','false'],true))continue;
+                    $timestamp=null;
+                    if(ctype_digit($raw)) {
+                        $number=(int)$raw;
+                        $timestamp=$number>1000000000000?(int)floor($number/1000):$number;
+                    } else {
+                        $parsed=strtotime($raw);
+                        if($parsed!==false)$timestamp=$parsed;
+                    }
+                    if($timestamp!==null&&$timestamp>=946684800&&$timestamp<=4102444800)
+                        return ['date'=>gmdate('Y-m-d',$timestamp),'status'=>'found','sources'=>$worked];
+                }
+                if($depth<3&&is_array($value))$pending[]=[$value,$depth+1];
+            }
+        }
+    }
+    return ['date'=>null,'status'=>$worked?'not_exposed':'account_requests_failed','sources'=>$worked];
 }
 
 function stalker_connection_check(array $feed): array {
@@ -324,7 +357,8 @@ function stalker_connection_check(array $feed): array {
         }
     }
     $expiry=stalker_account_expiry($feed);
-    return ['ok'=>true,'expiryDate'=>$expiry===null?null:gmdate('Y-m-d',$expiry),
+    return ['ok'=>true,'expiryDate'=>$expiry['date'],'expiryStatus'=>$expiry['status'],
+        'expirySources'=>$expiry['sources'],
         'channelCount'=>$reported!==null&&$reported>0?$reported:($sample>0?$sample:null),
         'sampleCount'=>$sample,'countEstimated'=>!($reported!==null&&$reported>0),
         'endpoint'=>stalker_endpoint($feed)];
