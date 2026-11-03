@@ -402,11 +402,25 @@ window.VaultcastStalkerVod=function(host,options){
   function favouriteIdentity(item){
     var name=favouriteName(item),release=String(item.year||year(item)||'').trim();
     var normalized=name.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim();
-    return {name:name,year:/^(?:19|20)\d{2}$/.test(release)?release:'',normalized:normalized,tab:item.tab||kind};
+    return {name:name,year:/^(?:19|20)\d{2}$/.test(release)?release:'',normalized:normalized,tab:item.tab||kind,
+      language:typeof item.language==='string'?item.language:'',folder:typeof item.folder==='string'?item.folder:''};
   }
   function favouriteId(item){
     var fav=favouriteIdentity(item);
     return fav.tab+'|'+fav.normalized+'|'+fav.year;
+  }
+  // A saved language identifies provider folders, not the viewer's current language.
+  // Older favourites without a language continue using the original all-provider lookup.
+  function favouriteTargets(fav){
+    var enabled=options.connections.filter(function(f){return f.enabled;}),targets=[];
+    if(fav.language&&categories.length){
+      categories.filter(function(c){return categoryLanguage(c.name)===fav.language&&enabled.some(function(f){return f.id===c.feed;});})
+        .sort(function(a,b){return Number(b.id===fav.folder)-Number(a.id===fav.folder);})
+        .forEach(function(c){targets.push({feed:enabled.find(function(f){return f.id===c.feed;}),category:c.id});});
+    }
+    // If categories are not available, preserve the existing name search behaviour.
+    if(!targets.length)enabled.forEach(function(feed){targets.push({feed:feed,category:''});});
+    return targets;
   }
   var favouriteLookupToken=0;
   function favouriteEntries(){
@@ -446,7 +460,7 @@ window.VaultcastStalkerVod=function(host,options){
   function findFavourite(favourite,button){
     if(button.disabled)return;
     button.disabled=true;var original=button.textContent;button.textContent='Searching…';
-    var activeFeeds=options.connections.filter(function(f){return f.enabled;}),index=0,match=null;
+    var targets=favouriteTargets(favourite),index=0,match=null;
     function normalized(name){return favouriteIdentity({name:name,tab:kind}).normalized;}
     function finish(){
       button.disabled=false;button.textContent=original;
@@ -455,11 +469,11 @@ window.VaultcastStalkerVod=function(host,options){
     }
     function next(){
       if(!active||!host.isConnected)return;
-      if(match||index>=activeFeeds.length){finish();return;}
-      var feed=activeFeeds[index++],page=1;
+      if(match||index>=targets.length){finish();return;}
+      var target=targets[index++],feed=target.feed,page=1;
       function searchPage(){
         if(!active||!host.isConnected)return;
-        var params=new URLSearchParams({kind:kind,feed:feed.id,q:favourite.name,page:String(page)});
+        var params=new URLSearchParams({kind:kind,feed:feed.id,category:target.category,q:favourite.name,page:String(page)});
         options.api('stalker_vod_catalogue',params.toString()).then(function(data){
           var candidates=data&&Array.isArray(data.items)?data.items:[];
           var found=candidates.find(function(item){return item&&normalized(item.name)===favourite.normalized&&(!favourite.year||!year(item)||year(item)===favourite.year);});
@@ -513,7 +527,7 @@ window.VaultcastStalkerVod=function(host,options){
     // This uses the existing direct provider endpoint, not a catalogue worker or database.
     var index=0,complete=0,unverified=0;
     function searchJob(job){
-      var feedIndex=0,failed=false,posterFound=false;
+      var targets=favouriteTargets(job.fav),feedIndex=0,failed=false,posterFound=false;
       function finish(){
         if(!current())return;
         complete++;
@@ -543,11 +557,11 @@ window.VaultcastStalkerVod=function(host,options){
       }
       function nextFeed(){
         if(!current())return;
-        if(feedIndex>=activeFeeds.length){finish();return;}
-        var feed=activeFeeds[feedIndex++],page=1;
+        if(feedIndex>=targets.length){finish();return;}
+        var target=targets[feedIndex++],feed=target.feed,page=1;
         function nextPage(){
           if(!current())return;
-          var params=new URLSearchParams({kind:kind,feed:feed.id,q:job.fav.name,page:String(page)});
+          var params=new URLSearchParams({kind:kind,feed:feed.id,category:target.category,q:job.fav.name,page:String(page)});
           options.api('stalker_vod_catalogue',params.toString()).then(function(data){
             if(!current())return;
             if(!data||!data.ok){failed=true;nextFeed();return;}
@@ -679,7 +693,7 @@ window.VaultcastStalkerVod=function(host,options){
         star.setAttribute('aria-pressed',String(active));
       }
       star.onclick=function(){
-        var fav=favouriteIdentity(Object.assign({},item,{tab:kind})),id=favouriteId(fav);
+        var fav=favouriteIdentity(Object.assign({},item,{tab:kind,language:language,folder:category})),id=favouriteId(fav);
         if(!fav.normalized){status.textContent='Cannot save a favourite without a title.';return;}
         var list=favouriteEntries(),exists=list.some(function(x){return favouriteId(x)===id;});
         list=list.filter(function(x){return favouriteId(x)!==id;});
