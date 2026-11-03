@@ -158,6 +158,54 @@ final class StalkerDirect {
         return ['ok'=>true,'items'=>$items,'groups'=>$counts,'total'=>$total,'hasMore'=>$offset+count($items)<$total,
             'indexing'=>$indexing,'connections'=>$progress,'shared'=>false];
     }
+    /** Single-item, opt-in metadata diagnostic. Never return provider transport or auth fields. */
+    public static function probe(array $state,array $opts): array {
+        $kind=(string)($opts['kind']??'');
+        if(!in_array($kind,['vod','series'],true))throw new InvalidArgumentException('Select movies or series.');
+        $wanted=(string)($opts['feed']??'');
+        $id=(string)($opts['id']??'');
+        // Only accept catalogue-issued IDs; do not allow arbitrary provider actions.
+        if(!preg_match('/^(?:vod:)?[0-9]{1,12}$/D',$id)&&!preg_match('/^[0-9]{1,12}:[0-9]{1,12}$/D',$id))
+            throw new InvalidArgumentException('Choose a valid catalogue item.');
+        $feed=null;
+        foreach(($state['feeds']??[]) as $candidate){
+            if(($candidate['id']??'')===$wanted&&($candidate['type']??'')==='stalker'&&!empty($candidate['enabled'])){$feed=$candidate;break;}
+        }
+        if(!$feed)throw new InvalidArgumentException('Select an enabled Stalker connection.');
+        $rawId=preg_replace('/^vod:/','',$id);
+        if(strpos($rawId,':')!==false)$rawId=explode(':',$rawId,2)[0];
+        // One provider operation per user-triggered probe, no playback or episode crawl.
+        $result=stalker_call($feed,'get_info',['movie_id'=>$rawId],$kind);
+        $row=is_array($result['data']??null)?$result['data']:$result;
+        if(!is_array($row))return ['ok'=>true,'supported'=>false,'fields'=>[],'field_names'=>[]];
+        $sourceSections=[$row];
+        foreach(['info','movie_info','video_info'] as $field){
+            if(is_array($row[$field]??null))$sourceSections[]=$row[$field];
+        }
+        $allow=['id','name','o_name','year','movie_year','release_date','premiered','category_id','category',
+            'genre_id','genre_id_1','genre_id_2','genre_id_3','genre_id_4','genres_str','genre','genres',
+            'director','actors','cast','description','descr','plot','summary','overview','time','duration',
+            'country','language','original_language','rating_imdb','rating_mpaa','rating','age','hd',
+            'high_quality','added','tmdb_id','imdb_id','kinopoisk_id','series_number','season','season_number',
+            'episode','episode_number','episodes_count','seasons_count','is_series','audio_languages',
+            'subtitle_languages','audio_tracks','subtitles'];
+        $fields=[];$names=[];
+        foreach($sourceSections as $section){
+            foreach($section as $key=>$value){
+                if(!is_string($key))continue;
+                // Provider field names can reveal new possibilities; names alone never include secrets.
+                if(preg_match('/^[a-z][a-z0-9_]{0,49}$/i',$key)&&!preg_match('/(?:token|auth|pass|secret|cookie|key|mac|serial|device|url|link|cmd|stream|ticket)/i',$key))$names[$key]=true;
+                if(!in_array($key,$allow,true)||isset($fields[$key]))continue;
+                if(is_bool($value)||is_int($value)||is_float($value))$value=(string)$value;
+                if(!is_string($value)||trim($value)==='')continue;
+                $value=mb_substr(trim(html_entity_decode(strip_tags($value),ENT_QUOTES|ENT_HTML5,'UTF-8')),0,$key==='description'||$key==='plot'||$key==='overview'?1200:250);
+                if(preg_match('~(?:https?://|[a-z0-9]{2,}://|(?:token|auth|password|session|cookie)[=:])~i',$value))continue;
+                $fields[$key]=$value;
+            }
+        }
+        return ['ok'=>true,'supported'=>!empty($fields),'fields'=>$fields,'field_names'=>array_keys($names)];
+    }
+
     public static function browse(array $state,array $opts): array {
         $kind=(string)($opts['kind']??'vod');
         if(!in_array($kind,['vod','series'],true))throw new InvalidArgumentException('Choose Movies or Series.');
