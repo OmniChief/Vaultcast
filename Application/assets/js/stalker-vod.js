@@ -2,7 +2,16 @@
 'use strict';
 window.VaultcastStalkerVod=function(host,options){
   var h=options.h,active=false,kind='vod',serial=0,timer=null,letter='#',query='',feeds=[],progress={},titles=[],seen={},loading=false;
-  var status,results,next,search,letters,exportButton,groupExportButton,groups,group='',categories=[],category='',groupsLoading=false,titlesStarted=false,categoryStatus=null,scopeActions=null,prefixGroups=null,showMoreCategories=false,searchAllMode=false,language='',tasks=[],providerSelections={};
+  var status,results,next,search,letters,exportButton,groupExportButton,groups,group='',categories=[],category='',groupsLoading=false,titlesStarted=false,categoryStatus=null,scopeActions=null,prefixGroups=null,showMoreCategories=false,searchAllMode=false,language='UK',tasks=[],providerSelections={};
+  // English is the initial scope; remember explicit selections per user/browser.
+  var languagePreferenceKey='stalker-vod-language-'+options.owner;
+  try{var savedLanguage=localStorage.getItem(languagePreferenceKey);if(savedLanguage!==null)language=savedLanguage;}catch(e){}
+  function chooseLanguage(value){
+    if(language===value)return;
+    language=value;
+    try{localStorage.setItem(languagePreferenceKey,value);}catch(e){}
+    showMoreCategories=false;renderCategories();rerunScopedSearch();
+  }
   function valid(token){return active&&host.isConnected&&options.current()&&token===serial;}
   // Discover provider-defined leading labels from retrieved names, never from a hardcoded provider list.
   // Require an explicit delimiter so ordinary titles (e.g. "A Beautiful Mind") remain intact.
@@ -233,7 +242,7 @@ window.VaultcastStalkerVod=function(host,options){
       function scopeButton(label,value){
         var selected=activeLanguage===value;
         var button=h('button',{type:'button',className:'btn ghost stalker-scope-toggle',text:label,
-          onClick:function(){if(language===value)return;language=value;showMoreCategories=false;renderCategories();rerunScopedSearch();}});
+          onClick:function(){chooseLanguage(value);}});
         button.setAttribute('aria-pressed',String(selected));
         button.style.background=selected?'var(--accent,#196b96)':'var(--surface,#172438)';
         button.style.color=selected?'#fff':'var(--text-muted,#b6c3d2)';
@@ -743,7 +752,8 @@ window.VaultcastStalkerVod=function(host,options){
   function restore(saved){
     if(!saved||saved.kind!==kind)return false;
     stop();active=true;serial++;feeds=options.connections.filter(function(f){return f.enabled;});
-    language=saved.language||'';category=saved.category||'';query=saved.query||'';searchAllMode=!!saved.searchAllMode;
+    if(typeof saved.language==='string')language=saved.language;
+    category=saved.category||'';query=saved.query||'';searchAllMode=!!saved.searchAllMode;
     titles=(saved.titles||[]).slice();categories=(saved.categories||[]).slice();progress=saved.progress||{};
     tasks=(saved.tasks||[]).map(function(t){return {key:t.key,feed:feeds.find(function(f){return f.id===t.feedId;}),category:t.category};}).filter(function(t){return !!t.feed;});
     titlesStarted=!!saved.titlesStarted;seen={};loading=false;groupsLoading=false;
