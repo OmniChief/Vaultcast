@@ -161,7 +161,7 @@ window.VaultcastStalkerVod=function(host,options){
     exportJob=job;
     var button=exportButton;button.textContent='Save partial detailed export';
     var kinds=['vod','series'],list=options.connections.filter(function(f){return f.enabled;});
-    var count=0,issues=[],fieldsFound={},categoriesMap={},tasks=[],taskIndex=0,seenPages={},stats={};
+    var count=0,issues=[],fieldsFound={},categoriesMap={},tasks=[],taskIndex=0,seenPages={},stats={},probeQueue=[],probeKeys={},probeIndex=0,probeStarted=false;
     function plain(value,max){
       if(typeof value!=='string'&&typeof value!=='number'&&typeof value!=='boolean')return null;
       return String(value).replace(/[\u0000-\u001f\u007f]/g,' ').slice(0,max||1000);
@@ -197,6 +197,7 @@ window.VaultcastStalkerVod=function(host,options){
       job.lines.push('Additional item fields seen: '+(Object.keys(fieldsFound).join(', ')||'none exposed by catalogue endpoint'));
       job.lines.push('Field counts: '+JSON.stringify(stats));
       job.lines.push('Tasks visited: '+taskIndex+'/'+tasks.length);
+      job.lines.push('Detail probes completed: '+probeIndex+'/'+probeQueue.length+' (maximum 20)');
       issues.forEach(function(x){job.lines.push('WARNING: '+x);});
       var name='stalker-vod-detailed-'+new Date().toISOString().slice(0,10)+'.txt';
       var blob=new Blob([job.lines.join('\n')+'\n'],{type:'text/plain;charset=utf-8'});
@@ -205,6 +206,28 @@ window.VaultcastStalkerVod=function(host,options){
       setTimeout(function(){URL.revokeObjectURL(url);},30000);
       exportJob=null;button.textContent='Export detailed VOD metadata (.txt)';
       status.textContent='Detailed VOD export saved: '+count+' records'+(issues.length?' · '+issues.length+' warnings':'')+'.';
+    }
+    function runProbes(){
+      if(exportJob!==job)return;
+      if(job.cancelled||probeIndex>=probeQueue.length){finish();return;}
+      var probe=probeQueue[probeIndex];
+      status.textContent='Checking detail metadata '+(probeIndex+1)+'/'+probeQueue.length+' · '+probe.feed.name+' '+probe.kind;
+      var query=new URLSearchParams({kind:probe.kind,feed:probe.feed.id,id:probe.item.id});
+      Promise.resolve(options.api('stalker_vod_probe',query.toString())).then(function(result){
+        if(job.cancelled){finish();return;}
+        job.lines.push('DETAIL_PROBE\t'+JSON.stringify({
+          connection:plain(probe.feed.name,160),type:probe.kind,portal_id:plain(probe.item.id,120),
+          category:plain(probe.category,200),supported:!!(result&&result.supported),
+          fields:result&&result.fields||{},field_names:result&&result.field_names||[]
+        }));
+      }).catch(function(err){
+        issues.push('Detail probe '+probe.feed.name+' '+probe.kind+' '+probe.item.id+': '+(err.message||err));
+      }).then(function(){probeIndex++;setTimeout(runProbes,500);});
+    }
+    function complete(){
+      if(exportJob!==job)return;
+      if(job.cancelled||!probeQueue.length){finish();return;}
+      if(!probeStarted){probeStarted=true;job.lines.push('','### Per-item detail probe results');runProbes();}
     }
     function recordStats(obj){
       ['year','description','poster_path','portal_category_id','portal_category_name','language','imdb_id','tmdb_id'].forEach(function(field){
@@ -239,7 +262,7 @@ window.VaultcastStalkerVod=function(host,options){
     function schedule(){setTimeout(run,250);}
     function run(){
       if(exportJob!==job)return;
-      if(job.cancelled||count>=maxRecords||taskIndex>=tasks.length){finish();return;}
+      if(job.cancelled||count>=maxRecords||taskIndex>=tasks.length){complete();return;}
       var task=tasks[taskIndex],feed=task.feed,k=task.kind,key=task.key;
       var catLabel=(categoriesMap[key]||{})[task.category]||task.category||'All';
       status.textContent='Detailed export: '+feed.name+' '+k+' / '+catLabel+' · '+count+' records (save partial at any time)';
@@ -259,6 +282,14 @@ window.VaultcastStalkerVod=function(host,options){
           if(!obj.portal_category_id&&task.category)obj.portal_category_id=task.category;
           if(!obj.portal_category_name&&task.category)obj.portal_category_name=catLabel;
           recordStats(obj);job.lines.push('RECORD\t'+JSON.stringify(obj));count++;
+          // One representative item per sampled category/page. Maximum 20 portal calls.
+          // Only use numeric catalogue IDs and do not probe series episodes.
+          var candidate=String(item.id||''),probeKey=feed.id+'|'+k+'|'+task.category;
+          if(probeQueue.length<20&&!probeKeys[probeKey]&&
+            (/^(?:vod:)?\d{1,12}$/.test(candidate)||/^\d{1,12}:\d{1,12}$/.test(candidate))){
+            probeKeys[probeKey]=true;
+            probeQueue.push({feed:feed,kind:k,item:{id:candidate},category:catLabel});
+          }
         });
         // Small demos take one page per sampled category; full scans continue
         // each category until the portal reports its final page.
