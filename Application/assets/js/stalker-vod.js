@@ -234,7 +234,7 @@ window.VaultcastStalkerVod=function(host,options){
       b.setAttribute('aria-pressed',String(!!chosen));return b;
     }
     var buckets=categoryBuckets(),languages=['UK','African','Arabic','Dutch','French','German','Iran','Italian','Portuguese','Spanish','Turkish','Other'];
-    var available=languages.filter(function(lang){return lang==='UK'||buckets.some(function(c){return c.language===lang;});});
+    var available=languages.filter(function(lang){return buckets.some(function(c){return c.language===lang;});});
     buckets.forEach(function(c){if(available.indexOf(c.language)<0)available.push(c.language);});
     available.sort(function(a,b){if(a==='UK')return -1;if(b==='UK')return 1;return a.localeCompare(b);});
     function languageLabel(lang){return lang==='UK'?'English':lang;}
@@ -732,7 +732,7 @@ window.VaultcastStalkerVod=function(host,options){
     if(!ordered.length)results.appendChild(h('p',{className:'muted',text:titlesStarted?'No matching titles in loaded pages. Load more to continue.':'Select a provider folder or use Search all titles to begin.'}));
     var done=tasks.filter(function(t){return progress[t.key]&&progress[t.key].done;}).length;
     var failed=tasks.filter(function(t){return progress[t.key]&&progress[t.key].failed;}).length;
-    status.textContent=ordered.length+' titles in '+(searchAllMode?(language?(language==='UK'?'English':language)+' folders':'All languages'):(group||'Selected folder'))+' (loaded so far) · '+done+'/'+tasks.length+' sources finished'+(failed?' · '+failed+' provider sources failed':'')+(failed&&ordered.length===0?' · Check provider category response or switch to All languages':'');
+    status.textContent=ordered.length+' titles in '+(searchAllMode?(language?(language==='UK'?'English':language)+' folders':'All languages'):(group||'Selected folder'))+' (loaded so far) · '+done+'/'+tasks.length+' sources finished'+(failed?' · '+failed+' unavailable':'');
     next.hidden=!titlesStarted||!tasks.some(function(t){return progress[t.key]&&!progress[t.key].done;});
     next.disabled=loading;
   }
@@ -744,13 +744,6 @@ window.VaultcastStalkerVod=function(host,options){
       tasks=bucket?bucket.sources.map(function(c){return {key:c.feed+'|'+c.id,feed:feeds.find(function(f){return f.id===c.feed;}),category:c.id};}):
         searchAllMode&&language?categories.filter(function(c){return categoryLanguage(c.name)===language;}).map(function(c){return {key:c.feed+'|'+c.id,feed:feeds.find(function(f){return f.id===c.feed;}),category:c.id};}):
         feeds.map(function(f){return {key:f.id+'|*',feed:f,category:''};});
-      // Providers without usable category metadata must not silently disappear
-      // when English is the default. Their unfiltered provider search can still work.
-      if(searchAllMode&&language==='UK'){
-        feeds.forEach(function(feed){
-          if(!categories.some(function(c){return c.feed===feed.id;}))tasks.push({key:feed.id+'|*',feed:feed,category:''});
-        });
-      }
       tasks=tasks.filter(function(t){return !!t.feed;});
       tasks.forEach(function(t){progress[t.key]={page:1,done:false,failed:false};});
     }
@@ -770,7 +763,7 @@ window.VaultcastStalkerVod=function(host,options){
         if(!result||!result.ok)throw Error(result&&result.error||'Portal unavailable');
         add(result.items,task.feed);p.page++;p.done=!result.hasMore||p.page>10000;
         if(p.done){index++;attempts=0;}
-      }).catch(function(error){if(valid(token)){p.done=true;p.failed=true;p.error=String(error&&error.message||'Provider request failed');index++;attempts=0;}})
+      }).catch(function(){if(valid(token)){p.done=true;p.failed=true;index++;attempts=0;}})
         .then(function(){if(valid(token)){renderResults();step();}});
     }
     step();
