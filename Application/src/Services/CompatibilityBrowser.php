@@ -202,84 +202,186 @@ final class CompatibilityBrowser {
         if($view==='live')return self::live($id,$page,$query);
         throw new RuntimeException('Page not found.');
     }
-    /** Lightweight, provider-paged Stalker Live TV in Compatibility Mode. */
+    /** Samsung-safe Stalker country browsing across all enabled connections. */
     private static function stalker(int $page): string {
         self::allow('live');
         if(class_exists('Parental') && Parental::filtering())throw new RuntimeException('Provider catalogues are unavailable for restricted profiles.');
         require_once STREAM_ROOT.'/src/Live/iptv.php';
         $state=iptv_load();
         $feeds=array_values(array_filter($state['feeds']??[],static function($f){return ($f['type']??'')==='stalker'&&!empty($f['enabled']);}));
-        $selected=(string)($_GET['feed']??'');
-        $feed=null;
-        foreach($feeds as $candidate)if((string)$candidate['id']===$selected){$feed=$candidate;break;}
+        $base=['view'=>'live','tab'=>'stalker'];
         $html='<h2>Stalker Live TV</h2>'.self::link('Back to Live TV',['view'=>'live']);
         if(!$feeds)return $html.'<p>No enabled Stalker connections are available.</p>';
-        if(!$feed){
-            $html.='<ul class="compat-list">';
-            foreach($feeds as $candidate)$html.='<li>'.self::link((string)($candidate['name']??'Connection'),['view'=>'live','tab'=>'stalker','feed'=>$candidate['id']]).'</li>';
-            return $html.'</ul>';
+        $country=strtoupper(mb_substr((string)($_GET['country']??''),0,3));
+        $section=mb_substr((string)($_GET['section']??''),0,80);
+        $folderId=mb_substr((string)($_GET['folder']??''),0,120);
+        $folderFeed=mb_substr((string)($_GET['folder_feed']??''),0,120);
+        $sourceOffset=max(0,min(1000,(int)($_GET['source_offset']??0)));
+        $selectedChannel=mb_substr((string)($_GET['channel']??''),0,120);
+        $selectedFeed=mb_substr((string)($_GET['feed']??''),0,120);
+        $sections=['General & entertainment','Sports','Football','Live events & PPV','Movies & on-demand','Kids & family','News, documentary & music','Replays & catch-up','Other categories'];
+        $sectionFor=static function(string $label): string {
+            $n=mb_strtoupper($label);
+            if(preg_match('/\b(?:REPLAY|CATCH.?UP)\b/u',$n))return 'Replays & catch-up';
+            if(preg_match('/\b(?:PPV|PAY PER VIEW|EVENTS?|UFC|BOXING|PDC|F1 TV|RACES)\b/u',$n))return 'Live events & PPV';
+            if(preg_match('/\b(?:EPL|EFL|SOCCER|FOOTBALL|LEAGUE|CHAMPIONSHIP|LA LIGA|SERIE A|SPFL|SCOTTISH CUP|UEFA)\b/u',$n))return 'Football';
+            if(preg_match('/\b(?:SPORTS?|ESPN|BEIN|DAZN|SUPERSPORT|VIAPLAY)\b/u',$n))return 'Sports';
+            if(preg_match('/\b(?:KIDS?|BABY|CARTOON|CHILDREN|FAMILY)\b/u',$n))return 'Kids & family';
+            if(preg_match('/^(?:OD\b|ON DEMAND\b)|\b(?:MOVIES?|CINEMA|SKY STORE|NETFLIX|DISNEY|IPLAY|CINE)\b/u',$n))return 'Movies & on-demand';
+            if(preg_match('/\b(?:NEWS|DOCUMENTARY|LIFESTYLE|MUSIC|RADIO)\b/u',$n))return 'News, documentary & music';
+            if(preg_match('/\b(?:GENERAL|ENTERTAINMENT|24\/7|AMAZON|ITVX|DISCOVERY|SKY MIX)\b/u',$n))return 'General & entertainment';
+            return 'Other categories';
+        };
+        $cleanLabel=static function(string $raw): string {
+            $label=trim($raw);
+            for($n=0;$n<3;$n++){
+                $next=preg_replace('/^\s*(?:[|┃│¦]\s*[A-Z]{2,3}\s*[|┃│¦]|\[\s*[A-Z]{2,3}\s*\]|\(\s*[A-Z]{2,3}\s*\))\s*[-–—:|┃│¦]*\s*/iu','',$label);
+                if($next===$label)break;
+                $label=trim($next);
+            }
+            return $label!==''?$label:$raw;
+        };
+        $countryName=static function(string $code): string {
+            if($code==='ZZ')return 'Unlabelled / mixed';
+            if($code==='GB')return 'United Kingdom';
+            if($code==='US')return 'United States';
+            if(class_exists('Locale')){
+                $label=\Locale::getDisplayRegion('und-'.$code,'en');
+                if(is_string($label)&&$label!==''&&strtoupper($label)!==$code)return $label;
+            }
+            return $code;
+        };
+        $folders=[];$errors=[];
+        // Provider categories are cached on the NAS. No SQL catalogue, browser
+        // JavaScript, or upfront live channel scan is required.
+        foreach($feeds as $feed){
+            try{
+                $categories=StalkerLiveBrowse::categories($feed)['categories'];
+                foreach($categories as $folder){
+                    $folder['feed']=$feed['id'];$folder['connection']=$feed['name'];
+                    $folder['name']=$cleanLabel((string)$folder['name']);
+                    $folder['section']=$sectionFor($folder['name']);
+                    $folders[]=$folder;
+                }
+            }catch(Throwable $e){$errors[]=(string)$feed['name'].': categories unavailable';}
         }
-        $base=['view'=>'live','tab'=>'stalker','feed'=>$feed['id']];
-        $html.=self::link('Connections',['view'=>'live','tab'=>'stalker']).'<h3>'.self::esc($feed['name']??'Connection').'</h3>';
-        $category=mb_substr((string)($_GET['category']??''),0,120);
-        try{
-            $folders=StalkerLiveBrowse::categories($feed)['categories'];
-            $country=strtoupper(mb_substr((string)($_GET['country']??''),0,3));
-            if($country===''){
-                $counts=[];
-                foreach($folders as $folder){
-                    $code=(string)($folder['country']??'ZZ');
-                    $counts[$code]=($counts[$code]??0)+1;
-                }
-                ksort($counts);
-                $html.='<h3>Countries</h3><ul class="compat-list">';
-                foreach($counts as $code=>$count){
-                    $label=$code==='ZZ'?'Other / unlabelled':$code;
-                    $html.='<li>'.self::link($label.' ('.$count.')',$base+['country'=>$code]).'</li>';
-                }
-                return $html.'</ul>';
+        if($country===''){
+            $counts=[];
+            foreach($folders as $folder){$code=$folder['country']??'ZZ';$counts[$code]=($counts[$code]??0)+1;}
+            $codes=array_keys($counts);
+            usort($codes,static function($a,$b)use($countryName){
+                $rank=static function($code){return $code==='GB'?0:($code==='US'?1:($code==='ZZ'?3:2));};
+                return $rank($a)<=>$rank($b) ?: strcmp($countryName($a),$countryName($b));
+            });
+            $html.='<p class="compat-note">'.count($folders).' categories across '.count($feeds).' connections'.($errors?' · '.self::esc(implode('; ',$errors)):'').'</p>';
+            $html.='<h3>Countries</h3><ul class="compat-list">';
+            foreach($codes as $code)$html.='<li>'.self::link($countryName($code).' ('.$counts[$code].')',$base+['country'=>$code]).'</li>';
+            return $html.'</ul>'.(!$codes?'<p>No provider categories could be loaded.</p>':'');
+        }
+        $html.=self::link('Countries',$base);
+        $countryFolders=array_values(array_filter($folders,static function($f)use($country){return ($f['country']??'ZZ')===$country;}));
+        if($section===''&&$folderId===''){
+            $html.='<h3>'.self::esc($countryName($country)).' · Provider categories</h3>';
+            if(!$countryFolders)return $html.'<p>No categories for this country.</p>';
+            $groups=array_fill_keys($sections,[]);
+            $merged=[];
+            foreach($countryFolders as $folder){
+                $key=$folder['section'].'|'.mb_strtolower($folder['name']);
+                if(!isset($merged[$key]))$merged[$key]=['name'=>$folder['name'],'section'=>$folder['section'],'sources'=>[]];
+                $merged[$key]['sources'][]=$folder;
             }
-            $html.=self::link('Countries',$base);
-            $folders=array_values(array_filter($folders,static function($item)use($country){return (string)($item['country']??'ZZ')===$country;}));
-            if($category===''){
-                $html.='<h3>'.self::esc($country==='ZZ'?'Other / unlabelled':$country).'</h3><ul class="compat-list">';
-                foreach($folders as $folder)$html.='<li>'.self::link($folder['name'], $base+['country'=>$country,'category'=>$folder['id']]).'</li>';
-                return $html.'</ul>';
+            foreach($merged as $item)$groups[$item['section']][]=$item;
+            $html.='<p class="compat-note">Select a section to load its channels, or select an individual provider folder.</p>';
+            foreach($sections as $name){
+                if(!$groups[$name])continue;
+                usort($groups[$name],static function($a,$b){
+                    $rank=static function($x){return strtoupper($x)==='GENERAL'?0:(strtoupper($x)==='ENTERTAINMENT'?1:2);};
+                    return $rank($a['name'])<=>$rank($b['name']) ?: strcasecmp($a['name'],$b['name']);
+                });
+                $html.='<section class="compat-panel"><h3>'.self::link($name.' ('.count($groups[$name]).')',$base+['country'=>$country,'section'=>$name]).'</h3>';
+                // Plain links remain operable on older Samsung Tizen browsers.
+                $html.='<ul class="compat-list">';
+                foreach($groups[$name] as $entry){
+                    $first=$entry['sources'][0];
+                    $html.='<li>'.self::link($entry['name'].' · '.count($entry['sources']).' connection(s)',
+                        $base+['country'=>$country,'folder'=>$first['id'],'folder_feed'=>$first['feed']]).'</li>';
+                }
+                $html.='</ul></section>';
             }
-            $chosen=null;foreach($folders as $folder)if($folder['id']===$category){$chosen=$folder;break;}
-            if(!$chosen)return $html.'<p>Category no longer exists. Choose another category.</p>';
-            $html.=self::link('Categories',$base+['country'=>$country]).'<h3>'.self::esc($chosen['name']).'</h3>';
-            $data=StalkerLiveBrowse::channels($feed,['category'=>$category,'page'=>$page]);
-            $selectedChannel=mb_substr((string)($_GET['channel']??''),0,120);
-            $channel=null;
-            foreach($data['items']??[] as $item)if($selectedChannel!==''&&(string)$item['id']===$selectedChannel)$channel=$item;
-            if($selectedChannel!==''&&!$channel)$html.='<p class="compat-note">Channel unavailable on this page. Select a channel again.</p>';
-            if($channel){
-                $html.=self::link('Back to channels',$base+['country'=>$country,'category'=>$category,'page'=>$page]);
-                $html.='<h3>'.self::esc($channel['name']).'</h3>';
-                // Issue a viewer-scoped playback ticket using the same authenticated
-                // Stalker proxy as the standard interface. Never reveal portal URLs.
-                $id=(string)$channel['id'];
-                $ticket=bin2hex(random_bytes(16));
-                $url=stalker_resolve($feed,$id);
+            return $html;
+        }
+        $target=array_values(array_filter($countryFolders,static function($f)use($section,$folderId,$folderFeed){
+            return $section!==''?$f['section']===$section:
+                ((string)$f['id']===$folderId&&(string)$f['feed']===$folderFeed);
+        }));
+        if(!$target)return $html.'<p>This provider group is no longer available.</p>';
+        $label=$section!==''?$section:$target[0]['name'];
+        $html.=self::link('Categories',$base+['country'=>$country]).'<h3>'.self::esc($label).'</h3>';
+        $window=8;
+        $slice=array_slice($target,$sourceOffset,$window);
+        $channels=[];$more=false;$failures=[];
+        // Only one provider page per selected folder per request, max eight
+        // folder sources. Paging avoids a multi-provider scan on small NAS units.
+        foreach($slice as $source){
+            $feed=null;foreach($feeds as $candidate)if((string)$candidate['id']===(string)$source['feed']){$feed=$candidate;break;}
+            if(!$feed)continue;
+            try{
+                $data=StalkerLiveBrowse::channels($feed,['category'=>$source['id'],'page'=>$page]);
+                $more=$more||!empty($data['hasMore']);
+                foreach($data['items']??[] as $item)$channels[]=$item;
+            }catch(Throwable $e){$failures[]=$source['connection'].' · '. $source['name'];}
+        }
+        $byName=[];
+        foreach($channels as $item){
+            $name=(string)$item['name'];
+            for($n=0;$n<3;$n++){
+                $next=preg_replace('/^\s*(?:(?:UK|GB)\s*[-–—:|]|\[\s*(?:UK|GB)\s*\]|[|┃│¦]\s*(?:UK|GB)\s*[|┃│¦])\s*/iu','',$name);
+                if($next===$name)break;$name=trim($next);
+            }
+            $key=mb_strtolower(trim(preg_replace('/\s+/u',' ',$name)));
+            if($key==='')continue;
+            if(!isset($byName[$key]))$byName[$key]=['name'=>$name,'copies'=>[]];
+            $byName[$key]['copies'][]=$item;
+        }
+        $html.='<p class="compat-note">'.count($byName).' channels on this page · '.count($slice).' provider folders'.($failures?' · Unavailable: '.self::esc(implode(', ',$failures)):'').'</p>';
+        $params=$base+['country'=>$country]+($section!==''?['section'=>$section]:['folder'=>$folderId,'folder_feed'=>$folderFeed])+['source_offset'=>$sourceOffset];
+        if($selectedChannel!==''){
+            $item=null;$copies=[];
+            foreach($byName as $group)foreach($group['copies'] as $candidate)if((string)$candidate['id']===$selectedChannel&&(string)$candidate['feed']===$selectedFeed){$item=$candidate;$copies=$group['copies'];break 2;}
+            if(!$item)return $html.'<p>This channel is no longer on the selected provider page.</p>'.self::link('Back to channels',$params+['page'=>$page]);
+            $html.=self::link('Back to channels',$params+['page'=>$page]).'<h3>'.self::esc($item['name']).'</h3>';
+            if(count($copies)>1){
+                $html.='<p>Available connections:</p><ul class="compat-list">';
+                foreach($copies as $copy)$html.='<li>'.self::link($copy['connection'], $params+['page'=>$page,'feed'=>$copy['feed'],'channel'=>$copy['id']]).'</li>';
+                $html.='</ul>';
+            }
+            try{
+                $feed=null;foreach($feeds as $candidate)if((string)$candidate['id']===$selectedFeed){$feed=$candidate;break;}
+                if(!$feed)throw new RuntimeException('Connection unavailable.');
+                $ticket=bin2hex(random_bytes(16));$url=stalker_resolve($feed,(string)$item['id']);
                 \Vaultcast\Repository::cachePut('stalker_play_ticket_'.hash('sha256',$ticket),[
                     'viewer'=>(string)self::$viewer['id'],'feed'=>$feed['id'],
                     'fingerprint'=>hash('sha256',json_encode($feed)),
-                    'kind'=>'live','id'=>$id,'url'=>$url,'created'=>time(),'item'=>null
+                    'kind'=>'live','id'=>(string)$item['id'],'url'=>$url,'created'=>time(),'item'=>null
                 ],21600);
                 $stream=self::$base.'api/live/stalker_stream?'.http_build_query([
-                    'feed'=>$feed['id'],'channel'=>$id,'ticket'=>$ticket,'format'=>'.m3u8'
+                    'feed'=>$feed['id'],'channel'=>$item['id'],'ticket'=>$ticket,'format'=>'.m3u8'
                 ],'','&',PHP_QUERY_RFC3986);
                 $html.=self::player($stream,false,[],['hls'=>true]);
-                return $html;
-            }
-            $html.='<ul class="compat-list">';
-            foreach($data['items']??[] as $item){
-                $html.='<li>'.self::link((string)$item['name'],$base+['country'=>$country,'category'=>$category,'page'=>$page,'channel'=>$item['id']]).'</li>';
-            }
-            $html.='</ul>'.self::pages($base+['country'=>$country,'category'=>$category],$page,!empty($data['hasMore']));
-
-        }catch(Throwable $e){$html.='<p class="compat-note">Could not load provider channels. '.self::esc($e->getMessage()).'</p>';}
+            }catch(Throwable $e){$html.='<p class="compat-note">Playback unavailable. Try another connection or retry the channel.</p>';}
+            return $html;
+        }
+        $html.='<ul class="compat-list">';
+        foreach($byName as $group){
+            $item=$group['copies'][0];
+            $html.='<li>'.self::link($group['name'],$params+['page'=>$page,'feed'=>$item['feed'],'channel'=>$item['id']]);
+            if(count($group['copies'])>1)$html.='<small> · '.count($group['copies']).' connections</small>';
+            $html.='</li>';
+        }
+        $html.='</ul>';
+        $html.=self::pages($params,$page,$more);
+        if($sourceOffset>0)$html.=self::link('Previous provider folders',$base+['country'=>$country]+($section!==''?['section'=>$section]:['folder'=>$folderId,'folder_feed'=>$folderFeed])+['source_offset'=>max(0,$sourceOffset-$window)]);
+        if($sourceOffset+$window<count($target))$html.=self::link('More provider folders',$base+['country'=>$country]+($section!==''?['section'=>$section]:['folder'=>$folderId,'folder_feed'=>$folderFeed])+['source_offset'=>$sourceOffset+$window]);
         return $html;
     }
     private static function live(string $id,int $page,string $query): string {
