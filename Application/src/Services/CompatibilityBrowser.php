@@ -322,10 +322,10 @@ final class CompatibilityBrowser {
         if(!$target)return $html.'<p>This provider group is no longer available.</p>';
         $label=$section!==''?$section:$target[0]['name'];
         $html.=self::link('Categories',$base+['country'=>$country]).'<h3>'.self::esc($label).'</h3>';
-        $window=8;
+        $window=4;
         $slice=array_slice($target,$sourceOffset,$window);
         $channels=[];$more=false;$failures=[];
-        // Only one provider page per selected folder per request, max eight
+        // Only one provider page per selected folder per request, max four
         // folder sources. Paging avoids a multi-provider scan on small NAS units.
         foreach($slice as $source){
             $feed=null;foreach($feeds as $candidate)if((string)$candidate['id']===(string)$source['feed']){$feed=$candidate;break;}
@@ -404,7 +404,7 @@ final class CompatibilityBrowser {
         $language=static function(string $raw): string {
             $name=mb_strtoupper($raw);
             $code='';
-            if(preg_match('/(?:[|┃│¦]\s*([A-Z]{2,3})\s*[|┃│¦]|\[\s*([A-Z]{2,3})\s*\])/u',$name,$m))$code=(string)($m[1]?:($m[2]??''));
+            if(preg_match('/(?:[|┃│¦]\s*([A-Z]{2,3})\s*[|┃│¦]|\[\s*([A-Z]{2,3})\s*\])/u',$name,$m))$code=(string)(($m[1]??'')!==''?$m[1]:($m[2]??''));
             $codes=['EN'=>'UK','GB'=>'UK','UK'=>'UK','US'=>'UK','FR'=>'French','DE'=>'German','IT'=>'Italian','ES'=>'Spanish','PT'=>'Portuguese','NL'=>'Dutch','TR'=>'Turkish','IR'=>'Iran','AR'=>'Arabic'];
             if($code!=='')return $codes[$code]??$code;
             if(strpos($name,'MULTISUB')!==false)return 'UK';
@@ -488,7 +488,7 @@ final class CompatibilityBrowser {
         }else{
             $html.='<h3>Search results</h3>';
         }
-        $window=6;$sourceList=array_slice($filtered,$sourceOffset,$window);
+        $window=3;$sourceList=array_slice($filtered,$sourceOffset,$window);
         $items=[];$failed=0;$more=false;
         foreach($sourceList as $src){
             $feed=$feedById[$src['feed']]??null;
