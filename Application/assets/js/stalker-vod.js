@@ -12,6 +12,40 @@ window.VaultcastStalkerVod=function(host,options){
     try{localStorage.setItem(languagePreferenceKey,value);}catch(e){}
     showMoreCategories=false;renderCategories();rerunScopedSearch();
   }
+  // One preferred provider per tab and viewer, stored by stable brand identity.
+  // Folder IDs are intentionally not persisted: portal catalogues can change.
+  function providerFavouriteKey(){return 'stalker-vod-preferred-provider-v1-'+options.owner+'-'+kind;}
+  function preferredProvider(){
+    try{
+      var value=JSON.parse(localStorage.getItem(providerFavouriteKey())||'null');
+      return value&&typeof value.id==='string'&&typeof value.section==='string'&&typeof value.language==='string'?value:null;
+    }catch(e){return null;}
+  }
+  function togglePreferredProvider(entry){
+    var previous=preferredProvider(),same=previous&&previous.id===entry.id&&previous.section===entry.section&&previous.language===entry.language;
+    try{
+      if(same)localStorage.removeItem(providerFavouriteKey());
+      else localStorage.setItem(providerFavouriteKey(),JSON.stringify(entry));
+    }catch(e){status.textContent='This browser could not save the preferred provider.';return;}
+    renderCategories();
+  }
+  function openPreferredProvider(){
+    var fav=preferredProvider();
+    if(!fav)return;
+    var selected=Object.keys(providerSelections).find(function(key){
+      var prefix='provider|'+fav.language+'|'+fav.section+'|';
+      return key===prefix+fav.id;
+    });
+    if(!selected)return; // Provider disappeared; retain the preference for later.
+    if(language!==fav.language){
+      language=fav.language;
+      try{localStorage.setItem(languagePreferenceKey,language);}catch(e){}
+      renderCategories();
+      selected='provider|'+fav.language+'|'+fav.section+'|'+fav.id;
+      if(!providerSelections[selected])return;
+    }
+    beginBrowse(selected);
+  }
   function valid(token){return active&&host.isConnected&&options.current()&&token===serial;}
   // Discover provider-defined leading labels from retrieved names, never from a hardcoded provider list.
   // Require an explicit delimiter so ordinary titles (e.g. "A Beautiful Mind") remain intact.
@@ -162,7 +196,12 @@ window.VaultcastStalkerVod=function(host,options){
     groupsLoading=true;categories=[];category='';showMoreCategories=false;renderCategories();
     function nextFeed(){
       if(!valid(token))return;
-      if(index>=feeds.length){groupsLoading=false;renderCategories();renderResults();if(searchAllMode&&titlesStarted&&!tasks.length)scan(false);return;}
+      if(index>=feeds.length){
+        groupsLoading=false;renderCategories();renderResults();
+        if(!refresh&&!searchAllMode&&!titlesStarted)openPreferredProvider();
+        if(searchAllMode&&titlesStarted&&!tasks.length)scan(false);
+        return;
+      }
       var feed=feeds[index++];
       categoryStatus.textContent='Loading groups from '+feed.name+'…';
       options.api('stalker_vod_catalogue',new URLSearchParams({kind:kind,feed:feed.id,categories_only:'1',refresh:refresh?'1':''}).toString())
@@ -378,12 +417,24 @@ window.VaultcastStalkerVod=function(host,options){
             art.appendChild(logo);
           }
           art.appendChild(h('span',{className:'stalker-provider-monogram',text:def?def[1]:'Other networks'}));
-          grid.appendChild(h('button',{type:'button',className:'stalker-provider-group stalker-provider-action',onClick:function(){beginBrowse(key);}},[
+          var identity={id:id,section:part.label,language:activeLanguage||'UK'};
+          var fav=preferredProvider(),isFavourite=!!fav&&fav.id===identity.id&&fav.section===identity.section&&fav.language===identity.language;
+          var tile=h('div',{className:'stalker-provider-favourite-tile'});
+          var openProvider=h('button',{type:'button',className:'stalker-provider-group stalker-provider-action',onClick:function(){beginBrowse(key);}},[
             h('span',{className:'stalker-provider-summary'},[
               art,h('strong',{text:def?def[1]:'Other networks'}),
               h('small',{className:'muted',text:entry.items.length+' folders · '+all.length+' sources'})
             ])
-          ]));
+          ]);
+          var star=h('button',{type:'button',className:'stalker-provider-favourite-star'+(isFavourite?' is-favourite':''),
+            text:isFavourite?'★':'☆',
+            title:(isFavourite?'Remove default':'Set as default')+' '+(def?def[1]:'Other networks')+' for '+(kind==='vod'?'Movies':'Series'),
+            'aria-label':(isFavourite?'Remove default provider ':'Set default provider ')+(def?def[1]:'Other networks')+' for '+(kind==='vod'?'Movies':'Series'),
+            'aria-pressed':String(isFavourite),
+            onClick:function(){togglePreferredProvider(identity);}
+          });
+          tile.append(openProvider,star);
+          grid.appendChild(tile);
         });
       }else{
         part.items.forEach(function(c){
