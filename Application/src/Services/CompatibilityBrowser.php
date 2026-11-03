@@ -342,13 +342,16 @@ final class CompatibilityBrowser {
                 foreach($data['items']??[] as $item)$channels[]=$item;
             }catch(Throwable $e){$failures[]=$source['connection'].' · '. $source['name'];}
         }
-        $byName=[];
+        $byName=[];$selectedRaw=null;$selectedCopies=[];
         foreach($channels as $item){
             $name=(string)$item['name'];
             for($n=0;$n<3;$n++){
                 $next=preg_replace('/^\s*(?:(?:UK|GB)\s*[-–—:|]|\[\s*(?:UK|GB)\s*\]|[|┃│¦]\s*(?:UK|GB)\s*[|┃│¦])\s*/iu','',$name);
                 if($next===$name)break;$name=trim($next);
             }
+            // A previously selected channel must remain playable even after
+            // the viewer changes a display-only name/quality filter.
+            if($selectedChannel!==''&&(string)$item['id']===$selectedChannel&&(string)$item['feed']===$selectedFeed)$selectedRaw=$item;
             if($channelQuery!==''&&mb_stripos($name,$channelQuery)===false)continue;
             $upper=mb_strtoupper($name);
             $formats=[];
@@ -376,6 +379,7 @@ final class CompatibilityBrowser {
         if($selectedChannel!==''){
             $item=null;$copies=[];
             foreach($byName as $group)foreach($group['copies'] as $candidate)if((string)$candidate['id']===$selectedChannel&&(string)$candidate['feed']===$selectedFeed){$item=$candidate;$copies=$group['copies'];break 2;}
+            if(!$item)$item=$selectedRaw;
             if(!$item)return $html.'<p>This channel is no longer on the selected provider page.</p>'.self::link('Back to channels',$params+['page'=>$page]);
             $html.=self::link('Back to channels',$params+['page'=>$page]).'<h3>'.self::esc($item['name']).'</h3>';
             if(count($copies)>1){
@@ -404,6 +408,7 @@ final class CompatibilityBrowser {
                     'feed'=>$feed['id'],'channel'=>$item['id'],'ticket'=>$ticket
                 ],'','&',PHP_QUERY_RFC3986);
                 if($hls)$stream.='&format=.m3u8';
+                if($hls)$html.='<p class="compat-note">This provider supplied an HLS playlist. Older Tizen browsers may not support HLS; Vaultcast cannot change the provider format without transcoding.</p>';
                 $html.=self::player($stream,false,[],['hls'=>$hls]);
             }catch(Throwable $e){$html.='<p class="compat-note">Playback unavailable. Try another connection or retry the channel.</p>';}
             return $html;
