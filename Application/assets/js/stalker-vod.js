@@ -480,7 +480,7 @@ window.VaultcastStalkerVod=function(host,options){
       ]);
       var message=h('small',{className:'muted',text:'Looking up provider artwork…'});
       var button=h('button',{type:'button',className:'btn ghost',text:titleText,onClick:function(){
-        if(job.found){options.open(job.found.feed,Object.assign({},job.found.item,{feed:job.found.feed}),button);}
+        if(job.found){options.open(job.found.feed,Object.assign({},job.found.item,{feed:job.found.feed,sources:job.sources.slice()}),button);}
         else findFavourite(fav,button);
       }});
       button.style.whiteSpace='normal';button.style.textAlign='left';button.style.width='100%';
@@ -495,7 +495,9 @@ window.VaultcastStalkerVod=function(host,options){
         cover,h('div',{className:'stalker-vod-copy'},[button,message,remove])
       ]);
       results.appendChild(card);
-      var job={fav:fav,cover:cover,message:message,found:null};
+      var job={fav:fav,cover:cover,message:message,found:null,sources:[],ready:false};
+      button.disabled=true;
+      job.button=button;
       jobs.push(job);
     });
     // Two outstanding lookups at most; each provider search is limited to three pages.
@@ -506,10 +508,13 @@ window.VaultcastStalkerVod=function(host,options){
       function finish(){
         if(!current())return;
         complete++;
+        job.ready=true;
+        job.button.disabled=!job.found;
         if(!job.found){
           if(failed){unverified++;job.message.textContent='Could not verify availability (provider error).';}
           else job.message.textContent='Not found in the provider pages checked.';
-        }else if(!posterFound)job.message.textContent='Poster unavailable from current providers.';
+        }else if(!posterFound)job.message.textContent='Poster unavailable from current providers · '+job.sources.length+' connection(s) found.';
+        else job.message.textContent=job.sources.length+' connection(s) available.';
         status.textContent='Checked '+complete+' of '+jobs.length+' favourites'+(unverified?' · '+unverified+' could not be verified':'');
         schedule();
       }
@@ -524,12 +529,12 @@ window.VaultcastStalkerVod=function(host,options){
           job.message.textContent='Poster unavailable from current providers.';
         };
         job.cover.replaceChildren(image);
-        job.message.textContent='Available from provider';
+        job.message.textContent='Checking other connections…';
         return true;
       }
       function nextFeed(){
         if(!current())return;
-        if(posterFound||feedIndex>=activeFeeds.length){finish();return;}
+        if(feedIndex>=activeFeeds.length){finish();return;}
         var feed=activeFeeds[feedIndex++],page=1;
         function nextPage(){
           if(!current())return;
@@ -538,13 +543,14 @@ window.VaultcastStalkerVod=function(host,options){
             if(!current())return;
             if(!data||!data.ok){failed=true;nextFeed();return;}
             var candidates=Array.isArray(data.items)?data.items:[];
-            var found=candidates.find(function(item){
-              return item&&normalized(item.name)===job.fav.normalized&&(!job.fav.year||!year(item)||year(item)===job.fav.year);
+            candidates.forEach(function(item){
+              if(!item||normalized(item.name)!==job.fav.normalized||(job.fav.year&&year(item)&&year(item)!==job.fav.year))return;
+              var source={id:item.id,feed:feed.id,connection:feed.name,kind:item.kind,playable:item.playable,
+                poster:item.poster||''};
+              if(!job.sources.some(function(existing){return String(existing.feed)===String(source.feed)&&String(existing.id)===String(source.id);}))job.sources.push(source);
+              if(!job.found)job.found={feed:feed.id,item:item};
+              if(!posterFound&&usePoster(item))posterFound=true;
             });
-            if(found){
-              if(!job.found)job.found={feed:feed.id,item:found};
-              if(usePoster(found)){posterFound=true;finish();return;}
-            }
             if(data.hasMore&&candidates.length&&page<3){page++;nextPage();}
             else nextFeed();
           }).catch(function(){if(current()){failed=true;nextFeed();}});
