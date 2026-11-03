@@ -32,18 +32,15 @@ window.VaultcastStalkerVod=function(host,options){
   function openPreferredProvider(){
     var fav=preferredProvider();
     if(!fav)return;
-    var selected=Object.keys(providerSelections).find(function(key){
-      var prefix='provider|'+fav.language+'|'+fav.section+'|';
-      return key===prefix+fav.id;
-    });
-    if(!selected)return; // Provider disappeared; retain the preference for later.
+    // Build the chosen language's provider groups before looking up the saved
+    // brand. The previous language may have no matching visible group.
     if(language!==fav.language){
       language=fav.language;
       try{localStorage.setItem(languagePreferenceKey,language);}catch(e){}
       renderCategories();
-      selected='provider|'+fav.language+'|'+fav.section+'|'+fav.id;
-      if(!providerSelections[selected])return;
     }
+    var selected='provider|'+fav.language+'|'+fav.section+'|'+fav.id;
+    if(!providerSelections[selected])return; // Provider removed; show folders.
     beginBrowse(selected);
   }
   function valid(token){return active&&host.isConnected&&options.current()&&token===serial;}
