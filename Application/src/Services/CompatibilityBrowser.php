@@ -359,6 +359,11 @@ final class CompatibilityBrowser {
                 $html.='<p>Available connections:</p><ul class="compat-list">';
                 foreach($copies as $copy)$html.='<li>'.self::link($copy['connection'], $params+['page'=>$page,'feed'=>$copy['feed'],'channel'=>$copy['id']]).'</li>';
                 $html.='</ul>';
+                foreach($copies as $n=>$copy)if((string)$copy['feed']===$selectedFeed&&(string)$copy['id']===$selectedChannel){
+                    $next=$copies[($n+1)%count($copies)];
+                    $html.=self::link('Try next connection',$params+['page'=>$page,'feed'=>$next['feed'],'channel'=>$next['id']]);
+                    break;
+                }
             }
             try{
                 $feed=null;foreach($feeds as $candidate)if((string)$candidate['id']===$selectedFeed){$feed=$candidate;break;}
@@ -529,6 +534,11 @@ final class CompatibilityBrowser {
                     foreach($copies as $source)$html.='<li>'.self::link($source['connection'],
                         $params+['page'=>$page,'feed'=>$source['feed'],'item'=>$source['id']]).'</li>';
                     $html.='</ul>';
+                    foreach($copies as $n=>$copy)if((string)$copy['feed']===$selectedFeed&&(string)$copy['id']===$selectedItem){
+                        $next=$copies[($n+1)%count($copies)];
+                        $html.=self::link('Try next connection',$params+['page'=>$page,'feed'=>$next['feed'],'item'=>$next['id']]);
+                        break;
+                    }
                 }
                 if(!empty($found['playable']))$html.=self::stalkerOnDemandPlayer($feedById[$selectedFeed],$found);
                 else $html.=self::link('Browse seasons and episodes',$base+['lang'=>$lang,'parent'=>$found['id'],'feed'=>$selectedFeed]);
