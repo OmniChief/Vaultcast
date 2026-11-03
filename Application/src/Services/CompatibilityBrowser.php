@@ -374,10 +374,14 @@ final class CompatibilityBrowser {
                     'fingerprint'=>hash('sha256',json_encode($feed)),
                     'kind'=>'live','id'=>(string)$item['id'],'url'=>$url,'created'=>time(),'item'=>null
                 ],21600);
+                // Do not force HLS: some portals return continuous MPEG-TS or
+                // a regular media file, which legacy Tizen may handle natively.
+                $hls=(bool)preg_match('/\\.m3u8(?:[?#]|$)/i',(string)parse_url($url,PHP_URL_PATH));
                 $stream=self::$base.'api/live/stalker_stream?'.http_build_query([
-                    'feed'=>$feed['id'],'channel'=>$item['id'],'ticket'=>$ticket,'format'=>'.m3u8'
+                    'feed'=>$feed['id'],'channel'=>$item['id'],'ticket'=>$ticket
                 ],'','&',PHP_QUERY_RFC3986);
-                $html.=self::player($stream,false,[],['hls'=>true]);
+                if($hls)$stream.='&format=.m3u8';
+                $html.=self::player($stream,false,[],['hls'=>$hls]);
             }catch(Throwable $e){$html.='<p class="compat-note">Playback unavailable. Try another connection or retry the channel.</p>';}
             return $html;
         }
