@@ -212,6 +212,25 @@
   }
   function cleanup(){if(!alive)return;clearInterval(progressTimer);clearTimeout(cinemaTimer);clearTimeout(roll);clearTimeout(hlsTimer);if(hls)try{hls.destroy();}catch(e){}var pending=requests;requests=[];for(var i=0;i<pending.length;i++)try{pending[i].abort();}catch(e){}save(true);alive=false;}
   if(typeof media.play!=='function'||typeof media.canPlayType!=='function'){say('This browser has no usable inline player. Open the stream directly.');return;}
+  // Older Tizen native fullscreen does not reliably expose :fullscreen.
+  // Keep the crop on the video element so it carries into native fullscreen.
+  // A user control avoids forcing zoom on televisions that already fit properly.
+  var edgeCrop=document.getElementById('compat-edge-crop'),cropEnabled=false;
+  try{cropEnabled=window.localStorage&&localStorage.getItem('vaultcast-compat-edge-crop')==='on';}catch(cropStorageError){}
+  function setEdgeCrop(on){
+    cropEnabled=!!on;
+    if(cropEnabled){
+      media.className+=' compat-edge-crop';
+    }else{
+      media.className=media.className.replace(/\s*compat-edge-crop\b/g,'');
+    }
+    if(edgeCrop){edgeCrop.innerHTML='TV edge crop: '+(cropEnabled?'On':'Off');edgeCrop.setAttribute('aria-pressed',cropEnabled?'true':'false');}
+  }
+  setEdgeCrop(cropEnabled);
+  if(edgeCrop)listen(edgeCrop,'click',function(){
+    setEdgeCrop(!cropEnabled);
+    try{if(window.localStorage)localStorage.setItem('vaultcast-compat-edge-crop',cropEnabled?'on':'off');}catch(cropStorageError){}
+  });
   var centrePlay=document.getElementById('compat-centre-play'),centreLabel=document.getElementById('compat-centre-label');
   function updateCentrePlay(){
     if(!centrePlay)return;
