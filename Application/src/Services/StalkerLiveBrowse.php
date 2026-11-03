@@ -50,6 +50,8 @@ final class StalkerLiveBrowse {
             $name=mb_substr((string)($row['name']??$id),0,300);
             $playback=stalker_live_entry($row);
             \Vaultcast\Repository::cachePut(self::key($feed,'item:'.$id),$playback,7200);
+            // The compatibility player uses the same on-demand Stalker resolver.
+            \Vaultcast\Repository::cachePut(stalker_live_key($feed,$id),$playback,7200);
             $items[]=['id'=>$id,'name'=>$name,'description'=>$selected['name'],'feed'=>$feed['id'],
                 'connection'=>$feed['name'],'kind'=>'live','country'=>StalkerCountries::country($name)??$selected['country']];
         }
