@@ -414,8 +414,15 @@ window.VaultcastStalkerVod=function(host,options){
   function favouriteTargets(fav){
     var enabled=options.connections.filter(function(f){return f.enabled;}),targets=[];
     if(fav.language&&categories.length){
+      var bucket=categoryBuckets().find(function(c){return c.key===fav.folder;});
+      var preferred=bucket?bucket.sources:((providerSelections[fav.folder]||{}).sources||[]);
       categories.filter(function(c){return categoryLanguage(c.name)===fav.language&&enabled.some(function(f){return f.id===c.feed;});})
-        .sort(function(a,b){return Number(b.id===fav.folder)-Number(a.id===fav.folder);})
+        .sort(function(a,b){
+          function priority(c){return preferred.some(function(p){return p.feed===c.feed&&p.id===c.id;})?0:1;}
+          return priority(a)-priority(b);
+        })
+        // Bound lookups on providers with hundreds of language folders.
+        .slice(0,24)
         .forEach(function(c){targets.push({feed:enabled.find(function(f){return f.id===c.feed;}),category:c.id});});
     }
     // If categories are not available, preserve the existing name search behaviour.
@@ -492,12 +499,12 @@ window.VaultcastStalkerVod=function(host,options){
     results.replaceChildren();
     next.hidden=true;
     status.textContent=favs.length?'Checking saved favourites against current providers…':'No saved favourites for '+(kind==='vod'?'movies':'series')+'.';
-    var activeFeeds=options.connections.filter(function(f){return f.enabled;});
     function current(){return token===favouriteLookupToken&&active&&host.isConnected&&options.current();}
     function normalized(name){return favouriteIdentity({name:name,tab:kind}).normalized;}
     var jobs=[];
     favs.forEach(function(fav){
       var titleText=fav.name+(fav.year?' ('+fav.year+')':'');
+      var languageNote=fav.language?(fav.language==='UK'?'English':fav.language):'All languages (older favourite)';
       var cover=h('div',{className:'stalker-vod-cover'},[
         h('span',{className:'stalker-vod-placeholder',text:fav.name})
       ]);
@@ -515,7 +522,7 @@ window.VaultcastStalkerVod=function(host,options){
         }});
       remove.style.alignSelf='flex-start';remove.style.fontSize='1.2rem';
       var card=h('article',{className:'stalker-vod-card stalker-favourite-entry'},[
-        cover,h('div',{className:'stalker-vod-copy'},[button,message,remove])
+        cover,h('div',{className:'stalker-vod-copy'},[button,h('small',{className:'muted',text:'Saved language: '+languageNote}),message,remove])
       ]);
       results.appendChild(card);
       var job={fav:fav,cover:cover,message:message,found:null,sources:[],ready:false};
