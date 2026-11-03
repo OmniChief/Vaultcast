@@ -6,6 +6,49 @@ window.VaultcastStalkerVod=function(host,options){
   // English is the initial scope; remember explicit selections per user/browser.
   var languagePreferenceKey='stalker-vod-language-'+options.owner;
   try{var savedLanguage=localStorage.getItem(languagePreferenceKey);if(savedLanguage!==null)language=savedLanguage;}catch(e){}
+  // Signed-in devices share preferences; browser storage remains an offline
+  // fallback and a one-time source for migrating existing local favourites.
+  var accountFavourites=null,accountDefaults=null;
+  function accountUrl(){return (window.NSApp&&window.NSApp.API?window.NSApp.API:(window.__STREAM_BASE__||'/')+'api')+'/me/stalker-vod-favourites';}
+  function accountRequest(body){
+    return fetch(accountUrl(),{method:body===null?'GET':'POST',credentials:'same-origin',
+      headers:body===null?{}:{'Content-Type':'application/json'},
+      body:body===null?undefined:JSON.stringify(body)
+    }).then(function(response){if(!response.ok)throw Error('Account sync unavailable');return response.json();})
+      .then(function(data){if(!data||!data.ok)throw Error('Account sync unavailable');return data;});
+  }
+  function localDefault(tab){
+    try{return JSON.parse(localStorage.getItem('stalker-vod-preferred-provider-v1-'+options.owner+'-'+tab)||'null');}
+    catch(e){return null;}
+  }
+  function saveAccountSettings(body){
+    accountRequest(body).catch(function(){if(status)status.textContent='Saved on this device, but account sync failed. Try again when connected.';});
+  }
+  function loadAccountSettings(){
+    return accountRequest(null).then(function(data){
+      var migration={};
+      if(Array.isArray(data.favourites)){
+        accountFavourites=data.favourites;
+        try{localStorage.setItem(favouriteKey(),JSON.stringify(data.favourites));}catch(e){}
+      }else{
+        accountFavourites=favouriteEntries();
+        if(accountFavourites.length)migration.favourites=accountFavourites;
+      }
+      if(data.defaults&&typeof data.defaults==='object'){
+        accountDefaults={vod:data.defaults.vod||null,series:data.defaults.series||null};
+        ['vod','series'].forEach(function(tab){
+          try{
+            if(accountDefaults[tab])localStorage.setItem('stalker-vod-preferred-provider-v1-'+options.owner+'-'+tab,JSON.stringify(accountDefaults[tab]));
+            else localStorage.removeItem('stalker-vod-preferred-provider-v1-'+options.owner+'-'+tab);
+          }catch(e){}
+        });
+      }else{
+        accountDefaults={vod:localDefault('vod'),series:localDefault('series')};
+        if(accountDefaults.vod||accountDefaults.series)migration.defaults=accountDefaults;
+      }
+      if(Object.keys(migration).length)saveAccountSettings(migration);
+    }).catch(function(){accountFavourites=null;accountDefaults=null;});
+  }
   function chooseLanguage(value){
     if(language===value)return;
     language=value;
@@ -16,6 +59,7 @@ window.VaultcastStalkerVod=function(host,options){
   // Save a stable name/brand, never a temporary provider folder ID.
   function providerFavouriteKey(){return 'stalker-vod-preferred-provider-v1-'+options.owner+'-'+kind;}
   function preferredProvider(){
+    if(accountDefaults)return accountDefaults[kind]||null;
     try{
       var value=JSON.parse(localStorage.getItem(providerFavouriteKey())||'null');
       return value&&typeof value.id==='string'&&typeof value.section==='string'&&typeof value.language==='string'?value:null;
@@ -27,6 +71,10 @@ window.VaultcastStalkerVod=function(host,options){
       if(same)localStorage.removeItem(providerFavouriteKey());
       else localStorage.setItem(providerFavouriteKey(),JSON.stringify(entry));
     }catch(e){status.textContent='This browser could not save the preferred provider.';return;}
+    if(accountDefaults){
+      accountDefaults[kind]=same?null:entry;
+      saveAccountSettings({defaults:accountDefaults});
+    }
     renderCategories();
   }
   function openPreferredProvider(){
@@ -493,7 +541,7 @@ window.VaultcastStalkerVod=function(host,options){
   }
   var favouriteLookupToken=0;
   function favouriteEntries(){
-    var saved=null;
+    var saved=accountFavourites;
     try{
       var raw=localStorage.getItem(favouriteKey());
       if(raw!==null){saved=JSON.parse(raw);if(!Array.isArray(saved))saved=[];}
@@ -520,6 +568,10 @@ window.VaultcastStalkerVod=function(host,options){
   function saveFavourites(list){
     try{
       localStorage.setItem(favouriteKey(),JSON.stringify(list.slice(0,200)));
+      if(accountFavourites!==null){
+        accountFavourites=list.slice(0,200);
+        saveAccountSettings({favourites:accountFavourites});
+      }
       return true;
     }catch(e){
       status.textContent='Could not save favourites in browser storage. Check browser storage permissions or available space.';
@@ -849,6 +901,14 @@ window.VaultcastStalkerVod=function(host,options){
     requestAnimationFrame(function(){requestAnimationFrame(function(){if(active&&host.isConnected)window.scrollTo(0,target);});});
     return true;
   }
-  return {show:function(value){if(active&&kind===value)return;stop();active=true;kind=value;letter='#';query='';render();reset();loadCategories(false);},stop:stop,snapshot:snapshot,restore:restore};
+  return {show:function(value){
+    if(active&&kind===value)return;
+    stop();active=true;kind=value;letter='#';query='';render();reset();
+    // Load the account preference before choosing the default provider.
+    var showToken=serial;
+    loadAccountSettings().then(function(){
+      if(active&&kind===value&&serial===showToken)loadCategories(false);
+    });
+  },stop:stop,snapshot:snapshot,restore:restore};
 };
 })();
