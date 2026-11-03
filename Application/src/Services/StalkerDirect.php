@@ -66,6 +66,16 @@ final class StalkerDirect {
             $playable=$cmd!==''&&empty($row['is_series'])&&empty($episodes)&&($kind==='vod'||$parent!=='');
             $publicId=$playable?$kind.':'.$id:$id;
             $item=array_merge($meta,['id'=>$publicId,'kind'=>$kind,'playable'=>$playable,'feed'=>$feed['id'],'connection'=>$feed['name']]);
+            // Provider catalogue categories and metadata: descriptive values only.
+            // Do not forward commands, playback links, tokens or arbitrary portal fields.
+            foreach (['category_id','category','genre_id','movie_year','release_date','rating','duration','country','language','original_language','imdb_id','tmdb_id','director','genre'] as $field) {
+                $value=$row[$field]??null;
+                if (!is_scalar($value) || $value==='') continue;
+                $value=mb_substr((string)$value,0,250);
+                if (preg_match('~https?://|(?:token|auth|password|cookie|session|mac)[=:]~i',$value)) continue;
+                $item[$field]=$value;
+            }
+
             if($playable)\Vaultcast\Repository::cachePut(self::key($feed,'item:'.$publicId),['cmd'=>$cmd,'series'=>(string)($row['series_number']??''),'metadata'=>$item],7200);
             $items[]=$item;
         }
