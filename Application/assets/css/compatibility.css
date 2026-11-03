@@ -266,3 +266,50 @@ html{background:transparent}
 .compat-controller-panel{margin:14px 0}.compat-controller-row{padding:9px 0;border-bottom:1px solid #35506b}.compat-controller-row strong{display:inline-block;width:85px;vertical-align:middle}.compat-controller-keys{display:inline-block;width:42%;min-width:150px;margin:4px 10px 4px 0;vertical-align:middle}.compat-controller-row button{margin:3px 6px 3px 0}#compat-controller-status{margin:16px 0}#compat-controller-toggle{margin:10px 0}
 
 #compat-channel-number{position:fixed;top:20px;right:20px;z-index:100001;padding:16px 24px;background:#101b2a;color:#edf2f7;border:2px solid #70dfea;font-size:28px;font-weight:bold}
+
+/* Fullscreen playback must not inherit the framed inline-player border.
+   Legacy Samsung/Tizen WebKit uses the prefixed fullscreen selectors. */
+#compat-media:-webkit-full-screen,
+#compat-media:-moz-full-screen,
+#compat-media:-ms-fullscreen,
+#compat-media:fullscreen,
+.compat-video-stage:-webkit-full-screen,
+.compat-video-stage:-moz-full-screen,
+.compat-video-stage:-ms-fullscreen,
+.compat-video-stage:fullscreen{
+  margin:0;
+  padding:0;
+  border:0;
+  -webkit-border-radius:0;
+  -moz-border-radius:0;
+  border-radius:0;
+  outline:0;
+  -webkit-box-shadow:none;
+  -moz-box-shadow:none;
+  box-shadow:none;
+  background:#000;
+  width:100%;
+  height:100%;
+  max-width:none;
+  min-height:0;
+}
+.compat-video-stage:-webkit-full-screen #compat-media,
+.compat-video-stage:-moz-full-screen #compat-media,
+.compat-video-stage:-ms-fullscreen #compat-media,
+.compat-video-stage:fullscreen #compat-media{
+  margin:0;
+  padding:0;
+  border:0;
+  -webkit-border-radius:0;
+  -moz-border-radius:0;
+  border-radius:0;
+  outline:0;
+  -webkit-box-shadow:none;
+  -moz-box-shadow:none;
+  box-shadow:none;
+  background:#000;
+  width:100%;
+  height:100%;
+  max-width:none;
+  min-height:0;
+}
