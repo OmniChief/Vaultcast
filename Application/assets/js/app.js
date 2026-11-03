@@ -6090,7 +6090,11 @@ try {
   }
   function viewStalkerVod(id){
     var parts=id.split(':'),feed=parts[1],itemId=parts.slice(2).join(':'),hint=state._stalkerVodHint,item=hint&&hint.feed===feed&&hint.item.id===itemId?hint.item:{id:itemId,name:'Provider video',kind:'vod',playable:true},attempt=0,stream=null;
-    var wrap=h('div',{className:'live-channel-page stalker-vod-detail'}),hero=h('section',{className:'stalker-vod-hero'}),host=h('div',{className:'detail-player'}),status=h('p',{role:'status',className:'muted'});
+    var wrap=h('div',{className:'live-channel-page stalker-vod-detail'}),hero=h('section',{className:'stalker-vod-hero'}),host=h('div',{className:'detail-player'}),status=h('p',{role:'status',className:'muted'}),watchButton=null;
+    // Only "Try next" initiates playback automatically after switching copies.
+    var autoTry=state._stalkerVodTryNext;
+    state._stalkerVodTryNext=null;
+    var retryOnOpen=!!(autoTry&&String(autoTry.feed)===String(feed)&&String(autoTry.id)===String(itemId));
     function current(){return wrap.isConnected&&state.liveChannel===id;}
     function stop(){attempt++;closePlayer();host.replaceChildren();status.textContent='Playback stopped.';}
     function watch(e){
@@ -6108,19 +6112,28 @@ try {
       // Multiple matching provider copies are carried from the catalogue to this page.
       // Keep playback bound to the active feed/item ID and reload on source changes.
       var copies=Array.isArray(item.sources)?item.sources.filter(function(x){return x&&x.id&&x.feed;}):[];
-      var selector=null;
+      var selector=null,sourceControls=null;
       if(copies.length>1){
         selector=h('select',{'aria-label':'Choose provider connection for this title'});
         copies.forEach(function(src,i){
           selector.appendChild(h('option',{value:String(i),text:src.connection||src.feed}));
           if(String(src.feed)===String(feed)&&String(src.id)===String(itemId))selector.value=String(i);
         });
-        selector.onchange=function(){
-          var selected=copies[Number(selector.value)];
-          if(!selected||String(selected.feed)===String(feed)&&String(selected.id)===String(itemId))return;
+        function switchSource(next,autoPlay){
+          if(!next||String(next.feed)===String(feed)&&String(next.id)===String(itemId))return;
           attempt++;closePlayer();
-          playStalkerItem(selected.feed,Object.assign({},item,selected,{sources:copies}),null);
-        };
+          if(autoPlay)state._stalkerVodTryNext={feed:next.feed,id:next.id};
+          playStalkerItem(next.feed,Object.assign({},item,next,{sources:copies}),null);
+        }
+        selector.onchange=function(){switchSource(copies[Number(selector.value)],false);};
+        var tryNext=h('button',{type:'button',className:'btn ghost',text:'Try next',title:'Try the next available connection',
+          onClick:function(){
+            var position=copies.findIndex(function(src){return String(src.feed)===String(feed)&&String(src.id)===String(itemId);});
+            switchSource(copies[(position+1)%copies.length],true);
+          }});
+        sourceControls=h('div',{className:'row-actions stalker-vod-source-actions'},[
+          h('label',{className:'stalker-vod-source-select'},[h('span',{text:'Connection'}),selector]),tryNext
+        ]);
       }
       var navigation=state._stalkerEpisodeNav,navButtons=null;
       if(navigation&&String(navigation.feed)===String(feed)&&Array.isArray(navigation.items)){
@@ -6139,10 +6152,12 @@ try {
         }
       }
       var download=can('downloads_request')&&can('ingest_view')&&userAreaAllowed('library')?h('button',{className:'btn',text:'Add to library',onClick:function(e){var button=e.currentTarget;button.disabled=true;stalkerPost('stalker_download',{feed:feed,id:itemId,name:item.name}).then(function(){button.textContent='Queued for library';status.textContent='Downloading to the server. Match and import the finished video from Offline downloads.';}).catch(function(error){button.disabled=false;status.textContent=error.message;});}}):null;
-      hero.replaceChildren(h('div',{className:'stalker-vod-detail-poster'},[item.poster?h('img',{src:item.poster,alt:'',onError:function(e){e.target.remove();}}):h('span',{text:item.name.slice(0,1).toUpperCase()})]),h('div',{className:'stalker-vod-detail-copy'},[h('span',{className:'eyebrow',text:'Provider video'}),h('h1',{text:item.name}),item.year?h('p',{className:'muted',text:item.year}):null,navButtons,selector?h('label',{className:'stalker-vod-source-select'},[h('span',{text:'Connection'}),selector]):null,h('div',{className:'row-actions'},[h('button',{className:'btn primary',text:'Watch',onClick:watch}),download,stalkerCheckButton(feed,itemId,item.kind||'vod',status,function(){attempt++;}),h('button',{className:'btn ghost',text:'Stop playback',onClick:stop})]),item.description?h('p',{text:item.description}):null,h('p',{className:'muted',text:'Add to library downloads a local copy first, then lets you match it in the import inbox.'})]));
+      watchButton=h('button',{className:'btn primary',text:'Watch',onClick:watch});
+      hero.replaceChildren(h('div',{className:'stalker-vod-detail-poster'},[item.poster?h('img',{src:item.poster,alt:'',onError:function(e){e.target.remove();}}):h('span',{text:item.name.slice(0,1).toUpperCase()})]),h('div',{className:'stalker-vod-detail-copy'},[h('span',{className:'eyebrow',text:'Provider video'}),h('h1',{text:item.name}),item.year?h('p',{className:'muted',text:item.year}):null,navButtons,sourceControls,h('div',{className:'row-actions'},[watchButton,download,stalkerCheckButton(feed,itemId,item.kind||'vod',status,function(){attempt++;}),h('button',{className:'btn ghost',text:'Stop playback',onClick:stop})]),item.description?h('p',{text:item.description}):null,h('p',{className:'muted',text:'Add to library downloads a local copy first, then lets you match it in the import inbox.'})]));
     }
     wrap.appendChild(h('div',{className:'row-actions live-channel-back'},[h('button',{className:'btn',text:'← Back to catalogue',onClick:function(){attempt++;closePlayer();goLiveTab('stalker');}})]));wrap.appendChild(hero);wrap.appendChild(status);wrap.appendChild(host);paint();
-    setTimeout(function(){if(!current())return;liveApi('stalker_vod_detail','feed='+encodeURIComponent(feed)+'&id='+encodeURIComponent(itemId)).then(function(result){if(current()&&result&&result.ok){item=Object.assign({},item,result.item);paint();}}).catch(function(error){if(current())status.textContent=error.message;});},0);
+    if(retryOnOpen)setTimeout(function(){if(current()&&watchButton)watchButton.click();},0);
+    setTimeout(function(){if(!current())return;liveApi('stalker_vod_detail','feed='+encodeURIComponent(feed)+'&id='+encodeURIComponent(itemId)).then(function(result){if(current()&&result&&result.ok){item=Object.assign({},item,result.item,{sources:item.sources});paint();}}).catch(function(error){if(current())status.textContent=error.message;});},0);
     return shell(wrap);
   }
   function viewStalkerChannel(id){
