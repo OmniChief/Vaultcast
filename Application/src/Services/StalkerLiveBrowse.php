@@ -39,7 +39,20 @@ final class StalkerLiveBrowse {
         $page=max(1,min(10000,(int)($opts['page']??1)));
         $key=self::key($feed,'channels:'.json_encode([$category,$page]));
         $cached=\Vaultcast\Repository::cacheGet($key);
-        if($cached!==null&&empty($opts['refresh']))return $cached;
+        if($cached!==null&&empty($opts['refresh'])){
+            // Channel-page caching and playback-command caching have independent
+            // lifetimes. Rehydrate a missing command when a cached page is used,
+            // otherwise a visible channel can fail to resolve on selection.
+            $ready=true;
+            foreach($cached['items']??[] as $item){
+                $id=(string)($item['id']??'');
+                if($id!==''&&\Vaultcast\Repository::cacheGet(stalker_live_key($feed,$id))===null
+                    &&\Vaultcast\Repository::cacheGet(self::key($feed,'item:'.$id))===null){
+                    $ready=false;break;
+                }
+            }
+            if($ready)return $cached;
+        }
         $result=stalker_ordered_page($feed,'itv',['sortby'=>'number','genre'=>$category,'search'=>'','fav'=>0],$page);
         $rows=$result['data']??$result;
         if(!is_array($rows))throw new RuntimeException('Provider returned invalid channels.');
