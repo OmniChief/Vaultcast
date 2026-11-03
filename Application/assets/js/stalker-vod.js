@@ -151,6 +151,7 @@ window.VaultcastStalkerVod=function(host,options){
     setTimeout(function(){URL.revokeObjectURL(url);},30000);
   }
   function exportRaw(){
+    if(!options.isAdmin)return;
     if(exportJob){exportJob.cancelled=true;return;}
     var job={cancelled:false,lines:['Stalker VOD raw name export','Generated: '+new Date().toISOString(),'Original titles only; no matching or filtering','']};
     exportJob=job;var button=exportButton;button.textContent='Cancel export';
@@ -199,6 +200,7 @@ window.VaultcastStalkerVod=function(host,options){
   }
   var groupExportJob=null,groupExportUrl=null,groupDownloadLink=null;
   function exportGroups(){
+    if(!options.isAdmin)return;
     if(groupExportJob){groupExportJob.cancelled=true;groupExportJob.advance();return;}
     var button=groupExportButton,items=[],warnings=[],job={cancelled:false,advance:function(){}};
     groupExportJob=job;button.textContent='Save partial export';
@@ -730,11 +732,11 @@ window.VaultcastStalkerVod=function(host,options){
     categoryStatus.style.display='block';categoryStatus.style.width='100%';categoryStatus.style.minWidth='0';
     results=h('div',{className:'stalker-vod-grid'});
     next=h('button',{className:'btn',text:'Load more provider pages',onClick:function(){scan(false);}});
-    exportButton=h('button',{className:'btn ghost',text:'Export raw VOD names (.txt)',onClick:exportRaw});
-    groupExportButton=h('button',{className:'btn ghost',text:'Export raw VOD groups (.json)',onClick:exportGroups});
+    exportButton=options.isAdmin?h('button',{className:'btn ghost',text:'Export raw VOD names (.txt)',onClick:exportRaw}):null;
+    groupExportButton=options.isAdmin?h('button',{className:'btn ghost',text:'Export raw VOD groups (.json)',onClick:exportGroups}):null;
     host.append(h('div',{className:'stalker-vod-library-heading'},[
       h('div',{},[h('h2',{text:kind==='vod'?'Movies':'Series'}),h('p',{className:'muted',text:'Search all languages or select a language to limit searches to its provider folders. Select a folder to browse its titles.'})]),
-      h('div',{className:'row-actions'},[h('div',{style:'display:flex;flex-direction:column;gap:8px'},[exportButton,groupExportButton]),h('button',{className:'btn ghost',text:'Refresh',onClick:function(){reset();loadCategories(true);}})])
+      h('div',{className:'row-actions'},(options.isAdmin?[h('div',{style:'display:flex;flex-direction:column;gap:8px'},[exportButton,groupExportButton])]:[]).concat([h('button',{className:'btn ghost',text:'Refresh',onClick:function(){reset();loadCategories(true);}})]))
      ]),h('form',{className:'stalker-searchbar',onSubmit:function(e){e.preventDefault();if(searchAllMode){rerunScopedSearch();}else renderResults();}},[search]),categoryStatus,status,results,next);
     var searchAllButton=h('button',{className:'btn',type:'button',text:'Search all '+(kind==='vod'?'movies':'series'),onClick:function(){
       var term=search.value.trim();
