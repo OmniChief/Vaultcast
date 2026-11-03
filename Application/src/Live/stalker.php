@@ -302,7 +302,9 @@ function stalker_account_expiry(array $feed): array {
             $errors[]=$type.'/'.$action;
         }
     }
-    $fields=['expire_billing_date','end_date','expire_date','expiration_date','expires_at','subscription_end','expiration','expiry_date','expiry','exp_date'];
+    // MAG portals commonly expose the human-readable expiry in account_info.phone.
+    // Treat that field as a date only when it looks like one, never as a telephone number.
+    $fields=['expire_billing_date','end_date','expire_date','expiration_date','expires_at','subscription_end','expiration','expiry_date','expiry','exp_date','tariff_expired_date','tariff_instead_expired','phone'];
     foreach ($responses as $response) {
         $pending=[[$response,0]];
         while($pending) {
@@ -311,7 +313,8 @@ function stalker_account_expiry(array $feed): array {
             foreach ($data as $key=>$value) {
                 if(is_string($key)&&in_array(strtolower($key),$fields,true)&&is_scalar($value)) {
                     $raw=trim((string)$value);
-                    if($raw===''||in_array($raw,['0','0000-00-00','unlimited','null','false'],true))continue;
+                    if($raw===''||in_array(strtolower($raw),['0','0000-00-00','0000-00-00 00:00:00','unlimited','null','false'],true))continue;
+                    if(strtolower($key)==='phone'&&!preg_match('/(?:[.\/-]|[a-z]{3,}|\\s\\d{4}\\b)/i',$raw))continue;
                     $timestamp=null;
                     if(ctype_digit($raw)) {
                         $number=(int)$raw;
