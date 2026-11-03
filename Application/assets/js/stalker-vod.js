@@ -470,8 +470,18 @@ window.VaultcastStalkerVod=function(host,options){
     status.textContent=favs.length?favs.length+' saved favourites. Select one to find it on the current connections.':'No saved favourites for '+(kind==='vod'?'movies':'series')+'.';
     favs.forEach(function(fav){
       var button=h('button',{className:'btn ghost',text:fav.name+(fav.year?' ('+fav.year+')':''),onClick:function(){findFavourite(fav,button);}});
-      button.style.whiteSpace='normal';button.style.textAlign='left';
-      results.appendChild(button);
+      button.style.whiteSpace='normal';button.style.textAlign='left';button.style.width='100%';
+      var remove=h('button',{type:'button',className:'btn ghost stalker-save',text:'★',
+        'aria-label':'Remove '+fav.name+' from favourites',title:'Remove from favourites','aria-pressed':'true',
+        onClick:function(){
+          var id=favouriteId(fav),remaining=favouriteEntries().filter(function(item){return favouriteId(item)!==id;});
+          if(!saveFavourites(remaining))return;
+          showFavourites();
+        }});
+      remove.style.alignSelf='flex-start';remove.style.fontSize='1.2rem';
+      var entry=h('div',{className:'stalker-favourite-entry'},[button,remove]);
+      entry.style.display='flex';entry.style.flexDirection='column';entry.style.alignItems='flex-start';entry.style.gap='8px';
+      results.appendChild(entry);
     });
   }
   function render(){
