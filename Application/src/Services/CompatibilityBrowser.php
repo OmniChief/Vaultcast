@@ -224,6 +224,12 @@ final class CompatibilityBrowser {
         $sourceOffset=max(0,min(1000,(int)($_GET['source_offset']??0)));
         $selectedChannel=mb_substr((string)($_GET['channel']??''),0,120);
         $selectedFeed=mb_substr((string)($_GET['feed']??''),0,120);
+        $channelQuery=mb_substr(trim((string)($_GET['q']??'')),0,120);
+        // Explicit format choices are in the URL, so links work on older Tizen.
+        // Empty string means all named formats are off; untagged streams remain.
+        $formatParam=isset($_GET['formats'])?(string)$_GET['formats']:'UHD,FHD,HD';
+        $enabledFormats=array_values(array_intersect(['UHD','FHD','HD'],array_map('trim',explode(',',$formatParam))));
+        $formatValue=implode(',',$enabledFormats);
         $sections=['General & entertainment','Sports','Football','Live events & PPV','Movies & on-demand','Kids & family','News, documentary & music','Replays & catch-up','Other categories'];
         $sectionFor=static function(string $label): string {
             $n=mb_strtoupper($label);
@@ -343,13 +349,30 @@ final class CompatibilityBrowser {
                 $next=preg_replace('/^\s*(?:(?:UK|GB)\s*[-–—:|]|\[\s*(?:UK|GB)\s*\]|[|┃│¦]\s*(?:UK|GB)\s*[|┃│¦])\s*/iu','',$name);
                 if($next===$name)break;$name=trim($next);
             }
+            if($channelQuery!==''&&mb_stripos($name,$channelQuery)===false)continue;
+            $upper=mb_strtoupper($name);
+            $formats=[];
+            if(preg_match('/(?:^|[^A-Z0-9])(?:UHD|4K|2160P)(?:$|[^A-Z0-9])/',$upper))$formats[]='UHD';
+            if(preg_match('/(?:^|[^A-Z0-9])(?:FHD|FULL\s*HD|1080P)(?:$|[^A-Z0-9])/',$upper))$formats[]='FHD';
+            if(preg_match('/(?:^|[^A-Z0-9])(?:HD|720P)(?:$|[^A-Z0-9])/',$upper)&&strpos($upper,'FULL HD')===false)$formats[]='HD';
+            if(array_diff($formats,$enabledFormats))continue;
             $key=mb_strtolower(trim(preg_replace('/\s+/u',' ',$name)));
             if($key==='')continue;
             if(!isset($byName[$key]))$byName[$key]=['name'=>$name,'copies'=>[]];
             $byName[$key]['copies'][]=$item;
         }
-        $html.='<p class="compat-note">'.count($byName).' channels on this page · '.count($slice).' provider folders'.($failures?' · Unavailable: '.self::esc(implode(', ',$failures)):'').'</p>';
-        $params=$base+['country'=>$country]+($section!==''?['section'=>$section]:['folder'=>$folderId,'folder_feed'=>$folderFeed])+['source_offset'=>$sourceOffset];
+        $rootParams=$base+['country'=>$country]+($section!==''?['section'=>$section]:['folder'=>$folderId,'folder_feed'=>$folderFeed])+['source_offset'=>$sourceOffset];
+        $params=$rootParams+['formats'=>$formatValue,'q'=>$channelQuery];
+        $html.='<p class="compat-note">Channel formats: ';
+        foreach(['UHD','FHD','HD'] as $format){
+            $toggled=array_values(array_diff($enabledFormats,[$format]));
+            if(!in_array($format,$enabledFormats,true))$toggled[]=$format;
+            $nextFormats=implode(',',array_values(array_intersect(['UHD','FHD','HD'],$toggled)));
+            $html.=self::link((in_array($format,$enabledFormats,true)?'✓ ':'✕ ').$format,$rootParams+['formats'=>$nextFormats,'q'=>$channelQuery,'page'=>$page]);
+        }
+        $html.='</p>';
+        $html.=self::searchForm($rootParams+['formats'=>$formatValue],$channelQuery);
+        $html.='<p class="compat-note">'.count($byName).' matching channels on this page · '.count($slice).' provider folders'.($failures?' · Unavailable: '.self::esc(implode(', ',$failures)):'').'</p>';
         if($selectedChannel!==''){
             $item=null;$copies=[];
             foreach($byName as $group)foreach($group['copies'] as $candidate)if((string)$candidate['id']===$selectedChannel&&(string)$candidate['feed']===$selectedFeed){$item=$candidate;$copies=$group['copies'];break 2;}
@@ -394,8 +417,8 @@ final class CompatibilityBrowser {
         }
         $html.='</ul>';
         $html.=self::pages($params,$page,$more);
-        if($sourceOffset>0)$html.=self::link('Previous provider folders',$base+['country'=>$country]+($section!==''?['section'=>$section]:['folder'=>$folderId,'folder_feed'=>$folderFeed])+['source_offset'=>max(0,$sourceOffset-$window)]);
-        if($sourceOffset+$window<count($target))$html.=self::link('More provider folders',$base+['country'=>$country]+($section!==''?['section'=>$section]:['folder'=>$folderId,'folder_feed'=>$folderFeed])+['source_offset'=>$sourceOffset+$window]);
+        if($sourceOffset>0)$html.=self::link('Previous provider folders',array_merge($params,['source_offset'=>max(0,$sourceOffset-$window),'page'=>1]));
+        if($sourceOffset+$window<count($target))$html.=self::link('More provider folders',array_merge($params,['source_offset'=>$sourceOffset+$window,'page'=>1]));
         return $html;
     }
     /** Samsung-friendly Movies/Series browsing via the same direct provider pages. */
