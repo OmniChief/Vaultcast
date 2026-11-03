@@ -224,6 +224,8 @@ window.VaultcastStalkerVod=function(host,options){
     category=key;searchAllMode=false;query='';search.value='';letter='#';
     reset();renderCategories();titlesStarted=true;scan(false);
   }
+  // Only the user opening a section changes its remembered open state.
+  var accordionStates={};
   function renderCategories(){
     if(!categoryStatus)return;
     categoryStatus.replaceChildren();
@@ -338,7 +340,9 @@ window.VaultcastStalkerVod=function(host,options){
     sections.forEach(function(part){
       if(!part.items.length)return;
       part.items.sort(function(a,b){return a.name.localeCompare(b.name);});
-      var accordion=h('details',{className:'stalker-folder-section',open:part.label==='Genres'});
+      var accordionKey=kind+'|'+activeLanguage+'|'+part.label;
+      var accordion=h('details',{className:'stalker-folder-section',open:accordionStates[accordionKey]===true});
+      accordion.addEventListener('toggle',function(){if(accordion.isConnected)accordionStates[accordionKey]=accordion.open;});
       accordion.appendChild(h('summary',{className:'stalker-folder-section-heading',text:part.label+' ('+part.items.length+')'}));
       var grid=h('div');
       grid.style.display='grid';grid.style.width='100%';grid.style.gridTemplateColumns='repeat(auto-fill,minmax(min(100%,220px),1fr))';grid.style.gap='12px';
