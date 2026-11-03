@@ -731,7 +731,11 @@ window.VaultcastStalkerVod=function(host,options){
     if(!results)return;
     favouriteLookupToken++;
     results.replaceChildren();
-    var ordered=titles.filter(fits).sort(function(a,b){return title(a).localeCompare(title(b),undefined,{numeric:true});});
+    // Append-only discovery order: the portal returns independent pages and
+    // providers do not guarantee a globally sorted catalogue. Sorting after
+    // each page moved existing posters into earlier/later slots on Load more.
+    // Existing duplicate titles retain their first position as sources merge.
+    var ordered=titles.filter(fits);
     ordered.forEach(function(item){
       var sources=item.sources||[],chosen=sources[0];
       if(item.numberedParts&&item.numberedParts.length>1){
