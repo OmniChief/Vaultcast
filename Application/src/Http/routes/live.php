@@ -396,14 +396,24 @@ if ($__liveAction !== null) {
             $playbackKey = 'stalker_playback_v3_'.hash('sha256',json_encode([$portalViewer['id'],$feed,$id,$playback]));
             $playbackState = \Vaultcast\Repository::cacheGet($playbackKey);
             if (function_exists('release_request_locks')) release_request_locks();
-            if (!$playbackState) {
+            // Stalker create_link URLs may be short-lived. Renew only when the
+            // viewer requests a fresh HLS playlist, not via a background timer
+            // or during a continuous MPEG-TS connection.
+            $playlistRequest=isset($_GET['format']) && (string)$_GET['format']==='.m3u8';
+            $renewLiveLink=$playbackState && $playlistRequest
+                && (!$ticketState || ($ticketState['kind']??'live')==='live')
+                && time()-(int)($playbackState['resolvedAt']??0)>=60;
+            if (!$playbackState || $renewLiveLink) {
                 if ($ticketState && $ticketState['kind']!=='live') {
                     $mediaUrl=time()-(int)$ticketState['created']<30?$ticketState['url']:stalker_vod_resolve($feed,$id,$ticketState['item']);
                 } else $mediaUrl=$ticketState && time()-(int)$ticketState['created']<30?$ticketState['url']:stalker_resolve($feed,$id);
-                $playbackState = ['url'=>$mediaUrl,'jar'=>'st'.substr(hash('sha256',$playbackKey),0,32)];
-                $jarPath = iptv_hls_jar_path($playbackState['jar']);
-                if (!@copy(stalker_cookie_path($feed),$jarPath)) throw new RuntimeException('Could not create portal playback storage.');
-                @chmod($jarPath,0600);
+                $jar=$playbackState['jar']??'st'.substr(hash('sha256',$playbackKey),0,32);
+                $playbackState=['url'=>$mediaUrl,'jar'=>$jar,'resolvedAt'=>time()];
+                $jarPath=iptv_hls_jar_path($jar);
+                if (!is_file($jarPath)) {
+                    if (!@copy(stalker_cookie_path($feed),$jarPath)) throw new RuntimeException('Could not create portal playback storage.');
+                    @chmod($jarPath,0600);
+                }
                 \Vaultcast\Repository::cachePut($playbackKey,$playbackState,300);
             }
             $_GET['u'] = $playbackState['url'];
