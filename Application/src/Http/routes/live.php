@@ -318,9 +318,7 @@ if ($__liveAction !== null) {
                 if ($existing && ($existing['type'] ?? '')!=='stalker') throw new InvalidArgumentException('This is not a Stalker connection.');
                 if ($operation==='check') {
                     if (!$existing) throw new InvalidArgumentException('Save the connection first.');
-                    stalker_session($existing,true);
-                    $catalogue=stalker_catalogue($existing,['kind'=>'live','refresh'=>true,'load'=>true]);
-                    json_out(['ok'=>true,'channelCount'=>$catalogue['total'],'endpoint'=>stalker_endpoint($existing)]);
+                    json_out(stalker_connection_check($existing));
                 }
                 if (!in_array($operation,['save','remove'],true)) throw new InvalidArgumentException('Unknown connection operation.');
                 $feeds=$state['feeds'];
@@ -430,7 +428,7 @@ if ($__liveAction !== null) {
             require_once STREAM_ROOT.'/src/Live/iptv.php';
             $feed=iptv_feed_by_id(iptv_load(),(string)($checkBody['feedId'] ?? ''));
             if (!$feed || ($feed['type'] ?? '')!=='stalker') live_bridge_deny(422,'Save a Stalker source first.');
-            try { stalker_session($feed,true);$index=stalker_index($feed,true);json_out(['ok'=>true,'channelCount'=>count($index['channels'])]); }
+            try { json_out(stalker_connection_check($feed)); }
             catch (RuntimeException $e) { live_bridge_deny(502,$e->getMessage()); }
         }
     }
