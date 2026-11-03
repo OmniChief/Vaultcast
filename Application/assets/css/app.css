@@ -3103,6 +3103,14 @@ html[data-motion="reduced"] .vca-overall span,html[data-motion="reduced"] .vca-b
 .stalker-provider-subfolders{display:flex;flex-direction:column;gap:7px;padding:10px;border-top:1px solid #3d5675}
 .stalker-provider-group[open]{grid-column:span 1}
 
+/* Separate favourite button sits above each provider logo, not inside its
+   browse button; this keeps the two actions independently keyboard accessible. */
+.stalker-provider-favourite-tile{position:relative;min-width:0}
+.stalker-provider-favourite-tile .stalker-provider-action{height:100%}
+.stalker-provider-favourite-star{position:absolute;top:6px;right:6px;z-index:3;display:flex;align-items:center;justify-content:center;width:31px;height:31px;min-width:31px;padding:0;border:1px solid #627998;border-radius:50%;background:#101c30;color:#d6e0f0;font-size:21px;line-height:1;cursor:pointer;box-shadow:0 1px 5px #0008}
+.stalker-provider-favourite-star:hover,.stalker-provider-favourite-star:focus-visible{color:#ffe08a;border-color:#ffe08a;background:#23344c;outline:2px solid #ffe08a;outline-offset:1px}
+.stalker-provider-favourite-star.is-favourite{color:#ffd66b;border-color:#e1ad4e;background:#292514}
+
 /* Stalker folder artwork tiles */
 .stalker-folder-art-card{display:flex!important;flex-direction:column;align-items:center;justify-content:center;gap:9px;min-height:132px!important;text-align:center!important;line-height:1.4}
 .stalker-folder-art{display:grid;place-items:center;width:74px;height:64px;border-radius:13px;background:linear-gradient(135deg,#263c60,#111e35);font-size:2.2rem;line-height:1;border:1px solid #476282;text-shadow:0 1px 12px rgba(0,0,0,.3)}
