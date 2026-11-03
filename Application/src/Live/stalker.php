@@ -323,8 +323,17 @@ function stalker_account_expiry(array $feed): array {
                         $parsed=strtotime($raw);
                         if($parsed!==false)$timestamp=$parsed;
                     }
-                    if($timestamp!==null&&$timestamp>=946684800&&$timestamp<=4102444800)
-                        return ['date'=>gmdate('Y-m-d',$timestamp),'status'=>'found','sources'=>$worked];
+                    if($timestamp!==null&&$timestamp>=946684800&&$timestamp<=4102444800) {
+                        // A provider date without a time must stay date-only.
+                        // Preserve a provider's wall-clock time if it gives no timezone;
+                        // numeric Unix timestamps and timezone-qualified values are UTC.
+                        $hasTime=ctype_digit($raw)||preg_match('/(?:T|\\s)(\\d{1,2}):(\\d{2})(?::\\d{2})?/', $raw, $timeMatch);
+                        $hasZone=ctype_digit($raw)||preg_match('/(?:Z|[+-]\\d{2}:?\\d{2})$/i', $raw);
+                        $clock=$hasTime?($hasZone?gmdate('H:i',$timestamp):sprintf('%02d:%s',(int)$timeMatch[1],$timeMatch[2])):null;
+                        $date=$hasZone?gmdate('Y-m-d',$timestamp):($hasTime||!ctype_digit($raw)?date('Y-m-d',$timestamp):gmdate('Y-m-d',$timestamp));
+                        return ['date'=>$date,'time'=>$clock,'timeZone'=>$clock?($hasZone?'UTC':'provider time'):null,
+                            'status'=>'found','sources'=>$worked];
+                    }
                 }
                 if($depth<3&&is_array($value))$pending[]=[$value,$depth+1];
             }
