@@ -267,6 +267,21 @@ html{background:transparent}
 
 #compat-channel-number{position:fixed;top:20px;right:20px;z-index:100001;padding:16px 24px;background:#101b2a;color:#edf2f7;border:2px solid #70dfea;font-size:28px;font-weight:bold}
 
+/* Older Tizen native fullscreen is not always exposed through :fullscreen.
+   Remove the inline border at the source so it cannot be carried into the
+   hardware fullscreen surface. Scope this to the actual media player only. */
+#compat-media{
+  border:0!important;
+  -webkit-border-radius:0!important;
+  -moz-border-radius:0!important;
+  border-radius:0!important;
+  outline:0;
+  -webkit-box-shadow:none;
+  -moz-box-shadow:none;
+  box-shadow:none;
+  background:#000;
+}
+
 /* Fullscreen playback must not inherit the framed inline-player border.
    Legacy Samsung/Tizen WebKit uses the prefixed fullscreen selectors. */
 #compat-media:-webkit-full-screen,
