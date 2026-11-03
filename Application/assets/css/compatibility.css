@@ -341,3 +341,10 @@ html{background:transparent}
   transform-origin:50% 50%;
 }
 .compat-video-stage{overflow:hidden;background:#000}
+
+/* TV remote: keep the optional display adjustment above the media surface,
+   where native Tizen fullscreen cannot hide it before the user enables it. */
+.compat-edge-crop-control{margin:12px 0;padding:10px 14px;background:#17354a;border:2px solid #6de9f5}
+.compat-edge-crop-control button{font-weight:bold;font-size:18px;padding:12px 18px;margin:0 12px 0 0;background:#08202e;border-color:#6de9f5}
+.compat-edge-crop-control button:focus{outline:4px solid #fff;outline-offset:3px}
+.compat-edge-crop-control span{display:inline-block;vertical-align:middle;font-size:14px;color:#e4f5ff}
