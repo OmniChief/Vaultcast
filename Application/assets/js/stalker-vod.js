@@ -2,7 +2,7 @@
 'use strict';
 window.VaultcastStalkerVod=function(host,options){
   var h=options.h,active=false,kind='vod',serial=0,timer=null,letter='#',query='',feeds=[],progress={},titles=[],seen={},loading=false;
-  var status,results,next,search,letters,exportButton,groupExportButton,groups,group='',categories=[],category='',groupsLoading=false,titlesStarted=false,categoryStatus=null,prefixGroups=null,showMoreCategories=false,searchAllMode=false,language='',tasks=[],providerSelections={};
+  var status,results,next,search,letters,exportButton,groupExportButton,groups,group='',categories=[],category='',groupsLoading=false,titlesStarted=false,categoryStatus=null,scopeActions=null,prefixGroups=null,showMoreCategories=false,searchAllMode=false,language='',tasks=[],providerSelections={};
   function valid(token){return active&&host.isConnected&&options.current()&&token===serial;}
   // Discover provider-defined leading labels from retrieved names, never from a hardcoded provider list.
   // Require an explicit delimiter so ordinary titles (e.g. "A Beautiful Mind") remain intact.
@@ -222,25 +222,39 @@ window.VaultcastStalkerVod=function(host,options){
       var b=h('button',{className:chosen?'btn':'btn ghost',text:label,onClick:fn});
       b.setAttribute('aria-pressed',String(!!chosen));return b;
     }
-    if(groupsLoading){categoryStatus.appendChild(h('p',{className:'muted',text:'Loading provider folders…'}));return;}
-    providerSelections={};
     var buckets=categoryBuckets(),languages=['UK','African','Arabic','Dutch','French','German','Iran','Italian','Portuguese','Spanish','Turkish','Other'];
     var available=languages.filter(function(lang){return buckets.some(function(c){return c.language===lang;});});
     buckets.forEach(function(c){if(available.indexOf(c.language)<0)available.push(c.language);});
     available.sort(function(a,b){if(a==='UK')return -1;if(b==='UK')return 1;return a.localeCompare(b);});
     function languageLabel(lang){return lang==='UK'?'English':lang;}
     var activeLanguage=language||'';
-    var wrap=h('div',{className:'row-actions'});
-    wrap.style.display='flex';wrap.style.flexWrap='wrap';wrap.style.gap='8px';wrap.style.marginBottom='20px';
-    wrap.appendChild(btn('All folders',function(){language='';showMoreCategories=false;renderCategories();rerunScopedSearch();},!activeLanguage));
-    available.slice(0,5).forEach(function(lang){
-      wrap.appendChild(btn(languageLabel(lang),function(){language=lang;showMoreCategories=false;renderCategories();rerunScopedSearch();},activeLanguage===lang));
-    });
-    if(available.length>5)wrap.appendChild(btn(showMoreCategories?'Fewer languages':'More languages',function(){showMoreCategories=!showMoreCategories;renderCategories();},false));
-    if(showMoreCategories)available.slice(5).forEach(function(lang){
-      wrap.appendChild(btn(lang,function(){language=lang;renderCategories();rerunScopedSearch();},activeLanguage===lang));
-    });
-    categoryStatus.appendChild(wrap);
+    if(scopeActions){
+      scopeActions.replaceChildren();
+      function scopeButton(label,value){
+        var selected=activeLanguage===value;
+        var button=h('button',{type:'button',className:'btn ghost stalker-scope-toggle',text:label,
+          onClick:function(){if(language===value)return;language=value;showMoreCategories=false;renderCategories();rerunScopedSearch();}});
+        button.setAttribute('aria-pressed',String(selected));
+        button.style.background=selected?'var(--accent,#196b96)':'var(--surface,#172438)';
+        button.style.color=selected?'#fff':'var(--text-muted,#b6c3d2)';
+        button.style.borderColor=selected?'var(--accent,#5cbdf5)':'var(--border,#3a4e66)';
+        button.style.boxShadow=selected?'0 0 0 1px var(--accent,#5cbdf5), 0 0 12px rgba(80,180,245,.35)':'none';
+        scopeActions.appendChild(button);
+      }
+      scopeButton('All folders','');
+      available.slice(0,5).forEach(function(lang){scopeButton(languageLabel(lang),lang);});
+      // Keep the selected language visible even if it is beyond the first five.
+      if(!showMoreCategories&&activeLanguage&&available.indexOf(activeLanguage)>=5)scopeButton(languageLabel(activeLanguage),activeLanguage);
+      if(available.length>5){
+        var more=h('button',{type:'button',className:'btn ghost',text:showMoreCategories?'Fewer languages':'More languages',
+          onClick:function(){showMoreCategories=!showMoreCategories;renderCategories();}});
+        more.setAttribute('aria-expanded',String(showMoreCategories));
+        scopeActions.appendChild(more);
+      }
+      if(showMoreCategories)available.slice(5).forEach(function(lang){scopeButton(languageLabel(lang),lang);});
+    }
+    if(groupsLoading){categoryStatus.appendChild(h('p',{className:'muted',text:'Loading provider folders…'}));return;}
+    providerSelections={};
     var shown=buckets.filter(function(c){return !activeLanguage||c.language===activeLanguage;});
 
     // Order by purpose within each language: genre, service/company, then collections.
@@ -314,10 +328,10 @@ window.VaultcastStalkerVod=function(host,options){
     var kids=shown.filter(function(c){return isKids(c.name);});
     if(kids.length){
       sections[0].items=sections[0].items.filter(function(c){return !isKids(c.name);});
-      sections[0].items.push({name:'Kids',key:'kids|'+(activeLanguage||'UK'),sources:kids.reduce(function(all,c){return all.concat(c.sources);},[]),aggregate:true});
+      sections[0].items.push({name:'Kids',key:'kids|'+(activeLanguage||'all'),sources:kids.reduce(function(all,c){return all.concat(c.sources);},[]),aggregate:true});
     }
     var section=h('section');section.style.width='100%';section.style.marginBottom='20px';
-    var heading=h('h3',{text:activeLanguage?(languageLabel(activeLanguage)+' folders'):'English folders'});
+    var heading=h('h3',{text:activeLanguage?(languageLabel(activeLanguage)+' folders'):'All folders'});
     heading.style.margin='0 0 12px';section.appendChild(heading);
     sections.forEach(function(part){
       if(!part.items.length)return;
@@ -448,7 +462,7 @@ window.VaultcastStalkerVod=function(host,options){
     host.append(h('div',{className:'stalker-vod-library-heading'},[
       h('div',{},[h('h2',{text:kind==='vod'?'Movies':'Series'}),h('p',{className:'muted',text:'Search all folders or select a language to limit searches to its provider folders. Select a folder to browse its titles.'})]),
       h('div',{className:'row-actions'},[h('div',{style:'display:flex;flex-direction:column;gap:8px'},[exportButton,groupExportButton]),h('button',{className:'btn ghost',text:'Refresh',onClick:function(){reset();loadCategories(true);}})])
-     ]),categoryStatus,h('form',{className:'stalker-searchbar',onSubmit:function(e){e.preventDefault();if(searchAllMode){rerunScopedSearch();}else renderResults();}},[search]),status,results,next);
+     ]),h('form',{className:'stalker-searchbar',onSubmit:function(e){e.preventDefault();if(searchAllMode){rerunScopedSearch();}else renderResults();}},[search]),categoryStatus,status,results,next);
     var searchAllButton=h('button',{className:'btn',type:'button',text:'Search all '+(kind==='vod'?'movies':'series'),onClick:function(){
       var term=search.value.trim();
       searchAllMode=true;category='';query=term;search.value=term;letter='#';
@@ -457,7 +471,10 @@ window.VaultcastStalkerVod=function(host,options){
     var favouritesButton=h('button',{className:'btn ghost',type:'button',text:'Favourites',onClick:function(){
       serial++;titlesStarted=false;loading=false;searchAllMode=false;category='';tasks=[];renderCategories();showFavourites();
     }});
-    var searchActions=h('div',{className:'row-actions'},[searchAllButton,favouritesButton]);
+    scopeActions=h('div',{className:'row-actions'});
+    scopeActions.style.display='flex';scopeActions.style.flexWrap='wrap';scopeActions.style.gap='8px';
+    var searchActions=h('div',{className:'row-actions'},[searchAllButton,favouritesButton,scopeActions]);
+    searchActions.style.display='flex';searchActions.style.flexWrap='wrap';searchActions.style.alignItems='center';searchActions.style.gap='8px';
     searchActions.style.marginTop='8px';
     search.parentElement.insertAdjacentElement('afterend',searchActions);
     renderCategories();
