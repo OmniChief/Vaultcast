@@ -464,7 +464,7 @@ window.VaultcastStalkerVod=function(host,options){
     next();
   }
   function showFavourites(){
-    var favs=favouriteEntries();
+    var favs=favouriteEntries().filter(function(item){return item.tab===kind;});
     results.replaceChildren();
     next.hidden=true;
     status.textContent=favs.length?favs.length+' saved favourites. Select one to find it on the current connections.':'No saved favourites for '+(kind==='vod'?'movies':'series')+'.';
