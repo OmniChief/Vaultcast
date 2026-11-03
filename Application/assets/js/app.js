@@ -6470,12 +6470,26 @@ try {
           stalkerPost('stalker_manage',{operation:'save',id:connection.id||'',connection:value}).then(function(){if(host.isConnected)paintStalkerSettings(host);}).catch(showError).finally(function(){button.disabled=false;});
         }}));
       }
+      function expiryStorageKey(id){return 'vaultcast-stalker-expiry-'+owner+'-'+id;}
+      function expiryLabel(saved){
+        if(!saved)return 'Subscription expiry: Check connection to retrieve';
+        return 'Subscription expiry: '+(saved.expiryDate?
+          saved.expiryDate+(saved.expiryTime?' · '+saved.expiryTime+(saved.expiryTimeZone?' '+saved.expiryTimeZone:''):''):
+          (saved.expiryStatus==='account_requests_failed'?'Could not retrieve account information':'Not exposed by the portal'))+
+          (saved.expiryDate?'':saved.expirySources&&saved.expirySources.length?' (checked '+saved.expirySources.join(', ')+')':'');
+      }
       (result.connections||[]).forEach(function(connection){
-        var expiryInfo=h('p',{className:'muted',text:'Subscription expiry: Check connection to retrieve'});
+        var storedExpiry=null;
+        try{storedExpiry=JSON.parse(localStorage.getItem(expiryStorageKey(connection.id))||'null');}catch(ignore){}
+        var expiryInfo=h('p',{className:'muted',text:expiryLabel(storedExpiry)});
         list.appendChild(h('div',{className:'settings-card'},[expiryInfo,h('h3',{text:connection.name}),h('p',{className:'muted',text:connection.url+(connection.enabled?'':' · Disabled')}),h('div',{className:'row-actions'},[
           h('button',{className:'btn',text:'Edit',onClick:function(){edit(connection);}}),h('button',{className:'btn ghost',text:'Restore previous details',onClick:function(){stalkerPost('stalker_updates',{operation:'rollback',feed:connection.id}).then(function(){if(host.isConnected)paintStalkerSettings(host);}).catch(showError);}}),
-          h('button',{className:'btn',text:'Check connection',onClick:function(e){var button=e.currentTarget;button.disabled=true;message.className='muted';message.textContent='Checking provider connection…';stalkerPost('stalker_manage',{operation:'check',id:connection.id}).then(function(res){message.textContent='Connected · '+(res.channelCount==null?'channel count unavailable':res.channelCount+(res.countEstimated?' channels returned (provider total unavailable)':' live channels reported'))+' · '+res.endpoint;expiryInfo.textContent='Subscription expiry: '+(res.expiryDate?(res.expiryDate+(res.expiryTime?' · '+res.expiryTime+(res.expiryTimeZone?' '+res.expiryTimeZone:''):'')):(res.expiryStatus==='account_requests_failed'?'Could not retrieve account information':'Not exposed by the portal'))+(res.expiryDate?'':res.expirySources&&res.expirySources.length?' (checked '+res.expirySources.join(', ')+')':'');}).catch(showError).finally(function(){button.disabled=false;});}}),
-          h('button',{className:'btn danger',text:'Remove',onClick:function(){if(!confirm('Remove '+connection.name+'?'))return;stalkerPost('stalker_manage',{operation:'remove',id:connection.id}).then(function(){if(host.isConnected)paintStalkerSettings(host);}).catch(showError);}})
+          h('button',{className:'btn',text:'Check connection',onClick:function(e){var button=e.currentTarget;button.disabled=true;message.className='muted';message.textContent='Checking provider connection…';stalkerPost('stalker_manage',{operation:'check',id:connection.id}).then(function(res){message.textContent='Connected · '+(res.channelCount==null?'channel count unavailable':res.channelCount+(res.countEstimated?' channels returned (provider total unavailable)':' live channels reported'))+' · '+res.endpoint;var expiryRecord={expiryDate:res.expiryDate||null,expiryTime:res.expiryTime||null,
+                expiryTimeZone:res.expiryTimeZone||null,expiryStatus:res.expiryStatus||'not_exposed',
+                expirySources:Array.isArray(res.expirySources)?res.expirySources:[]};
+              try{localStorage.setItem(expiryStorageKey(connection.id),JSON.stringify(expiryRecord));}catch(ignore){}
+              expiryInfo.textContent=expiryLabel(expiryRecord);}).catch(showError).finally(function(){button.disabled=false;});}}),
+          h('button',{className:'btn danger',text:'Remove',onClick:function(){if(!confirm('Remove '+connection.name+'?'))return;stalkerPost('stalker_manage',{operation:'remove',id:connection.id}).then(function(){try{localStorage.removeItem(expiryStorageKey(connection.id));}catch(ignore){}if(host.isConnected)paintStalkerSettings(host);}).catch(showError);}})
         ])]));
       });
       edit();stalkerCatalogueSettings(host,result.connections||[]);stalkerUpdateSettings(host,result.connections||[]);
