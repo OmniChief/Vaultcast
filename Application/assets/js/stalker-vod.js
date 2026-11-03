@@ -541,11 +541,15 @@ window.VaultcastStalkerVod=function(host,options){
   }
   var favouriteLookupToken=0;
   function favouriteEntries(){
+    // Once the account responds it is authoritative: never let stale local
+    // storage on another device silently replace the shared favourites.
     var saved=accountFavourites;
-    try{
-      var raw=localStorage.getItem(favouriteKey());
-      if(raw!==null){saved=JSON.parse(raw);if(!Array.isArray(saved))saved=[];}
-    }catch(e){saved=[];}
+    if(saved===null){
+      try{
+        var raw=localStorage.getItem(favouriteKey());
+        if(raw!==null){saved=JSON.parse(raw);if(!Array.isArray(saved))saved=[];}
+      }catch(e){saved=[];}
+    }
     if(saved===null){
       // Import per-connection favourites created by older Vaultcast versions.
       saved=[];
