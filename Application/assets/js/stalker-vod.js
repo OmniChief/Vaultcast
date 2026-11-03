@@ -241,17 +241,10 @@ window.VaultcastStalkerVod=function(host,options){
         button.style.boxShadow=selected?'0 0 0 1px var(--accent,#5cbdf5), 0 0 12px rgba(80,180,245,.35)':'none';
         scopeActions.appendChild(button);
       }
-      scopeButton('All folders','');
-      available.slice(0,5).forEach(function(lang){scopeButton(languageLabel(lang),lang);});
-      // Keep the selected language visible even if it is beyond the first five.
-      if(!showMoreCategories&&activeLanguage&&available.indexOf(activeLanguage)>=5)scopeButton(languageLabel(activeLanguage),activeLanguage);
-      if(available.length>5){
-        var more=h('button',{type:'button',className:'btn ghost',text:showMoreCategories?'Fewer languages':'More languages',
-          onClick:function(){showMoreCategories=!showMoreCategories;renderCategories();}});
-        more.setAttribute('aria-expanded',String(showMoreCategories));
-        scopeActions.appendChild(more);
-      }
-      if(showMoreCategories)available.slice(5).forEach(function(lang){scopeButton(languageLabel(lang),lang);});
+      // Show every language supplied by the current provider folders.
+      available.forEach(function(lang){scopeButton(languageLabel(lang),lang);});
+      // The unrestricted search is deliberately last.
+      scopeButton('All languages','');
     }
     if(groupsLoading){categoryStatus.appendChild(h('p',{className:'muted',text:'Loading provider folders…'}));return;}
     providerSelections={};
@@ -331,7 +324,7 @@ window.VaultcastStalkerVod=function(host,options){
       sections[0].items.push({name:'Kids',key:'kids|'+(activeLanguage||'all'),sources:kids.reduce(function(all,c){return all.concat(c.sources);},[]),aggregate:true});
     }
     var section=h('section');section.style.width='100%';section.style.marginBottom='20px';
-    var heading=h('h3',{text:activeLanguage?(languageLabel(activeLanguage)+' folders'):'All folders'});
+    var heading=h('h3',{text:activeLanguage?(languageLabel(activeLanguage)+' folders'):'All languages'});
     heading.style.margin='0 0 12px';section.appendChild(heading);
     sections.forEach(function(part){
       if(!part.items.length)return;
@@ -460,7 +453,7 @@ window.VaultcastStalkerVod=function(host,options){
     exportButton=h('button',{className:'btn ghost',text:'Export raw VOD names (.txt)',onClick:exportRaw});
     groupExportButton=h('button',{className:'btn ghost',text:'Export raw VOD groups (.json)',onClick:exportGroups});
     host.append(h('div',{className:'stalker-vod-library-heading'},[
-      h('div',{},[h('h2',{text:kind==='vod'?'Movies':'Series'}),h('p',{className:'muted',text:'Search all folders or select a language to limit searches to its provider folders. Select a folder to browse its titles.'})]),
+      h('div',{},[h('h2',{text:kind==='vod'?'Movies':'Series'}),h('p',{className:'muted',text:'Search all languages or select a language to limit searches to its provider folders. Select a folder to browse its titles.'})]),
       h('div',{className:'row-actions'},[h('div',{style:'display:flex;flex-direction:column;gap:8px'},[exportButton,groupExportButton]),h('button',{className:'btn ghost',text:'Refresh',onClick:function(){reset();loadCategories(true);}})])
      ]),h('form',{className:'stalker-searchbar',onSubmit:function(e){e.preventDefault();if(searchAllMode){rerunScopedSearch();}else renderResults();}},[search]),categoryStatus,status,results,next);
     var searchAllButton=h('button',{className:'btn',type:'button',text:'Search all '+(kind==='vod'?'movies':'series'),onClick:function(){
@@ -561,7 +554,7 @@ window.VaultcastStalkerVod=function(host,options){
     if(!ordered.length)results.appendChild(h('p',{className:'muted',text:titlesStarted?'No matching titles in loaded pages. Load more to continue.':'Select a provider folder or use Search all titles to begin.'}));
     var done=tasks.filter(function(t){return progress[t.key]&&progress[t.key].done;}).length;
     var failed=tasks.filter(function(t){return progress[t.key]&&progress[t.key].failed;}).length;
-    status.textContent=ordered.length+' titles in '+(searchAllMode?(language?(language==='UK'?'English':language)+' folders':'All folders'):(group||'Selected folder'))+' (loaded so far) · '+done+'/'+tasks.length+' sources finished'+(failed?' · '+failed+' unavailable':'');
+    status.textContent=ordered.length+' titles in '+(searchAllMode?(language?(language==='UK'?'English':language)+' folders':'All languages'):(group||'Selected folder'))+' (loaded so far) · '+done+'/'+tasks.length+' sources finished'+(failed?' · '+failed+' unavailable':'');
     next.hidden=!titlesStarted||!tasks.some(function(t){return progress[t.key]&&!progress[t.key].done;});
     next.disabled=loading;
   }
