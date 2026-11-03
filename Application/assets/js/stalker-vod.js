@@ -147,7 +147,7 @@ window.VaultcastStalkerVod=function(host,options){
     }
     next(0);
   }
-  function stop(){active=false;serial++;clearTimeout(timer);if(exportJob)exportJob.cancelled=true;}
+  function stop(){active=false;serial++;favouriteLookupToken++;clearTimeout(timer);if(exportJob)exportJob.cancelled=true;}
   function loadCategories(refresh){
     var token=++serial,index=0;
     groupsLoading=true;categories=[];category='';showMoreCategories=false;renderCategories();
@@ -399,6 +399,7 @@ window.VaultcastStalkerVod=function(host,options){
     var fav=favouriteIdentity(item);
     return fav.tab+'|'+fav.normalized+'|'+fav.year;
   }
+  var favouriteLookupToken=0;
   function favouriteEntries(){
     var saved=null;
     try{
@@ -464,25 +465,107 @@ window.VaultcastStalkerVod=function(host,options){
     next();
   }
   function showFavourites(){
-    var favs=favouriteEntries().filter(function(item){return item.tab===kind;});
+    var token=++favouriteLookupToken,favs=favouriteEntries().filter(function(item){return item.tab===kind;});
     results.replaceChildren();
     next.hidden=true;
-    status.textContent=favs.length?favs.length+' saved favourites. Select one to find it on the current connections.':'No saved favourites for '+(kind==='vod'?'movies':'series')+'.';
+    status.textContent=favs.length?'Checking saved favourites against current providers…':'No saved favourites for '+(kind==='vod'?'movies':'series')+'.';
+    var activeFeeds=options.connections.filter(function(f){return f.enabled;});
+    function current(){return token===favouriteLookupToken&&active&&host.isConnected&&options.current();}
+    function normalized(name){return favouriteIdentity({name:name,tab:kind}).normalized;}
+    var jobs=[];
     favs.forEach(function(fav){
-      var button=h('button',{className:'btn ghost',text:fav.name+(fav.year?' ('+fav.year+')':''),onClick:function(){findFavourite(fav,button);}});
+      var titleText=fav.name+(fav.year?' ('+fav.year+')':'');
+      var cover=h('div',{className:'stalker-vod-cover'},[
+        h('span',{className:'stalker-vod-placeholder',text:fav.name})
+      ]);
+      var message=h('small',{className:'muted',text:'Looking up provider artwork…'});
+      var button=h('button',{type:'button',className:'btn ghost',text:titleText,onClick:function(){
+        if(job.found){options.open(job.found.feed,Object.assign({},job.found.item,{feed:job.found.feed}),button);}
+        else findFavourite(fav,button);
+      }});
       button.style.whiteSpace='normal';button.style.textAlign='left';button.style.width='100%';
       var remove=h('button',{type:'button',className:'btn ghost stalker-save',text:'★',
-        'aria-label':'Remove '+fav.name+' from favourites',title:'Remove from favourites','aria-pressed':'true',
+        'aria-label':'Remove '+titleText+' from favourites',title:'Remove from favourites','aria-pressed':'true',
         onClick:function(){
           var id=favouriteId(fav),remaining=favouriteEntries().filter(function(item){return favouriteId(item)!==id;});
-          if(!saveFavourites(remaining))return;
-          showFavourites();
+          if(saveFavourites(remaining))showFavourites();
         }});
       remove.style.alignSelf='flex-start';remove.style.fontSize='1.2rem';
-      var entry=h('div',{className:'stalker-favourite-entry'},[button,remove]);
-      entry.style.display='flex';entry.style.flexDirection='column';entry.style.alignItems='flex-start';entry.style.gap='8px';
-      results.appendChild(entry);
+      var card=h('article',{className:'stalker-vod-card stalker-favourite-entry'},[
+        cover,h('div',{className:'stalker-vod-copy'},[button,message,remove])
+      ]);
+      results.appendChild(card);
+      var job={fav:fav,cover:cover,message:message,found:null};
+      jobs.push(job);
     });
+    // Two outstanding lookups at most; each provider search is limited to three pages.
+    // This uses the existing direct provider endpoint, not a catalogue worker or database.
+    var index=0,complete=0,unverified=0;
+    function searchJob(job){
+      var feedIndex=0,failed=false,posterFound=false;
+      function finish(){
+        if(!current())return;
+        complete++;
+        if(!job.found){
+          if(failed){unverified++;job.message.textContent='Could not verify availability (provider error).';}
+          else job.message.textContent='Not found in the provider pages checked.';
+        }else if(!posterFound)job.message.textContent='Poster unavailable from current providers.';
+        status.textContent='Checked '+complete+' of '+jobs.length+' favourites'+(unverified?' · '+unverified+' could not be verified':'');
+        schedule();
+      }
+      function usePoster(item){
+        if(!current())return false;
+        var poster=String(item.poster||'').trim();
+        if(!/^https?:\/\//i.test(poster))return false;
+        var image=h('img',{src:poster,alt:job.fav.name+' poster',loading:'lazy',referrerpolicy:'no-referrer'});
+        image.onerror=function(){
+          if(!current())return;
+          image.remove();
+          job.message.textContent='Poster unavailable from current providers.';
+        };
+        job.cover.replaceChildren(image);
+        job.message.textContent='Available from provider';
+        return true;
+      }
+      function nextFeed(){
+        if(!current())return;
+        if(posterFound||feedIndex>=activeFeeds.length){finish();return;}
+        var feed=activeFeeds[feedIndex++],page=1;
+        function nextPage(){
+          if(!current())return;
+          var params=new URLSearchParams({kind:kind,feed:feed.id,q:job.fav.name,page:String(page)});
+          options.api('stalker_vod_catalogue',params.toString()).then(function(data){
+            if(!current())return;
+            if(!data||!data.ok){failed=true;nextFeed();return;}
+            var candidates=Array.isArray(data.items)?data.items:[];
+            var found=candidates.find(function(item){
+              return item&&normalized(item.name)===job.fav.normalized&&(!job.fav.year||!year(item)||year(item)===job.fav.year);
+            });
+            if(found){
+              if(!job.found)job.found={feed:feed.id,item:found};
+              if(usePoster(found)){posterFound=true;finish();return;}
+            }
+            if(data.hasMore&&candidates.length&&page<3){page++;nextPage();}
+            else nextFeed();
+          }).catch(function(){if(current()){failed=true;nextFeed();}});
+        }
+        nextPage();
+      }
+      nextFeed();
+    }
+    var running=0;
+    function schedule(){
+      if(!current())return;
+      running--;
+      while(running<2&&index<jobs.length){
+        var job=jobs[index++];
+        running++;
+        searchJob(job);
+      }
+    }
+    // Start the first two searches; subsequent work advances only as each completes.
+    running=1;
+    schedule();
   }
   function render(){
     host.replaceChildren();
@@ -548,6 +631,7 @@ window.VaultcastStalkerVod=function(host,options){
   }
   function renderResults(){
     if(!results)return;
+    favouriteLookupToken++;
     results.replaceChildren();
     var ordered=titles.filter(fits).sort(function(a,b){return title(a).localeCompare(title(b),undefined,{numeric:true});});
     ordered.forEach(function(item){
