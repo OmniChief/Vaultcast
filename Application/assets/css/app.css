@@ -3142,6 +3142,11 @@ html[data-motion="reduced"] .vca-overall span,html[data-motion="reduced"] .vca-b
 .stalker-studio-section .stalker-provider-favourite-tile{min-width:0}
 @media(max-width:650px){.stalker-studio-section>div{padding:10px}.stalker-studio-section .stalker-provider-summary{min-height:110px}}
 
+/* Provider-supplied metadata on the new Stalker Studio title cards. */
+.stalker-studio-meta{display:flex;flex-wrap:wrap;gap:5px;margin:5px 0 7px}
+.stalker-studio-meta span{font-size:.72rem;line-height:1.4;padding:3px 7px;border:1px solid #38516c;border-radius:6px;background:rgba(46,73,104,.32);color:#d2e2f5;max-width:100%;overflow-wrap:anywhere}
+.stalker-studio-synopsis{font-size:.77rem;line-height:1.45;color:var(--text-muted,#aebfd1);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;margin:2px 0 8px}
+
 /* Compact Live TV country picker: flag and name only. */
 .stalker-country-grid{grid-template-columns:repeat(auto-fill,minmax(118px,1fr));gap:10px}
 .stalker-country-tile{min-height:100px;padding:12px 8px;gap:9px;border-radius:11px}
