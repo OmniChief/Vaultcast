@@ -20,15 +20,15 @@ window.VaultcastStalkerCountries=function(host,options){
     host.append(h('div',{className:'stalker-country-heading'},[h('h2',{text:title})]),status,body);
   }
   function renderCountries(){
-    shell('Live TV · Provider categories');
+    shell('Live TV · Countries');
     var count={},codes={};
     folders.forEach(function(f){codes[f.country]=true;count[f.country]=(count[f.country]||0)+1;});
     var list=Object.keys(codes).sort(function(a,b){return a==='GB'?-1:b==='GB'?1:a==='US'?-1:b==='US'?1:a==='ZZ'?1:b==='ZZ'?-1:name(a).localeCompare(name(b));});
-    if(!list.length)status.textContent=failures.length?failures.join(' · '):'No provider categories available.';
-    else status.textContent=folders.length+' categories across '+feeds.length+' enabled connections'+(failures.length?' · '+failures.join(' · '):'');
+    if(!list.length)status.textContent=failures.length?failures.join(' · '):'No channel groups available.';
+    else status.textContent=folders.length+' channel groups across '+feeds.length+' enabled connections'+(failures.length?' · '+failures.join(' · '):'');
     var grid=h('div',{className:'stalker-country-grid'});
-    list.forEach(function(code){grid.appendChild(h('button',{className:'stalker-country-tile',title:name(code)+' · '+count[code]+' categories','aria-label':name(code),onClick:function(){country=code;selected=null;remember();renderCategories();}},[flag(code),h('strong',{text:name(code)})]));});
-    body.append(h('button',{className:'btn ghost',text:'Refresh provider categories',onClick:function(){discover(true);}}),grid);
+    list.forEach(function(code){grid.appendChild(h('button',{className:'stalker-country-tile',title:name(code)+' · '+count[code]+' channel groups','aria-label':name(code),onClick:function(){country=code;selected=null;remember();renderCategories();}},[flag(code),h('strong',{text:name(code)})]));});
+    body.append(h('button',{className:'btn ghost',text:'Refresh channel groups',onClick:function(){discover(true);}}),grid);
   }
   function categoryLabel(raw){
     // Presentation only: retain the original provider label for country matching,
