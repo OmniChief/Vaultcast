@@ -6236,13 +6236,15 @@ try {
     }
     var playing=false,failed=false;
     function failover(message){
-      if(!current()||playing||failed)return;
+      // A stream can fail after first playback too; continue through the remaining
+      // known qualities/connections rather than stopping on its first success.
+      if(!current()||failed)return;
       failed=true;
       var currentKey=feed+'|'+channelId;
       if(tried.indexOf(currentKey)<0)tried.push(currentKey);
       var next=liveCopies.find(function(src){return tried.indexOf(src.feed+'|'+src.id)<0;});
       if(next){
-        status.className='muted';status.textContent='Connection failed. Trying '+(next.connection||'another connection')+'…';
+        status.className='muted';status.textContent='Playback failed. Trying '+(next.quality||'another quality')+' on '+(next.connection||'another connection')+'…';
         ++attempt;closePlayer();
         playStalkerItem(next.feed,Object.assign({},next,{sources:liveCopies,_failoverTried:tried,_channelSequence:sequence}),null);
       }else{
