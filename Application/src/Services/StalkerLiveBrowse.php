@@ -11,7 +11,7 @@ final class StalkerLiveBrowse {
         return 'stalker_live_direct_v1_'.hash('sha256',json_encode([$feed,$suffix]));
     }
     public static function categories(array $feed,bool $refresh=false): array {
-        $key=self::key($feed,'genres:v3');
+        $key=self::key($feed,'genres:v4');
         $cached=\Vaultcast\Repository::cacheGet($key);
         if($cached!==null&&!$refresh)return ['ok'=>true,'categories'=>$cached];
         $result=stalker_call($feed,'get_genres',[],'itv');
@@ -22,7 +22,8 @@ final class StalkerLiveBrowse {
             if(!is_array($row)||!isset($row['id'])||!is_scalar($row['id']))continue;
             $id=(string)$row['id'];if($id===''||strlen($id)>120)continue;
             $title=mb_substr(trim((string)($row['title']??$row['name']??$id)),0,160);
-            $categories[]=['id'=>$id,'name'=>$title,'country'=>StalkerCountries::country($title)??'ZZ'];
+            $categories[]=['id'=>$id,'name'=>$title,'country'=>StalkerCountries::country($title)??'ZZ',
+                'genre'=>StalkerCountries::group($title,$title)];
             if(count($categories)>=1000)break;
         }
         \Vaultcast\Repository::cachePut($key,$categories,$categories?3600:180);
