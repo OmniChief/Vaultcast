@@ -3208,3 +3208,14 @@ html[data-motion="reduced"] .vca-overall span,html[data-motion="reduced"] .vca-b
 .stalker-vod-viewbar strong{flex:1 1 200px;min-width:0;overflow-wrap:anywhere;font-size:.95rem}
 .stalker-vod-viewbar .btn{min-height:35px}
 .stalker-vod-discovery[hidden]{display:none!important}
+
+/* Stalker Live channel artwork: logos stay small and never shift EPG columns. */
+.stalker-studio-channel-heading{align-items:center;flex-wrap:nowrap}
+.stalker-studio-channel-logo{position:relative;display:grid;place-items:center;flex:none;width:58px;height:50px;overflow:hidden;border:1px solid var(--border,#34455b);border-radius:10px;background:var(--surface-2,#1f3047)}
+.stalker-studio-channel-logo img{display:block;position:absolute;inset:5px;width:calc(100% - 10px);height:calc(100% - 10px);object-fit:contain}
+.stalker-studio-channel-logo-text{font-size:.75rem;font-weight:750;letter-spacing:.03em;color:var(--text-muted,#b5c4d4);max-width:100%;overflow:hidden;text-overflow:ellipsis}
+.stalker-studio-channel-logo.has-logo .stalker-studio-channel-logo-text{visibility:hidden}
+.stalker-studio-channel-copy{display:flex;flex-direction:column;min-width:0;gap:4px;flex:1}
+.stalker-studio-channel-title{display:flex;align-items:center;flex-wrap:wrap;gap:6px}
+.stalker-studio-channel-copy small{font-size:.75rem}
+@media(max-width:480px){.stalker-studio-channel-logo{width:48px;height:44px}.stalker-studio-channel-heading{gap:10px}}
