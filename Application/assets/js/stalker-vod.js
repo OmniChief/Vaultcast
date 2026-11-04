@@ -2,7 +2,7 @@
 'use strict';
 window.VaultcastStalkerVod=function(host,options){
   var h=options.h,active=false,kind='vod',serial=0,timer=null,letter='#',query='',feeds=[],progress={},titles=[],seen={},loading=false;
-  var status,results,next,search,letters,exportButton,groupExportButton,groups,group='',categories=[],category='',groupsLoading=false,titlesStarted=false,categoryStatus=null,scopeActions=null,prefixGroups=null,showMoreCategories=false,searchAllMode=false,language='UK',tasks=[],providerSelections={},preferredTileKeys={};
+  var status,results,next,search,letters,exportButton,groupExportButton,fieldProbeButton,groups,group='',categories=[],category='',groupsLoading=false,titlesStarted=false,categoryStatus=null,scopeActions=null,prefixGroups=null,showMoreCategories=false,searchAllMode=false,language='UK',tasks=[],providerSelections={},preferredTileKeys={};
   // English is the initial scope; remember explicit selections per user/browser.
   var languagePreferenceKey='stalker-vod-language-'+options.owner;
   try{var savedLanguage=localStorage.getItem(languagePreferenceKey);if(savedLanguage!==null)language=savedLanguage;}catch(e){}
@@ -320,6 +320,36 @@ window.VaultcastStalkerVod=function(host,options){
     }
     if(!list.length){issues.push('No enabled Stalker connections');finish();return;}
     loadCategories(0);
+  }
+  // A small admin-only inspection of one original catalogue page, not a scan.
+  function exportCatalogueFields(){
+    if(!options.isAdmin||!fieldProbeButton||fieldProbeButton.disabled)return;
+    var list=options.connections.filter(function(f){return f.enabled;});
+    if(!list.length){status.textContent='No enabled Stalker connections.';return;}
+    var choices=list.map(function(f,i){return (i+1)+'. '+f.name;}).join('\n');
+    var selection=window.prompt('Choose the Stalker connection to inspect:\n'+choices,'1');
+    if(selection===null)return;
+    var idx=Number(selection)-1;
+    if(!Number.isInteger(idx)||idx<0||idx>=list.length){status.textContent='Invalid connection choice.';return;}
+    var feed=list[idx],params=new URLSearchParams({kind:kind,feed:feed.id});
+    // The currently selected category narrows the one-page sample, if numeric.
+    if(/^\d{1,12}$/.test(String(category)))params.set('category',category);
+    fieldProbeButton.disabled=true;
+    status.textContent='Inspecting one raw catalogue page from '+feed.name+' ('+kind+')…';
+    Promise.resolve(options.api('stalker_vod_fields',params.toString())).then(function(result){
+      if(!result||!result.ok)throw Error(result&&result.error||'Catalogue field inspection failed');
+      var output={generated:new Date().toISOString(),source:'One Stalker get_ordered_list page',
+        complete:true,connection:result.connection,type:result.kind,category:result.category,
+        rows_inspected:result.rows_inspected,fields:result.fields,
+        note:'Sanitised field inventory; transport details, credentials, playback commands and URLs omitted.'};
+      var blob=new Blob([JSON.stringify(output,null,2)+'\n'],{type:'application/json;charset=utf-8'});
+      var url=URL.createObjectURL(blob),a=document.createElement('a');
+      a.href=url;a.download='stalker-vod-provider-fields-'+kind+'-'+new Date().toISOString().slice(0,10)+'.json';
+      document.body.appendChild(a);a.click();a.remove();
+      setTimeout(function(){URL.revokeObjectURL(url);},30000);
+      status.textContent='Raw provider field inventory saved: '+result.rows_inspected+' items, '+Object.keys(result.fields||{}).length+' field names.';
+    }).catch(function(err){status.textContent='Provider field inspection failed: '+(err.message||err);})
+      .then(function(){fieldProbeButton.disabled=false;});
   }
   var groupExportJob=null,groupExportUrl=null,groupDownloadLink=null;
   function exportGroups(){
@@ -857,9 +887,10 @@ window.VaultcastStalkerVod=function(host,options){
     next=h('button',{className:'btn',text:'Load more provider pages',onClick:function(){scan(false);}});
     exportButton=options.isAdmin?h('button',{className:'btn ghost',text:'Export detailed VOD metadata (.txt)',onClick:exportRaw}):null;
     groupExportButton=options.isAdmin?h('button',{className:'btn ghost',text:'Export raw VOD groups (.json)',onClick:exportGroups}):null;
+    fieldProbeButton=options.isAdmin?h('button',{className:'btn ghost',text:'Inspect provider JSON fields (.json)',onClick:exportCatalogueFields}):null;
     host.append(h('div',{className:'stalker-vod-library-heading'},[
       h('div',{},[h('h2',{text:kind==='vod'?'Movies':'Series'}),h('p',{className:'muted',text:'Search all languages or select a language to limit searches to its provider folders. Select a folder to browse its titles.'})]),
-      h('div',{className:'row-actions'},(options.isAdmin?[h('div',{style:'display:flex;flex-direction:column;gap:8px'},[exportButton,groupExportButton])]:[]).concat([h('button',{className:'btn ghost',text:'Refresh',onClick:function(){reset();loadCategories(true);}})]))
+      h('div',{className:'row-actions'},(options.isAdmin?[h('div',{style:'display:flex;flex-direction:column;gap:8px'},[exportButton,groupExportButton,fieldProbeButton])]:[]).concat([h('button',{className:'btn ghost',text:'Refresh',onClick:function(){reset();loadCategories(true);}})]))
      ]),h('form',{className:'stalker-searchbar',onSubmit:function(e){e.preventDefault();if(searchAllMode){rerunScopedSearch();}else renderResults();}},[search]),categoryStatus,status,results,next);
     var searchAllButton=h('button',{className:'btn',type:'button',text:'Search all '+(kind==='vod'?'movies':'series'),onClick:function(){
       var term=search.value.trim();
