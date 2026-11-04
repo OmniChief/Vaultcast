@@ -108,9 +108,17 @@ final class StalkerLiveBrowse {
         if(!$ids)return ['ok'=>true,'programmes'=>[],'available'=>false,'channelCount'=>0];
         // This portal action returns its own channel-indexed structure. Request the
         // minimum period and filter it immediately to the selected visible page.
-        $response=stalker_request($feed,'itv','get_epg_info',['period'=>1],stalker_session($feed));
-        $data=$response['data']??$response;
-        if(!is_array($data))throw new RuntimeException('Provider returned an invalid programme guide.');
+        $portalFailed=false;
+        try {
+            $response=stalker_request($feed,'itv','get_epg_info',['period'=>1],stalker_session($feed));
+            $data=$response['data']??$response;
+            if(!is_array($data))throw new RuntimeException('Provider returned an invalid programme guide.');
+        } catch (\Throwable $error) {
+            // A temporary provider EPG outage must not hide already-cached Freeview
+            // programmes. Never retry the remote provider within this request.
+            $portalFailed=true;
+            $data=[];
+        }
         $now=time();$programmes=[];$total=0;
         foreach($data as $channelId=>$rows){
             if(!is_array($rows))continue;
@@ -144,7 +152,7 @@ final class StalkerLiveBrowse {
         // Supplement missing UK EPG slots using Vaultcast's existing XMLTV cache.
         // This index is built by the normal EPG refresh, not by channel browsing.
         $freeviewPath=STREAM_DATA.'/live/epg_cache/stalker-freeview.json';
-        if(is_file($freeviewPath)){
+        if(is_file($freeviewPath) && @filesize($freeviewPath) <= 16777216){
             $raw=@file_get_contents($freeviewPath);
             $freeview=$raw!==false?json_decode($raw,true):null;
             if(is_array($freeview)&&is_array($freeview['programmes']??null)
@@ -207,8 +215,11 @@ final class StalkerLiveBrowse {
             }
             $programmes[$id]=$unique;
         }
+        if($portalFailed && !$programmes)
+            throw new RuntimeException('Provider EPG is unavailable and no matching cached Freeview listings were found.');
         $out=['ok'=>true,'programmes'=>$programmes,'available'=>count($programmes)>0,
-            'channelCount'=>count($ids),'guideChannels'=>count($programmes),'limited'=>$total>=240];
+            'channelCount'=>count($ids),'guideChannels'=>count($programmes),'limited'=>$total>=240,
+            'providerEpgUnavailable'=>$portalFailed];
         \Vaultcast\Repository::cachePut($key,$out,180);
         return $out;
     }
