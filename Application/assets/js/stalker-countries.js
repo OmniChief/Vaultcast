@@ -8,6 +8,37 @@ window.VaultcastStalkerCountries=function(host,options){
   var selected=null,loading=false,guideBusy=false,refreshChannels=false,search='',chosen='',offset=0,body,status,list,hero,summary,more,guideButton;
   var overrides={},favourites=[],onlyFavourites=false,guideTimer=null,clockTimer=null,guideRetry=false,guideRetries=0,cache=new Map();
   var preference='vaultcast-stalker-live-favourites-'+options.owner;
+  var guideConnectionAt=Date.now(),guideDb=null;
+  // Persist final page results, scoped to this signed-in viewer and provider.
+  // Expiry is checked on connection, not by a timer during viewing.
+  function browserGuideDb(){
+    if(guideDb)return guideDb;
+    guideDb=new Promise(function(resolve){
+      if(!window.indexedDB){resolve(null);return;}
+      var settled=false,request;
+      function finish(db){if(settled){if(db)db.close();return;}settled=true;resolve(db);}
+      try{request=indexedDB.open('vaultcast-stalker-epg-v1',1);}catch(ignore){finish(null);return;}
+      request.onupgradeneeded=function(){if(!request.result.objectStoreNames.contains('pages'))request.result.createObjectStore('pages',{keyPath:'key'});};
+      request.onsuccess=function(){var db=request.result;db.onversionchange=function(){db.close();guideDb=null;};finish(db);};
+      request.onerror=request.onblocked=function(){finish(null);};
+    });return guideDb;
+  }
+  function guideCacheKey(entry){return JSON.stringify([String(options.owner),country,entry.feed,entry.category,entry.page]);}
+  function cachedGuide(key){return browserGuideDb().then(function(db){return new Promise(function(resolve){
+    if(!db){resolve(null);return;}try{var request=db.transaction('pages','readonly').objectStore('pages').get(key);
+      request.onsuccess=function(){var row=request.result;resolve(row&&Number.isFinite(row.at)&&row.at<=Date.now()&&guideConnectionAt-row.at<86400000&&row.data?row.data:null);};
+      request.onerror=function(){resolve(null);};
+    }catch(ignore){resolve(null);}
+  });});}
+  function cacheGuide(key,data){
+    browserGuideDb().then(function(db){if(!db)return;try{
+      var tx=db.transaction('pages','readwrite'),store=tx.objectStore('pages');
+      tx.onerror=function(){};
+      store.put({key:key,at:Date.now(),data:{ok:true,programmes:data.programmes||{},channelLogos:data.channelLogos||{}}});
+      // Remove expired records without retaining other users' guide data forever.
+      var cursor=store.openCursor();cursor.onsuccess=function(){var item=cursor.result;if(!item)return;if(guideConnectionAt-Number(item.value.at)>=86400000)item.delete();item.continue();};
+    }catch(ignore){}});
+  }
   try{overrides=JSON.parse(localStorage.getItem('vaultcast-stalker-country-overrides-'+options.owner)||'{}');}catch(ignore){}
   try{favourites=JSON.parse(localStorage.getItem(preference)||'[]');if(!Array.isArray(favourites))favourites=[];}catch(ignore){}
   var genreOrder=['Entertainment','News','Documentary','Sports','Movies','Kids','Music','Lifestyle','Education','Shopping','Religious','Adult','Other'];
@@ -18,7 +49,11 @@ window.VaultcastStalkerCountries=function(host,options){
   function name(code){return code==='ZZ'?'Other countries':countries[code]?countries[code].name:code;}
   function genreName(value){return value==='Documentary'?'Documentaries':value;}
   function remember(){options.save({country:country,genre:genre,view:view});}
-  function stop(){active=false;serial++;loading=false;guideBusy=false;clearTimeout(guideTimer);clearInterval(clockTimer);}
+  function reconnectGuide(){
+    if(!active)return;guideConnectionAt=Date.now();guideFetched={};guideRetries=0;
+    cache.forEach(function(saved){saved.guideFetched={};});requestGuide();
+  }
+  function stop(){active=false;serial++;loading=false;guideBusy=false;clearTimeout(guideTimer);clearInterval(clockTimer);window.removeEventListener('online',reconnectGuide);}
   function plain(value){return Array.isArray(value)?value.filter(function(x){return typeof x==='string';}).join(' · '):typeof value==='string'||typeof value==='number'?String(value):'';}
   function normal(raw){
     var value=String(raw||'').normalize('NFKC').trim();
@@ -77,8 +112,9 @@ window.VaultcastStalkerCountries=function(host,options){
     return h('div',{className:'stalker-tv-meta'},values.filter(Boolean).map(function(value){return h('span',{text:value});}));
   }
   function credits(p){if(!p)return '';return [p.cast&&plain(p.cast)?'Cast: '+plain(p.cast):'',p.director&&plain(p.director)?'Director: '+plain(p.director):'',p.presenter&&plain(p.presenter)?'Presented by '+plain(p.presenter):''].filter(Boolean).join(' · ');}
-  function sequence(items){return items.map(function(item){return {feed:item.feed,id:String(item.id),name:item.name,sources:item.sources.map(function(s){return {feed:s.feed,id:String(s.id),name:s.name,connection:s.connection,kind:'live',quality:s.quality,qualityRank:s.qualityRank};})};});}
-  function play(item,button,source){var first=source||item.sources[0],ordered=[first].concat(item.sources.filter(function(s){return s.feed!==first.feed||String(s.id)!==String(first.id);}));options.play(first.feed,Object.assign({},item,{feed:first.feed,id:first.id,sources:ordered,_channelSequence:sequence(visibleChannels())}),button);}
+  function playerGuide(item){var events=programmes(item);if(!events.length)return null;return {logo:item.sources.map(function(s){return s.logoUrl||guideLogos[s.feed+'|'+s.id];}).filter(Boolean)[0]||'',programs:events.map(function(p){return Object.assign({},p,{startUnix:p.start*1000,endUnix:p.end*1000,subtitle:p.description||'',kind:'epg'});})};}
+  function sequence(items){return items.map(function(item){return {feed:item.feed,id:String(item.id),name:item.name,_guide:playerGuide(item),sources:item.sources.map(function(s){return {feed:s.feed,id:String(s.id),name:s.name,connection:s.connection,kind:'live',quality:s.quality,qualityRank:s.qualityRank};})};});}
+  function play(item,button,source){var first=source||item.sources[0],ordered=[first].concat(item.sources.filter(function(s){return s.feed!==first.feed||String(s.id)!==String(first.id);}));options.play(first.feed,Object.assign({},item,{feed:first.feed,id:first.id,sources:ordered,_guide:playerGuide(item),_channelSequence:sequence(visibleChannels())}),button);}
   function favouriteId(item){return country+'|'+key(item);}
   function favourite(item){return favourites.indexOf(favouriteId(item))>=0;}
   function star(item){var b=h('button',{type:'button',className:'btn ghost','aria-pressed':String(favourite(item)),'aria-label':(favourite(item)?'Remove favourite ':'Favourite ')+item.name,text:favourite(item)?'★':'☆'});b.onclick=function(){var id=favouriteId(item);favourites=favourites.filter(function(x){return x!==id;});if(b.getAttribute('aria-pressed')!=='true')favourites.push(id);try{localStorage.setItem(preference,JSON.stringify(favourites.slice(-500)));}catch(ignore){}paint();};return b;}
@@ -155,10 +191,16 @@ window.VaultcastStalkerCountries=function(host,options){
       if(guideRetry&&guideRetries<3){guideRetry=false;guideRetries++;var retryToken=serial;guideTimer=setTimeout(function(){if(current(retryToken)){guideFetched={};requestGuide();}},65000);}
       return;
     }
-    var token=serial,entry=pending[0],id=entry.feed+'|'+entry.category+'|'+entry.page;guideBusy=true;paint();
-    options.api('stalker_live_guide','feed='+encodeURIComponent(entry.feed)+'&category='+encodeURIComponent(entry.category)+'&page='+entry.page).then(function(data){
+    var token=serial,entry=pending[0],id=entry.feed+'|'+entry.category+'|'+entry.page,cacheKey=guideCacheKey(entry),fromBrowser=false;guideBusy=true;paint();
+    cachedGuide(cacheKey).then(function(cached){
+      if(!current(token))return null;
+      if(cached){fromBrowser=true;return cached;}
+      return options.api('stalker_live_guide','feed='+encodeURIComponent(entry.feed)+'&category='+encodeURIComponent(entry.category)+'&page='+entry.page);
+    }).then(function(data){
       if(!current(token))return;if(!data||!data.ok)throw Error(data&&data.error||'Programme guide unavailable');Object.keys(data.programmes||{}).forEach(function(id){guideByChannel[entry.feed+'|'+id]=data.programmes[id];});Object.keys(data.channelLogos||{}).forEach(function(id){guideLogos[entry.feed+'|'+id]=data.channelLogos[id];});
-      if(Object.keys(data.openEpgIndexStatus||{}).some(function(region){return region.slice(0,2)===country&&data.openEpgIndexStatus[region]!=='ready';}))guideRetry=true;
+      var unfinished=Object.keys(data.openEpgIndexStatus||{}).some(function(region){return region.slice(0,2)===country&&data.openEpgIndexStatus[region]!=='ready';});
+      if(unfinished)guideRetry=true;
+      if(!fromBrowser&&!unfinished&&(!data.providerEpgUnavailable||data.available))cacheGuide(cacheKey,data);
     }).catch(function(error){if(current(token)){guideRetry=true;status.textContent='Some programme listings are unavailable. Refresh guide to retry.';}}).then(function(){if(!current(token))return;guideFetched[id]=true;guideBusy=false;paint();snapshot();guideTimer=setTimeout(requestGuide,150);});
   }
   function loadChannels(){
@@ -190,6 +232,6 @@ window.VaultcastStalkerCountries=function(host,options){
       }step();
     }).catch(function(error){if(current(token))host.replaceChildren(h('p',{className:'bad',text:error.message}),h('button',{type:'button',className:'btn',text:'Retry',onClick:function(){discover(refresh);}}));});
   }
-  return {show:function(){if(active)return;active=true;clockTimer=setInterval(function(){if(current(serial)&&selected&&!loading)paint();},60000);if(folders.length)openGenre(genre);else discover(false);},stop:stop};
+  return {show:function(){if(active)return;active=true;guideConnectionAt=Date.now();guideFetched={};cache.forEach(function(saved){saved.guideFetched={};});window.addEventListener('online',reconnectGuide);clockTimer=setInterval(function(){if(current(serial)&&selected&&!loading)paint();},60000);if(folders.length)openGenre(genre);else discover(false);},stop:stop};
 };
 })();

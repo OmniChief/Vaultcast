@@ -886,7 +886,7 @@ window.VaultcastStalkerVod=function(host,options){
         }});
       remove.style.alignSelf='flex-start';remove.style.fontSize='1.2rem';
       var card=h('article',{className:'stalker-vod-card stalker-favourite-entry'},[
-        cover,h('div',{className:'stalker-vod-copy'},[button,h('small',{className:'muted',text:'Saved language: '+languageNote}),message,remove])
+        h('div',{className:'stalker-vod-poster-frame'},[cover,remove]),h('div',{className:'stalker-vod-copy'},[button,h('small',{className:'muted',text:'Saved language: '+languageNote}),message])
       ]);
       results.appendChild(card);
       var job={fav:fav,cover:cover,message:message,found:null,sources:[],ready:false};
@@ -1062,9 +1062,7 @@ window.VaultcastStalkerVod=function(host,options){
         return;
       }
       function selected(){return chosen;}
-      function open(){var src=selected();options.open(src.feed,Object.assign({},item,src,{sources:sources}),button);}
-      var button=h('button',{className:'btn',text:item.playable?'View details':kind==='series'?'Browse series':'Explore',onClick:open});
-      var download=item.playable&&options.download?h('button',{className:'btn ghost',text:'Add to library',onClick:function(){var src=selected();download.disabled=true;options.download(src.feed,Object.assign({},item,src)).then(function(){download.textContent='Queued';}).catch(function(e){download.disabled=false;status.textContent=e.message;});}}):null;
+      function open(){var src=selected();options.open(src.feed,Object.assign({},item,src,{sources:sources,poster:src.poster||item.poster}),posterButton);}
       var star=h('button',{className:'btn ghost stalker-save'});
       function updateStar(){
         var active=favouriteEntries().some(function(x){return favouriteId(x)===favouriteId(Object.assign({},item,{tab:kind}));});
@@ -1090,23 +1088,18 @@ window.VaultcastStalkerVod=function(host,options){
         posterImg.onerror=function(){if(alternatives.length)posterImg.src=alternatives.shift();else posterImg.remove();};
         posterButton.appendChild(posterImg);
       }
+      var cardTitle=title(item),cardYear=year(item);
+      if(cardYear&&cardTitle.endsWith(' ('+cardYear+')'))cardTitle=cardTitle.slice(0,-(String(cardYear).length+3));
+      var posterFrame=h('div',{className:'stalker-vod-poster-frame'},[posterButton,star]);
+      if(item.rating_imdb&&Number(item.rating_imdb)>0)posterFrame.appendChild(h('span',{
+        className:'stalker-vod-poster-rating','aria-label':'Rating '+Number(item.rating_imdb).toFixed(1),
+        text:'★ '+Number(item.rating_imdb).toFixed(1)
+      }));
       results.appendChild(h('article',{className:'stalker-vod-card'},[
-        posterButton,
+        posterFrame,
         h('div',{className:'stalker-vod-copy'},[
-          h('h3',{text:title(item),title:item.name}),
-          h('div',{className:'row-head'},[h('span',{className:'muted',text:year(item)||' '}),star]),
-          h('div',{className:'stalker-studio-meta'},[
-            item.genres_str||item.genre?h('span',{text:String(item.genres_str||item.genre).slice(0,65)}):null,
-            item.rating_imdb&&Number(item.rating_imdb)>0?h('span',{text:'★ '+Number(item.rating_imdb).toFixed(1)}):null,
-            sources.length>1?h('span',{text:sources.length+' sources'}):null,
-            item.age||item.rating_mpaa?h('span',{text:'Age rating · '+String(item.age||item.rating_mpaa).slice(0,30)}):null,
-            item.duration||item.time?h('span',{text:'Duration · '+String(item.duration||item.time).slice(0,30)}):null
-          ]),
-          item.description?h('p',{className:'stalker-studio-synopsis',text:String(item.description).slice(0,145)}):null,
-          item.actors||item.cast?h('p',{className:'stalker-studio-credits',text:'Cast: '+String(item.actors||item.cast)}):null,
-          item.director?h('p',{className:'stalker-studio-credits',text:'Director: '+String(item.director)}):null,
-          item.audio_languages||item.subtitle_languages?h('p',{className:'stalker-studio-credits',text:[item.audio_languages?'Audio: '+item.audio_languages:'',item.subtitle_languages?'Subtitles: '+item.subtitle_languages:''].filter(Boolean).join(' · ')}):null,
-          h('div',{className:'row-actions'},[button,download])
+          h('h3',{text:cardTitle,title:item.name}),
+          h('span',{className:'muted',text:cardYear||''})
         ])
       ]));
     });
