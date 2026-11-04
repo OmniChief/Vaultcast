@@ -862,10 +862,10 @@ window.VaultcastStalkerVod=function(host,options){
     next=h('button',{className:'btn',text:'Load more provider pages',onClick:function(){scan(false);}});
     exportButton=options.isAdmin?h('button',{className:'btn ghost',text:'Export detailed VOD metadata (.txt)',onClick:exportRaw}):null;
     groupExportButton=options.isAdmin?h('button',{className:'btn ghost',text:'Export raw VOD groups (.json)',onClick:exportGroups}):null;
-    fieldProbeButton=options.isAdmin?h('button',{className:'btn ghost',text:'Inspect provider JSON fields (.json)',onClick:exportCatalogueFields}):null;
+    fieldProbeButton=options.isAdmin?h('button',{className:'btn ghost',type:'button',text:kind==='series'?'Inspect series JSON fields (.json)':'Inspect movie JSON fields (.json)',onClick:exportCatalogueFields}):null;
     host.append(h('div',{className:'stalker-vod-library-heading'},[
       h('div',{},[h('h2',{text:kind==='vod'?'Movies':'Series'}),h('p',{className:'muted',text:'Search all languages or select a language to limit searches to its provider folders. Select a folder to browse its titles.'})]),
-      h('div',{className:'row-actions'},(options.isAdmin?[h('div',{style:'display:flex;flex-direction:column;gap:8px'},[exportButton,groupExportButton,fieldProbeButton])]:[]).concat([h('button',{className:'btn ghost',text:'Refresh',onClick:function(){reset();loadCategories(true);}})]))
+      h('div',{className:'row-actions'},(options.isAdmin?[h('div',{style:'display:flex;flex-direction:column;gap:8px'},[exportButton,groupExportButton])]:[]).concat([h('button',{className:'btn ghost',type:'button',text:'Refresh',onClick:function(){reset();loadCategories(true);}})]).concat(options.isAdmin?[fieldProbeButton]:[]))
      ]),h('form',{className:'stalker-searchbar',onSubmit:function(e){e.preventDefault();if(searchAllMode){rerunScopedSearch();}else renderResults();}},[search]),categoryStatus,status,results,next);
     var searchAllButton=h('button',{className:'btn',type:'button',text:'Search all '+(kind==='vod'?'movies':'series'),onClick:function(){
       var term=search.value.trim();
