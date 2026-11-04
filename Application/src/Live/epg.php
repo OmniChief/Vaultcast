@@ -122,10 +122,10 @@ function epg_index_xmltv($path, $wanted, $fromMs, $toMs) {
  * Streaming reads and a short window keep the generated index small on a NAS.
  * Never guess regional variants and never replace an existing index on failure.
  */
-function epg_build_stalker_open_index(string $path,string $country,int $fromMs,int $toMs): void {
-    if(!in_array($country,['GB','US'],true)||!class_exists('XMLReader'))return;
+function epg_build_stalker_open_index(string $path,string $country,int $fromMs,int $toMs): array {
+    if(!in_array($country,['GB','US'],true)||!class_exists('XMLReader'))throw new RuntimeException('XMLTV parser unavailable.');
     $reader=new XMLReader();
-    if(!@$reader->open($path,null,LIBXML_NONET|LIBXML_COMPACT))return;
+    if(!@$reader->open($path,null,LIBXML_NONET|LIBXML_COMPACT))throw new RuntimeException('Cannot open downloaded XMLTV guide.');
     $wanted=[];$names=[];$channelCount=0;
     while($reader->read()){
         if($reader->nodeType!==XMLReader::ELEMENT)continue;
@@ -145,7 +145,7 @@ function epg_build_stalker_open_index(string $path,string $country,int $fromMs,i
         }
     }
     $reader->close();
-    if(!$wanted)return;
+    if(!$wanted)throw new RuntimeException('No channel IDs found in the XMLTV guide.');
     $programmes=epg_index_xmltv($path,$wanted,$fromMs,$toMs);
     $slim=[];$total=0;
     foreach($wanted as $id=>$_){
@@ -162,15 +162,19 @@ function epg_build_stalker_open_index(string $path,string $country,int $fromMs,i
         if($entries){$slim[$id]=$entries;$total+=count($entries);}
         if($total>=30000)break;
     }
-    if(!$slim)return;
+    if(!$slim)throw new RuntimeException('No programmes found in the current 48-hour guide window.');
     $payload=json_encode(['updatedAt'=>time(),'channels'=>$names,'programmes'=>$slim],
         JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE);
-    if($payload===false)return;
+    if($payload===false)throw new RuntimeException('Could not encode the Stalker guide index.');
+    if(strlen($payload)>16777216)throw new RuntimeException('Stalker guide index exceeds the 16 MiB cache limit.');
     $pathOut=epg_cache_dir().'/stalker-open-'.strtolower($country).'.json';
     $tmp=$pathOut.'.'.bin2hex(random_bytes(4)).'.tmp';
-    if(@file_put_contents($tmp,$payload,LOCK_EX)!==false){
-        if(!@rename($tmp,$pathOut))@unlink($tmp);
-    }else @unlink($tmp);
+    if(@file_put_contents($tmp,$payload,LOCK_EX)===false || !@rename($tmp,$pathOut)){
+        @unlink($tmp);
+        throw new RuntimeException('Could not save the Stalker guide index.');
+    }
+    return ['country'=>$country,'channelsInXmltv'=>count($wanted),
+        'channelsWithProgrammes'=>count($slim),'programmes'=>$total,'updatedAt'=>time()];
 }
 
 function epg_pick_for_channel($programsById, $ch) {
@@ -300,12 +304,20 @@ function epg_refresh_locked($force) {
     }
     epg_build_channel_catalogue();
     // Re-index only as part of the normal guide refresh, not Stalker browsing.
+    $stalkerOpenEpg=[];
+    foreach($openSources as $country=>$url)$stalkerOpenEpg[$country]=['status'=>'download_failed','channelsWithProgrammes'=>0];
     foreach($fetched as $source){
         $url=(string)($source['url']??'');
         $country=array_search($url,$openSources,true);
         if($country===false)continue;
-        try{epg_build_stalker_open_index($source['path'],$country,$from,$to);}
-        catch(Throwable $error){error_log('Open EPG Stalker fallback index: '.$error->getMessage());}
+        try{
+            $stalkerOpenEpg[$country]=array_merge(['status'=>'indexed'],
+                epg_build_stalker_open_index($source['path'],$country,$from,$to));
+        } catch(Throwable $error){
+            $stalkerOpenEpg[$country]=['status'=>'index_failed','error'=>$error->getMessage(),
+                'retainedPreviousCache'=>is_file(epg_cache_dir().'/stalker-open-'.strtolower($country).'.json')];
+            error_log('Open EPG Stalker fallback index: '.$error->getMessage());
+        }
     }
     $indexPath = epg_cache_dir() . '/favourites.json';
     $tempPath=$indexPath.'.'.bin2hex(random_bytes(4));
@@ -326,6 +338,8 @@ function epg_refresh_locked($force) {
         'errors' => $errors,
         'channelsWithEpg' => count(array_filter($slim, function ($v) { return !empty($v); })),
         'favourites' => count($iptv['channels']),
+        'stalkerOpenEpg' => $stalkerOpenEpg,
+        'note' => 'Open EPG channelsWithProgrammes counts XMLTV channel IDs, not Stalker matches. Stalker matches are reported by the live guide page.',
     );
 }
 
