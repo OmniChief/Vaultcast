@@ -6925,7 +6925,7 @@ try {
           h('button', { className:'lp-btn lp-back', type:'button', title:providerContext?'Close player':'Hide player controls', 'aria-label':providerContext?'Close player':'Hide player controls', onClick: function(e){if(vodMode){closePlayer();return;}if(providerContext){closePlayer();goLiveTab('stalker');return;} e.currentTarget.blur(); clearTimeout(lp.idleT); overlay.classList.add('idle'); } }, [ icon('close') ]),
           h('div', { className:'lp-chan' }, [ elNum, elName, elPill ]),
           h('div', { className:'lp-spacer' }),
-          shareButton(function(){ var c = playerChannels()[lp.idx] || list[lp.idx]; return liveChannelPath(c ? c.id : ''); }, 'Copy link to this channel'),
+          vodMode?null:shareButton(function(){ var c = playerChannels()[lp.idx] || list[lp.idx]; return liveChannelPath(c ? c.id : ''); }, 'Copy link to this channel'),
           elClock
         ]),
         h('div', { className:'lp-bottom' }, [
