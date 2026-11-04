@@ -577,7 +577,6 @@ window.VaultcastStalkerVod=function(host,options){
     if(groupsLoading){categoryStatus.appendChild(h('p',{className:'muted',text:'Loading provider folders…'}));return;}
     providerSelections={};preferredTileKeys={};
     var shown=buckets.filter(function(c){return !activeLanguage||c.language===activeLanguage;});
-    var currentSelection=category ? (providerSelections[category]||null) : null;
     // Selection names are derived from live folder data below. The browser is
     // still built when collapsed so scanning retains all of its source IDs.
     var viewBar=h('nav',{className:'stalker-vod-viewbar','aria-label':'Stalker browse location'});
@@ -669,7 +668,7 @@ window.VaultcastStalkerVod=function(host,options){
       sections[0].items=sections[0].items.filter(function(c){return !isKids(c.name);});
       sections[0].items.push({name:'Kids',key:'kids|'+(activeLanguage||'all'),sources:kids.reduce(function(all,c){return all.concat(c.sources);},[]),aggregate:true});
     }
-    var section=h('section');section.style.width='100%';section.style.marginBottom='20px';
+    var section=h('section',{className:'stalker-vod-discovery'});section.style.width='100%';section.style.marginBottom='20px';
     var heading=h('h3',{text:activeLanguage?(languageLabel(activeLanguage)+' · Discover'):'Discover · All languages'});
     heading.style.margin='0 0 12px';section.appendChild(heading);
     sections.forEach(function(part){
@@ -992,7 +991,7 @@ window.VaultcastStalkerVod=function(host,options){
       renderCategories();rerunScopedSearch();
     }});
     var favouritesButton=h('button',{className:'btn ghost',type:'button',text:'Favourites',onClick:function(){
-      serial++;titlesStarted=false;loading=false;searchAllMode=false;showFolderBrowser=false;category='';tasks=[];renderCategories();showFavourites();
+      serial++;titlesStarted=false;loading=false;searchAllMode=false;showFolderBrowser=true;category='';tasks=[];renderCategories();showFavourites();
     }});
     scopeActions=h('div',{className:'row-actions'});
     scopeActions.style.display='flex';scopeActions.style.flexWrap='wrap';scopeActions.style.gap='8px';
