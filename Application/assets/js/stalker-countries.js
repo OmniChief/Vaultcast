@@ -278,7 +278,18 @@ window.VaultcastStalkerCountries=function(host,options){
       });
       visible.forEach(function(item){
         var epg=programmeInfo(item),watch=h('button',{className:'btn primary',text:'Watch'});
-        watch.onclick=function(){options.play(item.feed,item,watch);};
+        watch.onclick=function(){
+          // The loaded, filtered guide order is the player's zap order. No extra
+          // provider catalogue scan is required when using up/down.
+          var sequence=visible.map(function(channel){
+            return {feed:channel.feed,id:String(channel.id),name:channel.name,
+              sources:(channel.sources||[]).map(function(src){
+                return {feed:src.feed,id:String(src.id),name:src.name,
+                  connection:src.connection,kind:'live'};
+              })};
+          });
+          options.play(item.feed,Object.assign({},item,{_channelSequence:sequence}),watch);
+        };
         var artwork=h('span',{className:'stalker-studio-channel-logo', 'aria-hidden':'true'});
         var fallback=h('span',{className:'stalker-studio-channel-logo-text',
           text:(item.name||'?').replace(/^(?:UK|GB|US)\\s*[-|:]\\s*/i,'').trim().slice(0,3).toUpperCase()||'TV'});
