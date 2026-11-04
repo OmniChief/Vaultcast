@@ -7265,7 +7265,7 @@ try {
       msg('');
       overlay.classList.remove('needs-tap');
       paintHeader();
-      elTitle.textContent = 'Tuning\u2026'; elWhen.textContent = ''; elNext.textContent = ''; elFill.style.width = '0%';
+      elTitle.textContent = vodMode?(lp.ch.name||'Provider video'):'Tuning\u2026'; elWhen.textContent = vodMode?'On-demand video':''; elNext.textContent = ''; elFill.style.width = '0%';
       elEpg.innerHTML = '';
       if (lp.guideOpen) paintGuideList();
       if (lp.epgOpen) paintFullEpg();
