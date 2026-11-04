@@ -53,7 +53,7 @@ final class StalkerDirect {
                 if(preg_match('~(?:https?://|[a-z0-9+.-]+://|(?:token|auth|password|cookie|session|mac)[=:])~i',$value))continue;
                 // Provider sends 0 for missing genres; preserve quality flags and time as-is.
                 if(preg_match('/^(?:genre_id(?:_[1-4])?|cat_genre_id_[1-4])$/',$field)&&$value==='0')continue;
-                $out[$field]=mb_substr(preg_replace('/[\x00-\x1f\x7f]/',' ',$value),0,300);
+                $out[$field]=mb_substr(preg_replace('/[\x00-\x1f\x7f]/',' ',$value),0,in_array($field,['actors','cast','director'],true)?3000:300);
             }
         }
         return $out;

@@ -7,42 +7,79 @@ final class StalkerOffline {
     private static function save(array $j): void {\Vaultcast\Repository::putDocument('stalker-offline:'.$j['id'],$j);}
     public static function listing(): array {
         $rows=\Vaultcast\Repository::rows("SELECT payload FROM vaultcast_documents WHERE name LIKE 'stalker-offline:%'");
+        foreach($rows as &$row){
+            if(!in_array($row['status']??'', ['queued','downloading'],true))continue;
+            $dir=self::root().'/'.$row['id'];$bytes=0;
+            foreach(glob($dir.'/*')?:[] as $file)if(is_file($file)&&preg_match('/^(?:source(?:\.part)?|segment-\d+(?:\.part)?|video(?:\.part)?\.mkv)$/',basename($file)))$bytes+=(int)filesize($file);
+            $row['bytes']=max((int)($row['bytes']??0),$bytes);
+            if(time()-strtotime($row['updated']??$row['created']??'now')>90){
+                $lock=@fopen(self::root().'/'.$row['id'].'.lock','c');
+                if($lock&&flock($lock,LOCK_EX|LOCK_NB)){
+                    $row=self::job($row['id']);
+                    if(in_array($row['status']??'', ['queued','downloading'],true)){$row['status']='failed';$row['error']='The download worker stopped. Retry to resume saved data.';self::save($row);}
+                    flock($lock,LOCK_UN);
+                }
+                if(is_resource($lock))fclose($lock);
+            }
+        }unset($row);
         usort($rows,static function($a,$b){return strcmp($b['created']??'',$a['created']??'');});
-        return array_map(static function($j){return array_intersect_key($j,array_flip(['id','name','status','bytes','error','created','updated','job_pid']));},$rows);
+        return array_map(static function($j){return array_intersect_key($j,array_flip(['id','name','status','bytes','error','created','updated','job_pid','destination']));},$rows);
     }
-    public static function enqueue(array $feed,string $itemId,string $name): array {
+    public static function enqueue(array $feed,string $itemId,string $name,string $destination='library'): array {
         require_once STREAM_ROOT.'/src/Live/iptv.php';
         $item=stalker_vod_entry($feed,$itemId);
         if(!$item)throw new RuntimeException('Refresh the provider catalogue and select the title again.');
-        foreach(\Vaultcast\Repository::rows("SELECT payload FROM vaultcast_documents WHERE name LIKE 'stalker-offline:%'") as $existing)if(($existing['feed']??'')===$feed['id']&&($existing['item_id']??'')===$itemId&&in_array($existing['status'],['queued','downloading','ready'],true))throw new RuntimeException('This title is already in Offline downloads.');
-        if(count(array_filter(self::listing(),static function($j){return in_array($j['status'],['queued','downloading'],true);}))>=20)throw new RuntimeException('The offline queue is full. Wait for a download to finish.');
+        $queue=self::listing();
+        foreach(\Vaultcast\Repository::rows("SELECT payload FROM vaultcast_documents WHERE name LIKE 'stalker-offline:%'") as $existing){
+            if(($existing['feed']??'')!==$feed['id']||($existing['item_id']??'')!==$itemId||($existing['status']??'')==='imported')continue;
+            if($destination==='library')$existing['destination']='library';
+            $existing['item']=$item;self::save($existing);
+            if(in_array($existing['status'],['queued','downloading','ready'],true))return ['ok'=>true,'id'=>$existing['id'],'status'=>$existing['status']];
+            if(count(array_filter($queue,static function($j){return in_array($j['status'],['queued','downloading'],true);}))>=20)throw new RuntimeException('The download queue is full. Wait for a download to finish.');
+            return self::retry($existing['id']);
+        }
+        if(count(array_filter($queue,static function($j){return in_array($j['status'],['queued','downloading'],true);}))>=20)throw new RuntimeException('The download queue is full. Wait for a download to finish.');
         $id=bin2hex(random_bytes(12));
-        $j=['id'=>$id,'feed'=>$feed['id'],'item'=>$item,'item_id'=>$itemId,'name'=>mb_substr(trim($name),0,250),'status'=>'queued','bytes'=>0,'created'=>date('c')];self::save($j);
+        $j=['id'=>$id,'feed'=>$feed['id'],'item'=>$item,'item_id'=>$itemId,'name'=>mb_substr(trim($name),0,250),'destination'=>$destination==='browser'?'browser':'library','status'=>'queued','bytes'=>0,'created'=>date('c')];self::save($j);
         return self::retry($id);
     }
     public static function retry(string $id): array {
         $j=self::job($id);$lock=fopen(self::root().'/'.$id.'.lock','c');
         if(!$lock||!flock($lock,LOCK_EX|LOCK_NB))throw new RuntimeException('This download is still running.');
-        try{if(in_array($j['status'],['ready','imported'],true))throw new RuntimeException('This download is already complete.');@unlink(self::root().'/'.$id.'/cancel');$j['status']='queued';unset($j['error']);self::save($j);}
+        try{if(in_array($j['status'],['ready','imported'],true))throw new RuntimeException('This download is already complete.');@unlink(self::root().'/'.$id.'/cancel');$j['status']='queued';$j['updated']=date('c');unset($j['error']);self::save($j);}
         finally{flock($lock,LOCK_UN);fclose($lock);}
         try{Process::startPhpWorker('stalker-download',$id);}
         catch(Throwable $e){$j['status']='failed';$j['error']='Could not start the download worker. Check the PHP worker configuration.';self::save($j);throw new RuntimeException($j['error']);}
         return ['ok'=>true,'id'=>$id];
     }
     public static function cancel(string $id): array {$j=self::job($id);if(in_array($j['status'],['ready','imported'],true))throw new RuntimeException('This download is already complete.');$dir=self::root().'/'.$id;if(!is_dir($dir))@mkdir($dir,0700,true);file_put_contents($dir.'/cancel','1');$j['status']='cancelled';self::save($j);return ['ok'=>true];}
+    public static function downloadFile(string $id): void {
+        $j=self::job($id);$path=self::root().'/'.$id.'/video.mkv';
+        if(!in_array($j['status']??'', ['ready','imported'],true)||!is_file($path))throw new RuntimeException('The video is not ready to download. Open Downloads to see its status.');
+        $name=preg_replace('/[\x00-\x1f\x7f\/\\\\"<>:|?*]/u','_', $j['name']??'Video').'.mkv';
+        header('Cache-Control: private, no-store');
+        header("Content-Disposition: attachment; filename=\"video.mkv\"; filename*=UTF-8''".rawurlencode($name));
+        Stream::sendFile($path,'video/x-matroska');exit;
+    }
     private static function fetch(string $url,string $dest,array $feed,int $limit=21474836480,bool $fresh=false): void {
+        for($attempt=0;$attempt<3;$attempt++){
+            try{self::fetchOnce($url,$dest,$feed,$limit,$fresh,$attempt);return;}
+            catch(RuntimeException $error){if($attempt===2||is_file(dirname($dest).'/cancel'))throw $error;sleep($attempt+1);}
+        }
+    }
+    private static function fetchOnce(string $url,string $dest,array $feed,int $limit,bool $fresh,int $attempt): void {
         if(is_file($dest)&&!$fresh)return;
         $part=$dest.'.part';$metaFile=$part.'.json';$meta=is_file($metaFile)?json_decode((string)file_get_contents($metaFile),true):[];
         $offset=!$fresh&&is_file($part)&&!empty($meta['validator'])?(int)filesize($part):0;
         for($hop=0;$hop<5;$hop++){
             $p=parse_url($url);if(!$p||!in_array($p['scheme']??'',['http','https'],true)||isset($p['user'])||isset($p['pass']))throw new RuntimeException('Provider returned an invalid media URL.');
             $ips=stalker_public_addresses($url);foreach($ips as $ip)if(!WebFetch::publicIp($ip))throw new RuntimeException('Media address is not public.');
-            $host=(string)$p['host'];$port=$p['port']??($p['scheme']==='https'?443:80);$ip=strpos($ips[0],':')!==false?'['.$ips[0].']':$ips[0];
+            $host=(string)$p['host'];$port=$p['port']??($p['scheme']==='https'?443:80);$ip=strpos($ips[$attempt%count($ips)],':')!==false?'['.$ips[$attempt%count($ips)].']':$ips[$attempt%count($ips)];
             $headers=['Accept: */*'];if($offset){$headers[]='Range: bytes='.$offset.'-';$headers[]='If-Range: '.$meta['validator'];}
             $status=0;$response=[];$file=null;$received=0;$failed=false;
             $ch=curl_init($url);
-            curl_setopt_array($ch,[CURLOPT_FOLLOWLOCATION=>false,CURLOPT_PROTOCOLS=>CURLPROTO_HTTP|CURLPROTO_HTTPS,CURLOPT_RESOLVE=>[$host.':'.$port.':'.$ip],CURLOPT_CONNECTTIMEOUT=>10,CURLOPT_TIMEOUT=>0,CURLOPT_LOW_SPEED_LIMIT=>1024,CURLOPT_LOW_SPEED_TIME=>90,CURLOPT_SSL_VERIFYPEER=>true,
-                CURLOPT_COOKIEFILE=>stalker_cookie_path($feed),CURLOPT_REFERER=>stalker_endpoint($feed),CURLOPT_USERAGENT=>'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 MAG250 stbapp ver: 4 rev: 1812 Mobile Safari/533.3',CURLOPT_HTTPHEADER=>$headers,CURLOPT_NOPROGRESS=>false,
+            curl_setopt_array($ch,[CURLOPT_FOLLOWLOCATION=>false,CURLOPT_PROTOCOLS=>CURLPROTO_HTTP|CURLPROTO_HTTPS,CURLOPT_RESOLVE=>[$host.':'.$port.':'.$ip],CURLOPT_CONNECTTIMEOUT=>20,CURLOPT_HTTP_VERSION=>CURL_HTTP_VERSION_1_1,CURLOPT_TIMEOUT=>0,CURLOPT_LOW_SPEED_LIMIT=>1024,CURLOPT_LOW_SPEED_TIME=>90,CURLOPT_SSL_VERIFYPEER=>true,
+                CURLOPT_COOKIEFILE=>$feed['_downloadCookies']??stalker_cookie_path($feed),CURLOPT_COOKIEJAR=>$feed['_downloadCookies']??stalker_cookie_path($feed),CURLOPT_REFERER=>preg_replace('#/(?:server/load|portal)\.php$#','/c/',stalker_endpoint($feed)),CURLOPT_USERAGENT=>'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 MAG250 stbapp ver: 4 rev: 1812 Mobile Safari/533.3',CURLOPT_HTTPHEADER=>$headers,CURLOPT_NOPROGRESS=>false,
                 CURLOPT_XFERINFOFUNCTION=>static function()use($dest){$marker=dirname($dest).'/cancel';clearstatcache(true,$marker);return is_file($marker)?1:0;},
                 CURLOPT_HEADERFUNCTION=>static function($h,$line)use(&$status,&$response){if(preg_match('#^HTTP/\S+\s+(\d+)#',$line,$m)){$status=(int)$m[1];$response=[];}elseif(strpos($line,':')!==false){[$k,$v]=explode(':',$line,2);$response[strtolower(trim($k))]=trim($v);}return strlen($line);},
                 CURLOPT_WRITEFUNCTION=>static function($h,$chunk)use(&$file,&$received,&$failed,&$response,&$status,$offset,$part,$metaFile,$limit){
@@ -52,9 +89,9 @@ final class StalkerOffline {
                     $received+=strlen($chunk);$free=@disk_free_space(dirname($part));if($received+($status===206?$offset:0)>$limit||($free!==false&&$free<100*1024*1024)){$failed=true;return 0;}
                     $n=fwrite($file,$chunk);return $n===false?0:$n;
                 }]);
-            $ok=curl_exec($ch);curl_close($ch);if(is_resource($file))fclose($file);
+            $ok=curl_exec($ch);$errno=curl_errno($ch);$status=(int)curl_getinfo($ch,CURLINFO_HTTP_CODE);curl_close($ch);if(is_resource($file))fclose($file);
             if($status>=300&&$status<400&&!empty($response['location'])){$url=iptv_hls_resolve_uri($url,$response['location']);continue;}
-            if(!$ok||$failed||!in_array($status,[200,206],true)||!is_file($part))throw new RuntimeException('Download interrupted or refused (HTTP '.$status.'). Partial files are kept; use Retry. Check available disk space.');
+            if(!$ok||$failed||!in_array($status,[200,206],true)||!is_file($part))throw new RuntimeException('Download interrupted or refused (HTTP '.$status.($errno?', transport '.$errno.': '.curl_strerror($errno):'').'). Partial files are kept; use Retry.');
             if(!@rename($part,$dest))throw new RuntimeException('Cannot finish the downloaded file.');@chmod($dest,0600);return;
         }
         throw new RuntimeException('Too many media redirects.');
@@ -96,8 +133,10 @@ final class StalkerOffline {
             $feed=iptv_feed_by_id(iptv_load(),$j['feed']);if(!$feed||empty($feed['enabled']))throw new RuntimeException('The provider connection is unavailable.');
             $dir=self::root().'/'.$id;if(!is_dir($dir)&&!@mkdir($dir,0700,true))throw new RuntimeException('Cannot create download folder.');
             if(is_file($dir.'/cancel'))throw new RuntimeException('Download cancelled. Partial media was preserved.');
-            $j['status']='downloading';self::save($j);
-            $url=stalker_vod_resolve($feed,$j['item_id'],$j['item']);$source=$dir.'/source';self::fetch($url,$source,$feed);
+            $j['destination']=self::job($id)['destination']??'library';$j['status']='downloading';$j['updated']=date('c');self::save($j);
+            $url=stalker_vod_resolve($feed,$j['item_id'],$j['item']);
+            $cookies=$dir.'/cookies';if(!@copy(stalker_cookie_path($feed),$cookies))throw new RuntimeException('Could not prepare provider download cookies.');@chmod($cookies,0600);
+            $feed['_downloadCookies']=$cookies;$source=$dir.'/source';self::fetch($url,$source,$feed);
             $head=file_get_contents($source,false,null,0,16);
             $expectedDuration=0.0;
             if(strpos(ltrim((string)$head),'#EXTM3U')===0){$source=self::playlist($url,$dir,$feed);preg_match_all('/#EXTINF:([0-9.]+)/',(string)file_get_contents($source),$durations);$expectedDuration=array_sum(array_map('floatval',$durations[1]));}
@@ -115,13 +154,13 @@ final class StalkerOffline {
             $info=json_decode((string)$probe,true);$streams=$info['streams']??[];
             if($expectedDuration>0&&abs((float)($info['format']['duration']??0)-$expectedDuration)>max(5.0,$expectedDuration*0.001))throw new RuntimeException('The saved video is incomplete. Downloaded segments were preserved for retry.');
             if(!array_filter($streams,static function($s){return ($s['codec_type']??'')==='video';})||!@rename($part,$dest))throw new RuntimeException('The download could not be verified as a complete video. Partial files are kept for retry.');
-            $j['status']='ready';$j['bytes']=filesize($dest);$j['updated']=date('c');unset($j['error']);self::save($j);@unlink(STREAM_SHM.'/ingest_count.json');return ['ok'=>true];
-        }catch(Throwable $e){$j['status']=is_file(self::root().'/'.$id.'/cancel')?'cancelled':'failed';$j['error']=$j['status']==='cancelled'?'Cancelled. Partial downloads were preserved.':($e instanceof RuntimeException?$e->getMessage():'The download worker failed. Partial files were preserved.');self::save($j);return ['ok'=>false,'error'=>$j['error']];}
+            $j['destination']=self::job($id)['destination']??'library';$j['status']='ready';$j['bytes']=filesize($dest);$j['updated']=date('c');unset($j['error']);self::save($j);@unlink(STREAM_SHM.'/ingest_count.json');return ['ok'=>true];
+        }catch(Throwable $e){$j['destination']=self::job($id)['destination']??'library';$j['status']=is_file(self::root().'/'.$id.'/cancel')?'cancelled':'failed';$j['error']=$j['status']==='cancelled'?'Cancelled. Partial downloads were preserved.':($e instanceof RuntimeException?$e->getMessage():'The download worker failed. Partial files were preserved.');self::save($j);return ['ok'=>false,'error'=>$j['error']];}
         finally{if(is_resource($bandwidth)){flock($bandwidth,LOCK_UN);fclose($bandwidth);}flock($own,LOCK_UN);fclose($own);}
     }
     public static function torrents(): array {
         $rows=\Vaultcast\Repository::rows("SELECT payload FROM vaultcast_documents WHERE name LIKE 'stalker-offline:%'");$out=[];
-        foreach($rows as $j)if(in_array($j['status'],['ready','imported'],true)&&preg_match('/^[a-f0-9]{24}$/D',$j['id'])){$dir=self::root().'/'.$j['id'];$file=$dir.'/video.mkv';if(is_file($file))$out[]=['stalker_offline'=>$j['id'],'hashString'=>'stalker-'.$j['id'],'id'=>0,'name'=>$j['name'],'percentDone'=>1,'downloadDir'=>$dir,'files'=>[['name'=>'video.mkv','length'=>filesize($file)]]];}
+        foreach($rows as $j)if(($j['destination']??'library')!=='browser'&&in_array($j['status'],['ready','imported'],true)&&preg_match('/^[a-f0-9]{24}$/D',$j['id'])){$dir=self::root().'/'.$j['id'];$file=$dir.'/video.mkv';if(is_file($file))$out[]=['stalker_offline'=>$j['id'],'hashString'=>'stalker-'.$j['id'],'id'=>0,'name'=>$j['name'],'percentDone'=>1,'downloadDir'=>$dir,'files'=>[['name'=>'video.mkv','length'=>filesize($file)]]];}
         return $out;
     }
     public static function files(array $tor): array {

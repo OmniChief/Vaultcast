@@ -123,8 +123,10 @@
         h('label', { className: 'check-label' }, [ h('input', { type: 'checkbox', checked: showAll, onChange: function(e){ M.ui.ingestAll = e.target.checked; renderIngest(host); } }), ' Show done (imported / dismissed)' ]),
         h('button', { className: 'btn', type: 'button', text: 'Refresh', onClick: function(){ renderIngest(host); } })
       ]));
-      if (j.transmission === false) host.appendChild(h('p', { className: 'bad', text: 'Transmission is not reachable, so finished downloads cannot be listed.' }));
+      if (j.transmission === false) host.appendChild(h('p', { className: 'bad', text: 'Transmission is unavailable. Provider downloads are still listed below.' }));
+      (j.provider_downloads||[]).forEach(function(item){host.appendChild(h('div',{className:'settings-card'},[h('h3',{text:item.name}),h('p',{text:'Provider download · '+item.status+(item.bytes?' · '+fmtSize(item.bytes):'')}),item.error?h('p',{className:'bad',text:item.error}):null,h('p',{className:'muted',text:item.status==='failed'?'Open Live → Stalker → Downloads to retry.':'This video will be available to match here when its download finishes.'})]));});
       if (!j.items || !j.items.length) {
+        if((j.provider_downloads||[]).length)return;
         host.appendChild(h('div', { className: 'empty-state' }, [ h('div', { className: 'empty-icon', text: '✓' }), h('h3', { text: 'Nothing waiting' }), h('p', { text: 'Finished downloads that need a decision show up here.' }) ]));
         return;
       }

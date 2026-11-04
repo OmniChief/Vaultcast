@@ -213,6 +213,7 @@ class Ingest {
                 'imported_before' => $imported ? count($rec['dests'] ?? []) : 0,
             ];
         }
+        $out['provider_downloads']=array_values(array_filter(StalkerOffline::listing(),static function($j){return ($j['destination']??'library')!=='browser'&&!in_array($j['status']??'', ['ready','imported','cancelled'],true);}));
         $out['pending'] = $pending;
         @file_put_contents(STREAM_SHM . '/ingest_count.json', json_encode(['n' => $pending, 'at' => time()]));
         return $out;
