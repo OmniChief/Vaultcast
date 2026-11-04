@@ -4,6 +4,7 @@ var countries={"AF":{"name":"Afghanistan","flag":"data:image/svg+xml;base64,PHN2
 window.VaultcastStalkerCountries=function(host,options){
   var h=options.h,active=false,serial=0,country=(options.saved||{}).country||'';
   var selected=null,feeds=[],folders=[],failures=[],status,body,search='',page=1,channels=[],hasMore=false,sourcePages={};
+  var pageInventory=[],guideByChannel={},guideFetched={},guideBusy=false,formatEnabled={UHD:true,FHD:true,HD:true};
   var overrides={};try{overrides=JSON.parse(localStorage.getItem('vaultcast-stalker-country-overrides-'+options.owner)||'{}');}catch(ignore){}
   function folderKey(f){return f.feed+'/'+f.id;}
   function saveOverrides(){try{localStorage.setItem('vaultcast-stalker-country-overrides-'+options.owner,JSON.stringify(overrides));}catch(ignore){}}
@@ -154,51 +155,142 @@ window.VaultcastStalkerCountries=function(host,options){
     });
     return Array.from(groups.values());
   }
+  function requestGuide(maxPages){
+    if(!selected||!active||guideBusy)return;
+    var pending=pageInventory.filter(function(entry){return !guideFetched[entry.feed+'|'+entry.category+'|'+entry.page];}).slice(0,Math.max(1,Math.min(3,maxPages||1)));
+    if(!pending.length)return;
+    var token=serial,position=0;
+    guideBusy=true;
+    pending.forEach(function(entry){guideFetched[entry.feed+'|'+entry.category+'|'+entry.page]=true;});
+    function next(){
+      if(!current(token)){guideBusy=false;return;}
+      if(position>=pending.length){guideBusy=false;drawChannels();return;}
+      var entry=pending[position++];
+      var args='feed='+encodeURIComponent(entry.feed)+'&category='+encodeURIComponent(entry.category)+'&page='+entry.page;
+      options.api('stalker_live_guide',args).then(function(data){
+        if(!current(token))return;
+        if(!data||!data.ok)throw Error(data&&data.error||'Programme guide unavailable');
+        Object.keys(data.programmes||{}).forEach(function(id){
+          var list=data.programmes[id];
+          if(Array.isArray(list))guideByChannel[entry.feed+'|'+id]=list;
+        });
+      }).catch(function(error){
+        if(current(token)){
+          // A failed page may be retried without refreshing the channel catalogue.
+          delete guideFetched[entry.feed+'|'+entry.category+'|'+entry.page];
+        }
+      }).then(next);
+    }
+    next();
+  }
   function drawChannels(){
     shell(categoryLabel(selected.name));
     var back=h('button',{className:'btn ghost',text:'← Categories',onClick:renderCategories});
-    var refresh=h('button',{className:'btn ghost',text:'Refresh channel list',onClick:function(){page=1;channels=[];sourcePages={};loadChannels(false,true);}});
-    var find=h('input',{type:'search',value:search,placeholder:'Filter loaded channels…','aria-label':'Filter channel names'});
-    find.oninput=function(){search=find.value;display();};
-    var list=h('div',{className:'stalker-country-results'});
-    var next=h('button',{className:'btn',text:'Load next provider page',onClick:function(){page++;loadChannels(true);},hidden:!hasMore});
-    // Format filters are presentation-only and never request more provider data.
-    // Untagged channels remain visible when all named formats are switched off.
-    var formats=['UHD','FHD','HD'],enabled={UHD:true,FHD:true,HD:true};
-    var controls=h('div',{className:'row-actions'},[back,refresh]);
-    formats.forEach(function(format){
-      var toggle=h('button',{type:'button',className:'btn primary',text:format,'aria-label':'Show '+format+' channels','aria-pressed':'true'});
+    var refresh=h('button',{className:'btn ghost',text:'Refresh channels',onClick:function(){
+      page=1;channels=[];sourcePages={};pageInventory=[];guideByChannel={};guideFetched={};loadChannels(false,true);
+    }});
+    var find=h('input',{type:'search',value:search,placeholder:'Find a channel in loaded pages…','aria-label':'Filter channel names'});
+    var list=h('div',{className:'stalker-studio-guide',role:'region','aria-label':'Stalker Live TV guide'});
+    var next=h('button',{className:'btn',text:'Load more channels',onClick:function(){page++;loadChannels(true);},hidden:!hasMore});
+    var guide=h('button',{className:'btn ghost',text:'Load more programme listings',
+      onClick:function(){requestGuide(3);}});
+    var filters=h('div',{className:'row-actions stalker-studio-guide-toolbar'},[
+      back,refresh,guide
+    ]);
+    ['UHD','FHD','HD'].forEach(function(format){
+      var toggle=h('button',{type:'button',className:formatEnabled[format]?'btn primary':'btn ghost',
+        text:format,'aria-label':'Show '+format+' channels','aria-pressed':String(formatEnabled[format])});
       toggle.onclick=function(){
-        enabled[format]=!enabled[format];
-        toggle.className=enabled[format]?'btn primary':'btn ghost';
-        toggle.setAttribute('aria-pressed',String(enabled[format]));
-        display();
+        formatEnabled[format]=!formatEnabled[format];
+        toggle.className=formatEnabled[format]?'btn primary':'btn ghost';
+        toggle.setAttribute('aria-pressed',String(formatEnabled[format]));display();
       };
-      controls.appendChild(toggle);
+      filters.appendChild(toggle);
     });
-    body.append(controls,find,list,next);
+    var summary=h('p',{className:'muted',role:'status'});
+    body.append(filters,find,summary,list,next);
     function channelFormats(name){
-      var text=String(name||'').toUpperCase();
-      var found=[];
-      if(/(?:^|[^A-Z0-9])(?:UHD|4K|2160P)(?=$|[^A-Z0-9])/.test(text))found.push('UHD');
-      if(/(?:^|[^A-Z0-9])(?:FHD|FULL\s*HD|1080P)(?=$|[^A-Z0-9])/.test(text))found.push('FHD');
-      if(/(?:^|[^A-Z0-9])(?:HD|720P)(?=$|[^A-Z0-9])/.test(text)&&!/FULL\s*HD/.test(text))found.push('HD');
+      var value=String(name||'').toUpperCase(),found=[];
+      if(/(?:^|[^A-Z0-9])(?:UHD|4K|2160P)(?=$|[^A-Z0-9])/.test(value))found.push('UHD');
+      if(/(?:^|[^A-Z0-9])(?:FHD|FULL\s*HD|1080P)(?=$|[^A-Z0-9])/.test(value))found.push('FHD');
+      if(/(?:^|[^A-Z0-9])(?:HD|720P)(?=$|[^A-Z0-9])/.test(value)&&!/FULL\s*HD/.test(value))found.push('HD');
       return found;
+    }
+    function programmeInfo(item){
+      var now=Date.now()/1000;
+      var available=[];
+      (item.sources||[]).forEach(function(src){
+        var entries=guideByChannel[src.feed+'|'+src.id]||[];
+        entries.forEach(function(p){
+          if(!p||!Number.isFinite(Number(p.start))||!Number.isFinite(Number(p.end))||Number(p.end)<=Number(p.start))return;
+          available.push({item:p,source:src});
+        });
+      });
+      var current=available.filter(function(p){return Number(p.item.start)<=now&&Number(p.item.end)>now;})
+        .sort(function(a,b){return Number(b.item.start)-Number(a.item.start);})[0]||null;
+      var next=available.filter(function(p){return Number(p.item.start)>now;})
+        .sort(function(a,b){return Number(a.item.start)-Number(b.item.start);})[0]||null;
+      return {current:current,next:next};
+    }
+    function time(ts){return new Date(Number(ts)*1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});}
+    function programmeCard(entry,label){
+      var outer=h('div',{className:'stalker-studio-programme'});
+      outer.appendChild(h('span',{className:'stalker-studio-programme-label',text:label}));
+      if(!entry){outer.appendChild(h('span',{className:'muted',text:'No programme information'}));return outer;}
+      var p=entry.item;
+      outer.appendChild(h('strong',{text:p.title||'Programme'}));
+      outer.appendChild(h('small',{className:'muted',text:time(p.start)+' – '+time(p.end)}));
+      if(label==='Now'){
+        var ratio=(Date.now()/1000-Number(p.start))/(Number(p.end)-Number(p.start));
+        var bar=h('div',{className:'stalker-studio-programme-progress'});
+        var fill=h('span');fill.style.width=Math.max(0,Math.min(100,100*ratio))+'%';
+        bar.appendChild(fill);outer.appendChild(bar);
+      }
+      return outer;
     }
     function display(){
       list.replaceChildren();
       var grouped=groupedChannels();
-      var visible=grouped.filter(function(c){return c.name.toLowerCase().includes(search.toLowerCase())&&channelFormats(c.name).every(function(format){return enabled[format];});});
-      visible.forEach(function(item){
-        var watch=h('button',{className:'btn',text:'Watch',onClick:function(){options.play(item.feed,item,watch);}});
-        list.appendChild(h('article',{className:'stalker-channel-card'},[
-          h('span',{className:'stalker-channel-card-icon','aria-hidden':'true',text:'▶'}),
-          h('div',{className:'stalker-country-channel-copy'},[h('strong',{text:item.name}),h('small',{className:'muted',text:item.sources.length+' '+(item.sources.length===1?'connection':'connections')})]),watch
-        ]));
+      var visible=grouped.filter(function(c){
+        return c.name.toLowerCase().includes(search.toLowerCase())&&channelFormats(c.name).every(function(format){return formatEnabled[format];});
       });
-      if(!visible.length)list.appendChild(h('p',{className:'muted',text:'No channels on the loaded pages match your filter.'}));
-      status.textContent=grouped.length+' unique channels loaded from '+selected.sources.length+' connections';
+      visible.forEach(function(item){
+        var epg=programmeInfo(item),watch=h('button',{className:'btn primary',text:'Watch'});
+        watch.onclick=function(){options.play(item.feed,item,watch);};
+        var channelName=h('div',{className:'stalker-studio-channel-heading'},[
+          item.number!=null?h('span',{className:'stalker-studio-channel-number',text:String(item.number)}):null,
+          h('strong',{text:item.name}),
+          h('small',{className:'muted',text:item.sources.length+' '+(item.sources.length===1?'source':'sources')})
+        ]);
+        var detail=h('details',{className:'stalker-studio-programme-details'});
+        detail.appendChild(h('summary',{text:'Programme details'}));
+        [epg.current,epg.next].forEach(function(entry){
+          if(!entry)return;
+          var programme=entry.item;
+          detail.appendChild(h('div',{className:'stalker-studio-programme-description'},[
+            h('strong',{text:programme.title||'Programme'}),
+            h('small',{className:'muted',text:time(programme.start)+' – '+time(programme.end)}),
+            h('p',{text:programme.description||'No description was provided.'})
+          ]));
+        });
+        if(!epg.current&&!epg.next)detail.appendChild(h('p',{className:'muted',text:'This provider has no current listings for the channel.'}));
+        var row=h('article',{className:'stalker-studio-guide-row'},[
+          channelName,
+          programmeCard(epg.current,'Now'),
+          programmeCard(epg.next,'Next'),
+          h('div',{className:'stalker-studio-guide-actions'},[watch]),
+          detail
+        ]);
+        list.appendChild(row);
+      });
+      if(!visible.length)list.appendChild(h('p',{className:'muted',text:'No matching channels on loaded pages.'}));
+      var covered=grouped.filter(function(item){return !!programmeInfo(item).current;}).length;
+      summary.textContent=visible.length+' channels shown · '+covered+' with current programmes · '+selected.sources.length+' provider folders';
+      status.textContent='Guide data is loaded on demand and may be unavailable for some channels.';
+      guide.disabled=guideBusy||!pageInventory.some(function(entry){return !guideFetched[entry.feed+'|'+entry.category+'|'+entry.page];});
+      guide.textContent=guideBusy?'Loading guide…':'Load more programme listings';
     }
+    find.oninput=function(){search=find.value;display();};
     display();
   }
   function loadChannels(append,refresh){
@@ -206,11 +298,11 @@ window.VaultcastStalkerCountries=function(host,options){
     var token=++serial,sources=selected.sources||[selected],index=0,combined=append?channels.slice():[],more=false;
     shell('Loading '+categoryLabel(selected.name)+'…');
     status.textContent='Requesting provider channel pages…';
-    if(!append)sourcePages={};
+    if(!append){sourcePages={};pageInventory=[];guideByChannel={};guideFetched={};guideBusy=false;}
     // Fetch one page per connection sequentially; do not trigger a server-side scan.
     function next(){
       if(!current(token))return;
-      if(index>=sources.length){channels=combined;hasMore=more;drawChannels();return;}
+      if(index>=sources.length){channels=combined;hasMore=more;drawChannels();requestGuide(1);return;}
       var src=sources[index++],key=folderKey(src),progress=sourcePages[key]||{page:1,more:true};
       if(!progress.more){next();return;}
       var params='feed='+encodeURIComponent(src.feed)+'&category='+encodeURIComponent(src.id)+'&page='+progress.page+(refresh?'&refresh=1':'');
@@ -218,6 +310,8 @@ window.VaultcastStalkerCountries=function(host,options){
         if(!current(token))return;
         if(!result||!result.ok)throw Error(result&&result.error||'Provider channel page failed.');
         (result.items||[]).forEach(function(item){combined.push(item);});
+        if((result.items||[]).length&&!pageInventory.some(function(p){return p.feed===src.feed&&p.category===src.id&&p.page===progress.page;}))
+          pageInventory.push({feed:src.feed,category:src.id,page:progress.page});
         sourcePages[key]={page:progress.page+1,more:!!result.hasMore};
         more=more||!!result.hasMore;
         next();
