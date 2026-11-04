@@ -65,8 +65,23 @@ final class StalkerLiveBrowse {
             \Vaultcast\Repository::cachePut(self::key($feed,'item:'.$id),$playback,7200);
             // The compatibility player uses the same on-demand Stalker resolver.
             \Vaultcast\Repository::cachePut(stalker_live_key($feed,$id),$playback,7200);
+            // Carry presentation metadata already included in the same provider page.
+            // Keep commands and private provider URLs in the existing server-side cache.
+            $xmltvId=trim((string)($row['xmltv_id']??''));
+            if(strlen($xmltvId)>160||preg_match('~(?:/|\\\\|https?:|[?&=]|[\\x00-\\x1f])~',$xmltvId))$xmltvId='';
+            $number=filter_var($row['number']??null,FILTER_VALIDATE_INT,
+                ['options'=>['min_range'=>1,'max_range'=>1000000]]);
+            $flag=static function($value): bool {
+                return in_array(strtolower(trim((string)$value)),['1','true','yes','on'],true);
+            };
             $items[]=['id'=>$id,'name'=>$name,'description'=>$selected['name'],'feed'=>$feed['id'],
-                'connection'=>$feed['name'],'kind'=>'live','country'=>StalkerCountries::country($name)??$selected['country']];
+                'connection'=>$feed['name'],'kind'=>'live','country'=>StalkerCountries::country($name)??$selected['country'],
+                'number'=>$number===false?null:$number,'xmltvId'=>$xmltvId,
+                'epgAvailable'=>$xmltvId!=='',
+                'archive'=>$flag($row['archive']??0)&&$flag($row['enable_tv_archive']??0),
+                'archiveHours'=>max(0,min(720,(int)($row['tv_archive_duration']??0))),
+                'pvr'=>$flag($row['allow_pvr']??0),'timeshift'=>$flag($row['allow_local_timeshift']??0),
+                'logoAvailable'=>is_string($row['logo']??null)&&trim($row['logo'])!==''];
         }
         $count=count($rows);$perPage=max(1,(int)($result['max_page_items']??$count));
         $total=isset($result['total_items'])&&is_numeric($result['total_items'])?max(0,(int)$result['total_items']):null;
