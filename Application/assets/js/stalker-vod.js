@@ -153,15 +153,15 @@ window.VaultcastStalkerVod=function(host,options){
   // The diagnostic export stays browser-driven and never requests playable URLs.
   function exportRaw(){
     if(exportJob){exportJob.cancelled=true;return;}
-    var answer=window.prompt('Detailed export demo: maximum titles to inspect across movies and series. Enter 250 for a sample, or ALL for a full export.','250');
+    var answer=window.prompt('Metadata export: enter 250 for a representative sample or ALL to browse every provider catalogue page.','250');
     if(answer===null)return;
     var maxRecords=/^all$/i.test(answer.trim())?Infinity:Number(answer.trim());
     if(!Number.isInteger(maxRecords)&&maxRecords!==Infinity||maxRecords<1||maxRecords>1000000){status.textContent='Enter a positive record limit or ALL.';return;}
-    var job={cancelled:false,lines:['Stalker VOD detailed metadata export (diagnostic demo)','Generated: '+new Date().toISOString(),'Scope: '+(maxRecords===Infinity?'ALL':maxRecords)+' records','Source: Stalker catalogue pages and category metadata; no external metadata matching','Sensitive URLs, credentials, commands and tokens are excluded','Each RECORD line is a JSON object; missing metadata is null or omitted','']};
+    var job={cancelled:false,lines:['Stalker VOD comprehensive metadata export','Generated: '+new Date().toISOString(),'Scope: '+(maxRecords===Infinity?'ALL':maxRecords)+' records','Source: Stalker catalogue pages and category metadata; no external metadata matching','Sensitive URLs, credentials, commands and tokens are excluded','Each RECORD line is a JSON object; missing metadata is null or omitted','']};
     exportJob=job;
     var button=exportButton;button.textContent='Save partial detailed export';
     var kinds=['vod','series'],list=options.connections.filter(function(f){return f.enabled;});
-    var count=0,issues=[],fieldsFound={},categoriesMap={},tasks=[],taskIndex=0,seenPages={},stats={},probeQueue=[],probeKeys={},probeIndex=0,probeStarted=false;
+    var count=0,issues=[],fieldsFound={},categoriesMap={},tasks=[],taskIndex=0,seenPages={},stats={},seenRecords={};
     function plain(value,max){
       if(typeof value!=='string'&&typeof value!=='number'&&typeof value!=='boolean')return null;
       return String(value).replace(/[\u0000-\u001f\u007f]/g,' ').slice(0,max||1000);
@@ -177,7 +177,7 @@ window.VaultcastStalkerVod=function(host,options){
     }
     function record(item,feed,k,groupMap){
       var parsed=prefixParts(item),y=year(item);
-      var allowed=['description','genre','genres','country','language','original_language','director','cast','duration','rating','imdb_id','tmdb_id','release_date','season','episode','episodeTitle','seasonId','seasonName','category','category_id','categoryId'];
+      var allowed=['description','o_name','genre','genres','genres_str','genre_id','genre_id_1','genre_id_2','genre_id_3','genre_id_4','cat_genre_id_1','cat_genre_id_2','cat_genre_id_3','cat_genre_id_4','country','language','original_language','director','actors','cast','duration','time','rating','rating_imdb','rating_mpaa','rating_kinopoisk','age','added','hd','high_quality','low_quality','imdb_id','tmdb_id','kinopoisk_id','movie_year','release_date','premiered','season','season_number','series_number','episodes_count','seasons_count','year_end','audio_languages','subtitle_languages','episode','episodeTitle','seasonId','seasonName','category','category_id','categoryId'];
       var obj={connection:plain(feed.name,160),type:k,portal_id:plain(item.id,120),
         raw_title:plain(item.name,600),clean_title:plain(parsed.name,600),prefixes:parsed.labels,
         year:y||null,playable:!!item.playable};
@@ -197,40 +197,18 @@ window.VaultcastStalkerVod=function(host,options){
       job.lines.push('Additional item fields seen: '+(Object.keys(fieldsFound).join(', ')||'none exposed by catalogue endpoint'));
       job.lines.push('Field counts: '+JSON.stringify(stats));
       job.lines.push('Tasks visited: '+taskIndex+'/'+tasks.length);
-      job.lines.push('Detail probes completed: '+probeIndex+'/'+probeQueue.length+' (maximum 20)');
+      job.lines.push('Distinct per-connection item records: '+Object.keys(seenRecords).length);
       issues.forEach(function(x){job.lines.push('WARNING: '+x);});
       var name='stalker-vod-detailed-'+new Date().toISOString().slice(0,10)+'.txt';
       var blob=new Blob([job.lines.join('\n')+'\n'],{type:'text/plain;charset=utf-8'});
       var url=URL.createObjectURL(blob),a=document.createElement('a');
       a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();
       setTimeout(function(){URL.revokeObjectURL(url);},30000);
-      exportJob=null;button.textContent='Export detailed VOD metadata (.txt)';
+      exportJob=null;button.textContent='Export comprehensive VOD metadata (.txt)';
       status.textContent='Detailed VOD export saved: '+count+' records'+(issues.length?' · '+issues.length+' warnings':'')+'.';
     }
-    function runProbes(){
-      if(exportJob!==job)return;
-      if(job.cancelled||probeIndex>=probeQueue.length){finish();return;}
-      var probe=probeQueue[probeIndex];
-      status.textContent='Checking detail metadata '+(probeIndex+1)+'/'+probeQueue.length+' · '+probe.feed.name+' '+probe.kind;
-      var query=new URLSearchParams({kind:probe.kind,feed:probe.feed.id,id:probe.item.id});
-      Promise.resolve(options.api('stalker_vod_probe',query.toString())).then(function(result){
-        if(job.cancelled){finish();return;}
-        job.lines.push('DETAIL_PROBE\t'+JSON.stringify({
-          connection:plain(probe.feed.name,160),type:probe.kind,portal_id:plain(probe.item.id,120),
-          category:plain(probe.category,200),supported:!!(result&&result.supported),
-          fields:result&&result.fields||{},field_names:result&&result.field_names||[]
-        }));
-      }).catch(function(err){
-        issues.push('Detail probe '+probe.feed.name+' '+probe.kind+' '+probe.item.id+': '+(err.message||err));
-      }).then(function(){probeIndex++;setTimeout(runProbes,500);});
-    }
-    function complete(){
-      if(exportJob!==job)return;
-      if(job.cancelled||!probeQueue.length){finish();return;}
-      if(!probeStarted){probeStarted=true;job.lines.push('','### Per-item detail probe results');runProbes();}
-    }
     function recordStats(obj){
-      ['year','description','poster_path','portal_category_id','portal_category_name','language','imdb_id','tmdb_id'].forEach(function(field){
+      ['year','description','poster_path','portal_category_id','portal_category_name','language','imdb_id','tmdb_id','genres_str','genre_id_1','actors','age','added','rating_imdb','time','hd'].forEach(function(field){
         if(obj[field]!==undefined&&obj[field]!==null&&obj[field]!=='')stats[field]=(stats[field]||0)+1;
       });
     }
@@ -246,6 +224,7 @@ window.VaultcastStalkerVod=function(host,options){
           for(var n=0;n<slots;n++){var index=Math.floor(n*groups.length/slots);if(chosen.indexOf(groups[index])<0)chosen.push(groups[index]);}
           groups=chosen;
         }
+        if(maxRecords===Infinity)groups=['']; // One All traversal per feed/type prevents rereading titles in multiple categories.
         if(!groups.length)groups=[''];
         groups.forEach(function(category){tasks.push({feed:feed,kind:k,key:key,category:category,page:1});});
       });});
@@ -262,7 +241,7 @@ window.VaultcastStalkerVod=function(host,options){
     function schedule(){setTimeout(run,250);}
     function run(){
       if(exportJob!==job)return;
-      if(job.cancelled||count>=maxRecords||taskIndex>=tasks.length){complete();return;}
+      if(job.cancelled||count>=maxRecords||taskIndex>=tasks.length){finish();return;}
       var task=tasks[taskIndex],feed=task.feed,k=task.kind,key=task.key;
       var catLabel=(categoriesMap[key]||{})[task.category]||task.category||'All';
       status.textContent='Detailed export: '+feed.name+' '+k+' / '+catLabel+' · '+count+' records (save partial at any time)';
@@ -278,18 +257,14 @@ window.VaultcastStalkerVod=function(host,options){
         job.lines.push('### '+plain(feed.name,160)+' / '+k+' / '+plain(catLabel,200)+' / page '+task.page);
         items.forEach(function(item){
           if(!item||!item.name||count>=maxRecords)return;
+          var uniqueKey=feed.id+'|'+k+'|'+String(item.id);
+          if(seenRecords[uniqueKey])return;
+          seenRecords[uniqueKey]=true;
           var obj=record(item,feed,k,categoriesMap[key]||{});
           if(!obj.portal_category_id&&task.category)obj.portal_category_id=task.category;
           if(!obj.portal_category_name&&task.category)obj.portal_category_name=catLabel;
           recordStats(obj);job.lines.push('RECORD\t'+JSON.stringify(obj));count++;
-          // One representative item per sampled category/page. Maximum 20 portal calls.
-          // Only use numeric catalogue IDs and do not probe series episodes.
-          var candidate=String(item.id||''),probeKey=feed.id+'|'+k+'|'+task.category;
-          if(probeQueue.length<20&&!probeKeys[probeKey]&&
-            (/^(?:vod:)?\d{1,12}$/.test(candidate)||/^\d{1,12}:\d{1,12}$/.test(candidate))){
-            probeKeys[probeKey]=true;
-            probeQueue.push({feed:feed,kind:k,item:{id:candidate},category:catLabel});
-          }
+
         });
         // Small demos take one page per sampled category; full scans continue
         // each category until the portal reports its final page.
