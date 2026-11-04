@@ -237,6 +237,9 @@ function epg_refresh_locked($force) {
     // Stalker Open EPG sources are managed automatically. Preserve any user IPTV guides.
     $openSources=['GB'=>'https://www.open-epg.com/files/unitedkingdom.xml.gz',
         'US'=>'https://www.open-epg.com/files/unitedstates1.xml.gz'];
+    $hasStalker=false;
+    foreach($iptv['feeds'] as $feed) if(($feed['type']??'')==='stalker'&&!empty($feed['enabled'])){$hasStalker=true;break;}
+    if(!$hasStalker)$openSources=[];
     $urls = array_values(array_unique(array_merge($iptv['epgUrls'],array_values($openSources))));
     if ($urls && !class_exists('XMLReader')) throw new RuntimeException('PHP XMLReader is required to import XMLTV programme guides.');
     $wanted = epg_wanted_ids($iptv);
@@ -258,6 +261,8 @@ function epg_refresh_locked($force) {
     $to = $now + 48 * 3600000;
     $programsById = array();
     foreach ($fetched as $f) {
+        // Open EPG is indexed separately for on-demand Stalker channels, not IPTV favourites.
+        if(in_array((string)($f['url']??''),$openSources,true))continue;
         $chunk = epg_index_xmltv($f['path'], $wanted, $from, $to);
         foreach ($chunk as $cid => $list) {
             if (!isset($programsById[$cid])) $programsById[$cid] = array();
