@@ -128,6 +128,7 @@ final class StalkerLiveBrowse {
             $data=[];
         }
         $now=time();$programmes=[];$total=0;
+        $portalMatched=[];$openMatched=[];
         foreach($data as $channelId=>$rows){
             if(!is_array($rows))continue;
             $channel=(string)$channelId;
@@ -150,6 +151,7 @@ final class StalkerLiveBrowse {
                 $name=trim(strip_tags((string)($row['name']??$row['title']??'')));
                 if($name==='')continue;
                 $description=trim(strip_tags((string)($row['descr']??'')));
+                $portalMatched[$actual]=true;
                 $programmes[$actual][]= [
                     'title'=>mb_substr($name,0,180),'description'=>mb_substr($description,0,400),
                     'start'=>$start,'end'=>$end
@@ -202,6 +204,7 @@ final class StalkerLiveBrowse {
                     if($overlaps)continue;
                     $title=trim((string)($event['title']??''));
                     if($title==='')continue;
+                    $openMatched[$id]=true;
                     $programmes[$id][]=['title'=>mb_substr($title,0,180),
                         'description'=>mb_substr((string)($event['description']??''),0,400),
                         'start'=>$start,'end'=>$end,'source'=>'open-epg'];
@@ -226,7 +229,10 @@ final class StalkerLiveBrowse {
             throw new RuntimeException('Provider EPG is unavailable and no matching cached Open EPG listings were found.');
         $out=['ok'=>true,'programmes'=>$programmes,'available'=>count($programmes)>0,
             'channelCount'=>count($ids),'guideChannels'=>count($programmes),'limited'=>$total>=240,
-            'providerEpgUnavailable'=>$portalFailed];
+            'providerEpgUnavailable'=>$portalFailed,
+            'providerMatchedChannels'=>count($portalMatched),
+            'openEpgMatchedChannels'=>count($openMatched),
+            'openEpgAddedProgrammeChannels'=>count(array_diff_key($openMatched,$portalMatched))];
         \Vaultcast\Repository::cachePut($key,$out,180);
         return $out;
     }
