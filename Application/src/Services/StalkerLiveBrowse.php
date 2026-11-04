@@ -69,6 +69,14 @@ final class StalkerLiveBrowse {
             // Keep commands and private provider URLs in the existing server-side cache.
             $xmltvId=trim((string)($row['xmltv_id']??''));
             if(strlen($xmltvId)>160||preg_match('~(?:/|\\\\|https?:|[?&=]|[\\x00-\\x1f])~',$xmltvId))$xmltvId='';
+            $logoUrl=trim((string)($row['logo']??''));
+            // Do not leak authenticated portal URLs or local addresses to browsers.
+            // Images are browser-loaded directly; never proxy through the NAS.
+            if(strlen($logoUrl)>500
+                ||!preg_match('~^https://[a-z0-9.-]+(?::443)?/[a-z0-9_./%+@-]+$~iD',$logoUrl)
+                ||preg_match('~^https://(?:localhost|127\\.|10\\.|192\\.168\\.|172\\.(?:1[6-9]|2[0-9]|3[01])\\.|169\\.254\\.|[^/]*\\.local/)~i',$logoUrl)){
+                $logoUrl='';
+            }
             $number=filter_var($row['number']??null,FILTER_VALIDATE_INT,
                 ['options'=>['min_range'=>1,'max_range'=>1000000]]);
             $flag=static function($value): bool {
@@ -81,7 +89,7 @@ final class StalkerLiveBrowse {
                 'archive'=>$flag($row['archive']??0)&&$flag($row['enable_tv_archive']??0),
                 'archiveHours'=>max(0,min(720,(int)($row['tv_archive_duration']??0))),
                 'pvr'=>$flag($row['allow_pvr']??0),'timeshift'=>$flag($row['allow_local_timeshift']??0),
-                'logoAvailable'=>is_string($row['logo']??null)&&trim($row['logo'])!==''];
+                'logoAvailable'=>$logoUrl!=='','logoUrl'=>$logoUrl];
         }
         $count=count($rows);$perPage=max(1,(int)($result['max_page_items']??$count));
         $total=isset($result['total_items'])&&is_numeric($result['total_items'])?max(0,(int)$result['total_items']):null;
@@ -150,7 +158,7 @@ final class StalkerLiveBrowse {
             $data=[];
         }
         $now=time();$programmes=[];$total=0;
-        $portalMatched=[];$openMatched=[];$openEpgIndexStatus=[];
+        $portalMatched=[];$openMatched=[];$openEpgIndexStatus=[];$channelLogos=[];
         foreach($data as $channelId=>$rows){
             if(!is_array($rows))continue;
             $channel=(string)$channelId;
@@ -228,6 +236,9 @@ final class StalkerLiveBrowse {
                         if(count($preferred)===1)$sourceId=(string)$preferred[0];
                     }
                 }
+                if($sourceId!=='' && isset($open['logos'][$sourceId])
+                    && is_string($open['logos'][$sourceId]))
+                    $channelLogos[$id]=$open['logos'][$sourceId];
                 $additional=$open['programmes'][$sourceId]??null;
                 if(!is_array($additional))continue;
                 if(!isset($programmes[$id]))$programmes[$id]=[];
@@ -272,6 +283,7 @@ final class StalkerLiveBrowse {
             'providerEpgUnavailable'=>$portalFailed,
             'providerMatchedChannels'=>count($portalMatched),
             'openEpgIndexStatus'=>$openEpgIndexStatus,
+            'channelLogos'=>$channelLogos,
             'openEpgMatchedChannels'=>count($openMatched),
             'openEpgAddedProgrammeChannels'=>count(array_diff_key($openMatched,$portalMatched))];
         \Vaultcast\Repository::cachePut($key,$out,180);
