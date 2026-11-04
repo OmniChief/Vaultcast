@@ -6101,11 +6101,21 @@ try {
       var button=e.currentTarget,mine=++attempt;button.disabled=true;closePlayer();stopRadio();status.textContent='Connecting…';
       stalkerPost('stalker_play',{feed:feed,kind:item.kind||'vod',id:itemId}).then(function(result){
         if(!current()||mine!==attempt)return;closePlayer();stopRadio();
-        var video=h('video',{id:'player-media',controls:true,autoplay:true,playsinline:true,preload:'metadata',style:'width:100%;max-height:75vh'}),frame=h('div',{id:'player-overlay',className:'player-inline stalker-vod-inline'},[video]),alive=true;
-        host.replaceChildren(frame);addCentrePlay(frame,video,function(){var promise=video.play();if(promise&&promise.catch)promise.catch(function(){status.textContent='Press play in the player to start.';});});_liveCleanup=function(){alive=false;if(stream){stream.destroy();stream=null;}video.pause();video.removeAttribute('src');video.load();};
-        video.addEventListener('playing',function(){status.textContent='';});video.addEventListener('error',function(){status.textContent='This video could not play. Its format or codec may be unsupported.';});
-        attachIptvStream(video,result.source,{current:function(){return alive&&current();},play:function(){var p=video.play();if(p&&p.catch)p.catch(function(){status.textContent='Press play to start watching.';});},stream:function(value){stream=value;},error:function(message){status.textContent=message;}});
-        host.scrollIntoView({block:'start',behavior:'smooth'});
+        // Use the existing Stalker Live TV player, in on-demand mode. Its
+        // HLS transport, fullscreen chrome and cleanup remain shared.
+        var vodContext={
+          vod:true,
+          channels:[{id:id,kind:'iptv',number:'',name:item.name||'Provider video',
+            slogan:item.kind==='series'?'Series':'Movie',programs:[]}],
+          sources:{},
+          onError:function(message){if(current()&&mine===attempt){status.className='bad';status.textContent=message;}},
+          onPlaying:function(){if(current())status.textContent='';},
+          onReturn:function(){if(current())watchButton.focus();}
+        };
+        vodContext.sources[id]=result.source;
+        host.replaceChildren();
+        startLivePlayer(id,host,vodContext);
+        host.scrollIntoView({block:'nearest',behavior:'smooth'});
       }).catch(function(error){if(current()&&mine===attempt){status.className='bad';status.textContent=error.message;}}).finally(function(){button.disabled=false;});
     }
     function paint(){
@@ -6870,8 +6880,9 @@ try {
   }
 
   function startLivePlayer(chId,inlineHost,providerContext){
+    var vodMode=!!(providerContext&&providerContext.vod);
     function playerChannels(){return providerContext?providerContext.channels:liveChannels();}
-    if(restoreMiniVideo('live:'+chId,inlineHost))return;
+    if(!vodMode&&restoreMiniVideo('live:'+chId,inlineHost))return;
     closePlayer();stopRadio();
     var list = playerChannels();
     if (!list.length) { toast('No live channels'); return; }
@@ -6882,7 +6893,7 @@ try {
     var lp = { idx: idx, ch: null, block: null, hls: null, token: 0, errors: 0, idleT: null, tickT: null, guideOpen: false, epgOpen: false, keyH: null, mode: 'live', playAt: 0, nextRelay: null, historyMs: ((live.guide && live.guide.historyDays) || 7) * 86400000, skew: 0 };
     var video = h('video', { id:'player-media', autoplay:true, playsinline:true, preload:'auto' });
     video.setAttribute('webkit-playsinline', 'true');
-    if(providerContext){video.muted=true;video.defaultMuted=true;}
+    if(providerContext&&!vodMode){video.muted=true;video.defaultMuted=true;}
     var elNum = h('span', { className:'lp-num' }), elName = h('span', { className:'lp-name' }), elPill = h('span', { className:'lc-pill' });
     var elTitle = h('h2', { className:'lp-title', text:'Tuning\u2026' }), elWhen = h('p', { className:'lp-when muted' }), elNext = h('p', { className:'lp-next muted' });
     var elEpg = h('div', { className:'lp-epg', 'aria-label':'This channel schedule' });
@@ -6906,12 +6917,12 @@ try {
       ]),
       epgBody
     ]);
-    var overlay = h('div', { className:'player-overlay live-player'+(inlineHost?' player-inline live-player-inline':''), id:'player-overlay' }, [
+    var overlay = h('div', { className:'player-overlay live-player'+(inlineHost?' player-inline live-player-inline':'')+(vodMode?' stalker-vod-live-player':''), id:'player-overlay' }, [
       video,
       h('div', { className:'lp-tuning' }, [ h('div', { className:'spinner' }) ]),
       h('div', { className:'lp-chrome' }, [
         h('div', { className:'lp-top' }, [
-          h('button', { className:'lp-btn lp-back', type:'button', title:providerContext?'Close player':'Hide player controls', 'aria-label':providerContext?'Close player':'Hide player controls', onClick: function(e){if(providerContext){closePlayer();goLiveTab('stalker');return;} e.currentTarget.blur(); clearTimeout(lp.idleT); overlay.classList.add('idle'); } }, [ icon('close') ]),
+          h('button', { className:'lp-btn lp-back', type:'button', title:providerContext?'Close player':'Hide player controls', 'aria-label':providerContext?'Close player':'Hide player controls', onClick: function(e){if(vodMode){closePlayer();return;}if(providerContext){closePlayer();goLiveTab('stalker');return;} e.currentTarget.blur(); clearTimeout(lp.idleT); overlay.classList.add('idle'); } }, [ icon('close') ]),
           h('div', { className:'lp-chan' }, [ elNum, elName, elPill ]),
           h('div', { className:'lp-spacer' }),
           shareButton(function(){ var c = playerChannels()[lp.idx] || list[lp.idx]; return liveChannelPath(c ? c.id : ''); }, 'Copy link to this channel'),
@@ -6941,12 +6952,26 @@ try {
       epgFull
     ]);
     if(providerContext&&list.length<2)overlay.querySelectorAll('.lp-zap').forEach(function(button){button.hidden=true;});
-    overlay._miniKey='live:'+chId;overlay._miniTitle=(list[idx]&&list[idx].name)||'Live television';overlay._miniReturn=function(){openLiveChannel(lp.ch?lp.ch.id:chId);};
+    if(vodMode){
+      shiftCluster.style.display='';
+      btnPrevProg.hidden=true;btnNextProg.hidden=true;btnGoLive.hidden=true;
+      btnBack15.title='Rewind 15 seconds';btnFwd30.title='Forward 30 seconds';
+      elProg.classList.add('seekable');
+      elProg.setAttribute('aria-label','Seek in video');
+      overlay.querySelectorAll('.lp-guide,.lp-epg-full,.lp-epg,.lp-next,.lp-zap').forEach(function(node){node.hidden=true;});
+      overlay.querySelectorAll('.lp-controls button').forEach(function(button){
+        if(/Channel list|Full EPG/.test(button.title||''))button.hidden=true;
+      });
+      var eyebrow=overlay.querySelector('.eyebrow');
+      if(eyebrow)eyebrow.textContent='On demand';
+    }
+    overlay._miniKey=(vodMode?'stalker-vod:':'live:')+chId;overlay._miniTitle=(list[idx]&&list[idx].name)||'Live television';
+    overlay._miniReturn=vodMode?function(){if(providerContext&&providerContext.onReturn)providerContext.onReturn();}:function(){openLiveChannel(lp.ch?lp.ch.id:chId);};
     addCentrePlay(overlay,video,safePlay);
     if(inlineHost)overlay.setAttribute('tabindex','0');
     (inlineHost||document.body).appendChild(overlay);
     // Achievements: one beacon a minute while a channel is really playing (IPTV counts as Live TV, the rest is PseudoTV Relay).
-    var achTimer = setInterval(function(){
+    var achTimer = vodMode?null:setInterval(function(){
       if (!overlay.isConnected) { clearInterval(achTimer); return; }
       if (video.paused || video.readyState < 2 || document.hidden) return;
       var c = playerChannels()[lp.idx] || list[lp.idx]; var cid = String((c && c.id) || '');
@@ -7065,6 +7090,7 @@ try {
       } catch (e) {nativeFullscreen();}
     }
     function paintShiftPill(){
+      if(vodMode){elPill.textContent='VOD';elPill.className='lc-pill iptv';shiftCluster.style.display='';elProg.classList.add('seekable');return;}
       var c = lp.ch;
       if (!c) return;
       if (c.kind === 'iptv') {
@@ -7085,11 +7111,12 @@ try {
     function paintHeader(){
       var c = lp.ch;
       overlay.classList.toggle('is-iptv',c.kind==='iptv');
-      elNum.textContent = String(c.number);
+      elNum.textContent = vodMode?'':String(c.number);
       elName.textContent = c.name || ('Channel ' + c.number);
       paintShiftPill();
     }
     function paintNow(b){
+      if(vodMode)return;
       var c = lp.ch;
       if (c.kind === 'iptv') {
         var nn = progNowAndNext(c);
@@ -7229,7 +7256,7 @@ try {
       var n = list.length;
       lp.idx = ((i % n) + n) % n;
       lp.ch = list[lp.idx];
-      overlay._miniKey='live:'+lp.ch.id;overlay._miniTitle=lp.ch.name;
+      overlay._miniKey=(vodMode?'stalker-vod:':'live:')+lp.ch.id;overlay._miniTitle=lp.ch.name;
       lp.errors = 0;
       lp.block = null;
       lp.mode = 'live';
@@ -7242,8 +7269,8 @@ try {
       elEpg.innerHTML = '';
       if (lp.guideOpen) paintGuideList();
       if (lp.epgOpen) paintFullEpg();
-      if(inlineHost&&overlay.classList.contains('player-inline')){state.liveChannel=lp.ch.id;state.liveTab=providerContext?'stalker':lp.ch.kind==='iptv'?'iptv':'relay';try{paintChannelInformation(lp.ch);}catch(error){if(!providerContext)throw error;}document.querySelectorAll('.subnav .subnav-btn').forEach(function(button){button.classList.toggle('active',button.textContent===(providerContext?'Stalker':lp.ch.kind==='iptv'?'IPTV':'Relay'));});}
-      try { if(!overlay.classList.contains('player-mini'))history.replaceState(Object.assign({}, history.state || {}, { live: lp.ch.id,liveChannel:lp.ch.id,liveTab:providerContext?'stalker':lp.ch.kind==='iptv'?'iptv':'relay' }), '', navUrl({ live: lp.ch.id })); } catch (e) {}
+      if(!vodMode&&inlineHost&&overlay.classList.contains('player-inline')){state.liveChannel=lp.ch.id;state.liveTab=providerContext?'stalker':lp.ch.kind==='iptv'?'iptv':'relay';try{paintChannelInformation(lp.ch);}catch(error){if(!providerContext)throw error;}document.querySelectorAll('.subnav .subnav-btn').forEach(function(button){button.classList.toggle('active',button.textContent===(providerContext?'Stalker':lp.ch.kind==='iptv'?'IPTV':'Relay'));});}
+      try { if(!vodMode&&!overlay.classList.contains('player-mini'))history.replaceState(Object.assign({}, history.state || {}, { live: lp.ch.id,liveChannel:lp.ch.id,liveTab:providerContext?'stalker':lp.ch.kind==='iptv'?'iptv':'relay' }), '', navUrl({ live: lp.ch.id })); } catch (e) {}
       if (lp.ch.kind === 'iptv') tuneIptv(); else tuneRelay(0);
       wake();
     }
@@ -7253,6 +7280,7 @@ try {
     video.addEventListener('pause', function(){ btnPlay.innerHTML = ICONS.playFill; });
     video.addEventListener('waiting', function(){ setTuning(true); });
     video.addEventListener('ended', function(){
+      if(vodMode&&providerContext&&providerContext.onEnded)providerContext.onEnded();
       if (lp.ch && lp.ch.kind !== 'iptv' && lp.block) relayNext(lp.block);
     });
     video.addEventListener('error', function(){
@@ -7268,12 +7296,13 @@ try {
       if (!lp.hls) { setTuning(false); msg('Playback failed. The stream may be offline or unsupported here.'); }
     });
     btnPlay.addEventListener('click', function(){ if (video.paused) safePlay(); else video.pause(); });
-    btnBack15.addEventListener('click', function(){ skipMs(-15000); });
-    btnFwd30.addEventListener('click', function(){ skipMs(30000); });
+    btnBack15.addEventListener('click', function(){ if(vodMode){if(Number.isFinite(video.duration))video.currentTime=Math.max(0,video.currentTime-15);}else skipMs(-15000); });
+    btnFwd30.addEventListener('click', function(){ if(vodMode){if(Number.isFinite(video.duration))video.currentTime=Math.min(video.duration,video.currentTime+30);}else skipMs(30000); });
     btnPrevProg.addEventListener('click', function(){ skipProg(-1); });
     btnNextProg.addEventListener('click', function(){ skipProg(1); });
     btnGoLive.addEventListener('click', function(){ goLive(); });
     elProg.addEventListener('click', function(e){
+      if(vodMode){var rect=elProg.getBoundingClientRect();if(rect.width&&Number.isFinite(video.duration)&&video.duration>0)video.currentTime=Math.max(0,Math.min(video.duration,(e.clientX-rect.left)/rect.width*video.duration));return;}
       if (!lp.block || !lp.ch || lp.ch.kind === 'iptv') return;
       var rect = elProg.getBoundingClientRect();
       if (!rect.width) return;
@@ -7319,7 +7348,10 @@ try {
       var tag = (e.target && e.target.tagName || '').toLowerCase();
       if (tag === 'input' && e.target.type !== 'range') return;
       var k = e.key;
-      if (k === 'ArrowUp' || k === 'PageUp' || k === 'ChannelUp') { e.preventDefault(); if (lp.guideOpen) return; zap(-1); }
+      if (vodMode&&(k === 'ArrowLeft'||k === 'ArrowRight')) {if(Number.isFinite(video.duration)){e.preventDefault();video.currentTime=Math.max(0,Math.min(video.duration,video.currentTime+(k==='ArrowLeft'?-15:30)));}}
+      else if(vodMode&&(k==='Escape')){e.preventDefault();closePlayer();}
+      else if(vodMode&&(k==='g'||k==='G'||k==='e'||k==='E'||k==='l'||k==='L'||k==='ArrowUp'||k==='ArrowDown'||k==='PageUp'||k==='PageDown'))return;
+      else if (k === 'ArrowUp' || k === 'PageUp' || k === 'ChannelUp') { e.preventDefault(); if (lp.guideOpen) return; zap(-1); }
       else if (k === 'ArrowDown' || k === 'PageDown' || k === 'ChannelDown') { e.preventDefault(); if (lp.guideOpen) return; zap(1); }
       else if (k === ' ' && tag !== 'button') { e.preventDefault(); if (video.paused) safePlay(); else video.pause(); }
       else if (k === 'ArrowLeft') { e.preventDefault(); if (lp.ch && lp.ch.kind !== 'iptv') skipMs(-15000); }
@@ -7335,7 +7367,15 @@ try {
     document.addEventListener('keydown', lp.keyH);
     lp.guideAt=Date.now();
     lp.tickT = setInterval(function(){
-      if(inlineHost&&overlay.classList.contains('player-inline')&&!document.hidden&&!lp.guideRefreshing&&Date.now()-lp.guideAt>90000){lp.guideAt=Date.now();lp.guideRefreshing=true;(providerContext?providerContext.refresh():ensureLiveData(false)).then(function(){if(!overlay.isConnected)return;list=playerChannels();var current=list.find(function(ch){return ch.id===lp.ch.id;});if(current){lp.ch=current;lp.idx=list.indexOf(current);if(overlay.classList.contains('player-inline'))paintChannelInformation(current);paintChannelEpg();}}).catch(function(){}).finally(function(){lp.guideRefreshing=false;});}
+      if(!vodMode&&inlineHost&&overlay.classList.contains('player-inline')&&!document.hidden&&!lp.guideRefreshing&&Date.now()-lp.guideAt>90000){lp.guideAt=Date.now();lp.guideRefreshing=true;(providerContext?providerContext.refresh():ensureLiveData(false)).then(function(){if(!overlay.isConnected)return;list=playerChannels();var current=list.find(function(ch){return ch.id===lp.ch.id;});if(current){lp.ch=current;lp.idx=list.indexOf(current);if(overlay.classList.contains('player-inline'))paintChannelInformation(current);paintChannelEpg();}}).catch(function(){}).finally(function(){lp.guideRefreshing=false;});}
+      if(vodMode){
+        var d=video.duration,t=video.currentTime||0;
+        var vclock=function(n){var whole=Math.max(0,Math.floor(n||0)),h=Math.floor(whole/3600),m=Math.floor((whole%3600)/60),sec=whole%60;return (h?h+':'+String(m).padStart(2,'0'):String(m))+':'+String(sec).padStart(2,'0');};
+        elClock.textContent=vclock(t)+(Number.isFinite(d)&&d>0?' / '+vclock(d):'');
+        elWhen.textContent=Number.isFinite(d)&&d>0?'Duration '+vclock(d):'On-demand video';
+        elFill.style.width=Number.isFinite(d)&&d>0?Math.max(0,Math.min(100,100*t/d))+'%':'0%';
+        return;
+      }
       elClock.textContent = fmtClock(Date.now());
       var c = lp.ch;
       if (!c) return;
@@ -7365,7 +7405,7 @@ try {
       if (lp.hls) { try { lp.hls.destroy(); } catch (e) {} lp.hls = null; }
       try { if (document.fullscreenElement) document.exitFullscreen(); } catch (e2) {}
     };
-    if(providerContext)providerContext.updateChannel=function(){if(!overlay.isConnected||!providerContext.channels.length)return;list=providerContext.channels;lp.ch=list[0];paintHeader();paintNow(null);try{paintChannelInformation(lp.ch);}catch(ignore){}};
+    if(providerContext&&!vodMode)providerContext.updateChannel=function(){if(!overlay.isConnected||!providerContext.channels.length)return;list=providerContext.channels;lp.ch=list[0];paintHeader();paintNow(null);try{paintChannelInformation(lp.ch);}catch(ignore){}};
     elClock.textContent = fmtClock(Date.now());
     tune(idx);
   }
