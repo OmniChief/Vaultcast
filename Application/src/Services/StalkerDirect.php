@@ -29,6 +29,33 @@ final class StalkerDirect {
         \Vaultcast\Repository::cachePut($key,$categories,$categories?3600:300);
         return $categories;
     }
+    /** Copy presentation-only metadata already supplied with a catalogue page. */
+    private static function descriptiveFields(array $row): array {
+        $text=['o_name','genres_str','genre','genres','director','actors','cast','country','language',
+            'original_language','rating_imdb','rating_mpaa','rating_kinopoisk','age','added',
+            'imdb_id','tmdb_id','kinopoisk_id','movie_year','release_date','premiered','duration',
+            'category_id','category','genre_id','genre_id_1','genre_id_2','genre_id_3','genre_id_4',
+            'cat_genre_id_1','cat_genre_id_2','cat_genre_id_3','cat_genre_id_4','rating','time',
+            'hd','high_quality','low_quality','season','season_number','series_number',
+            'episodes_count','seasons_count','year_end','audio_languages','subtitle_languages'];
+        $out=[];
+        foreach([$row,is_array($row['info']??null)?$row['info']:[],
+                 is_array($row['movie_info']??null)?$row['movie_info']:[],
+                 is_array($row['video_info']??null)?$row['video_info']:[]] as $section) {
+            foreach($text as $field) {
+                if(array_key_exists($field,$out)||!array_key_exists($field,$section))continue;
+                $value=$section[$field];
+                if(!is_scalar($value))continue;
+                $value=trim(html_entity_decode(strip_tags((string)$value),ENT_QUOTES|ENT_HTML5,'UTF-8'));
+                if($value===''||preg_match('/^(?:n\/?a|none|null|unknown|undefined|not available)$/i',$value))continue;
+                if(preg_match('~(?:https?://|[a-z0-9+.-]+://|(?:token|auth|password|cookie|session|mac)[=:])~i',$value))continue;
+                // Provider sends 0 for missing genres; preserve quality flags and time as-is.
+                if(preg_match('/^(?:genre_id(?:_[1-4])?|cat_genre_id_[1-4])$/',$field)&&$value==='0')continue;
+                $out[$field]=mb_substr(preg_replace('/[\x00-\x1f\x7f]/',' ',$value),0,300);
+            }
+        }
+        return $out;
+    }
     private static function page(array $feed,string $kind,int $page,string $category,string $query,string $parent,bool $refresh): array {
         $key=self::key($feed,'page:'.json_encode([$kind,$page,$category,$query,$parent]));
         if(!$refresh){$cached=\Vaultcast\Repository::cacheGet($key);if($cached!==null)return $cached;}
@@ -66,15 +93,8 @@ final class StalkerDirect {
             $playable=$cmd!==''&&empty($row['is_series'])&&empty($episodes)&&($kind==='vod'||$parent!=='');
             $publicId=$playable?$kind.':'.$id:$id;
             $item=array_merge($meta,['id'=>$publicId,'kind'=>$kind,'playable'=>$playable,'feed'=>$feed['id'],'connection'=>$feed['name']]);
-            // Provider catalogue categories and metadata: descriptive values only.
-            // Do not forward commands, playback links, tokens or arbitrary portal fields.
-            foreach (['category_id','category','genre_id','movie_year','release_date','rating','duration','country','language','original_language','imdb_id','tmdb_id','director','genre'] as $field) {
-                $value=$row[$field]??null;
-                if (!is_scalar($value) || $value==='') continue;
-                $value=mb_substr((string)$value,0,250);
-                if (preg_match('~https?://|(?:token|auth|password|cookie|session|mac)[=:]~i',$value)) continue;
-                $item[$field]=$value;
-            }
+            // No extra provider calls: extract safe fields from existing page data.
+            $item=array_merge($item,self::descriptiveFields($row));
 
             if($playable)\Vaultcast\Repository::cachePut(self::key($feed,'item:'.$publicId),['cmd'=>$cmd,'series'=>(string)($row['series_number']??''),'metadata'=>$item],7200);
             $items[]=$item;
