@@ -940,7 +940,7 @@ window.VaultcastStalkerVod=function(host,options){
   }
   function render(){
     host.replaceChildren();
-    search=h('input',{type:'search',value:query,placeholder:'Search all titles or filter loaded names…','aria-label':'Search Stalker VOD'});
+    search=h('input',{type:'search',value:query,placeholder:'Search titles, actors, genres or filter loaded results…','aria-label':'Search Stalker catalogue'});
     search.oninput=function(){query=search.value;if(!searchAllMode)renderResults();};
     status=h('p',{className:'muted',role:'status'});
     categoryStatus=h('section',{'aria-label':'Available Stalker provider groups'});
@@ -953,7 +953,7 @@ window.VaultcastStalkerVod=function(host,options){
     liveProbeButton=options.isAdmin?h('button',{className:'btn ghost',type:'button',text:'Inspect live TV channel fields (.json)',onClick:exportLiveFields}):null;
     epgProbeButton=options.isAdmin?h('button',{className:'btn ghost',type:'button',text:'Inspect live TV EPG fields (.json)',onClick:exportEpgFields}):null;
     host.append(h('div',{className:'stalker-vod-library-heading'},[
-      h('div',{},[h('h2',{text:kind==='vod'?'Movies':'Series'}),h('p',{className:'muted',text:'Search all languages or select a language to limit searches to its provider folders. Select a folder to browse its titles.'})]),
+      h('div',{},[h('small',{className:'muted',text:'STALKER STUDIO · ON DEMAND'}),h('h2',{text:kind==='vod'?'Discover Movies':'Discover Series'}),h('p',{className:'muted',text:'Live provider catalogue · Explore services, genres and collections. Titles update when folders are refreshed.'})]),
       h('div',{className:'row-actions'},(options.isAdmin?[h('div',{style:'display:flex;flex-direction:column;gap:8px'},[exportButton,groupExportButton])]:[]).concat([h('button',{className:'btn ghost',type:'button',text:'Refresh',onClick:function(){reset();loadCategories(true);}})]).concat(options.isAdmin?[fieldProbeButton,liveProbeButton,epgProbeButton]:[]))
      ]),h('form',{className:'stalker-searchbar',onSubmit:function(e){e.preventDefault();if(searchAllMode){rerunScopedSearch();}else renderResults();}},[search]),categoryStatus,status,results,next);
     var searchAllButton=h('button',{className:'btn',type:'button',text:'Search all '+(kind==='vod'?'movies':'series'),onClick:function(){
@@ -1063,6 +1063,13 @@ window.VaultcastStalkerVod=function(host,options){
         h('div',{className:'stalker-vod-copy'},[
           h('h3',{text:title(item),title:item.name}),
           h('div',{className:'row-head'},[h('span',{className:'muted',text:year(item)||' '}),star]),
+          h('div',{className:'stalker-studio-meta'},[
+            item.genres_str||item.genre?h('span',{text:String(item.genres_str||item.genre).slice(0,65)}):null,
+            item.rating_imdb&&Number(item.rating_imdb)>0?h('span',{text:'★ '+Number(item.rating_imdb).toFixed(1)}):null,
+            sources.length>1?h('span',{text:sources.length+' sources'}):null,
+            item.age?h('span',{text:String(item.age).slice(0,14)}):null
+          ]),
+          item.description?h('p',{className:'stalker-studio-synopsis',text:String(item.description).slice(0,145)}):null,
           h('div',{className:'row-actions'},[button,download])
         ])
       ]));
