@@ -2,7 +2,7 @@
 'use strict';
 window.VaultcastStalkerVod=function(host,options){
   var h=options.h,active=false,kind='vod',serial=0,timer=null,letter='#',query='',feeds=[],progress={},titles=[],seen={},loading=false;
-  var status,results,next,search,letters,exportButton,groupExportButton,fieldProbeButton,liveProbeButton,epgProbeButton,groups,group='',categories=[],category='',groupsLoading=false,titlesStarted=false,categoryStatus=null,scopeActions=null,prefixGroups=null,showMoreCategories=false,searchAllMode=false,language='UK',tasks=[],providerSelections={},preferredTileKeys={};
+  var status,results,next,search,letters,exportButton,groupExportButton,fieldProbeButton,liveProbeButton,epgProbeButton,groups,group='',categories=[],category='',groupsLoading=false,titlesStarted=false,categoryStatus=null,scopeActions=null,prefixGroups=null,showMoreCategories=false,searchAllMode=false,showFolderBrowser=true,language='UK',tasks=[],providerSelections={},preferredTileKeys={};
   // English is the initial scope; remember explicit selections per user/browser.
   var languagePreferenceKey='stalker-vod-language-'+options.owner;
   try{var savedLanguage=localStorage.getItem(languagePreferenceKey);if(savedLanguage!==null)language=savedLanguage;}catch(e){}
@@ -533,8 +533,13 @@ window.VaultcastStalkerVod=function(host,options){
     if(titlesStarted)scan(false);
   }
   function beginBrowse(key){
-    category=key;searchAllMode=false;query='';search.value='';letter='#';
+    category=key;searchAllMode=false;showFolderBrowser=false;query='';search.value='';letter='#';
     reset();renderCategories();titlesStarted=true;scan(false);
+  }
+  function browseDiscovery(){
+    serial++;loading=false;titlesStarted=false;category='';searchAllMode=false;
+    query='';search.value='';letter='#';showFolderBrowser=true;tasks=[];
+    reset();renderCategories();renderResults();
   }
   // Only the user opening a section changes its remembered open state.
   var accordionStates={};
@@ -572,6 +577,24 @@ window.VaultcastStalkerVod=function(host,options){
     if(groupsLoading){categoryStatus.appendChild(h('p',{className:'muted',text:'Loading provider folders…'}));return;}
     providerSelections={};preferredTileKeys={};
     var shown=buckets.filter(function(c){return !activeLanguage||c.language===activeLanguage;});
+    var currentSelection=category ? (providerSelections[category]||null) : null;
+    // Selection names are derived from live folder data below. The browser is
+    // still built when collapsed so scanning retains all of its source IDs.
+    var viewBar=h('nav',{className:'stalker-vod-viewbar','aria-label':'Stalker browse location'});
+    var viewTitle=h('strong',{text:searchAllMode?'Search across '+(activeLanguage?languageLabel(activeLanguage):'all languages'):
+      category?'Selected provider folders':'Browse '+(kind==='vod'?'movies':'series')});
+    viewBar.appendChild(viewTitle);
+    if(category||searchAllMode){
+      var discovery=h('button',{type:'button',className:'btn ghost',text:'All folders',onClick:browseDiscovery});
+      viewBar.appendChild(discovery);
+      if(category){
+        viewBar.appendChild(h('button',{type:'button',className:'btn ghost',
+          text:showFolderBrowser?'Hide folders':'Change folder',
+          'aria-expanded':String(showFolderBrowser),
+          onClick:function(){showFolderBrowser=!showFolderBrowser;renderCategories();}}));
+      }
+    }
+    categoryStatus.appendChild(viewBar);
 
     // Order by purpose within each language: genre, service/company, then collections.
     // Classification affects display only; provider IDs and merged source lists are unchanged.
@@ -717,6 +740,13 @@ window.VaultcastStalkerVod=function(host,options){
       accordion.appendChild(grid);
       section.appendChild(accordion);
     });
+    if(category){
+      var selectedProvider=providerSelections[category];
+      viewTitle.textContent=selectedProvider?(selectedProvider.name+' · '+selectedProvider.sources.length+' sources'):'Selected provider folders';
+    }
+    // Collapse the large discovery artwork grid once a folder or full search
+    // is active. No data is lost and switching folders remains instantaneous.
+    section.hidden=!!(category||searchAllMode)&&!showFolderBrowser;
     categoryStatus.appendChild(section);
 
     if(!shown.length)categoryStatus.appendChild(h('p',{className:'muted',text:'No folders in this language.'}));
@@ -958,11 +988,11 @@ window.VaultcastStalkerVod=function(host,options){
      ]),h('form',{className:'stalker-searchbar',onSubmit:function(e){e.preventDefault();if(searchAllMode){rerunScopedSearch();}else renderResults();}},[search]),categoryStatus,status,results,next);
     var searchAllButton=h('button',{className:'btn',type:'button',text:'Search all '+(kind==='vod'?'movies':'series'),onClick:function(){
       var term=search.value.trim();
-      searchAllMode=true;category='';query=term;search.value=term;letter='#';
+      searchAllMode=true;showFolderBrowser=false;category='';query=term;search.value=term;letter='#';
       renderCategories();rerunScopedSearch();
     }});
     var favouritesButton=h('button',{className:'btn ghost',type:'button',text:'Favourites',onClick:function(){
-      serial++;titlesStarted=false;loading=false;searchAllMode=false;category='';tasks=[];renderCategories();showFavourites();
+      serial++;titlesStarted=false;loading=false;searchAllMode=false;showFolderBrowser=false;category='';tasks=[];renderCategories();showFavourites();
     }});
     scopeActions=h('div',{className:'row-actions'});
     scopeActions.style.display='flex';scopeActions.style.flexWrap='wrap';scopeActions.style.gap='8px';
@@ -1123,7 +1153,7 @@ window.VaultcastStalkerVod=function(host,options){
     if(!saved||saved.kind!==kind)return false;
     stop();active=true;serial++;feeds=options.connections.filter(function(f){return f.enabled;});
     if(typeof saved.language==='string')language=saved.language;
-    category=saved.category||'';query=saved.query||'';searchAllMode=!!saved.searchAllMode;
+    category=saved.category||'';query=saved.query||'';searchAllMode=!!saved.searchAllMode;showFolderBrowser=!(category||searchAllMode);
     titles=(saved.titles||[]).slice();categories=(saved.categories||[]).slice();progress=saved.progress||{};
     tasks=(saved.tasks||[]).map(function(t){return {key:t.key,feed:feeds.find(function(f){return f.id===t.feedId;}),category:t.category};}).filter(function(t){return !!t.feed;});
     titlesStarted=!!saved.titlesStarted;seen={};loading=false;groupsLoading=false;
