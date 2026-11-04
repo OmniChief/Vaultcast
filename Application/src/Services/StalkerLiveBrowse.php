@@ -155,6 +155,73 @@ final class StalkerLiveBrowse {
             'note'=>'One catalogue page only; safe per-channel metadata without playback commands, URLs, IDs or secrets. Flags represent provider claims, not verified functionality.'];
     }
 
+    /** One opt-in short guide request. Never expose provider access or transport fields. */
+    public static function epgProbe(array $feed,array $opts): array {
+        $period=max(1,min(2,(int)($opts['period']??1)));
+        // Smallest meaningful provider guide window; no background scans or writes.
+        $response=stalker_request($feed,'itv','get_epg_info',['period'=>$period],stalker_session($feed));
+        $data=$response['data']??$response;
+        if(!is_array($data))throw new RuntimeException('Provider returned an invalid EPG response.');
+        $inventory=[];$examples=[];$channels=0;$events=0;$earliest=null;$latest=null;$channelsWithEvents=0;
+        $safe=static function($value,int $limit=160): ?string {
+            if(!is_scalar($value))return null;
+            $str=trim(html_entity_decode(strip_tags((string)$value),ENT_QUOTES|ENT_HTML5,'UTF-8'));
+            if($str===''||preg_match('/^(?:n\/?a|none|null|unknown|undefined)$/i',$str))return null;
+            if(preg_match('~(?:https?://|[a-z][a-z0-9+.-]*://|(?:token|auth|pass|session|cookie)[=:]|[?&][a-z_]+=)~i',$str))return null;
+            return mb_substr(preg_replace('/[\x00-\x1f\x7f]/',' ',$str),0,$limit);
+        };
+        foreach($data as $channelId=>$rows){
+            if(!is_array($rows))continue;
+            ++$channels;
+            $had=false;
+            foreach($rows as $row){
+                if(!is_array($row))continue;
+                $had=true;++$events;
+                foreach($row as $key=>$value){
+                    if(!is_string($key)||!preg_match('/^[a-z][a-z0-9_]{0,49}$/i',$key))continue;
+                    if(preg_match('/(?:token|auth|pass|secret|cookie|key|mac|serial|device|url|link|cmd|stream|ticket|host|ip|login|account|user|pin|drm|license|proxy|path|file|play)/i',$key))continue;
+                    if(!isset($inventory[$key]))$inventory[$key]=['type'=>gettype($value),'present'=>0,'nonempty'=>0];
+                    $inventory[$key]['present']++;
+                    $v=$safe($value);
+                    if($v!==null){
+                        $inventory[$key]['nonempty']++;
+                        if(in_array($key,['name','title','descr','description','start_timestamp','stop_timestamp',
+                            'time','time_to','ch_id','category','genre','duration'],true)
+                            &&!isset($inventory[$key]['example']))$inventory[$key]['example']=$v;
+                    }
+                }
+                $start=$row['start_timestamp']??$row['time']??null;
+                $end=$row['stop_timestamp']??$row['time_to']??null;
+                $start=is_numeric($start)?(int)$start:(is_string($start)?strtotime($start):false);
+                $end=is_numeric($end)?(int)$end:(is_string($end)?strtotime($end):false);
+                if(is_int($start)&&$start>0)$earliest=$earliest===null?$start:min($earliest,$start);
+                if(is_int($end)&&$end>0)$latest=$latest===null?$end:max($latest,$end);
+                if(count($examples)<12){
+                    $entry=['channel_ref'=>substr(hash('sha256',(string)($row['ch_id']??$channelId)),0,12)];
+                    foreach(['name','title','descr','description','category','genre'] as $field){
+                        if(isset($row[$field])&&($v=$safe($row[$field],$field==='descr'||$field==='description'?240:150))!==null)
+                            $entry[$field]=$v;
+                    }
+                    if(is_int($start)&&$start>0)$entry['start_utc']=gmdate('c',$start);
+                    if(is_int($end)&&$end>0)$entry['end_utc']=gmdate('c',$end);
+                    $examples[]=$entry;
+                }
+                // Defend the NAS against unexpectedly large provider guide responses.
+                if($events>=1500)break;
+            }
+            if($had)++$channelsWithEvents;
+            if($events>=1500||$channels>=5000)break;
+        }
+        ksort($inventory);
+        return ['ok'=>true,'connection'=>$feed['name'],'period'=>$period,
+            'channels_seen'=>$channels,'channels_with_events'=>$channelsWithEvents,
+            'events_inspected'=>$events,'truncated'=>$events>=1500||$channels>=5000,
+            'earliest_start_utc'=>$earliest===null?null:gmdate('c',$earliest),
+            'latest_end_utc'=>$latest===null?null:gmdate('c',$latest),
+            'fields'=>$inventory,'programme_samples'=>$examples,
+            'note'=>'One bounded EPG request. Channel references hashed. Credentials, playback links, provider URLs and unrecognised values omitted.'];
+    }
+
     public static function entry(array $feed,string $id): ?array {
         $playback=\Vaultcast\Repository::cacheGet(self::key($feed,'item:'.$id));
         return $playback===null?null:['playback'=>$playback];
