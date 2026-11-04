@@ -341,14 +341,19 @@ window.VaultcastStalkerVod=function(host,options){
     categoryId=categoryId.trim();
     if(categoryId&&!/^\d{1,12}$/.test(categoryId)){status.textContent='Enter a numeric category ID or leave blank.';return;}
     if(categoryId)params.set('category',categoryId);
+    var pageAnswer=window.prompt('Provider channel page to inspect (1–20). One page only.','1');
+    if(pageAnswer===null)return;
+    if(!/^(?:[1-9]|1[0-9]|20)$/.test(pageAnswer.trim())){status.textContent='Choose a page from 1 to 20.';return;}
+    params.set('page',pageAnswer.trim());
     liveProbeButton.disabled=true;
     status.textContent='Inspecting one live TV channel page on '+feed.name+'…';
     Promise.resolve(options.api('stalker_live_fields',params.toString())).then(function(result){
       if(!result||!result.ok)throw Error(result&&result.error||'Live TV inspection failed');
       var output={generated:new Date().toISOString(),source:'Stalker Live TV get_ordered_list page',
         connection:result.connection,category:result.category,category_id:result.category_id,
-        rows_inspected:result.rows_inspected,fields:result.fields,
-        note:'Sanitised field inventory; commands, URLs and credentials omitted.'};
+        page:result.page,rows_inspected:result.rows_inspected,provider_total:result.provider_total,
+        fields:result.fields,channel_samples:result.channel_samples,separator_samples:result.separator_samples,
+        note:'One safe channel page: field distributions and up to 15 samples; commands, URLs and credentials omitted.'};
       var blob=new Blob([JSON.stringify(output,null,2)+'\n'],{type:'application/json;charset=utf-8'});
       var url=URL.createObjectURL(blob),a=document.createElement('a');
       a.href=url;a.download='stalker-live-tv-fields-'+new Date().toISOString().slice(0,10)+'.json';
