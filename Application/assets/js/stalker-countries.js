@@ -84,6 +84,8 @@ window.VaultcastStalkerCountries=function(host,options){
   function groupedChannels(){
     var groups=new Map();
     channels.forEach(function(item){
+      // Hide provider RAW variants too, including already cached channel pages.
+      if(/(?:^|[^a-z0-9])raw(?:$|[^a-z0-9])/i.test(String(item.name||'').normalize('NFKC')))return;
       var id=key(item);
       // Decorative provider headings are not playable television services.
       if(!id||/[#═━☰]{3,}/.test(item.name)||/^[\W_]*(?:UK|GB)?[\W_]*(?:GENERAL|ENTERTAINMENT|CHANNELS)[\W_]*$/i.test(id))return;
