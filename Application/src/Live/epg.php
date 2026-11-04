@@ -117,6 +117,62 @@ function epg_index_xmltv($path, $wanted, $fromMs, $toMs) {
     $reader->close();return $programs;
 }
 
+/**
+ * Reuse the configured Freeview XMLTV source to provide Stalker-only fallbacks.
+ * Streaming reads and a short window keep the generated index small on a NAS.
+ * Never guess regional variants and never replace an existing index on failure.
+ */
+function epg_build_stalker_freeview_index(string $path,int $fromMs,int $toMs): void {
+    if(!class_exists('XMLReader'))return;
+    $reader=new XMLReader();
+    if(!@$reader->open($path,null,LIBXML_NONET|LIBXML_COMPACT))return;
+    $wanted=[];$names=[];$channelCount=0;
+    while($reader->read()){
+        if($reader->nodeType!==XMLReader::ELEMENT)continue;
+        if($reader->localName==='programme')break;
+        if($reader->localName!=='channel')continue;
+        $id=trim((string)$reader->getAttribute('id'));
+        if($id===''||strlen($id)>160||isset($wanted[$id]))continue;
+        if(++$channelCount>1000)break;
+        $wanted[$id]=true;
+        $xml=$reader->readOuterXML();
+        if($xml&&function_exists('simplexml_load_string')){
+            $node=@simplexml_load_string($xml,'SimpleXMLElement',LIBXML_NONET);
+            if($node){
+                $label=trim((string)($node->{'display-name'}??''));
+                if($label!=='')$names[$id]=mb_substr($label,0,160);
+            }
+        }
+    }
+    $reader->close();
+    if(!$wanted)return;
+    $programmes=epg_index_xmltv($path,$wanted,$fromMs,$toMs);
+    $slim=[];$total=0;
+    foreach($wanted as $id=>$_){
+        if(!isset($programmes[$id]))continue;
+        $entries=[];
+        foreach($programmes[$id] as $event){
+            if($event['endUnix']<=$event['startUnix'])continue;
+            $entries[]=['start'=>(int)floor($event['startUnix']/1000),
+                'end'=>(int)floor($event['endUnix']/1000),
+                'title'=>mb_substr((string)$event['title'],0,180),
+                'description'=>mb_substr((string)($event['subtitle']??''),0,400)];
+            if(count($entries)>=100)break;
+        }
+        if($entries){$slim[$id]=$entries;$total+=count($entries);}
+        if($total>=30000)break;
+    }
+    if(!$slim)return;
+    $payload=json_encode(['updatedAt'=>time(),'channels'=>$names,'programmes'=>$slim],
+        JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE);
+    if($payload===false)return;
+    $pathOut=epg_cache_dir().'/stalker-freeview.json';
+    $tmp=$pathOut.'.'.bin2hex(random_bytes(4)).'.tmp';
+    if(@file_put_contents($tmp,$payload,LOCK_EX)!==false){
+        if(!@rename($tmp,$pathOut))@unlink($tmp);
+    }else @unlink($tmp);
+}
+
 function epg_pick_for_channel($programsById, $ch) {
     if (!empty($ch['epgId'])) return $programsById[$ch['epgId']] ?? [];
     $aliases = epg_channel_aliases(isset($ch['tvgId']) ? $ch['tvgId'] : '', $ch['id']);
@@ -235,6 +291,15 @@ function epg_refresh_locked($force) {
         if (!empty($ch['tvgId'])) $slim[$ch['tvgId']] = $deduped;
     }
     epg_build_channel_catalogue();
+    // Freeview is an optional URL in Vaultcast's existing XMLTV settings.
+    // Re-index only during the normal EPG refresh, never during Stalker browsing.
+    foreach($fetched as $source){
+        $url=(string)($source['url']??'');
+        if(!preg_match('~^(?:https://)?(?:raw\.githubusercontent\.com/dp247/Freeview-EPG/|github\.com/dp247/Freeview-EPG/)~i',$url))continue;
+        try{epg_build_stalker_freeview_index($source['path'],$from,$to);}
+        catch(Throwable $error){error_log('Freeview Stalker fallback index: '.$error->getMessage());}
+        break;
+    }
     $indexPath = epg_cache_dir() . '/favourites.json';
     $tempPath=$indexPath.'.'.bin2hex(random_bytes(4));
     $encoded = json_encode(array(
