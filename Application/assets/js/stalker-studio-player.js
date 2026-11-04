@@ -17,6 +17,8 @@
     if(video.dataset.stalkerStudioPlayer==='1')return;
     if(video.closest('.player-overlay')||video.closest('.compat-player'))return;
     var root=video.closest('.stalker-vod-detail,.stalker-video-detail,.stalker-vod-player,.stalker-player');
+    // The full-interface episode player can be a sibling of the Stalker hero.
+    if(!root&&video.closest('#detail-player')&&document.querySelector('.stalker-vod-detail-copy'))root=video.closest('#detail-player');
     if(!root)return;
     video.dataset.stalkerStudioPlayer='1';
     var wrap=el('div','stalker-studio-player'),tools=el('div','stalker-studio-player-controls');
@@ -80,7 +82,7 @@
   }
   function discover(){
     queued=false;
-    document.querySelectorAll('.stalker-vod-detail video,.stalker-video-detail video,.stalker-vod-player video,.stalker-player video').forEach(attach);
+    document.querySelectorAll('.stalker-vod-detail video,.stalker-video-detail video,.stalker-vod-player video,.stalker-player video,#detail-player video').forEach(attach);
   }
   function schedule(){
     if(queued)return;queued=true;
