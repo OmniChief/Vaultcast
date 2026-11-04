@@ -3153,3 +3153,19 @@ html[data-motion="reduced"] .vca-overall span,html[data-motion="reduced"] .vca-b
 .stalker-country-tile img{width:46px;height:32px;object-fit:cover}
 .stalker-country-tile strong{font-size:.86rem;line-height:1.3;text-align:center;overflow-wrap:break-word}
 .stalker-country-tile>span{font-size:1.7rem}
+
+/* On-demand mode reuses the exact Live TV player chrome, without live-only UI. */
+.stalker-vod-live-player .lp-guide,
+.stalker-vod-live-player .lp-epg,
+.stalker-vod-live-player .lp-epg-full,
+.stalker-vod-live-player .lp-next,
+.stalker-vod-live-player .lp-zap,
+.stalker-vod-live-player .lp-golive,
+.stalker-vod-live-player .lp-shift .lp-btn[hidden],
+.stalker-vod-live-player .lp-controls > .lp-btn[hidden]{display:none!important}
+.stalker-vod-live-player .lp-progress{max-width:none;touch-action:pan-y}
+.stalker-vod-live-player .lp-chan .lp-num:empty{display:none}
+.stalker-vod-live-player .lp-bottom .lp-title{font-size:clamp(1.05rem,2vw,1.7rem)}
+.stalker-vod-live-player .lp-chrome{padding:clamp(10px,2vw,24px)}
+.stalker-vod-detail .detail-player{width:100%;max-width:1200px;margin:12px auto 24px}
+@media(max-width:650px){.stalker-vod-live-player .lp-shift .lp-btn{min-width:38px}.stalker-vod-live-player .lp-controls{gap:7px}}
