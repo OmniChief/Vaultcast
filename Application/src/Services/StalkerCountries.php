@@ -44,6 +44,12 @@ final class StalkerCountries {
     public static function group(string $name,string $genre): string {
         // Shared Stalker taxonomy: classify provider folder metadata at discovery
         // time, without loading every channel or building a database catalogue.
+        // Portal category labels contain box-drawing separators, emoji and
+        // country/quality prefixes. Recognise the primary genre explicitly
+        // before generic keyword matching (e.g. UK ┃ GENERAL).
+        $normalised=mb_strtoupper(preg_replace('/[^\\p{L}\\p{N}]+/u',' ',trim($genre.' '.$name)),'UTF-8');
+        if(preg_match('/(?:^|\\s)GENERAL(?:\\s|$)/u',$normalised))return 'General';
+        if(preg_match('/(?:^|\\s)ENTERTAINMENT(?:\\s|$)/u',$normalised))return 'Entertainment';
         $rules=[
             'Adult'=>'adult|xxx|porn',
             'Sports'=>'sports?|espn|racing|football|soccer|cricket|golf|tennis|sky sports|tnt sports|bein|dazn|ufc|boxing|epl|efl|uefa|formula 1|f1 tv|ppv',
