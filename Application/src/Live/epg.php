@@ -160,7 +160,6 @@ function epg_build_stalker_open_index(string $path,string $country,int $fromMs,i
             if(count($entries)>=100)break;
         }
         if($entries){$slim[$id]=$entries;$total+=count($entries);}
-        if($total>=30000)break;
     }
     if(!$slim)throw new RuntimeException('No programmes found in the current 48-hour guide window.');
     $payload=json_encode(['updatedAt'=>time(),'channels'=>$names,'programmes'=>$slim],
