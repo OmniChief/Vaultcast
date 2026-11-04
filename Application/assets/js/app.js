@@ -6559,6 +6559,21 @@ try {
         ])]));
       });
       edit();stalkerCatalogueSettings(host,result.connections||[]);stalkerUpdateSettings(host,result.connections||[]);
+      if(state.user&&state.user.role==='admin'){
+        var diagnosticsHost=h('div'),diagnostics=h('details',{className:'settings-card'},[h('summary',{text:'Stalker diagnostics & exports'}),diagnosticsHost]),diagnosticsBrowser=null,diagnosticsLoading=false;
+        host.appendChild(diagnostics);
+        function diagnosticsCurrent(){return diagnosticsHost.isConnected&&owner===(state.user&&state.user.id)&&state.user.role==='admin';}
+        diagnostics.addEventListener('toggle',function(){
+          if(!diagnostics.open||diagnosticsBrowser||diagnosticsLoading)return;
+          diagnosticsLoading=true;diagnosticsHost.replaceChildren(pendingContent());
+          var ready=window.VaultcastStalkerVod?Promise.resolve():new Promise(function(resolve,reject){var script=document.createElement('script');script.src=window.VaultcastDependencies.stalkerVod;script.onload=resolve;script.onerror=function(){script.remove();reject(new Error('Could not load Stalker diagnostics. Close and reopen this section to retry.'));};document.head.appendChild(script);});
+          ready.then(function(){
+            if(!diagnosticsCurrent())return;
+            diagnosticsBrowser=window.VaultcastStalkerVod(diagnosticsHost,{h:h,owner:owner,isAdmin:true,connections:result.connections||[],current:diagnosticsCurrent,api:function(action,args){if(!diagnosticsCurrent())return Promise.reject(new Error('Settings closed.'));return liveApi(action,args);}});
+            diagnosticsBrowser.showDiagnostics();
+          }).catch(function(error){if(diagnosticsCurrent())diagnosticsHost.replaceChildren(h('p',{className:'bad',text:error.message}));}).finally(function(){diagnosticsLoading=false;});
+        });
+      }
     }).catch(function(error){if(host.isConnected)host.replaceChildren(h('p',{className:'bad',text:error.message}));});
   }
   function viewLive(){

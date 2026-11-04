@@ -1,6 +1,7 @@
 (function(){
 'use strict';
 window.VaultcastStalkerVod=function(host,options){
+  var genreFilter='',genreSelect=null;
   var h=options.h,active=false,kind='vod',serial=0,timer=null,letter='#',query='',feeds=[],progress={},titles=[],seen={},loading=false;
   var status,results,next,search,letters,exportButton,groupExportButton,fieldProbeButton,liveProbeButton,epgProbeButton,groups,group='',categories=[],category='',groupsLoading=false,titlesStarted=false,categoryStatus=null,scopeActions=null,prefixGroups=null,showMoreCategories=false,searchAllMode=false,showFolderBrowser=true,language='UK',tasks=[],providerSelections={},preferredTileKeys={};
   // English is the initial scope; remember explicit selections per user/browser.
@@ -135,7 +136,25 @@ window.VaultcastStalkerVod=function(host,options){
     return kind+'|'+name+'|'+year(item);
   }
   function initial(item){var m=title(item).match(/[A-Za-z0-9]/);return m?m[0].toUpperCase():'#';}
-  function fits(item){return !query||title(item).toLocaleLowerCase().includes(query.toLocaleLowerCase());}
+  function itemGenres(item){
+    var raw=item.genres_str||item.genres||item.genre||'';
+    var values=Array.isArray(raw)?raw:String(raw).split(/[,;|/]+/);
+    return Array.from(new Set(values.map(function(value){return typeof value==='string'?value.trim():'';}).filter(function(value){return value&&!/^\d+$/.test(value);})));
+  }
+  function fits(item){
+    var genres=itemGenres(item);
+    if(genreFilter&&!genres.some(function(value){return value.toLocaleLowerCase()===genreFilter;}))return false;
+    var text=[title(item),item.actors,item.cast,item.director,genres.join(' ')].filter(Boolean).join(' ').toLocaleLowerCase();
+    return !query||text.includes(query.toLocaleLowerCase());
+  }
+  function renderGenreFilter(){
+    if(!genreSelect)return;
+    var values=new Map();titles.forEach(function(item){itemGenres(item).forEach(function(value){values.set(value.toLocaleLowerCase(),value);});});
+    genreSelect.replaceChildren(h('option',{value:'',text:'All genres',selected:!genreFilter}));
+    if(genreFilter&&!values.has(genreFilter))values.set(genreFilter,genreFilter);
+    Array.from(values).sort(function(a,b){return a[1].localeCompare(b[1]);}).forEach(function(pair){genreSelect.appendChild(h('option',{value:pair[0],text:pair[1],selected:genreFilter===pair[0]}));});
+    genreSelect.disabled=!values.size;
+  }
   function reset(){
     serial++;progress={};tasks=[];titles=[];seen={};loading=false;group='';titlesStarted=false;
     feeds=options.connections.filter(function(f){return f.enabled;});
@@ -976,22 +995,18 @@ window.VaultcastStalkerVod=function(host,options){
     categoryStatus.style.display='block';categoryStatus.style.width='100%';categoryStatus.style.minWidth='0';
     results=h('div',{className:'stalker-vod-grid'});
     next=h('button',{className:'btn',text:'Load more provider pages',onClick:function(){scan(false);}});
-    exportButton=options.isAdmin?h('button',{className:'btn ghost',text:'Export detailed VOD metadata (.txt)',onClick:exportRaw}):null;
-    groupExportButton=options.isAdmin?h('button',{className:'btn ghost',text:'Export raw VOD groups (.json)',onClick:exportGroups}):null;
-    fieldProbeButton=options.isAdmin?h('button',{className:'btn ghost',type:'button',text:kind==='series'?'Inspect series JSON fields (.json)':'Inspect movie JSON fields (.json)',onClick:exportCatalogueFields}):null;
-    liveProbeButton=options.isAdmin?h('button',{className:'btn ghost',type:'button',text:'Inspect live TV channel fields (.json)',onClick:exportLiveFields}):null;
-    epgProbeButton=options.isAdmin?h('button',{className:'btn ghost',type:'button',text:'Inspect live TV EPG fields (.json)',onClick:exportEpgFields}):null;
-    host.append(h('div',{className:'stalker-vod-library-heading'},[
-      h('div',{},[h('small',{className:'muted',text:'STALKER STUDIO · ON DEMAND'}),h('h2',{text:kind==='vod'?'Discover Movies':'Discover Series'}),h('p',{className:'muted',text:'Live provider catalogue · Explore services, genres and collections. Titles update when folders are refreshed.'})]),
-      h('div',{className:'row-actions'},(options.isAdmin?[h('div',{style:'display:flex;flex-direction:column;gap:8px'},[exportButton,groupExportButton])]:[]).concat([h('button',{className:'btn ghost',type:'button',text:'Refresh',onClick:function(){reset();loadCategories(true);}})]).concat(options.isAdmin?[fieldProbeButton,liveProbeButton,epgProbeButton]:[]))
-     ]),h('form',{className:'stalker-searchbar',onSubmit:function(e){e.preventDefault();if(searchAllMode){rerunScopedSearch();}else renderResults();}},[search]),categoryStatus,status,results,next);
+    genreSelect=h('select',{'aria-label':'Filter loaded titles by genre'});
+    genreSelect.onchange=function(){genreFilter=genreSelect.value;renderResults();};
+    var refresh=h('button',{className:'btn ghost',type:'button',text:'Refresh',onClick:function(){reset();loadCategories(true);}});
+    host.append(h('form',{className:'stalker-searchbar stalker-vod-search-top',onSubmit:function(e){e.preventDefault();if(searchAllMode){rerunScopedSearch();}else renderResults();}},[search,genreSelect,refresh]),categoryStatus,status,results,next);
+    renderGenreFilter();
     var searchAllButton=h('button',{className:'btn',type:'button',text:'Search all '+(kind==='vod'?'movies':'series'),onClick:function(){
       var term=search.value.trim();
       searchAllMode=true;showFolderBrowser=false;category='';query=term;search.value=term;letter='#';
       renderCategories();rerunScopedSearch();
     }});
     var favouritesButton=h('button',{className:'btn ghost',type:'button',text:'Favourites',onClick:function(){
-      serial++;titlesStarted=false;loading=false;searchAllMode=false;showFolderBrowser=true;category='';tasks=[];renderCategories();showFavourites();
+      serial++;titlesStarted=false;loading=false;searchAllMode=false;showFolderBrowser=true;category='';tasks=[];renderCategories();showFavourites();genreSelect.disabled=true;
     }});
     scopeActions=h('div',{className:'row-actions'});
     scopeActions.style.display='flex';scopeActions.style.flexWrap='wrap';scopeActions.style.gap='8px';
@@ -1036,6 +1051,7 @@ window.VaultcastStalkerVod=function(host,options){
   }
   function renderResults(){
     if(!results)return;
+    renderGenreFilter();
     favouriteLookupToken++;
     results.replaceChildren();
     // Append-only discovery order: the portal returns independent pages and
@@ -1143,7 +1159,7 @@ window.VaultcastStalkerVod=function(host,options){
     step();
   }
   function snapshot(){
-    return {kind:kind,language:language,category:category,query:query,searchAllMode:searchAllMode,
+    return {kind:kind,language:language,category:category,query:query,genreFilter:genreFilter,searchAllMode:searchAllMode,
       titles:titles.slice(),categories:categories.slice(),progress:JSON.parse(JSON.stringify(progress)),
       tasks:tasks.map(function(t){return {key:t.key,feedId:t.feed&&t.feed.id,category:t.category};}),
       titlesStarted:titlesStarted,scrollY:window.scrollY||document.documentElement.scrollTop||0};
@@ -1152,7 +1168,7 @@ window.VaultcastStalkerVod=function(host,options){
     if(!saved||saved.kind!==kind)return false;
     stop();active=true;serial++;feeds=options.connections.filter(function(f){return f.enabled;});
     if(typeof saved.language==='string')language=saved.language;
-    category=saved.category||'';query=saved.query||'';searchAllMode=!!saved.searchAllMode;showFolderBrowser=!(category||searchAllMode);
+    category=saved.category||'';query=saved.query||'';genreFilter=saved.genreFilter||'';searchAllMode=!!saved.searchAllMode;showFolderBrowser=!(category||searchAllMode);
     titles=(saved.titles||[]).slice();categories=(saved.categories||[]).slice();progress=saved.progress||{};
     tasks=(saved.tasks||[]).map(function(t){return {key:t.key,feed:feeds.find(function(f){return f.id===t.feedId;}),category:t.category};}).filter(function(t){return !!t.feed;});
     titlesStarted=!!saved.titlesStarted;seen={};loading=false;groupsLoading=false;
@@ -1161,9 +1177,21 @@ window.VaultcastStalkerVod=function(host,options){
     requestAnimationFrame(function(){requestAnimationFrame(function(){if(active&&host.isConnected)window.scrollTo(0,target);});});
     return true;
   }
-  return {show:function(value){
+  function showDiagnostics(){
+    if(!options.isAdmin)return;
+    active=true;status=h('p',{className:'muted',role:'status'});
+    var type=h('select',{'aria-label':'Catalogue to inspect'},[h('option',{value:'vod',text:'Movies'}),h('option',{value:'series',text:'Series'})]);
+    type.onchange=function(){kind=type.value;fieldProbeButton.textContent=kind==='series'?'Inspect series JSON fields (.json)':'Inspect movie JSON fields (.json)';};
+    exportButton=h('button',{className:'btn ghost',type:'button',text:'Export detailed VOD metadata (.txt)',onClick:exportRaw});
+    groupExportButton=h('button',{className:'btn ghost',type:'button',text:'Export raw VOD groups (.json)',onClick:exportGroups});
+    fieldProbeButton=h('button',{className:'btn ghost',type:'button',text:'Inspect movie JSON fields (.json)',onClick:exportCatalogueFields});
+    liveProbeButton=h('button',{className:'btn ghost',type:'button',text:'Inspect live TV channel fields (.json)',onClick:exportLiveFields});
+    epgProbeButton=h('button',{className:'btn ghost',type:'button',text:'Inspect live TV EPG fields (.json)',onClick:exportEpgFields});
+    host.replaceChildren(type,h('div',{className:'row-actions stalker-diagnostic-actions'},[exportButton,groupExportButton,fieldProbeButton,liveProbeButton,epgProbeButton]),status);
+  }
+  return {showDiagnostics:showDiagnostics,show:function(value){
     if(active&&kind===value)return;
-    stop();active=true;kind=value;letter='#';query='';render();reset();
+    stop();active=true;kind=value;letter='#';query='';genreFilter='';render();reset();
     // Load the account preference before choosing the default provider.
     var showToken=serial;
     loadAccountSettings().then(function(){
