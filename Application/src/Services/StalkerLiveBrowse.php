@@ -94,12 +94,34 @@ final class StalkerLiveBrowse {
      * Load a short on-demand guide for one visible provider channel page.
      * Only selected channel programmes are cached, never the whole provider guide.
      */
+    /**
+     * Match known quality variants without collapsing regional services.
+     * Do not remove region names, +1 timeshifts or channel numbers generally.
+     */
+    private static function epgMatchName(string $name): string {
+        $name=trim(html_entity_decode(strip_tags($name),ENT_QUOTES|ENT_HTML5,'UTF-8'));
+        $name=preg_replace('/^\\s*(?:\\|\\s*(?:UK|GB|US|USA)\\s*\\||\\[(?:UK|GB|US|USA)\\]|(?:UK|GB|US|USA)\\s*[-:])\\s*/iu','',$name);
+        $name=preg_replace('/(?:\\s+|\\s*[-|]\\s*)(?:UHD|FHD|HD|SD|4K|HEVC|H\\.?265|H\\.?264)\\s*$/iu','',$name);
+        $name=mb_strtolower(trim(preg_replace('/\\s+/u',' ',$name)));
+        // These broadcaster-specific spelling variants are unambiguous.
+        $name=preg_replace('/^bbc\\s+(?:1|one)(?=\\s|$)/u','bbc one',$name);
+        $name=preg_replace('/^bbc\\s+(?:2|two)(?=\\s|$)/u','bbc two',$name);
+        $name=preg_replace('/^bbc\\s+(?:3|three)(?=\\s|$)/u','bbc three',$name);
+        $name=preg_replace('/^bbc\\s+(?:4|four)(?=\\s|$)/u','bbc four',$name);
+        return $name;
+    }
+
     public static function guidePage(array $feed,array $opts): array {
         $category=(string)($opts['category']??'');
         if(!preg_match('/^[0-9]{1,12}$/D',$category))
             throw new InvalidArgumentException('Select a live TV category.');
         $page=max(1,min(10000,(int)($opts['page']??1)));
-        $key=self::key($feed,'guide:'.json_encode([$category,$page]));
+        $indexRevision=[];
+        foreach(['gb','us'] as $region){
+            $indexPath=STREAM_DATA.'/live/epg_cache/stalker-open-'.$region.'.json';
+            $indexRevision[$region]=is_file($indexPath)?(int)@filemtime($indexPath):0;
+        }
+        $key=self::key($feed,'guide:v2:'.json_encode([$category,$page,$indexRevision]));
         $cached=\Vaultcast\Repository::cacheGet($key);
         if($cached!==null)return $cached;
         // A user opening Stalker EPG can request a refresh without browser-side
@@ -170,10 +192,11 @@ final class StalkerLiveBrowse {
                 ||(int)($open['updatedAt']??0)<=$now-86400)continue;
             $nameMap=[];$ambiguous=[];
             foreach(($open['channels']??[]) as $xmlId=>$label){
-                $key=mb_strtolower(trim(preg_replace('/\\s+/u',' ',(string)$label)));
-                if($key==='')continue;
-                if(isset($nameMap[$key])&&$nameMap[$key]!==$xmlId)$ambiguous[$key]=true;
-                else $nameMap[$key]=$xmlId;
+                if(!isset($open['programmes'][$xmlId]))continue;
+                $match=self::epgMatchName((string)$label);
+                if($match==='')continue;
+                if(isset($nameMap[$match]) && $nameMap[$match]!==$xmlId)$ambiguous[$match]=true;
+                else $nameMap[$match]=$xmlId;
             }
             foreach($visible['items'] as $channel){
                 if(strtoupper((string)($channel['country']??''))!==$country)continue;
@@ -181,12 +204,9 @@ final class StalkerLiveBrowse {
                 if($id==='')continue;
                 $sourceId=trim((string)($channel['xmltvId']??''));
                 if(!isset($open['programmes'][$sourceId])){
-                    $label=trim((string)($channel['name']??''));
-                    // Strip country decoration only; preserve region and variants.
-                    $label=preg_replace('/^\\s*(?:\\|\\s*(?:UK|GB|US|USA)\\s*\\||\\[(?:UK|GB|US|USA)\\]|(?:UK|GB|US|USA)\\s*[-:])\\s*/i','',$label);
-                    $key=mb_strtolower(trim(preg_replace('/\\s+/u',' ',$label)));
-                    if($key===''||isset($ambiguous[$key]))continue;
-                    $sourceId=$nameMap[$key]??'';
+                    $match=self::epgMatchName((string)($channel['name']??''));
+                    if($match===''||isset($ambiguous[$match]))continue;
+                    $sourceId=$nameMap[$match]??'';
                 }
                 $additional=$open['programmes'][$sourceId]??null;
                 if(!is_array($additional))continue;
