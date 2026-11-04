@@ -69,7 +69,10 @@ window.VaultcastStalkerCountries=function(host,options){
     var scoped=folders.filter(function(f){return f.country===country;});
     var genreMap=new Map(genreOrder.map(function(g){return [g,[]];}));
     scoped.forEach(function(folder){
-      var genre=genreMap.has(folder.genre)?folder.genre:'Other';
+      var label=categoryLabel(folder.name).normalize('NFKC').replace(/[^a-z0-9]+/gi,' ').trim();
+      var genre=/\\bGENERAL\\b/i.test(label)?'General':
+        /\\bENTERTAINMENT\\b/i.test(label)?'Entertainment':
+        genreMap.has(folder.genre)?folder.genre:'Other';
       genreMap.get(genre).push(folder);
     });
     status.textContent=scoped.length+' provider folders mapped into '+genreOrder.filter(function(g){
