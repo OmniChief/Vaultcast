@@ -6067,7 +6067,7 @@ try {
     return liveApiPost(action,body).then(function(result){if(!result.ok||!result.body||!result.body.ok)throw new Error(result.body&&result.body.error||'Provider request failed.');return result.body;});
   }
   function playStalkerItem(feed,item,button){
-    if(item.kind==='live'){state._stalkerChannelHint={id:'stalker:'+feed+':'+item.id,name:item.name,slogan:item.description||'',sources:Array.isArray(item.sources)?item.sources:[],tried:Array.isArray(item._failoverTried)?item._failoverTried:[]};openLiveChannel('stalker:'+feed+':'+item.id);return;}
+    if(item.kind==='live'){state._stalkerChannelHint={id:'stalker:'+feed+':'+item.id,name:item.name,slogan:item.description||'',sources:Array.isArray(item.sources)?item.sources:[],tried:Array.isArray(item._failoverTried)?item._failoverTried:[],sequence:Array.isArray(item._channelSequence)?item._channelSequence:[]};openLiveChannel('stalker:'+feed+':'+item.id);return;}
     state._stalkerVodHint={feed:feed,item:item};openLiveChannel('stalker-vod:'+feed+':'+item.id);
   }
   function liveChannelPath(id){
@@ -6214,6 +6214,26 @@ try {
     var liveHint=state._stalkerChannelHint&&state._stalkerChannelHint.id===id?state._stalkerChannelHint:{};
     var liveCopies=Array.isArray(liveHint.sources)?liveHint.sources.filter(function(src){return src&&src.feed&&src.id;}):[];
     var tried=Array.isArray(liveHint.tried)?liveHint.tried.slice():[];
+    var sequence=Array.isArray(liveHint.sequence)?liveHint.sequence:[];
+    function zapStalker(direction){
+      if(!current()||sequence.length<2)return;
+      var at=sequence.findIndex(function(ch){
+        return (ch.sources||[]).some(function(src){
+          return String(src.feed)===String(feed)&&String(src.id)===String(channelId);
+        }) || (String(ch.feed)===String(feed)&&String(ch.id)===String(channelId));
+      });
+      if(at<0)return;
+      var next=sequence[(at+direction+sequence.length)%sequence.length];
+      if(!next||next===sequence[at])return;
+      var sources=Array.isArray(next.sources)?next.sources.filter(function(src){return src&&src.feed&&src.id;}):[];
+      var target=sources[0]||(next.feed&&next.id?next:null);
+      if(!target)return;
+      attempt++;failed=true;closePlayer();
+      playStalkerItem(target.feed,Object.assign({},target,{
+        name:next.name||target.name,kind:'live',sources:sources.length?sources:[target],
+        _channelSequence:sequence
+      }),null);
+    }
     var playing=false,failed=false;
     function failover(message){
       if(!current()||playing||failed)return;
@@ -6224,7 +6244,7 @@ try {
       if(next){
         status.className='muted';status.textContent='Connection failed. Trying '+(next.connection||'another connection')+'…';
         ++attempt;closePlayer();
-        playStalkerItem(next.feed,Object.assign({},next,{sources:liveCopies,_failoverTried:tried}),null);
+        playStalkerItem(next.feed,Object.assign({},next,{sources:liveCopies,_failoverTried:tried,_channelSequence:sequence}),null);
       }else{
         context.playError=true;status.className='bad';
         status.textContent=(message||'Stream unavailable')+' · All available connections were tried.';
@@ -6240,7 +6260,7 @@ try {
         var src=liveCopies[Number(liveSelect.value)];
         if(!src||String(src.feed)===String(feed)&&String(src.id)===String(channelId))return;
         attempt++;closePlayer();
-        playStalkerItem(src.feed,Object.assign({},src,{sources:liveCopies}),null);
+        playStalkerItem(src.feed,Object.assign({},src,{sources:liveCopies,_channelSequence:sequence}),null);
       };
       wrap.appendChild(h('label',{className:'stalker-vod-source-select'},[h('span',{text:'Connection'}),liveSelect]));
     }
@@ -6249,6 +6269,7 @@ try {
       if(!current())return;
       var hint=state._stalkerChannelHint&&state._stalkerChannelHint.id===id?state._stalkerChannelHint:{};
       context={channels:[{id:id,provider:'stalker',kind:'iptv',number:0,name:hint.name||'Channel '+channelId,slogan:hint.slogan||'Stalker',logo:'',programs:[]}],sources:{},refresh:refreshGuide,
+        hasNextChannel:sequence.length>1,onZap:zapStalker,
         onError:function(message){if(current())failover(message);},
         onPlaying:function(){playing=true;tried=[];if(!context.guideRequested){context.guideRequested=true;refreshGuide().catch(function(){if(current()&&!context.playError)status.textContent='Programme guide unavailable; playback can continue.';});}}
       };
@@ -6976,7 +6997,7 @@ try {
       guide,
       epgFull
     ]);
-    if(providerContext&&list.length<2)overlay.querySelectorAll('.lp-zap').forEach(function(button){button.hidden=true;});
+    if(providerContext&&list.length<2&&!providerContext.hasNextChannel)overlay.querySelectorAll('.lp-zap').forEach(function(button){button.hidden=true;});
     if(vodMode){
       shiftCluster.style.display='';
       btnPrevProg.hidden=true;btnNextProg.hidden=true;btnGoLive.hidden=true;
@@ -7299,7 +7320,12 @@ try {
       if (lp.ch.kind === 'iptv') tuneIptv(); else tuneRelay(0);
       wake();
     }
-    function zap(d){ tune(lp.idx + d); }
+    function zap(d){
+      if(providerContext&&typeof providerContext.onZap==='function'){
+        providerContext.onZap(d);return;
+      }
+      tune(lp.idx + d);
+    }
 
     video.addEventListener('playing', function(){ if(providerContext&&providerContext.onPlaying)providerContext.onPlaying();setTuning(false); overlay.classList.remove('needs-tap'); lp.errors = 0; btnPlay.innerHTML = ICONS.pause; });
     video.addEventListener('pause', function(){ btnPlay.innerHTML = ICONS.playFill; });
