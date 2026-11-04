@@ -90,6 +90,76 @@ final class StalkerLiveBrowse {
         \Vaultcast\Repository::cachePut($key,$out,600);
         return $out;
     }
+    /**
+     * Load a short on-demand guide for one visible provider channel page.
+     * Only selected channel programmes are cached, never the whole provider guide.
+     */
+    public static function guidePage(array $feed,array $opts): array {
+        $category=(string)($opts['category']??'');
+        if(!preg_match('/^[0-9]{1,12}$/D',$category))
+            throw new InvalidArgumentException('Select a live TV category.');
+        $page=max(1,min(10000,(int)($opts['page']??1)));
+        $key=self::key($feed,'guide:'.json_encode([$category,$page]));
+        $cached=\Vaultcast\Repository::cacheGet($key);
+        if($cached!==null)return $cached;
+        $visible=self::channels($feed,['category'=>$category,'page'=>$page]);
+        $ids=[];
+        foreach($visible['items'] as $item)$ids[(string)$item['id']]=true;
+        if(!$ids)return ['ok'=>true,'programmes'=>[],'available'=>false,'channelCount'=>0];
+        // This portal action returns its own channel-indexed structure. Request the
+        // minimum period and filter it immediately to the selected visible page.
+        $response=stalker_request($feed,'itv','get_epg_info',['period'=>1],stalker_session($feed));
+        $data=$response['data']??$response;
+        if(!is_array($data))throw new RuntimeException('Provider returned an invalid programme guide.');
+        $now=time();$programmes=[];$total=0;
+        foreach($data as $channelId=>$rows){
+            if(!is_array($rows))continue;
+            $channel=(string)$channelId;
+            if(!isset($ids[$channel])){
+                // Some portals index EPG arrays differently; their row ch_id takes precedence.
+                $first=null;
+                foreach($rows as $candidate){if(is_array($candidate)){$first=$candidate;break;}}
+                $channel=is_array($first)?(string)($first['ch_id']??$channel):$channel;
+            }
+            if(!isset($ids[$channel]))continue;
+            foreach($rows as $row){
+                if(!is_array($row))continue;
+                $actual=(string)($row['ch_id']??$channel);
+                if(!isset($ids[$actual]))continue;
+                $start=$row['start_timestamp']??null;$end=$row['stop_timestamp']??null;
+                if(!is_numeric($start)||!is_numeric($end))continue;
+                $start=(int)$start;$end=(int)$end;
+                if($start<1000000000||$end<=$start||$end-$start>86400
+                    ||$end<$now-3600||$start>$now+172800)continue;
+                $name=trim(strip_tags((string)($row['name']??$row['title']??'')));
+                if($name==='')continue;
+                $description=trim(strip_tags((string)($row['descr']??'')));
+                $programmes[$actual][]= [
+                    'title'=>mb_substr($name,0,180),'description'=>mb_substr($description,0,400),
+                    'start'=>$start,'end'=>$end
+                ];
+                if(++$total>=240)break 2;
+            }
+        }
+        foreach($programmes as $id=>$entries){
+            usort($entries,static function($a,$b){return $a['start']<=>$b['start'];});
+            // The provider may overlap or duplicate entries; retain the nearest
+            // programme candidates without reordering the channel list.
+            $unique=[];$previous=[];
+            foreach($entries as $entry){
+                $signature=$entry['start'].'|'.$entry['end'].'|'.$entry['title'];
+                if(isset($previous[$signature]))continue;
+                $previous[$signature]=true;$unique[]=$entry;
+                if(count($unique)>=6)break;
+            }
+            $programmes[$id]=$unique;
+        }
+        $out=['ok'=>true,'programmes'=>$programmes,'available'=>count($programmes)>0,
+            'channelCount'=>count($ids),'guideChannels'=>count($programmes),'limited'=>$total>=240];
+        \Vaultcast\Repository::cachePut($key,$out,180);
+        return $out;
+    }
+
     /** Opt-in admin diagnostic: one paginated Live TV response, no playback resolution or guide crawl. */
     public static function fieldProbe(array $feed,array $opts): array {
         $requested=(string)($opts['category']??'');
