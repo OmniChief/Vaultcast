@@ -207,6 +207,16 @@ window.VaultcastStalkerCountries=function(host,options){
       };
       filters.appendChild(toggle);
     });
+    var listingOnly=false;
+    var listingsToggle=h('button',{type:'button',className:'btn ghost',
+      text:'With listings only','aria-pressed':'false','aria-label':'Show only channels with current or upcoming programme listings'});
+    listingsToggle.onclick=function(){
+      listingOnly=!listingOnly;
+      listingsToggle.setAttribute('aria-pressed',String(listingOnly));
+      listingsToggle.className=listingOnly?'btn primary':'btn ghost';
+      display();
+    };
+    filters.appendChild(listingsToggle);
     var summary=h('p',{className:'muted',role:'status'});
     body.append(filters,find,summary,list,next);
     function channelFormats(name){
@@ -239,7 +249,7 @@ window.VaultcastStalkerCountries=function(host,options){
       if(!entry){outer.appendChild(h('span',{className:'muted',text:'No programme information'}));return outer;}
       var p=entry.item;
       outer.appendChild(h('strong',{text:p.title||'Programme'}));
-      outer.appendChild(h('small',{className:'muted',text:time(p.start)+' – '+time(p.end)+(p.source==='freeview'?' · Freeview XMLTV':' · Provider EPG')}));
+      outer.appendChild(h('small',{className:'muted',text:time(p.start)+' – '+time(p.end)+(p.source==='open-epg'?' · Open EPG':' · Provider EPG')}));
       if(label==='Now'){
         var ratio=(Date.now()/1000-Number(p.start))/(Number(p.end)-Number(p.start));
         var bar=h('div',{className:'stalker-studio-programme-progress'});
@@ -252,7 +262,11 @@ window.VaultcastStalkerCountries=function(host,options){
       list.replaceChildren();
       var grouped=groupedChannels();
       var visible=grouped.filter(function(c){
-        return c.name.toLowerCase().includes(search.toLowerCase())&&channelFormats(c.name).every(function(format){return formatEnabled[format];});
+        if(!c.name.toLowerCase().includes(search.toLowerCase())||
+          !channelFormats(c.name).every(function(format){return formatEnabled[format];}))return false;
+        if(!listingOnly)return true;
+        var epg=programmeInfo(c);
+        return !!(epg.current||epg.next);
       });
       visible.forEach(function(item){
         var epg=programmeInfo(item),watch=h('button',{className:'btn primary',text:'Watch'});
@@ -283,9 +297,11 @@ window.VaultcastStalkerCountries=function(host,options){
         ]);
         list.appendChild(row);
       });
-      if(!visible.length)list.appendChild(h('p',{className:'muted',text:'No matching channels on loaded pages.'}));
+      if(!visible.length)list.appendChild(h('p',{className:'muted',text:listingOnly?'No programme listings found in loaded channels. Try loading more listings or turn off the filter.':'No matching channels on loaded pages.'}));
       var covered=grouped.filter(function(item){return !!programmeInfo(item).current;}).length;
-      summary.textContent=visible.length+' channels shown · '+covered+' with current programmes · '+selected.sources.length+' provider folders';
+      summary.textContent=visible.length+' of '+grouped.length+' channels shown · '+covered+
+        ' with current programmes · '+selected.sources.length+' provider folders'+
+        (listingOnly?' · Listings filter on':'');
       status.textContent='Guide data is loaded on demand and may be unavailable for some channels.';
       guide.disabled=guideBusy||!pageInventory.some(function(entry){return !guideFetched[entry.feed+'|'+entry.category+'|'+entry.page];});
       guide.textContent=guideBusy?'Loading guide…':'Load more programme listings';
