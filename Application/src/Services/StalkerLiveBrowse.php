@@ -141,6 +141,59 @@ final class StalkerLiveBrowse {
                 if(++$total>=240)break 2;
             }
         }
+        // Supplement missing UK EPG slots using Vaultcast's existing XMLTV cache.
+        // This index is built by the normal EPG refresh, not by channel browsing.
+        $freeviewPath=STREAM_DATA.'/live/epg_cache/stalker-freeview.json';
+        if(is_file($freeviewPath)){
+            $raw=@file_get_contents($freeviewPath);
+            $freeview=$raw!==false?json_decode($raw,true):null;
+            if(is_array($freeview)&&is_array($freeview['programmes']??null)
+                &&(int)($freeview['updatedAt']??0)>$now-86400){
+                $xmlIds=[];$nameMap=[];$ambiguous=[];
+                foreach(($freeview['channels']??[]) as $xmlId=>$label){
+                    $key=mb_strtolower(trim(preg_replace('/\s+/u',' ',(string)$label)));
+                    if($key==='')continue;
+                    if(isset($nameMap[$key])&&$nameMap[$key]!==$xmlId)$ambiguous[$key]=true;
+                    else $nameMap[$key]=$xmlId;
+                }
+                foreach($visible['items'] as $channel){
+                    if(strtoupper((string)($channel['country']??''))!=='GB')continue;
+                    $id=(string)($channel['id']??'');
+                    if($id==='')continue;
+                    $sourceId=trim((string)($channel['xmltvId']??''));
+                    if(!isset($freeview['programmes'][$sourceId])){
+                        $label=trim((string)($channel['name']??''));
+                        // Remove only unmistakable country decoration; retain
+                        // region, +1, channel number and all other distinctions.
+                        $label=preg_replace('/^\s*(?:\|\s*(?:UK|GB)\s*\||\[UK\]|\[GB\]|UK\s*[-:])\s*/i','',$label);
+                        $key=mb_strtolower(trim(preg_replace('/\s+/u',' ',$label)));
+                        if($key===''||isset($ambiguous[$key]))continue;
+                        $sourceId=$nameMap[$key]??'';
+                    }
+                    $additional=$freeview['programmes'][$sourceId]??null;
+                    if(!is_array($additional))continue;
+                    if(!isset($programmes[$id]))$programmes[$id]=[];
+                    foreach($additional as $event){
+                        if(!is_array($event))continue;
+                        $start=(int)($event['start']??0);$end=(int)($event['end']??0);
+                        if($start<$now-3600||$start>$now+172800||$end<=$start||$end-$start>86400)continue;
+                        $overlaps=false;
+                        foreach($programmes[$id] as $existing){
+                            if($start<(int)$existing['end']&&$end>(int)$existing['start']){
+                                $overlaps=true;break;
+                            }
+                        }
+                        if($overlaps)continue;
+                        $title=trim((string)($event['title']??''));
+                        if($title==='')continue;
+                        $programmes[$id][]=['title'=>mb_substr($title,0,180),
+                            'description'=>mb_substr((string)($event['description']??''),0,400),
+                            'start'=>$start,'end'=>$end,'source'=>'freeview'];
+                        if(count($programmes[$id])>=20)break;
+                    }
+                }
+            }
+        }
         foreach($programmes as $id=>$entries){
             usort($entries,static function($a,$b){return $a['start']<=>$b['start'];});
             // The provider may overlap or duplicate entries; retain the nearest
