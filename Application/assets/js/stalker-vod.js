@@ -336,6 +336,11 @@ window.VaultcastStalkerVod=function(host,options){
     var index=Number(choice)-1;
     if(!Number.isInteger(index)||index<0||index>=list.length){status.textContent='Choose a valid connection number.';return;}
     var feed=list[index],params=new URLSearchParams({feed:feed.id});
+    var categoryId=window.prompt('Optional Live TV category ID (leave blank to inspect the first category):','');
+    if(categoryId===null)return;
+    categoryId=categoryId.trim();
+    if(categoryId&&!/^\d{1,12}$/.test(categoryId)){status.textContent='Enter a numeric category ID or leave blank.';return;}
+    if(categoryId)params.set('category',categoryId);
     liveProbeButton.disabled=true;
     status.textContent='Inspecting one live TV channel page on '+feed.name+'…';
     Promise.resolve(options.api('stalker_live_fields',params.toString())).then(function(result){
