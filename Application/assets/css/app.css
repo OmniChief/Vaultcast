@@ -3201,3 +3201,10 @@ html[data-motion="reduced"] .vca-overall span,html[data-motion="reduced"] .vca-b
  .stalker-studio-guide-actions{justify-content:flex-start}
  .stalker-studio-programme strong{white-space:normal}
 }
+
+/* Stalker Studio: keep the current browsing location visible without forcing
+   the entire provider discovery wall above every result list. */
+.stalker-vod-viewbar{display:flex;align-items:center;justify-content:flex-start;flex-wrap:wrap;gap:9px;padding:12px 14px;margin:10px 0;border:1px solid var(--border,#34455b);border-radius:12px;background:var(--surface,#172438)}
+.stalker-vod-viewbar strong{flex:1 1 200px;min-width:0;overflow-wrap:anywhere;font-size:.95rem}
+.stalker-vod-viewbar .btn{min-height:35px}
+.stalker-vod-discovery[hidden]{display:none!important}
