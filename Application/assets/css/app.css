@@ -3235,3 +3235,13 @@ html[data-motion="reduced"] .vca-overall span,html[data-motion="reduced"] .vca-b
 .stalker-studio-genre-source-row .btn{flex-shrink:0}
 .stalker-studio-genre-source-row select{max-width:55%;min-width:125px}
 @media(max-width:500px){.stalker-studio-genres{grid-template-columns:minmax(0,1fr)}.stalker-studio-genre-open{padding:14px}}
+
+/* One Live TV channel per service, with variants visible on demand. */
+.stalker-studio-guide-actions{display:flex;flex-direction:column;align-items:stretch;gap:7px;min-width:155px}
+.stalker-studio-guide-actions>.btn{width:100%}
+.stalker-studio-quality-options{max-width:260px;min-width:0}
+.stalker-studio-quality-options>summary{cursor:pointer;font-size:.76rem;color:var(--text-muted,#b5c4d4);line-height:1.4}
+.stalker-studio-quality-list{display:flex;flex-direction:column;gap:5px;padding-top:8px}
+.stalker-studio-quality-list .btn{width:100%;min-height:34px;padding:7px 9px;text-align:left;white-space:normal;overflow-wrap:anywhere}
+@media(max-width:820px){.stalker-studio-guide-actions{grid-column:2}}
+@media(max-width:480px){.stalker-studio-guide-actions{grid-column:1;max-width:none}.stalker-studio-quality-options{max-width:none}}
