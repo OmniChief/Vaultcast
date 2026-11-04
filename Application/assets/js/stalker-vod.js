@@ -450,11 +450,27 @@ window.VaultcastStalkerVod=function(host,options){
   function stop(){active=false;serial++;favouriteLookupToken++;clearTimeout(timer);if(exportJob)exportJob.cancelled=true;}
   function loadCategories(refresh){
     var token=++serial,index=0;
-    groupsLoading=true;categories=[];category='';showMoreCategories=false;renderCategories();
+    // Refresh provider discovery without throwing the viewer out of the selected folder.
+    var previousCategory=category;
+    groupsLoading=true;categories=[];showMoreCategories=false;renderCategories();
     function nextFeed(){
       if(!valid(token))return;
       if(index>=feeds.length){
-        groupsLoading=false;renderCategories();renderResults();
+        groupsLoading=false;
+        // A provider may remove or rename a folder. Reconcile the active source list,
+        // while keeping a merged folder selected when at least one source survives.
+        if(previousCategory&&!searchAllMode){
+          var availableKeys=categoryBuckets().map(function(c){return c.key;});
+          var oldSelection=providerSelections[previousCategory];
+          if(availableKeys.indexOf(previousCategory)<0&&oldSelection){
+            var stillPresent=oldSelection.sources.filter(function(source){
+              return categories.some(function(c){return c.feed===source.feed&&c.id===source.id;});
+            });
+            if(!stillPresent.length){category='';titlesStarted=false;tasks=[];titles=[];seen={};}
+            else providerSelections[previousCategory]={name:oldSelection.name,sources:stillPresent};
+          }
+        }
+        renderCategories();renderResults();
         if(!refresh&&!searchAllMode&&!titlesStarted)openPreferredProvider();
         if(searchAllMode&&titlesStarted&&!tasks.length)scan(false);
         return;
@@ -631,15 +647,21 @@ window.VaultcastStalkerVod=function(host,options){
       sections[0].items.push({name:'Kids',key:'kids|'+(activeLanguage||'all'),sources:kids.reduce(function(all,c){return all.concat(c.sources);},[]),aggregate:true});
     }
     var section=h('section');section.style.width='100%';section.style.marginBottom='20px';
-    var heading=h('h3',{text:activeLanguage?(languageLabel(activeLanguage)+' folders'):'All languages'});
+    var heading=h('h3',{text:activeLanguage?(languageLabel(activeLanguage)+' · Discover'):'Discover · All languages'});
     heading.style.margin='0 0 12px';section.appendChild(heading);
     sections.forEach(function(part){
       if(!part.items.length)return;
       part.items.sort(function(a,b){return a.name.localeCompare(b.name);});
-      var accordionKey=kind+'|'+activeLanguage+'|'+part.label;
-      var accordion=h('details',{className:'stalker-folder-section',open:accordionStates[accordionKey]===true});
-      accordion.addEventListener('toggle',function(){if(accordion.isConnected)accordionStates[accordionKey]=accordion.open;});
-      accordion.appendChild(h('summary',{className:'stalker-folder-section-heading',text:part.label+' ('+part.items.length+')'}));
+      // Studio navigation: the four discovery sections are visible immediately.
+      // Provider lists remain current because every render rebuilds them from live categories.
+      var accordion=h('section',{className:'stalker-folder-section stalker-studio-section'});
+      var sectionHeading=h('div',{className:'stalker-folder-section-heading'},[
+        h('strong',{text:part.label}),
+        h('small',{className:'muted',text:part.items.length+' groups'})
+      ]);
+      sectionHeading.style.display='flex';sectionHeading.style.alignItems='center';
+      sectionHeading.style.justifyContent='space-between';sectionHeading.style.padding='12px 14px';
+      accordion.appendChild(sectionHeading);
       var grid=h('div');
       grid.style.display='grid';grid.style.width='100%';grid.style.gridTemplateColumns='repeat(auto-fill,minmax(min(100%,220px),1fr))';grid.style.gap='12px';
       function folderButton(c){
