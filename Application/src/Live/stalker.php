@@ -473,21 +473,27 @@ function stalker_vod_resolve(array $feed, string $id, ?array $item = null): stri
 }
 
 function stalker_channel_detail(array $feed,string $id,bool $refresh=false,bool $includeGuide=true): array {
+    $presentation=StalkerLiveBrowse::presentation($feed,$id);
     $item=\Vaultcast\Repository::cacheGet('stalker_channel_v2_'.hash('sha256',json_encode([$feed,$id,StalkerCatalogues::active($feed,'live')])));
     $scan=\Vaultcast\Repository::cacheGet(stalker_live_scan_key($feed));
     if(!$item)$item=$scan['rows'][$id]??null;
     if(!$item){$item=StalkerCountries::entry($feed,$id);if($item)unset($item['playback']);}
     if(!$item)$item=['name'=>'Channel '.$id,'description'=>$feed['name']];
-    $guideError='';$programs=[];
-    if($includeGuide)try{
+    if(empty($item['name']))$item['name']=$presentation['name']??'Channel '.$id;
+    $guideError='';$programs=$includeGuide?($presentation['programs']??[]):[];
+    if($includeGuide&&(!$programs||$refresh))try{
         $key='stalker_channel_epg_'.hash('sha256',json_encode($feed));$guide=$refresh?null:\Vaultcast\Repository::cacheGet($key);
         if($guide===null){$guide=stalker_guide($feed);\Vaultcast\Repository::cachePut($key,$guide,300);}
         if(!empty($guide['__unavailable']))$guideError='The provider programme guide is currently unavailable.';
-        $stableId='stalker-'.substr(hash('sha256',$feed['id'].':'.$id),0,20);$programs=$guide[$stableId]??[];
+        $stableId='stalker-'.substr(hash('sha256',$feed['id'].':'.$id),0,20);
+        foreach($guide[$stableId]??[] as $event){
+            $overlap=false;foreach($programs as $known)if($event['startUnix']<$known['endUnix']&&$event['endUnix']>$known['startUnix']){$overlap=true;break;}
+            if(!$overlap)$programs[]=$event;
+        }
     }catch(RuntimeException $e){$guideError='The provider programme guide is currently unavailable.';\Vaultcast\Repository::cachePut($key,['__unavailable'=>true],300);}
     usort($programs,static function($a,$b){return $a['startUnix']<=>$b['startUnix'];});
     $now=(int)round(microtime(true)*1000);$programs=array_values(array_filter($programs,static function($p)use($now){return $p['endUnix']>$now-3600000;}));
-    return ['ok'=>true,'channel'=>['id'=>'stalker:'.$feed['id'].':'.$id,'provider'=>'stalker','kind'=>'iptv','number'=>ctype_digit($id)?(int)$id:0,'name'=>$item['name'],'slogan'=>($item['description']??'')?:$feed['name'],'logo'=>'','programs'=>$programs],'guideError'=>$guideError];
+    return ['ok'=>true,'channel'=>['id'=>'stalker:'.$feed['id'].':'.$id,'provider'=>'stalker','kind'=>'iptv','number'=>ctype_digit($id)?(int)$id:0,'name'=>$presentation['name']??$item['name'],'slogan'=>($item['description']??'')?:$feed['name'],'logo'=>$presentation['logo']??'','programs'=>$programs],'guideError'=>$guideError];
 }
 
 /** Bounded GET of the actual media endpoint; never return its URL or body. */

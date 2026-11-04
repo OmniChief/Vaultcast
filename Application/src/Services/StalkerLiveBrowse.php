@@ -10,6 +10,10 @@ final class StalkerLiveBrowse {
     private static function key(array $feed,string $suffix): string {
         return 'stalker_live_direct_v1_'.hash('sha256',json_encode([$feed,$suffix]));
     }
+    public static function presentation(array $feed,string $id): array {
+        $value=\Vaultcast\Repository::cacheGet(self::key($feed,'presentation:v1:'.$id));
+        return is_array($value)?$value:[];
+    }
     public static function categories(array $feed,bool $refresh=false): array {
         $key=self::key($feed,'genres:v5');
         $cached=\Vaultcast\Repository::cacheGet($key);
@@ -38,7 +42,7 @@ final class StalkerLiveBrowse {
         foreach($categories as $candidate)if($candidate['id']===$category){$selected=$candidate;break;}
         if($selected===null)throw new InvalidArgumentException('Unknown provider category.');
         $page=max(1,min(10000,(int)($opts['page']??1)));
-        $key=self::key($feed,'channels:'.json_encode([$category,$page]));
+        $key=self::key($feed,'channels:v2:'.json_encode([$category,$page]));
         $cached=\Vaultcast\Repository::cacheGet($key);
         if($cached!==null&&empty($opts['refresh'])){
             // Channel-page caching and playback-command caching have independent
@@ -62,6 +66,7 @@ final class StalkerLiveBrowse {
             if(!is_array($row)||!isset($row['id'])||!is_scalar($row['id'])||empty($row['cmd']))continue;
             $id=(string)$row['id'];if($id===''||strlen($id)>120)continue;
             $name=mb_substr((string)($row['name']??$id),0,300);
+            if(preg_match('/[#═━☰]{3,}/u',$name))continue;
             $playback=stalker_live_entry($row);
             \Vaultcast\Repository::cachePut(self::key($feed,'item:'.$id),$playback,7200);
             // The compatibility player uses the same on-demand Stalker resolver.
@@ -109,15 +114,21 @@ final class StalkerLiveBrowse {
      */
     private static function epgMatchName(string $name): string {
         $name=trim(html_entity_decode(strip_tags($name),ENT_QUOTES|ENT_HTML5,'UTF-8'));
-        $name=preg_replace('/^\\s*(?:\\|\\s*(?:UK|GB|US|USA)\\s*\\||\\[(?:UK|GB|US|USA)\\]|(?:UK|GB|US|USA)\\s*[-:])\\s*/iu','',$name);
-        $name=preg_replace('/(?:\\s+|\\s*[-|]\\s*)(?:UHD|FHD|HD|SD|4K|HEVC|H\\.?265|H\\.?264)\\s*$/iu','',$name);
+        for($pass=0;$pass<5;$pass++){
+            $name=preg_replace('/^\\s*(?:[|┃│¦]\\s*(?:UK|GB|US|USA)\\s*[|┃│¦]|\\[\\s*(?:UK|GB|US|USA)\\s*\\]|(?:UK|GB|US|USA)\\s*[-:])\\s*/iu','',$name);
+            $name=preg_replace('/(?:\\s+|\\s*[-|]\\s*|\\s*\\[)(?:UHD|FHD|FULL\\s*HD|HD|SD|4K|2160P|1080P|720P|HEVC|H\\.?265|H\\.?264)\\]?\\s*$/iu','',$name);
+        }
         $name=mb_strtolower(trim(preg_replace('/\\s+/u',' ',$name)));
         // These broadcaster-specific spelling variants are unambiguous.
         $name=preg_replace('/^bbc\\s+(?:1|one)(?=\\s|$)/u','bbc one',$name);
         $name=preg_replace('/^bbc\\s+(?:2|two)(?=\\s|$)/u','bbc two',$name);
         $name=preg_replace('/^bbc\\s+(?:3|three)(?=\\s|$)/u','bbc three',$name);
         $name=preg_replace('/^bbc\\s+(?:4|four)(?=\\s|$)/u','bbc four',$name);
-        return $name;
+        $name=preg_replace('/^itv\\s+([1-4])(?=\\s|$)/u','itv$1',$name);
+        $name=preg_replace('/^(?:channel\\s*5|five)(?=\\s|$)/u','5',$name);
+        $name=preg_replace('/^more\\s*4(?=\\s|$)/u','more4',$name);
+        $name=preg_replace('/^film\\s*4(?=\\s|$)/u','film4',$name);
+        return preg_replace('/\\s*\\+\\s*1\\b/u',' +1',$name);
     }
 
     public static function guidePage(array $feed,array $opts): array {
@@ -126,17 +137,17 @@ final class StalkerLiveBrowse {
             throw new InvalidArgumentException('Select a live TV category.');
         $page=max(1,min(10000,(int)($opts['page']??1)));
         $indexRevision=[];
-        foreach(['gb','us'] as $region){
+        foreach(['gb','gb-freeview','us'] as $region){
             $indexPath=STREAM_DATA.'/live/epg_cache/stalker-open-'.$region.'.json';
             $indexRevision[$region]=is_file($indexPath)?(int)@filemtime($indexPath):0;
         }
-        $key=self::key($feed,'guide:v2:'.json_encode([$category,$page,$indexRevision]));
+        $key=self::key($feed,'guide:v3:'.json_encode([$category,$page,$indexRevision]));
         $cached=\Vaultcast\Repository::cacheGet($key);
         if($cached!==null)return $cached;
         // A user opening Stalker EPG can request a refresh without browser-side
         // downloading or per-channel polling. Maintenance queues only one CLI job.
         $missingGuide=false;
-        foreach(['gb','us'] as $region){
+        foreach(['gb','gb-freeview','us'] as $region){
             $index=STREAM_DATA.'/live/epg_cache/stalker-open-'.$region.'.json';
             if(!is_file($index)||time()-@filemtime($index)>21600){$missingGuide=true;break;}
         }
@@ -183,28 +194,29 @@ final class StalkerLiveBrowse {
                 if($name==='')continue;
                 $description=trim(strip_tags((string)($row['descr']??'')));
                 $portalMatched[$actual]=true;
-                $programmes[$actual][]= [
-                    'title'=>mb_substr($name,0,180),'description'=>mb_substr($description,0,400),
-                    'start'=>$start,'end'=>$end
-                ];
+                $programmes[$actual][]= array_merge(StalkerProgramme::provider($row),[
+                    'title'=>mb_substr($name,0,180),'description'=>StalkerProgramme::text($row['descr']??$row['description']??'',5000),
+                    'start'=>$start,'end'=>$end,'source'=>'provider'
+                ]);
                 if(++$total>=240)break 2;
             }
         }
         // Match only the requested country's cached Open EPG guide.
         // Never use a US programme for a UK channel or vice versa.
-        foreach(['GB','US'] as $country){
-            $indexPath=STREAM_DATA.'/live/epg_cache/stalker-open-'.strtolower($country).'.json';
-            if(!is_file($indexPath)){$openEpgIndexStatus[$country]='missing';continue;}
-            if(@filesize($indexPath)>16777216){$openEpgIndexStatus[$country]='oversized';continue;}
+        foreach(['GB','GB-freeview','US'] as $region){
+            $country=substr($region,0,2);
+            $indexPath=STREAM_DATA.'/live/epg_cache/stalker-open-'.strtolower($region).'.json';
+            if(!is_file($indexPath)){$openEpgIndexStatus[$region]='missing';continue;}
+            if(@filesize($indexPath)>16777216){$openEpgIndexStatus[$region]='oversized';continue;}
             $raw=@file_get_contents($indexPath);
             $open=$raw!==false?json_decode($raw,true):null;
             if(!is_array($open)||!is_array($open['programmes']??null)){
-                $openEpgIndexStatus[$country]='invalid';continue;
+                $openEpgIndexStatus[$region]='invalid';continue;
             }
             if((int)($open['updatedAt']??0)<=$now-86400){
-                $openEpgIndexStatus[$country]='stale';continue;
+                $openEpgIndexStatus[$region]='stale';continue;
             }
-            $openEpgIndexStatus[$country]='ready';
+            $openEpgIndexStatus[$region]='ready';
             // Build candidate sets rather than treating HD/SD versions of the
             // same unregionalised service as an immediate ambiguous match.
             $nameMap=[];
@@ -246,21 +258,28 @@ final class StalkerLiveBrowse {
                 foreach($additional as $event){
                     if(!is_array($event))continue;
                     $start=(int)($event['start']??0);$end=(int)($event['end']??0);
-                    if($start<$now-3600||$start>$now+172800||$end<=$start||$end-$start>86400)continue;
+                    if($end<$now-3600||$start>$now+172800||$end<=$start||$end-$start>86400)continue;
                     $overlaps=false;
-                    foreach($programmes[$id] as $existing){
+                    foreach($programmes[$id] as &$existing){
                         if($start<(int)$existing['end']&&$end>(int)$existing['start']){
+                            // Enrich the same programme only, never an unrelated
+                            // regional listing that happens to overlap in time.
+                            if($start===(int)$existing['start']&&mb_strtolower(trim((string)($event['title']??'')))===mb_strtolower(trim($existing['title']))){
+                                foreach(['description','cast','director','presenter','categories','rating','ratingSystem','episode','language','subtitles','poster'] as $field)
+                                    if(empty($existing[$field])&&!empty($event[$field]))$existing[$field]=$event[$field];
+                            }
                             $overlaps=true;break;
                         }
                     }
+                    unset($existing);
                     if($overlaps)continue;
                     $title=trim((string)($event['title']??''));
                     if($title==='')continue;
                     $openMatched[$id]=true;
-                    $programmes[$id][]=['title'=>mb_substr($title,0,180),
-                        'description'=>mb_substr((string)($event['description']??''),0,400),
-                        'start'=>$start,'end'=>$end,'source'=>'open-epg'];
-                    if(count($programmes[$id])>=20)break;
+                    $programmes[$id][]=array_merge(array_intersect_key($event,array_flip(['cast','director','presenter','categories','rating','ratingSystem','episode','language','subtitles','poster'])),['title'=>mb_substr($title,0,180),
+                        'description'=>mb_substr((string)($event['description']??''),0,5000),
+                        'start'=>$start,'end'=>$end,'source'=>$region==='GB-freeview'?'freeview':'open-epg']);
+                    if(count($programmes[$id])>=60)break;
                 }
             }
         }
@@ -273,12 +292,23 @@ final class StalkerLiveBrowse {
                 $signature=$entry['start'].'|'.$entry['end'].'|'.$entry['title'];
                 if(isset($previous[$signature]))continue;
                 $previous[$signature]=true;$unique[]=$entry;
-                if(count($unique)>=6)break;
+                if(count($unique)>=60)break;
             }
             $programmes[$id]=$unique;
         }
         if($portalFailed && !$programmes)
             throw new RuntimeException('Provider EPG is unavailable and no matching cached Open EPG listings were found.');
+        // Reuse the same matched schedule on the player page, without another
+        // portal scan or any browser-supplied metadata becoming authoritative.
+        foreach($visible['items'] as $channel){
+            $id=(string)$channel['id'];$events=[];
+            foreach($programmes[$id]??[] as $event)$events[]=array_merge($event,[
+                'startUnix'=>$event['start']*1000,'endUnix'=>$event['end']*1000,
+                'subtitle'=>$event['description']??'','kind'=>'epg']);
+            \Vaultcast\Repository::cachePut(self::key($feed,'presentation:v1:'.$id),[
+                'name'=>$channel['name'],'logo'=>$channel['logoUrl']?:($channelLogos[$id]??''),
+                'programs'=>$events],600);
+        }
         $out=['ok'=>true,'programmes'=>$programmes,'available'=>count($programmes)>0,
             'channelCount'=>count($ids),'guideChannels'=>count($programmes),'limited'=>$total>=240,
             'providerEpgUnavailable'=>$portalFailed,

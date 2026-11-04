@@ -45,6 +45,8 @@ final class StalkerDirect {
             foreach($text as $field) {
                 if(array_key_exists($field,$out)||!array_key_exists($field,$section))continue;
                 $value=$section[$field];
+                if(is_array($value)&&in_array($field,['actors','cast','director','genres','audio_languages','subtitle_languages'],true))
+                    $value=implode(', ',StalkerProgramme::names($value));
                 if(!is_scalar($value))continue;
                 $value=trim(html_entity_decode(strip_tags((string)$value),ENT_QUOTES|ENT_HTML5,'UTF-8'));
                 if($value===''||preg_match('/^(?:n\/?a|none|null|unknown|undefined|not available)$/i',$value))continue;

@@ -1027,6 +1027,8 @@ window.VaultcastStalkerVod=function(host,options){
       if(!part&&!year(item))k+='|'+feed.id;
       group=seen[k];
       if(!group){group=Object.assign({},item,{sources:[],groupLabels:[]});if(part){group.name=part.name;group.numberedParts=[];}seen[k]=group;titles.push(group);}
+      // Enrich an already matched title without changing its identity or position.
+      ['poster','description','actors','cast','director','age','rating_mpaa','genres_str','genre','duration','time','rating_imdb','audio_languages','subtitle_languages'].forEach(function(field){if(!group[field]&&item[field])group[field]=item[field];});
       if(part&&!group.numberedParts.some(function(p){return p.feed===feed.id&&p.id===item.id;}))group.numberedParts.push({number:part.number,name:item.name,id:item.id,feed:feed.id,connection:feed.name,item:item});
       if(!group.sources.some(function(x){return x.feed===source.feed&&x.id===source.id;}))group.sources.push(source);
       source.labels.forEach(function(label){if(group.groupLabels.indexOf(label)<0)group.groupLabels.push(label);});
@@ -1084,7 +1086,8 @@ window.VaultcastStalkerVod=function(host,options){
       ]);
       if(item.poster){
         var posterImg=h('img',{src:item.poster,alt:'',loading:'lazy',referrerpolicy:'no-referrer'});
-        posterImg.onerror=function(){posterImg.remove();};
+        var alternatives=Array.from(new Set((item.posterCandidates||[]).map(function(candidate){return candidate.url;}).concat(sources.map(function(source){return source.poster;})))).filter(function(url){return typeof url==='string'&&/^https?:\/\//i.test(url)&&url!==item.poster;}).slice(0,8);
+        posterImg.onerror=function(){if(alternatives.length)posterImg.src=alternatives.shift();else posterImg.remove();};
         posterButton.appendChild(posterImg);
       }
       results.appendChild(h('article',{className:'stalker-vod-card'},[
@@ -1096,9 +1099,13 @@ window.VaultcastStalkerVod=function(host,options){
             item.genres_str||item.genre?h('span',{text:String(item.genres_str||item.genre).slice(0,65)}):null,
             item.rating_imdb&&Number(item.rating_imdb)>0?h('span',{text:'★ '+Number(item.rating_imdb).toFixed(1)}):null,
             sources.length>1?h('span',{text:sources.length+' sources'}):null,
-            item.age?h('span',{text:String(item.age).slice(0,14)}):null
+            item.age||item.rating_mpaa?h('span',{text:'Age rating · '+String(item.age||item.rating_mpaa).slice(0,30)}):null,
+            item.duration||item.time?h('span',{text:'Duration · '+String(item.duration||item.time).slice(0,30)}):null
           ]),
           item.description?h('p',{className:'stalker-studio-synopsis',text:String(item.description).slice(0,145)}):null,
+          item.actors||item.cast?h('p',{className:'stalker-studio-credits',text:'Cast: '+String(item.actors||item.cast)}):null,
+          item.director?h('p',{className:'stalker-studio-credits',text:'Director: '+String(item.director)}):null,
+          item.audio_languages||item.subtitle_languages?h('p',{className:'stalker-studio-credits',text:[item.audio_languages?'Audio: '+item.audio_languages:'',item.subtitle_languages?'Subtitles: '+item.subtitle_languages:''].filter(Boolean).join(' · ')}):null,
           h('div',{className:'row-actions'},[button,download])
         ])
       ]));

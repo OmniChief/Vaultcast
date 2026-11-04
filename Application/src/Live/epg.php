@@ -105,9 +105,9 @@ function epg_index_xmltv($path, $wanted, $fromMs, $toMs) {
         if(isset($wanted[$channel])||isset($wanted[$base])||isset($bases[$base])){
             $start=epg_parse_xmltv_time($reader->getAttribute('start'));$stop=epg_parse_xmltv_time($reader->getAttribute('stop'));
             if($start!==null){$stop=$stop ?? $start+3600000;
-                if($stop>=$fromMs&&$start<=$toMs){$title='Programme';$description='';$node=$reader->readOuterXML();
-                    if($node&&function_exists('simplexml_load_string')){$xml=@simplexml_load_string($node,'SimpleXMLElement',LIBXML_NONET);if($xml){$title=trim((string)($xml->title ?? '')) ?: 'Programme';$description=trim((string)($xml->desc ?? ''));}}
-                    $row=['startUnix'=>$start,'endUnix'=>$stop,'title'=>$title,'subtitle'=>$description,'kind'=>'epg'];$programs[$channel][]=$row;if($base!==$channel)$programs[$base][]=$row;
+                if($stop>=$fromMs&&$start<=$toMs){$title='Programme';$description='';$metadata=[];$node=$reader->readOuterXML();
+                    if($node&&function_exists('simplexml_load_string')){$xml=@simplexml_load_string($node,'SimpleXMLElement',LIBXML_NONET);if($xml){$title=StalkerProgramme::text((string)($xml->title ?? ''),180) ?: 'Programme';$description=StalkerProgramme::text((string)($xml->desc ?? ''),5000);$metadata=StalkerProgramme::xml($xml);}}
+                    $row=array_merge($metadata,['startUnix'=>$start,'endUnix'=>$stop,'title'=>$title,'subtitle'=>$description,'kind'=>'epg']);$programs[$channel][]=$row;if($base!==$channel)$programs[$base][]=$row;
                 }
             }
         }
@@ -122,7 +122,7 @@ function epg_index_xmltv($path, $wanted, $fromMs, $toMs) {
  * Streaming reads and a short window keep the generated index small on a NAS.
  * Never guess regional variants and never replace an existing index on failure.
  */
-function epg_build_stalker_open_index(string $path,string $country,int $fromMs,int $toMs): array {
+function epg_build_stalker_open_index(string $path,string $country,int $fromMs,int $toMs,string $source='open-epg'): array {
     if(!in_array($country,['GB','US'],true)||!class_exists('XMLReader'))throw new RuntimeException('XMLTV parser unavailable.');
     $reader=new XMLReader();
     if(!@$reader->open($path,null,LIBXML_NONET|LIBXML_COMPACT))throw new RuntimeException('Cannot open downloaded XMLTV guide.');
@@ -160,20 +160,29 @@ function epg_build_stalker_open_index(string $path,string $country,int $fromMs,i
         $entries=[];
         foreach($programmes[$id] as $event){
             if($event['endUnix']<=$event['startUnix'])continue;
-            $entries[]=['start'=>(int)floor($event['startUnix']/1000),
+            $entries[]=array_merge(array_intersect_key($event,array_flip(['cast','director','presenter','categories','rating','ratingSystem','episode','language','subtitles','poster'])),['start'=>(int)floor($event['startUnix']/1000),
                 'end'=>(int)floor($event['endUnix']/1000),
                 'title'=>mb_substr((string)$event['title'],0,180),
-                'description'=>mb_substr((string)($event['subtitle']??''),0,400)];
-            if(count($entries)>=100)break;
+                'description'=>mb_substr((string)($event['subtitle']??''),0,5000),'source'=>$source]);
+            if(count($entries)>=60)break;
         }
         if($entries){$slim[$id]=$entries;$total+=count($entries);}
     }
     if(!$slim)throw new RuntimeException('No programmes found in the current 48-hour guide window.');
-    $payload=json_encode(['updatedAt'=>time(),'channels'=>$names,'logos'=>$logos,'programmes'=>$slim],
+    $payload=json_encode(['schema'=>2,'updatedAt'=>time(),'channels'=>$names,'logos'=>$logos,'programmes'=>$slim],
         JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE);
     if($payload===false)throw new RuntimeException('Could not encode the Stalker guide index.');
+    // Rich credits/posters must not make an otherwise usable guide disappear.
+    // Keep the nearest programmes for every channel within the existing NAS budget.
+    for($limit=30;strlen($payload)>16777216&&$limit>=6;$limit=(int)floor($limit/2)){
+        $total=0;
+        foreach($slim as &$entries){usort($entries,static function($a,$b){return $a['start']<=>$b['start'];});$entries=array_slice($entries,0,$limit);$total+=count($entries);}
+        unset($entries);
+        $payload=json_encode(['schema'=>2,'updatedAt'=>time(),'channels'=>$names,'logos'=>$logos,'programmes'=>$slim],JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE);
+        if($payload===false)throw new RuntimeException('Could not encode the Stalker guide index.');
+    }
     if(strlen($payload)>16777216)throw new RuntimeException('Stalker guide index exceeds the 16 MiB cache limit.');
-    $pathOut=epg_cache_dir().'/stalker-open-'.strtolower($country).'.json';
+    $pathOut=epg_cache_dir().'/stalker-open-'.strtolower($country).($source==='freeview'?'-freeview':'').'.json';
     $tmp=$pathOut.'.'.bin2hex(random_bytes(4)).'.tmp';
     if(@file_put_contents($tmp,$payload,LOCK_EX)===false || !@rename($tmp,$pathOut)){
         @unlink($tmp);
@@ -246,6 +255,7 @@ function epg_refresh_locked($force) {
     $iptv = iptv_load();
     // Stalker Open EPG sources are managed automatically. Preserve any user IPTV guides.
     $openSources=['GB'=>'https://www.open-epg.com/files/unitedkingdom.xml.gz',
+        'GB-freeview'=>'https://raw.githubusercontent.com/dp247/Freeview-EPG/master/epg.xml',
         'US'=>'https://www.open-epg.com/files/unitedstates1.xml.gz'];
     $hasStalker=false;
     foreach($iptv['feeds'] as $feed) if(($feed['type']??'')==='stalker'&&!empty($feed['enabled'])){$hasStalker=true;break;}
@@ -318,7 +328,7 @@ function epg_refresh_locked($force) {
         if($country===false)continue;
         try{
             $stalkerOpenEpg[$country]=array_merge(['status'=>'indexed'],
-                epg_build_stalker_open_index($source['path'],$country,$from,$to));
+                epg_build_stalker_open_index($source['path'],substr($country,0,2),$from,$to,$country==='GB-freeview'?'freeview':'open-epg'));
         } catch(Throwable $error){
             $stalkerOpenEpg[$country]=['status'=>'index_failed','error'=>$error->getMessage(),
                 'retainedPreviousCache'=>is_file(epg_cache_dir().'/stalker-open-'.strtolower($country).'.json')];
