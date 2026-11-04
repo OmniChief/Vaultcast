@@ -156,13 +156,13 @@ window.VaultcastStalkerCountries=function(host,options){
   }
   function channelDisplayBase(raw){
     var name=channelDisplayName(raw);
-    // Providers put quality at either end, sometimes enclosed in brackets.
-    // Strip quality only; preserve +1, geographic regions and other variants.
-    for(var pass=0;pass<3;pass++){
-      var updated=name.replace(/^\s*(?:(?:UHD|FHD|HD|SD|4K|2160P|1080P|720P)\s*[-|:]\s*|\\[(?:UHD|FHD|HD|SD|4K|2160P|1080P|720P)\\]\s*)/i,'')
-        .replace(/(?:\s*[-|:]\s*|\s+|\s*\\[)(?:UHD|FHD|HD|SD|4K|2160P|1080P|720P)(?:\\])?\s*$/i,'').trim();
-      if(!updated||updated===name)break;
-      name=updated;
+    // Remove known quality tags only; retain regions and +1 timeshifts.
+    for(var pass=0;pass<4;pass++){
+      var next=name
+        .replace(/^\s*(?:(?:UHD|FHD|FULL\s*HD|HD|SD|4K|2160P|1080P|720P|480P|576P)\s*[-|:]\s*|\[(?:UHD|FHD|HD|SD|4K|2160P|1080P|720P)\]\s*)/i,'')
+        .replace(/(?:\s*[-|:]\s*|\s+|\s*\[)(?:UHD|FHD|FULL\s*HD|HD|SD|4K|2160P|1080P|720P|480P|576P)\]?\s*$/i,'').trim();
+      if(!next||next===name)break;
+      name=next;
     }
     return name.replace(/^BBC\s*1(?=\s|$)/i,'BBC One')
       .replace(/^BBC\s*2(?=\s|$)/i,'BBC Two')
@@ -281,16 +281,16 @@ window.VaultcastStalkerCountries=function(host,options){
       var visible=grouped.filter(function(c){
         return c.name.toLowerCase().includes(search.toLowerCase());
       });
+      var sequence=visible.map(function(channel){
+        var best=channel.sources[0]||channel;
+        return {feed:best.feed,id:String(best.id),name:channel.name,
+          sources:(channel.sources||[]).map(function(src){
+            return {feed:src.feed,id:String(src.id),name:src.name,connection:src.connection,
+              kind:'live',quality:src.quality,qualityRank:src.qualityRank};
+          })};
+      });
       visible.forEach(function(item){
         var epg=programmeInfo(item),watch=h('button',{className:'btn primary',text:'Watch'});
-        var sequence=visible.map(function(channel){
-          var best=channel.sources[0]||channel;
-          return {feed:best.feed,id:String(best.id),name:channel.name,
-            sources:(channel.sources||[]).map(function(src){
-              return {feed:src.feed,id:String(src.id),name:src.name,connection:src.connection,
-                kind:'live',quality:src.quality,qualityRank:src.qualityRank};
-            })};
-        });
         function playVariant(src){
           var ordered=[src].concat(item.sources.filter(function(s){
             return !(s.feed===src.feed&&String(s.id)===String(src.id));
