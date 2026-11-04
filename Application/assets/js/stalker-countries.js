@@ -95,7 +95,7 @@ window.VaultcastStalkerCountries=function(host,options){
       var order=[];group.sources.forEach(function(s){if(order.indexOf(s.feed)<0)order.push(s.feed);});
       group.sources.sort(function(a,b){return order.indexOf(a.feed)-order.indexOf(b.feed)||b.qualityRank-a.qualityRank;});
       group.feed=group.sources[0].feed;group.id=group.sources[0].id;return group;
-    }).sort(function(a,b){return (genre==='Entertainment'?rank(a)-rank(b):0)||a.name.localeCompare(b.name,undefined,{numeric:true});});
+    }).sort(function(a,b){return (genre==='General'||genre==='Entertainment'?rank(a)-rank(b):0)||a.name.localeCompare(b.name,undefined,{numeric:true});});
   }
   function sourcesFor(value){return folders.filter(function(f){return f.country===country&&f.genre===value;});}
   function programmes(item){
