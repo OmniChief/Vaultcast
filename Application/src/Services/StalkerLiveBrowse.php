@@ -75,6 +75,56 @@ final class StalkerLiveBrowse {
         \Vaultcast\Repository::cachePut($key,$out,600);
         return $out;
     }
+    /** Inspect one provider Live TV page without exposing commands or URL tokens. */
+    public static function fieldProbe(array $feed,array $opts): array {
+        $requested=(string)($opts['category']??'');
+        if($requested!==''&&!preg_match('/^[0-9]{1,12}$/D',$requested))
+            throw new InvalidArgumentException('Choose a valid channel category.');
+        $categories=self::categories($feed)['categories'];
+        $selected=null;
+        foreach($categories as $candidate){
+            if($requested!==''&&(string)$candidate['id']!==$requested)continue;
+            if(!preg_match('/^[0-9]{1,12}$/D',(string)$candidate['id']))continue;
+            $selected=$candidate;break;
+        }
+        if($selected===null)throw new InvalidArgumentException('No usable Live TV category was found.');
+        $result=stalker_ordered_page($feed,'itv',['sortby'=>'number','genre'=>$selected['id'],'search'=>'','fav'=>0],1);
+        $rows=$result['data']??$result;
+        if(!is_array($rows))throw new RuntimeException('Provider returned an invalid Live TV page.');
+        $samples=['name','number','tv_genre_id','group_title','xmltv_id','epg_id',
+            'epg','epg_enabled','has_archive','archive','archive_days','archive_range',
+            'logo','icon','screenshot_uri','country','language','hd','quality',
+            'aspect_ratio','description','tv_genre','genre','censored','is_favorite'];
+        $inventory=[];$inspected=0;
+        foreach($rows as $row){
+            if(!is_array($row))continue;
+            $inspect=function(array $section,string $prefix='') use (&$inventory,$samples): void {
+                foreach($section as $key=>$value){
+                    if(!is_string($key)||!preg_match('/^[a-z][a-z0-9_]{0,49}$/i',$key))continue;
+                    if(preg_match('/(?:token|auth|pass|secret|cookie|key|mac|serial|device|url|link|cmd|stream|ticket|host|ip|login|account|user|pin|drm|license|proxy|path|file|play)/i',$key))continue;
+                    $field=$prefix.$key;
+                    $type=is_array($value)?'array':(is_object($value)?'object':gettype($value));
+                    if(!isset($inventory[$field]))$inventory[$field]=['type'=>$type,'present'=>0,'populated'=>0];
+                    $inventory[$field]['present']++;
+                    if($value!==null&&$value!==''&&$value!==[])$inventory[$field]['populated']++;
+                    // Only descriptive text/identifiers. Never export provider URLs, logos or transport strings.
+                    if(in_array($key,$samples,true)&&!in_array($key,['logo','icon','screenshot_uri','epg'],true)
+                        &&is_scalar($value)&&!isset($inventory[$field]['example'])){
+                        $sample=trim(html_entity_decode(strip_tags((string)$value),ENT_QUOTES|ENT_HTML5,'UTF-8'));
+                        if($sample!==''&&!preg_match('~(?:https?://|[a-z][a-z0-9+.-]*://|(?:token|auth|pass|session|cookie)[=:]|[?&][a-z_]+=)~i',$sample))
+                            $inventory[$field]['example']=mb_substr(preg_replace('/[\x00-\x1f\x7f]/',' ',$sample),0,120);
+                    }
+                }
+            };
+            $inspect($row);
+            if(++$inspected>=15)break;
+        }
+        ksort($inventory);
+        return ['ok'=>true,'connection'=>$feed['name'],'category'=>$selected['name'],
+            'category_id'=>$selected['id'],'rows_inspected'=>$inspected,'fields'=>$inventory,
+            'note'=>'One provider channel page inspected; credentials, commands and URLs excluded.'];
+    }
+
     public static function entry(array $feed,string $id): ?array {
         $playback=\Vaultcast\Repository::cacheGet(self::key($feed,'item:'.$id));
         return $playback===null?null:['playback'=>$playback];
