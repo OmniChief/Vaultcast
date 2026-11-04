@@ -118,12 +118,12 @@ function epg_index_xmltv($path, $wanted, $fromMs, $toMs) {
 }
 
 /**
- * Reuse the configured Freeview XMLTV source to provide Stalker-only fallbacks.
+ * Build Stalker-only fallback indexes from the UK and US Open EPG guides.
  * Streaming reads and a short window keep the generated index small on a NAS.
  * Never guess regional variants and never replace an existing index on failure.
  */
-function epg_build_stalker_freeview_index(string $path,int $fromMs,int $toMs): void {
-    if(!class_exists('XMLReader'))return;
+function epg_build_stalker_open_index(string $path,string $country,int $fromMs,int $toMs): void {
+    if(!in_array($country,['GB','US'],true)||!class_exists('XMLReader'))return;
     $reader=new XMLReader();
     if(!@$reader->open($path,null,LIBXML_NONET|LIBXML_COMPACT))return;
     $wanted=[];$names=[];$channelCount=0;
@@ -166,7 +166,7 @@ function epg_build_stalker_freeview_index(string $path,int $fromMs,int $toMs): v
     $payload=json_encode(['updatedAt'=>time(),'channels'=>$names,'programmes'=>$slim],
         JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE);
     if($payload===false)return;
-    $pathOut=epg_cache_dir().'/stalker-freeview.json';
+    $pathOut=epg_cache_dir().'/stalker-open-'.strtolower($country).'.json';
     $tmp=$pathOut.'.'.bin2hex(random_bytes(4)).'.tmp';
     if(@file_put_contents($tmp,$payload,LOCK_EX)!==false){
         if(!@rename($tmp,$pathOut))@unlink($tmp);
@@ -234,7 +234,10 @@ function epg_refresh($force = false) {
 
 function epg_refresh_locked($force) {
     $iptv = iptv_load();
-    $urls = $iptv['epgUrls'];
+    // Stalker Open EPG sources are managed automatically. Preserve any user IPTV guides.
+    $openSources=['GB'=>'https://www.open-epg.com/files/unitedkingdom.xml.gz',
+        'US'=>'https://www.open-epg.com/files/unitedstates1.xml.gz'];
+    $urls = array_values(array_unique(array_merge($iptv['epgUrls'],array_values($openSources))));
     if ($urls && !class_exists('XMLReader')) throw new RuntimeException('PHP XMLReader is required to import XMLTV programme guides.');
     $wanted = epg_wanted_ids($iptv);
     $fetched = array();
@@ -291,14 +294,13 @@ function epg_refresh_locked($force) {
         if (!empty($ch['tvgId'])) $slim[$ch['tvgId']] = $deduped;
     }
     epg_build_channel_catalogue();
-    // Freeview is an optional URL in Vaultcast's existing XMLTV settings.
-    // Re-index only during the normal EPG refresh, never during Stalker browsing.
+    // Re-index only as part of the normal guide refresh, not Stalker browsing.
     foreach($fetched as $source){
         $url=(string)($source['url']??'');
-        if(!preg_match('~^(?:https://)?(?:raw\.githubusercontent\.com/dp247/Freeview-EPG/|github\.com/dp247/Freeview-EPG/)~i',$url))continue;
-        try{epg_build_stalker_freeview_index($source['path'],$from,$to);}
-        catch(Throwable $error){error_log('Freeview Stalker fallback index: '.$error->getMessage());}
-        break;
+        $country=array_search($url,$openSources,true);
+        if($country===false)continue;
+        try{epg_build_stalker_open_index($source['path'],$country,$from,$to);}
+        catch(Throwable $error){error_log('Open EPG Stalker fallback index: '.$error->getMessage());}
     }
     $indexPath = epg_cache_dir() . '/favourites.json';
     $tempPath=$indexPath.'.'.bin2hex(random_bytes(4));
