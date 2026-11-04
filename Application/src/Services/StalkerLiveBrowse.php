@@ -114,7 +114,7 @@ final class StalkerLiveBrowse {
             $data=$response['data']??$response;
             if(!is_array($data))throw new RuntimeException('Provider returned an invalid programme guide.');
         } catch (\Throwable $error) {
-            // A temporary provider EPG outage must not hide already-cached Freeview
+            // A temporary provider EPG outage must not hide already-cached Open EPG
             // programmes. Never retry the remote provider within this request.
             $portalFailed=true;
             $data=[];
@@ -149,56 +149,55 @@ final class StalkerLiveBrowse {
                 if(++$total>=240)break 2;
             }
         }
-        // Supplement missing UK EPG slots using Vaultcast's existing XMLTV cache.
-        // This index is built by the normal EPG refresh, not by channel browsing.
-        $freeviewPath=STREAM_DATA.'/live/epg_cache/stalker-freeview.json';
-        if(is_file($freeviewPath) && @filesize($freeviewPath) <= 16777216){
-            $raw=@file_get_contents($freeviewPath);
-            $freeview=$raw!==false?json_decode($raw,true):null;
-            if(is_array($freeview)&&is_array($freeview['programmes']??null)
-                &&(int)($freeview['updatedAt']??0)>$now-86400){
-                $xmlIds=[];$nameMap=[];$ambiguous=[];
-                foreach(($freeview['channels']??[]) as $xmlId=>$label){
-                    $key=mb_strtolower(trim(preg_replace('/\s+/u',' ',(string)$label)));
-                    if($key==='')continue;
-                    if(isset($nameMap[$key])&&$nameMap[$key]!==$xmlId)$ambiguous[$key]=true;
-                    else $nameMap[$key]=$xmlId;
+        // Match only the requested country's cached Open EPG guide.
+        // Never use a US programme for a UK channel or vice versa.
+        foreach(['GB','US'] as $country){
+            $indexPath=STREAM_DATA.'/live/epg_cache/stalker-open-'.strtolower($country).'.json';
+            if(!is_file($indexPath) || @filesize($indexPath)>16777216)continue;
+            $raw=@file_get_contents($indexPath);
+            $open=$raw!==false?json_decode($raw,true):null;
+            if(!is_array($open)||!is_array($open['programmes']??null)
+                ||(int)($open['updatedAt']??0)<=$now-86400)continue;
+            $nameMap=[];$ambiguous=[];
+            foreach(($open['channels']??[]) as $xmlId=>$label){
+                $key=mb_strtolower(trim(preg_replace('/\\s+/u',' ',(string)$label)));
+                if($key==='')continue;
+                if(isset($nameMap[$key])&&$nameMap[$key]!==$xmlId)$ambiguous[$key]=true;
+                else $nameMap[$key]=$xmlId;
+            }
+            foreach($visible['items'] as $channel){
+                if(strtoupper((string)($channel['country']??''))!==$country)continue;
+                $id=(string)($channel['id']??'');
+                if($id==='')continue;
+                $sourceId=trim((string)($channel['xmltvId']??''));
+                if(!isset($open['programmes'][$sourceId])){
+                    $label=trim((string)($channel['name']??''));
+                    // Strip country decoration only; preserve region and variants.
+                    $label=preg_replace('/^\\s*(?:\\|\\s*(?:UK|GB|US|USA)\\s*\\||\\[(?:UK|GB|US|USA)\\]|(?:UK|GB|US|USA)\\s*[-:])\\s*/i','',$label);
+                    $key=mb_strtolower(trim(preg_replace('/\\s+/u',' ',$label)));
+                    if($key===''||isset($ambiguous[$key]))continue;
+                    $sourceId=$nameMap[$key]??'';
                 }
-                foreach($visible['items'] as $channel){
-                    if(strtoupper((string)($channel['country']??''))!=='GB')continue;
-                    $id=(string)($channel['id']??'');
-                    if($id==='')continue;
-                    $sourceId=trim((string)($channel['xmltvId']??''));
-                    if(!isset($freeview['programmes'][$sourceId])){
-                        $label=trim((string)($channel['name']??''));
-                        // Remove only unmistakable country decoration; retain
-                        // region, +1, channel number and all other distinctions.
-                        $label=preg_replace('/^\s*(?:\|\s*(?:UK|GB)\s*\||\[UK\]|\[GB\]|UK\s*[-:])\s*/i','',$label);
-                        $key=mb_strtolower(trim(preg_replace('/\s+/u',' ',$label)));
-                        if($key===''||isset($ambiguous[$key]))continue;
-                        $sourceId=$nameMap[$key]??'';
-                    }
-                    $additional=$freeview['programmes'][$sourceId]??null;
-                    if(!is_array($additional))continue;
-                    if(!isset($programmes[$id]))$programmes[$id]=[];
-                    foreach($additional as $event){
-                        if(!is_array($event))continue;
-                        $start=(int)($event['start']??0);$end=(int)($event['end']??0);
-                        if($start<$now-3600||$start>$now+172800||$end<=$start||$end-$start>86400)continue;
-                        $overlaps=false;
-                        foreach($programmes[$id] as $existing){
-                            if($start<(int)$existing['end']&&$end>(int)$existing['start']){
-                                $overlaps=true;break;
-                            }
+                $additional=$open['programmes'][$sourceId]??null;
+                if(!is_array($additional))continue;
+                if(!isset($programmes[$id]))$programmes[$id]=[];
+                foreach($additional as $event){
+                    if(!is_array($event))continue;
+                    $start=(int)($event['start']??0);$end=(int)($event['end']??0);
+                    if($start<$now-3600||$start>$now+172800||$end<=$start||$end-$start>86400)continue;
+                    $overlaps=false;
+                    foreach($programmes[$id] as $existing){
+                        if($start<(int)$existing['end']&&$end>(int)$existing['start']){
+                            $overlaps=true;break;
                         }
-                        if($overlaps)continue;
-                        $title=trim((string)($event['title']??''));
-                        if($title==='')continue;
-                        $programmes[$id][]=['title'=>mb_substr($title,0,180),
-                            'description'=>mb_substr((string)($event['description']??''),0,400),
-                            'start'=>$start,'end'=>$end,'source'=>'freeview'];
-                        if(count($programmes[$id])>=20)break;
                     }
+                    if($overlaps)continue;
+                    $title=trim((string)($event['title']??''));
+                    if($title==='')continue;
+                    $programmes[$id][]=['title'=>mb_substr($title,0,180),
+                        'description'=>mb_substr((string)($event['description']??''),0,400),
+                        'start'=>$start,'end'=>$end,'source'=>'open-epg'];
+                    if(count($programmes[$id])>=20)break;
                 }
             }
         }
@@ -216,7 +215,7 @@ final class StalkerLiveBrowse {
             $programmes[$id]=$unique;
         }
         if($portalFailed && !$programmes)
-            throw new RuntimeException('Provider EPG is unavailable and no matching cached Freeview listings were found.');
+            throw new RuntimeException('Provider EPG is unavailable and no matching cached Open EPG listings were found.');
         $out=['ok'=>true,'programmes'=>$programmes,'available'=>count($programmes)>0,
             'channelCount'=>count($ids),'guideChannels'=>count($programmes),'limited'=>$total>=240,
             'providerEpgUnavailable'=>$portalFailed];
