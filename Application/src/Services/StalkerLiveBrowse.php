@@ -102,6 +102,14 @@ final class StalkerLiveBrowse {
         $key=self::key($feed,'guide:'.json_encode([$category,$page]));
         $cached=\Vaultcast\Repository::cacheGet($key);
         if($cached!==null)return $cached;
+        // A user opening Stalker EPG can request a refresh without browser-side
+        // downloading or per-channel polling. Maintenance queues only one CLI job.
+        $missingGuide=false;
+        foreach(['gb','us'] as $region){
+            $index=STREAM_DATA.'/live/epg_cache/stalker-open-'.$region.'.json';
+            if(!is_file($index)||time()-@filemtime($index)>21600){$missingGuide=true;break;}
+        }
+        if($missingGuide && class_exists('LiveGuideCache')) LiveGuideCache::queueEpg();
         $visible=self::channels($feed,['category'=>$category,'page'=>$page]);
         $ids=[];
         foreach($visible['items'] as $item)$ids[(string)$item['id']]=true;
