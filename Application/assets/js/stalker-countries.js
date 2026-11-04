@@ -239,7 +239,7 @@ window.VaultcastStalkerCountries=function(host,options){
       if(!entry){outer.appendChild(h('span',{className:'muted',text:'No programme information'}));return outer;}
       var p=entry.item;
       outer.appendChild(h('strong',{text:p.title||'Programme'}));
-      outer.appendChild(h('small',{className:'muted',text:time(p.start)+' – '+time(p.end)}));
+      outer.appendChild(h('small',{className:'muted',text:time(p.start)+' – '+time(p.end)+(p.source==='freeview'?' · Freeview XMLTV':' · Provider EPG')}));
       if(label==='Now'){
         var ratio=(Date.now()/1000-Number(p.start))/(Number(p.end)-Number(p.start));
         var bar=h('div',{className:'stalker-studio-programme-progress'});
