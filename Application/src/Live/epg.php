@@ -126,7 +126,7 @@ function epg_build_stalker_open_index(string $path,string $country,int $fromMs,i
     if(!in_array($country,['GB','US'],true)||!class_exists('XMLReader'))throw new RuntimeException('XMLTV parser unavailable.');
     $reader=new XMLReader();
     if(!@$reader->open($path,null,LIBXML_NONET|LIBXML_COMPACT))throw new RuntimeException('Cannot open downloaded XMLTV guide.');
-    $wanted=[];$names=[];$channelCount=0;
+    $wanted=[];$names=[];$logos=[];$channelCount=0;
     while($reader->read()){
         if($reader->nodeType!==XMLReader::ELEMENT)continue;
         if($reader->localName==='programme')break;
@@ -141,6 +141,13 @@ function epg_build_stalker_open_index(string $path,string $country,int $fromMs,i
             if($node){
                 $label=trim((string)($node->{'display-name'}??''));
                 if($label!=='')$names[$id]=mb_substr($label,0,160);
+                // Only expose public HTTPS artwork, never private portal links,
+                // credentials, query tokens or arbitrary local file paths.
+                $icon=$node->icon ?? null;
+                $url=$icon ? trim((string)($icon['src']??'')) : '';
+                if(strlen($url)<=500&&preg_match('~^https://[a-z0-9.-]+(?::443)?/[a-z0-9_./%+@-]+$~iD',$url)
+                    && !preg_match('~(?:^https://(?:localhost|127\\.|10\\.|192\\.168\\.|172\\.(?:1[6-9]|2[0-9]|3[01])\\.|169\\.254\\.|[^/]*\\.local/))~i',$url))
+                    $logos[$id]=$url;
             }
         }
     }
@@ -162,7 +169,7 @@ function epg_build_stalker_open_index(string $path,string $country,int $fromMs,i
         if($entries){$slim[$id]=$entries;$total+=count($entries);}
     }
     if(!$slim)throw new RuntimeException('No programmes found in the current 48-hour guide window.');
-    $payload=json_encode(['updatedAt'=>time(),'channels'=>$names,'programmes'=>$slim],
+    $payload=json_encode(['updatedAt'=>time(),'channels'=>$names,'logos'=>$logos,'programmes'=>$slim],
         JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE);
     if($payload===false)throw new RuntimeException('Could not encode the Stalker guide index.');
     if(strlen($payload)>16777216)throw new RuntimeException('Stalker guide index exceeds the 16 MiB cache limit.');
