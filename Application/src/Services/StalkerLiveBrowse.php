@@ -150,7 +150,7 @@ final class StalkerLiveBrowse {
             $data=[];
         }
         $now=time();$programmes=[];$total=0;
-        $portalMatched=[];$openMatched=[];
+        $portalMatched=[];$openMatched=[];$openEpgIndexStatus=[];
         foreach($data as $channelId=>$rows){
             if(!is_array($rows))continue;
             $channel=(string)$channelId;
@@ -185,18 +185,25 @@ final class StalkerLiveBrowse {
         // Never use a US programme for a UK channel or vice versa.
         foreach(['GB','US'] as $country){
             $indexPath=STREAM_DATA.'/live/epg_cache/stalker-open-'.strtolower($country).'.json';
-            if(!is_file($indexPath) || @filesize($indexPath)>16777216)continue;
+            if(!is_file($indexPath)){$openEpgIndexStatus[$country]='missing';continue;}
+            if(@filesize($indexPath)>16777216){$openEpgIndexStatus[$country]='oversized';continue;}
             $raw=@file_get_contents($indexPath);
             $open=$raw!==false?json_decode($raw,true):null;
-            if(!is_array($open)||!is_array($open['programmes']??null)
-                ||(int)($open['updatedAt']??0)<=$now-86400)continue;
-            $nameMap=[];$ambiguous=[];
+            if(!is_array($open)||!is_array($open['programmes']??null)){
+                $openEpgIndexStatus[$country]='invalid';continue;
+            }
+            if((int)($open['updatedAt']??0)<=$now-86400){
+                $openEpgIndexStatus[$country]='stale';continue;
+            }
+            $openEpgIndexStatus[$country]='ready';
+            // Build candidate sets rather than treating HD/SD versions of the
+            // same unregionalised service as an immediate ambiguous match.
+            $nameMap=[];
             foreach(($open['channels']??[]) as $xmlId=>$label){
                 if(!isset($open['programmes'][$xmlId]))continue;
                 $match=self::epgMatchName((string)$label);
                 if($match==='')continue;
-                if(isset($nameMap[$match]) && $nameMap[$match]!==$xmlId)$ambiguous[$match]=true;
-                else $nameMap[$match]=$xmlId;
+                $nameMap[$match][(string)$xmlId]=(string)$label;
             }
             foreach($visible['items'] as $channel){
                 if(strtoupper((string)($channel['country']??''))!==$country)continue;
@@ -205,8 +212,21 @@ final class StalkerLiveBrowse {
                 $sourceId=trim((string)($channel['xmltvId']??''));
                 if(!isset($open['programmes'][$sourceId])){
                     $match=self::epgMatchName((string)($channel['name']??''));
-                    if($match===''||isset($ambiguous[$match]))continue;
-                    $sourceId=$nameMap[$match]??'';
+                    $candidates=$nameMap[$match]??[];
+                    if(count($candidates)===1){
+                        $sourceId=(string)array_key_first($candidates);
+                    } elseif(count($candidates)>1){
+                        // Prefer one HD/UHD candidate for an HD/UHD portal channel,
+                        // but never collapse differing regional channel labels.
+                        $preferred=[];
+                        $quality=(string)($channel['name']??'');
+                        if(preg_match('/\\b(?:UHD|4K|FHD|HD)\\s*$/iu',$quality)){
+                            foreach($candidates as $candidateId=>$label){
+                                if(preg_match('/\\b(?:UHD|4K|HD)\\s*$/iu',$label))$preferred[]=$candidateId;
+                            }
+                        }
+                        if(count($preferred)===1)$sourceId=(string)$preferred[0];
+                    }
                 }
                 $additional=$open['programmes'][$sourceId]??null;
                 if(!is_array($additional))continue;
@@ -251,6 +271,7 @@ final class StalkerLiveBrowse {
             'channelCount'=>count($ids),'guideChannels'=>count($programmes),'limited'=>$total>=240,
             'providerEpgUnavailable'=>$portalFailed,
             'providerMatchedChannels'=>count($portalMatched),
+            'openEpgIndexStatus'=>$openEpgIndexStatus,
             'openEpgMatchedChannels'=>count($openMatched),
             'openEpgAddedProgrammeChannels'=>count(array_diff_key($openMatched,$portalMatched))];
         \Vaultcast\Repository::cachePut($key,$out,180);
