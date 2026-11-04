@@ -229,7 +229,7 @@ function live_bridge_tv_export(string $kind): void {
 $__liveAction = live_bridge_action();
 if ($__liveAction !== null) {
     if (empty(Store::settings()['features']['live'])) live_bridge_deny(404, 'Live channels are disabled in Settings → Integrations.');
-    $readActions = ['stalker_vod_fields','stalker_vod_probe','stalker_vod_detail','stalker_art','stalker_channel','stalker_offline','stalker_update_status','stalker','stalker_catalogue_status','stalker_vod_catalogue','stalker_live_categories','stalker_live_channels','stalker_countries','stalker_browse','stalker_stream', 'guide', 'now', 'iptv', 'iptv_status', 'file', 'iptv_hls', 'logo', 'local_file', 'station', 'catalogue', 'programme_source', 'duration', 'channel_logo', 'iptv_browse', 'epg_refresh', 'm3u', 'tune', 'tv_studio', 'tv_preview', 'tv_health', 'xmltv', 'playlist', 'channels', 'radio', 'radio_search', 'epg_channels'];
+    $readActions = ['stalker_live_fields','stalker_vod_fields','stalker_vod_probe','stalker_vod_detail','stalker_art','stalker_channel','stalker_offline','stalker_update_status','stalker','stalker_catalogue_status','stalker_vod_catalogue','stalker_live_categories','stalker_live_channels','stalker_countries','stalker_browse','stalker_stream', 'guide', 'now', 'iptv', 'iptv_status', 'file', 'iptv_hls', 'logo', 'local_file', 'station', 'catalogue', 'programme_source', 'duration', 'channel_logo', 'iptv_browse', 'epg_refresh', 'm3u', 'tune', 'tv_studio', 'tv_preview', 'tv_health', 'xmltv', 'playlist', 'channels', 'radio', 'radio_search', 'epg_channels'];
     $writeActions = ['stalker_catalogue_control','stalker_check_media','stalker_cancel','stalker_download','stalker_retry','stalker_updates','stalker_manage','stalker_play','tv_slot_preview','iptv_preview','station', 'iptv_add', 'iptv_remove', 'iptv_toggle', 'iptv_probe', 'iptv_save', 'epg_refresh', 'tv_studio', 'tv_channels', 'channel_logo', 'radio_save', 'epg_map'];
     $m = $_SERVER['REQUEST_METHOD'] ?? 'GET';
     $isWrite = ($m === 'POST' || $m === 'PUT' || $m === 'PATCH' || $m === 'DELETE');
@@ -299,7 +299,7 @@ if ($__liveAction !== null) {
          catch(RuntimeException $e){live_bridge_deny(502,$e->getMessage());}
          catch(DomainException $e){live_bridge_deny(422,$e->getMessage());}
     }
-    if (in_array($__liveAction,['stalker_live_categories','stalker_live_channels','stalker_catalogue_control','stalker','stalker_check_media','stalker_vod_fields','stalker_vod_probe','stalker_vod_detail','stalker_channel','stalker_catalogue_status','stalker_vod_catalogue','stalker_countries','stalker_browse','stalker_manage','stalker_play'],true)) {
+    if (in_array($__liveAction,['stalker_live_categories','stalker_live_channels','stalker_catalogue_control','stalker','stalker_check_media','stalker_live_fields','stalker_vod_fields','stalker_vod_probe','stalker_vod_detail','stalker_channel','stalker_catalogue_status','stalker_vod_catalogue','stalker_countries','stalker_browse','stalker_manage','stalker_play'],true)) {
         require_once STREAM_ROOT.'/src/Live/iptv.php';
         $viewer=Auth::requireUser();
         if (class_exists('Parental') && Parental::filtering()) live_bridge_deny(403,'Provider catalogues are unavailable for restricted profiles.');
@@ -312,6 +312,13 @@ if ($__liveAction !== null) {
             if ($__liveAction==='stalker_vod_catalogue') json_out(StalkerDirect::browse($state,$body));
             if ($__liveAction==='stalker_vod_probe') {Permissions::require('iptv_manage');json_out(StalkerDirect::probe($state,$body));}
             if ($__liveAction==='stalker_vod_fields') {Permissions::require('iptv_manage');json_out(StalkerDirect::catalogueFieldProbe($state,$body));}
+            if ($__liveAction==='stalker_live_fields') {
+                Permissions::require('iptv_manage');
+                $selected=iptv_feed_by_id($state,(string)($body['feed']??''));
+                if(!$selected||($selected['type']??'')!=='stalker'||empty($selected['enabled']))
+                    throw new InvalidArgumentException('Choose an enabled Stalker connection.');
+                json_out(StalkerLiveBrowse::fieldProbe($selected,$body));
+            }
             if ($__liveAction==='stalker_countries') json_out(StalkerCountries::browse($state,$body));
             if ($__liveAction==='stalker_manage') {
                 $operation=(string)($body['operation'] ?? 'save');
