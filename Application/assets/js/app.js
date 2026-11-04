@@ -6249,7 +6249,7 @@ try {
         playStalkerItem(next.feed,Object.assign({},next,{sources:liveCopies,_failoverTried:tried,_channelSequence:sequence}),null);
       }else{
         context.playError=true;status.className='bad';
-        status.textContent=(message||'Stream unavailable')+' · All available connections were tried.';
+        status.textContent=(message||'Stream unavailable')+' · All available qualities and connections were tried.';
       }
     }
     if(liveCopies.length>1){
@@ -6273,7 +6273,7 @@ try {
       context={channels:[{id:id,provider:'stalker',kind:'iptv',number:0,name:hint.name||'Channel '+channelId,slogan:hint.slogan||'Stalker',logo:'',programs:[]}],sources:{},refresh:refreshGuide,
         hasNextChannel:sequence.length>1,onZap:zapStalker,
         onError:function(message){if(current())failover(message);},
-        onPlaying:function(){playing=true;tried=[];if(!context.guideRequested){context.guideRequested=true;refreshGuide().catch(function(){if(current()&&!context.playError)status.textContent='Programme guide unavailable; playback can continue.';});}}
+        onPlaying:function(){playing=true;if(!context.guideRequested){context.guideRequested=true;refreshGuide().catch(function(){if(current()&&!context.playError)status.textContent='Programme guide unavailable; playback can continue.';});}}
       };
       play();
       liveApi('stalker_channel','feed='+encodeURIComponent(feed)+'&id='+encodeURIComponent(channelId)+'&guide=0').then(function(result){if(!current()||!result||!result.ok)return;context.channels=[result.channel];if(context.updateChannel)context.updateChannel();}).catch(function(){});
