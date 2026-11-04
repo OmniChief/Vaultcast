@@ -4,7 +4,7 @@ var countries={"AF":{"name":"Afghanistan","flag":"data:image/svg+xml;base64,PHN2
 window.VaultcastStalkerCountries=function(host,options){
   var h=options.h,active=false,serial=0,country=(options.saved||{}).country||'';
   var selected=null,feeds=[],folders=[],failures=[],status,body,search='',page=1,channels=[],hasMore=false,sourcePages={};
-  var pageInventory=[],guideByChannel={},guideLogos={},guideFetched={},guideBusy=false,formatEnabled={UHD:true,FHD:true,HD:true};
+  var pageInventory=[],guideByChannel={},guideLogos={},guideFetched={},guideBusy=false;
   var overrides={};try{overrides=JSON.parse(localStorage.getItem('vaultcast-stalker-country-overrides-'+options.owner)||'{}');}catch(ignore){}
   function folderKey(f){return f.feed+'/'+f.id;}
   function saveOverrides(){try{localStorage.setItem('vaultcast-stalker-country-overrides-'+options.owner,JSON.stringify(overrides));}catch(ignore){}}
@@ -146,7 +146,7 @@ window.VaultcastStalkerCountries=function(host,options){
   function quality(name){
     var n=String(name||'').toUpperCase();
     if(/(?:^|[^A-Z0-9])(?:UHD|4K|2160P)(?=$|[^A-Z0-9])/.test(n))return {label:'UHD',rank:4};
-    if(/(?:^|[^A-Z0-9])(?:FHD|FULL\\s*HD|1080P)(?=$|[^A-Z0-9])/.test(n))return {label:'FHD',rank:3};
+    if(/(?:^|[^A-Z0-9])(?:FHD|FULL\s*HD|1080P)(?=$|[^A-Z0-9])/.test(n))return {label:'FHD',rank:3};
     if(/(?:^|[^A-Z0-9])(?:HD|720P)(?=$|[^A-Z0-9])/.test(n))return {label:'HD',rank:2};
     if(/(?:^|[^A-Z0-9])(?:SD|480P|576P)(?=$|[^A-Z0-9])/.test(n))return {label:'SD',rank:1};
     return {label:'Standard',rank:0};
@@ -156,18 +156,18 @@ window.VaultcastStalkerCountries=function(host,options){
     // Providers put quality at either end, sometimes enclosed in brackets.
     // Strip quality only; preserve +1, geographic regions and other variants.
     for(var pass=0;pass<3;pass++){
-      var updated=name.replace(/^\\s*(?:(?:UHD|FHD|HD|SD|4K|2160P|1080P|720P)\\s*[-|:]\\s*|\\[(?:UHD|FHD|HD|SD|4K|2160P|1080P|720P)\\]\\s*)/i,'')
-        .replace(/(?:\\s*[-|:]\\s*|\\s+|\\s*\\[)(?:UHD|FHD|HD|SD|4K|2160P|1080P|720P)(?:\\])?\\s*$/i,'').trim();
+      var updated=name.replace(/^\s*(?:(?:UHD|FHD|HD|SD|4K|2160P|1080P|720P)\s*[-|:]\s*|\\[(?:UHD|FHD|HD|SD|4K|2160P|1080P|720P)\\]\s*)/i,'')
+        .replace(/(?:\s*[-|:]\s*|\s+|\s*\\[)(?:UHD|FHD|HD|SD|4K|2160P|1080P|720P)(?:\\])?\s*$/i,'').trim();
       if(!updated||updated===name)break;
       name=updated;
     }
-    return name.replace(/^BBC\\s*1(?=\\s|$)/i,'BBC One')
-      .replace(/^BBC\\s*2(?=\\s|$)/i,'BBC Two')
-      .replace(/^BBC\\s*3(?=\\s|$)/i,'BBC Three')
-      .replace(/^BBC\\s*4(?=\\s|$)/i,'BBC Four');
+    return name.replace(/^BBC\s*1(?=\s|$)/i,'BBC One')
+      .replace(/^BBC\s*2(?=\s|$)/i,'BBC Two')
+      .replace(/^BBC\s*3(?=\s|$)/i,'BBC Three')
+      .replace(/^BBC\s*4(?=\s|$)/i,'BBC Four');
   }
   function channelKey(item){
-    return channelDisplayBase(item.name).normalize('NFKC').toLocaleLowerCase().replace(/\\s+/g,' ').trim();
+    return channelDisplayBase(item.name).normalize('NFKC').toLocaleLowerCase().replace(/\s+/g,' ').trim();
   }
   function groupedChannels(){
     var groups=new Map();
@@ -235,11 +235,11 @@ window.VaultcastStalkerCountries=function(host,options){
     var next=h('button',{className:'btn',text:'Load more channels',onClick:function(){page++;loadChannels(true);},hidden:!hasMore});
     var guide=h('button',{className:'btn ghost',text:'Load more programme listings',
       onClick:function(){requestGuide(3);}});
-    var filters=h('div',{className:'row-actions stalker-studio-guide-toolbar'},[
+    var toolbar=h('div',{className:'row-actions stalker-studio-guide-toolbar'},[
       back,refresh,guide
     ]);
     var summary=h('p',{className:'muted',role:'status'});
-    body.append(filters,find,summary,list,next);
+    body.append(toolbar,find,summary,list,next);
     function programmeInfo(item){
       var now=Date.now()/1000;
       var available=[];
@@ -350,8 +350,7 @@ window.VaultcastStalkerCountries=function(host,options){
       if(!visible.length)list.appendChild(h('p',{className:'muted',text:listingOnly?'No programme listings found in loaded channels. Try loading more listings or turn off the filter.':'No matching channels on loaded pages.'}));
       var covered=grouped.filter(function(item){return !!programmeInfo(item).current;}).length;
       summary.textContent=visible.length+' of '+grouped.length+' channels shown · '+covered+
-        ' with current programmes · '+selected.sources.length+' provider folders'+
-        '';
+        ' with current programmes · '+selected.sources.length+' provider folders';
       status.textContent='Guide data is loaded on demand and may be unavailable for some channels.';
       guide.disabled=guideBusy||!pageInventory.some(function(entry){return !guideFetched[entry.feed+'|'+entry.category+'|'+entry.page];});
       guide.textContent=guideBusy?'Loading guide…':'Load more programme listings';
