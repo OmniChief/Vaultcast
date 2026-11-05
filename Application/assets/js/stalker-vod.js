@@ -616,6 +616,22 @@ window.VaultcastStalkerVod=function(host,options){
     });
     return Object.keys(byKey).map(function(k){return byKey[k];});
   }
+  function matchingLanguageFolders(sources){
+    var buckets=categoryBuckets(),matches=[];
+    var anchor=(sources||[]).find(function(source){return source&&source.feed&&source.categoryId;});
+    var bucket=anchor&&buckets.find(function(entry){return entry.sources.some(function(category){return String(category.feed)===String(anchor.feed)&&String(category.id)===String(anchor.categoryId);});});
+    if(bucket)bucket.sources.forEach(function(entry){matches.push({feed:entry.feed,id:entry.id,name:entry.name,language:bucket.language});});
+    if(!matches.length&&category){
+      var selected=providerSelections[category]||buckets.find(function(entry){return entry.key===category;});
+      if(!selected&&category.indexOf('provider-folder|')===0){var parts=category.split('|'),sourceCategory=categories.find(function(entry){return String(entry.feed)===String(parts[1])&&String(entry.id)===String(parts.slice(2).join('|'));});selected=sourceCategory&&buckets.find(function(entry){return entry.sources.some(function(candidate){return String(candidate.feed)===String(sourceCategory.feed)&&String(candidate.id)===String(sourceCategory.id);});});}
+      if(selected&&Array.isArray(selected.sources))selected.sources.forEach(function(entry){var categoryEntry=categories.find(function(candidate){return String(candidate.feed)===String(entry.feed)&&String(candidate.id)===String(entry.id);}),name=entry.name||categoryEntry&&categoryEntry.name||'';if(!matches.some(function(existing){return String(existing.feed)===String(entry.feed)&&String(existing.id)===String(entry.id);}))matches.push({feed:entry.feed,id:entry.id,name:name,language:selected.language||categoryLanguage(name)});});
+    }
+    return matches;
+  }
+  function openItem(source,item,button){
+    item=Object.assign({},item,{_stalkerLanguage:language,_stalkerMatchTitle:title(item),_stalkerLookupFolders:matchingLanguageFolders(item.sources||[])});
+    options.open(source,item,button);
+  }
   function folderSection(name){
     var value=String(name||'').toLocaleLowerCase();
     if(/netflix|amazon|prime video|apple(?: tv)?|disney|hbo|max\b|hulu|paramount|peacock|tubi|discovery\s*\+|britbox|itvx|skyshowtime|espn\s*\+|mubi|crunchyroll|hayu|roku|starz(?:play)?|viaplay|mgm\s*\+/.test(value))return 'Streaming services';
@@ -840,7 +856,7 @@ window.VaultcastStalkerVod=function(host,options){
     function normalized(name){return favouriteIdentity({name:name,tab:kind}).normalized;}
     function finish(){
       button.disabled=false;button.textContent=original;
-      if(match){options.open(match.feed,Object.assign({},match.item,{feed:match.feed}),button);}
+      if(match){openItem(match.feed,Object.assign({},match.item,{feed:match.feed}),button);}
       else status.textContent='Favourite "'+favourite.name+'" was not found on the enabled connections. It remains saved.';
     }
     function next(){
@@ -879,7 +895,7 @@ window.VaultcastStalkerVod=function(host,options){
       ]);
       var message=h('small',{className:'muted',text:'Looking up provider artwork…'});
       var button=h('button',{type:'button',className:'btn ghost',text:titleText,onClick:function(){
-        if(job.found){options.open(job.found.feed,Object.assign({},job.found.item,{feed:job.found.feed,sources:job.sources.slice()}),button);}
+        if(job.found){openItem(job.found.feed,Object.assign({},job.found.item,{feed:job.found.feed,sources:job.sources.slice()}),button);}
         else findFavourite(fav,button);
       }});
       button.style.whiteSpace='normal';button.style.textAlign='left';button.style.width='100%';
@@ -956,7 +972,7 @@ window.VaultcastStalkerVod=function(host,options){
             var candidates=Array.isArray(data.items)?data.items:[];
             candidates.forEach(function(item){
               if(!item||normalized(item.name)!==job.fav.normalized||(job.fav.year&&year(item)&&year(item)!==job.fav.year))return;
-              var source={id:item.id,feed:feed.id,connection:feed.name,kind:item.kind,playable:item.playable,
+              var source={id:item.id,feed:feed.id,connection:feed.name,kind:item.kind,playable:item.playable,categoryId:target.category||'',
                 poster:item.poster||''};
               if(!job.sources.some(function(existing){return String(existing.feed)===String(source.feed)&&String(existing.id)===String(source.id);}))job.sources.push(source);
               if(!job.found)job.found={feed:feed.id,item:item};
@@ -1028,12 +1044,13 @@ window.VaultcastStalkerVod=function(host,options){
     if(shared.length<12)return null;
     return {number:Number(m[1]),name:shared,key:shared.toLocaleLowerCase()+'|'+poster};
   }
-  function add(rows,feed){
+  function add(rows,feed,categoryId){
     (rows||[]).forEach(function(item){
       if(!item||!item.name||!item.id)return;
       var sourceItemKey=String(feed.id)+'|'+String(item.id),prior=seenSourceItems[sourceItemKey];
       if(prior){['poster','description','actors','cast','director','age','rating_mpaa','genres_str','genre','duration','time','rating_imdb','audio_languages','subtitle_languages'].forEach(function(field){if(!prior[field]&&item[field])prior[field]=item[field];});return;}
-      var source={id:item.id,feed:feed.id,connection:feed.name,kind:item.kind,playable:item.playable,labels:prefixParts(item).labels,poster:item.poster||'',posterCandidates:Array.isArray(item.posterCandidates)?item.posterCandidates:[]};
+      var sourceCategory=categories.find(function(entry){return String(entry.feed)===String(feed.id)&&String(entry.id)===String(categoryId);});
+      var source={id:item.id,feed:feed.id,connection:feed.name,kind:item.kind,playable:item.playable,categoryId:categoryId||'',categoryName:sourceCategory?sourceCategory.name:'',language:sourceCategory?categoryLanguage(sourceCategory.name):language,labels:prefixParts(item).labels,poster:item.poster||'',posterCandidates:Array.isArray(item.posterCandidates)?item.posterCandidates:[]};
       var part=numberedPart(item);
       var k=part?'numbered|'+feed.id+'|'+part.key:key(item),group=seen[k];
       // Without a year, avoid merging unrelated similarly named releases.
@@ -1043,7 +1060,7 @@ window.VaultcastStalkerVod=function(host,options){
       seenSourceItems[sourceItemKey]=group;
       // Enrich an already matched title without changing its identity or position.
       ['poster','description','actors','cast','director','age','rating_mpaa','genres_str','genre','duration','time','rating_imdb','audio_languages','subtitle_languages'].forEach(function(field){if(!group[field]&&item[field])group[field]=item[field];});
-      if(part&&!group.numberedParts.some(function(p){return p.feed===feed.id&&p.id===item.id;}))group.numberedParts.push({number:part.number,name:item.name,id:item.id,feed:feed.id,connection:feed.name,item:item});
+      if(part&&!group.numberedParts.some(function(p){return p.feed===feed.id&&p.id===item.id;}))group.numberedParts.push({number:part.number,name:item.name,id:item.id,feed:feed.id,connection:feed.name,categoryId:categoryId||'',item:item});
       if(!group.sources.some(function(x){return x.feed===source.feed&&x.id===source.id;}))group.sources.push(source);
       source.labels.forEach(function(label){if(group.groupLabels.indexOf(label)<0)group.groupLabels.push(label);});
     });
@@ -1072,7 +1089,7 @@ window.VaultcastStalkerVod=function(host,options){
         parts.forEach(function(part){
           var label=String(part.number).padStart(3,'0')+' · '+title(part.item);
           details.appendChild(h('button',{className:'btn ghost',text:label,onClick:function(){
-            options.open(part.feed,Object.assign({},part.item,{sources:[{id:part.id,feed:part.feed,connection:part.connection,kind:part.item.kind,playable:true}]}));
+            openItem(part.feed,Object.assign({},part.item,{sources:[{id:part.id,feed:part.feed,connection:part.connection,kind:part.item.kind,playable:true,categoryId:part.categoryId||''}]}));
           }}));
         });
         results.appendChild(h('article',{className:'stalker-vod-card'},[
@@ -1082,7 +1099,7 @@ window.VaultcastStalkerVod=function(host,options){
         return;
       }
       function selected(){return chosen;}
-      function open(){var src=selected();options.open(src.feed,Object.assign({},item,src,{sources:sources,poster:src.poster||item.poster}),posterButton);}
+      function open(){var src=selected();openItem(src.feed,Object.assign({},item,src,{sources:sources,poster:src.poster||item.poster}),posterButton);}
       var star=h('button',{className:'btn ghost stalker-save'});
       function updateStar(){
         var active=favouriteEntries().some(function(x){return favouriteId(x)===favouriteId(Object.assign({},item,{tab:kind}));});
@@ -1190,7 +1207,7 @@ window.VaultcastStalkerVod=function(host,options){
         p.pageSignatures[signature]=true;
         var fresh=rows.filter(function(item){var id=String(item&&item.id||'');if(!id||p.seenIds[id])return false;p.seenIds[id]=true;return true;});
         if(!fresh.length){p.done=true;return;}
-        add(fresh,task.feed);p.page++;p.done=!result.hasMore||p.page>10000;
+        add(fresh,task.feed,task.category);p.page++;p.done=!result.hasMore||p.page>10000;
         if(p.done){index++;attempts=0;}
       }).catch(function(){if(valid(token)){p.done=true;p.failed=true;index++;attempts=0;}})
         .then(function(){if(valid(token)){renderResults();step();}});
