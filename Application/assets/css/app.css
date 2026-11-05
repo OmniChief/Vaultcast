@@ -1034,6 +1034,12 @@ input[type=checkbox], input[type=radio], input[type=range] { accent-color: var(-
 }
 .settings-main > h2 { margin: 0 0 8px; font-size: 1.45rem; }
 .settings-card { margin-top: 12px; }
+.offline-download-progress { display:flex; align-items:center; gap:12px; margin-top:10px; max-width:520px; color:var(--muted); font-size:.9rem; }
+.offline-download-progress-track { flex:1; height:7px; overflow:hidden; border-radius:99px; background:var(--border); }
+.offline-download-progress-track > span { display:block; height:100%; border-radius:inherit; background:linear-gradient(90deg,var(--live-a),var(--live-b)); transition:width .35s ease; }
+.offline-download-progress.indeterminate .offline-download-progress-track > span { width:34% !important; animation:offline-download-progress 1.35s ease-in-out infinite alternate; }
+.offline-download-progress-label { min-width:120px; text-align:right; }
+@keyframes offline-download-progress { from { transform:translateX(-35%); } to { transform:translateX(195%); } }
 .settings-choice-grid {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-top: 14px;
 }

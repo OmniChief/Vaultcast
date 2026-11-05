@@ -6351,13 +6351,22 @@ try {
     host.replaceChildren(h('h2',{text:'Offline downloads'}),pendingContent());
     liveApi('stalker_offline').then(function(result){
       if(!host.isConnected)return;if(!result||!result.ok)throw new Error(result&&result.error||'Could not load offline downloads.');
+      function offlineProgress(item){
+        if(['queued','downloading'].indexOf(item.status)<0)return null;
+        var known=item.percent!=null,pct=known?Math.max(0,Math.min(100,Number(item.percent)||0)):0;
+        var fill=h('span',{style:'width:'+pct+'%'}),track=h('div',{className:'offline-download-progress-track'},[fill]);
+        var label=h('span',{className:'offline-download-progress-label',text:known?pct+'% downloaded':item.status==='queued'?'Waiting in queue':'Receiving data'});
+        var wrap=h('div',{className:'offline-download-progress'+(known?'':' indeterminate'),'data-offline-progress':item.id},[track,label]);
+        wrap.setAttribute('role','progressbar');wrap.setAttribute('aria-label','Download progress');wrap.setAttribute('aria-valuemin','0');wrap.setAttribute('aria-valuemax','100');if(known)wrap.setAttribute('aria-valuenow',String(pct));
+        return wrap;
+      }
       host.replaceChildren(h('div',{className:'row-head'},[h('h2',{text:'Offline downloads'}),h('button',{className:'btn',text:'Refresh status',onClick:function(){showStalkerOffline(host);}})]),h('p',{className:'muted',text:'Prepared videos can be saved to this device. Library downloads also appear in the ingest inbox for matching.'}));
       (result.items||[]).forEach(function(item){
         var seriesDetails=[item.showName,item.seasonName,item.episode?('Episode '+item.episode):'',item.episodeTitle].filter(Boolean).join(' · ');
         var details=[item.stage,item.percent!=null?item.percent+'% downloaded':'',item.connection?'Provider: '+item.connection:'',item.destination==='browser'?'Destination: this device':'Destination: library',item.bytes?Math.round(item.bytes/1048576)+' MB transferred':''].filter(Boolean).join(' · ');
         var admin=!!(state.user&&state.user.role==='admin');
         var statusLine=h('p',{text:item.status,'data-offline-status':item.id,'data-offline-state':item.status});
-        host.appendChild(h('div',{className:'settings-card','data-offline-job':item.id},[h('h3',{text:item.name}),seriesDetails?h('p',{className:'muted',text:seriesDetails}):null,statusLine,h('p',{className:'muted',text:details,'data-offline-details':item.id}),item.error?h('p',{className:'bad',text:item.error}):null,
+        host.appendChild(h('div',{className:'settings-card','data-offline-job':item.id},[h('h3',{text:item.name}),seriesDetails?h('p',{className:'muted',text:seriesDetails}):null,statusLine,h('p',{className:'muted',text:details,'data-offline-details':item.id}),offlineProgress(item),item.error?h('p',{className:'bad',text:item.error}):null,
         ['queued','downloading'].indexOf(item.status)>=0&&can('downloads_request')?h('button',{className:'btn ghost',text:'Cancel download',onClick:function(){stalkerPost('stalker_cancel',{id:item.id}).then(function(){showStalkerOffline(host);}).catch(function(error){toast(error.message,{kind:'bad'});});}}):null,item.status==='ready'&&item.destination!=='browser'&&can('ingest_import')?h('button',{className:'btn',text:'Match and add to library',onClick:function(){openSettings('ingest');}}):null,
         item.status==='ready'&&can('downloads_request')?h('a',{className:'btn',href:LIVE_API+'stalker_offline_file?id='+encodeURIComponent(item.id),download:'',text:'Save video to device'}):null,
         ['failed','cancelled'].indexOf(item.status)>=0&&can('downloads_request')?h('button',{className:'btn',text:'Retry interrupted download',onClick:function(e){var b=e.currentTarget;b.disabled=true;stalkerPost('stalker_retry',{id:item.id}).then(function(){showStalkerOffline(host);}).catch(function(error){toast(error.message,{kind:'bad'});}).finally(function(){b.disabled=false;});}}):null,
@@ -6374,6 +6383,7 @@ try {
             if(line&&line.getAttribute('data-offline-state')!==row.status){changed=true;return;}
             if(line)line.textContent=row.status;
             if(detail)detail.textContent=[row.stage,row.percent!=null?row.percent+'% downloaded':'',row.connection?'Provider: '+row.connection:'',row.destination==='browser'?'Destination: this device':'Destination: library',row.bytes?Math.round(row.bytes/1048576)+' MB transferred':''].filter(Boolean).join(' · ');
+            var progress=card.querySelector('[data-offline-progress]'),nextProgress=offlineProgress(row);if(progress&&nextProgress)progress.replaceWith(nextProgress);else if(progress&&!nextProgress)progress.remove();else if(!progress&&nextProgress&&detail)detail.after(nextProgress);
           });
           if(changed){showStalkerOffline(host);return;}
           if(active&&host.isConnected)host._stalkerOfflineTimer=setTimeout(updateProgress,4000);
