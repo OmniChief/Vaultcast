@@ -6082,6 +6082,7 @@ try {
     else if(bytes>0)parts.push(stalkerFormatBytes(bytes)+' transferred');
     else if(active)parts.push('Waiting for provider data');
     if(total===0&&active)parts.push('Size not reported');
+    if(active&&Number(job.providerHttpStatus)>0)parts.push('Provider HTTP '+Number(job.providerHttpStatus));
     if(speed>0)parts.push(stalkerFormatBytes(speed)+'/s');else if(active)parts.push('0 B/s');
     var elapsed=Math.max(0,Number(job.elapsedSeconds)||0);if(active&&elapsed>0)parts.push('Elapsed '+(elapsed>=60?Math.floor(elapsed/60)+'m '+(elapsed%60)+'s':elapsed+'s'));
     return parts.join(' · ');
