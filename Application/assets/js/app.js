@@ -2,6 +2,8 @@
   'use strict';
   var BASE = window.__STREAM_BASE__ || '/';
   var API = BASE + 'api';
+  var tvSelectPicker = /(?:Tizen|Web0S|WebOS|SMART-TV|SmartTV|Android TV|Google TV|AFT[A-Z0-9]*|Roku|Viera|HbbTV|NetCast|BRAVIA|Hisense|Philips)/i.test(navigator.userAgent || '');
+  if(tvSelectPicker)document.documentElement.classList.add('tv-poster-device');
   var _navSilent = false;
   function streamPlayUrl(url){
     if (!url) return url;
@@ -1130,7 +1132,7 @@ function confirmDialog(message, opts){
   function setPosterBg(el, url){
     if (!el || !url) return;
     el.style.backgroundImage = 'url("'+String(url).replace(/"/g,'%22')+'")';
-    el.style.backgroundSize = 'cover';
+    el.style.backgroundSize = tvSelectPicker&&el.closest&&el.closest('.card')?'contain':'cover';
     el.style.backgroundPosition = 'center';
     el.style.backgroundRepeat = 'no-repeat';
     el.classList.add('poster-ready');
@@ -4980,7 +4982,6 @@ try {
 
   // Several TV browsers close their native select popup while the remote moves
   // focus between options. Use an in-page, D-pad-friendly picker on those TVs.
-  var tvSelectPicker = /(?:Tizen|Web0S|WebOS|SMART-TV|SmartTV|Android TV|Google TV|AFT[A-Z0-9]*|Roku|Viera|HbbTV|NetCast|BRAVIA|Hisense|Philips)/i.test(navigator.userAgent || '');
   function openTvSelectPicker(select){
     if(!tvSelectPicker||!select||select.disabled||select.multiple||document.querySelector('.tv-select-picker'))return;
     var options=Array.prototype.slice.call(select.options).map(function(option,index){return {option:option,index:index};}).filter(function(row){return !row.option.disabled;});
