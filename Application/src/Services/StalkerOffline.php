@@ -113,7 +113,12 @@ final class StalkerOffline {
                      $n=fwrite($file,$chunk);if($n===false||$n!==strlen($chunk)){$failed=true;$failureCause='The download could not be written completely. Check free disk space and offline storage permissions.';return 0;}return $n;
                 }]);
             $ok=curl_exec($ch);$errno=curl_errno($ch);$status=(int)curl_getinfo($ch,CURLINFO_HTTP_CODE);curl_close($ch);if(is_resource($file))fclose($file);
-            if($status>=300&&$status<400&&!empty($response['location'])){$url=iptv_hls_resolve_uri($url,$response['location']);continue;}
+            $redirect=trim((string)($response['location']??''));
+            // Some provider gateways send their redirect target as Refresh
+            // instead of the standard Location header. Resolve it through the
+            // same validated redirect loop below.
+            if($redirect===''&&$status>=300&&$status<400&&isset($response['refresh'])&&preg_match('/^\s*\d+\s*;\s*url\s*=\s*["\']?([^"\']+)["\']?\s*$/i',$response['refresh'],$refresh))$redirect=trim($refresh[1]);
+            if($status>=300&&$status<400&&$redirect!==''){$url=iptv_hls_resolve_uri($url,$redirect);continue;}
             if($status>=300&&$status<400)throw new RuntimeException('The provider redirected this download (HTTP '.$status.') without a usable destination. Refresh the provider link and retry.');
             // Some Stalker media hosts reject Range/If-Range requests (notably
             // with 405 or vendor status 460). Drop the incompatible partial and
