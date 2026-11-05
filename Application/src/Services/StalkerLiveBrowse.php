@@ -118,6 +118,9 @@ final class StalkerLiveBrowse {
             $name=preg_replace('/^\\s*(?:[|┃│¦]\\s*(?:UK|GB|US|USA)\\s*[|┃│¦]|\\[\\s*(?:UK|GB|US|USA)\\s*\\]|(?:UK|GB|US|USA)\\s*[-:])\\s*/iu','',$name);
             $name=preg_replace('/(?:\\s+|\\s*[-|]\\s*|\\s*\\[)(?:UHD|FHD|FULL\\s*HD|HD|SD|4K|2160P|1080P|720P|HEVC|H\\.?265|H\\.?264)\\]?\\s*$/iu','',$name);
         }
+        // XMLTV UK feeds append .uk to channel labels; it is a country marker,
+        // not part of a service name such as BBC One.
+        $name=preg_replace('/\\.uk$/iu','',$name);
         $name=mb_strtolower(trim(preg_replace('/\\s+/u',' ',$name)));
         // These broadcaster-specific spelling variants are unambiguous.
         $name=preg_replace('/^bbc\\s+(?:1|one)(?=\\s|$)/u','bbc one',$name);
