@@ -520,9 +520,10 @@ function stalker_check_media(array $feed,string $id,string $kind,string $profile
         if(in_array($profile,['stb','http1'],true))curl_setopt($ch,CURLOPT_REFERER,preg_replace('#/(?:server/load|portal)\.php$#','/c/',stalker_endpoint($feed)));
         if($profile!=='stb')curl_setopt($ch,CURLOPT_HTTP_VERSION,CURL_HTTP_VERSION_1_1);
         $ok=curl_exec($ch);$status=(int)curl_getinfo($ch,CURLINFO_HTTP_CODE);curl_close($ch);
-        if($status===458&&$browserRange){$browserRange=false;$hop--;continue;}
-        if($status>=300&&$status<400&&!empty($headers['location'])){$url=iptv_hls_resolve_uri($url,$headers['location']);continue;}
         $type=strtolower(explode(';',$headers['content-type']??'unknown')[0]);
+        if($browserRange&&($status===458||($status===400&&$type==='video/mp4'))){$browserRange=false;$hop--;continue;}
+        if($status>=300&&$status<400&&!empty($headers['location'])){$url=iptv_hls_resolve_uri($url,$headers['location']);continue;}
+        if($status===400&&$type==='video/mp4'&&strpos(substr($body,0,64),'ftyp')!==false)$status=200;
         $format=strpos(ltrim($body),'#EXTM3U')===0?'HLS playlist':((strlen($body)>188&&ord($body[0])===71&&ord($body[188])===71)?'MPEG-TS stream':(strpos($type,'video/')===0?'Video stream':(strpos($type,'html')!==false?'HTML page':'Unrecognised response')));
         return ['ok'=>true,'http'=>$status,'method'=>'GET','profile'=>$profile,'linkMode'=>$linkMode,'temporaryLink'=>$entry['use_http_tmp_link']??null,'loadBalancing'=>$entry['use_load_balancing']??null,'type'=>$type,'format'=>$format,'redirects'=>$hop,'https'=>$p['scheme']==='https','samePortalHost'=>strtolower($host)===strtolower((string)parse_url(stalker_endpoint($feed),PHP_URL_HOST)),'cloudflare'=>stripos($body,'cloudflare')!==false,'allow'=>preg_replace('/[^A-Z, ]/','',(string)($headers['allow']??'')),'received'=>strlen($body),'timedOutOrFailed'=>$ok===false&&strlen($body)<8192];
     }

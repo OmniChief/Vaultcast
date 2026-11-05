@@ -6339,18 +6339,46 @@ try {
     }
     function lookupYear(row){var explicit=String(row&&row.year||'').match(/^(?:19|20)\d{2}$/);if(explicit)return explicit[0];var match=String(row&&row.name||'').match(/[([]((?:19|20)\d{2})[)\]]\s*$/);return match?match[1]:'';}
     function findAlternateConnections(){
-      if(!item||item.kind!=='vod'||item.episode!=null||item.seasonId||!Array.isArray(item._stalkerLookupFolders)||!item._stalkerLookupFolders.length)return;
-      var wanted=normalizedVodTitle(item._stalkerMatchTitle||item.name),copies=Array.isArray(item.sources)?item.sources.slice():[{id:itemId,feed:feed,connection:'',kind:'vod',playable:true}],folders=item._stalkerLookupFolders.filter(function(folder,index,array){return folder&&folder.feed&&folder.id&&String(folder.feed)!==String(feed)&&!copies.some(function(source){return String(source.feed)===String(folder.feed);})&&(!item._stalkerLanguage||folder.language===item._stalkerLanguage)&&array.findIndex(function(other){return other&&String(other.feed)===String(folder.feed)&&String(other.id)===String(folder.id);})===index;});
+      var isEpisode=!!(item&&(item.episode!=null||item.showName&&(item.season!=null||item.seasonName||/\bS\d{1,2}\s*E\d{1,3}\b|\bEpisode\s*\d+\b/i.test(item.name||'')))),isMovie=!!(item&&item.kind==='vod'&&!isEpisode&&!item.seasonId);
+      if((!isMovie&&!isEpisode)||!Array.isArray(item._stalkerLookupFolders)||!item._stalkerLookupFolders.length)return;
+      var matchTitle=isEpisode?(item.showName||item._stalkerMatchTitle||item.name):(item._stalkerMatchTitle||item.name),wanted=normalizedVodTitle(matchTitle),copies=Array.isArray(item.sources)?item.sources.slice():[{id:itemId,feed:feed,connection:'',kind:'vod',playable:true}],folders=item._stalkerLookupFolders.filter(function(folder,index,array){return folder&&folder.feed&&folder.id&&String(folder.feed)!==String(feed)&&!copies.some(function(source){return String(source.feed)===String(folder.feed);})&&(!item._stalkerLanguage||folder.language===item._stalkerLanguage)&&array.findIndex(function(other){return other&&String(other.feed)===String(folder.feed)&&String(other.id)===String(folder.id);})===index;});
       if(!wanted||!folders.length)return;
       folders.sort(function(a,b){return a.priority===b.priority?0:a.priority?-1:1;});
-      var query=String(item._stalkerMatchTitle||item.name||'').replace(/\s*[([](?:19|20)\d{2}[)\]]\s*$/,'').trim(),words=query.normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean).sort(function(a,b){return b.length-a.length;});
+      var query=String(matchTitle||item.name||'').replace(/\s*[([](?:19|20)\d{2}[)\]]\s*$/,'').trim(),words=query.normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean).sort(function(a,b){return b.length-a.length;});
       query=words[0]||query;if(query.length>24)query=query.slice(0,5);
       var token=++lookupToken;lookupPending=true;lookupMessage='';paint();
+      function episodeCoordinates(candidate){
+        var rawName=String(candidate&&candidate.name||''),season=candidate&&candidate.season!=null&&candidate.season!==''?Number(candidate.season):NaN,episode=candidate&&candidate.episode!=null&&candidate.episode!==''?Number(candidate.episode):NaN;
+        var code=rawName.match(/\bS(\d{1,2})\s*E(\d{1,3})\b/i),seasonMatch=String(candidate&&candidate.seasonName||rawName).match(/(?:Season\s*(\d+)|\bS(\d{1,2})E\d+\b)/i),episodeMatch=rawName.match(/\bEpisode\s*(\d+)\b/i)||String(candidate&&candidate.id||'').match(/:(\d+)$/);
+        if(!Number.isFinite(season))season=code?Number(code[1]):seasonMatch?Number(seasonMatch[1]||seasonMatch[2]):NaN;
+        if(!Number.isFinite(episode)||episode<=0)episode=code?Number(code[2]):episodeMatch?Number(episodeMatch[1]):NaN;
+        return {season:season,episode:episode,title:normalizedVodTitle(candidate&&candidate.episodeTitle||'')};
+      }
+      function sameEpisode(candidate){
+        var wantedEpisode=episodeCoordinates(item),candidateEpisode=episodeCoordinates(candidate);
+        if(!Number.isFinite(wantedEpisode.season)||!Number.isFinite(wantedEpisode.episode)||wantedEpisode.season!==candidateEpisode.season||wantedEpisode.episode!==candidateEpisode.episode)return false;
+        return !wantedEpisode.title||!candidateEpisode.title||wantedEpisode.title===candidateEpisode.title;
+      }
+      function findEpisode(series,folder,page){
+        var params='feed='+encodeURIComponent(folder.feed)+'&kind=series&parent='+encodeURIComponent(series.id)+'&page='+page;
+        return liveApi('stalker_browse',params).then(function(result){
+          if(!result||!result.ok)return null;
+          var found=(result.items||[]).find(function(candidate){return candidate&&candidate.playable&&sameEpisode(candidate);});
+          if(found)return found;
+          return result.hasMore&&page<3?findEpisode(series,folder,page+1):null;
+        }).catch(function(){return null;});
+      }
       function searchFolder(folder,page){
-        var params='feed='+encodeURIComponent(folder.feed)+'&kind=vod&category='+encodeURIComponent(folder.id)+'&q='+encodeURIComponent(query)+'&page='+page;
+        var params='feed='+encodeURIComponent(folder.feed)+'&kind='+(isEpisode?'series':'vod')+'&category='+encodeURIComponent(folder.id)+'&q='+encodeURIComponent(query)+'&page='+page;
         return liveApi('stalker_browse',params).then(function(result){
           if(!result||!result.ok)return [];
-          var found=(result.items||[]).filter(function(candidate){if(!candidate||!candidate.playable||normalizedVodTitle(candidate.name)!==wanted)return false;var wantedYear=String(item.year||'')||lookupYear(item),candidateYear=lookupYear(candidate);return !(wantedYear&&candidateYear&&wantedYear!==candidateYear);});
+          var found=(result.items||[]).filter(function(candidate){if(!candidate||normalizedVodTitle(candidate.name)!==wanted)return false;var wantedYear=String(item.year||'')||lookupYear(item),candidateYear=lookupYear(candidate);return !(wantedYear&&candidateYear&&wantedYear!==candidateYear);});
+          if(isEpisode){
+            var series=found.find(function(candidate){return !candidate.playable;});
+            if(!series)return result.hasMore&&page<3?searchFolder(folder,page+1):[];
+            return findEpisode(series,folder,1).then(function(episode){return episode?[{episode:episode}]:[];});
+          }
+          found=found.filter(function(candidate){return candidate.playable;});
           if(found.length||!result.hasMore||page>=3)return found;
           return searchFolder(folder,page+1);
         }).catch(function(){return [];});
@@ -6367,7 +6395,8 @@ try {
         var changed=false;
         results.forEach(function(result){
           if(copies.some(function(source){return String(source.feed)===String(result.folder.feed);}))return;
-          copies.push({id:result.item.id,feed:result.folder.feed,connection:result.item.connection||'',kind:'vod',playable:true,categoryId:result.folder.id,categoryName:result.folder.name,language:result.folder.language});changed=true;
+          var found=isEpisode?result.item.episode:result.item;
+          copies.push({id:found.id,feed:result.folder.feed,connection:found.connection||result.folder.feedName||'',kind:'vod',playable:true,categoryId:result.folder.id,categoryName:result.folder.name,language:result.folder.language});changed=true;
         });
         if(changed)item.sources=copies;
         lookupPending=false;lookupMessage=results.length||copies.length>1?'':'No other matching title found in this language group.';paint();
@@ -6679,7 +6708,7 @@ try {
       }
       loaded.forEach(function(item){
         if(episodeView&&query.value.trim()&&(item.name+' '+(item.episodeTitle||'')).toLowerCase().indexOf(query.value.trim().toLowerCase())<0)return;
-        var button=h('button',{className:'btn',text:item.kind==='live'?'Watch':item.playable?'View details':'Explore',onClick:function(){if(state._stalkerBrowse)state._stalkerBrowse.folders=Array.from(results.querySelectorAll('details[data-folder]')).map(function(folder){return [folder.getAttribute('data-folder'),folder.open];});if(item.kind==='live'||item.playable){var playItem=item;if(kind==='series'&&!playItem.showName&&trail.length)playItem=Object.assign({},item,{showName:trail[0].name});playStalkerItem(feed.value,playItem,button);}else{parent=item.id;showContext=Object.assign({},item);trail.push({id:item.id,name:item.name});query.value='';page=1;back.hidden=false;load(false,true);}}});
+        var button=h('button',{className:'btn',text:item.kind==='live'?'Watch':item.playable?'View details':'Explore',onClick:function(){if(state._stalkerBrowse)state._stalkerBrowse.folders=Array.from(results.querySelectorAll('details[data-folder]')).map(function(folder){return [folder.getAttribute('data-folder'),folder.open];});if(item.kind==='live'||item.playable){var playItem=item;if(kind==='series'&&showContext){playItem=Object.assign({},item,{showName:item.showName||(trail.length?trail[0].name:showContext.name),_stalkerMatchTitle:showContext._stalkerMatchTitle||showContext.name,_stalkerLanguage:showContext._stalkerLanguage,_stalkerLookupFolders:showContext._stalkerLookupFolders});}else if(kind==='series'&&!playItem.showName&&trail.length)playItem=Object.assign({},item,{showName:trail[0].name});playStalkerItem(feed.value,playItem,button);}else{parent=item.id;showContext=Object.assign({},item);trail.push({id:item.id,name:item.name});query.value='';page=1;back.hidden=false;load(false,true);}}});
         var isSaved=saved().some(function(x){return x.id===item.id&&x.tab===kind;}),star=h('button',{className:'btn ghost stalker-save',text:isSaved?'★':'☆','aria-label':(isSaved?'Remove favourite: ':'Save favourite: ')+item.name,'aria-pressed':String(isSaved),onClick:function(){var list=saved().filter(function(x){return !(x.id===item.id&&x.tab===kind);});if(!isSaved)list.unshift({id:item.id,name:item.name,tab:kind});try{localStorage.setItem('stalker-favourites-'+owner+'-'+feed.value,JSON.stringify(list.slice(0,100)));}catch(ignore){}draw();}});
         var download=item.kind!=='live'&&item.playable&&can('downloads_request')&&can('ingest_view')&&userAreaAllowed('library')?h('button',{className:'btn ghost',text:'Download for library',onClick:function(e){var b=e.currentTarget;b.disabled=true;var showName=item.showName||(kind==='series'&&trail.length?trail[0].name:'');stalkerPost('stalker_download',{feed:feed.value,id:item.id,name:item.name,showName:showName}).then(function(){toast('Download queued. Match it in the import inbox when it finishes.');}).catch(function(error){toast(error.message,{kind:'bad'});}).finally(function(){b.disabled=false;});}}):null;
         if(episodeView&&item.playable){
