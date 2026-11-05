@@ -236,11 +236,17 @@ final class StalkerOffline {
             $dir=self::root().'/'.$id;if(!is_dir($dir)&&!@mkdir($dir,0700,true))throw new RuntimeException('Cannot create download folder.');
             if(is_file($dir.'/cancel'))throw new RuntimeException('Download cancelled. Partial media was preserved.');
             $j['destination']=self::job($id)['destination']??'library';$j['status']='downloading';$j['stage']='Resolving provider stream';$j['updated']=date('c');self::save($j);
-            // Ask Stalker for a download-mode link instead of reusing the
-            // playback URL generated with download=0. A player URL may expire
-            // before a large transfer finishes.
-            $url=stalker_vod_resolve($feed,$j['item_id'],$j['item'],true);
-            $cookies=$dir.'/cookies';if(!@copy(stalker_cookie_path($feed),$cookies))throw new RuntimeException('Could not prepare provider download cookies.');@chmod($cookies,0600);
+            $url='';$playbackCookies='';$ticket=(string)($j['playback_ticket']??'');$ticketViewer=(string)($j['playback_viewer']??'');
+            if(preg_match('/^[a-f0-9]{32}$/D',$ticket)&&$ticketViewer!==''){
+                $ticketState=\Vaultcast\Repository::cacheGet('stalker_play_ticket_'.hash('sha256',$ticket));
+                if($ticketState&&($ticketState['viewer']??null)===$ticketViewer&&($ticketState['feed']??null)===$feed['id']&&($ticketState['id']??null)===$j['item_id']&&($ticketState['kind']??null)!=='live'){
+                    $playbackKey='stalker_playback_v3_'.hash('sha256',json_encode([$ticketViewer,$feed,$j['item_id'],$ticket]));$playbackState=\Vaultcast\Repository::cacheGet($playbackKey);
+                    if($playbackState&&!empty($playbackState['url'])){$url=(string)$playbackState['url'];if(!empty($playbackState['jar']))$playbackCookies=iptv_hls_jar_path((string)$playbackState['jar']);}
+                    elseif(time()-(int)($ticketState['created']??0)<30)$url=(string)($ticketState['url']??'');
+                }
+            }
+            if($url==='')$url=stalker_vod_resolve($feed,$j['item_id'],$j['item']);
+            $cookies=$dir.'/cookies';$cookieSource=$playbackCookies!==''&&is_file($playbackCookies)?$playbackCookies:stalker_cookie_path($feed);if(!@copy($cookieSource,$cookies))throw new RuntimeException('Could not prepare provider download cookies.');@chmod($cookies,0600);
             $feed['_downloadCookies']=$cookies;$source=$dir.'/source';$j['stage']='Downloading from provider';$j['updated']=date('c');self::save($j);
             // Start with a plain GET. Some Stalker media gateways stall when
             // the initial request includes Range: bytes=0-. Content-Length
