@@ -236,16 +236,19 @@ final class StalkerOffline {
             $dir=self::root().'/'.$id;if(!is_dir($dir)&&!@mkdir($dir,0700,true))throw new RuntimeException('Cannot create download folder.');
             if(is_file($dir.'/cancel'))throw new RuntimeException('Download cancelled. Partial media was preserved.');
             $j['destination']=self::job($id)['destination']??'library';$j['status']='downloading';$j['stage']='Resolving provider stream';$j['updated']=date('c');self::save($j);
-            $url='';$playbackCookies='';$ticket=(string)($j['playback_ticket']??'');$ticketViewer=(string)($j['playback_viewer']??'');
+            $playbackCookies='';$ticket=(string)($j['playback_ticket']??'');$ticketViewer=(string)($j['playback_viewer']??'');
             if(preg_match('/^[a-f0-9]{32}$/D',$ticket)&&$ticketViewer!==''){
                 $ticketState=\Vaultcast\Repository::cacheGet('stalker_play_ticket_'.hash('sha256',$ticket));
                 if($ticketState&&($ticketState['viewer']??null)===$ticketViewer&&($ticketState['feed']??null)===$feed['id']&&($ticketState['id']??null)===$j['item_id']&&($ticketState['kind']??null)!=='live'){
                     $playbackKey='stalker_playback_v3_'.hash('sha256',json_encode([$ticketViewer,$feed,$j['item_id'],$ticket]));$playbackState=\Vaultcast\Repository::cacheGet($playbackKey);
-                    if($playbackState&&!empty($playbackState['url'])){$url=(string)$playbackState['url'];if(!empty($playbackState['jar']))$playbackCookies=iptv_hls_jar_path((string)$playbackState['jar']);}
-                    elseif(time()-(int)($ticketState['created']??0)<30)$url=(string)($ticketState['url']??'');
+                    if($playbackState&&!empty($playbackState['jar']))$playbackCookies=iptv_hls_jar_path((string)$playbackState['jar']);
                 }
             }
-            if($url==='')$url=stalker_vod_resolve($feed,$j['item_id'],$j['item']);
+            // Reuse the active player's refreshed cookies, but give the NAS
+            // worker its own provider media URL. Some providers bind a signed
+            // playback URL to the browser's in-progress stream and stall when
+            // a second consumer tries to fetch that same URL.
+            $url=stalker_vod_resolve($feed,$j['item_id'],$j['item']);
             $cookies=$dir.'/cookies';$cookieSource=$playbackCookies!==''&&is_file($playbackCookies)?$playbackCookies:stalker_cookie_path($feed);if(!@copy($cookieSource,$cookies))throw new RuntimeException('Could not prepare provider download cookies.');@chmod($cookies,0600);
             $feed['_downloadCookies']=$cookies;$source=$dir.'/source';$j['stage']='Downloading from provider';$j['updated']=date('c');self::save($j);
             // Start with a plain GET. Some Stalker media gateways stall when
