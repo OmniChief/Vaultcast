@@ -588,12 +588,14 @@ window.VaultcastStalkerVod=function(host,options){
     var value=String(name||'').toLocaleLowerCase();
     if(/netflix|amazon|prime video|apple(?: tv)?|disney|hbo|max\b|hulu|paramount|peacock|tubi|discovery\s*\+|britbox|itvx|skyshowtime|espn\s*\+|mubi/.test(value))return 'Streaming services';
     if(/\b(?:bbc|cnn|hallmark|lifetime|sky|espn|bet\+?|cartoon network)\b/.test(value))return 'TV & networks';
+    if(/\bTOP\s*(?:\d+|MOVIES?|KIDS?)\b|\bNEW\s+(?:RELEASES?|RELEASED|ADDED)\b/.test(value))return 'Collections & popular';
     return 'Genres';
   }
   function folderLogo(name){
     var value=String(name||'').toLocaleLowerCase();
     var logos=[
-      [/netflix/,'netflix.svg'],[/apple(?: tv)?/,'appletv.svg'],[/hbo|max\b/,'hbomax.svg'],
+      [/netflix/,'netflix.svg'],[/amazon|prime video/,'primevideo.png'],[/apple(?: tv)?/,'appletv.svg'],
+      [/disney/,'disneyplus.svg'],[/hbo|max\b/,'hbomax.svg'],[/hulu/,'hulu.svg'],
       [/paramount/,'paramountplus.svg'],[/tubi/,'tubi.svg'],[/cnn/,'cnn.svg'],[/\bsky\b/,'sky.svg']
     ];
     for(var i=0;i<logos.length;i++)if(logos[i][0].test(value))return 'assets/img/vod/providers/'+logos[i][1];
@@ -604,7 +606,10 @@ window.VaultcastStalkerVod=function(host,options){
     var providerLabel=sourceCount+' '+(sourceCount===1?'provider':'providers'),logo=folderLogo(bucket.name);
     var contents=[h('span',{className:'stalker-vod-folder-title',text:bucket.name}),h('small',{className:'stalker-vod-folder-providers',text:providerLabel})];
     var children=[];
-    if(logo)children.push(h('span',{className:'stalker-vod-folder-logo-wrap'},[h('img',{className:'stalker-vod-folder-logo',src:logo,alt:'',loading:'lazy',onError:function(e){var wrap=e.target.parentNode;if(wrap&&wrap.parentNode)wrap.parentNode.removeChild(wrap);}})]));
+    if(logo){
+      var wide=/primevideo|disneyplus|hulu/.test(logo);
+      children.push(h('span',{className:'stalker-vod-folder-logo-wrap'+(wide?' stalker-vod-folder-logo-wrap-wide':'')},[h('img',{className:'stalker-vod-folder-logo'+(wide?' stalker-vod-folder-logo-wide':'')+(logo==='assets/img/vod/providers/primevideo.png'?' stalker-vod-folder-logo-amazon':''),src:logo,alt:'',loading:'lazy',onError:function(e){var wrap=e.target.parentNode;if(wrap&&wrap.parentNode)wrap.parentNode.removeChild(wrap);}})]));
+    }
     children.push(h('span',{className:'stalker-vod-folder-copy'},contents));
     return h('button',{className:'btn stalker-vod-folder-tile',type:'button','aria-label':'Open '+bucket.name+', available from '+providerLabel,onClick:function(){providerFolderId='';beginBrowse(bucket.key);}},children);
   }
@@ -677,7 +682,7 @@ window.VaultcastStalkerVod=function(host,options){
     languages.forEach(function(lang){
       var groupFolders=folderGroups[lang].sort(function(a,b){return a.name.localeCompare(b.name,undefined,{sensitivity:'base'});});
       var section=h('section',{className:'stalker-vod-provider-section'},[h('h2',{text:lang==='UK'?'English':lang})]);
-      var sectionOrder=['Streaming services','TV & networks','Genres'],sectionsByName={};
+      var sectionOrder=['Streaming services','TV & networks','Collections & popular','Genres'],sectionsByName={};
       groupFolders.forEach(function(bucket){var sectionName=folderSection(bucket.name);(sectionsByName[sectionName]||(sectionsByName[sectionName]=[])).push(bucket);});
       sectionOrder.forEach(function(sectionName){
         var buckets=sectionsByName[sectionName];if(!buckets||!buckets.length)return;
