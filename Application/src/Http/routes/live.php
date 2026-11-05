@@ -296,7 +296,7 @@ if ($__liveAction !== null) {
             if($__liveAction==='stalker_retry')json_out(StalkerOffline::retry((string)($body['id']??'')));
             $feed=iptv_feed_by_id(iptv_load(),(string)($body['feed']??''));
             if(!$feed||($feed['type']??'')!=='stalker'||empty($feed['enabled']))throw new InvalidArgumentException('Select an enabled Stalker connection.');
-            json_out(StalkerOffline::enqueue($feed,(string)($body['id']??''),(string)($body['name']??'Provider video'),(string)($body['destination']??'library')));
+            json_out(StalkerOffline::enqueue($feed,(string)($body['id']??''),(string)($body['name']??'Provider video'),(string)($body['destination']??'library'),(string)($body['playback_ticket']??''),(string)$viewer['id']));
         }catch(InvalidArgumentException $e){live_bridge_deny(422,$e->getMessage());}
          catch(RuntimeException $e){live_bridge_deny(502,$e->getMessage());}
          catch(DomainException $e){live_bridge_deny(422,$e->getMessage());}

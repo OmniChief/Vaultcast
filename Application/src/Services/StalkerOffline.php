@@ -32,23 +32,27 @@ final class StalkerOffline {
             ]);
         },$rows);
     }
-    public static function enqueue(array $feed,string $itemId,string $name,string $destination='library'): array {
+    public static function enqueue(array $feed,string $itemId,string $name,string $destination='library',string $playbackTicket='',string $viewer=''): array {
         require_once STREAM_ROOT.'/src/Live/iptv.php';
         $item=stalker_vod_entry($feed,$itemId);
         if(!$item)throw new RuntimeException('Refresh the provider catalogue and select the title again.');
+        if(preg_match('/^[a-f0-9]{32}$/D',$playbackTicket)){
+            $ticketState=\Vaultcast\Repository::cacheGet('stalker_play_ticket_'.hash('sha256',$playbackTicket));
+            if(!$ticketState||($ticketState['viewer']??null)!==$viewer||($ticketState['feed']??null)!==$feed['id']||($ticketState['id']??null)!==$itemId||($ticketState['kind']??null)==='live')$playbackTicket='';
+        }else $playbackTicket='';
         $displayName=trim((string)($item['name']??''));if($displayName==='')$displayName=$name;
         $queue=self::listing();
         foreach(\Vaultcast\Repository::rows("SELECT payload FROM vaultcast_documents WHERE name LIKE 'stalker-offline:%'") as $existing){
             if(($existing['feed']??'')!==$feed['id']||($existing['item_id']??'')!==$itemId||($existing['status']??'')==='imported')continue;
             if($destination==='library')$existing['destination']='library';
-            $existing['item']=$item;$existing['name']=mb_substr($displayName,0,250);$existing['connection']=(string)($feed['name']??'');self::save($existing);
+            $existing['item']=$item;$existing['name']=mb_substr($displayName,0,250);$existing['connection']=(string)($feed['name']??'');if($playbackTicket!==''){$existing['playback_ticket']=$playbackTicket;$existing['playback_viewer']=$viewer;}self::save($existing);
             if(in_array($existing['status'],['queued','downloading','ready'],true))return ['ok'=>true,'id'=>$existing['id'],'status'=>$existing['status']];
             if(count(array_filter($queue,static function($j){return in_array($j['status'],['queued','downloading'],true);}))>=20)throw new RuntimeException('The download queue is full. Wait for a download to finish.');
             return self::retry($existing['id']);
         }
         if(count(array_filter($queue,static function($j){return in_array($j['status'],['queued','downloading'],true);}))>=20)throw new RuntimeException('The download queue is full. Wait for a download to finish.');
         $id=bin2hex(random_bytes(12));
-        $j=['id'=>$id,'feed'=>$feed['id'],'connection'=>(string)($feed['name']??''),'item'=>$item,'item_id'=>$itemId,'name'=>mb_substr($displayName,0,250),'destination'=>$destination==='browser'?'browser':'library','status'=>'queued','stage'=>'Queued for download','bytes'=>0,'created'=>date('c')];self::save($j);
+        $j=['id'=>$id,'feed'=>$feed['id'],'connection'=>(string)($feed['name']??''),'item'=>$item,'item_id'=>$itemId,'name'=>mb_substr($displayName,0,250),'destination'=>$destination==='browser'?'browser':'library','status'=>'queued','stage'=>'Queued for download','bytes'=>0,'created'=>date('c')];if($playbackTicket!==''){$j['playback_ticket']=$playbackTicket;$j['playback_viewer']=$viewer;}self::save($j);
         return self::retry($id);
     }
     public static function retry(string $id): array {
@@ -174,8 +178,17 @@ final class StalkerOffline {
             $dir=self::root().'/'.$id;if(!is_dir($dir)&&!@mkdir($dir,0700,true))throw new RuntimeException('Cannot create download folder.');
             if(is_file($dir.'/cancel'))throw new RuntimeException('Download cancelled. Partial media was preserved.');
             $j['destination']=self::job($id)['destination']??'library';$j['status']='downloading';$j['stage']='Resolving provider stream';$j['updated']=date('c');self::save($j);
-            $url=stalker_vod_resolve($feed,$j['item_id'],$j['item']);
-            $cookies=$dir.'/cookies';if(!@copy(stalker_cookie_path($feed),$cookies))throw new RuntimeException('Could not prepare provider download cookies.');@chmod($cookies,0600);
+            $url='';$playbackCookies='';$ticket=(string)($j['playback_ticket']??'');$ticketViewer=(string)($j['playback_viewer']??'');
+            if(preg_match('/^[a-f0-9]{32}$/D',$ticket)&&$ticketViewer!==''){
+                $ticketState=\Vaultcast\Repository::cacheGet('stalker_play_ticket_'.hash('sha256',$ticket));
+                if($ticketState&&($ticketState['viewer']??null)===$ticketViewer&&($ticketState['feed']??null)===$feed['id']&&($ticketState['id']??null)===$j['item_id']&&($ticketState['kind']??null)!=='live'){
+                    $playbackKey='stalker_playback_v3_'.hash('sha256',json_encode([$ticketViewer,$feed,$j['item_id'],$ticket]));$playbackState=\Vaultcast\Repository::cacheGet($playbackKey);
+                    if($playbackState&&!empty($playbackState['url'])){$url=(string)$playbackState['url'];if(!empty($playbackState['jar']))$playbackCookies=iptv_hls_jar_path((string)$playbackState['jar']);}
+                    elseif(time()-(int)($ticketState['created']??0)<30)$url=(string)($ticketState['url']??'');
+                }
+            }
+            if($url==='')$url=stalker_vod_resolve($feed,$j['item_id'],$j['item']);
+            $cookies=$dir.'/cookies';$cookieSource=$playbackCookies!==''&&is_file($playbackCookies)?$playbackCookies:stalker_cookie_path($feed);if(!@copy($cookieSource,$cookies))throw new RuntimeException('Could not prepare provider download cookies.');@chmod($cookies,0600);
             $feed['_downloadCookies']=$cookies;$source=$dir.'/source';$j['stage']='Downloading from provider';$j['updated']=date('c');self::save($j);self::fetch($url,$source,$feed);
             $head=file_get_contents($source,false,null,0,16);
             $expectedDuration=0.0;

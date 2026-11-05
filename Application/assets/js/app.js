@@ -6068,7 +6068,7 @@ try {
   function stalkerPost(action,body){
     return liveApiPost(action,body).then(function(result){if(!result.ok||!result.body||!result.body.ok)throw new Error(result.body&&result.body.error||'Provider request failed.');return result.body;});
   }
-  function stalkerSaveVideo(feed,item,status,button,destination){
+  function stalkerSaveVideo(feed,item,status,button,destination,playbackTicket){
     button.disabled=true;status.textContent=destination==='browser'?'Preparing your browser download…':'Adding video to the library download queue…';
     var owner=state.user&&state.user.id;
     function current(){return status.isConnected&&owner===(state.user&&state.user.id);}
@@ -6093,7 +6093,7 @@ try {
         setTimeout(function(){poll(id);},5000);
       }).catch(function(error){if(current()){button.disabled=false;status.textContent=error.message;}});
     }
-    stalkerPost('stalker_download',{feed:feed,id:item.id,name:item.name,destination:destination}).then(function(result){poll(result.id);}).catch(function(error){if(current()){button.disabled=false;status.textContent=error.message;}});
+    stalkerPost('stalker_download',{feed:feed,id:item.id,name:item.name,destination:destination,playback_ticket:playbackTicket||''}).then(function(result){poll(result.id);}).catch(function(error){if(current()){button.disabled=false;status.textContent=error.message;}});
   }
   function stalkerDownloadToBrowser(feed,item,status,button){
     button.disabled=true;status.textContent='Preparing the browser download…';
@@ -6184,13 +6184,14 @@ try {
   }
   function viewStalkerVod(id){
     var parts=id.split(':'),feed=parts[1],itemId=parts.slice(2).join(':'),hint=state._stalkerVodHint,item=hint&&hint.feed===feed&&hint.item.id===itemId?hint.item:{id:itemId,name:'Provider video',kind:'vod',playable:true},attempt=0,stream=null;
-    var wrap=h('div',{className:'live-channel-page stalker-vod-detail'}),hero=h('section',{className:'stalker-vod-hero'}),host=h('div',{className:'detail-player'}),status=h('p',{role:'status',className:'muted'}),watchButton=null;
+    var wrap=h('div',{className:'live-channel-page stalker-vod-detail'}),hero=h('section',{className:'stalker-vod-hero'}),host=h('div',{className:'detail-player'}),status=h('p',{role:'status',className:'muted'}),watchButton=null,playbackTicket='';
     function current(){return wrap.isConnected&&state.liveChannel===id;}
     function stop(){attempt++;closePlayer();host.replaceChildren();status.textContent='Playback stopped.';}
     function watch(e){
       var button=e.currentTarget,mine=++attempt;button.disabled=true;closePlayer();stopRadio();status.textContent='Connecting…';
       stalkerPost('stalker_play',{feed:feed,kind:item.kind||'vod',id:itemId}).then(function(result){
         if(!current()||mine!==attempt)return;closePlayer();stopRadio();
+        var ticketMatch=String(result.source&&result.source.url||'').match(/[?&]ticket=([a-f0-9]{32})(?:&|$)/i);playbackTicket=ticketMatch?ticketMatch[1]:'';
         var navigation=state._stalkerEpisodeNav,nextEpisode=null;
         if(navigation&&String(navigation.feed)===String(feed)&&Array.isArray(navigation.items)){var position=navigation.items.findIndex(function(entry){return String(entry.id)===String(itemId);});if(position>=0&&position<navigation.items.length-1)nextEpisode=navigation.items[position+1];}
         startStalkerLibraryPlayer(host,result.source,item,{
@@ -6247,7 +6248,7 @@ try {
       }
       var canSave=can('downloads_request')&&can('ingest_view')&&userAreaAllowed('library');
       var download=canSave?h('button',{className:'btn',text:'Download',onClick:function(e){stalkerDownloadToBrowser(feed,Object.assign({},item,{id:itemId}),status,e.currentTarget);}}):null;
-      var addLibrary=canSave?h('button',{className:'btn',text:'Add to library',onClick:function(e){stalkerSaveVideo(feed,Object.assign({},item,{id:itemId}),status,e.currentTarget,'library');}}):null;
+      var addLibrary=canSave?h('button',{className:'btn',text:'Add to library',onClick:function(e){stalkerSaveVideo(feed,Object.assign({},item,{id:itemId}),status,e.currentTarget,'library',playbackTicket);}}):null;
       watchButton=h('button',{className:'btn primary',text:'Play again',onClick:watch});
       hero.replaceChildren(h('div',{className:'stalker-vod-detail-poster'},[item.poster?h('img',{src:item.poster,alt:'',onError:function(e){e.target.remove();}}):h('span',{text:item.name.slice(0,1).toUpperCase()})]),h('div',{className:'stalker-vod-detail-copy'},[h('span',{className:'eyebrow',text:'Provider video'}),h('h1',{text:item.name}),item.year?h('p',{className:'muted',text:item.year}):null,navButtons,sourceControls,h('div',{className:'row-actions'},[watchButton,download,addLibrary,stalkerCheckButton(feed,itemId,item.kind||'vod',status),h('button',{className:'btn ghost',text:'Stop playback',onClick:stop})]),item.description?h('p',{text:item.description}):null,stalkerVodMetadata(item),h('p',{className:'muted',text:'Add to library saves to your server and ingest inbox. Download prepares a video file to save on this device.'})]));
     }
