@@ -3,7 +3,7 @@
 window.VaultcastStalkerVod=function(host,options){
   var genreFilter='',genreSelect=null,languageSelect=null,providerFolderId='',searchMode='title',sortOrder='provider',minRating='',yearFilter='',scanCursor=0,scanQuery=null;
   var h=options.h,active=false,kind='vod',serial=0,timer=null,letter='#',query='',feeds=[],progress={},titles=[],seen={},seenSourceItems={},loading=false;
-  var status,results,next,search,letters,exportButton,groupExportButton,fieldProbeButton,liveProbeButton,epgProbeButton,groups,group='',categories=[],category='',groupsLoading=false,titlesStarted=false,categoryStatus=null,scopeActions=null,prefixGroups=null,showMoreCategories=false,searchAllMode=false,showFolderBrowser=true,language='UK',tasks=[],providerSelections={},preferredTileKeys={};
+  var status,results,next,search,letters,exportButton,groupExportButton,fieldProbeButton,liveProbeButton,epgProbeButton,groups,group='',categories=[],category='',groupsLoading=false,titlesStarted=false,categoryStatus=null,scopeActions=null,prefixGroups=null,showMoreCategories=false,searchAllMode=false,showFolderBrowser=true,language='UK',tasks=[],providerSelections={},preferredTileKeys={},visibleLimit=48;
   // English is the initial scope; remember explicit selections per user/browser.
   var languagePreferenceKey='stalker-vod-language-'+options.owner;
   try{var savedLanguage=localStorage.getItem(languagePreferenceKey);if(savedLanguage!==null)language=savedLanguage;}catch(e){}
@@ -165,6 +165,7 @@ window.VaultcastStalkerVod=function(host,options){
     genreSelect.disabled=!values.size;
   }
   function reset(){
+    visibleLimit=48;
     serial++;scanCursor=0;scanQuery=null;progress={};tasks=[];titles=[];seen={};seenSourceItems={};loading=false;group='';titlesStarted=false;
     feeds=options.connections.filter(function(f){return f.enabled;});
     feeds.forEach(function(f){progress[f.id]={page:1,done:false,failed:false};});
@@ -683,6 +684,11 @@ window.VaultcastStalkerVod=function(host,options){
     languages.forEach(function(lang){
       var groupFolders=folderGroups[lang].sort(function(a,b){return a.name.localeCompare(b.name,undefined,{sensitivity:'base'});});
       var section=h('section',{className:'stalker-vod-provider-section'},[h('h2',{text:lang==='UK'?'English':lang})]);
+      var featuredNewRelease=kind==='vod'&&lang==='UK'?groupFolders.find(function(bucket){return /^new released$/i.test(bucket.name);})||groupFolders.find(function(bucket){return /^new release(?:d)?(?:\s|$)/i.test(bucket.name);}):null;
+      if(featuredNewRelease){
+        groupFolders=groupFolders.filter(function(bucket){return bucket!==featuredNewRelease;});
+        section.appendChild(h('div',{className:'stalker-vod-featured-folder'},[h('h3',{text:'New Released'}),folderTile(featuredNewRelease)]));
+      }
       var sectionOrder=['Streaming services','TV & networks','Collections & popular','Genres'],sectionsByName={};
       groupFolders.forEach(function(bucket){var sectionName=folderSection(bucket.name);(sectionsByName[sectionName]||(sectionsByName[sectionName]=[])).push(bucket);});
       sectionOrder.forEach(function(sectionName){
@@ -921,7 +927,10 @@ window.VaultcastStalkerVod=function(host,options){
     status=h('p',{className:'muted',role:'status'});
     categoryStatus=h('section');
     results=h('div',{className:'stalker-vod-grid'});
-    next=h('button',{className:'btn',text:'Load more results',onClick:function(){scan(false);}});
+    next=h('button',{className:'btn',text:'Load 48 more',onClick:function(){
+      visibleLimit+=48;renderResults();
+      if(titles.filter(fits).length<visibleLimit&&tasks.some(function(t){return progress[t.key]&&!progress[t.key].done;}))scan(false);
+    }});
     function selector(label,choices,value,change){return h('label',{className:'stalker-vod-filter'},[h('span',{text:label}),h('select',{'aria-label':label,onChange:function(e){change(e.target.value);}},choices.map(function(pair){return h('option',{value:pair[0],text:pair[1],selected:pair[0]===value});}))]);}
     var mode=selector('Search by',[['title',kind==='vod'?'Movies':'Series'],['actor','Actor'],['director','Director']],searchMode,function(value){searchMode=value;search.placeholder='Search '+(value==='title'?(kind==='vod'?'movies':'series'):value+'s')+'…';renderResults();});
     languageSelect=h('select',{'aria-label':'Language',onChange:function(e){chooseLanguage(e.target.value);}});
@@ -930,13 +939,12 @@ window.VaultcastStalkerVod=function(host,options){
     var rating=selector('Minimum rating',[['','Any rating'],['9','9+'],['8','8+'],['7','7+'],['6','6+'],['5','5+']],minRating,function(value){minRating=value;applyCatalogueFilterChange();});
     var years=[['','Any year']];for(var y=new Date().getFullYear()+1;y>=1900;y--)years.push([String(y),String(y)]);
     var release=selector('Release year',years,yearFilter,function(value){yearFilter=value;applyCatalogueFilterChange();});
-    function submit(){searchAllMode=true;category='';providerFolderId='';rerunScopedSearch();}
-    var pause=h('button',{className:'btn ghost',type:'button',text:'Pause search',onClick:function(){serial++;loading=false;clearTimeout(timer);renderResults();}});
-    var refresh=h('button',{className:'btn ghost',type:'button',text:'Refresh',onClick:function(){reset();searchAllMode=true;titlesStarted=true;category='';loadCategories(true);}});
+    function submit(){searchAllMode=true;showFolderBrowser=false;category='';providerFolderId='';renderCategories();rerunScopedSearch();}
     var clearFilters=h('button',{className:'btn ghost',type:'button',text:'Reset filters',onClick:function(){query='';genreFilter='';minRating='';yearFilter='';sortOrder='provider';searchMode='title';render();submit();}});
-    var favourites=h('button',{className:'btn ghost',type:'button',text:'Favourites',onClick:function(){serial++;titlesStarted=false;loading=false;tasks=[];showFavourites();}});
-    host.append(h('form',{className:'stalker-searchbar stalker-vod-search-top',onSubmit:function(e){e.preventDefault();submit();}},[search,mode,h('button',{className:'btn primary',type:'submit',text:'Search'}),refresh,favourites,clearFilters,pause]),h('div',{className:'stalker-vod-filters'},[
-      h('label',{className:'stalker-vod-filter'},[h('span',{text:'Language'}),languageSelect]),h('label',{className:'stalker-vod-filter'},[h('span',{text:'Genre'}),genreSelect]),sort,rating,release
+    var favourites=h('button',{className:'btn ghost',type:'button',text:'Favourites',onClick:function(){serial++;titlesStarted=false;loading=false;tasks=[];showFolderBrowser=false;renderCategories();showFavourites();}});
+    var discover=h('button',{className:'btn ghost',type:'button',text:'Discover',onClick:browseDiscovery});
+    host.append(h('form',{className:'stalker-searchbar stalker-vod-search-top',onSubmit:function(e){e.preventDefault();submit();}},[discover,search,mode,h('button',{className:'btn primary',type:'submit',text:'Search'}),favourites]),h('div',{className:'stalker-vod-filters'},[
+      h('label',{className:'stalker-vod-filter'},[h('span',{text:'Language'}),languageSelect]),h('label',{className:'stalker-vod-filter'},[h('span',{text:'Genre'}),genreSelect]),sort,rating,release,clearFilters
     ]),categoryStatus,status,results,next);
     renderGenreFilter();renderCategories();
   }
@@ -991,7 +999,7 @@ window.VaultcastStalkerVod=function(host,options){
       if(!av||!bv)return av?-1:bv?1:names;
       return (sortOrder==='oldest'?av-bv:bv-av)||names;
     });
-    ordered.forEach(function(item){
+    ordered.slice(0,visibleLimit).forEach(function(item){
       var sources=item.sources||[],chosen=sources.find(function(source){return !providerFolderId||String(source.feed)===providerFolderId;})||sources[0];
       if(item.numberedParts&&item.numberedParts.length>1){
         var parts=item.numberedParts.slice().sort(function(a,b){return a.number-b.number||a.name.localeCompare(b.name);});
@@ -1055,7 +1063,7 @@ window.VaultcastStalkerVod=function(host,options){
     var done=tasks.filter(function(t){return progress[t.key]&&progress[t.key].done;}).length;
     var failed=tasks.filter(function(t){return progress[t.key]&&progress[t.key].failed;}).length;
     status.textContent=ordered.length+' matching titles in '+(searchAllMode?(language?(language==='UK'?'English':language)+' folders':'All languages'):(group||'Selected folder'))+(unfinished?(loading?' so far · loading catalogue':' so far · more pages available'):'')+(searchMode==='actor'?' · matching available cast':searchMode==='director'?' · matching available directors':'')+' · '+done+'/'+tasks.length+' sources finished'+(failed?' · '+failed+' unavailable':'');
-    next.hidden=!titlesStarted||!tasks.some(function(t){return progress[t.key]&&!progress[t.key].done;});
+    next.hidden=!titlesStarted||!(ordered.length>visibleLimit||tasks.some(function(t){return progress[t.key]&&!progress[t.key].done;}));
     next.disabled=loading;
   }
   function scan(refresh){
@@ -1090,7 +1098,7 @@ window.VaultcastStalkerVod=function(host,options){
       if(!valid(token))return;
       if(index>=pending.length){
         loading=false;renderResults();
-        if((shouldScanAllPages()||query.trim())&&tasks.some(function(t){return progress[t.key]&&!progress[t.key].done;})){
+        if((titles.filter(fits).length<visibleLimit||shouldScanAllPages()||query.trim())&&tasks.some(function(t){return progress[t.key]&&!progress[t.key].done;})){
           status.textContent+=' · Checking remaining pages…';
           timer=setTimeout(function(){if(valid(token))scan(false);},500);
         }

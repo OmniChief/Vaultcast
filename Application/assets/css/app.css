@@ -3378,8 +3378,12 @@ html[data-motion="reduced"] .vca-overall span,html[data-motion="reduced"] .vca-b
 /* Catalogue controls: labels stack internally, controls share a horizontal row. */
 .stalker-vod-library .stalker-vod-filters{display:flex;flex-direction:row;flex-wrap:wrap;align-items:flex-end;gap:10px}
 .stalker-vod-library .stalker-vod-filters>.stalker-vod-filter{flex:1 1 140px;min-width:140px}
+.stalker-vod-library .stalker-vod-filters>.btn{height:40px;align-self:flex-end;white-space:nowrap}
 .stalker-vod-library .stalker-vod-search-top{align-items:flex-end}
 .stalker-vod-library .stalker-vod-search-top>.stalker-vod-filter{flex:0 0 150px;min-width:0}
 .stalker-vod-library .stalker-vod-filter select{flex:0 0 auto;height:40px;min-height:40px;min-width:0;max-width:100%;box-sizing:border-box}
 .stalker-vod-library .stalker-vod-search-top input{height:40px;box-sizing:border-box}
 @media(max-width:600px){.stalker-vod-library .stalker-vod-filters>.stalker-vod-filter{flex:1 1 calc(50% - 10px);min-width:0}.stalker-vod-library .stalker-vod-search-top>.stalker-vod-filter{flex-basis:140px}}
+.stalker-vod-featured-folder{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:10px 0 16px;padding:12px;border:1px solid var(--border);border-radius:12px;background:var(--surface-1)}
+.stalker-vod-featured-folder h3{margin:0;font-size:.95rem}
+.stalker-vod-featured-folder .stalker-vod-folder-tile{min-width:180px;max-width:260px}
