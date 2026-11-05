@@ -36,20 +36,23 @@ final class StalkerOffline {
             if($season===''&&is_numeric($item['season']??null))$season=(int)$item['season']===0?'Specials':'Season '.(int)$item['season'];
             return array_merge(array_intersect_key($j,array_flip(['id','name','status','bytes','error','created','updated','job_pid','destination','stage','connection'])),[
                 'percent'=>$j['status']==='ready'||$j['status']==='imported'?100:($j['percent']??null),'totalBytes'=>(int)($j['totalBytes']??0),'speedBytesPerSecond'=>(int)($j['speedBytesPerSecond']??0),
-                'showName'=>(string)($item['showName']??$item['seriesName']??''),'seasonName'=>(string)$season,
+                'showName'=>(string)($item['showName']??$item['seriesName']??''),'season'=>is_numeric($item['season']??null)?(int)$item['season']:null,'seasonName'=>(string)$season,
                 'episode'=>(string)($item['episode']??$item['episode_number']??''),'episodeTitle'=>(string)($item['episodeTitle']??$item['episode_title']??'')
             ]);
         },$rows);
     }
-    public static function enqueue(array $feed,string $itemId,string $name,string $destination='library',string $playbackTicket='',string $viewer=''): array {
+    public static function enqueue(array $feed,string $itemId,string $name,string $destination='library',string $playbackTicket='',string $viewer='',string $showName=''): array {
         require_once STREAM_ROOT.'/src/Live/iptv.php';
         $item=stalker_vod_entry($feed,$itemId);
         if(!$item)throw new RuntimeException('Refresh the provider catalogue and select the title again.');
+        if(empty($item['showName'])&&trim($showName)!=='')$item['showName']=mb_substr(trim(preg_replace('/[\x00-\x1f\x7f]/u',' ',strip_tags($showName))),0,200);
         if(preg_match('/^[a-f0-9]{32}$/D',$playbackTicket)){
             $ticketState=\Vaultcast\Repository::cacheGet('stalker_play_ticket_'.hash('sha256',$playbackTicket));
             if(!$ticketState||($ticketState['viewer']??null)!==$viewer||($ticketState['feed']??null)!==$feed['id']||($ticketState['id']??null)!==$itemId||($ticketState['kind']??null)==='live')$playbackTicket='';
         }else $playbackTicket='';
         $displayName=trim((string)($item['name']??''));if($displayName==='')$displayName=$name;
+        $season=is_numeric($item['season']??null)?(int)$item['season']:null;$episode=is_numeric($item['episode']??null)?(int)$item['episode']:null;$show=(string)($item['showName']??'');
+        if($show!==''&&$season!==null&&$episode!==null)$displayName=$show.' S'.str_pad((string)$season,2,'0',STR_PAD_LEFT).'E'.str_pad((string)$episode,2,'0',STR_PAD_LEFT);
         $queue=self::listing();
         foreach(\Vaultcast\Repository::rows("SELECT payload FROM vaultcast_documents WHERE name LIKE 'stalker-offline:%'") as $existing){
             if(($existing['feed']??'')!==$feed['id']||($existing['item_id']??'')!==$itemId||($existing['status']??'')==='imported')continue;
