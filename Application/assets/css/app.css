@@ -577,21 +577,6 @@ input[type=checkbox], input[type=radio], input[type=range] { accent-color: var(-
   -webkit-mask-image: linear-gradient(90deg, #000, transparent 85%); mask-image: linear-gradient(90deg, #000, transparent 85%);
 }
 .play-view .card .poster { aspect-ratio: 3/4; }
-/* Some TV browsers report aspect-ratio support but calculate card poster
-   heights incorrectly. Keep this sizing fallback limited to TV browsers. */
-.tv-poster-device .card .poster {
-  --poster-height-ratio: 150%;
-  display: block;
-  box-sizing: content-box;
-  height: 0;
-  aspect-ratio: auto;
-  padding: 0 0 var(--poster-height-ratio);
-  background-position: center;
-  background-repeat: no-repeat;
-  background-color: #101724;
-}
-.tv-poster-device .card .poster .ph { position: absolute; right: 12px; bottom: 12px; left: 12px; }
-.tv-poster-device .play-view .card .poster { --poster-height-ratio: 133.333%; }
 /* ---------- detail heroes (movie / show) ---------- */
 .detail-hero {
   position: relative; overflow: hidden; isolation: isolate;
@@ -1114,7 +1099,7 @@ input[type=checkbox], input[type=radio], input[type=range] { accent-color: var(-
 .stalker-vod-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); gap:18px; align-items:start; }
 .stalker-vod-card { overflow:hidden; border:1px solid rgba(255,255,255,.1); border-radius:var(--radius-lg); background:rgba(255,255,255,.025); }
 .stalker-vod-cover { position:relative; display:block; width:100%; aspect-ratio:2/3; padding:0; overflow:hidden; border:0; cursor:pointer; background:linear-gradient(145deg,#26354b,#141b28); color:#fff; }
-.stalker-vod-cover img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+.stalker-vod-cover img { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; }
 .stalker-vod-placeholder { display:grid; place-items:center; width:100%; height:100%; padding:14px; text-align:center; overflow-wrap:anywhere; font-size:clamp(.9rem,1.4vw,1.2rem); line-height:1.35; font-weight:650; opacity:.85; }
 .stalker-vod-badge { position:absolute; bottom:12px; left:12px; padding:6px 10px; border-radius:20px; background:rgba(0,0,0,.75); }
 .stalker-vod-copy { padding:14px; }
@@ -1127,7 +1112,7 @@ input[type=checkbox], input[type=radio], input[type=range] { accent-color: var(-
 .stalker-vod-description summary { cursor:pointer; }
 .stalker-vod-hero { display:grid; grid-template-columns:minmax(150px,240px) minmax(0,1fr); gap:28px; align-items:start; margin:20px 0; }
 .stalker-vod-detail-poster { aspect-ratio:2/3; border-radius:var(--radius-lg); overflow:hidden; background:linear-gradient(145deg,#26354b,#141b28); display:grid; place-items:center; font-size:64px; }
-.stalker-vod-detail-poster img { width:100%; height:100%; object-fit:cover; }
+.stalker-vod-detail-poster img { width:100%; height:100%; object-fit:contain; }
 .stalker-vod-detail-copy h1 { margin:8px 0 12px; }
 .stalker-vod-detail-copy > p { max-width:75ch; }
 .stalker-vod-inline { position:relative; width:100%; background:#000; border-radius:var(--radius-lg); overflow:hidden; }
