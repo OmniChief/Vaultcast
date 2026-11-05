@@ -595,7 +595,8 @@ window.VaultcastStalkerVod=function(host,options){
     var value=String(name||'').toLocaleLowerCase();
     var logos=[
       [/netflix/,'netflix.svg'],[/amazon|prime video/,'primevideo.png'],[/apple(?: tv)?/,'appletv.svg'],
-      [/disney/,'disneyplus.svg'],[/hbo|max\b/,'hbomax.svg'],[/hulu/,'hulu.svg'],
+      [/discovery\s*\+/,'discoveryplus-icon.png'],[/disney/,'disneyplus.svg'],[/espn\s*\+/,'espn.svg'],
+      [/hbo|max\b/,'hbomax.svg'],[/hulu/,'hulu.svg'],[/peacock/,'peacock.png'],
       [/paramount/,'paramountplus.svg'],[/tubi/,'tubi.svg'],[/cnn/,'cnn.svg'],[/\bsky\b/,'sky.svg']
     ];
     for(var i=0;i<logos.length;i++)if(logos[i][0].test(value))return 'assets/img/vod/providers/'+logos[i][1];
@@ -607,8 +608,8 @@ window.VaultcastStalkerVod=function(host,options){
     var contents=[h('span',{className:'stalker-vod-folder-title',text:bucket.name}),h('small',{className:'stalker-vod-folder-providers',text:providerLabel})];
     var children=[];
     if(logo){
-      var wide=/primevideo|disneyplus|hulu/.test(logo);
-      children.push(h('span',{className:'stalker-vod-folder-logo-wrap'+(wide?' stalker-vod-folder-logo-wrap-wide':'')},[h('img',{className:'stalker-vod-folder-logo'+(wide?' stalker-vod-folder-logo-wide':'')+(logo==='assets/img/vod/providers/primevideo.png'?' stalker-vod-folder-logo-amazon':''),src:logo,alt:'',loading:'lazy',onError:function(e){var wrap=e.target.parentNode;if(wrap&&wrap.parentNode)wrap.parentNode.removeChild(wrap);}})]));
+      var wide=/primevideo|disneyplus|hulu|peacock|espn/.test(logo),brandTone=/disneyplus/.test(logo)?' stalker-vod-folder-logo-disney':/hulu/.test(logo)?' stalker-vod-folder-logo-hulu':'';
+      children.push(h('span',{className:'stalker-vod-folder-logo-wrap'+(wide?' stalker-vod-folder-logo-wrap-wide':'')},[h('img',{className:'stalker-vod-folder-logo'+(wide?' stalker-vod-folder-logo-wide':'')+brandTone+(logo==='assets/img/vod/providers/primevideo.png'?' stalker-vod-folder-logo-amazon':''),src:logo,alt:'',loading:'lazy',onError:function(e){var wrap=e.target.parentNode;if(wrap&&wrap.parentNode)wrap.parentNode.removeChild(wrap);}})]));
     }
     children.push(h('span',{className:'stalker-vod-folder-copy'},contents));
     return h('button',{className:'btn stalker-vod-folder-tile',type:'button','aria-label':'Open '+bucket.name+', available from '+providerLabel,onClick:function(){providerFolderId='';beginBrowse(bucket.key);}},children);

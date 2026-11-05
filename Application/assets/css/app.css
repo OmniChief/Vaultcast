@@ -1151,11 +1151,13 @@ input[type=checkbox], input[type=radio], input[type=range] { accent-color: var(-
 .stalker-vod-provider-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,210px),1fr));gap:9px}
 .stalker-vod-folder-category .stalker-vod-provider-grid{padding:10px}
 .stalker-vod-folder-tile{display:flex;align-items:center;gap:11px;min-height:64px;text-align:left;white-space:normal;overflow-wrap:anywhere;line-height:1.35}
-.stalker-vod-folder-logo-wrap{display:grid;place-items:center;flex:0 0 42px;width:42px;height:42px;border-radius:9px;background:rgba(0,0,0,.2)}
-.stalker-vod-folder-logo{display:block;width:28px;height:28px;object-fit:contain}
-.stalker-vod-folder-logo-wrap-wide{flex-basis:58px;width:58px}
-.stalker-vod-folder-logo-wide{width:48px;height:30px}
+.stalker-vod-folder-logo-wrap{display:grid;place-items:center;flex:0 0 46px;width:46px;height:46px;border-radius:9px;background:rgba(0,0,0,.2)}
+.stalker-vod-folder-logo{display:block;width:34px;height:34px;object-fit:contain}
+.stalker-vod-folder-logo-wrap-wide{flex-basis:68px;width:68px}
+.stalker-vod-folder-logo-wide{width:60px;height:38px}
 .stalker-vod-folder-logo-amazon{box-sizing:border-box;padding:4px;background:#fff;border-radius:5px}
+.stalker-vod-folder-logo-disney{filter:brightness(1.7) saturate(1.45)}
+.stalker-vod-folder-logo-hulu{filter:brightness(1.45) saturate(1.25)}
 .stalker-vod-folder-copy{display:flex;flex-direction:column;gap:4px;min-width:0}
 .stalker-vod-folder-title{font-weight:700}
 .stalker-vod-folder-providers{font-size:.78rem;color:var(--muted)}
