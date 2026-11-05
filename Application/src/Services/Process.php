@@ -30,6 +30,17 @@ final class Process {
         if((int)$pid<=0)throw new RuntimeException('Could not launch the PHP playback worker. Check process permissions'.(PHP_OS_FAMILY==='Windows'?' and that powershell.exe is available to the PHP service.':'.'));
         return (int)$pid;
     }
+    public static function terminatePhpWorker(int $pid,string $command,string $id): bool {
+        if($pid<2||!preg_match('/^[a-z0-9-]{1,40}$/D',$command)||!preg_match('/^[a-f0-9]{24}$/D',$id))return false;
+        if(PHP_OS_FAMILY==='Windows'){
+            $script='$p=Get-CimInstance Win32_Process -Filter "ProcessId = '.$pid.'"; if($p -and $p.CommandLine.Contains("Console.php") -and $p.CommandLine.Contains("'.$command.'") -and $p.CommandLine.Contains("'.$id.'")){Stop-Process -Id '.$pid.' -Force; "stopped"}';
+            return trim((string)self::powershell($script))==='stopped';
+        }
+        $cmdline=@file_get_contents('/proc/'.$pid.'/cmdline');
+        if(!is_string($cmdline)||strpos($cmdline,'Console.php')===false||strpos($cmdline,$command)===false||strpos($cmdline,$id)===false)return false;
+        if(function_exists('posix_kill'))return @posix_kill($pid,defined('SIGTERM')?SIGTERM:15);
+        return false;
+    }
     public static function powershell(string $script): ?string {
         return self::capture(['powershell.exe','-NoProfile','-NonInteractive','-EncodedCommand',base64_encode(mb_convert_encoding($script,'UTF-16LE','UTF-8'))], 10);
     }
