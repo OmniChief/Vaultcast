@@ -37,7 +37,7 @@
       notify();
       if (video.paused || video.seeking || video.readyState < 3 || context.state !== 'running') { stopSources(); return; }
       packets.forEach(function (packet) {
-        if (scheduled.has(packet.id) || packet.time > time + 1 || packet.time + packet.buffer.duration <= time) return;
+        if (scheduled.has(packet.id) || packet.time > time + 2 || packet.time + packet.buffer.duration <= time) return;
         var source = context.createBufferSource(), offset = Math.max(0, time - packet.time);
         source.buffer = packet.buffer; source.playbackRate.value = rate; source.connect(gain);
         scheduled.add(packet.id); sources.push(source);

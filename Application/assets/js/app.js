@@ -5816,7 +5816,9 @@ try {
     var progs = ch.programs || [];
     for (var i = 0; i < progs.length; i++) {
       var p = progs[i];
-      if (p.startUnix <= now && p.endUnix > now) cur = p;
+      // XMLTV feeds can overlap at hand-offs. Keep the programme that began
+      // first until it ends instead of letting a later listing replace it.
+      if (p.startUnix <= now && p.endUnix > now && (!cur || p.startUnix < cur.startUnix)) cur = p;
       else if (p.startUnix > now && !isFiller(p) && !nxt) nxt = p;
     }
     if (!cur) cur = ch.now || null;
@@ -6781,6 +6783,8 @@ try {
     }
     var rows = chans.map(function(ch){
       var progs = (ch.programs && ch.programs.length) ? ch.programs : [ch.now, ch.next].filter(Boolean);
+      var current = null;
+      progs.forEach(function(p){ if (p && p.startUnix <= now && p.endUnix > now && (!current || p.startUnix < current.startUnix)) current = p; });
       var blocks = [];
       var segs = [], run = null;
       function flushRun(){
@@ -6808,7 +6812,7 @@ try {
       segs.forEach(function(p){
         var s = Math.max(p.startUnix, start), e = Math.min(p.endUnix, end);
         if (e - s < 60000) return;
-        var on = p.startUnix <= now && p.endUnix > now;
+        var on = p === current || p.kind === 'run' && p.startUnix <= now && p.endUnix > now;
         var title = (ch.kind === 'iptv' && p.kind === 'live') ? (ch.name + ' \u00b7 live') : p.title;
         blocks.push(h('button', {
           className:'g-prog' + (on ? ' on' : '') + (p.endUnix <= now ? ' past' : ''), type:'button',
@@ -7117,8 +7121,12 @@ try {
         return;
       }
       var now = Date.now();
+      var current = null;
+      for (var ci = 0; ci < items.length; ci++) {
+        if (items[ci].startUnix <= now && items[ci].endUnix > now && (!current || items[ci].startUnix < current.startUnix)) current = items[ci];
+      }
       var rows = items.map(function(p, i){
-        var on = p.startUnix <= now && p.endUnix > now;
+        var on = p === current;
         var meta = parseProgMeta(p);
         var label = channelEpgLabel(p, c);
         var when = fmtClock(p.startUnix) + '\u2013' + fmtClock(p.endUnix);
