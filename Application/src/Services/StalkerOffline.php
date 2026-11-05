@@ -101,7 +101,9 @@ final class StalkerOffline {
             $headers=['Accept: */*'];if($offset){$headers[]='Range: bytes='.$offset.'-';$headers[]='If-Range: '.$meta['validator'];}
             $status=0;$response=[];$file=null;$received=0;$failed=false;$failureCause='';
             $ch=curl_init($url);
-            curl_setopt_array($ch,[CURLOPT_FOLLOWLOCATION=>false,CURLOPT_PROTOCOLS=>CURLPROTO_HTTP|CURLPROTO_HTTPS,CURLOPT_RESOLVE=>[$host.':'.$port.':'.$ip],CURLOPT_CONNECTTIMEOUT=>20,CURLOPT_HTTP_VERSION=>CURL_HTTP_VERSION_1_1,CURLOPT_TIMEOUT=>0,CURLOPT_LOW_SPEED_LIMIT=>1024,CURLOPT_LOW_SPEED_TIME=>90,CURLOPT_SSL_VERIFYPEER=>true,
+            // Match the live stream proxy's protocol negotiation and content
+            // decoding; some provider gateways refuse forced HTTP/1.1 requests.
+            curl_setopt_array($ch,[CURLOPT_FOLLOWLOCATION=>false,CURLOPT_PROTOCOLS=>CURLPROTO_HTTP|CURLPROTO_HTTPS,CURLOPT_RESOLVE=>[$host.':'.$port.':'.$ip],CURLOPT_CONNECTTIMEOUT=>20,CURLOPT_TIMEOUT=>0,CURLOPT_LOW_SPEED_LIMIT=>1024,CURLOPT_LOW_SPEED_TIME=>90,CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_ENCODING=>'',
                 CURLOPT_COOKIEFILE=>$feed['_downloadCookies']??stalker_cookie_path($feed),CURLOPT_COOKIEJAR=>$feed['_downloadCookies']??stalker_cookie_path($feed),CURLOPT_REFERER=>preg_replace('#/(?:server/load|portal)\.php$#','/c/',stalker_endpoint($feed)),CURLOPT_USERAGENT=>'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 MAG250 stbapp ver: 4 rev: 1812 Mobile Safari/533.3',CURLOPT_HTTPHEADER=>$headers,CURLOPT_NOPROGRESS=>false,
                 CURLOPT_XFERINFOFUNCTION=>static function()use($dest){$marker=dirname($dest).'/cancel';clearstatcache(true,$marker);return is_file($marker)?1:0;},
                 CURLOPT_HEADERFUNCTION=>static function($h,$line)use(&$status,&$response){if(preg_match('#^HTTP/\S+\s+(\d+)#',$line,$m)){$status=(int)$m[1];$response=[];}elseif(strpos($line,':')!==false){[$k,$v]=explode(':',$line,2);$response[strtolower(trim($k))]=trim($v);}return strlen($line);},
