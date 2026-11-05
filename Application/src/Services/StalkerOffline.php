@@ -62,9 +62,12 @@ final class StalkerOffline {
         Stream::sendFile($path,'video/x-matroska');exit;
     }
     private static function fetch(string $url,string $dest,array $feed,int $limit=21474836480,bool $fresh=false): void {
-        for($attempt=0;$attempt<3;$attempt++){
+        for($attempt=0;$attempt<5;$attempt++){
             try{self::fetchOnce($url,$dest,$feed,$limit,$fresh,$attempt);return;}
-            catch(RuntimeException $error){if($attempt===2||is_file(dirname($dest).'/cancel'))throw $error;sleep($attempt+1);}
+            catch(RuntimeException $error){
+                if($attempt===4||is_file(dirname($dest).'/cancel')||preg_match('/^(?:Not enough free disk space|This provider video exceeds|Cannot write the download|The download could not be written)/i',$error->getMessage()))throw $error;
+                sleep(min(30,1<<$attempt));
+            }
         }
     }
     private static function fetchOnce(string $url,string $dest,array $feed,int $limit,bool $fresh,int $attempt): void {
@@ -76,22 +79,23 @@ final class StalkerOffline {
             $ips=stalker_public_addresses($url);foreach($ips as $ip)if(!WebFetch::publicIp($ip))throw new RuntimeException('Media address is not public.');
             $host=(string)$p['host'];$port=$p['port']??($p['scheme']==='https'?443:80);$ip=strpos($ips[$attempt%count($ips)],':')!==false?'['.$ips[$attempt%count($ips)].']':$ips[$attempt%count($ips)];
             $headers=['Accept: */*'];if($offset){$headers[]='Range: bytes='.$offset.'-';$headers[]='If-Range: '.$meta['validator'];}
-            $status=0;$response=[];$file=null;$received=0;$failed=false;
+            $status=0;$response=[];$file=null;$received=0;$failed=false;$failureCause='';
             $ch=curl_init($url);
             curl_setopt_array($ch,[CURLOPT_FOLLOWLOCATION=>false,CURLOPT_PROTOCOLS=>CURLPROTO_HTTP|CURLPROTO_HTTPS,CURLOPT_RESOLVE=>[$host.':'.$port.':'.$ip],CURLOPT_CONNECTTIMEOUT=>20,CURLOPT_HTTP_VERSION=>CURL_HTTP_VERSION_1_1,CURLOPT_TIMEOUT=>0,CURLOPT_LOW_SPEED_LIMIT=>1024,CURLOPT_LOW_SPEED_TIME=>90,CURLOPT_SSL_VERIFYPEER=>true,
                 CURLOPT_COOKIEFILE=>$feed['_downloadCookies']??stalker_cookie_path($feed),CURLOPT_COOKIEJAR=>$feed['_downloadCookies']??stalker_cookie_path($feed),CURLOPT_REFERER=>preg_replace('#/(?:server/load|portal)\.php$#','/c/',stalker_endpoint($feed)),CURLOPT_USERAGENT=>'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 MAG250 stbapp ver: 4 rev: 1812 Mobile Safari/533.3',CURLOPT_HTTPHEADER=>$headers,CURLOPT_NOPROGRESS=>false,
                 CURLOPT_XFERINFOFUNCTION=>static function()use($dest){$marker=dirname($dest).'/cancel';clearstatcache(true,$marker);return is_file($marker)?1:0;},
                 CURLOPT_HEADERFUNCTION=>static function($h,$line)use(&$status,&$response){if(preg_match('#^HTTP/\S+\s+(\d+)#',$line,$m)){$status=(int)$m[1];$response=[];}elseif(strpos($line,':')!==false){[$k,$v]=explode(':',$line,2);$response[strtolower(trim($k))]=trim($v);}return strlen($line);},
-                CURLOPT_WRITEFUNCTION=>static function($h,$chunk)use(&$file,&$received,&$failed,&$response,&$status,$offset,$part,$metaFile,$limit){
+                 CURLOPT_WRITEFUNCTION=>static function($h,$chunk)use(&$file,&$received,&$failed,&$failureCause,&$response,&$status,$offset,$part,$metaFile,$limit){
                     if($status>=300&&$status<400)return strlen($chunk);
                     if(!in_array($status,[200,206],true))return 0;
-                    if(!$file){if($status===206&&(!$offset||!preg_match('/^bytes '.preg_quote((string)$offset,'/').'-/',$response['content-range']??''))){$failed=true;return 0;}$file=@fopen($part,$status===206?'ab':'wb');if(!$file){$failed=true;return 0;}@chmod($part,0600);$validator=$response['etag']??$response['last-modified']??'';@file_put_contents($metaFile,json_encode(['validator'=>$validator]));}
-                    $received+=strlen($chunk);$free=@disk_free_space(dirname($part));if($received+($status===206?$offset:0)>$limit||($free!==false&&$free<100*1024*1024)){$failed=true;return 0;}
-                    $n=fwrite($file,$chunk);return $n===false?0:$n;
+                     if(!$file){if($status===206&&(!$offset||!preg_match('/^bytes '.preg_quote((string)$offset,'/').'-/',$response['content-range']??''))){$failed=true;$failureCause='The provider changed the partial download; retry the download.';return 0;}$file=@fopen($part,$status===206?'ab':'wb');if(!$file){$failed=true;$failureCause='Cannot write the download to offline storage.';return 0;}@chmod($part,0600);$validator=$response['etag']??$response['last-modified']??'';@file_put_contents($metaFile,json_encode(['validator'=>$validator]));}
+                     $received+=strlen($chunk);$free=@disk_free_space(dirname($part));if($received+($status===206?$offset:0)>$limit){$failed=true;$failureCause='This provider video exceeds the 20 GB offline download limit.';return 0;}if($free!==false&&$free<100*1024*1024){$failed=true;$failureCause='Not enough free disk space to continue the download.';return 0;}
+                     $n=fwrite($file,$chunk);if($n===false||$n!==strlen($chunk)){$failed=true;$failureCause='The download could not be written completely. Check free disk space and offline storage permissions.';return 0;}return $n;
                 }]);
             $ok=curl_exec($ch);$errno=curl_errno($ch);$status=(int)curl_getinfo($ch,CURLINFO_HTTP_CODE);curl_close($ch);if(is_resource($file))fclose($file);
             if($status>=300&&$status<400&&!empty($response['location'])){$url=iptv_hls_resolve_uri($url,$response['location']);continue;}
-            if(!$ok||$failed||!in_array($status,[200,206],true)||!is_file($part))throw new RuntimeException('Download interrupted or refused (HTTP '.$status.($errno?', transport '.$errno.': '.curl_strerror($errno):'').'). Partial files are kept; use Retry.');
+            if($failed&&$failureCause!=='')throw new RuntimeException($failureCause.' Partial files are kept; use Retry.');
+            if(!$ok||!in_array($status,[200,206],true)||!is_file($part))throw new RuntimeException('Download interrupted or refused (HTTP '.$status.($errno?', transport '.$errno.': '.curl_strerror($errno):'').'). Partial files are kept; use Retry.');
             if(!@rename($part,$dest))throw new RuntimeException('Cannot finish the downloaded file.');@chmod($dest,0600);return;
         }
         throw new RuntimeException('Too many media redirects.');
@@ -130,7 +134,7 @@ final class StalkerOffline {
             if(!$bandwidth||!flock($bandwidth,LOCK_EX))throw new RuntimeException('Download queue lock unavailable.');
             $j=self::job($id);if(in_array($j['status'],['ready','imported'],true))return ['ok'=>true];
             $features=Store::settings()['features']??[];if(empty($features['live'])||empty($features['downloads']))throw new RuntimeException('Live or downloads have been disabled.');
-            $feed=iptv_feed_by_id(iptv_load(),$j['feed']);if(!$feed||empty($feed['enabled']))throw new RuntimeException('The provider connection is unavailable.');
+            $feed=iptv_feed_by_id(iptv_load(),$j['feed']);if(!$feed||empty($feed['enabled']))throw new RuntimeException('The saved provider connection is missing or disabled. Re-enable it in Live settings → IPTV & guide matching, then retry this download.');
             $dir=self::root().'/'.$id;if(!is_dir($dir)&&!@mkdir($dir,0700,true))throw new RuntimeException('Cannot create download folder.');
             if(is_file($dir.'/cancel'))throw new RuntimeException('Download cancelled. Partial media was preserved.');
             $j['destination']=self::job($id)['destination']??'library';$j['status']='downloading';$j['updated']=date('c');self::save($j);
