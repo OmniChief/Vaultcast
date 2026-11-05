@@ -5,7 +5,7 @@ window.VaultcastStalkerCountries=function(host,options){
   var h=options.h,active=false,serial=0,country=(options.saved||{}).country||'GB';
   var genre=(options.saved||{}).genre||'General',view=(options.saved||{}).view||'guide';
   var feeds=[],folders=[],failures=[],channels=[],sourcePages={},pageInventory=[],guideByChannel={},guideLogos={},guideFetched={};
-  var selected=null,loading=false,guideBusy=false,refreshChannels=false,search='',chosen='',offset=0,body,status,list,hero,summary,more,guideButton;
+  var selected=null,loading=false,guideBusy=false,guideRefreshPending=false,guideForceRefresh=false,refreshChannels=false,search='',chosen='',offset=0,body,status,list,hero,summary,more,guideButton;
   var overrides={},favourites=[],onlyFavourites=false,guideTimer=null,clockTimer=null,guideRetryAt={},guideAttempts={},cache=new Map();
   var preference='vaultcast-stalker-live-favourites-'+options.owner;
   var guideConnectionAt=Date.now(),guideDb=null;
@@ -29,6 +29,9 @@ window.VaultcastStalkerCountries=function(host,options){
       request.onsuccess=function(){var row=request.result;resolve(row&&Number.isFinite(row.at)&&row.at<=Date.now()&&guideConnectionAt-row.at<86400000&&row.data?row.data:null);};
       request.onerror=function(){resolve(null);};
     }catch(ignore){resolve(null);}
+  });});}
+  function removeCachedGuide(key){return browserGuideDb().then(function(db){return new Promise(function(resolve){
+    if(!db){resolve();return;}try{var tx=db.transaction('pages','readwrite');tx.objectStore('pages').delete(key);tx.oncomplete=tx.onerror=tx.onabort=function(){resolve();};}catch(ignore){resolve();}
   });});}
   function cacheGuide(key,data){
     browserGuideDb().then(function(db){if(!db)return;try{
@@ -151,7 +154,7 @@ window.VaultcastStalkerCountries=function(host,options){
     if(!items.length)list.appendChild(h('p',{className:'muted',text:onlyFavourites?'No favourites in the loaded channels for this genre. Use ☆ to save a channel.':loading?'Loading channels…':'No matching channels in loaded pages.'}));
     summary.textContent=items.length+' channels · '+all.filter(function(item){return !!programmeInfo(item).current;}).length+' with programme listings'+(loading?' · Loading more…':'');
     more.hidden=!selected.sources.some(function(s){return !sourcePages[folderKey(s)]||sourcePages[folderKey(s)].more;});more.disabled=loading;
-    guideButton.disabled=guideBusy;guideButton.textContent=guideBusy?'Loading guide…':'Refresh guide';
+    guideButton.disabled=guideBusy||guideRefreshPending||!pageInventory.length;guideButton.textContent=guideBusy||guideRefreshPending?'Refreshing EPG…':'Refresh EPG';
     if(!hero.querySelector('details[open]')&&!hero.contains(focused))showFeature(items.find(function(item){return key(item)===chosen;})||items[0]);
     if(focusKey&&focusIndex>=0){var row=Array.from(list.querySelectorAll('[data-channel]')).find(function(el){return el.getAttribute('data-channel')===focusKey;});var target=row&&row.querySelectorAll('button')[focusIndex];if(target)target.focus({preventScroll:true});}
   }
@@ -171,10 +174,10 @@ window.VaultcastStalkerCountries=function(host,options){
     var when=h('select',{'aria-label':'Programme time'});[[0,'On now'],[3600,'In 1 hour'],[7200,'In 2 hours'],[10800,'In 3 hours']].forEach(function(pair){when.appendChild(h('option',{value:pair[0],selected:offset===pair[0],text:pair[1]}));});when.onchange=function(){offset=Number(when.value);paint();};layouts.appendChild(when);
     hero=h('section',{className:'stalker-tv-feature',hidden:true,'aria-label':'Selected programme'});summary=h('p',{className:'muted',role:'status'});list=h('div');
     more=h('button',{type:'button',className:'btn',text:'Load more channels',onClick:function(){loadChannels();}});
-    guideButton=h('button',{type:'button',className:'btn ghost',text:'Refresh guide',onClick:function(){guideFetched={};guideRetryAt={};guideAttempts={};requestGuide();}});
+    guideButton=h('button',{type:'button',className:'btn ghost',text:'Refresh EPG',onClick:refreshEpg});
     var sources=h('details',{className:'stalker-tv-provider-settings'},[h('summary',{text:'Provider folders & country corrections'})]);
     sourcesFor(genre).forEach(function(f){var choose=h('select',{'aria-label':'Country for '+f.name+' on '+f.connection});Object.keys(countries).sort().concat(['ZZ']).forEach(function(code){choose.appendChild(h('option',{value:code,selected:code===f.country,text:name(code)}));});choose.onchange=function(){overrides[folderKey(f)]=choose.value;f.country=choose.value;try{localStorage.setItem('vaultcast-stalker-country-overrides-'+options.owner,JSON.stringify(overrides));}catch(ignore){}cache.clear();selected=null;openGenre(genre);};sources.appendChild(h('label',{},[h('span',{text:f.name+' · '+f.connection}),choose]));});
-    body.append(h('div',{className:'stalker-tv-heading'},[h('div',{},[h('span',{className:'eyebrow',text:name(country)+' · Live TV'}),h('h2',{text:genreName(genre)})]),find]),h('div',{className:'stalker-tv-toolbar'},[layouts]),status,hero,summary,list,h('div',{className:'row-actions'},[more,guideButton]),sources);
+    body.append(h('div',{className:'stalker-tv-heading'},[h('div',{},[h('span',{className:'eyebrow',text:name(country)+' · Live TV'}),h('h2',{text:genreName(genre)})]),find]),h('div',{className:'stalker-tv-toolbar'},[layouts,guideButton]),status,hero,summary,list,h('div',{className:'row-actions'},[more]),sources);
     host.append(navigation,body);status.textContent=failures.join(' · ');
   }
   function snapshot(){if(selected)cache.set(selected.country+'|'+selected.genre,{channels:channels,sourcePages:sourcePages,pageInventory:pageInventory,guideByChannel:guideByChannel,guideLogos:guideLogos,guideFetched:guideFetched,search:search,chosen:chosen});if(cache.size>8)cache.delete(cache.keys().next().value);}
@@ -185,11 +188,25 @@ window.VaultcastStalkerCountries=function(host,options){
     remember();shell();paint();if(!sources.length){status.textContent='No provider folders available for this genre in '+name(country)+'. Choose another genre or country.';return;}
     if(!channels.length)loadChannels();else requestGuide();
   }
+  function refreshEpg(){
+    if(guideBusy||guideRefreshPending||loading||!pageInventory.length)return;
+    guideRefreshPending=true;guideFetched={};guideRetryAt={};guideAttempts={};guideForceRefresh=true;
+    var clears=[];
+    pageInventory.forEach(function(entry){
+      (entry.channelIds||[]).forEach(function(id){delete guideByChannel[entry.feed+'|'+id];delete guideLogos[entry.feed+'|'+id];});
+      clears.push(removeCachedGuide(guideCacheKey(entry)));
+    });
+    status.textContent='Refreshing guide data in this browser…';paint();
+    Promise.all(clears).then(function(){
+      if(!current(serial))return;
+      guideRefreshPending=false;requestGuide();
+    });
+  }
   function requestGuide(){
     if(!current(serial)||!selected||guideBusy||loading)return;
     clearTimeout(guideTimer);
     var pending=pageInventory.filter(function(p){return !guideFetched[p.feed+'|'+p.category+'|'+p.page];});
-    if(!pending.length)return;
+    if(!pending.length){guideForceRefresh=false;paint();return;}
     var now=Date.now(),entry=pending.find(function(p){return (guideRetryAt[p.feed+'|'+p.category+'|'+p.page]||0)<=now;});
     if(!entry){
       var due=Math.min.apply(null,pending.map(function(p){return guideRetryAt[p.feed+'|'+p.category+'|'+p.page];})),retryToken=serial;
@@ -198,8 +215,8 @@ window.VaultcastStalkerCountries=function(host,options){
     var token=serial,id=entry.feed+'|'+entry.category+'|'+entry.page,cacheKey=guideCacheKey(entry),fromBrowser=false,complete=false;guideBusy=true;paint();
     cachedGuide(cacheKey).then(function(cached){
       if(!current(token))return null;
-      if(cached){fromBrowser=true;return cached;}
-      return options.api('stalker_live_guide','feed='+encodeURIComponent(entry.feed)+'&category='+encodeURIComponent(entry.category)+'&page='+entry.page);
+      if(cached&&!guideForceRefresh){fromBrowser=true;return cached;}
+      return options.api('stalker_live_guide','feed='+encodeURIComponent(entry.feed)+'&category='+encodeURIComponent(entry.category)+'&page='+entry.page+(guideForceRefresh?'&refresh=1':''));
     }).then(function(data){
       if(!current(token))return;if(!data||!data.ok)throw Error(data&&data.error||'Programme guide unavailable');
       // EPG is metadata for this provider page, never a source of channel rows.

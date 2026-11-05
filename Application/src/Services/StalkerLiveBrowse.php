@@ -136,13 +136,14 @@ final class StalkerLiveBrowse {
         if(!preg_match('/^[0-9]{1,12}$/D',$category))
             throw new InvalidArgumentException('Select a live TV category.');
         $page=max(1,min(10000,(int)($opts['page']??1)));
+        $refresh=!empty($opts['refresh']);
         $indexRevision=[];
         foreach(['gb','gb-freeview','us'] as $region){
             $indexPath=STREAM_DATA.'/live/epg_cache/stalker-open-'.$region.'.json';
             $indexRevision[$region]=is_file($indexPath)?(int)@filemtime($indexPath):0;
         }
         $key=self::key($feed,'guide:v3:'.json_encode([$category,$page,$indexRevision]));
-        $cached=\Vaultcast\Repository::cacheGet($key);
+        $cached=$refresh?null:\Vaultcast\Repository::cacheGet($key);
         if($cached!==null)return $cached;
         // A user opening Stalker EPG can request a refresh without browser-side
         // downloading or per-channel polling. Maintenance queues only one CLI job.
