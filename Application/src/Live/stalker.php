@@ -499,7 +499,7 @@ function stalker_channel_detail(array $feed,string $id,bool $refresh=false,bool 
 /** Bounded GET of the actual media endpoint; never return its URL or body. */
 function stalker_check_media(array $feed,string $id,string $kind,string $profile='stb'): array {
     require_once __DIR__.'/iptv_hls.php';
-    if(!in_array($profile,['stb','http1','vlc','browser'],true)||($kind!=='live'&&$profile!=='stb'))throw new InvalidArgumentException('Unknown playback check profile.');
+    if(!in_array($profile,['stb','http1','vlc','browser'],true)||($kind!=='live'&&!in_array($profile,['stb','browser'],true)))throw new InvalidArgumentException('Unknown playback check profile.');
     $url=$kind==='live'?stalker_resolve($feed,$id):stalker_vod_resolve($feed,$id);
     $entry=$kind==='live'?\Vaultcast\Repository::cacheGet(stalker_live_key($feed,$id)):null;
     $linkMode=$entry&&stalker_static_live_url($entry)!==null?'static':'create_link';
