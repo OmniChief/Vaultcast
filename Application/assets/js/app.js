@@ -6088,7 +6088,7 @@ try {
           }else status.append('Download complete. ',h('button',{className:'btn',text:'Open ingest inbox',onClick:function(){openSettings('ingest');}}));
           return;
         }
-        var details=[job.stage|| (job.status==='queued'?'Queued for download':'Downloading video'),job.bytes?Math.round(job.bytes/1048576)+' MB transferred':'',job.showName&&job.showName!==item.name?job.showName:'',job.seasonName||'',job.episode?('Episode '+job.episode):'',job.episodeTitle&&job.episodeTitle!==item.name?job.episodeTitle:''].filter(Boolean);
+        var details=[job.stage|| (job.status==='queued'?'Queued for download':'Downloading video'),job.percent!=null?job.percent+'% downloaded':'',job.bytes?Math.round(job.bytes/1048576)+' MB transferred':'',job.showName&&job.showName!==item.name?job.showName:'',job.seasonName||'',job.episode?('Episode '+job.episode):'',job.episodeTitle&&job.episodeTitle!==item.name?job.episodeTitle:''].filter(Boolean);
         status.textContent=details.join(' · ')+'. You can leave this page; progress is saved in Downloads.';
         setTimeout(function(){poll(id);},5000);
       }).catch(function(error){if(current()){button.disabled=false;status.textContent=error.message;}});
@@ -6354,7 +6354,7 @@ try {
       host.replaceChildren(h('div',{className:'row-head'},[h('h2',{text:'Offline downloads'}),h('button',{className:'btn',text:'Refresh status',onClick:function(){showStalkerOffline(host);}})]),h('p',{className:'muted',text:'Prepared videos can be saved to this device. Library downloads also appear in the ingest inbox for matching.'}));
       (result.items||[]).forEach(function(item){
         var seriesDetails=[item.showName,item.seasonName,item.episode?('Episode '+item.episode):'',item.episodeTitle].filter(Boolean).join(' · ');
-        var details=[item.stage,item.connection?'Provider: '+item.connection:'',item.destination==='browser'?'Destination: this device':'Destination: library',item.bytes?Math.round(item.bytes/1048576)+' MB transferred':''].filter(Boolean).join(' · ');
+        var details=[item.stage,item.percent!=null?item.percent+'% downloaded':'',item.connection?'Provider: '+item.connection:'',item.destination==='browser'?'Destination: this device':'Destination: library',item.bytes?Math.round(item.bytes/1048576)+' MB transferred':''].filter(Boolean).join(' · ');
         var admin=!!(state.user&&state.user.role==='admin');
         var statusLine=h('p',{text:item.status,'data-offline-status':item.id,'data-offline-state':item.status});
         host.appendChild(h('div',{className:'settings-card','data-offline-job':item.id},[h('h3',{text:item.name}),seriesDetails?h('p',{className:'muted',text:seriesDetails}):null,statusLine,h('p',{className:'muted',text:details,'data-offline-details':item.id}),item.error?h('p',{className:'bad',text:item.error}):null,
@@ -6373,7 +6373,7 @@ try {
             var line=card.querySelector('[data-offline-status]'),detail=card.querySelector('[data-offline-details]');
             if(line&&line.getAttribute('data-offline-state')!==row.status){changed=true;return;}
             if(line)line.textContent=row.status;
-            if(detail)detail.textContent=[row.stage,row.connection?'Provider: '+row.connection:'',row.destination==='browser'?'Destination: this device':'Destination: library',row.bytes?Math.round(row.bytes/1048576)+' MB transferred':''].filter(Boolean).join(' · ');
+            if(detail)detail.textContent=[row.stage,row.percent!=null?row.percent+'% downloaded':'',row.connection?'Provider: '+row.connection:'',row.destination==='browser'?'Destination: this device':'Destination: library',row.bytes?Math.round(row.bytes/1048576)+' MB transferred':''].filter(Boolean).join(' · ');
           });
           if(changed){showStalkerOffline(host);return;}
           if(active&&host.isConnected)host._stalkerOfflineTimer=setTimeout(updateProgress,4000);

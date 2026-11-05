@@ -12,6 +12,12 @@ final class StalkerOffline {
             $dir=self::root().'/'.$row['id'];$bytes=0;
             foreach(glob($dir.'/*')?:[] as $file)if(is_file($file)&&preg_match('/^(?:source(?:\.part)?|segment-\d+(?:\.part)?|video(?:\.part)?\.mkv)$/',basename($file)))$bytes+=(int)filesize($file);
             $row['bytes']=max((int)($row['bytes']??0),$bytes);
+            $row['percent']=null;$row['totalBytes']=0;
+            if(!empty($row['is_hls'])&&(int)($row['segments_total']??0)>0)$row['percent']=(int)floor(min(1,(int)($row['segments_done']??0)/(int)$row['segments_total'])*100);
+            else{
+                $progressMeta=$dir.'/source.part.json';if(!is_file($progressMeta))$progressMeta=$dir.'/source.json';
+                if(is_file($progressMeta)){$meta=json_decode((string)file_get_contents($progressMeta),true);$row['totalBytes']=(int)($meta['total_bytes']??0);if($row['totalBytes']>0)$row['percent']=(int)floor(min(1,$row['bytes']/$row['totalBytes'])*100);}
+            }
             if(time()-strtotime($row['updated']??$row['created']??'now')>90){
                 $lock=@fopen(self::root().'/'.$row['id'].'.lock','c');
                 if($lock&&flock($lock,LOCK_EX|LOCK_NB)){
@@ -27,6 +33,7 @@ final class StalkerOffline {
             $item=is_array($j['item']??null)?$j['item']:[];$season=$item['seasonName']??'';
             if($season===''&&is_numeric($item['season']??null))$season=(int)$item['season']===0?'Specials':'Season '.(int)$item['season'];
             return array_merge(array_intersect_key($j,array_flip(['id','name','status','bytes','error','created','updated','job_pid','destination','stage','connection'])),[
+                'percent'=>$j['status']==='ready'||$j['status']==='imported'?100:($j['percent']??null),'totalBytes'=>(int)($j['totalBytes']??0),
                 'showName'=>(string)($item['showName']??$item['seriesName']??''),'seasonName'=>(string)$season,
                 'episode'=>(string)($item['episode']??$item['episode_number']??''),'episodeTitle'=>(string)($item['episodeTitle']??$item['episode_title']??'')
             ]);
@@ -114,7 +121,7 @@ final class StalkerOffline {
                  CURLOPT_WRITEFUNCTION=>static function($h,$chunk)use(&$file,&$received,&$failed,&$failureCause,&$response,&$status,$offset,$part,$metaFile,$limit){
                     if($status>=300&&$status<400)return strlen($chunk);
                     if(!in_array($status,[200,206],true))return 0;
-                     if(!$file){if($status===206&&!preg_match('/^bytes '.preg_quote((string)$offset,'/').'-/',$response['content-range']??'')){$failed=true;$failureCause='The provider changed the partial download; retry the download.';return 0;}$file=@fopen($status===206&&$offset>0?'ab':'wb');if(!$file){$failed=true;$failureCause='Cannot write the download to offline storage.';return 0;}@chmod($part,0600);$validator=$response['etag']??$response['last-modified']??'';@file_put_contents($metaFile,json_encode(['validator'=>$validator]));}
+                     if(!$file){if($status===206&&!preg_match('/^bytes '.preg_quote((string)$offset,'/').'-/',$response['content-range']??'')){$failed=true;$failureCause='The provider changed the partial download; retry the download.';return 0;}$file=@fopen($status===206&&$offset>0?'ab':'wb');if(!$file){$failed=true;$failureCause='Cannot write the download to offline storage.';return 0;}@chmod($part,0600);$validator=$response['etag']??$response['last-modified']??'';$total=0;if(preg_match('/^bytes \d+-\d+\/(\d+)$/',$response['content-range']??'',$range))$total=(int)$range[1];elseif(isset($response['content-length'])&&ctype_digit((string)$response['content-length']))$total=(int)$response['content-length']+($status===206?$offset:0);@file_put_contents($metaFile,json_encode(['validator'=>$validator,'total_bytes'=>$total]));}
                      $received+=strlen($chunk);$free=@disk_free_space(dirname($part));if($received+($status===206?$offset:0)>$limit){$failed=true;$failureCause='This provider video exceeds the 20 GB offline download limit.';return 0;}if($free!==false&&$free<100*1024*1024){$failed=true;$failureCause='Not enough free disk space to continue the download.';return 0;}
                      $n=fwrite($file,$chunk);if($n===false||$n!==strlen($chunk)){$failed=true;$failureCause='The download could not be written completely. Check free disk space and offline storage permissions.';return 0;}return $n;
                 }]);
@@ -144,14 +151,14 @@ final class StalkerOffline {
         }
         throw new RuntimeException('Too many media redirects.');
     }
-    private static function playlist(string $url,string $dir,array $feed,int $depth=0): string {
+    private static function playlist(string $url,string $dir,array $feed,int $depth=0,string $jobId=''): string {
         if($depth>4)throw new RuntimeException('Too many nested playlists.');
         $path=$dir.'/manifest-'.$depth;self::fetch($url,$path,$feed,4*1024*1024,true);$text=(string)file_get_contents($path);
         $lines=preg_split('/\r?\n/',$text);$variants=[];$bandwidth=0;
         foreach($lines as $line){$line=trim($line);if(strpos($line,'#EXT-X-STREAM-INF:')===0){preg_match('/BANDWIDTH=(\d+)/',$line,$m);$bandwidth=(int)($m[1]??1);}elseif($bandwidth&&$line!==''&&$line[0]!=='#'){$variants[$bandwidth]=iptv_hls_resolve_uri($url,$line);$bandwidth=0;}}
-        if($variants){krsort($variants);return self::playlist(reset($variants),$dir,$feed,$depth+1);}
+        if($variants){krsort($variants);return self::playlist(reset($variants),$dir,$feed,$depth+1,$jobId);}
         if(strpos($text,'#EXT-X-ENDLIST')===false)throw new RuntimeException('This is a continuous stream, not downloadable VOD.');
-        $out=[];$number=0;$signature=[];$duration='';
+        $out=[];$number=0;$signature=[];$segments=[];$duration='';
         foreach($lines as $line){$line=trim($line);if($line==='' )continue;
             if(strpos($line,'#EXTINF:')===0)$duration=$line;
             if(strpos($line,'#EXT-X-KEY:')===0&&!preg_match('/METHOD=(?:AES-128|NONE)(?:,|$)/',$line))throw new RuntimeException('This provider uses unsupported protected video.');
@@ -159,14 +166,15 @@ final class StalkerOffline {
                 if(strpos($line,'URI=')!==false){if(!preg_match('/^#EXT-X-(?:KEY|MAP):/',$line))throw new RuntimeException('Unsupported playlist resource.');$line=preg_replace_callback('/URI="([^"]+)"/',static function($m)use($url,$dir,$feed){$resource=iptv_hls_resolve_uri($url,$m[1]);$name='resource-'.hash('sha256',$resource);self::fetch($resource,$dir.'/'.$name,$feed,64*1024*1024);return 'URI="'.$name.'"';},$line);}
                 $out[]=$line;continue;
             }
-            $resource=iptv_hls_resolve_uri($url,$line);$params=[];parse_str((string)parse_url($resource,PHP_URL_QUERY),$params);
+            $resource=iptv_hls_resolve_uri($url,$line);$segments[]=$resource;$params=[];parse_str((string)parse_url($resource,PHP_URL_QUERY),$params);
             foreach(array_keys($params) as $key)if(preg_match('/^(?:token|expires|exp|signature|sig|auth|play_token|session)$/i',(string)$key))unset($params[$key]);
             ksort($params);$signature[]=[parse_url($resource,PHP_URL_PATH),$params,$duration];$out[]='segment-'.($number++);
         }
         $signatureFile=$dir.'/segments.json';$encoded=json_encode($signature);
         if(is_file($signatureFile)&&file_get_contents($signatureFile)!==$encoded)throw new RuntimeException('Provider changed this video while it was downloading. Existing partial files were preserved.');
         file_put_contents($signatureFile,$encoded);
-        $number=0;foreach($lines as $line){$line=trim($line);if($line!==''&&$line[0]!=='#'){self::fetch(iptv_hls_resolve_uri($url,$line),$dir.'/segment-'.($number++),$feed,512*1024*1024);}}
+        if($jobId!==''){$job=self::job($jobId);$job['is_hls']=true;$job['segments_total']=count($segments);$job['segments_done']=0;$job['updated']=date('c');self::save($job);}
+        foreach($segments as $number=>$segment){self::fetch($segment,$dir.'/segment-'.$number,$feed,512*1024*1024);if($jobId!==''){$job=self::job($jobId);$job['segments_done']=$number+1;$job['updated']=date('c');self::save($job);}}
         $local=$dir.'/offline.m3u8';file_put_contents($local,implode("\n",$out)."\n");return $local;
     }
     public static function run(string $id): array {
@@ -196,7 +204,7 @@ final class StalkerOffline {
             $feed['_downloadCookies']=$cookies;$source=$dir.'/source';$j['stage']='Downloading from provider';$j['updated']=date('c');self::save($j);self::fetch($url,$source,$feed,21474836480,false,true);
             $head=file_get_contents($source,false,null,0,16);
             $expectedDuration=0.0;
-            if(strpos(ltrim((string)$head),'#EXTM3U')===0){$j['stage']='Downloading stream segments';$j['updated']=date('c');self::save($j);$source=self::playlist($url,$dir,$feed);preg_match_all('/#EXTINF:([0-9.]+)/',(string)file_get_contents($source),$durations);$expectedDuration=array_sum(array_map('floatval',$durations[1]));}
+            if(strpos(ltrim((string)$head),'#EXTM3U')===0){$j['is_hls']=true;$j['stage']='Downloading stream segments';$j['updated']=date('c');self::save($j);$source=self::playlist($url,$dir,$feed,0,$id);preg_match_all('/#EXTINF:([0-9.]+)/',(string)file_get_contents($source),$durations);$expectedDuration=array_sum(array_map('floatval',$durations[1]));}
             $dest=$dir.'/video.mkv';$part=$dir.'/video.part.mkv';
             $j['stage']='Preparing offline video';$j['updated']=date('c');self::save($j);
             $arguments=[Remux::ffmpegBin(),'-nostdin','-y','-v','error','-protocol_whitelist','file,crypto,data'];
