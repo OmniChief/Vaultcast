@@ -128,10 +128,18 @@ final class StalkerLiveBrowse {
         $name=preg_replace('/^bbc\\s+(?:3|three)(?=\\s|$)/u','bbc three',$name);
         $name=preg_replace('/^bbc\\s+(?:4|four)(?=\\s|$)/u','bbc four',$name);
         $name=preg_replace('/^itv\\s+([1-4])(?=\\s|$)/u','itv$1',$name);
+        $name=preg_replace('/^4\\s*seven(?=\\s|$)/u','4seven',$name);
+        $name=preg_replace('/^(?:u\\s*&\\s*)?alibi(?=\\s|$)/u','alibi',$name);
         $name=preg_replace('/^(?:channel\\s*5|five)(?=\\s|$)/u','5',$name);
         $name=preg_replace('/^more\\s*4(?=\\s|$)/u','more4',$name);
         $name=preg_replace('/^film\\s*4(?=\\s|$)/u','film4',$name);
         return preg_replace('/\\s*\\+\\s*1\\b/u',' +1',$name);
+    }
+    /** Collapse ITV1 regional labels only for the consensus schedule fallback. */
+    private static function epgRegionalRoot(string $name): string {
+        if(preg_match('/^(itv1)(?:\\s+.+?)(\\s+\\+1)?$/u',$name,$match))
+            return $match[1].($match[2]??'');
+        return $name;
     }
 
     public static function guidePage(array $feed,array $opts): array {
@@ -223,12 +231,14 @@ final class StalkerLiveBrowse {
             $openEpgIndexStatus[$region]='ready';
             // Build candidate sets rather than treating HD/SD versions of the
             // same unregionalised service as an immediate ambiguous match.
-            $nameMap=[];
+            $nameMap=[];$regionalMap=[];
             foreach(($open['channels']??[]) as $xmlId=>$label){
                 if(!isset($open['programmes'][$xmlId]))continue;
                 $match=self::epgMatchName((string)$label);
                 if($match==='')continue;
                 $nameMap[$match][(string)$xmlId]=(string)$label;
+                $root=self::epgRegionalRoot($match);
+                if($root!==$match)$regionalMap[$root][(string)$xmlId]=(string)$label;
             }
             foreach($visible['items'] as $channel){
                 if(strtoupper((string)($channel['country']??''))!==$country)continue;
@@ -238,6 +248,11 @@ final class StalkerLiveBrowse {
                 if(!isset($open['programmes'][$sourceId])){
                     $match=self::epgMatchName((string)($channel['name']??''));
                     $candidates=$nameMap[$match]??[];
+                    $regionalConsensus=false;
+                    if(!$candidates&&isset($regionalMap[$match])){
+                        $candidates=$regionalMap[$match];
+                        $regionalConsensus=count($candidates)>1;
+                    }
                     if(count($candidates)===1){
                         $sourceId=(string)array_key_first($candidates);
                     } elseif(count($candidates)>1){
@@ -257,6 +272,27 @@ final class StalkerLiveBrowse {
                     && is_string($open['logos'][$sourceId]))
                     $channelLogos[$id]=$open['logos'][$sourceId];
                 $additional=$open['programmes'][$sourceId]??null;
+                if(!empty($regionalConsensus)&&$sourceId===''){
+                    // Generic ITV1 has no single national XMLTV channel. Add only
+                    // events shared by a majority of regional schedules; this fills
+                    // nationwide programme slots without assigning local news to
+                    // the wrong region. Keep +1 consensus separate.
+                    $votes=[];$regionalIds=array_keys($candidates);$regionalCount=count($regionalIds);
+                    foreach($regionalIds as $regionalId){
+                        $seen=[];
+                        foreach($open['programmes'][$regionalId]??[] as $event){
+                            if(!is_array($event))continue;
+                            $signature=(int)($event['start']??0).'|'.(int)($event['end']??0).'|'.mb_strtolower(trim((string)($event['title']??'')));
+                            if(isset($seen[$signature]))continue;
+                            $seen[$signature]=true;
+                            if(!isset($votes[$signature]))$votes[$signature]=['count'=>0,'event'=>$event];
+                            $votes[$signature]['count']++;
+                        }
+                    }
+                    $threshold=(int)ceil($regionalCount*0.6);
+                    $additional=[];
+                    foreach($votes as $vote)if($vote['count']>=$threshold)$additional[]=$vote['event'];
+                }
                 if(!is_array($additional))continue;
                 if(!isset($programmes[$id]))$programmes[$id]=[];
                 foreach($additional as $event){

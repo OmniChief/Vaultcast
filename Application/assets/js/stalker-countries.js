@@ -69,6 +69,7 @@ window.VaultcastStalkerCountries=function(host,options){
     return value.replace(/^BBC\s*1(?=\s|$)/i,'BBC One').replace(/^BBC\s*2(?=\s|$)/i,'BBC Two')
       .replace(/^BBC\s*3(?=\s|$)/i,'BBC Three').replace(/^BBC\s*4(?=\s|$)/i,'BBC Four')
       .replace(/^ITV\s+([1-4])(?=\s|$)/i,'ITV$1').replace(/^CHANNEL\s*4(?=\s|$)/i,'Channel 4')
+      .replace(/^4\s*SEVEN(?=\s|$)/i,'4SEVEN')
       .replace(/^(?:CHANNEL\s*5|FIVE)(?=\s|$)/i,'5').replace(/^MORE\s*4(?=\s|$)/i,'More4')
       .replace(/^FILM\s*4(?=\s|$)/i,'Film4').replace(/\s*\+\s*1\b/g,' +1');
   }
