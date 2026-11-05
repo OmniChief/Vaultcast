@@ -519,13 +519,13 @@ window.VaultcastStalkerVod=function(host,options){
   }
   function categoryLanguage(name){
     var n=String(name||'').normalize('NFKC').toUpperCase().replace(/\u00a0/g,' ');
-    // Explicit markers take priority over the UK fallback. Never guess an unknown code is UK.
+    // Explicit locale markers take priority; unmarked folders stay unspecified.
     var m=n.match(/(?:^|\s)[|┃│¦]\s*([A-Z]{2,3})\s*[|┃│¦]/)||n.match(/\[\s*([A-Z]{2,3})\s*\]/);
     var code=m?m[1]:'';
     var known={EN:'UK',US:'UK',UK:'UK',GB:'UK',IR:'Iran',FR:'French',IT:'Italian',DE:'German',ES:'Spanish',NL:'Dutch',PT:'Portuguese',TR:'Turkish',AR:'Arabic',AF:'African'};
     if(code)return known[code]||code;
-    var prefix=n.match(/^\s*(FR|DE|IT|ES|NL|PT|TR|BG|PL|RO|CZ|SK|HU|GR|DK|NO|SE|FI)\s*[-:]/),prefixLanguages={FR:'French',DE:'German',IT:'Italian',ES:'Spanish',NL:'Dutch',PT:'Portuguese',TR:'Turkish',BG:'Slavic',PL:'Slavic',RO:'Romanian',CZ:'Slavic',SK:'Slavic',HU:'Hungarian',GR:'Greek',DK:'Scandinavian',NO:'Scandinavian',SE:'Scandinavian',FI:'Finnish'};
-    if(prefix)return prefixLanguages[prefix[1]];
+    var prefix=n.match(/^\s*(PT\s*\/\s*BR|FR|DE|IT|ES|NL|PT|TR|BG|PL|RO|CZ|SK|HU|GR|DK|NO|SE|FI|AL|BR|IL|IN|KU|MT|PK|RU|SO|SV|EN|EX)\s*[-:]/),prefixLanguages={'PT/BR':'Portuguese',FR:'French',DE:'German',IT:'Italian',ES:'Spanish',NL:'Dutch',PT:'Portuguese',TR:'Turkish',BG:'Slavic',PL:'Slavic',RO:'Romanian',CZ:'Slavic',SK:'Slavic',HU:'Hungarian',GR:'Greek',DK:'Scandinavian',NO:'Scandinavian',SE:'Scandinavian',FI:'Finnish',AL:'Albanian',BR:'Portuguese',IL:'Hebrew',IN:'Indian',KU:'Kurdish',MT:'Maltese',PK:'Urdu',RU:'Russian',SO:'Somali',SV:'Swedish',EN:'UK',EX:'Serbian/Croatian/Bosnian'};
+    if(prefix)return prefixLanguages[prefix[1].replace(/\s/g,'')];
     if(/\b(?:BANGLA|BENGALI)\b/.test(n))return 'Bengali';
     if(/\bGUJARATI\b/.test(n))return 'Gujarati';
     if(/\bHINDI\b/.test(n))return 'Hindi';
@@ -537,6 +537,15 @@ window.VaultcastStalkerVod=function(host,options){
     if(/\bTAMIL\b/.test(n))return 'Tamil';
     if(/\bTELUGU\b/.test(n))return 'Telugu';
     if(/\bURDU\b/.test(n))return 'Urdu';
+    if(/\bPAKISTAN(?:I)?\b/.test(n))return 'Urdu';
+    if(/\b(?:HEBREW|ISRAELI)\b/.test(n))return 'Hebrew';
+    if(/\bKURDISH\b/.test(n))return 'Kurdish';
+    if(/\b(?:KOREAN|KOREA)\b/.test(n))return 'Korean';
+    if(/\b(?:INDIA|INDIAN|BOLLYWOOD)\b/.test(n))return 'Indian';
+    if(/\b(?:SOMALI|SOMALIA)\b/.test(n))return 'Somali';
+    if(/\b(?:ALBANIAN|ALBANIA)\b/.test(n))return 'Albanian';
+    if(/\b(?:NORDIC|SVENSKA|SWEDISH|NORWEGIAN|DANISH|FINNISH)\b/.test(n))return /\b(?:SVENSKA|SWEDISH)\b/.test(n)?'Swedish':'Scandinavian';
+    if(/\b(?:EXYU|EX\s*[- ]?YUGOSLAV(?:IAN)?)\b/.test(n))return 'Serbian/Croatian/Bosnian';
     if(/\b(?:SERBIAN|CROATIAN|BOSNIAN|EXYU)\b/.test(n))return 'Serbian/Croatian/Bosnian';
     if(/\b(?:MULTI\s*\/\s*LINGO|MULTILINGUAL|MULTISUB|MULTI LANGUAGE)\b/.test(n))return 'Multi-language';
     if(/\bASIA(?:N)?\b/.test(n))return 'Asian';
@@ -553,7 +562,8 @@ window.VaultcastStalkerVod=function(host,options){
     if(/\bPORTUGUESE\b/.test(n))return 'Portuguese';
     if(/\bTURK(?:ISH)?\b/.test(n))return 'Turkish';
     if(/\bAFRICAN\b/.test(n))return 'African';
-    return 'UK';
+    if(/\bENGLISH\b/.test(n)||/^\s*EN\s*[-:]/.test(n)||/\b(?:BBC|ITV|STV|UTV|CNN|SKY|CHANNEL\s*[45]|MY5)\b/.test(n))return 'UK';
+    return 'Other / unspecified';
   }
   function categoryName(name){
     return String(name||'').normalize('NFKC').replace(/\u00a0/g,' ')
