@@ -499,6 +499,11 @@ window.VaultcastStalkerVod=function(host,options){
             else providerSelections[previousCategory]={name:oldSelection.name,sources:stillPresent};
           }
         }
+        if(!previousCategory&&!searchAllMode&&!titlesStarted&&kind==='vod'){
+          var landingFolders=categoryBuckets(),newReleases=landingFolders.filter(function(bucket){return bucket.language==='UK'&&/^new released$/i.test(bucket.name);});
+          if(!newReleases.length)newReleases=landingFolders.filter(function(bucket){return bucket.language==='UK'&&/^new release(?:d)?(?:\s|$)/i.test(bucket.name);});
+          if(newReleases.length){language='UK';try{localStorage.setItem(languagePreferenceKey,language);}catch(e){}sortOrder='rating';beginBrowse(newReleases[0].key);return;}
+        }
         renderCategories();renderResults();
         if(searchAllMode&&titlesStarted&&!tasks.length)scan(false);
         return;
@@ -1159,7 +1164,7 @@ window.VaultcastStalkerVod=function(host,options){
   }
   return {showDiagnostics:showDiagnostics,show:function(value){
     if(active&&kind===value)return;
-    stop();active=true;kind=value;letter='#';query='';genreFilter='';providerFolderId='';searchAllMode=false;titlesStarted=false;showFolderBrowser=true;category='';categories=[];providerSelections={};groupsLoading=true;reset();render();
+    stop();active=true;kind=value;letter='#';query='';genreFilter='';providerFolderId='';searchAllMode=false;titlesStarted=false;showFolderBrowser=true;category='';categories=[];providerSelections={};sortOrder=value==='vod'?'rating':'provider';groupsLoading=true;reset();render();
     // Load the account preference before choosing the default provider.
     var showToken=serial;
     loadAccountSettings().then(function(){
