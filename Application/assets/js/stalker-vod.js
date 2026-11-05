@@ -164,12 +164,6 @@ window.VaultcastStalkerVod=function(host,options){
     Array.from(values).sort(function(a,b){return a[1].localeCompare(b[1]);}).forEach(function(pair){genreSelect.appendChild(h('option',{value:pair[0],text:pair[1],selected:genreFilter===pair[0]}));});
     genreSelect.disabled=!values.size;
   }
-  function providerGroup(name){
-    var value=String(name||'').toLocaleLowerCase();
-    if(/netflix|prime(?: video)?|amazon video|disney\+?|apple tv|hulu|hbo|max\b|peacock|paramount\+?|discovery\+|crunchyroll|britbox|itvx|now tv|skyshowtime|mubi/.test(value))return 0;
-    if(/\b(?:bbc|itv|stv|utv|channel\s*[45]|my5|sky(?:\s+(?:one|atlantic|witness|comedy|documentaries|crime))?|dave|e4|quest|4seven|film4|5star|5usa|5action|5select|u\s*&\s*(?:dave|drama|yesterday|w)|yesterday|challenge|legend|pbs america)\b/.test(value))return 1;
-    return 2;
-  }
   function reset(){
     serial++;scanCursor=0;scanQuery=null;progress={};tasks=[];titles=[];seen={};seenSourceItems={};loading=false;group='';titlesStarted=false;
     feeds=options.connections.filter(function(f){return f.enabled;});
@@ -598,7 +592,7 @@ window.VaultcastStalkerVod=function(host,options){
     if(!categories.length){categoryStatus.appendChild(h('p',{className:'muted',text:groupsLoading?'Loading provider folders…':feeds.length?'Preparing provider folders…':'No enabled Stalker providers are available.'}));return;}
     if(!showFolderBrowser){
       var activeFeed=feeds.find(function(feed){return feed.id===providerFolderId;});
-      categoryStatus.appendChild(h('button',{className:'btn ghost stalker-vod-folder-back',type:'button',text:activeFeed?'← '+activeFeed.name+' folders':'← Provider folders',onClick:function(){showProviderFolders(activeFeed?activeFeed.id:'');}}));
+      categoryStatus.appendChild(h('button',{className:'btn ghost stalker-vod-folder-back',type:'button',text:activeFeed?'← '+activeFeed.name+' folders':'← All folders',onClick:function(){if(activeFeed)showProviderFolders(activeFeed.id);else browseDiscovery();}}));
       return;
     }
     if(providerFolderId){
@@ -615,22 +609,18 @@ window.VaultcastStalkerVod=function(host,options){
       var allButton=h('button',{className:'btn ghost',type:'button',text:'Browse all titles from this provider',onClick:function(){beginProviderCategory(providerFolderId,'');}});
       categoryStatus.appendChild(allButton);return;
     }
-    var groups=[['Streaming services',[]],['TV stations',[]],['Other providers',[]]];
-    feeds.slice().sort(function(a,b){return providerGroup(a.name)-providerGroup(b.name)||String(a.name).localeCompare(String(b.name),undefined,{sensitivity:'base'});}).forEach(function(feed){
-      var count=categories.filter(function(c){return c.feed===feed.id&&(!language||categoryLanguage(c.name)===language);}).length;
-      groups[providerGroup(feed.name)][1].push({feed:feed,count:count});
+    var providerCount=feeds.length;
+    var folders=categoryBuckets().filter(function(bucket){return !language||bucket.language===language;})
+      .sort(function(a,b){return a.name.localeCompare(b.name,undefined,{sensitivity:'base'});});
+    categoryStatus.appendChild(h('div',{className:'stalker-vod-folder-heading'},[h('h2',{text:'All provider folders · '+providerCount+' providers'})]));
+    if(!folders.length){categoryStatus.appendChild(h('p',{className:'muted',text:'No folders match this language.'}));return;}
+    var folderGrid=h('div',{className:'stalker-vod-provider-grid'});
+    folders.forEach(function(bucket){
+      var sourceCount=new Set(bucket.sources.map(function(source){return String(source.feed);})).size;
+      var label=sourceCount+' '+(sourceCount===1?'provider':'providers');
+      folderGrid.appendChild(h('button',{className:'btn stalker-vod-folder-tile',type:'button','aria-label':'Open '+bucket.name+', available from '+label,text:bucket.name+' · '+label,onClick:function(){providerFolderId='';beginBrowse(bucket.key);}}));
     });
-    var providerSections=h('div',{className:'stalker-vod-provider-browser'});
-    groups.forEach(function(group){
-      if(!group[1].length)return;
-      var section=h('section',{className:'stalker-vod-provider-section'},[h('h2',{text:group[0]})]),grid=h('div',{className:'stalker-vod-provider-grid'});
-      group[1].forEach(function(entry){
-        var label=entry.count+' '+(entry.count===1?'folder':'folders');
-        grid.appendChild(h('button',{className:'btn stalker-vod-folder-tile',type:'button','aria-label':'Open '+entry.feed.name+', '+label,text:entry.feed.name+' · '+label,onClick:function(){showProviderFolders(entry.feed.id);}}));
-      });
-      section.appendChild(grid);providerSections.appendChild(section);
-    });
-    categoryStatus.appendChild(providerSections);
+    categoryStatus.appendChild(folderGrid);
   }
   // Store stable title/year identities, never temporary provider IDs.
   function favouriteKey(){return 'stalker-vod-favourites-v2-'+options.owner;}
