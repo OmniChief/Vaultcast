@@ -3387,3 +3387,29 @@ html[data-motion="reduced"] .vca-overall span,html[data-motion="reduced"] .vca-b
 .stalker-vod-featured-folder{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:10px 0 16px;padding:12px;border:1px solid var(--border);border-radius:12px;background:var(--surface-1)}
 .stalker-vod-featured-folder h3{margin:0;font-size:.95rem}
 .stalker-vod-featured-folder .stalker-vod-folder-tile{min-width:180px;max-width:260px}
+.stalker-vod-folder-network-logos{display:flex;align-items:center;gap:3px;flex:0 0 auto}
+.stalker-vod-network-logo{display:grid;place-items:center;box-sizing:border-box;min-width:42px;height:42px;padding:0 5px;border-radius:8px;background:#101827;color:#f7f9ff;font-size:.72rem;font-weight:900;letter-spacing:-.04em;line-height:1;text-align:center;white-space:nowrap}
+.stalker-vod-network-logo-bbc{background:#111;letter-spacing:.03em;box-shadow:inset 0 0 0 1px #ffffff70}
+.stalker-vod-network-logo-itv{background:linear-gradient(120deg,#04bfe8,#7257ed 55%,#ff587c);font-size:1rem;text-transform:lowercase}
+.stalker-vod-network-logo-abc{min-width:42px;border-radius:50%;background:#111;color:#fff;font-size:1rem}
+.stalker-vod-network-logo-amc{background:#f5f5f5;color:#111;font-size:1rem;font-style:italic;letter-spacing:-.08em}
+.stalker-vod-network-logo-bet,.stalker-vod-network-logo-history{background:#101010;color:#fff;border:1px solid #c99c48}
+.stalker-vod-network-logo-bravo,.stalker-vod-network-logo-showtime,.stalker-vod-network-logo-tnt{background:#e31b35;color:#fff}
+.stalker-vod-network-logo-cbc,.stalker-vod-network-logo-nbc{background:#151b2b;color:#fff}
+.stalker-vod-network-logo-cbs{background:#fff;color:#071b4b;border:2px solid #071b4b}
+.stalker-vod-network-logo-comedy-central{background:#111;color:#fff;box-shadow:inset 0 0 0 2px #ffffff70}
+.stalker-vod-network-logo-cw,.stalker-vod-network-logo-fx,.stalker-vod-network-logo-fox{background:#092b55;color:#fff}
+.stalker-vod-network-logo-mtv{background:#111;color:#00d8ff;font-size:1rem}
+.stalker-vod-network-logo-nickelodeon{background:#f58220;color:#fff}
+.stalker-vod-network-logo-own,.stalker-vod-network-logo-zeus{background:#111;color:#efcf8b}
+.stalker-vod-network-logo-vh1,.stalker-vod-network-logo-syfy{background:#33216b;color:#fff}
+.stalker-vod-network-logo-hallmark,.stalker-vod-network-logo-lifetime{background:#192b50;color:#fff;font-size:.58rem;letter-spacing:0}
+.stalker-vod-network-logo-cartoon-network{background:#111;color:#fff;box-shadow:inset 0 0 0 2px #fff}
+.stalker-vod-network-logo-crunchyroll{background:#f47521;color:#111}
+.stalker-vod-network-logo-britbox,.stalker-vod-network-logo-itvx{background:#17152f;color:#fff}
+.stalker-vod-network-logo-hayu{background:#34285f;color:#ff79c7}
+.stalker-vod-network-logo-roku{background:#662d91;color:#fff}
+.stalker-vod-network-logo-viaplay{background:#ef1a46;color:#fff;font-size:.55rem;letter-spacing:0}
+.stalker-vod-network-logo-mubi{background:#101010;color:#fff}
+.stalker-vod-network-logo-mgm{background:#161616;color:#d6bd75}
+.stalker-vod-network-logo-starz{background:#101010;color:#fff}

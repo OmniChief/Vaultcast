@@ -568,6 +568,21 @@ window.VaultcastStalkerVod=function(host,options){
     if(/\bASIA(?:N)?\b/.test(n))return 'Asian';
     if(/\b(?:PERSIAN|FARSI|IRANIAN)\b/.test(n))return 'Persian';
     if(/\bIRAN\b/.test(n))return 'Iran';
+    if(/\b(?:FRANCE|FRENCH)\b/.test(n))return 'French';
+    if(/\b(?:POLAND|POLISH)\b/.test(n))return 'Polish';
+    if(/\b(?:TURKEY|TURKISH)\b/.test(n))return 'Turkish';
+    if(/\b(?:JAPAN|JAPANESE)\b/.test(n))return 'Japanese';
+    if(/\b(?:CHINA|CHINESE)\b/.test(n))return 'Chinese';
+    if(/\b(?:THAI|THAILAND)\b/.test(n))return 'Thai';
+    if(/\b(?:VIETNAMESE|VIETNAM)\b/.test(n))return 'Vietnamese';
+    if(/\b(?:FILIPINO|PHILIPPINES?)\b/.test(n))return 'Filipino';
+    if(/\b(?:INDONESIAN|INDONESIA)\b/.test(n))return 'Indonesian';
+    if(/\b(?:ITALY|ITALIAN)\b/.test(n))return 'Italian';
+    if(/\bGERMAN(?:Y)?\b/.test(n))return 'German';
+    if(/\bSPANISH\b/.test(n))return 'Spanish';
+    if(/\bDUTCH\b/.test(n))return 'Dutch';
+    if(/\bPORTUGUESE\b/.test(n))return 'Portuguese';
+    if(/\b(?:SWEDISH|SVENSKA)\b/.test(n))return 'Swedish';
     if(/[\u0600-\u06ff]/.test(n))return 'Arabic';
     if(/[\u0370-\u03ff]/.test(n)||/\bGREEK\b/.test(n))return 'Greek';
     if(/[\u0400-\u04ff]/.test(n)||/\b(?:RUSSIAN|UKRAINIAN|BULGARIAN)\b/.test(n))return 'Slavic';
@@ -580,7 +595,7 @@ window.VaultcastStalkerVod=function(host,options){
     if(/\bTURK(?:ISH)?\b/.test(n))return 'Turkish';
     if(/\bAFRICAN\b/.test(n))return 'African';
     if(/\b(?:ACTION|ADULT|ADVENTURE|ANIME|BOXING|CHRISTMAS|COLLECTIONS?|COMEDY|CONCERTS?|CRIME|DOCUMENTAR(?:Y|IES)|DRAMA|FAMILY|FANTASY|HISTORY|HORROR|KIDS?|MANGA|MUSICAL|MUSIC|NEW RELEASES?|ROMANCE|SCIENCE FICTION|SPORTS?|THRILLER|WAR|WESTERN|WORKOUT|MOVIES|FILMS|TOP \d+|IMDB|NEW ADDED|NEW RELEASED)\b/.test(n))return 'UK';
-    if(/\bENGLISH\b/.test(n)||/^\s*EN\s*[-:]/.test(n)||/\b(?:BBC|ITV|STV|UTV|CNN|SKY|CHANNEL\s*[45]|MY5)\b/.test(n))return 'UK';
+    if(/\bENGLISH\b/.test(n)||/^\s*EN\s*[-:]/.test(n)||/\b(?:BBC|ITV|STV|UTV|CNN|SKY|CHANNEL\s*[45]|MY5|ABC|AMC|BET|BRAVO|CBC|CBS|COMEDY CENTRAL|CW|FOX|FX|HISTORY|MTV|NBC|NICKELODEON|OWN|SHOWTIME|TNT|VH1|SYFY|HALLMARK|LIFETIME|CARTOON NETWORK|WOW TV|ZEUS NETWORK)\b/.test(n)||/\bA\s*&\s*E\+?(?=\s|$)/.test(n))return 'UK';
     return 'Other / unspecified';
   }
   function categoryName(name){
@@ -603,8 +618,8 @@ window.VaultcastStalkerVod=function(host,options){
   }
   function folderSection(name){
     var value=String(name||'').toLocaleLowerCase();
-    if(/netflix|amazon|prime video|apple(?: tv)?|disney|hbo|max\b|hulu|paramount|peacock|tubi|discovery\s*\+|britbox|itvx|skyshowtime|espn\s*\+|mubi/.test(value))return 'Streaming services';
-    if(/\b(?:bbc|cnn|hallmark|lifetime|sky|espn|bet\+?|cartoon network)\b/.test(value))return 'TV & networks';
+    if(/netflix|amazon|prime video|apple(?: tv)?|disney|hbo|max\b|hulu|paramount|peacock|tubi|discovery\s*\+|britbox|itvx|skyshowtime|espn\s*\+|mubi|crunchyroll|hayu|roku|starz(?:play)?|viaplay|mgm\s*\+/.test(value))return 'Streaming services';
+    if(/\b(?:bbc|itv|stv|utv|cnn|hallmark|lifetime|sky|espn|bet\+?|cartoon network|abc(?: network)?|amc(?: network)?|bravo|cbc(?: network)?|cbs(?: network)?|comedy central|cw|fox(?: network)?|fx|mtv|nbc(?: network)?|nickelodeon|own|showtime|tnt(?: network)?|vh1|syfy|wow tv|zeus network)\b/.test(value)||/\ba\s*&\s*e\+?(?=\s|$)/.test(value)||/^\s*history(?: channel)?\s*$/.test(value))return 'TV & networks';
     if(/\btop\s*(?:\d+|movies?|kids?)\b|\bnew\s+(?:release(?:s|d)?|added)\b|\bcollections?\b|\b\d{4}\s*&\s*old\b/.test(value))return 'Collections & popular';
     return 'Genres';
   }
@@ -619,6 +634,20 @@ window.VaultcastStalkerVod=function(host,options){
     for(var i=0;i<logos.length;i++)if(logos[i][0].test(value))return 'assets/img/vod/providers/'+logos[i][1];
     return '';
   }
+  function folderNetworkMarks(name){
+    var value=String(name||'').toLocaleLowerCase(),brands=[
+      [/\bbbc\b/,'BBC','bbc'],[/\bitv\b/,'itv','itv'],[/\ba\s*&\s*e\+?(?=\s|$)/,'A&E','ae'],[/\babc(?: network)?\b/,'abc','abc'],
+      [/\bamc(?: network)?\b/,'AMC','amc'],[/\bbet\+?\b/,'BET+','bet'],[/\bbravo\b/,'bravo','bravo'],[/\bcbc(?: network)?\b/,'CBC','cbc'],
+      [/\bcbs(?: network)?\b/,'CBS','cbs'],[/\bcomedy central\b/,'CC','comedy-central'],[/\bcw\b/,'CW','cw'],[/\bfox(?: network)?\b/,'FOX','fox'],
+      [/\bfx\b/,'FX','fx'],[/^\s*history(?: channel)?\s*$/,'HISTORY','history'],[/\bmtv\b/,'MTV','mtv'],[/\bnbc(?: network)?\b/,'NBC','nbc'],
+      [/\bnickelodeon\b/,'nick','nickelodeon'],[/\bown\b/,'OWN','own'],[/\bshowtime\b/,'SHOWTIME','showtime'],[/\btnt(?: network)?\b/,'TNT','tnt'],
+      [/\bvh1\b/,'VH1','vh1'],[/\bsyfy\b/,'SYFY','syfy'],[/\bwow tv\b/,'WOW','wow'],[/\bzeus network\b/,'ZEUS','zeus'],
+      [/\bhallmark\b/,'HALLMARK','hallmark'],[/\blifetime\b/,'LIFETIME','lifetime'],[/\bcartoon network\b/,'CN','cartoon-network'],
+      [/\bcrunchyroll\b/,'CR','crunchyroll'],[/\bbritbox\b/,'BRITBOX','britbox'],[/\bitvx\b/,'ITVX','itvx'],[/\bhayu\b/,'hayu','hayu'],
+      [/\broku\b/,'ROKU','roku'],[/\bviaplay\b/,'VIAPLAY','viaplay'],[/\bmubi\b/,'MUBI','mubi'],[/\bmgm\s*\+/,'MGM+','mgm'],[/\bstarz(?:play)?\b/,'STARZ','starz']
+    ];
+    return brands.filter(function(brand){return brand[0].test(value);}).map(function(brand){return {text:brand[1],brand:brand[2]};});
+  }
   function folderTile(bucket){
     var sourceCount=new Set(bucket.sources.map(function(source){return String(source.feed);})).size;
     var providerLabel=sourceCount+' '+(sourceCount===1?'provider':'providers'),logo=folderLogo(bucket.name);
@@ -627,6 +656,9 @@ window.VaultcastStalkerVod=function(host,options){
     if(logo){
       var wide=/primevideo|disneyplus|hulu|peacock|espn/.test(logo),brandTone=/disneyplus/.test(logo)?' stalker-vod-folder-logo-disney':/hulu/.test(logo)?' stalker-vod-folder-logo-hulu':'';
       children.push(h('span',{className:'stalker-vod-folder-logo-wrap'+(wide?' stalker-vod-folder-logo-wrap-wide':'')},[h('img',{className:'stalker-vod-folder-logo'+(wide?' stalker-vod-folder-logo-wide':'')+brandTone+(logo==='assets/img/vod/providers/primevideo.png'?' stalker-vod-folder-logo-amazon':''),src:logo,alt:'',loading:'lazy',onError:function(e){var wrap=e.target.parentNode;if(wrap&&wrap.parentNode)wrap.parentNode.removeChild(wrap);}})]));
+    }else{
+      var networkMarks=folderNetworkMarks(bucket.name);
+      if(networkMarks.length)children.push(h('span',{className:'stalker-vod-folder-network-logos','aria-hidden':'true'},networkMarks.map(function(mark){return h('span',{className:'stalker-vod-network-logo stalker-vod-network-logo-'+mark.brand,text:mark.text});})));
     }
     children.push(h('span',{className:'stalker-vod-folder-copy'},contents));
     return h('button',{className:'btn stalker-vod-folder-tile',type:'button','aria-label':'Open '+bucket.name+', available from '+providerLabel,onClick:function(){providerFolderId='';beginBrowse(bucket.key);}},children);
