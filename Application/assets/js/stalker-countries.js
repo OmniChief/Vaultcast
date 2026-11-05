@@ -23,7 +23,7 @@ window.VaultcastStalkerCountries=function(host,options){
       request.onerror=request.onblocked=function(){finish(null);};
     });return guideDb;
   }
-  function guideCacheKey(entry){return JSON.stringify([String(options.owner),country,entry.feed,entry.category,entry.page]);}
+  function guideCacheKey(entry){return JSON.stringify(['guide-v2',String(options.owner),country,entry.feed,entry.category,entry.page]);}
   function cachedGuide(key){return browserGuideDb().then(function(db){return new Promise(function(resolve){
     if(!db){resolve(null);return;}try{var request=db.transaction('pages','readonly').objectStore('pages').get(key);
       request.onsuccess=function(){var row=request.result;resolve(row&&Number.isFinite(row.at)&&row.at<=Date.now()&&guideConnectionAt-row.at<86400000&&row.data?row.data:null);};
