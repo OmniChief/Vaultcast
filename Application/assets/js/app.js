@@ -6068,6 +6068,21 @@ try {
   function stalkerPost(action,body){
     return liveApiPost(action,body).then(function(result){if(!result.ok||!result.body||!result.body.ok)throw new Error(result.body&&result.body.error||'Provider request failed.');return result.body;});
   }
+  function stalkerFormatBytes(value){
+    var bytes=Math.max(0,Number(value)||0);
+    if(bytes>=1000000000)return(bytes/1000000000).toFixed(1)+' GB';
+    if(bytes>=1000000)return(bytes/1000000).toFixed(1)+' MB';
+    if(bytes>=1000)return(bytes/1000).toFixed(1)+' KB';
+    return Math.round(bytes)+' B';
+  }
+  function stalkerOfflineTransferDetails(job){
+    if(!job)return'';
+    var bytes=Number(job.bytes)||0,total=Number(job.totalBytes)||0,speed=Number(job.speedBytesPerSecond)||0,parts=[];
+    if(total>0)parts.push(stalkerFormatBytes(bytes)+' of '+stalkerFormatBytes(total));
+    else if(bytes>0)parts.push(stalkerFormatBytes(bytes)+' transferred');
+    if(speed>0)parts.push(stalkerFormatBytes(speed)+'/s');
+    return parts.join(' · ');
+  }
   function stalkerSaveVideo(feed,item,status,button,destination,playbackTicket){
     button.disabled=true;status.textContent=destination==='browser'?'Preparing your browser download…':'Adding video to the library download queue…';
     var owner=state.user&&state.user.id;
@@ -6088,7 +6103,7 @@ try {
           }else status.append('Download complete. ',h('button',{className:'btn',text:'Open ingest inbox',onClick:function(){openSettings('ingest');}}));
           return;
         }
-        var details=[job.stage|| (job.status==='queued'?'Queued for download':'Downloading video'),job.percent!=null?job.percent+'% downloaded':'',job.bytes?Math.round(job.bytes/1048576)+' MB transferred':'',job.showName&&job.showName!==item.name?job.showName:'',job.seasonName||'',job.episode?('Episode '+job.episode):'',job.episodeTitle&&job.episodeTitle!==item.name?job.episodeTitle:''].filter(Boolean);
+        var details=[job.stage|| (job.status==='queued'?'Queued for download':'Downloading video'),job.percent!=null?job.percent+'% downloaded':'',stalkerOfflineTransferDetails(job),job.showName&&job.showName!==item.name?job.showName:'',job.seasonName||'',job.episode?('Episode '+job.episode):'',job.episodeTitle&&job.episodeTitle!==item.name?job.episodeTitle:''].filter(Boolean);
         status.textContent=details.join(' · ')+'. You can leave this page; progress is saved in Downloads.';
         setTimeout(function(){poll(id);},5000);
       }).catch(function(error){if(current()){button.disabled=false;status.textContent=error.message;}});
@@ -6363,7 +6378,7 @@ try {
       host.replaceChildren(h('div',{className:'row-head'},[h('h2',{text:'Offline downloads'}),h('button',{className:'btn',text:'Refresh status',onClick:function(){showStalkerOffline(host);}})]),h('p',{className:'muted',text:'Prepared videos can be saved to this device. Library downloads also appear in the ingest inbox for matching.'}));
       (result.items||[]).forEach(function(item){
         var seriesDetails=[item.showName,item.seasonName,item.episode?('Episode '+item.episode):'',item.episodeTitle].filter(Boolean).join(' · ');
-        var details=[item.stage,item.percent!=null?item.percent+'% downloaded':'',item.connection?'Provider: '+item.connection:'',item.destination==='browser'?'Destination: this device':'Destination: library',item.bytes?Math.round(item.bytes/1048576)+' MB transferred':''].filter(Boolean).join(' · ');
+        var details=[item.stage,item.percent!=null?item.percent+'% downloaded':'',stalkerOfflineTransferDetails(item),item.connection?'Provider: '+item.connection:'',item.destination==='browser'?'Destination: this device':'Destination: library'].filter(Boolean).join(' · ');
         var admin=!!(state.user&&state.user.role==='admin');
         var statusLine=h('p',{text:item.status,'data-offline-status':item.id,'data-offline-state':item.status});
         host.appendChild(h('div',{className:'settings-card','data-offline-job':item.id},[h('h3',{text:item.name}),seriesDetails?h('p',{className:'muted',text:seriesDetails}):null,statusLine,h('p',{className:'muted',text:details,'data-offline-details':item.id}),offlineProgress(item),item.error?h('p',{className:'bad',text:item.error}):null,
@@ -6382,7 +6397,7 @@ try {
             var line=card.querySelector('[data-offline-status]'),detail=card.querySelector('[data-offline-details]');
             if(line&&line.getAttribute('data-offline-state')!==row.status){changed=true;return;}
             if(line)line.textContent=row.status;
-            if(detail)detail.textContent=[row.stage,row.percent!=null?row.percent+'% downloaded':'',row.connection?'Provider: '+row.connection:'',row.destination==='browser'?'Destination: this device':'Destination: library',row.bytes?Math.round(row.bytes/1048576)+' MB transferred':''].filter(Boolean).join(' · ');
+            if(detail)detail.textContent=[row.stage,row.percent!=null?row.percent+'% downloaded':'',stalkerOfflineTransferDetails(row),row.connection?'Provider: '+row.connection:'',row.destination==='browser'?'Destination: this device':'Destination: library'].filter(Boolean).join(' · ');
             var progress=card.querySelector('[data-offline-progress]'),nextProgress=offlineProgress(row);if(progress&&nextProgress)progress.replaceWith(nextProgress);else if(progress&&!nextProgress)progress.remove();else if(!progress&&nextProgress&&detail)detail.after(nextProgress);
           });
           if(changed){showStalkerOffline(host);return;}
