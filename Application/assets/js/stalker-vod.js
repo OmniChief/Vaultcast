@@ -916,7 +916,7 @@ window.VaultcastStalkerVod=function(host,options){
     renderGenreFilter();
     favouriteLookupToken++;
     results.replaceChildren();
-    var unfinished=tasks.some(function(t){return progress[t.key]&&!progress[t.key].done;}),holdForComplete=shouldScanAllPages()&&unfinished;
+    var unfinished=tasks.some(function(t){return progress[t.key]&&!progress[t.key].done;});
     var ordered=titles.filter(fits);
     function numeric(item,field){if(field==='year')return Number(year(item))||0;if(field==='added'){var raw=item.added;return /^\d+$/.test(String(raw||''))?Number(raw)*1000:Date.parse(raw)||0;}return Number(item.rating_imdb||item.rating)||0;}
     if(sortOrder!=='provider')ordered.sort(function(a,b){
@@ -926,7 +926,7 @@ window.VaultcastStalkerVod=function(host,options){
       if(!av||!bv)return av?-1:bv?1:names;
       return (sortOrder==='oldest'?av-bv:bv-av)||names;
     });
-    (holdForComplete?[]:ordered).forEach(function(item){
+    ordered.forEach(function(item){
       var sources=item.sources||[],chosen=sources.find(function(source){return !providerFolderId||String(source.feed)===providerFolderId;})||sources[0];
       if(item.numberedParts&&item.numberedParts.length>1){
         var parts=item.numberedParts.slice().sort(function(a,b){return a.number-b.number||a.name.localeCompare(b.name);});
@@ -986,11 +986,10 @@ window.VaultcastStalkerVod=function(host,options){
         ])
       ]));
     });
-    if(holdForComplete)results.appendChild(h('p',{className:'muted',text:loading?'Checking every page in this filtered catalogue before showing results…':'More pages must be loaded to complete this filtered catalogue.'}));
-    else if(!ordered.length)results.appendChild(h('p',{className:'muted',text:titlesStarted?(unfinished?(loading?'No matches in the pages received yet. Catalogue loading…':'No matches in the pages loaded yet. Load more to continue.'):'No matching titles found.'):'Search to browse titles.'}));
+    if(!ordered.length)results.appendChild(h('p',{className:'muted',text:titlesStarted?(unfinished?(loading?'No matches in the pages received yet. Catalogue loading…':'No matches in the pages loaded yet. Load more to continue.'):'No matching titles found.'):'Search to browse titles.'}));
     var done=tasks.filter(function(t){return progress[t.key]&&progress[t.key].done;}).length;
     var failed=tasks.filter(function(t){return progress[t.key]&&progress[t.key].failed;}).length;
-    status.textContent=(holdForComplete?'Building complete filtered catalogue · '+ordered.length+' matches found so far':ordered.length+' matching titles in '+(searchAllMode?(language?(language==='UK'?'English':language)+' folders':'All languages'):(group||'Selected folder'))+(unfinished?(loading?' so far · loading catalogue':' so far · more pages available'):'')+(searchMode==='actor'?' · matching available cast':searchMode==='director'?' · matching available directors':''))+' · '+done+'/'+tasks.length+' sources finished'+(failed?' · '+failed+' unavailable':'');
+    status.textContent=ordered.length+' matching titles in '+(searchAllMode?(language?(language==='UK'?'English':language)+' folders':'All languages'):(group||'Selected folder'))+(unfinished?(loading?' so far · loading catalogue':' so far · more pages available'):'')+(searchMode==='actor'?' · matching available cast':searchMode==='director'?' · matching available directors':'')+' · '+done+'/'+tasks.length+' sources finished'+(failed?' · '+failed+' unavailable':'');
     next.hidden=!titlesStarted||!tasks.some(function(t){return progress[t.key]&&!progress[t.key].done;});
     next.disabled=loading;
   }
