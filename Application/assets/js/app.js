@@ -6202,18 +6202,25 @@ try {
     frame._miniKey=key;frame._miniTitle=item.name||'Provider video';
     frame._miniReturn=function(){if(context.onReturn)context.onReturn();};
     host.replaceChildren(frame);
-    var tools=detailPlayerTools(host),trackBar=h('div',{className:'player-tracks',role:'group','aria-label':'Audio and subtitles'}),audioLabel=h('label',{},[h('span',{text:'Audio'}),h('select',{'aria-label':'Audio track'})]),subtitleLabel=h('label',{},[h('span',{text:'Subtitles'}),h('select',{'aria-label':'Subtitles'},[h('option',{value:'-1',text:'Off'})])]),audioSelect=audioLabel.querySelector('select'),subtitleSelect=subtitleLabel.querySelector('select'),trackNote=h('span',{className:'player-track-note',role:'status'}),hasTracks=false;
+    var tools=detailPlayerTools(host),trackBar=h('div',{className:'player-tracks',role:'group','aria-label':'Audio and subtitles'}),audioLabel=h('label',{},[h('span',{text:'Audio'}),h('select',{'aria-label':'Audio track'})]),subtitleLabel=h('label',{},[h('span',{text:'Subtitles'}),h('select',{'aria-label':'Subtitles'},[h('option',{value:'-1',text:'Off'})])]),audioSelect=audioLabel.querySelector('select'),subtitleSelect=subtitleLabel.querySelector('select'),trackNote=h('span',{className:'player-track-note',role:'status'}),hasTracks=false,usingStreamAudio=false,usingStreamSubtitles=false;
     trackBar.append(audioLabel,subtitleLabel,trackNote);trackBar.hidden=true;tools.appendChild(trackBar);
     var autoNext=null;
     if(context.nextEpisode){autoNext=h('input',{type:'checkbox',checked:state._stalkerAutoNext!==false,'aria-label':'Automatically play next episode'});autoNext.addEventListener('change',function(){state._stalkerAutoNext=autoNext.checked;});tools.appendChild(h('label',{className:'player-auto-next'},[autoNext,' Automatically play next episode']));}
     function refreshTracks(stream){
-      var audioTracks=stream&&stream.audioTracks?stream.audioTracks:Array.from(video.audioTracks||[]),subTracks=stream&&stream.subtitleTracks?stream.subtitleTracks:Array.from(video.textTracks||[]),audVal=stream?stream.audioTrack:-1,subVal=stream?stream.subtitleTrack:-1;
+      hasTracks=false;
+      var nativeAudio=Array.from(video.audioTracks||[]),nativeSubtitles=Array.from(video.textTracks||[]).filter(function(track){return track.kind==='subtitles'||track.kind==='captions';});
+      var audioTracks=stream&&stream.audioTracks&&stream.audioTracks.length?stream.audioTracks:nativeAudio;
+      var subTracks=stream&&stream.subtitleTracks&&stream.subtitleTracks.length?stream.subtitleTracks:nativeSubtitles;
+      usingStreamAudio=!!(stream&&stream.audioTracks&&stream.audioTracks.length);
+      usingStreamSubtitles=!!(stream&&stream.subtitleTracks&&stream.subtitleTracks.length);
+      var audVal=stream&&Number.isInteger(stream.audioTrack)?stream.audioTrack:-1;
+      var subVal=stream&&Number.isInteger(stream.subtitleTrack)?stream.subtitleTrack:-1;
       if(audioTracks.length){audioSelect.replaceChildren();audioTracks.forEach(function(track,index){var label=track.name||track.label||track.lang||track.language||('Track '+(index+1));if(track.channels)label+=' · '+track.channels+'ch';audioSelect.appendChild(h('option',{value:String(index),text:label,selected:index===audVal||(!stream&&track.enabled)}));});audioLabel.style.display='grid';hasTracks=true;}else audioLabel.style.display='none';
-      if(subTracks.length){subtitleSelect.replaceChildren(h('option',{value:'-1',text:'Off'}));subTracks.forEach(function(track,index){var label=track.name||track.label||track.lang||track.language||('Subtitle '+(index+1));subtitleSelect.appendChild(h('option',{value:String(index),text:label,selected:index===subVal||(!stream&&track.mode==='showing')}));});subtitleLabel.style.display='grid';hasTracks=true;}else subtitleLabel.style.display='none';
-      trackBar.style.display=hasTracks?'flex':'none';
+      if(subTracks.length){subtitleSelect.replaceChildren(h('option',{value:'-1',text:'Off',selected:usingStreamSubtitles?subVal<0:!nativeSubtitles.some(function(track){return track.mode==='showing';})}));subTracks.forEach(function(track,index){var label=track.name||track.label||track.lang||track.language||('Subtitle '+(index+1));subtitleSelect.appendChild(h('option',{value:String(index),text:label,selected:usingStreamSubtitles?index===subVal:track.mode==='showing'}));});subtitleLabel.style.display='grid';hasTracks=true;}else subtitleLabel.style.display='none';
+      trackBar.hidden=!hasTracks;
     }
-    audioSelect.onchange=function(){var index=Number(audioSelect.value);if(stream&&Number.isInteger(stream.audioTrack))stream.audioTrack=index;else if(video.audioTracks&&video.audioTracks[index]){for(var i=0;i<video.audioTracks.length;i++)video.audioTracks[i].enabled=i===index;}};
-    subtitleSelect.onchange=function(){var index=Number(subtitleSelect.value);if(stream&&Number.isInteger(stream.subtitleTrack))stream.subtitleTrack=index;else Array.from(video.textTracks||[]).forEach(function(track,i){track.mode=i===index?'showing':'disabled';});};
+    audioSelect.onchange=function(){var index=Number(audioSelect.value);if(usingStreamAudio&&stream&&Number.isInteger(stream.audioTrack))stream.audioTrack=index;else if(video.audioTracks&&video.audioTracks[index]){for(var i=0;i<video.audioTracks.length;i++)video.audioTracks[i].enabled=i===index;}};
+    subtitleSelect.onchange=function(){var index=Number(subtitleSelect.value);if(usingStreamSubtitles&&stream&&Number.isInteger(stream.subtitleTrack))stream.subtitleTrack=index;else{var tracks=Array.from(video.textTracks||[]).filter(function(track){return track.kind==='subtitles'||track.kind==='captions';});tracks.forEach(function(track,i){track.mode=i===index?'showing':'disabled';});}};
     ['addtrack','removetrack','change'].forEach(function(event){if(video.audioTracks)video.audioTracks.addEventListener(event,function(){refreshTracks(stream);});if(video.textTracks)video.textTracks.addEventListener(event,function(){refreshTracks(stream);});});
     function play(){var p=video.play();if(p&&p.catch)p.catch(function(){if(context.onError)context.onError('Press play in the player to start.');});}
     addCentrePlay(frame,video,play);
