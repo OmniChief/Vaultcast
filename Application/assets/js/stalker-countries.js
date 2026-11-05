@@ -4,7 +4,7 @@ var countries={"AF":{"name":"Afghanistan","flag":"data:image/svg+xml;base64,PHN2
 window.VaultcastStalkerCountries=function(host,options){
   var h=options.h,active=false,serial=0,country=(options.saved||{}).country||'GB';
   var genre=(options.saved||{}).genre||'General',view=(options.saved||{}).view||'guide';
-  var feeds=[],folders=[],failures=[],channels=[],sourcePages={},pageInventory=[],guideByChannel={},guideLogos={},guideFetched={};
+  var feeds=[],folders=[],failures=[],channels=[],sourcePages={},pageInventory=[],guideByChannel={},guideLogos={},guideFetched={},guideFetchedAt={};
   var selected=null,loading=false,guideBusy=false,guideRefreshPending=false,guideForceRefresh=false,refreshChannels=false,search='',chosen='',offset=0,body,status,list,hero,summary,more,guideButton;
   var overrides={},favourites=[],onlyFavourites=false,guideTimer=null,clockTimer=null,guideRetryAt={},guideAttempts={},cache=new Map();
   var preference='vaultcast-stalker-live-favourites-'+options.owner;
@@ -52,11 +52,12 @@ window.VaultcastStalkerCountries=function(host,options){
   function name(code){return code==='ZZ'?'Other countries':countries[code]?countries[code].name:code;}
   function genreName(value){return value==='Documentary'?'Documentaries':value;}
   function remember(){options.save({country:country,genre:genre,view:view});}
+  function expireGuideFlags(fetched,at,now){Object.keys(fetched).forEach(function(id){if(!at[id]||now-at[id]>=86400000){delete fetched[id];delete at[id];}});}
   function reconnectGuide(){
-    if(!active)return;guideConnectionAt=Date.now();guideFetched={};guideRetryAt={};guideAttempts={};
-    cache.forEach(function(saved){saved.guideFetched={};});requestGuide();
+    if(!active)return;guideConnectionAt=Date.now();guideFetched={};guideFetchedAt={};guideRetryAt={};guideAttempts={};
+    cache.forEach(function(saved){saved.guideFetched={};saved.guideFetchedAt={};});requestGuide();
   }
-  function stop(){active=false;serial++;loading=false;guideBusy=false;clearTimeout(guideTimer);clearInterval(clockTimer);window.removeEventListener('online',reconnectGuide);}
+  function stop(){snapshot();active=false;serial++;loading=false;guideBusy=false;clearTimeout(guideTimer);clearInterval(clockTimer);window.removeEventListener('online',reconnectGuide);}
   function plain(value){return Array.isArray(value)?value.filter(function(x){return typeof x==='string';}).join(' · '):typeof value==='string'||typeof value==='number'?String(value):'';}
   function normal(raw){
     var value=String(raw||'').normalize('NFKC').trim();
@@ -181,17 +182,17 @@ window.VaultcastStalkerCountries=function(host,options){
     body.append(h('div',{className:'stalker-tv-heading'},[h('div',{},[h('span',{className:'eyebrow',text:name(country)+' · Live TV'}),h('h2',{text:genreName(genre)})]),find]),h('div',{className:'stalker-tv-toolbar'},[layouts,guideButton]),status,hero,summary,list,h('div',{className:'row-actions'},[more]),sources);
     host.append(navigation,body);status.textContent=failures.join(' · ');
   }
-  function snapshot(){if(selected)cache.set(selected.country+'|'+selected.genre,{channels:channels,sourcePages:sourcePages,pageInventory:pageInventory,guideByChannel:guideByChannel,guideLogos:guideLogos,guideFetched:guideFetched,search:search,chosen:chosen});if(cache.size>8)cache.delete(cache.keys().next().value);}
+  function snapshot(){if(selected)cache.set(selected.country+'|'+selected.genre,{channels:channels,sourcePages:sourcePages,pageInventory:pageInventory,guideByChannel:guideByChannel,guideLogos:guideLogos,guideFetched:guideFetched,guideFetchedAt:guideFetchedAt,search:search,chosen:chosen});if(cache.size>8)cache.delete(cache.keys().next().value);}
   function openGenre(value){
     snapshot();serial++;clearTimeout(guideTimer);loading=false;guideBusy=false;guideRetryAt={};guideAttempts={};genre=value;search='';chosen='';
     var sources=sourcesFor(genre);selected={sources:sources,country:country,genre:genre};
-    var saved=cache.get(country+'|'+genre)||{};channels=saved.channels||[];sourcePages=saved.sourcePages||{};pageInventory=saved.pageInventory||[];guideByChannel=saved.guideByChannel||{};guideLogos=saved.guideLogos||{};guideFetched=saved.guideFetched||{};search=saved.search||'';chosen=saved.chosen||'';
+    var saved=cache.get(country+'|'+genre)||{};channels=saved.channels||[];sourcePages=saved.sourcePages||{};pageInventory=saved.pageInventory||[];guideByChannel=saved.guideByChannel||{};guideLogos=saved.guideLogos||{};guideFetched=saved.guideFetched||{};guideFetchedAt=saved.guideFetchedAt||{};search=saved.search||'';chosen=saved.chosen||'';
     remember();shell();paint();if(!sources.length){status.textContent='No provider folders available for this genre in '+name(country)+'. Choose another genre or country.';return;}
     if(!channels.length)loadChannels();else requestGuide();
   }
   function refreshEpg(){
     if(guideBusy||guideRefreshPending||loading||!pageInventory.length)return;
-    guideRefreshPending=true;guideFetched={};guideRetryAt={};guideAttempts={};guideForceRefresh=true;
+    guideRefreshPending=true;guideFetched={};guideFetchedAt={};guideRetryAt={};guideAttempts={};guideForceRefresh=true;
     var clears=[];
     pageInventory.forEach(function(entry){
       (entry.channelIds||[]).forEach(function(id){delete guideByChannel[entry.feed+'|'+id];delete guideLogos[entry.feed+'|'+id];});
@@ -232,7 +233,7 @@ window.VaultcastStalkerCountries=function(host,options){
       if(!fromBrowser&&complete)cacheGuide(cacheKey,data);
     }).catch(function(error){if(current(token))status.textContent='Programme listings are still updating. Retrying automatically…';}).then(function(){
       if(!current(token))return;
-      if(complete){guideFetched[id]=true;delete guideRetryAt[id];delete guideAttempts[id];}
+      if(complete){guideFetched[id]=true;guideFetchedAt[id]=Date.now();delete guideRetryAt[id];delete guideAttempts[id];}
       else{
         // Retry only unfinished pages, indefinitely while this Live TV view is active.
         // Completed pages remain in IndexedDB across navigation and browser restarts.
@@ -271,6 +272,6 @@ window.VaultcastStalkerCountries=function(host,options){
       }step();
     }).catch(function(error){if(current(token))host.replaceChildren(h('p',{className:'bad',text:error.message}),h('button',{type:'button',className:'btn',text:'Retry',onClick:function(){discover(refresh);}}));});
   }
-  return {show:function(){if(active)return;active=true;guideConnectionAt=Date.now();guideFetched={};cache.forEach(function(saved){saved.guideFetched={};});window.addEventListener('online',reconnectGuide);clockTimer=setInterval(function(){if(current(serial)&&selected&&!loading)paint();},60000);if(folders.length)openGenre(genre);else discover(false);},stop:stop};
+  return {show:function(){if(active)return;active=true;guideConnectionAt=Date.now();expireGuideFlags(guideFetched,guideFetchedAt,guideConnectionAt);cache.forEach(function(saved){saved.guideFetched=saved.guideFetched||{};saved.guideFetchedAt=saved.guideFetchedAt||{};expireGuideFlags(saved.guideFetched,saved.guideFetchedAt,guideConnectionAt);});window.addEventListener('online',reconnectGuide);clockTimer=setInterval(function(){if(current(serial)&&selected&&!loading)paint();},60000);if(folders.length)openGenre(genre);else discover(false);},stop:stop};
 };
 })();
