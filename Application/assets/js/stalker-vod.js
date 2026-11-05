@@ -780,6 +780,24 @@ window.VaultcastStalkerVod=function(host,options){
     var fav=favouriteIdentity(item);
     return fav.tab+'|'+fav.normalized+'|'+fav.year;
   }
+  var favouriteCacheTtl=24*60*60*1000;
+  function favouriteCacheKey(){return 'stalker-vod-favourite-cache-v1-'+options.owner;}
+  function readFavouriteCache(){try{var cache=JSON.parse(localStorage.getItem(favouriteCacheKey())||'{}');return cache&&typeof cache==='object'&&!Array.isArray(cache)?cache:{};}catch(e){return {};}}
+  function safeCachedPoster(value){value=String(value||'');return value.length<=2048&&/^https?:\/\//i.test(value)&&!/(?:token|auth|password|cookie|session|mac|signature|access_token)=/i.test(value)?value:'';}
+  function cacheFavourite(favourite,item,sources){
+    if(!favourite||!item||!item.name)return;
+    var fields=['name','year','description','genres_str','genre','genres','director','actors','cast','age','rating_mpaa','rating_imdb','duration','time','language','audio_languages','subtitle_languages','country','kind','playable','season','episode','episodeTitle'];
+    var metadata={};fields.forEach(function(field){var value=item[field];if(typeof value==='string'||typeof value==='number'||typeof value==='boolean')metadata[field]=String(value).slice(0,field==='description'?2000:300);});
+    var poster=safeCachedPoster(item.poster);if(poster)metadata.poster=poster;
+    var sourceList=Array.isArray(sources)?sources:Array.isArray(item.sources)?item.sources:[];
+    if(item.feed&&item.id)sourceList=sourceList.concat([item]);
+    var seen={},safeSources=[];
+    sourceList.forEach(function(source){if(!source||!source.feed||!source.id)return;var key=String(source.feed)+'|'+String(source.id);if(seen[key])return;seen[key]=true;var copy={id:String(source.id),feed:String(source.feed)};['connection','kind','playable','categoryId','categoryName','language'].forEach(function(field){if(source[field]!=null&&['string','number','boolean'].indexOf(typeof source[field])>=0)copy[field]=String(source[field]).slice(0,180);});safeSources.push(copy);});
+    var cache=readFavouriteCache(),id=favouriteId(favourite);cache[id]={updatedAt:Date.now(),item:metadata,sources:safeSources};
+    var keys=Object.keys(cache);if(keys.length>200)keys.sort(function(a,b){return Number(cache[b]&&cache[b].updatedAt||0)-Number(cache[a]&&cache[a].updatedAt||0);}).slice(200).forEach(function(key){delete cache[key];});
+    try{localStorage.setItem(favouriteCacheKey(),JSON.stringify(cache));}catch(e){}
+  }
+  function removeFavouriteCache(favourite){var cache=readFavouriteCache();delete cache[favouriteId(favourite)];try{localStorage.setItem(favouriteCacheKey(),JSON.stringify(cache));}catch(e){}}
   function hasFavourite(item,tab,lang,folder){
     var favourite=favouriteIdentity(Object.assign({},item,{tab:tab||item.tab||kind,language:lang||item.language||language,folder:folder||item.folder||category}));
     return favouriteEntries().some(function(saved){return favouriteId(saved)===favouriteId(favourite);});
@@ -789,6 +807,8 @@ window.VaultcastStalkerVod=function(host,options){
     list=list.filter(function(saved){return favouriteId(saved)!==id;});
     if(!exists)list.unshift(favourite);
     if(!saveFavourites(list))return null;
+    if(exists)removeFavouriteCache(favourite);
+    else if(!(item.tab==='series'&&item.episode!=null))cacheFavourite(favourite,item,item.sources);
     if(active&&options.current())renderResults();
     return {active:!exists,favourite:favourite};
   }
@@ -802,11 +822,7 @@ window.VaultcastStalkerVod=function(host,options){
       var languageCategories=categories.filter(function(c){return categoryLanguage(c.name)===fav.language&&enabled.some(function(f){return f.id===c.feed;});});
       function isPreferred(c){return preferred.some(function(p){return p.feed===c.feed&&p.id===c.id;});}
       languageCategories.filter(isPreferred).forEach(function(c){targets.push({feed:enabled.find(function(f){return f.id===c.feed;}),category:c.id});});
-      // Search each connection's full catalogue before walking unrelated folders.
-      // This catches a favourite that was visible in a merged results list but
-      // lives outside its saved folder or beyond that folder's first few pages.
-      enabled.forEach(function(feed){targets.push({feed:feed,category:''});});
-      languageCategories.filter(function(c){return !isPreferred(c);}).slice(0,24).forEach(function(c){
+      languageCategories.filter(function(c){return !isPreferred(c);}).forEach(function(c){
         targets.push({feed:enabled.find(function(f){return f.id===c.feed;}),category:c.id});
       });
     }
@@ -864,7 +880,7 @@ window.VaultcastStalkerVod=function(host,options){
     function normalized(name){return favouriteIdentity({name:name,tab:kind}).normalized;}
     function finish(){
       button.disabled=false;button.textContent=original;
-      if(match){openItem(match.feed,Object.assign({},match.item,{feed:match.feed,_stalkerLanguage:favourite.language||language}),button);}
+      if(match){openItem(match.feed,Object.assign({},match.item,{feed:match.feed,_stalkerLanguage:favourite.language||language,_stalkerFolder:favourite.folder||''}),button);}
       else status.textContent='Favourite "'+favourite.name+'" was not found on the enabled connections. It remains saved.';
     }
     function next(){
@@ -894,7 +910,7 @@ window.VaultcastStalkerVod=function(host,options){
     status.textContent=favs.length?'Checking saved favourites against current providers…':'No saved favourites for '+(kind==='vod'?'movies':'series')+'.';
     function current(){return token===favouriteLookupToken&&active&&host.isConnected&&options.current();}
     function normalized(name){return favouriteIdentity({name:name,tab:kind}).normalized;}
-    var jobs=[];
+    var jobs=[],cache=readFavouriteCache();
     favs.forEach(function(fav){
       var titleText=fav.name+(fav.year?' ('+fav.year+')':'');
       var languageNote=fav.language?(fav.language==='UK'?'English':fav.language):'All languages (older favourite)';
@@ -903,7 +919,8 @@ window.VaultcastStalkerVod=function(host,options){
       ]);
       var message=h('small',{className:'muted',text:'Looking up provider artwork…'});
       var button=h('button',{type:'button',className:'btn ghost',text:titleText,onClick:function(){
-        if(job.found){openItem(job.found.feed,Object.assign({},job.found.item,{feed:job.found.feed,sources:job.sources.slice(),_stalkerLanguage:job.fav.language||language}),button);}
+        var available=job.found||job.cachedFallback&&job.cachedFallback.found;
+        if(available){var sources=job.found?job.sources:job.cachedFallback.sources;openItem(available.feed,Object.assign({},available.item,{feed:available.feed,sources:sources.slice(),_stalkerLanguage:job.fav.language||language,_stalkerFolder:job.fav.folder||''}),button);}
         else findFavourite(fav,button);
       }});
       button.style.whiteSpace='normal';button.style.textAlign='left';button.style.width='100%';
@@ -918,8 +935,16 @@ window.VaultcastStalkerVod=function(host,options){
         h('div',{className:'stalker-vod-poster-frame'},[cover,remove]),h('div',{className:'stalker-vod-copy'},[button,h('small',{className:'muted',text:'Saved language: '+languageNote}),message])
       ]);
       results.appendChild(card);
-      var job={fav:fav,cover:cover,message:message,found:null,sources:[],ready:false};
-      button.disabled=true;
+      var cacheEntry=cache[favouriteId(fav)],age=cacheEntry?Math.max(0,Date.now()-Number(cacheEntry.updatedAt||0)):Infinity,cachedItem=cacheEntry&&cacheEntry.item,cachedSources=cacheEntry&&Array.isArray(cacheEntry.sources)?cacheEntry.sources.filter(function(source){return source&&options.connections.some(function(feed){return feed.enabled&&String(feed.id)===String(source.feed);})}):[];
+      var job={fav:fav,cover:cover,message:message,found:null,sources:[],ready:false,cacheEntry:cacheEntry,cacheFresh:!!(cacheEntry&&age<favouriteCacheTtl&&cachedSources.length)};
+      if(cachedItem&&cachedItem.name){
+        job.sources=cachedSources.slice();
+        if(cachedSources.length)job.found={feed:cachedSources[0].feed,item:Object.assign({},cachedItem,cachedSources[0],{sources:cachedSources.slice(),_stalkerLanguage:fav.language||language,_stalkerFolder:fav.folder||''})};
+        var poster=safeCachedPoster(cachedItem.poster);
+        if(poster){var cachedImage=h('img',{src:poster,alt:fav.name+' poster',loading:'lazy',referrerpolicy:'no-referrer'});cachedImage.onerror=function(){cachedImage.remove();};cover.replaceChildren(cachedImage);}
+        button.disabled=!job.found;
+        message.textContent=job.cacheFresh?'Cached provider info · '+cachedSources.length+' connection(s) · Updated '+new Date(Number(cacheEntry.updatedAt)).toLocaleDateString():cachedSources.length?'Cached info · Refreshing provider connections…':'Cached title details · Checking enabled connections…';
+      }else button.disabled=true;
       job.button=button;
       jobs.push(job);
     });
@@ -930,14 +955,18 @@ window.VaultcastStalkerVod=function(host,options){
       var targets=favouriteTargets(job.fav),feedIndex=0,failed=false,posterFound=false;
       function finish(){
         if(!current())return;
+        if(!job.found&&job.cachedFallback){job.found=job.cachedFallback.found;job.sources=job.cachedFallback.sources;posterFound=job.cachedFallback.posterFound;job.cacheFallbackUsed=true;}
         complete++;
         job.ready=true;
         job.button.disabled=!job.found;
         if(!job.found){
           if(failed){unverified++;job.message.textContent='Could not verify availability (provider error).';}
           else job.message.textContent='Not found in the provider pages checked.';
-        }else if(!posterFound)job.message.textContent='Poster unavailable from current providers · '+job.sources.length+' connection(s) found.';
-        else job.message.textContent=job.sources.length+' connection(s) available.';
+        }else if(job.cacheFresh)job.message.textContent='Cached provider info · '+job.sources.length+' connection(s) · Updated '+new Date(Number(job.cacheEntry.updatedAt)).toLocaleDateString();
+        else if(job.cacheFallbackUsed)job.message.textContent='Using cached provider info · Refresh did not find a newer match.';
+        else if(!posterFound)job.message.textContent='Provider info updated · Poster unavailable · '+job.sources.length+' connection(s) found.';
+        else job.message.textContent='Provider info updated · '+job.sources.length+' connection(s) available.';
+        if(job.didRefresh&&job.found&&!job.cacheFallbackUsed)cacheFavourite(job.fav,job.found.item,job.sources);
         status.textContent='Checked '+complete+' of '+jobs.length+' favourites'+(unverified?' · '+unverified+' could not be verified':'');
         schedule();
       }
@@ -955,6 +984,9 @@ window.VaultcastStalkerVod=function(host,options){
         job.message.textContent='Checking other connections…';
         return true;
       }
+      if(job.cacheFresh){complete++;job.ready=true;job.message.textContent='Cached provider info · '+job.sources.length+' connection(s) · Updated '+new Date(Number(job.cacheEntry.updatedAt)).toLocaleDateString();status.textContent='Checked '+complete+' of '+jobs.length+' favourites';schedule();return;}
+      if(job.found){job.cachedFallback={found:job.found,sources:job.sources.slice(),posterFound:!!(job.cacheEntry&&job.cacheEntry.item&&job.cacheEntry.item.poster)};job.found=null;job.sources=[];}
+      job.didRefresh=true;
       var cachedItem=titles.find(function(item){return normalized(item.name)===job.fav.normalized&&(!job.fav.year||!year(item)||year(item)===job.fav.year);});
       var cachedSources=cachedItem&&Array.isArray(cachedItem.sources)?cachedItem.sources.filter(function(source){
         return source&&options.connections.some(function(feed){return feed.enabled&&String(feed.id)===String(source.feed);});
