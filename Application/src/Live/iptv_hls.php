@@ -38,6 +38,16 @@ function iptv_hls_resolve_uri($baseUrl, $ref) {
     $p = parse_url($baseUrl);
     if (!$p || empty($p['scheme']) || empty($p['host'])) return $ref;
     $origin = $p['scheme'] . '://' . $p['host'] . (isset($p['port']) ? ':' . $p['port'] : '');
+    // Query-only redirects (common for signed provider links) keep the current
+    // path and replace its query; they are not relative filenames.
+    if (isset($ref[0]) && $ref[0] === '?') {
+        $path = $p['path'] ?? '/';
+        return $origin . $path . $ref;
+    }
+    if (isset($ref[0]) && $ref[0] === '#') {
+        $path = $p['path'] ?? '/';
+        return $origin . $path . (isset($p['query']) ? '?' . $p['query'] : '') . $ref;
+    }
     if (isset($ref[0]) && $ref[0] === '/') {
         return $origin . $ref;
     }

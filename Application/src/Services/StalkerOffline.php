@@ -114,6 +114,7 @@ final class StalkerOffline {
                 }]);
             $ok=curl_exec($ch);$errno=curl_errno($ch);$status=(int)curl_getinfo($ch,CURLINFO_HTTP_CODE);curl_close($ch);if(is_resource($file))fclose($file);
             if($status>=300&&$status<400&&!empty($response['location'])){$url=iptv_hls_resolve_uri($url,$response['location']);continue;}
+            if($status>=300&&$status<400)throw new RuntimeException('The provider redirected this download (HTTP '.$status.') without a usable destination. Refresh the provider link and retry.');
             // Some Stalker media hosts reject Range/If-Range requests (notably
             // with 405 or vendor status 460). Drop the incompatible partial and
             // retry this URL as a fresh GET instead of leaving Retry stuck.
