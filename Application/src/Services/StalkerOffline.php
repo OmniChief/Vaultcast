@@ -94,6 +94,14 @@ final class StalkerOffline {
                 }]);
             $ok=curl_exec($ch);$errno=curl_errno($ch);$status=(int)curl_getinfo($ch,CURLINFO_HTTP_CODE);curl_close($ch);if(is_resource($file))fclose($file);
             if($status>=300&&$status<400&&!empty($response['location'])){$url=iptv_hls_resolve_uri($url,$response['location']);continue;}
+            // Some Stalker media hosts reject Range/If-Range requests (notably
+            // with 405 or vendor status 460). Drop the incompatible partial and
+            // retry this URL as a fresh GET instead of leaving Retry stuck.
+            if($offset>0&&(in_array($status,[400,405,416,460],true)||($failed&&strpos($failureCause,'The provider changed the partial download')===0))){
+                @unlink($part);@unlink($metaFile);
+                self::fetchOnce($url,$dest,$feed,$limit,true,$attempt);
+                return;
+            }
             if($failed&&$failureCause!=='')throw new RuntimeException($failureCause.' Partial files are kept; use Retry.');
             if(!$ok||!in_array($status,[200,206],true)||!is_file($part))throw new RuntimeException('Download interrupted or refused (HTTP '.$status.($errno?', transport '.$errno.': '.curl_strerror($errno):'').'). Partial files are kept; use Retry.');
             if(!@rename($part,$dest))throw new RuntimeException('Cannot finish the downloaded file.');@chmod($dest,0600);return;
