@@ -6531,7 +6531,7 @@ try {
       }).catch(function(error){vodLoading=null;if(current())vodHost.replaceChildren(h('p',{className:'bad',text:error.message}),h('button',{className:'btn',text:'Retry',onClick:onDemandView}));});
     }
     var folderState=new Map(resume&&resume.folders||[]),drawingSearch=false,availableGroups=[],trail=[],tools=h('div',{className:'stalker-browse-tools'});
-    function saved(){try{return JSON.parse(localStorage.getItem('stalker-favourites-'+owner+'-'+feed.value)||'[]').filter(function(x){return x&&typeof x.id==='string'&&typeof x.name==='string';}).slice(0,100);}catch(ignore){return [];}}
+    function saved(){try{var key='stalker-favourites-'+owner+'-'+feed.value,raw=JSON.parse(localStorage.getItem(key)||'[]'),changed=false,list=raw.filter(function(x){return x&&typeof x.id==='string'&&typeof x.name==='string';}).map(function(x){var prefix=String(x.name).match(/^\s*(?:[A-Z]{2,3}|ENGLISH)\s*[-:|]\s*/i);if(!prefix)return x;var clean=String(x.name).slice(prefix[0].length).trim().replace(/^#\s*/,'').replace(/([a-z0-9])([A-Z])/g,'$1 $2').replace(/\s+/g,' ').trim();if(clean===x.name)return x;changed=true;return Object.assign({},x,{name:clean});}).slice(0,100);if(changed)localStorage.setItem(key,JSON.stringify(list));return list;}catch(ignore){return [];}}
     function chooseCategory(id){liveRequested=kind==='live';parent='';trail=[];query.value='';category.value=id;page=1;load(false);}
     function browseTools(){
       tools.replaceChildren();root.classList.remove('stalker-downloads');if(downloads)downloads.classList.remove('primary');root.classList.toggle('stalker-is-live',kind==='live');

@@ -754,7 +754,9 @@ window.VaultcastStalkerVod=function(host,options){
   // Store stable title/year identities, never temporary provider IDs.
   function favouriteKey(){return 'stalker-vod-favourites-v2-'+options.owner;}
   function favouriteName(item){
-    return title({name:String(item.name||'')}).replace(/\s*\((?:19|20)\d{2}\)\s*$/,'').trim();
+    var raw=String(item.name||''),legacyPrefix=/^\s*(?:[A-Z]{2,3}|ENGLISH)\s*[-:|]\s*/i.test(raw),name=title({name:raw});
+    if(legacyPrefix)name=name.replace(/^#\s*/,'').replace(/([a-z0-9])([A-Z])/g,'$1 $2');
+    return name.replace(/\s*\((?:19|20)\d{2}\)\s*$/,'').replace(/\s+/g,' ').trim();
   }
   function favouriteIdentity(item){
     var name=favouriteName(item),release=String(item.year||year(item)||'').trim();
