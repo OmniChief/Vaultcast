@@ -2,7 +2,7 @@
   'use strict';
   var BASE = window.__STREAM_BASE__ || '/';
   var API = BASE + 'api';
-  var tvSelectPicker = /(?:Tizen|Web0S|WebOS|SMART-TV|SmartTV|Android TV|Google TV|AFT[A-Z0-9]*|Roku|Viera|HbbTV|NetCast|BRAVIA|Hisense|Philips)/i.test(navigator.userAgent || '');
+  var tvSelectPicker = /(?:\bLG\b|LGE|Tizen|Web0S|WebOS|SMART-TV|SmartTV|Android TV|Google TV|AFT[A-Z0-9]*|Roku|Viera|HbbTV|NetCast|BRAVIA|Hisense|Philips)/i.test(navigator.userAgent || '');
   if(tvSelectPicker)document.documentElement.classList.add('tv-poster-device');
   var _navSilent = false;
   function streamPlayUrl(url){
