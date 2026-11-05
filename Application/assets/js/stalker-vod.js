@@ -588,7 +588,7 @@ window.VaultcastStalkerVod=function(host,options){
     var value=String(name||'').toLocaleLowerCase();
     if(/netflix|amazon|prime video|apple(?: tv)?|disney|hbo|max\b|hulu|paramount|peacock|tubi|discovery\s*\+|britbox|itvx|skyshowtime|espn\s*\+|mubi/.test(value))return 'Streaming services';
     if(/\b(?:bbc|cnn|hallmark|lifetime|sky|espn|bet\+?|cartoon network)\b/.test(value))return 'TV & networks';
-    if(/\bTOP\s*(?:\d+|MOVIES?|KIDS?)\b|\bNEW\s+(?:RELEASES?|RELEASED|ADDED)\b/.test(value))return 'Collections & popular';
+    if(/\btop\s*(?:\d+|movies?|kids?)\b|\bnew\s+(?:release(?:s|d)?|added)\b|\bcollections?\b|\b\d{4}\s*&\s*old\b/.test(value))return 'Collections & popular';
     return 'Genres';
   }
   function folderLogo(name){
