@@ -85,16 +85,16 @@ final class StalkerOffline {
         header("Content-Disposition: attachment; filename=\"video.mkv\"; filename*=UTF-8''".rawurlencode($name));
         Stream::sendFile($path,'video/x-matroska');exit;
     }
-    private static function fetch(string $url,string $dest,array $feed,int $limit=21474836480,bool $fresh=false): void {
+    private static function fetch(string $url,string $dest,array $feed,int $limit=21474836480,bool $fresh=false,bool $rangeFirst=false): void {
         for($attempt=0;$attempt<5;$attempt++){
-            try{self::fetchOnce($url,$dest,$feed,$limit,$fresh,$attempt);return;}
+            try{self::fetchOnce($url,$dest,$feed,$limit,$fresh,$attempt,$rangeFirst);return;}
             catch(RuntimeException $error){
                 if($attempt===4||is_file(dirname($dest).'/cancel')||preg_match('/^(?:Not enough free disk space|This provider video exceeds|Cannot write the download|The download could not be written)/i',$error->getMessage()))throw $error;
                 sleep(min(30,1<<$attempt));
             }
         }
     }
-    private static function fetchOnce(string $url,string $dest,array $feed,int $limit,bool $fresh,int $attempt): void {
+    private static function fetchOnce(string $url,string $dest,array $feed,int $limit,bool $fresh,int $attempt,bool $rangeFirst=false,bool $noRange=false): void {
         if(is_file($dest)&&!$fresh)return;
         $part=$dest.'.part';$metaFile=$part.'.json';$meta=is_file($metaFile)?json_decode((string)file_get_contents($metaFile),true):[];
         $offset=!$fresh&&is_file($part)&&!empty($meta['validator'])?(int)filesize($part):0;
@@ -102,7 +102,7 @@ final class StalkerOffline {
             $p=parse_url($url);if(!$p||!in_array($p['scheme']??'',['http','https'],true)||isset($p['user'])||isset($p['pass']))throw new RuntimeException('Provider returned an invalid media URL.');
             $ips=stalker_public_addresses($url);foreach($ips as $ip)if(!WebFetch::publicIp($ip))throw new RuntimeException('Media address is not public.');
             $host=(string)$p['host'];$port=$p['port']??($p['scheme']==='https'?443:80);$ip=strpos($ips[$attempt%count($ips)],':')!==false?'['.$ips[$attempt%count($ips)].']':$ips[$attempt%count($ips)];
-            $headers=['Accept: */*'];if($offset){$headers[]='Range: bytes='.$offset.'-';$headers[]='If-Range: '.$meta['validator'];}
+            $headers=['Accept: */*'];if(!$noRange){if($offset){$headers[]='Range: bytes='.$offset.'-';$headers[]='If-Range: '.$meta['validator'];}elseif($rangeFirst)$headers[]='Range: bytes=0-';}
             $status=0;$response=[];$file=null;$received=0;$failed=false;$failureCause='';
             $ch=curl_init($url);
             // Match the live stream proxy's protocol negotiation and content
@@ -114,7 +114,7 @@ final class StalkerOffline {
                  CURLOPT_WRITEFUNCTION=>static function($h,$chunk)use(&$file,&$received,&$failed,&$failureCause,&$response,&$status,$offset,$part,$metaFile,$limit){
                     if($status>=300&&$status<400)return strlen($chunk);
                     if(!in_array($status,[200,206],true))return 0;
-                     if(!$file){if($status===206&&(!$offset||!preg_match('/^bytes '.preg_quote((string)$offset,'/').'-/',$response['content-range']??''))){$failed=true;$failureCause='The provider changed the partial download; retry the download.';return 0;}$file=@fopen($part,$status===206?'ab':'wb');if(!$file){$failed=true;$failureCause='Cannot write the download to offline storage.';return 0;}@chmod($part,0600);$validator=$response['etag']??$response['last-modified']??'';@file_put_contents($metaFile,json_encode(['validator'=>$validator]));}
+                     if(!$file){if($status===206&&!preg_match('/^bytes '.preg_quote((string)$offset,'/').'-/',$response['content-range']??'')){$failed=true;$failureCause='The provider changed the partial download; retry the download.';return 0;}$file=@fopen($status===206&&$offset>0?'ab':'wb');if(!$file){$failed=true;$failureCause='Cannot write the download to offline storage.';return 0;}@chmod($part,0600);$validator=$response['etag']??$response['last-modified']??'';@file_put_contents($metaFile,json_encode(['validator'=>$validator]));}
                      $received+=strlen($chunk);$free=@disk_free_space(dirname($part));if($received+($status===206?$offset:0)>$limit){$failed=true;$failureCause='This provider video exceeds the 20 GB offline download limit.';return 0;}if($free!==false&&$free<100*1024*1024){$failed=true;$failureCause='Not enough free disk space to continue the download.';return 0;}
                      $n=fwrite($file,$chunk);if($n===false||$n!==strlen($chunk)){$failed=true;$failureCause='The download could not be written completely. Check free disk space and offline storage permissions.';return 0;}return $n;
                 }]);
@@ -125,13 +125,14 @@ final class StalkerOffline {
             // same validated redirect loop below.
             if($redirect===''&&$status>=300&&$status<400&&isset($response['refresh'])&&preg_match('/^\s*\d+\s*;\s*url\s*=\s*["\']?([^"\']+)["\']?\s*$/i',$response['refresh'],$refresh))$redirect=trim($refresh[1]);
             if($status>=300&&$status<400&&$redirect!==''){$url=iptv_hls_resolve_uri($url,$redirect);continue;}
+            if($status>=300&&$status<400&&$rangeFirst&&!$noRange){@unlink($part);@unlink($metaFile);self::fetchOnce($url,$dest,$feed,$limit,true,$attempt,$rangeFirst,true);return;}
             if($status>=300&&$status<400)throw new RuntimeException('The provider redirected this download (HTTP '.$status.') without a usable destination. Refresh the provider link and retry.');
             // Some Stalker media hosts reject Range/If-Range requests (notably
             // with 405 or vendor status 460). Drop the incompatible partial and
             // retry this URL as a fresh GET instead of leaving Retry stuck.
-            if($offset>0&&(in_array($status,[400,405,416,460],true)||($failed&&strpos($failureCause,'The provider changed the partial download')===0))){
+            if(!$noRange&&(($offset>0||$rangeFirst)&&(in_array($status,[400,405,416,460],true)||($failed&&strpos($failureCause,'The provider changed the partial download')===0)))){
                 @unlink($part);@unlink($metaFile);
-                self::fetchOnce($url,$dest,$feed,$limit,true,$attempt);
+                self::fetchOnce($url,$dest,$feed,$limit,true,$attempt,$rangeFirst,true);
                 return;
             }
             if($failed&&$failureCause!=='')throw new RuntimeException($failureCause.' Partial files are kept; use Retry.');
@@ -189,7 +190,7 @@ final class StalkerOffline {
             }
             if($url==='')$url=stalker_vod_resolve($feed,$j['item_id'],$j['item']);
             $cookies=$dir.'/cookies';$cookieSource=$playbackCookies!==''&&is_file($playbackCookies)?$playbackCookies:stalker_cookie_path($feed);if(!@copy($cookieSource,$cookies))throw new RuntimeException('Could not prepare provider download cookies.');@chmod($cookies,0600);
-            $feed['_downloadCookies']=$cookies;$source=$dir.'/source';$j['stage']='Downloading from provider';$j['updated']=date('c');self::save($j);self::fetch($url,$source,$feed);
+            $feed['_downloadCookies']=$cookies;$source=$dir.'/source';$j['stage']='Downloading from provider';$j['updated']=date('c');self::save($j);self::fetch($url,$source,$feed,21474836480,false,true);
             $head=file_get_contents($source,false,null,0,16);
             $expectedDuration=0.0;
             if(strpos(ltrim((string)$head),'#EXTM3U')===0){$j['stage']='Downloading stream segments';$j['updated']=date('c');self::save($j);$source=self::playlist($url,$dir,$feed);preg_match_all('/#EXTINF:([0-9.]+)/',(string)file_get_contents($source),$durations);$expectedDuration=array_sum(array_map('floatval',$durations[1]));}
