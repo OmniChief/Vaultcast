@@ -4978,6 +4978,32 @@ try {
     closeMenus();
   });
 
+  // Several TV browsers close their native select popup while the remote moves
+  // focus between options. Use an in-page, D-pad-friendly picker on those TVs.
+  var tvSelectPicker = /(?:Tizen|Web0S|WebOS|SMART-TV|SmartTV|Android TV|Google TV|AFT[A-Z0-9]*|Roku|Viera|HbbTV|NetCast|BRAVIA|Hisense|Philips)/i.test(navigator.userAgent || '');
+  function openTvSelectPicker(select){
+    if(!tvSelectPicker||!select||select.disabled||select.multiple||document.querySelector('.tv-select-picker'))return;
+    var options=Array.prototype.slice.call(select.options).map(function(option,index){return {option:option,index:index};}).filter(function(row){return !row.option.disabled;});
+    if(!options.length)return;
+    var current=options.findIndex(function(row){return row.index===select.selectedIndex;});if(current<0)current=0;
+    var label=select.getAttribute('aria-label')||((select.labels&&select.labels[0]&&select.labels[0].textContent)||'Choose an option').trim();
+    var overlay=h('div',{className:'tv-select-picker',role:'presentation'}),dialog=h('section',{className:'tv-select-picker-dialog',role:'dialog','aria-modal':'true','aria-label':label},[
+      h('h2',{text:label}),h('div',{className:'tv-select-picker-options',role:'listbox','aria-label':label})
+    ]),list=dialog.querySelector('.tv-select-picker-options'),buttons=[];
+    function close(){overlay.remove();select.focus();}
+    function choose(index){var row=options[index];if(!row)return;select.selectedIndex=row.index;select.dispatchEvent(new Event('input',{bubbles:true}));select.dispatchEvent(new Event('change',{bubbles:true}));close();}
+    options.forEach(function(row,index){var button=h('button',{type:'button',className:'tv-select-picker-option'+(row.index===select.selectedIndex?' selected':''),role:'option','aria-selected':String(row.index===select.selectedIndex),text:row.option.textContent.trim(),onFocus:function(){current=index;},onClick:function(){choose(index);}});buttons.push(button);list.appendChild(button);});
+    function move(index){current=Math.max(0,Math.min(options.length-1,index));buttons[current].focus();list.scrollTop=Math.max(0,buttons[current].offsetTop-list.offsetTop-list.clientHeight/2);}
+    overlay.appendChild(dialog);overlay.addEventListener('click',function(event){if(event.target===overlay)close();});
+    overlay.addEventListener('keydown',function(event){var key=event.key;if(key==='Escape'){event.preventDefault();event.stopPropagation();close();}else if(key==='ArrowDown'||key==='ArrowRight'){event.preventDefault();event.stopPropagation();move(current+1);}else if(key==='ArrowUp'||key==='ArrowLeft'){event.preventDefault();event.stopPropagation();move(current-1);}else if(key==='Home'){event.preventDefault();event.stopPropagation();move(0);}else if(key==='End'){event.preventDefault();event.stopPropagation();move(options.length-1);}else if(key==='PageDown'){event.preventDefault();event.stopPropagation();move(current+6);}else if(key==='PageUp'){event.preventDefault();event.stopPropagation();move(current-6);}else if(key==='Enter'||key===' '){event.preventDefault();event.stopPropagation();choose(current);}});
+    document.body.appendChild(overlay);move(current);
+  }
+  if(tvSelectPicker){
+    document.addEventListener('pointerdown',function(event){var select=event.target&&event.target.closest&&event.target.closest('select');if(!select)return;event.preventDefault();select.focus();openTvSelectPicker(select);},true);
+    document.addEventListener('click',function(event){var select=event.target&&event.target.closest&&event.target.closest('select');if(!select)return;event.preventDefault();openTvSelectPicker(select);},true);
+    document.addEventListener('keydown',function(event){var select=event.target&&event.target.closest&&event.target.closest('select');if(!select||['Enter',' ','ArrowDown'].indexOf(event.key)<0)return;event.preventDefault();event.stopPropagation();openTvSelectPicker(select);},true);
+  }
+
   var accountDrawerClose = null;
   function accountHasUnread(){
     var owner=state.user&&state.user.role!=='guest'&&state.user.id;
@@ -7549,9 +7575,10 @@ try {
     lp.keyH = function(e){
       if (!document.getElementById('player-overlay')) return;
       if(overlay.classList.contains('player-mini'))return;
+      if(e.target&&e.target.closest&&e.target.closest('.tv-select-picker'))return;
       if(inlineHost&&!overlay.contains(document.activeElement)&&document.fullscreenElement!==overlay)return;
       var tag = (e.target && e.target.tagName || '').toLowerCase();
-      if (tag === 'input' && e.target.type !== 'range') return;
+      if (tag === 'select'||tag === 'textarea'||(e.target&&e.target.isContentEditable)||(tag === 'input' && e.target.type !== 'range')) return;
       var k = e.key;
       if (vodMode&&(k === 'ArrowLeft'||k === 'ArrowRight')) {if(Number.isFinite(video.duration)){e.preventDefault();video.currentTime=Math.max(0,Math.min(video.duration,video.currentTime+(k==='ArrowLeft'?-15:30)));}}
       else if(vodMode&&(k==='Escape')){e.preventDefault();closePlayer();}
