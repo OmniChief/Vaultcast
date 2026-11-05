@@ -133,12 +133,15 @@ final class StalkerOffline {
     private static function fetchOnce(string $url,string $dest,array $feed,int $limit,bool $fresh,int $attempt,bool $rangeFirst=false,bool $noRange=false): void {
         if(is_file($dest)&&!$fresh)return;
         $part=$dest.'.part';$metaFile=$part.'.json';$meta=is_file($metaFile)?json_decode((string)file_get_contents($metaFile),true):[];
-        $offset=!$fresh&&is_file($part)&&!empty($meta['validator'])?(int)filesize($part):0;
+        // Resume from any preserved bytes, even when the provider does not
+        // supply an ETag or Last-Modified header. Range responses are checked
+        // against the requested offset below before bytes are appended.
+        $offset=!$fresh&&is_file($part)?(int)filesize($part):0;
         for($hop=0;$hop<5;$hop++){
             $p=parse_url($url);if(!$p||!in_array($p['scheme']??'',['http','https'],true)||isset($p['user'])||isset($p['pass']))throw new RuntimeException('Provider returned an invalid media URL.');
             $ips=stalker_public_addresses($url);foreach($ips as $ip)if(!WebFetch::publicIp($ip))throw new RuntimeException('Media address is not public.');
             $host=(string)$p['host'];$port=$p['port']??($p['scheme']==='https'?443:80);$ip=strpos($ips[$attempt%count($ips)],':')!==false?'['.$ips[$attempt%count($ips)].']':$ips[$attempt%count($ips)];
-            $headers=['Accept: */*'];if(!$noRange){if($offset){$headers[]='Range: bytes='.$offset.'-';$headers[]='If-Range: '.$meta['validator'];}elseif($rangeFirst)$headers[]='Range: bytes=0-';}
+            $headers=['Accept: */*'];if(!$noRange){if($offset){$headers[]='Range: bytes='.$offset.'-';if(!empty($meta['validator']))$headers[]='If-Range: '.$meta['validator'];}elseif($rangeFirst)$headers[]='Range: bytes=0-';}
             $status=0;$response=[];$file=null;$received=0;$failed=false;$failureCause='';
             $ch=curl_init($url);
             // Match the live stream proxy's protocol negotiation and content
