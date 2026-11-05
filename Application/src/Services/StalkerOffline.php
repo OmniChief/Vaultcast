@@ -34,7 +34,7 @@ final class StalkerOffline {
         return array_map(static function($j){
             $item=is_array($j['item']??null)?$j['item']:[];$season=$item['seasonName']??'';
             if($season===''&&is_numeric($item['season']??null))$season=(int)$item['season']===0?'Specials':'Season '.(int)$item['season'];
-            return array_merge(array_intersect_key($j,array_flip(['id','name','status','bytes','error','created','updated','job_pid','destination','stage','connection'])),[
+            return array_merge(array_intersect_key($j,array_flip(['id','name','status','bytes','error','created','updated','job_pid','destination','stage','connection','delete_requested'])),[
                 'percent'=>$j['status']==='ready'||$j['status']==='imported'?100:($j['percent']??null),'totalBytes'=>(int)($j['totalBytes']??0),'speedBytesPerSecond'=>(int)($j['speedBytesPerSecond']??0),
                 'showName'=>(string)($item['showName']??$item['seriesName']??''),'season'=>is_numeric($item['season']??null)?(int)$item['season']:null,'seasonName'=>(string)$season,
                 'episode'=>(string)($item['episode']??$item['episode_number']??''),'episodeTitle'=>(string)($item['episodeTitle']??$item['episode_title']??'')
@@ -80,7 +80,15 @@ final class StalkerOffline {
     public static function delete(string $id): array {
         $j=self::job($id);$lock=@fopen(self::root().'/'.$id.'.lock','c');$locked=false;
         if($lock){$deadline=microtime(true)+8;do{$locked=flock($lock,LOCK_EX|LOCK_NB);if($locked)break;if(!in_array($j['status']??'', ['cancelled','failed'],true))break;usleep(200000);}while(microtime(true)<$deadline);}
-        if(!$locked){if(is_resource($lock))fclose($lock);throw new RuntimeException('The download is still stopping. Wait a few seconds, then delete it again.');}
+        if(!$locked){
+            if(is_resource($lock))fclose($lock);
+            if(($j['status']??'')==='cancelled'){
+                $dir=self::root().'/'.$id;if(!is_dir($dir))@mkdir($dir,0700,true);@file_put_contents($dir.'/delete-after-stop','1');
+                $j['delete_requested']=true;$j['stage']='Deleting after cancellation';$j['updated']=date('c');self::save($j);
+                return ['ok'=>true,'pending'=>true];
+            }
+            throw new RuntimeException('The download is still stopping. Wait a few seconds, then delete it again.');
+        }
         try{
             $j=self::job($id);
             if(in_array($j['status']??'', ['queued','downloading'],true))throw new RuntimeException('Cancel the active download first, then delete it after it stops.');
@@ -230,8 +238,8 @@ final class StalkerOffline {
             if($expectedDuration>0&&abs((float)($info['format']['duration']??0)-$expectedDuration)>max(5.0,$expectedDuration*0.001))throw new RuntimeException('The saved video is incomplete. Downloaded segments were preserved for retry.');
             if(!array_filter($streams,static function($s){return ($s['codec_type']??'')==='video';})||!@rename($part,$dest))throw new RuntimeException('The download could not be verified as a complete video. Partial files are kept for retry.');
             $j['destination']=self::job($id)['destination']??'library';$j['status']='ready';$j['stage']='Complete';$j['bytes']=filesize($dest);$j['updated']=date('c');unset($j['error']);self::save($j);@unlink(STREAM_SHM.'/ingest_count.json');return ['ok'=>true];
-        }catch(Throwable $e){$j['destination']=self::job($id)['destination']??'library';$j['status']=is_file(self::root().'/'.$id.'/cancel')?'cancelled':'failed';$j['stage']=$j['status']==='cancelled'?'Cancelled':'Stopped at: '.($j['stage']??'download');$j['error']=$j['status']==='cancelled'?'Cancelled. Partial downloads were preserved.':($e instanceof RuntimeException?$e->getMessage():'The download worker failed. Partial files were preserved.');$j['updated']=date('c');self::save($j);return ['ok'=>false,'error'=>$j['error']];}
-        finally{if(is_resource($bandwidth)){flock($bandwidth,LOCK_UN);fclose($bandwidth);}flock($own,LOCK_UN);fclose($own);}
+        }catch(Throwable $e){$j['destination']=self::job($id)['destination']??'library';$j['status']=is_file(self::root().'/'.$id.'/cancel')?'cancelled':'failed';$j['stage']=$j['status']==='cancelled'?'Cancelled':'Stopped at: '.($j['stage']??'download');$j['error']=$j['status']==='cancelled'?'Cancelled. Partial downloads were preserved.':($e instanceof RuntimeException?$e->getMessage():'The download worker failed. Partial files were preserved.');if(is_file(self::root().'/'.$id.'/delete-after-stop')){$j['delete_requested']=true;$j['stage']='Deleting after cancellation';} $j['updated']=date('c');self::save($j);return ['ok'=>false,'error'=>$j['error']];}
+        finally{if(is_resource($bandwidth)){flock($bandwidth,LOCK_UN);fclose($bandwidth);}flock($own,LOCK_UN);fclose($own);if(is_file(self::root().'/'.$id.'/delete-after-stop'))try{self::delete($id);}catch(Throwable $ignored){}}
     }
     public static function torrents(): array {
         $rows=\Vaultcast\Repository::rows("SELECT payload FROM vaultcast_documents WHERE name LIKE 'stalker-offline:%'");$out=[];

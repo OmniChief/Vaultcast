@@ -6394,13 +6394,13 @@ try {
         host.appendChild(h('div',{className:'settings-card','data-offline-job':item.id},[h('h3',{text:stalkerOfflineTitle(item)}),seriesDetails?h('p',{className:'muted',text:seriesDetails}):null,statusLine,h('p',{className:'muted',text:details,'data-offline-details':item.id}),offlineProgress(item),item.error?h('p',{className:'bad',text:item.error}):null,
         ['queued','downloading'].indexOf(item.status)>=0&&can('downloads_request')?h('button',{className:'btn ghost',text:'Cancel download',onClick:function(){stalkerPost('stalker_cancel',{id:item.id}).then(function(){showStalkerOffline(host);}).catch(function(error){toast(error.message,{kind:'bad'});});}}):null,item.status==='ready'&&item.destination!=='browser'&&can('ingest_import')?h('button',{className:'btn',text:'Match and add to library',onClick:function(){openSettings('ingest');}}):null,
         item.status==='ready'&&can('downloads_request')?h('a',{className:'btn',href:LIVE_API+'stalker_offline_file?id='+encodeURIComponent(item.id),download:'',text:'Save video to device'}):null,
-        ['failed','cancelled'].indexOf(item.status)>=0&&can('downloads_request')?h('button',{className:'btn',text:'Retry interrupted download',onClick:function(e){var b=e.currentTarget;b.disabled=true;stalkerPost('stalker_retry',{id:item.id}).then(function(){showStalkerOffline(host);}).catch(function(error){toast(error.message,{kind:'bad'});}).finally(function(){b.disabled=false;});}}):null,
-        admin&&!['queued','downloading'].includes(item.status)?h('button',{className:'btn danger',text:'Delete download',onClick:function(e){if(!confirm('Delete “'+item.name+'” and its saved files?'))return;var b=e.currentTarget;b.disabled=true;stalkerPost('stalker_delete',{id:item.id}).then(function(){showStalkerOffline(host);}).catch(function(error){toast(error.message,{kind:'bad'});}).finally(function(){b.disabled=false;});}}):null]));});
+        !item.delete_requested&&['failed','cancelled'].indexOf(item.status)>=0&&can('downloads_request')?h('button',{className:'btn',text:'Retry interrupted download',onClick:function(e){var b=e.currentTarget;b.disabled=true;stalkerPost('stalker_retry',{id:item.id}).then(function(){showStalkerOffline(host);}).catch(function(error){toast(error.message,{kind:'bad'});}).finally(function(){b.disabled=false;});}}):null,
+        admin&&!item.delete_requested&&!['queued','downloading'].includes(item.status)?h('button',{className:'btn danger',text:'Delete download',onClick:function(e){if(!confirm('Delete “'+item.name+'” and its saved files?'))return;var b=e.currentTarget;b.disabled=true;stalkerPost('stalker_delete',{id:item.id}).then(function(result){if(result.pending)toast('Delete requested. It will finish when the cancelled worker stops.');showStalkerOffline(host);}).catch(function(error){toast(error.message,{kind:'bad'});}).finally(function(){b.disabled=false;});}}):null]));});
       if(!(result.items||[]).length)host.appendChild(h('p',{className:'muted',text:'No provider videos have been downloaded yet.'}));
       function updateProgress(){
         liveApi('stalker_offline').then(function(next){
           if(!host.isConnected||!next||!next.ok)return;
-          var rows=next.items||[],active=rows.some(function(row){return row.status==='queued'||row.status==='downloading';}),changed=false;
+          var rows=next.items||[],active=rows.some(function(row){return row.status==='queued'||row.status==='downloading'||row.delete_requested;}),changed=false;
           rows.forEach(function(row){
             var card=Array.from(host.querySelectorAll('[data-offline-job]')).find(function(node){return node.getAttribute('data-offline-job')===row.id;});
             if(!card)return;
@@ -6410,11 +6410,12 @@ try {
             if(detail)detail.textContent=[row.stage,row.percent!=null?row.percent+'% downloaded':'',stalkerOfflineTransferDetails(row),row.connection?'Provider: '+row.connection:'',row.destination==='browser'?'Destination: this device':'Destination: library'].filter(Boolean).join(' · ');
             var progress=card.querySelector('[data-offline-progress]'),nextProgress=offlineProgress(row);if(progress&&nextProgress)progress.replaceWith(nextProgress);else if(progress&&!nextProgress)progress.remove();else if(!progress&&nextProgress&&detail)detail.after(nextProgress);
           });
+          Array.from(host.querySelectorAll('[data-offline-job]')).forEach(function(card){var id=card.getAttribute('data-offline-job');if(!rows.some(function(row){return row.id===id;}))changed=true;});
           if(changed){showStalkerOffline(host);return;}
           if(active&&host.isConnected)host._stalkerOfflineTimer=setTimeout(updateProgress,4000);
         }).catch(function(){if(host.isConnected)host._stalkerOfflineTimer=setTimeout(updateProgress,10000);});
       }
-      if((result.items||[]).some(function(item){return item.status==='queued'||item.status==='downloading';}))host._stalkerOfflineTimer=setTimeout(updateProgress,4000);
+      if((result.items||[]).some(function(item){return item.status==='queued'||item.status==='downloading'||item.delete_requested;}))host._stalkerOfflineTimer=setTimeout(updateProgress,4000);
     }).catch(function(error){if(host.isConnected)host.replaceChildren(h('p',{className:'bad',text:error.message}));});
   }
   function stalkerUpdateSettings(host,connections){
