@@ -625,7 +625,7 @@ window.VaultcastStalkerVod=function(host,options){
   }
   function openItem(source,item,button){
     var selectedLanguage=item._stalkerLanguage||language;
-    item=Object.assign({},item,{_stalkerLanguage:selectedLanguage,_stalkerMatchTitle:title(item),_stalkerLookupFolders:matchingLanguageFolders(item.sources||[],selectedLanguage)});
+    item=Object.assign({},item,{_stalkerLanguage:selectedLanguage,_stalkerFolder:item._stalkerFolder||category,_stalkerMatchTitle:title(item),_stalkerLookupFolders:matchingLanguageFolders(item.sources||[],selectedLanguage)});
     options.open(source,item,button);
   }
   function folderSection(name){
@@ -779,6 +779,18 @@ window.VaultcastStalkerVod=function(host,options){
   function favouriteId(item){
     var fav=favouriteIdentity(item);
     return fav.tab+'|'+fav.normalized+'|'+fav.year;
+  }
+  function hasFavourite(item,tab,lang,folder){
+    var favourite=favouriteIdentity(Object.assign({},item,{tab:tab||item.tab||kind,language:lang||item.language||language,folder:folder||item.folder||category}));
+    return favouriteEntries().some(function(saved){return favouriteId(saved)===favouriteId(favourite);});
+  }
+  function toggleFavourite(item,tab,lang,folder){
+    var favourite=favouriteIdentity(Object.assign({},item,{tab:tab||item.tab||kind,language:lang||item.language||language,folder:folder||item.folder||category})),id=favouriteId(favourite),list=favouriteEntries(),exists=list.some(function(saved){return favouriteId(saved)===id;});
+    list=list.filter(function(saved){return favouriteId(saved)!==id;});
+    if(!exists)list.unshift(favourite);
+    if(!saveFavourites(list))return null;
+    if(active&&options.current())renderResults();
+    return {active:!exists,favourite:favourite};
   }
   // A saved language identifies provider folders, not the viewer's current language.
   // Older favourites without a language continue using the original all-provider lookup.
@@ -1104,12 +1116,10 @@ window.VaultcastStalkerVod=function(host,options){
         star.setAttribute('aria-pressed',String(active));
       }
       star.onclick=function(){
-        var fav=favouriteIdentity(Object.assign({},item,{tab:kind,language:language,folder:category})),id=favouriteId(fav);
+        var fav=favouriteIdentity(Object.assign({},item,{tab:kind,language:language,folder:category}));
         if(!fav.normalized){status.textContent='Cannot save a favourite without a title.';return;}
-        var list=favouriteEntries(),exists=list.some(function(x){return favouriteId(x)===id;});
-        list=list.filter(function(x){return favouriteId(x)!==id;});
-        if(!exists)list.unshift(fav);
-        if(saveFavourites(list)){updateStar();status.textContent=exists?'Removed from favourites.':'Saved '+fav.name+(fav.year?' ('+fav.year+')':'')+' to favourites.';}
+        var result=toggleFavourite(item,kind,language,category);
+        if(result){updateStar();status.textContent=result.active?'Saved '+fav.name+(fav.year?' ('+fav.year+')':'')+' to favourites.':'Removed from favourites.';}
       };
       updateStar();
       var posterButton=h('button',{className:'stalker-vod-cover','aria-label':'Open '+item.name,onClick:open},[
@@ -1250,6 +1260,6 @@ window.VaultcastStalkerVod=function(host,options){
     loadAccountSettings().then(function(){
       if(active&&kind===value&&serial===showToken)loadCategories(false);
     });
-  },stop:stop,snapshot:snapshot,restore:restore};
+  },stop:stop,snapshot:snapshot,restore:restore,hasFavourite:hasFavourite,toggleFavourite:toggleFavourite};
 };
 })();
