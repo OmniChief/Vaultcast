@@ -118,8 +118,11 @@ final class StalkerOffline {
                      $received+=strlen($chunk);$free=@disk_free_space(dirname($part));if($received+($status===206?$offset:0)>$limit){$failed=true;$failureCause='This provider video exceeds the 20 GB offline download limit.';return 0;}if($free!==false&&$free<100*1024*1024){$failed=true;$failureCause='Not enough free disk space to continue the download.';return 0;}
                      $n=fwrite($file,$chunk);if($n===false||$n!==strlen($chunk)){$failed=true;$failureCause='The download could not be written completely. Check free disk space and offline storage permissions.';return 0;}return $n;
                 }]);
-            $ok=curl_exec($ch);$errno=curl_errno($ch);$status=(int)curl_getinfo($ch,CURLINFO_HTTP_CODE);curl_close($ch);if(is_resource($file))fclose($file);
+            $ok=curl_exec($ch);$errno=curl_errno($ch);$status=(int)curl_getinfo($ch,CURLINFO_HTTP_CODE);$curlRedirect=defined('CURLINFO_REDIRECT_URL')?(string)curl_getinfo($ch,CURLINFO_REDIRECT_URL):'';curl_close($ch);if(is_resource($file))fclose($file);
             $redirect=trim((string)($response['location']??''));
+            // Let libcurl supply its parsed target if the raw header callback
+            // did not expose Location (for example, on some HTTP/2 gateways).
+            if($redirect===''&&$status>=300&&$status<400&&$curlRedirect!=='')$redirect=$curlRedirect;
             // Some provider gateways send their redirect target as Refresh
             // instead of the standard Location header. Resolve it through the
             // same validated redirect loop below.
