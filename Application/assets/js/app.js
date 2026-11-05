@@ -6596,7 +6596,7 @@ try {
         list.appendChild(option(kind==='live'?'*':'',kind==='live'?'All channels':kind==='vod'?'All movies':'All series'));availableGroups.forEach(function(group){list.appendChild(option(group.id,group.name));});
         tools.appendChild(h('details',{className:'stalker-filter-panel',open:true},[h('summary',{text:'Browse categories'}),list]));
       }
-      if(favourites.length){var list=h('div',{className:'stalker-category-nav'});favourites.forEach(function(entry){list.appendChild(h('button',{className:'stalker-nav-item',text:'★ '+entry.name,onClick:function(){query.value=entry.name;parent='';trail=[];category.value='';page=1;load(false);}}));});tools.appendChild(h('details',{className:'stalker-filter-panel',open:false},[h('summary',{text:'Favourites · '+favourites.length}),list]));}
+      if(favourites.length&&!parent){var list=h('div',{className:'stalker-category-nav'});favourites.forEach(function(entry){list.appendChild(h('button',{className:'stalker-nav-item',text:'★ '+entry.name,onClick:function(){query.value=entry.name;parent='';trail=[];category.value='';page=1;load(false);}}));});tools.appendChild(h('details',{className:'stalker-filter-panel',open:false},[h('summary',{text:'Favourites · '+favourites.length}),list]));}
       var crumbs=h('nav',{className:'stalker-breadcrumbs','aria-label':'Catalogue location'});
       if(parent){crumbs.appendChild(h('button',{className:'btn ghost',text:kind==='vod'?'Movies':'Series',onClick:function(){chooseCategory('');}}));trail.forEach(function(entry,index){crumbs.appendChild(h('button',{className:'btn ghost',text:'› '+entry.name,onClick:function(){trail=trail.slice(0,index+1);parent=entry.id;page=1;load(false,true);}}));});}
       breadcrumbs.replaceChildren(crumbs);
