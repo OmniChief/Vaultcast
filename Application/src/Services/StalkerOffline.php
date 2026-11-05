@@ -37,7 +37,7 @@ final class StalkerOffline {
             $item=is_array($j['item']??null)?$j['item']:[];$season=$item['seasonName']??'';
             if($season===''&&is_numeric($item['season']??null))$season=(int)$item['season']===0?'Specials':'Season '.(int)$item['season'];
             return array_merge(array_intersect_key($j,array_flip(['id','name','status','bytes','error','created','updated','job_pid','destination','stage','connection','delete_requested'])),[
-                'percent'=>$j['status']==='ready'||$j['status']==='imported'?100:($j['percent']??null),'totalBytes'=>(int)($j['totalBytes']??0),'speedBytesPerSecond'=>(int)($j['speedBytesPerSecond']??0),
+                'percent'=>$j['status']==='ready'||$j['status']==='imported'?100:($j['percent']??null),'totalBytes'=>(int)($j['totalBytes']??0),'speedBytesPerSecond'=>(int)($j['speedBytesPerSecond']??0),'elapsedSeconds'=>$j['status']==='downloading'?max(0,time()-(int)(strtotime($j['created']??'now')?:time())):0,
                 'showName'=>(string)($item['showName']??$item['seriesName']??''),'season'=>is_numeric($item['season']??null)?(int)$item['season']:null,'seasonName'=>(string)$season,
                 'episode'=>(string)($item['episode']??$item['episode_number']??''),'episodeTitle'=>(string)($item['episodeTitle']??$item['episode_title']??'')
             ]);

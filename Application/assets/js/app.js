@@ -6077,10 +6077,13 @@ try {
   }
   function stalkerOfflineTransferDetails(job){
     if(!job)return'';
-    var bytes=Number(job.bytes)||0,total=Number(job.totalBytes)||0,speed=Number(job.speedBytesPerSecond)||0,parts=[];
+    var bytes=Number(job.bytes)||0,total=Number(job.totalBytes)||0,speed=Number(job.speedBytesPerSecond)||0,active=job.status==='downloading',parts=[];
     if(total>0)parts.push(stalkerFormatBytes(bytes)+' of '+stalkerFormatBytes(total));
     else if(bytes>0)parts.push(stalkerFormatBytes(bytes)+' transferred');
-    if(speed>0)parts.push(stalkerFormatBytes(speed)+'/s');
+    else if(active)parts.push('Waiting for provider data');
+    if(total===0&&active)parts.push('Size not reported');
+    if(speed>0)parts.push(stalkerFormatBytes(speed)+'/s');else if(active)parts.push('0 B/s');
+    var elapsed=Math.max(0,Number(job.elapsedSeconds)||0);if(active&&elapsed>0)parts.push('Elapsed '+(elapsed>=60?Math.floor(elapsed/60)+'m '+(elapsed%60)+'s':elapsed+'s'));
     return parts.join(' · ');
   }
   function stalkerOfflineTitle(item){
