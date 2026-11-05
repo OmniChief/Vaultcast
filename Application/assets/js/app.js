@@ -5741,7 +5741,7 @@ try {
     if (live.tickTimer) { clearInterval(live.tickTimer); live.tickTimer = null; }
   }
   function fmtClock(ms){
-    try { return new Date(ms).toLocaleTimeString([], { hour:'numeric', minute:'2-digit' }); } catch (e) { return ''; }
+    try { return new Date(ms).toLocaleTimeString([], { hour:'numeric', minute:'2-digit', timeZone:'Europe/London' }); } catch (e) { return ''; }
   }
   function fmtLeft(endMs){
     var m = Math.max(0, Math.round((endMs - Date.now()) / 60000));

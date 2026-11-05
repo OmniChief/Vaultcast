@@ -106,7 +106,7 @@ window.VaultcastStalkerCountries=function(host,options){
     return entries.sort(function(a,b){return a.start-b.start;});
   }
   function programmeInfo(item){var time=Date.now()/1000+offset,entries=programmes(item);return {current:entries.find(function(p){return p.start<=time&&p.end>time;}),next:entries.find(function(p){return p.start>time;})};}
-  function time(ts){return new Date(Number(ts)*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});}
+  function time(ts){return new Date(Number(ts)*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',timeZone:'Europe/London'});}
   function image(url,alt,className){if(typeof url!=='string'||!/^https?:\/\//i.test(url))return null;var img=h('img',{src:url,alt:alt||'',className:className||'',loading:'lazy',decoding:'async',referrerpolicy:'no-referrer'});img.onerror=function(){img.remove();};return img;}
   function logo(item){var art=h('span',{className:'stalker-tv-logo','aria-hidden':'true'},[h('span',{text:item.name.slice(0,3)})]);var url=item.sources.map(function(s){return s.logoUrl||guideLogos[s.feed+'|'+s.id];}).filter(Boolean)[0];var img=image(url);if(img){img.onload=function(){art.classList.add('loaded');};art.appendChild(img);}return art;}
   function metadata(p){
