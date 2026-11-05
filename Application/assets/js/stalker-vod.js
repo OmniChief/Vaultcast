@@ -616,20 +616,16 @@ window.VaultcastStalkerVod=function(host,options){
     });
     return Object.keys(byKey).map(function(k){return byKey[k];});
   }
-  function matchingLanguageFolders(sources){
-    var buckets=categoryBuckets(),matches=[];
-    var anchor=(sources||[]).find(function(source){return source&&source.feed&&source.categoryId;});
-    var bucket=anchor&&buckets.find(function(entry){return entry.sources.some(function(category){return String(category.feed)===String(anchor.feed)&&String(category.id)===String(anchor.categoryId);});});
-    if(bucket)bucket.sources.forEach(function(entry){matches.push({feed:entry.feed,id:entry.id,name:entry.name,language:bucket.language});});
-    if(!matches.length&&category){
-      var selected=providerSelections[category]||buckets.find(function(entry){return entry.key===category;});
-      if(!selected&&category.indexOf('provider-folder|')===0){var parts=category.split('|'),sourceCategory=categories.find(function(entry){return String(entry.feed)===String(parts[1])&&String(entry.id)===String(parts.slice(2).join('|'));});selected=sourceCategory&&buckets.find(function(entry){return entry.sources.some(function(candidate){return String(candidate.feed)===String(sourceCategory.feed)&&String(candidate.id)===String(sourceCategory.id);});});}
-      if(selected&&Array.isArray(selected.sources))selected.sources.forEach(function(entry){var categoryEntry=categories.find(function(candidate){return String(candidate.feed)===String(entry.feed)&&String(candidate.id)===String(entry.id);}),name=entry.name||categoryEntry&&categoryEntry.name||'';if(!matches.some(function(existing){return String(existing.feed)===String(entry.feed)&&String(existing.id)===String(entry.id);}))matches.push({feed:entry.feed,id:entry.id,name:name,language:selected.language||categoryLanguage(name)});});
-    }
+  function matchingLanguageFolders(sources,selectedLanguage){
+    var buckets=categoryBuckets(),anchor=(sources||[]).find(function(source){return source&&source.feed&&source.categoryId;}),anchorBucket=anchor&&buckets.find(function(entry){return entry.sources.some(function(category){return String(category.feed)===String(anchor.feed)&&String(category.id)===String(anchor.categoryId);});}),selected=category?providerSelections[category]||buckets.find(function(entry){return entry.key===category;}):null;
+    if(!selected&&category&&category.indexOf('provider-folder|')===0){var parts=category.split('|'),sourceCategory=categories.find(function(entry){return String(entry.feed)===String(parts[1])&&String(entry.id)===String(parts.slice(2).join('|'));});selected=sourceCategory&&buckets.find(function(entry){return entry.sources.some(function(candidate){return String(candidate.feed)===String(sourceCategory.feed)&&String(candidate.id)===String(sourceCategory.id);});});}
+    var language=anchorBucket&&anchorBucket.language||selectedLanguage||selected&&selected.language||'UK';
+    var matches=categories.filter(function(entry){return categoryLanguage(entry.name)===language;}).map(function(entry){return {feed:entry.feed,id:entry.id,name:entry.name,language:language,priority:!!(anchorBucket&&anchorBucket.sources.some(function(source){return String(source.feed)===String(entry.feed)&&String(source.id)===String(entry.id);}))};});
     return matches;
   }
   function openItem(source,item,button){
-    item=Object.assign({},item,{_stalkerLanguage:language,_stalkerMatchTitle:title(item),_stalkerLookupFolders:matchingLanguageFolders(item.sources||[])});
+    var selectedLanguage=item._stalkerLanguage||language;
+    item=Object.assign({},item,{_stalkerLanguage:selectedLanguage,_stalkerMatchTitle:title(item),_stalkerLookupFolders:matchingLanguageFolders(item.sources||[],selectedLanguage)});
     options.open(source,item,button);
   }
   function folderSection(name){
@@ -856,7 +852,7 @@ window.VaultcastStalkerVod=function(host,options){
     function normalized(name){return favouriteIdentity({name:name,tab:kind}).normalized;}
     function finish(){
       button.disabled=false;button.textContent=original;
-      if(match){openItem(match.feed,Object.assign({},match.item,{feed:match.feed}),button);}
+      if(match){openItem(match.feed,Object.assign({},match.item,{feed:match.feed,_stalkerLanguage:favourite.language||language}),button);}
       else status.textContent='Favourite "'+favourite.name+'" was not found on the enabled connections. It remains saved.';
     }
     function next(){
@@ -895,7 +891,7 @@ window.VaultcastStalkerVod=function(host,options){
       ]);
       var message=h('small',{className:'muted',text:'Looking up provider artwork…'});
       var button=h('button',{type:'button',className:'btn ghost',text:titleText,onClick:function(){
-        if(job.found){openItem(job.found.feed,Object.assign({},job.found.item,{feed:job.found.feed,sources:job.sources.slice()}),button);}
+        if(job.found){openItem(job.found.feed,Object.assign({},job.found.item,{feed:job.found.feed,sources:job.sources.slice(),_stalkerLanguage:job.fav.language||language}),button);}
         else findFavourite(fav,button);
       }});
       button.style.whiteSpace='normal';button.style.textAlign='left';button.style.width='100%';

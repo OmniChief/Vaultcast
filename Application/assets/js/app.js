@@ -6271,7 +6271,7 @@ try {
       // Multiple matching provider copies are carried from the catalogue to this page.
       // Keep playback bound to the active feed/item ID and reload on source changes.
       var copies=Array.isArray(item.sources)?item.sources.filter(function(x){return x&&x.id&&x.feed;}):[];
-      var selector=null,sourceControls=null,lookupNote=lookupPending||lookupMessage?h('p',{className:'muted',text:lookupPending?'Checking matching language-folder connections…':lookupMessage}):null;
+      var selector=null,sourceControls=null,lookupNote=lookupPending||lookupMessage?h('p',{className:'muted',text:lookupPending?'Checking all folders in this language group…':lookupMessage}):null;
       if(copies.length>1){
         selector=h('select',{'aria-label':'Choose provider connection for this title'});
         copies.forEach(function(src,i){
@@ -6325,8 +6325,9 @@ try {
     function lookupYear(row){var explicit=String(row&&row.year||'').match(/^(?:19|20)\d{2}$/);if(explicit)return explicit[0];var match=String(row&&row.name||'').match(/[([]((?:19|20)\d{2})[)\]]\s*$/);return match?match[1]:'';}
     function findAlternateConnections(){
       if(!item||item.kind!=='vod'||item.episode!=null||item.seasonId||!Array.isArray(item._stalkerLookupFolders)||!item._stalkerLookupFolders.length)return;
-      var wanted=normalizedVodTitle(item._stalkerMatchTitle||item.name),folders=item._stalkerLookupFolders.filter(function(folder,index,array){return folder&&folder.feed&&folder.id&&String(folder.feed)!==String(feed)&&(!item._stalkerLanguage||folder.language===item._stalkerLanguage)&&array.findIndex(function(other){return other&&String(other.feed)===String(folder.feed)&&String(other.id)===String(folder.id);})===index;});
+      var wanted=normalizedVodTitle(item._stalkerMatchTitle||item.name),copies=Array.isArray(item.sources)?item.sources.slice():[{id:itemId,feed:feed,connection:'',kind:'vod',playable:true}],folders=item._stalkerLookupFolders.filter(function(folder,index,array){return folder&&folder.feed&&folder.id&&String(folder.feed)!==String(feed)&&!copies.some(function(source){return String(source.feed)===String(folder.feed);})&&(!item._stalkerLanguage||folder.language===item._stalkerLanguage)&&array.findIndex(function(other){return other&&String(other.feed)===String(folder.feed)&&String(other.id)===String(folder.id);})===index;});
       if(!wanted||!folders.length)return;
+      folders.sort(function(a,b){return a.priority===b.priority?0:a.priority?-1:1;});
       var query=String(item._stalkerMatchTitle||item.name||'').replace(/\s*[([](?:19|20)\d{2}[)\]]\s*$/,'').trim(),words=query.normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean).sort(function(a,b){return b.length-a.length;});
       query=words[0]||query;if(query.length>24)query=query.slice(0,5);
       var token=++lookupToken;lookupPending=true;lookupMessage='';paint();
@@ -6339,15 +6340,22 @@ try {
           return searchFolder(folder,page+1);
         }).catch(function(){return [];});
       }
-      Promise.all(folders.map(function(folder){return searchFolder(folder,1).then(function(matches){return {folder:folder,matches:matches};});})).then(function(results){
+      var groups=[];folders.forEach(function(folder){var group=groups.find(function(entry){return String(entry.feed)===String(folder.feed);});if(!group){group={feed:folder.feed,folders:[]};groups.push(group);}group.folders.push(folder);});
+      function searchProvider(group){
+        function nextFolder(index){if(index>=group.folders.length)return Promise.resolve(null);var folder=group.folders[index];return searchFolder(folder,1).then(function(matches){return matches.length?{folder:folder,item:matches[0]}:nextFolder(index+1);});}
+        return nextFolder(0);
+      }
+      var cursor=0,results=[];
+      function worker(){if(cursor>=groups.length)return Promise.resolve();var group=groups[cursor++];return searchProvider(group).then(function(found){if(found)results.push(found);return worker();});}
+      Promise.all([worker(),worker(),worker()]).then(function(){
         if(!current()||token!==lookupToken)return;
-        var copies=Array.isArray(item.sources)?item.sources.slice():[{id:itemId,feed:feed,connection:'',kind:'vod',playable:true}],changed=false,matched=false;
+        var changed=false;
         results.forEach(function(result){
-          var found=result.matches[0];if(!found)return;matched=true;if(copies.some(function(source){return String(source.feed)===String(result.folder.feed);}))return;
-          copies.push({id:found.id,feed:result.folder.feed,connection:found.connection||'',kind:'vod',playable:true});changed=true;
+          if(copies.some(function(source){return String(source.feed)===String(result.folder.feed);}))return;
+          copies.push({id:result.item.id,feed:result.folder.feed,connection:result.item.connection||'',kind:'vod',playable:true,categoryId:result.folder.id,categoryName:result.folder.name,language:result.folder.language});changed=true;
         });
         if(changed)item.sources=copies;
-        lookupPending=false;lookupMessage=matched||copies.length>1?'':'No other matching title found in this language folder.';paint();
+        lookupPending=false;lookupMessage=results.length||copies.length>1?'':'No other matching title found in this language group.';paint();
       });
     }
     wrap.appendChild(h('div',{className:'row-actions live-channel-back'},[h('button',{className:'btn',text:'← Back to catalogue',onClick:function(){attempt++;closePlayer();goLiveTab('stalker');}})]));wrap.appendChild(host);wrap.appendChild(status);wrap.appendChild(hero);paint();
