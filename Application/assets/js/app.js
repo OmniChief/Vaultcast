@@ -5004,6 +5004,10 @@ try {
     document.addEventListener('click',function(event){var select=event.target&&event.target.closest&&event.target.closest('select');if(!select)return;event.preventDefault();openTvSelectPicker(select);},true);
     document.addEventListener('keydown',function(event){var select=event.target&&event.target.closest&&event.target.closest('select');if(!select||['Enter',' ','ArrowDown'].indexOf(event.key)<0)return;event.preventDefault();event.stopPropagation();openTvSelectPicker(select);},true);
   }
+  document.addEventListener('load',function(event){
+    var image=event.target,cover=image&&image.closest&&image.closest('.stalker-vod-cover');
+    if(image&&cover&&image.naturalWidth&&image.naturalHeight)cover.classList.toggle('stalker-vod-landscape',image.naturalWidth/image.naturalHeight>1.15);
+  },true);
 
   var accountDrawerClose = null;
   function accountHasUnread(){

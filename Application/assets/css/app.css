@@ -1110,9 +1110,10 @@ input[type=checkbox], input[type=radio], input[type=range] { accent-color: var(-
 .stalker-category-chips > * { flex-shrink:0; }
 .stalker-vod-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); gap:18px; align-items:start; }
 .stalker-vod-card { overflow:hidden; border:1px solid rgba(255,255,255,.1); border-radius:var(--radius-lg); background:rgba(255,255,255,.025); }
-.stalker-vod-cover { position:relative; display:block; width:100%; aspect-ratio:2/3; padding:0; overflow:hidden; border:0; cursor:pointer; background:linear-gradient(145deg,#26354b,#141b28); color:#fff; }
+.stalker-vod-cover { position:relative; display:block; box-sizing:content-box; width:100%; height:0; aspect-ratio:auto; padding:0 0 150%; overflow:hidden; border:0; cursor:pointer; background:linear-gradient(145deg,#26354b,#141b28); color:#fff; }
+.stalker-vod-cover.stalker-vod-landscape { padding-bottom:56.25%; }
 .stalker-vod-cover img { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; }
-.stalker-vod-placeholder { display:grid; place-items:center; width:100%; height:100%; padding:14px; text-align:center; overflow-wrap:anywhere; font-size:clamp(.9rem,1.4vw,1.2rem); line-height:1.35; font-weight:650; opacity:.85; }
+.stalker-vod-placeholder { position:absolute; inset:0; display:grid; place-items:center; padding:14px; text-align:center; overflow-wrap:anywhere; font-size:clamp(.9rem,1.4vw,1.2rem); line-height:1.35; font-weight:650; opacity:.85; }
 .stalker-vod-badge { position:absolute; bottom:12px; left:12px; padding:6px 10px; border-radius:20px; background:rgba(0,0,0,.75); }
 .stalker-vod-copy { padding:14px; }
 .stalker-vod-copy h3 { font-size:1rem; margin:0; overflow-wrap:anywhere; }
