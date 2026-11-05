@@ -23,7 +23,7 @@ window.VaultcastStalkerCountries=function(host,options){
       request.onerror=request.onblocked=function(){finish(null);};
     });return guideDb;
   }
-  function guideCacheKey(entry){return JSON.stringify(['guide-v2',String(options.owner),country,entry.feed,entry.category,entry.page]);}
+  function guideCacheKey(entry){return JSON.stringify(['guide-v3',String(options.owner),country,entry.feed,entry.category,entry.page]);}
   function cachedGuide(key){return browserGuideDb().then(function(db){return new Promise(function(resolve){
     if(!db){resolve(null);return;}try{var request=db.transaction('pages','readonly').objectStore('pages').get(key);
       request.onsuccess=function(){var row=request.result;resolve(row&&Number.isFinite(row.at)&&row.at<=Date.now()&&guideConnectionAt-row.at<86400000&&row.data?row.data:null);};
@@ -46,7 +46,7 @@ window.VaultcastStalkerCountries=function(host,options){
   try{favourites=JSON.parse(localStorage.getItem(preference)||'[]');if(!Array.isArray(favourites))favourites=[];}catch(ignore){}
   var genreOrder=['General','Entertainment','News','Documentary','Sports','Movies','Kids','Music','Lifestyle','Education','Shopping','Religious','Adult','Other'];
   // Editorial order, not claimed Freeview LCNs. Regions and +1 remain distinct services.
-  var ukOrder=['bbc one','bbc two','itv1','stv','utv','channel 4','5','bbc three','bbc four','bbc scotland','bbc alba','s4c','itv2','itv3','itv4','itvbe','e4','e4 extra','more4','film4','5star','5usa','5action','5select','u&dave','dave','u&drama','drama','u&yesterday','yesterday','u&w','w','u&eden','eden','quest','quest red','really','dmax','tlc','challenge','sky mix','sky arts','legend','legend xtra','true crime','true crime xtra','talking pictures tv','pbs america','together tv'];
+  var ukOrder=['bbc one','bbc two','itv1','stv','utv','channel 4','5','itv1 +1','bbc three','bbc four','bbc alba','s4c','bbc scotland','itv2','itv3','itv4','itvbe','e4','e4 extra','more4','film4','5star','5usa','5action','5select','u&dave','dave','u&drama','drama','u&yesterday','yesterday','u&w','w','u&eden','eden','quest','quest red','really','dmax','tlc','challenge','sky mix','sky arts','legend','legend xtra','true crime','true crime xtra','talking pictures tv','pbs america','together tv'];
   function current(token){return active&&host.isConnected&&options.current()&&token===serial;}
   function folderKey(f){return f.feed+'/'+f.id;}
   function name(code){return code==='ZZ'?'Other countries':countries[code]?countries[code].name:code;}
@@ -79,7 +79,8 @@ window.VaultcastStalkerCountries=function(host,options){
   function curated(item){return rank(item)<1000;}
   function rank(item){
     if(country!=='GB')return 1000;
-    var id=key(item),base=id.replace(/ \+1$/,''),index=ukOrder.indexOf(base),shift=base!==id ? .25 : 0;
+    var id=key(item),base=id.replace(/ \+1$/,''),index=ukOrder.indexOf(id),shift=0;
+    if(index<0){index=ukOrder.indexOf(base);shift=base!==id ? .25 : 0;}
     if(index<0&&/^(?:bbc one|bbc two|itv1|stv|utv) /.test(base)){
       // Sort regional editions beside their parent; never merge their sources/EPG.
       var parent=base.match(/^(bbc one|bbc two|itv1|stv|utv) /)[1];index=ukOrder.indexOf(parent);shift+=.5;

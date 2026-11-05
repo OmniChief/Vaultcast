@@ -11,7 +11,7 @@ final class StalkerLiveBrowse {
         return 'stalker_live_direct_v1_'.hash('sha256',json_encode([$feed,$suffix]));
     }
     public static function presentation(array $feed,string $id): array {
-        $value=\Vaultcast\Repository::cacheGet(self::key($feed,'presentation:v2:'.$id));
+        $value=\Vaultcast\Repository::cacheGet(self::key($feed,'presentation:v3:'.$id));
         return is_array($value)?$value:[];
     }
     public static function categories(array $feed,bool $refresh=false): array {
@@ -154,7 +154,7 @@ final class StalkerLiveBrowse {
             $indexPath=STREAM_DATA.'/live/epg_cache/stalker-open-'.$region.'.json';
             $indexRevision[$region]=is_file($indexPath)?(int)@filemtime($indexPath):0;
         }
-        $key=self::key($feed,'guide:v4:'.json_encode([$category,$page,$indexRevision]));
+        $key=self::key($feed,'guide:v5:'.json_encode([$category,$page,$indexRevision]));
         $cached=$refresh?null:\Vaultcast\Repository::cacheGet($key);
         if($cached!==null)return $cached;
         // A user opening Stalker EPG can request a refresh without browser-side
@@ -246,11 +246,9 @@ final class StalkerLiveBrowse {
                 $id=(string)($channel['id']??'');
                 if($id==='')continue;
                 $sourceId=trim((string)($channel['xmltvId']??''));
-                $regionalConsensus=false;$candidates=[];
+                $match=self::epgMatchName((string)($channel['name']??''));
+                $candidates=$nameMap[$match]??[];$regionalConsensus=false;
                 if(!isset($open['programmes'][$sourceId])){
-                    $match=self::epgMatchName((string)($channel['name']??''));
-                    $candidates=$nameMap[$match]??[];
-                    $regionalConsensus=false;
                     if(!$candidates&&isset($regionalMap[$match])){
                         $candidates=$regionalMap[$match];
                         $regionalConsensus=count($candidates)>1;
@@ -273,6 +271,13 @@ final class StalkerLiveBrowse {
                 if($sourceId!=='' && isset($open['logos'][$sourceId])
                     && is_string($open['logos'][$sourceId]))
                     $channelLogos[$id]=$open['logos'][$sourceId];
+                elseif($candidates){
+                    foreach($candidates as $candidateId=>$label){
+                        if(isset($open['logos'][$candidateId])&&is_string($open['logos'][$candidateId])){
+                            $channelLogos[$id]=$open['logos'][$candidateId];break;
+                        }
+                    }
+                }
                 $additional=$open['programmes'][$sourceId]??null;
                 if(!empty($regionalConsensus)&&$sourceId===''){
                     // Generic ITV1 has no single national XMLTV channel. Add only
@@ -347,7 +352,7 @@ final class StalkerLiveBrowse {
             foreach($programmes[$id]??[] as $event)$events[]=array_merge($event,[
                 'startUnix'=>$event['start']*1000,'endUnix'=>$event['end']*1000,
                 'subtitle'=>$event['description']??'','kind'=>'epg']);
-            \Vaultcast\Repository::cachePut(self::key($feed,'presentation:v2:'.$id),[
+            \Vaultcast\Repository::cachePut(self::key($feed,'presentation:v3:'.$id),[
                 'name'=>$channel['name'],'logo'=>$channel['logoUrl']?:($channelLogos[$id]??''),
                 'programs'=>$events],600);
         }
