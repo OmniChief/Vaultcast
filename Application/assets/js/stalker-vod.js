@@ -151,6 +151,12 @@ window.VaultcastStalkerVod=function(host,options){
     var text=fields.filter(Boolean).join(' ').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase();
     return !query||text.includes(query.normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase());
   }
+  function shouldScanAllPages(){return !!(genreFilter||providerFilter||minRating||yearFilter||sortOrder!=='provider');}
+  function applyCatalogueFilterChange(){
+    if(!titlesStarted){category='';searchAllMode=true;showFolderBrowser=false;reset();titlesStarted=true;renderCategories();}
+    renderResults();
+    if(shouldScanAllPages())scan(false);
+  }
   function renderGenreFilter(){
     if(!genreSelect)return;
     var values=new Map();titles.forEach(function(item){itemGenres(item).forEach(function(value){values.set(value.toLocaleLowerCase(),value);});});
@@ -822,12 +828,12 @@ window.VaultcastStalkerVod=function(host,options){
     function selector(label,choices,value,change){return h('label',{className:'stalker-vod-filter'},[h('span',{text:label}),h('select',{'aria-label':label,onChange:function(e){change(e.target.value);}},choices.map(function(pair){return h('option',{value:pair[0],text:pair[1],selected:pair[0]===value});}))]);}
     var mode=selector('Search by',[['title',kind==='vod'?'Movies':'Series'],['actor','Actor'],['director','Director']],searchMode,function(value){searchMode=value;search.placeholder='Search '+(value==='title'?(kind==='vod'?'movies':'series'):value+'s')+'…';renderResults();});
     languageSelect=h('select',{'aria-label':'Language',onChange:function(e){searchAllMode=true;chooseLanguage(e.target.value);}});
-    genreSelect=h('select',{'aria-label':'Genre',onChange:function(e){genreFilter=e.target.value;renderResults();}});
+    genreSelect=h('select',{'aria-label':'Genre',onChange:function(e){genreFilter=e.target.value;applyCatalogueFilterChange();}});
     providerSelect=h('select',{'aria-label':'Provider',onChange:function(e){chooseProvider(e.target.value);}});
-    var sort=selector('Sort by',[['provider','Default order'],['az','A–Z'],['za','Z–A'],['rating','Highest rating'],['newest','Newest release'],['oldest','Oldest release'],['added','Recently added']],sortOrder,function(value){sortOrder=value;renderResults();});
-    var rating=selector('Minimum rating',[['','Any rating'],['9','9+'],['8','8+'],['7','7+'],['6','6+'],['5','5+']],minRating,function(value){minRating=value;renderResults();});
+    var sort=selector('Sort by',[['provider','Default order'],['az','A–Z'],['za','Z–A'],['rating','Highest rating'],['newest','Newest release'],['oldest','Oldest release'],['added','Recently added']],sortOrder,function(value){sortOrder=value;applyCatalogueFilterChange();});
+    var rating=selector('Minimum rating',[['','Any rating'],['9','9+'],['8','8+'],['7','7+'],['6','6+'],['5','5+']],minRating,function(value){minRating=value;applyCatalogueFilterChange();});
     var years=[['','Any year']];for(var y=new Date().getFullYear()+1;y>=1900;y--)years.push([String(y),String(y)]);
-    var release=selector('Release year',years,yearFilter,function(value){yearFilter=value;renderResults();});
+    var release=selector('Release year',years,yearFilter,function(value){yearFilter=value;applyCatalogueFilterChange();});
     function submit(){searchAllMode=true;category='';rerunScopedSearch();}
     var pause=h('button',{className:'btn ghost',type:'button',text:'Pause search',onClick:function(){serial++;loading=false;clearTimeout(timer);renderResults();}});
     var refresh=h('button',{className:'btn ghost',type:'button',text:'Refresh',onClick:function(){reset();searchAllMode=true;titlesStarted=true;category='';loadCategories(true);}});
@@ -879,7 +885,7 @@ window.VaultcastStalkerVod=function(host,options){
     renderGenreFilter();
     favouriteLookupToken++;
     results.replaceChildren();
-    // Sort loaded metadata only; loading more extends the available result set.
+    var unfinished=tasks.some(function(t){return progress[t.key]&&!progress[t.key].done;}),holdForComplete=shouldScanAllPages()&&unfinished;
     var ordered=titles.filter(fits);
     function numeric(item,field){if(field==='year')return Number(year(item))||0;if(field==='added'){var raw=item.added;return /^\d+$/.test(String(raw||''))?Number(raw)*1000:Date.parse(raw)||0;}return Number(item.rating_imdb||item.rating)||0;}
     if(sortOrder!=='provider')ordered.sort(function(a,b){
@@ -889,7 +895,7 @@ window.VaultcastStalkerVod=function(host,options){
       if(!av||!bv)return av?-1:bv?1:names;
       return (sortOrder==='oldest'?av-bv:bv-av)||names;
     });
-    ordered.forEach(function(item){
+    (holdForComplete?[]:ordered).forEach(function(item){
       var sources=item.sources||[],chosen=sources.find(function(source){return !providerFilter||String(source.feed)===providerFilter;})||sources[0];
       if(item.numberedParts&&item.numberedParts.length>1){
         var parts=item.numberedParts.slice().sort(function(a,b){return a.number-b.number||a.name.localeCompare(b.name);});
@@ -949,11 +955,11 @@ window.VaultcastStalkerVod=function(host,options){
         ])
       ]));
     });
-    var unfinished=tasks.some(function(t){return progress[t.key]&&!progress[t.key].done;});
-    if(!ordered.length)results.appendChild(h('p',{className:'muted',text:titlesStarted?(unfinished?(loading?'No matches in the pages received yet. Catalogue loading…':'No matches in the pages loaded yet. Load more to continue.'):'No matching titles found.'):'Search to browse titles.'}));
+    if(holdForComplete)results.appendChild(h('p',{className:'muted',text:loading?'Checking every page in this filtered catalogue before showing results…':'More pages must be loaded to complete this filtered catalogue.'}));
+    else if(!ordered.length)results.appendChild(h('p',{className:'muted',text:titlesStarted?(unfinished?(loading?'No matches in the pages received yet. Catalogue loading…':'No matches in the pages loaded yet. Load more to continue.'):'No matching titles found.'):'Search to browse titles.'}));
     var done=tasks.filter(function(t){return progress[t.key]&&progress[t.key].done;}).length;
     var failed=tasks.filter(function(t){return progress[t.key]&&progress[t.key].failed;}).length;
-    status.textContent=ordered.length+' matching titles in '+(searchAllMode?(language?(language==='UK'?'English':language)+' folders':'All languages'):(group||'Selected folder'))+(unfinished?(loading?' so far · loading catalogue':' so far · more pages available'):'')+(searchMode==='actor'?' · matching available cast':searchMode==='director'?' · matching available directors':'')+' · '+done+'/'+tasks.length+' sources finished'+(failed?' · '+failed+' unavailable':'');
+    status.textContent=(holdForComplete?'Building complete filtered catalogue · '+ordered.length+' matches found so far':ordered.length+' matching titles in '+(searchAllMode?(language?(language==='UK'?'English':language)+' folders':'All languages'):(group||'Selected folder'))+(unfinished?(loading?' so far · loading catalogue':' so far · more pages available'):'')+(searchMode==='actor'?' · matching available cast':searchMode==='director'?' · matching available directors':''))+' · '+done+'/'+tasks.length+' sources finished'+(failed?' · '+failed+' unavailable':'');
     next.hidden=!titlesStarted||!tasks.some(function(t){return progress[t.key]&&!progress[t.key].done;});
     next.disabled=loading;
   }
@@ -989,8 +995,8 @@ window.VaultcastStalkerVod=function(host,options){
       if(!valid(token))return;
       if(index>=pending.length){
         loading=false;renderResults();
-        if(query.trim()&&tasks.some(function(t){return progress[t.key]&&!progress[t.key].done;})){
-          status.textContent+=' · Searching all providers…';
+        if((shouldScanAllPages()||query.trim())&&tasks.some(function(t){return progress[t.key]&&!progress[t.key].done;})){
+          status.textContent+=' · Checking remaining pages…';
           timer=setTimeout(function(){if(valid(token))scan(false);},500);
         }
         return;
