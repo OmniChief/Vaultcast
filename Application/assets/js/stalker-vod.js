@@ -155,7 +155,8 @@ window.VaultcastStalkerVod=function(host,options){
     if(genreFilter&&!genres.some(function(value){return value.toLocaleLowerCase()===genreFilter;}))return false;
     if(minRating&&!(Number(item.rating_imdb||item.rating||0)>=Number(minRating)))return false;
     if(yearFilter&&String(year(item))!==yearFilter)return false;
-    var fields=searchMode==='actor'?[item.actors,item.cast]:searchMode==='director'?[item.director]:[title(item)];
+    var searchableTitle=title(item).replace(/\s*[\(\[](?:19|20)\d{2}[\)\]]\s*$/,'').trim();
+    var fields=searchMode==='actor'?[item.actors,item.cast]:searchMode==='director'?[item.director]:[searchableTitle];
     var text=fields.filter(Boolean).join(' '),needle=foldedSearchText(query,false);
     if(!needle)return true;
     return foldedSearchText(text,false).includes(needle)||foldedSearchText(text,true).includes(foldedSearchText(query,true));
