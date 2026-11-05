@@ -11,7 +11,7 @@ final class StalkerLiveBrowse {
         return 'stalker_live_direct_v1_'.hash('sha256',json_encode([$feed,$suffix]));
     }
     public static function presentation(array $feed,string $id): array {
-        $value=\Vaultcast\Repository::cacheGet(self::key($feed,'presentation:v1:'.$id));
+        $value=\Vaultcast\Repository::cacheGet(self::key($feed,'presentation:v2:'.$id));
         return is_array($value)?$value:[];
     }
     public static function categories(array $feed,bool $refresh=false): array {
@@ -137,8 +137,9 @@ final class StalkerLiveBrowse {
     }
     /** Collapse ITV1 regional labels only for the consensus schedule fallback. */
     private static function epgRegionalRoot(string $name): string {
-        if(preg_match('/^(itv1)(?:\\s+.+?)(\\s+\\+1)?$/u',$name,$match))
-            return $match[1].($match[2]??'');
+        $timeshift=preg_match('/\\s+\\+1$/u',$name)?' +1':'';
+        $base=$timeshift!==''?preg_replace('/\\s+\\+1$/u','',$name):$name;
+        if(preg_match('/^itv1(?:\\s+.+)?$/u',$base))return 'itv1'.$timeshift;
         return $name;
     }
 
@@ -153,7 +154,7 @@ final class StalkerLiveBrowse {
             $indexPath=STREAM_DATA.'/live/epg_cache/stalker-open-'.$region.'.json';
             $indexRevision[$region]=is_file($indexPath)?(int)@filemtime($indexPath):0;
         }
-        $key=self::key($feed,'guide:v3:'.json_encode([$category,$page,$indexRevision]));
+        $key=self::key($feed,'guide:v4:'.json_encode([$category,$page,$indexRevision]));
         $cached=$refresh?null:\Vaultcast\Repository::cacheGet($key);
         if($cached!==null)return $cached;
         // A user opening Stalker EPG can request a refresh without browser-side
@@ -245,6 +246,7 @@ final class StalkerLiveBrowse {
                 $id=(string)($channel['id']??'');
                 if($id==='')continue;
                 $sourceId=trim((string)($channel['xmltvId']??''));
+                $regionalConsensus=false;$candidates=[];
                 if(!isset($open['programmes'][$sourceId])){
                     $match=self::epgMatchName((string)($channel['name']??''));
                     $candidates=$nameMap[$match]??[];
@@ -345,7 +347,7 @@ final class StalkerLiveBrowse {
             foreach($programmes[$id]??[] as $event)$events[]=array_merge($event,[
                 'startUnix'=>$event['start']*1000,'endUnix'=>$event['end']*1000,
                 'subtitle'=>$event['description']??'','kind'=>'epg']);
-            \Vaultcast\Repository::cachePut(self::key($feed,'presentation:v1:'.$id),[
+            \Vaultcast\Repository::cachePut(self::key($feed,'presentation:v2:'.$id),[
                 'name'=>$channel['name'],'logo'=>$channel['logoUrl']?:($channelLogos[$id]??''),
                 'programs'=>$events],600);
         }
