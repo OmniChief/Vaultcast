@@ -141,14 +141,24 @@ window.VaultcastStalkerVod=function(host,options){
     var values=Array.isArray(raw)?raw:String(raw).split(/[,;|/]+/);
     return Array.from(new Set(values.map(function(value){return typeof value==='string'?value.trim():'';}).filter(function(value){return value&&!/^\d+$/.test(value);})));
   }
+  function foldedSearchText(value,compact){
+    var text=String(value||'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase();
+    return (compact?text.replace(/[^\p{L}\p{N}]/gu,''):text.replace(/[^\p{L}\p{N}]+/gu,' ')).replace(/\s+/g,' ').trim();
+  }
+  function providerSearchTerm(value){
+    var folded=foldedSearchText(value,false),words=folded.split(/\s+/).filter(Boolean);
+    var term=words.sort(function(a,b){return b.length-a.length;})[0]||foldedSearchText(value,true);
+    return term.length>24?term.slice(0,5):term;
+  }
   function fits(item){
     var genres=itemGenres(item);
     if(genreFilter&&!genres.some(function(value){return value.toLocaleLowerCase()===genreFilter;}))return false;
     if(minRating&&!(Number(item.rating_imdb||item.rating||0)>=Number(minRating)))return false;
     if(yearFilter&&String(year(item))!==yearFilter)return false;
     var fields=searchMode==='actor'?[item.actors,item.cast]:searchMode==='director'?[item.director]:[title(item)];
-    var text=fields.filter(Boolean).join(' ').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase();
-    return !query||text.includes(query.normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase());
+    var text=fields.filter(Boolean).join(' '),needle=foldedSearchText(query,false);
+    if(!needle)return true;
+    return foldedSearchText(text,false).includes(needle)||foldedSearchText(text,true).includes(foldedSearchText(query,true));
   }
   function shouldScanAllPages(){return !!(genreFilter||providerFolderId||minRating||yearFilter||sortOrder!=='provider');}
   function applyCatalogueFilterChange(){
@@ -1075,7 +1085,7 @@ window.VaultcastStalkerVod=function(host,options){
     if(loading||!active||!titlesStarted)return;
     clearTimeout(timer);
     if(searchAllMode&&language&&groupsLoading){status.textContent='Preparing the selected language…';return;}
-    var requestQuery=searchAllMode&&searchMode==='title'?query:'';
+    var requestQuery=searchAllMode&&searchMode==='title'?providerSearchTerm(query):'';
     if(tasks.length&&scanQuery!==requestQuery){rerunScopedSearch();return;}
     scanQuery=requestQuery;
     if(!tasks.length){
