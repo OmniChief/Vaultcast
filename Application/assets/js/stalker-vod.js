@@ -1124,7 +1124,15 @@ window.VaultcastStalkerVod=function(host,options){
     if(!ordered.length)results.appendChild(h('p',{className:'muted',text:titlesStarted?(unfinished?(loading?'No matches in the pages received yet. Catalogue loading…':'No matches in the pages loaded yet. Load more to continue.'):'No matching titles found.'):'Search to browse titles.'}));
     var done=tasks.filter(function(t){return progress[t.key]&&progress[t.key].done;}).length;
     var failed=tasks.filter(function(t){return progress[t.key]&&progress[t.key].failed;}).length;
-    status.textContent=ordered.length+' matching titles in '+(searchAllMode?(language?(language==='UK'?'English':language)+' folders':'All languages'):(group||'Selected folder'))+(unfinished?(loading?' so far · loading catalogue':' so far · more pages available'):'')+(searchMode==='actor'?' · matching available cast':searchMode==='director'?' · matching available directors':'')+' · '+done+'/'+tasks.length+' sources finished'+(failed?' · '+failed+' unavailable':'');
+    status.className='muted stalker-vod-scan-status';
+    status.replaceChildren();
+    if(tasks.length){
+      var percent=Math.max(0,Math.min(100,Math.round(done/tasks.length*100)));
+      var label=unfinished?(loading?'Loading catalogue…':'More titles available'):failed?'Catalogue loaded with provider errors':'Catalogue ready';
+      var bar=h('div',{className:'stalker-vod-scan-progress','role':'progressbar','aria-label':'Catalogue loading progress','aria-valuemin':'0','aria-valuemax':'100','aria-valuenow':String(percent)}),fill=h('span');
+      fill.style.width=percent+'%';bar.appendChild(fill);
+      status.append(h('span',{className:'stalker-vod-scan-label',text:label}),bar);
+    }else if(titlesStarted)status.textContent='Preparing catalogue…';
     next.hidden=!titlesStarted||!(ordered.length>visibleLimit||tasks.some(function(t){return progress[t.key]&&!progress[t.key].done;}));
     next.disabled=loading;
   }
