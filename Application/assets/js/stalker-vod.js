@@ -584,17 +584,11 @@ window.VaultcastStalkerVod=function(host,options){
     });
     return Object.keys(byKey).map(function(k){return byKey[k];});
   }
-  function folderSection(name,sources){
-    if((sources||[]).some(function(source){return /^\s*EN\s*[-:]\s*/i.test(String(source.name||''));}))return 'Genres';
+  function folderSection(name){
     var value=String(name||'').toLocaleLowerCase();
     if(/netflix|amazon|prime video|apple(?: tv)?|disney|hbo|max\b|hulu|paramount|peacock|tubi|discovery\s*\+|britbox|itvx|skyshowtime|espn\s*\+|mubi/.test(value))return 'Streaming services';
     if(/\b(?:bbc|cnn|hallmark|lifetime|sky|espn|bet\+?|cartoon network)\b/.test(value))return 'TV & networks';
-    if(/\b(?:sport|sports|boxing|wwe|ufc|football|racing|motorsport)\b/.test(value))return 'Sports';
-    if(/\b(?:kids?|children|cartoon|family)\b/.test(value))return 'Kids & family';
-    if(/\b(?:action|adult|adventure|comedy|crime|documentar(?:y|ies)|drama|fantasy|horror|romance|science fiction|thriller|war|western|music|anime)\b/.test(value))return 'Genres';
-    if(/\b(?:top\s*\d+|imdb|new|added|release|collection|christmas|classic|popular)\b/.test(value))return 'Collections & popular';
-    if(/\b(?:4k|8k|uhd|hdr|dolby|3d|bluray|blu-ray|sdr)\b/.test(value))return 'Quality & format';
-    return 'Other folders';
+    return 'Genres';
   }
   function folderLogo(name){
     var value=String(name||'').toLocaleLowerCase();
@@ -683,8 +677,8 @@ window.VaultcastStalkerVod=function(host,options){
     languages.forEach(function(lang){
       var groupFolders=folderGroups[lang].sort(function(a,b){return a.name.localeCompare(b.name,undefined,{sensitivity:'base'});});
       var section=h('section',{className:'stalker-vod-provider-section'},[h('h2',{text:lang==='UK'?'English':lang})]);
-      var sectionOrder=['Streaming services','TV & networks','Genres','Kids & family','Sports','Collections & popular','Quality & format','Other folders'],sectionsByName={};
-      groupFolders.forEach(function(bucket){var sectionName=folderSection(bucket.name,bucket.sources);(sectionsByName[sectionName]||(sectionsByName[sectionName]=[])).push(bucket);});
+      var sectionOrder=['Streaming services','TV & networks','Genres'],sectionsByName={};
+      groupFolders.forEach(function(bucket){var sectionName=folderSection(bucket.name);(sectionsByName[sectionName]||(sectionsByName[sectionName]=[])).push(bucket);});
       sectionOrder.forEach(function(sectionName){
         var buckets=sectionsByName[sectionName];if(!buckets||!buckets.length)return;
         var detail=h('details',{className:'stalker-vod-folder-category',open:['Streaming services','TV & networks','Genres'].indexOf(sectionName)>=0},[
