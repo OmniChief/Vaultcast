@@ -6095,6 +6095,19 @@ try {
     }
     stalkerPost('stalker_download',{feed:feed,id:item.id,name:item.name,destination:destination}).then(function(result){poll(result.id);}).catch(function(error){if(current()){button.disabled=false;status.textContent=error.message;}});
   }
+  function stalkerDownloadToBrowser(feed,item,status,button){
+    button.disabled=true;status.textContent='Preparing the browser download…';
+    stalkerPost('stalker_play',{feed:feed,kind:'vod',id:item.id}).then(function(result){
+      var source=result&&result.source&&result.source.url;if(!source)throw new Error('The provider did not return a browser-playable link.');
+      // HLS is a playlist, not a video file. Keep using the server-side
+      // remuxer for those; progressive files can stream straight to the browser.
+      if(/[?&]format=\.m3u8(?:&|$)/i.test(source)){stalkerSaveVideo(feed,item,status,button,'browser');return;}
+      var filename=String(item.name||'Provider video').replace(/[\\/:*?"<>|\x00-\x1f]/g,'_').trim().slice(0,180)||'Provider video';
+      if(!/\.(?:mp4|mkv|avi|mov|webm|mpg|mpeg|ts)$/i.test(filename))filename+='.mkv';
+      var link=h('a',{className:'btn',href:source,download:filename,text:'Download video to this device'});
+      status.replaceChildren('Starting a direct browser download. If it does not start, use this link: ',link);link.click();button.disabled=false;
+    }).catch(function(error){button.disabled=false;status.textContent=error.message;});
+  }
   function playStalkerItem(feed,item,button){
     if(item.kind==='live'){state._stalkerChannelHint={id:'stalker:'+feed+':'+item.id,name:item.name,slogan:item.description||'',sources:Array.isArray(item.sources)?item.sources:[],tried:Array.isArray(item._failoverTried)?item._failoverTried:[],sequence:Array.isArray(item._channelSequence)?item._channelSequence:[],guide:item._guide||null};openLiveChannel('stalker:'+feed+':'+item.id);return;}
     state._stalkerVodHint={feed:feed,item:item};openLiveChannel('stalker-vod:'+feed+':'+item.id);
@@ -6233,7 +6246,7 @@ try {
         }
       }
       var canSave=can('downloads_request')&&can('ingest_view')&&userAreaAllowed('library');
-      var download=canSave?h('button',{className:'btn',text:'Download',onClick:function(e){stalkerSaveVideo(feed,Object.assign({},item,{id:itemId}),status,e.currentTarget,'browser');}}):null;
+      var download=canSave?h('button',{className:'btn',text:'Download',onClick:function(e){stalkerDownloadToBrowser(feed,Object.assign({},item,{id:itemId}),status,e.currentTarget);}}):null;
       var addLibrary=canSave?h('button',{className:'btn',text:'Add to library',onClick:function(e){stalkerSaveVideo(feed,Object.assign({},item,{id:itemId}),status,e.currentTarget,'library');}}):null;
       watchButton=h('button',{className:'btn primary',text:'Play again',onClick:watch});
       hero.replaceChildren(h('div',{className:'stalker-vod-detail-poster'},[item.poster?h('img',{src:item.poster,alt:'',onError:function(e){e.target.remove();}}):h('span',{text:item.name.slice(0,1).toUpperCase()})]),h('div',{className:'stalker-vod-detail-copy'},[h('span',{className:'eyebrow',text:'Provider video'}),h('h1',{text:item.name}),item.year?h('p',{className:'muted',text:item.year}):null,navButtons,sourceControls,h('div',{className:'row-actions'},[watchButton,download,addLibrary,stalkerCheckButton(feed,itemId,item.kind||'vod',status),h('button',{className:'btn ghost',text:'Stop playback',onClick:stop})]),item.description?h('p',{text:item.description}):null,stalkerVodMetadata(item),h('p',{className:'muted',text:'Add to library saves to your server and ingest inbox. Download prepares a video file to save on this device.'})]));
