@@ -929,6 +929,18 @@ window.VaultcastStalkerVod=function(host,options){
         job.message.textContent='Checking other connections…';
         return true;
       }
+      var cachedItem=titles.find(function(item){return normalized(item.name)===job.fav.normalized&&(!job.fav.year||!year(item)||year(item)===job.fav.year);});
+      var cachedSources=cachedItem&&Array.isArray(cachedItem.sources)?cachedItem.sources.filter(function(source){
+        return source&&options.connections.some(function(feed){return feed.enabled&&String(feed.id)===String(source.feed);});
+      }):[];
+      if(cachedItem&&cachedSources.length){
+        job.sources=cachedSources.slice();
+        job.found={feed:cachedSources[0].feed,item:Object.assign({},cachedItem,cachedSources[0],{sources:cachedSources.slice()})};
+        job.button.disabled=false;
+        usePoster(cachedItem);
+        finish();
+        return;
+      }
       function nextFeed(){
         if(!current())return;
         if(feedIndex>=targets.length){finish();return;}
