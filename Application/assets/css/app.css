@@ -1139,6 +1139,14 @@ input[type=checkbox], input[type=radio], input[type=range] { accent-color: var(-
 .stalker-vod-copy h3 { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
 .stalker-vod-copy .row-actions { display:flex; flex-wrap:wrap; gap:6px; }
 .stalker-save { flex-shrink:0; min-width:38px; }
+.stalker-vod-provider-browser{display:grid;gap:12px;margin:10px 0 16px}
+.stalker-vod-provider-section{min-width:0;border:1px solid var(--border);border-radius:12px;padding:14px;background:var(--bg2)}
+.stalker-vod-provider-section h2,.stalker-vod-folder-heading h2{font-size:1rem;margin:0 0 10px}
+.stalker-vod-provider-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,210px),1fr));gap:9px}
+.stalker-vod-folder-tile{min-height:56px;text-align:left;white-space:normal;overflow-wrap:anywhere;line-height:1.4}
+.stalker-vod-folder-heading{display:flex;align-items:center;gap:14px;margin:12px 0}
+.stalker-vod-folder-heading h2{margin:0}
+.stalker-vod-folder-back{margin:8px 0}
 .stalker-vod-description { margin-top:12px; font-size:.9rem; }
 .stalker-vod-description summary { cursor:pointer; }
 .stalker-vod-hero { display:grid; grid-template-columns:minmax(150px,240px) minmax(0,1fr); gap:28px; align-items:start; margin:20px 0; }
