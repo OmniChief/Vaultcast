@@ -230,7 +230,7 @@ $__liveAction = live_bridge_action();
 if ($__liveAction !== null) {
     if (empty(Store::settings()['features']['live'])) live_bridge_deny(404, 'Live channels are disabled in Settings → Integrations.');
     $readActions = ['stalker_offline_file','stalker_epg_fields','stalker_live_fields','stalker_vod_fields','stalker_vod_probe','stalker_vod_detail','stalker_art','stalker_channel','stalker_offline','stalker_update_status','stalker','stalker_catalogue_status','stalker_vod_catalogue','stalker_live_categories','stalker_live_channels','stalker_live_guide','stalker_countries','stalker_browse','stalker_stream', 'guide', 'now', 'iptv', 'iptv_status', 'file', 'iptv_hls', 'logo', 'local_file', 'station', 'catalogue', 'programme_source', 'duration', 'channel_logo', 'iptv_browse', 'epg_refresh', 'm3u', 'tune', 'tv_studio', 'tv_preview', 'tv_health', 'xmltv', 'playlist', 'channels', 'radio', 'radio_search', 'epg_channels'];
-    $writeActions = ['stalker_catalogue_control','stalker_check_media','stalker_cancel','stalker_download','stalker_retry','stalker_updates','stalker_manage','stalker_play','tv_slot_preview','iptv_preview','station', 'iptv_add', 'iptv_remove', 'iptv_toggle', 'iptv_probe', 'iptv_save', 'epg_refresh', 'tv_studio', 'tv_channels', 'channel_logo', 'radio_save', 'epg_map'];
+    $writeActions = ['stalker_catalogue_control','stalker_check_media','stalker_cancel','stalker_delete','stalker_download','stalker_retry','stalker_updates','stalker_manage','stalker_play','tv_slot_preview','iptv_preview','station', 'iptv_add', 'iptv_remove', 'iptv_toggle', 'iptv_probe', 'iptv_save', 'epg_refresh', 'tv_studio', 'tv_channels', 'channel_logo', 'radio_save', 'epg_map'];
     $m = $_SERVER['REQUEST_METHOD'] ?? 'GET';
     $isWrite = ($m === 'POST' || $m === 'PUT' || $m === 'PATCH' || $m === 'DELETE');
 
@@ -268,7 +268,7 @@ if ($__liveAction !== null) {
       catch(RuntimeException $error) {json_error($error->getMessage(),502);}
     $_GET['action'] = $__liveAction;
 
-    if (in_array($__liveAction,['stalker_offline_file','stalker_offline','stalker_download','stalker_retry','stalker_cancel','stalker_updates','stalker_update_status'],true)) {
+    if (in_array($__liveAction,['stalker_offline_file','stalker_offline','stalker_download','stalker_retry','stalker_cancel','stalker_delete','stalker_updates','stalker_update_status'],true)) {
         require_once STREAM_ROOT.'/src/Live/iptv.php';
         $viewer=Auth::requireUser();
         if(class_exists('Parental')&&Parental::filtering())live_bridge_deny(403,'Provider catalogues are unavailable for restricted profiles.');
@@ -291,6 +291,7 @@ if ($__liveAction !== null) {
             if($__liveAction==='stalker_offline_file'){Permissions::require('downloads_request');StalkerOffline::downloadFile((string)($body['id']??''));}
             if($__liveAction==='stalker_offline')json_out(['ok'=>true,'items'=>StalkerOffline::listing()]);
             if($__liveAction==='stalker_cancel')json_out(StalkerOffline::cancel((string)($body['id']??'')));
+            if($__liveAction==='stalker_delete'){Auth::requireAdmin();json_out(StalkerOffline::delete((string)($body['id']??'')));}
             if(empty(Store::settings()['features']['downloads']))live_bridge_deny(403,'Enable downloads in Settings before saving provider videos.');
             if($__liveAction==='stalker_retry')json_out(StalkerOffline::retry((string)($body['id']??'')));
             $feed=iptv_feed_by_id(iptv_load(),(string)($body['feed']??''));

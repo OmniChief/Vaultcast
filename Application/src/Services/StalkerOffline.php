@@ -23,36 +23,56 @@ final class StalkerOffline {
             }
         }unset($row);
         usort($rows,static function($a,$b){return strcmp($b['created']??'',$a['created']??'');});
-        return array_map(static function($j){return array_intersect_key($j,array_flip(['id','name','status','bytes','error','created','updated','job_pid','destination']));},$rows);
+        return array_map(static function($j){
+            $item=is_array($j['item']??null)?$j['item']:[];$season=$item['seasonName']??'';
+            if($season===''&&is_numeric($item['season']??null))$season=(int)$item['season']===0?'Specials':'Season '.(int)$item['season'];
+            return array_merge(array_intersect_key($j,array_flip(['id','name','status','bytes','error','created','updated','job_pid','destination','stage','connection'])),[
+                'showName'=>(string)($item['showName']??$item['seriesName']??''),'seasonName'=>(string)$season,
+                'episode'=>(string)($item['episode']??$item['episode_number']??''),'episodeTitle'=>(string)($item['episodeTitle']??$item['episode_title']??'')
+            ]);
+        },$rows);
     }
     public static function enqueue(array $feed,string $itemId,string $name,string $destination='library'): array {
         require_once STREAM_ROOT.'/src/Live/iptv.php';
         $item=stalker_vod_entry($feed,$itemId);
         if(!$item)throw new RuntimeException('Refresh the provider catalogue and select the title again.');
+        $displayName=trim((string)($item['name']??''));if($displayName==='')$displayName=$name;
         $queue=self::listing();
         foreach(\Vaultcast\Repository::rows("SELECT payload FROM vaultcast_documents WHERE name LIKE 'stalker-offline:%'") as $existing){
             if(($existing['feed']??'')!==$feed['id']||($existing['item_id']??'')!==$itemId||($existing['status']??'')==='imported')continue;
             if($destination==='library')$existing['destination']='library';
-            $existing['item']=$item;self::save($existing);
+            $existing['item']=$item;$existing['name']=mb_substr($displayName,0,250);$existing['connection']=(string)($feed['name']??'');self::save($existing);
             if(in_array($existing['status'],['queued','downloading','ready'],true))return ['ok'=>true,'id'=>$existing['id'],'status'=>$existing['status']];
             if(count(array_filter($queue,static function($j){return in_array($j['status'],['queued','downloading'],true);}))>=20)throw new RuntimeException('The download queue is full. Wait for a download to finish.');
             return self::retry($existing['id']);
         }
         if(count(array_filter($queue,static function($j){return in_array($j['status'],['queued','downloading'],true);}))>=20)throw new RuntimeException('The download queue is full. Wait for a download to finish.');
         $id=bin2hex(random_bytes(12));
-        $j=['id'=>$id,'feed'=>$feed['id'],'item'=>$item,'item_id'=>$itemId,'name'=>mb_substr(trim($name),0,250),'destination'=>$destination==='browser'?'browser':'library','status'=>'queued','bytes'=>0,'created'=>date('c')];self::save($j);
+        $j=['id'=>$id,'feed'=>$feed['id'],'connection'=>(string)($feed['name']??''),'item'=>$item,'item_id'=>$itemId,'name'=>mb_substr($displayName,0,250),'destination'=>$destination==='browser'?'browser':'library','status'=>'queued','stage'=>'Queued for download','bytes'=>0,'created'=>date('c')];self::save($j);
         return self::retry($id);
     }
     public static function retry(string $id): array {
         $j=self::job($id);$lock=fopen(self::root().'/'.$id.'.lock','c');
         if(!$lock||!flock($lock,LOCK_EX|LOCK_NB))throw new RuntimeException('This download is still running.');
-        try{if(in_array($j['status'],['ready','imported'],true))throw new RuntimeException('This download is already complete.');@unlink(self::root().'/'.$id.'/cancel');$j['status']='queued';$j['updated']=date('c');unset($j['error']);self::save($j);}
+        try{if(in_array($j['status'],['ready','imported'],true))throw new RuntimeException('This download is already complete.');@unlink(self::root().'/'.$id.'/cancel');$j['status']='queued';$j['stage']='Queued for retry';$j['updated']=date('c');unset($j['error']);self::save($j);}
         finally{flock($lock,LOCK_UN);fclose($lock);}
         try{Process::startPhpWorker('stalker-download',$id);}
         catch(Throwable $e){$j['status']='failed';$j['error']='Could not start the download worker. Check the PHP worker configuration.';self::save($j);throw new RuntimeException($j['error']);}
         return ['ok'=>true,'id'=>$id];
     }
-    public static function cancel(string $id): array {$j=self::job($id);if(in_array($j['status'],['ready','imported'],true))throw new RuntimeException('This download is already complete.');$dir=self::root().'/'.$id;if(!is_dir($dir))@mkdir($dir,0700,true);file_put_contents($dir.'/cancel','1');$j['status']='cancelled';self::save($j);return ['ok'=>true];}
+    public static function cancel(string $id): array {$j=self::job($id);if(in_array($j['status'],['ready','imported'],true))throw new RuntimeException('This download is already complete.');$dir=self::root().'/'.$id;if(!is_dir($dir))@mkdir($dir,0700,true);file_put_contents($dir.'/cancel','1');$j['status']='cancelled';$j['stage']='Cancellation requested';$j['updated']=date('c');self::save($j);return ['ok'=>true];}
+    public static function delete(string $id): array {
+        $j=self::job($id);$lock=@fopen(self::root().'/'.$id.'.lock','c');
+        if(!$lock||!flock($lock,LOCK_EX|LOCK_NB)){if(is_resource($lock))fclose($lock);throw new RuntimeException('Cancel the active download first, then delete it after it stops.');}
+        try{
+            if(in_array($j['status']??'', ['queued','downloading'],true))throw new RuntimeException('Cancel the active download first, then delete it after it stops.');
+            $dir=self::root().'/'.$id;
+            foreach(glob($dir.'/*')?:[] as $path)if(is_file($path)||is_link($path))@unlink($path);
+            @rmdir($dir);
+            $q=\Vaultcast\Database::connection()->prepare('DELETE FROM vaultcast_documents WHERE name=?');$q->execute(['stalker-offline:'.$id]);
+            return ['ok'=>true];
+        }finally{flock($lock,LOCK_UN);fclose($lock);}
+    }
     public static function downloadFile(string $id): void {
         $j=self::job($id);$path=self::root().'/'.$id.'/video.mkv';
         if(!in_array($j['status']??'', ['ready','imported'],true)||!is_file($path))throw new RuntimeException('The video is not ready to download. Open Downloads to see its status.');
@@ -145,14 +165,15 @@ final class StalkerOffline {
             $feed=iptv_feed_by_id(iptv_load(),$j['feed']);if(!$feed||empty($feed['enabled']))throw new RuntimeException('The saved provider connection is missing or disabled. Re-enable it in Live settings → IPTV & guide matching, then retry this download.');
             $dir=self::root().'/'.$id;if(!is_dir($dir)&&!@mkdir($dir,0700,true))throw new RuntimeException('Cannot create download folder.');
             if(is_file($dir.'/cancel'))throw new RuntimeException('Download cancelled. Partial media was preserved.');
-            $j['destination']=self::job($id)['destination']??'library';$j['status']='downloading';$j['updated']=date('c');self::save($j);
+            $j['destination']=self::job($id)['destination']??'library';$j['status']='downloading';$j['stage']='Resolving provider stream';$j['updated']=date('c');self::save($j);
             $url=stalker_vod_resolve($feed,$j['item_id'],$j['item']);
             $cookies=$dir.'/cookies';if(!@copy(stalker_cookie_path($feed),$cookies))throw new RuntimeException('Could not prepare provider download cookies.');@chmod($cookies,0600);
-            $feed['_downloadCookies']=$cookies;$source=$dir.'/source';self::fetch($url,$source,$feed);
+            $feed['_downloadCookies']=$cookies;$source=$dir.'/source';$j['stage']='Downloading from provider';$j['updated']=date('c');self::save($j);self::fetch($url,$source,$feed);
             $head=file_get_contents($source,false,null,0,16);
             $expectedDuration=0.0;
-            if(strpos(ltrim((string)$head),'#EXTM3U')===0){$source=self::playlist($url,$dir,$feed);preg_match_all('/#EXTINF:([0-9.]+)/',(string)file_get_contents($source),$durations);$expectedDuration=array_sum(array_map('floatval',$durations[1]));}
+            if(strpos(ltrim((string)$head),'#EXTM3U')===0){$j['stage']='Downloading stream segments';$j['updated']=date('c');self::save($j);$source=self::playlist($url,$dir,$feed);preg_match_all('/#EXTINF:([0-9.]+)/',(string)file_get_contents($source),$durations);$expectedDuration=array_sum(array_map('floatval',$durations[1]));}
             $dest=$dir.'/video.mkv';$part=$dir.'/video.part.mkv';
+            $j['stage']='Preparing offline video';$j['updated']=date('c');self::save($j);
             $arguments=[Remux::ffmpegBin(),'-nostdin','-y','-v','error','-protocol_whitelist','file,crypto,data'];
             if(pathinfo($source,PATHINFO_EXTENSION)==='m3u8')array_push($arguments,'-allowed_extensions','ALL');
             array_push($arguments,'-i',$source,'-map','0:v:0','-map','0:a?','-c','copy',$part);
@@ -162,12 +183,12 @@ final class StalkerOffline {
             do{$processState=proc_get_status($process);if(!$processState['running'])break;clearstatcache(true,$dir.'/cancel');if(time()>$deadline||is_file($dir.'/cancel')){proc_terminate($process);proc_close($process);throw new RuntimeException('Video preparation stopped. Downloaded media was preserved.');}usleep(100000);}while(true);
             $exit=$processState['exitcode'];proc_close($process);
             if($exit!==0)throw new RuntimeException('Video preparation failed. Downloaded media was preserved for retry.');
-            $probe=is_file($part)?Process::capture([MediaProbe::ffprobeBin(),'-v','error','-show_streams','-show_format','-of','json',$part],20):null;
+            $j['stage']='Checking the completed video';$j['updated']=date('c');self::save($j);$probe=is_file($part)?Process::capture([MediaProbe::ffprobeBin(),'-v','error','-show_streams','-show_format','-of','json',$part],20):null;
             $info=json_decode((string)$probe,true);$streams=$info['streams']??[];
             if($expectedDuration>0&&abs((float)($info['format']['duration']??0)-$expectedDuration)>max(5.0,$expectedDuration*0.001))throw new RuntimeException('The saved video is incomplete. Downloaded segments were preserved for retry.');
             if(!array_filter($streams,static function($s){return ($s['codec_type']??'')==='video';})||!@rename($part,$dest))throw new RuntimeException('The download could not be verified as a complete video. Partial files are kept for retry.');
-            $j['destination']=self::job($id)['destination']??'library';$j['status']='ready';$j['bytes']=filesize($dest);$j['updated']=date('c');unset($j['error']);self::save($j);@unlink(STREAM_SHM.'/ingest_count.json');return ['ok'=>true];
-        }catch(Throwable $e){$j['destination']=self::job($id)['destination']??'library';$j['status']=is_file(self::root().'/'.$id.'/cancel')?'cancelled':'failed';$j['error']=$j['status']==='cancelled'?'Cancelled. Partial downloads were preserved.':($e instanceof RuntimeException?$e->getMessage():'The download worker failed. Partial files were preserved.');self::save($j);return ['ok'=>false,'error'=>$j['error']];}
+            $j['destination']=self::job($id)['destination']??'library';$j['status']='ready';$j['stage']='Complete';$j['bytes']=filesize($dest);$j['updated']=date('c');unset($j['error']);self::save($j);@unlink(STREAM_SHM.'/ingest_count.json');return ['ok'=>true];
+        }catch(Throwable $e){$j['destination']=self::job($id)['destination']??'library';$j['status']=is_file(self::root().'/'.$id.'/cancel')?'cancelled':'failed';$j['stage']=$j['status']==='cancelled'?'Cancelled':'Stopped at: '.($j['stage']??'download');$j['error']=$j['status']==='cancelled'?'Cancelled. Partial downloads were preserved.':($e instanceof RuntimeException?$e->getMessage():'The download worker failed. Partial files were preserved.');$j['updated']=date('c');self::save($j);return ['ok'=>false,'error'=>$j['error']];}
         finally{if(is_resource($bandwidth)){flock($bandwidth,LOCK_UN);fclose($bandwidth);}flock($own,LOCK_UN);fclose($own);}
     }
     public static function torrents(): array {

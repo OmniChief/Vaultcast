@@ -126,7 +126,7 @@ final class StalkerVod {
         if($season===null&&preg_match('/\\b(?:season|saison|staffel)\\s*(\\d+)\\b/iu',(string)($row['name']??''),$m))$season=(int)$m[1];
         $seasonName=$season!==null?($season===0?'Specials':'Season '.$season):'Season unknown';
         $title=is_array($row['episode_titles']??null)?self::text($row['episode_titles'][$episode]??''):'';
-        return array_merge($metadata,['id'=>$kind.':'.$row['id'].':'.$episode,'name'=>($show['name']??$metadata['name']).' · '.$seasonName.' · '.($title?:'Episode '.$episode),'kind'=>'vod','playable'=>true,'season'=>$season,'seasonName'=>$seasonName,'seasonId'=>(string)$row['id'],'episode'=>$episode,'episodeTitle'=>$title,'showId'=>$show['showId']??$show['id']??'']);
+        return array_merge($metadata,['id'=>$kind.':'.$row['id'].':'.$episode,'name'=>($show['name']??$metadata['name']).' · '.$seasonName.' · '.($title?:'Episode '.$episode),'showName'=>(string)($show['name']??$metadata['name']),'kind'=>'vod','playable'=>true,'season'=>$season,'seasonName'=>$seasonName,'seasonId'=>(string)$row['id'],'episode'=>$episode,'episodeTitle'=>$title,'showId'=>$show['showId']??$show['id']??'']);
     }
     public static function children(array $feed,array $opts): array {
         $kind=(string)($opts['kind']??'series');$parent=(string)($opts['parent']??'');$page=max(1,(int)($opts['page']??1));$fp=self::fingerprint($feed,$kind);$pdo=self::pdo();
