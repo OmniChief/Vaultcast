@@ -773,14 +773,16 @@ window.VaultcastStalkerVod=function(host,options){
     if(fav.language&&categories.length){
       var bucket=categoryBuckets().find(function(c){return c.key===fav.folder;});
       var preferred=bucket?bucket.sources:((providerSelections[fav.folder]||{}).sources||[]);
-      categories.filter(function(c){return categoryLanguage(c.name)===fav.language&&enabled.some(function(f){return f.id===c.feed;});})
-        .sort(function(a,b){
-          function priority(c){return preferred.some(function(p){return p.feed===c.feed&&p.id===c.id;})?0:1;}
-          return priority(a)-priority(b);
-        })
-        // Bound lookups on providers with hundreds of language folders.
-        .slice(0,24)
-        .forEach(function(c){targets.push({feed:enabled.find(function(f){return f.id===c.feed;}),category:c.id});});
+      var languageCategories=categories.filter(function(c){return categoryLanguage(c.name)===fav.language&&enabled.some(function(f){return f.id===c.feed;});});
+      function isPreferred(c){return preferred.some(function(p){return p.feed===c.feed&&p.id===c.id;});}
+      languageCategories.filter(isPreferred).forEach(function(c){targets.push({feed:enabled.find(function(f){return f.id===c.feed;}),category:c.id});});
+      // Search each connection's full catalogue before walking unrelated folders.
+      // This catches a favourite that was visible in a merged results list but
+      // lives outside its saved folder or beyond that folder's first few pages.
+      enabled.forEach(function(feed){targets.push({feed:feed,category:''});});
+      languageCategories.filter(function(c){return !isPreferred(c);}).slice(0,24).forEach(function(c){
+        targets.push({feed:enabled.find(function(f){return f.id===c.feed;}),category:c.id});
+      });
     }
     // If categories are not available, preserve the existing name search behaviour.
     if(!targets.length)enabled.forEach(function(feed){targets.push({feed:feed,category:''});});
