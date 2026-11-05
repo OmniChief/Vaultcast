@@ -506,17 +506,21 @@ function stalker_check_media(array $feed,string $id,string $kind,string $profile
     $ua='Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 MAG250 stbapp ver: 4 rev: 1812 Mobile Safari/533.3';
     if($profile==='vlc')$ua='VLC/3.0.21 LibVLC/3.0.21';
     if($profile==='browser')$ua='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+    $browserRange=$profile==='browser';
     $probeJar='st'.bin2hex(random_bytes(16));stalker_media_cookies($feed,$probeJar,$url);$probeCookies=iptv_hls_jar_path($probeJar);
     try {
     for($hop=0;$hop<5;$hop++){
         $ips=stalker_public_addresses($url);$p=parse_url($url);$host=$p['host'];$port=$p['port']??($p['scheme']==='https'?443:80);$ip=strpos($ips[0],':')!==false?'['.$ips[0].']':$ips[0];
         $body='';$headers=[];$ch=curl_init($url);
-        curl_setopt_array($ch,[CURLOPT_HTTPGET=>true,CURLOPT_FOLLOWLOCATION=>false,CURLOPT_PROTOCOLS=>CURLPROTO_HTTP|CURLPROTO_HTTPS,CURLOPT_RESOLVE=>[$host.':'.$port.':'.$ip],CURLOPT_CONNECTTIMEOUT=>8,CURLOPT_TIMEOUT=>15,CURLOPT_USERAGENT=>$ua,CURLOPT_COOKIEFILE=>$probeCookies,CURLOPT_COOKIEJAR=>$probeCookies,CURLOPT_HTTPHEADER=>['Accept: */*'],
+        $mediaHeaders=['Accept: video/*, application/vnd.apple.mpegurl, application/x-mpegURL, */*;q=0.8'];
+        if($browserRange)$mediaHeaders[]='Range: bytes=0-8191';
+        curl_setopt_array($ch,[CURLOPT_HTTPGET=>true,CURLOPT_FOLLOWLOCATION=>false,CURLOPT_PROTOCOLS=>CURLPROTO_HTTP|CURLPROTO_HTTPS,CURLOPT_RESOLVE=>[$host.':'.$port.':'.$ip],CURLOPT_CONNECTTIMEOUT=>8,CURLOPT_TIMEOUT=>15,CURLOPT_USERAGENT=>$ua,CURLOPT_COOKIEFILE=>$probeCookies,CURLOPT_COOKIEJAR=>$probeCookies,CURLOPT_HTTPHEADER=>$mediaHeaders,
             CURLOPT_HEADERFUNCTION=>static function($h,$line)use(&$headers){if(preg_match('#^HTTP/#',$line))$headers=[];elseif(strpos($line,':')!==false){[$key,$value]=explode(':',$line,2);$headers[strtolower(trim($key))]=trim($value);}return strlen($line);},
             CURLOPT_WRITEFUNCTION=>static function($h,$chunk)use(&$body){$body.=substr($chunk,0,max(0,8192-strlen($body)));return strlen($body)>=8192?0:strlen($chunk);}]);
         if(in_array($profile,['stb','http1'],true))curl_setopt($ch,CURLOPT_REFERER,preg_replace('#/(?:server/load|portal)\.php$#','/c/',stalker_endpoint($feed)));
         if($profile!=='stb')curl_setopt($ch,CURLOPT_HTTP_VERSION,CURL_HTTP_VERSION_1_1);
         $ok=curl_exec($ch);$status=(int)curl_getinfo($ch,CURLINFO_HTTP_CODE);curl_close($ch);
+        if($status===458&&$browserRange){$browserRange=false;$hop--;continue;}
         if($status>=300&&$status<400&&!empty($headers['location'])){$url=iptv_hls_resolve_uri($url,$headers['location']);continue;}
         $type=strtolower(explode(';',$headers['content-type']??'unknown')[0]);
         $format=strpos(ltrim($body),'#EXTM3U')===0?'HLS playlist':((strlen($body)>188&&ord($body[0])===71&&ord($body[188])===71)?'MPEG-TS stream':(strpos($type,'video/')===0?'Video stream':(strpos($type,'html')!==false?'HTML page':'Unrecognised response')));
