@@ -446,12 +446,12 @@ function stalker_vod_entry(array $feed,string $id): ?array {
     return $item;
 }
 
-function stalker_vod_resolve(array $feed, string $id, ?array $item = null): string {
+function stalker_vod_resolve(array $feed, string $id, ?array $item = null, bool $download = false): string {
     $item=$item ?? stalker_vod_entry($feed,$id);
     if (!$item) throw new RuntimeException('This catalogue entry has expired. Refresh the Stalker page and select it again.');
     $command=(string)($item['cmd']??'');
     if($command==='')throw new RuntimeException('The selected provider title has no playback command. Refresh the provider page.');
-    $params=['cmd'=>$command,'series'=>(string)($item['series']??''),'forced_storage'=>'undefined','disable_ad'=>0,'download'=>0];
+    $params=['cmd'=>$command,'series'=>(string)($item['series']??''),'forced_storage'=>'undefined','disable_ad'=>0,'download'=>$download?1:0];
     $link='';
     try {
         $result=stalker_call($feed,'create_link',$params,'vod');
