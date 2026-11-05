@@ -2,7 +2,7 @@
 'use strict';
 window.VaultcastStalkerVod=function(host,options){
   var genreFilter='',genreSelect=null,languageSelect=null,providerSelect=null,providerFilter='',searchMode='title',sortOrder='provider',minRating='',yearFilter='',scanCursor=0,scanQuery=null;
-  var h=options.h,active=false,kind='vod',serial=0,timer=null,letter='#',query='',feeds=[],progress={},titles=[],seen={},loading=false;
+  var h=options.h,active=false,kind='vod',serial=0,timer=null,letter='#',query='',feeds=[],progress={},titles=[],seen={},seenSourceItems={},loading=false;
   var status,results,next,search,letters,exportButton,groupExportButton,fieldProbeButton,liveProbeButton,epgProbeButton,groups,group='',categories=[],category='',groupsLoading=false,titlesStarted=false,categoryStatus=null,scopeActions=null,prefixGroups=null,showMoreCategories=false,searchAllMode=false,showFolderBrowser=true,language='UK',tasks=[],providerSelections={},preferredTileKeys={};
   // English is the initial scope; remember explicit selections per user/browser.
   var languagePreferenceKey='stalker-vod-language-'+options.owner;
@@ -179,7 +179,7 @@ window.VaultcastStalkerVod=function(host,options){
     renderCategories();renderResults();
   }
   function reset(){
-    serial++;scanCursor=0;scanQuery=null;progress={};tasks=[];titles=[];seen={};loading=false;group='';titlesStarted=false;
+    serial++;scanCursor=0;scanQuery=null;progress={};tasks=[];titles=[];seen={};seenSourceItems={};loading=false;group='';titlesStarted=false;
     feeds=options.connections.filter(function(f){return f.enabled;});
     feeds.forEach(function(f){progress[f.id]={page:1,done:false,failed:false};});
     renderResults();
@@ -857,6 +857,8 @@ window.VaultcastStalkerVod=function(host,options){
   function add(rows,feed){
     (rows||[]).forEach(function(item){
       if(!item||!item.name||!item.id)return;
+      var sourceItemKey=String(feed.id)+'|'+String(item.id),prior=seenSourceItems[sourceItemKey];
+      if(prior){['poster','description','actors','cast','director','age','rating_mpaa','genres_str','genre','duration','time','rating_imdb','audio_languages','subtitle_languages'].forEach(function(field){if(!prior[field]&&item[field])prior[field]=item[field];});return;}
       var source={id:item.id,feed:feed.id,connection:feed.name,kind:item.kind,playable:item.playable,labels:prefixParts(item).labels,poster:item.poster||'',posterCandidates:Array.isArray(item.posterCandidates)?item.posterCandidates:[]};
       var part=numberedPart(item);
       var k=part?'numbered|'+feed.id+'|'+part.key:key(item),group=seen[k];
@@ -864,6 +866,7 @@ window.VaultcastStalkerVod=function(host,options){
       if(!part&&!year(item))k+='|'+feed.id;
       group=seen[k];
       if(!group){group=Object.assign({},item,{sources:[],groupLabels:[]});if(part){group.name=part.name;group.numberedParts=[];}seen[k]=group;titles.push(group);}
+      seenSourceItems[sourceItemKey]=group;
       // Enrich an already matched title without changing its identity or position.
       ['poster','description','actors','cast','director','age','rating_mpaa','genres_str','genre','duration','time','rating_imdb','audio_languages','subtitle_languages'].forEach(function(field){if(!group[field]&&item[field])group[field]=item[field];});
       if(part&&!group.numberedParts.some(function(p){return p.feed===feed.id&&p.id===item.id;}))group.numberedParts.push({number:part.number,name:item.name,id:item.id,feed:feed.id,connection:feed.name,item:item});
@@ -946,10 +949,11 @@ window.VaultcastStalkerVod=function(host,options){
         ])
       ]));
     });
-    if(!ordered.length)results.appendChild(h('p',{className:'muted',text:titlesStarted?'No matching titles in loaded pages. Load more to continue.':'Search to browse titles.'}));
+    var unfinished=tasks.some(function(t){return progress[t.key]&&!progress[t.key].done;});
+    if(!ordered.length)results.appendChild(h('p',{className:'muted',text:titlesStarted?(unfinished?'No matches in the pages received yet. Catalogue loading continues…':'No matching titles found.'):'Search to browse titles.'}));
     var done=tasks.filter(function(t){return progress[t.key]&&progress[t.key].done;}).length;
     var failed=tasks.filter(function(t){return progress[t.key]&&progress[t.key].failed;}).length;
-    status.textContent=ordered.length+' titles in '+(searchAllMode?(language?(language==='UK'?'English':language)+' folders':'All languages'):(group||'Selected folder'))+' (loaded so far'+(searchMode==='actor'?' · matching available cast':searchMode==='director'?' · matching available directors':'')+') · '+done+'/'+tasks.length+' sources finished'+(failed?' · '+failed+' unavailable':'');
+    status.textContent=ordered.length+' matching titles in '+(searchAllMode?(language?(language==='UK'?'English':language)+' folders':'All languages'):(group||'Selected folder'))+(unfinished?' so far · loading the full catalogue':'')+(searchMode==='actor'?' · matching available cast':searchMode==='director'?' · matching available directors':'')+' · '+done+'/'+tasks.length+' sources finished'+(failed?' · '+failed+' unavailable':'');
     next.hidden=!titlesStarted||!tasks.some(function(t){return progress[t.key]&&!progress[t.key].done;});
     next.disabled=loading;
   }
@@ -976,7 +980,7 @@ window.VaultcastStalkerVod=function(host,options){
       var queues=scopedFeeds.map(function(feed){return tasks.filter(function(t){return t.feed.id===feed.id;});}),interleaved=[];
       while(queues.some(function(queue){return queue.length;}))queues.forEach(function(queue){if(queue.length)interleaved.push(queue.shift());});
       tasks=interleaved;
-      tasks.forEach(function(t){progress[t.key]={page:1,done:false,failed:false};});
+      tasks.forEach(function(t){progress[t.key]={page:1,done:false,failed:false,pageSignatures:{},seenIds:{}};});
     }
     loading=true;var token=++serial;
     var pending=tasks.slice(scanCursor).concat(tasks.slice(0,scanCursor)).filter(function(t){return progress[t.key]&&!progress[t.key].done;}).slice(0,12);
@@ -985,8 +989,8 @@ window.VaultcastStalkerVod=function(host,options){
       if(!valid(token))return;
       if(index>=pending.length){
         loading=false;renderResults();
-        if(query.trim()&&tasks.some(function(t){return progress[t.key]&&!progress[t.key].done;})){
-          status.textContent+=' · Searching all providers…';
+        if(tasks.some(function(t){return progress[t.key]&&!progress[t.key].done;})){
+          status.textContent+=' · Loading remaining catalogue pages…';
           timer=setTimeout(function(){if(valid(token))scan(false);},500);
         }
         return;
@@ -999,8 +1003,13 @@ window.VaultcastStalkerVod=function(host,options){
       options.api('stalker_vod_catalogue',params.toString()).then(function(result){
         if(!valid(token))return;
         if(!result||!result.ok)throw Error(result&&result.error||'Portal unavailable');
-        var signature=(result.items||[]).map(function(item){return item.id;}).join('|');
-        add(result.items,task.feed);p.page++;p.done=!result.hasMore||p.page>10000||signature===p.signature;p.signature=signature;
+        var rows=(result.items||[]),ids=rows.map(function(item){return String(item&&item.id||'');}).filter(Boolean),signature=ids.length+':'+ids.reduce(function(hash,id){for(var n=0;n<id.length;n++)hash=Math.imul(hash^id.charCodeAt(n),16777619)>>>0;return Math.imul(hash^124,16777619)>>>0;},2166136261).toString(36);
+        p.pageSignatures=p.pageSignatures||{};p.seenIds=p.seenIds||{};
+        if(!ids.length||p.pageSignatures[signature]){p.done=true;return;}
+        p.pageSignatures[signature]=true;
+        var fresh=rows.filter(function(item){var id=String(item&&item.id||'');if(!id||p.seenIds[id])return false;p.seenIds[id]=true;return true;});
+        if(!fresh.length){p.done=true;return;}
+        add(fresh,task.feed);p.page++;p.done=!result.hasMore||p.page>10000;
         if(p.done){index++;attempts=0;}
       }).catch(function(){if(valid(token)){p.done=true;p.failed=true;index++;attempts=0;}})
         .then(function(){if(valid(token)){renderResults();step();}});
@@ -1018,7 +1027,8 @@ window.VaultcastStalkerVod=function(host,options){
     stop();active=true;serial++;feeds=options.connections.filter(function(f){return f.enabled;});
     if(typeof saved.language==='string')language=saved.language;
     category=saved.category||'';query=saved.query||'';genreFilter=saved.genreFilter||'';providerFilter=saved.providerFilter||'';scanCursor=saved.scanCursor||0;scanQuery=saved.scanQuery===undefined?(saved.query||''):saved.scanQuery;searchMode=saved.searchMode||'title';sortOrder=saved.sortOrder||'provider';minRating=saved.minRating||'';yearFilter=saved.yearFilter||'';searchAllMode=!!saved.searchAllMode;showFolderBrowser=!(category||searchAllMode);
-    titles=(saved.titles||[]).slice();categories=(saved.categories||[]).slice();progress=saved.progress||{};
+    titles=(saved.titles||[]).slice();categories=(saved.categories||[]).slice();progress=saved.progress||{};Object.keys(progress).forEach(function(key){var p=progress[key];p.pageSignatures=p.pageSignatures||{};p.seenIds=p.seenIds||{};});
+    seenSourceItems={};titles.forEach(function(item){(item.sources||[]).forEach(function(source){seenSourceItems[String(source.feed)+'|'+String(source.id)]=item;});(item.numberedParts||[]).forEach(function(part){seenSourceItems[String(part.feed)+'|'+String(part.id)]=item;});});
     tasks=(saved.tasks||[]).map(function(t){return {key:t.key,feed:feeds.find(function(f){return f.id===t.feedId;}),category:t.category};}).filter(function(t){return !!t.feed;});
     titlesStarted=!!saved.titlesStarted;seen={};loading=false;groupsLoading=false;
     render();search.value=query;renderCategories();renderResults();
