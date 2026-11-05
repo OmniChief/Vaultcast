@@ -524,20 +524,41 @@ window.VaultcastStalkerVod=function(host,options){
     var code=m?m[1]:'';
     var known={EN:'UK',US:'UK',UK:'UK',GB:'UK',IR:'Iran',FR:'French',IT:'Italian',DE:'German',ES:'Spanish',NL:'Dutch',PT:'Portuguese',TR:'Turkish',AR:'Arabic',AF:'African'};
     if(code)return known[code]||code;
+    var prefix=n.match(/^\s*(FR|DE|IT|ES|NL|PT|TR|BG|PL|RO|CZ|SK|HU|GR|DK|NO|SE|FI)\s*[-:]/),prefixLanguages={FR:'French',DE:'German',IT:'Italian',ES:'Spanish',NL:'Dutch',PT:'Portuguese',TR:'Turkish',BG:'Slavic',PL:'Slavic',RO:'Romanian',CZ:'Slavic',SK:'Slavic',HU:'Hungarian',GR:'Greek',DK:'Scandinavian',NO:'Scandinavian',SE:'Scandinavian',FI:'Finnish'};
+    if(prefix)return prefixLanguages[prefix[1]];
+    if(/\b(?:BANGLA|BENGALI)\b/.test(n))return 'Bengali';
+    if(/\bGUJARATI\b/.test(n))return 'Gujarati';
+    if(/\bHINDI\b/.test(n))return 'Hindi';
+    if(/\bKANNADA\b/.test(n))return 'Kannada';
+    if(/\bMALAYALAM\b/.test(n))return 'Malayalam';
+    if(/\bMARATHI\b/.test(n))return 'Marathi';
+    if(/\b(?:ODIA|ORIYA)\b/.test(n))return 'Odia';
+    if(/\bPUNJABI\b/.test(n))return 'Punjabi';
+    if(/\bTAMIL\b/.test(n))return 'Tamil';
+    if(/\bTELUGU\b/.test(n))return 'Telugu';
+    if(/\bURDU\b/.test(n))return 'Urdu';
+    if(/\b(?:SERBIAN|CROATIAN|BOSNIAN|EXYU)\b/.test(n))return 'Serbian/Croatian/Bosnian';
+    if(/\b(?:MULTI\s*\/\s*LINGO|MULTILINGUAL|MULTISUB|MULTI LANGUAGE)\b/.test(n))return 'Multi-language';
+    if(/\bASIA(?:N)?\b/.test(n))return 'Asian';
+    if(/\b(?:PERSIAN|FARSI|IRANIAN)\b/.test(n))return 'Persian';
     if(/\bIRAN\b/.test(n))return 'Iran';
     if(/[\u0600-\u06ff]/.test(n))return 'Arabic';
-    if(/\bMULTISUB\b/.test(n))return 'UK';
+    if(/[\u0370-\u03ff]/.test(n)||/\bGREEK\b/.test(n))return 'Greek';
+    if(/[\u0400-\u04ff]/.test(n)||/\b(?:RUSSIAN|UKRAINIAN|BULGARIAN)\b/.test(n))return 'Slavic';
     if(/\bFRENCH\b/.test(n))return 'French';
     if(/\bITAL(?:Y|IAN)\b/.test(n))return 'Italian';
     if(/\bGERMAN(?:Y)?\b/.test(n))return 'German';
     if(/\bSPANISH\b/.test(n))return 'Spanish';
+    if(/\bDUTCH\b/.test(n))return 'Dutch';
+    if(/\bPORTUGUESE\b/.test(n))return 'Portuguese';
+    if(/\bTURK(?:ISH)?\b/.test(n))return 'Turkish';
     if(/\bAFRICAN\b/.test(n))return 'African';
     return 'UK';
   }
   function categoryName(name){
     return String(name||'').normalize('NFKC').replace(/\u00a0/g,' ')
       .replace(/^\s*(?:VOD|MOVIES|SERIES)\s*[-:|]\s*/i,'')
-      .replace(/^\s*[|┃│¦]\s*[A-Z]{2,3}\s*[|┃│¦]\s*/i,'')
+      .replace(/^\s*[|┃│¦]\s*(?:[A-Z]{2,3}|ASIA|EXYU|PAKISTAN|MULTI\s*\/\s*LINGO)\s*[|┃│¦]\s*/i,'')
       .replace(/\s*\[\s*(?:[A-Z]{2,3}|MULTISUB)\s*\]\s*/gi,' ')
       .replace(/\s*[|┃│¦]\s*[A-Z]{2,3}\s*[|┃│¦]\s*/gi,' ')
       .replace(/\s*[-|]\s*$/,'').replace(/\s+/g,' ').trim()||String(name||'');
@@ -610,17 +631,25 @@ window.VaultcastStalkerVod=function(host,options){
       categoryStatus.appendChild(allButton);return;
     }
     var providerCount=feeds.length;
-    var folders=categoryBuckets().filter(function(bucket){return !language||bucket.language===language;})
-      .sort(function(a,b){return a.name.localeCompare(b.name,undefined,{sensitivity:'base'});});
-    categoryStatus.appendChild(h('div',{className:'stalker-vod-folder-heading'},[h('h2',{text:'All provider folders · '+providerCount+' providers'})]));
+    var folders=categoryBuckets().filter(function(bucket){return !language||bucket.language===language;});
+    var folderGroups={};
+    folders.forEach(function(bucket){(folderGroups[bucket.language]||(folderGroups[bucket.language]=[])).push(bucket);});
+    var languages=Object.keys(folderGroups).sort(function(a,b){return a==='UK'?-1:b==='UK'?1:a.localeCompare(b,undefined,{sensitivity:'base'});});
+    categoryStatus.appendChild(h('div',{className:'stalker-vod-folder-heading'},[h('h2',{text:'Folders from '+providerCount+' providers'})]));
     if(!folders.length){categoryStatus.appendChild(h('p',{className:'muted',text:'No folders match this language.'}));return;}
-    var folderGrid=h('div',{className:'stalker-vod-provider-grid'});
-    folders.forEach(function(bucket){
-      var sourceCount=new Set(bucket.sources.map(function(source){return String(source.feed);})).size;
-      var label=sourceCount+' '+(sourceCount===1?'provider':'providers');
-      folderGrid.appendChild(h('button',{className:'btn stalker-vod-folder-tile',type:'button','aria-label':'Open '+bucket.name+', available from '+label,text:bucket.name+' · '+label,onClick:function(){providerFolderId='';beginBrowse(bucket.key);}}));
+    var sections=h('div',{className:'stalker-vod-provider-browser'});
+    languages.forEach(function(lang){
+      var groupFolders=folderGroups[lang].sort(function(a,b){return a.name.localeCompare(b.name,undefined,{sensitivity:'base'});});
+      var section=h('section',{className:'stalker-vod-provider-section'},[h('h2',{text:lang==='UK'?'English':lang})]);
+      var folderGrid=h('div',{className:'stalker-vod-provider-grid'});
+      groupFolders.forEach(function(bucket){
+        var sourceCount=new Set(bucket.sources.map(function(source){return String(source.feed);})).size;
+        var label=sourceCount+' '+(sourceCount===1?'provider':'providers');
+        folderGrid.appendChild(h('button',{className:'btn stalker-vod-folder-tile',type:'button','aria-label':'Open '+bucket.name+', available from '+label,text:bucket.name+' · '+label,onClick:function(){providerFolderId='';beginBrowse(bucket.key);}}));
+      });
+      section.appendChild(folderGrid);sections.appendChild(section);
     });
-    categoryStatus.appendChild(folderGrid);
+    categoryStatus.appendChild(sections);
   }
   // Store stable title/year identities, never temporary provider IDs.
   function favouriteKey(){return 'stalker-vod-favourites-v2-'+options.owner;}
