@@ -562,6 +562,7 @@ window.VaultcastStalkerVod=function(host,options){
     if(/\bPORTUGUESE\b/.test(n))return 'Portuguese';
     if(/\bTURK(?:ISH)?\b/.test(n))return 'Turkish';
     if(/\bAFRICAN\b/.test(n))return 'African';
+    if(/\b(?:ACTION|ADULT|ADVENTURE|ANIME|BOXING|CHRISTMAS|COLLECTIONS?|COMEDY|CONCERTS?|CRIME|DOCUMENTAR(?:Y|IES)|DRAMA|FAMILY|FANTASY|HISTORY|HORROR|KIDS?|MANGA|MUSICAL|MUSIC|NEW RELEASES?|ROMANCE|SCIENCE FICTION|SPORTS?|THRILLER|WAR|WESTERN|WORKOUT|MOVIES|FILMS|TOP \d+|IMDB|NEW ADDED|NEW RELEASED)\b/.test(n))return 'UK';
     if(/\bENGLISH\b/.test(n)||/^\s*EN\s*[-:]/.test(n)||/\b(?:BBC|ITV|STV|UTV|CNN|SKY|CHANNEL\s*[45]|MY5)\b/.test(n))return 'UK';
     return 'Other / unspecified';
   }
