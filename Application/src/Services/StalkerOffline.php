@@ -4,7 +4,9 @@ declare(strict_types=1);
 final class StalkerOffline {
     private static function root(): string { $p=STREAM_DATA.'/stalker-offline';if(!is_dir($p)&&!@mkdir($p,0700,true))throw new RuntimeException('Cannot create offline storage.');return $p; }
     private static function job(string $id): array {if(!preg_match('/^[a-f0-9]{24}$/D',$id))throw new InvalidArgumentException('Invalid offline download.');$j=\Vaultcast\Repository::document('stalker-offline:'.$id,[]);if(!$j)throw new RuntimeException('Offline download not found.');return $j;}
-    private static function save(array $j): void {\Vaultcast\Repository::putDocument('stalker-offline:'.$j['id'],$j);}
+    private static function save(array $j): void {if(is_file(self::root().'/'.$j['id'].'.delete'))return;\Vaultcast\Repository::putDocument('stalker-offline:'.$j['id'],$j);}
+    private static function purgeDeletedFiles(string $id): void {$dir=self::root().'/'.$id;foreach(glob($dir.'/*')?:[] as $path)if(is_file($path)||is_link($path))@unlink($path);@rmdir($dir);$q=\Vaultcast\Database::connection()->prepare('DELETE FROM vaultcast_documents WHERE name=?');$q->execute(['stalker-offline:'.$id]);@unlink(self::root().'/'.$id.'.delete');}
+    private static function purgeIfUnlocked(string $id): void {$lock=@fopen(self::root().'/'.$id.'.lock','c');if($lock&&flock($lock,LOCK_EX|LOCK_NB)){if(is_file(self::root().'/'.$id.'.delete'))self::purgeDeletedFiles($id);flock($lock,LOCK_UN);}if(is_resource($lock))fclose($lock);}
     public static function listing(): array {
         $rows=\Vaultcast\Repository::rows("SELECT payload FROM vaultcast_documents WHERE name LIKE 'stalker-offline:%'");
         foreach($rows as &$row){
@@ -83,9 +85,10 @@ final class StalkerOffline {
         if(!$locked){
             if(is_resource($lock))fclose($lock);
             if(($j['status']??'')==='cancelled'){
-                $dir=self::root().'/'.$id;if(!is_dir($dir))@mkdir($dir,0700,true);@file_put_contents($dir.'/delete-after-stop','1');
-                $j['delete_requested']=true;$j['stage']='Deleting after cancellation';$j['updated']=date('c');self::save($j);
-                return ['ok'=>true,'pending'=>true];
+                $marker=self::root().'/'.$id.'.delete';@file_put_contents($marker,'1');
+                $q=\Vaultcast\Database::connection()->prepare('DELETE FROM vaultcast_documents WHERE name=?');$q->execute(['stalker-offline:'.$id]);
+                self::purgeIfUnlocked($id);
+                return ['ok'=>true];
             }
             throw new RuntimeException('The download is still stopping. Wait a few seconds, then delete it again.');
         }
@@ -97,7 +100,7 @@ final class StalkerOffline {
             @rmdir($dir);
             $q=\Vaultcast\Database::connection()->prepare('DELETE FROM vaultcast_documents WHERE name=?');$q->execute(['stalker-offline:'.$id]);
             return ['ok'=>true];
-        }finally{flock($lock,LOCK_UN);fclose($lock);}
+        }finally{flock($lock,LOCK_UN);fclose($lock);self::purgeIfUnlocked($id);}
     }
     public static function downloadFile(string $id): void {
         $j=self::job($id);$path=self::root().'/'.$id.'/video.mkv';
@@ -238,8 +241,8 @@ final class StalkerOffline {
             if($expectedDuration>0&&abs((float)($info['format']['duration']??0)-$expectedDuration)>max(5.0,$expectedDuration*0.001))throw new RuntimeException('The saved video is incomplete. Downloaded segments were preserved for retry.');
             if(!array_filter($streams,static function($s){return ($s['codec_type']??'')==='video';})||!@rename($part,$dest))throw new RuntimeException('The download could not be verified as a complete video. Partial files are kept for retry.');
             $j['destination']=self::job($id)['destination']??'library';$j['status']='ready';$j['stage']='Complete';$j['bytes']=filesize($dest);$j['updated']=date('c');unset($j['error']);self::save($j);@unlink(STREAM_SHM.'/ingest_count.json');return ['ok'=>true];
-        }catch(Throwable $e){$j['destination']=self::job($id)['destination']??'library';$j['status']=is_file(self::root().'/'.$id.'/cancel')?'cancelled':'failed';$j['stage']=$j['status']==='cancelled'?'Cancelled':'Stopped at: '.($j['stage']??'download');$j['error']=$j['status']==='cancelled'?'Cancelled. Partial downloads were preserved.':($e instanceof RuntimeException?$e->getMessage():'The download worker failed. Partial files were preserved.');if(is_file(self::root().'/'.$id.'/delete-after-stop')){$j['delete_requested']=true;$j['stage']='Deleting after cancellation';} $j['updated']=date('c');self::save($j);return ['ok'=>false,'error'=>$j['error']];}
-        finally{if(is_resource($bandwidth)){flock($bandwidth,LOCK_UN);fclose($bandwidth);}flock($own,LOCK_UN);fclose($own);if(is_file(self::root().'/'.$id.'/delete-after-stop'))try{self::delete($id);}catch(Throwable $ignored){}}
+        }catch(Throwable $e){if(is_file(self::root().'/'.$id.'.delete'))return ['ok'=>false,'deleted'=>true];$j['destination']=self::job($id)['destination']??'library';$j['status']=is_file(self::root().'/'.$id.'/cancel')?'cancelled':'failed';$j['stage']=$j['status']==='cancelled'?'Cancelled':'Stopped at: '.($j['stage']??'download');$j['error']=$j['status']==='cancelled'?'Cancelled. Partial downloads were preserved.':($e instanceof RuntimeException?$e->getMessage():'The download worker failed. Partial files were preserved.');$j['updated']=date('c');self::save($j);return ['ok'=>false,'error'=>$j['error']];}
+        finally{if(is_resource($bandwidth)){flock($bandwidth,LOCK_UN);fclose($bandwidth);}flock($own,LOCK_UN);fclose($own);self::purgeIfUnlocked($id);}
     }
     public static function torrents(): array {
         $rows=\Vaultcast\Repository::rows("SELECT payload FROM vaultcast_documents WHERE name LIKE 'stalker-offline:%'");$out=[];
