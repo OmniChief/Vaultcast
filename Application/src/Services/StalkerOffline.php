@@ -74,9 +74,11 @@ final class StalkerOffline {
     }
     public static function cancel(string $id): array {$j=self::job($id);if(in_array($j['status'],['ready','imported'],true))throw new RuntimeException('This download is already complete.');$dir=self::root().'/'.$id;if(!is_dir($dir))@mkdir($dir,0700,true);file_put_contents($dir.'/cancel','1');$j['status']='cancelled';$j['stage']='Cancellation requested';$j['updated']=date('c');self::save($j);return ['ok'=>true];}
     public static function delete(string $id): array {
-        $j=self::job($id);$lock=@fopen(self::root().'/'.$id.'.lock','c');
-        if(!$lock||!flock($lock,LOCK_EX|LOCK_NB)){if(is_resource($lock))fclose($lock);throw new RuntimeException('Cancel the active download first, then delete it after it stops.');}
+        $j=self::job($id);$lock=@fopen(self::root().'/'.$id.'.lock','c');$locked=false;
+        if($lock){$deadline=microtime(true)+8;do{$locked=flock($lock,LOCK_EX|LOCK_NB);if($locked)break;if(!in_array($j['status']??'', ['cancelled','failed'],true))break;usleep(200000);}while(microtime(true)<$deadline);}
+        if(!$locked){if(is_resource($lock))fclose($lock);throw new RuntimeException('The download is still stopping. Wait a few seconds, then delete it again.');}
         try{
+            $j=self::job($id);
             if(in_array($j['status']??'', ['queued','downloading'],true))throw new RuntimeException('Cancel the active download first, then delete it after it stops.');
             $dir=self::root().'/'.$id;
             foreach(glob($dir.'/*')?:[] as $path)if(is_file($path)||is_link($path))@unlink($path);
@@ -184,7 +186,9 @@ final class StalkerOffline {
         $j=self::job($id);$own=fopen(self::root().'/'.$id.'.lock','c');if(!$own||!flock($own,LOCK_EX|LOCK_NB))return ['ok'=>true,'busy'=>true];
         $bandwidth=fopen(self::root().'/download.lock','c');
         try{
-            if(!$bandwidth||!flock($bandwidth,LOCK_EX))throw new RuntimeException('Download queue lock unavailable.');
+            if(!$bandwidth)throw new RuntimeException('Download queue lock unavailable.');
+            while(!flock($bandwidth,LOCK_EX|LOCK_NB)){if(is_file(self::root().'/'.$id.'/cancel'))throw new RuntimeException('Download cancelled. Partial media was preserved.');usleep(250000);}
+            if(is_file(self::root().'/'.$id.'/cancel'))throw new RuntimeException('Download cancelled. Partial media was preserved.');
             $j=self::job($id);if(in_array($j['status'],['ready','imported'],true))return ['ok'=>true];
             $features=Store::settings()['features']??[];if(empty($features['live'])||empty($features['downloads']))throw new RuntimeException('Live or downloads have been disabled.');
             $feed=iptv_feed_by_id(iptv_load(),$j['feed']);if(!$feed||empty($feed['enabled']))throw new RuntimeException('The saved provider connection is missing or disabled. Re-enable it in Live settings → IPTV & guide matching, then retry this download.');
