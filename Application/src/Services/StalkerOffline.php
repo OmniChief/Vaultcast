@@ -244,7 +244,11 @@ final class StalkerOffline {
             }
             if($url==='')$url=stalker_vod_resolve($feed,$j['item_id'],$j['item']);
             $cookies=$dir.'/cookies';$cookieSource=$playbackCookies!==''&&is_file($playbackCookies)?$playbackCookies:stalker_cookie_path($feed);if(!@copy($cookieSource,$cookies))throw new RuntimeException('Could not prepare provider download cookies.');@chmod($cookies,0600);
-            $feed['_downloadCookies']=$cookies;$source=$dir.'/source';$j['stage']='Downloading from provider';$j['updated']=date('c');self::save($j);self::fetch($url,$source,$feed,21474836480,false,true);
+            $feed['_downloadCookies']=$cookies;$source=$dir.'/source';$j['stage']='Downloading from provider';$j['updated']=date('c');self::save($j);
+            // Start with a plain GET. Some Stalker media gateways stall when
+            // the initial request includes Range: bytes=0-. Content-Length
+            // still supplies progress; retries can use Range to resume partials.
+            self::fetch($url,$source,$feed,21474836480,false,false);
             $head=file_get_contents($source,false,null,0,16);
             $expectedDuration=0.0;
             if(strpos(ltrim((string)$head),'#EXTM3U')===0){$j['is_hls']=true;$j['stage']='Downloading stream segments';$j['updated']=date('c');self::save($j);$source=self::playlist($url,$dir,$feed,0,$id);preg_match_all('/#EXTINF:([0-9.]+)/',(string)file_get_contents($source),$durations);$expectedDuration=array_sum(array_map('floatval',$durations[1]));}
