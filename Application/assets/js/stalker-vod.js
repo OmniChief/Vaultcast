@@ -950,10 +950,10 @@ window.VaultcastStalkerVod=function(host,options){
       ]));
     });
     var unfinished=tasks.some(function(t){return progress[t.key]&&!progress[t.key].done;});
-    if(!ordered.length)results.appendChild(h('p',{className:'muted',text:titlesStarted?(unfinished?'No matches in the pages received yet. Catalogue loading continues…':'No matching titles found.'):'Search to browse titles.'}));
+    if(!ordered.length)results.appendChild(h('p',{className:'muted',text:titlesStarted?(unfinished?(loading?'No matches in the pages received yet. Catalogue loading…':'No matches in the pages loaded yet. Load more to continue.'):'No matching titles found.'):'Search to browse titles.'}));
     var done=tasks.filter(function(t){return progress[t.key]&&progress[t.key].done;}).length;
     var failed=tasks.filter(function(t){return progress[t.key]&&progress[t.key].failed;}).length;
-    status.textContent=ordered.length+' matching titles in '+(searchAllMode?(language?(language==='UK'?'English':language)+' folders':'All languages'):(group||'Selected folder'))+(unfinished?' so far · loading the full catalogue':'')+(searchMode==='actor'?' · matching available cast':searchMode==='director'?' · matching available directors':'')+' · '+done+'/'+tasks.length+' sources finished'+(failed?' · '+failed+' unavailable':'');
+    status.textContent=ordered.length+' matching titles in '+(searchAllMode?(language?(language==='UK'?'English':language)+' folders':'All languages'):(group||'Selected folder'))+(unfinished?(loading?' so far · loading catalogue':' so far · more pages available'):'')+(searchMode==='actor'?' · matching available cast':searchMode==='director'?' · matching available directors':'')+' · '+done+'/'+tasks.length+' sources finished'+(failed?' · '+failed+' unavailable':'');
     next.hidden=!titlesStarted||!tasks.some(function(t){return progress[t.key]&&!progress[t.key].done;});
     next.disabled=loading;
   }
@@ -989,8 +989,8 @@ window.VaultcastStalkerVod=function(host,options){
       if(!valid(token))return;
       if(index>=pending.length){
         loading=false;renderResults();
-        if(tasks.some(function(t){return progress[t.key]&&!progress[t.key].done;})){
-          status.textContent+=' · Loading remaining catalogue pages…';
+        if(query.trim()&&tasks.some(function(t){return progress[t.key]&&!progress[t.key].done;})){
+          status.textContent+=' · Searching all providers…';
           timer=setTimeout(function(){if(valid(token))scan(false);},500);
         }
         return;
