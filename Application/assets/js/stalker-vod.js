@@ -1,7 +1,7 @@
 (function(){
 'use strict';
 window.VaultcastStalkerVod=function(host,options){
-  var genreFilter='',genreSelect=null,languageSelect=null,providerFolderId='',searchMode='title',sortOrder='provider',minRating='',yearFilter='',scanCursor=0,scanQuery=null;
+  var genreFilter='',genreSelect=null,languageSelect=null,providerFolderId='',searchMode='title',sortOrder='provider',fullSortRequested=false,minRating='',yearFilter='',scanCursor=0,scanQuery=null;
   var h=options.h,active=false,kind='vod',serial=0,timer=null,letter='#',query='',feeds=[],progress={},titles=[],seen={},seenSourceItems={},loading=false;
   var status,results,next,search,letters,exportButton,groupExportButton,fieldProbeButton,liveProbeButton,epgProbeButton,groups,group='',categories=[],category='',groupsLoading=false,titlesStarted=false,categoryStatus=null,scopeActions=null,prefixGroups=null,showMoreCategories=false,searchAllMode=false,showFolderBrowser=true,language='UK',tasks=[],providerSelections={},preferredTileKeys={},visibleLimit=48;
   // English is the initial scope; remember explicit selections per user/browser.
@@ -161,7 +161,7 @@ window.VaultcastStalkerVod=function(host,options){
     if(!needle)return true;
     return foldedSearchText(text,false).includes(needle)||foldedSearchText(text,true).includes(foldedSearchText(query,true));
   }
-  function shouldScanAllPages(){return !!(genreFilter||providerFolderId||minRating||yearFilter||sortOrder!=='provider');}
+  function shouldScanAllPages(){return !!(genreFilter||providerFolderId||minRating||yearFilter||fullSortRequested);}
   function applyCatalogueFilterChange(){
     if(!titlesStarted){category='';searchAllMode=true;showFolderBrowser=false;reset();titlesStarted=true;renderCategories();}
     renderResults();
@@ -983,12 +983,12 @@ window.VaultcastStalkerVod=function(host,options){
     var mode=selector('Search by',[['title',kind==='vod'?'Movies':'Series'],['actor','Actor'],['director','Director']],searchMode,function(value){searchMode=value;search.placeholder='Search '+(value==='title'?(kind==='vod'?'movies':'series'):value+'s')+'…';renderResults();});
     languageSelect=h('select',{'aria-label':'Language',onChange:function(e){chooseLanguage(e.target.value);}});
     genreSelect=h('select',{'aria-label':'Genre',onChange:function(e){genreFilter=e.target.value;applyCatalogueFilterChange();}});
-    var sort=selector('Sort by',[['provider','Default order'],['az','A–Z'],['za','Z–A'],['rating','Highest rating'],['newest','Newest release'],['oldest','Oldest release'],['added','Recently added']],sortOrder,function(value){sortOrder=value;applyCatalogueFilterChange();});
+    var sort=selector('Sort by',[['provider','Default order'],['az','A–Z'],['za','Z–A'],['rating','Highest rating'],['newest','Newest release'],['oldest','Oldest release'],['added','Recently added']],sortOrder,function(value){sortOrder=value;fullSortRequested=value!=='provider';applyCatalogueFilterChange();});
     var rating=selector('Minimum rating',[['','Any rating'],['9','9+'],['8','8+'],['7','7+'],['6','6+'],['5','5+']],minRating,function(value){minRating=value;applyCatalogueFilterChange();});
     var years=[['','Any year']];for(var y=new Date().getFullYear()+1;y>=1900;y--)years.push([String(y),String(y)]);
     var release=selector('Release year',years,yearFilter,function(value){yearFilter=value;applyCatalogueFilterChange();});
     function submit(){searchAllMode=true;showFolderBrowser=false;category='';providerFolderId='';renderCategories();rerunScopedSearch();}
-    var clearFilters=h('button',{className:'btn ghost',type:'button',text:'Reset filters',onClick:function(){query='';genreFilter='';minRating='';yearFilter='';sortOrder='provider';searchMode='title';render();submit();}});
+    var clearFilters=h('button',{className:'btn ghost',type:'button',text:'Reset filters',onClick:function(){query='';genreFilter='';minRating='';yearFilter='';sortOrder='provider';fullSortRequested=false;searchMode='title';render();submit();}});
     var favourites=h('button',{className:'btn ghost',type:'button',text:'Favourites',onClick:function(){serial++;titlesStarted=false;loading=false;tasks=[];showFolderBrowser=false;renderCategories();showFavourites();}});
     var discover=h('button',{className:'btn ghost',type:'button',text:'Discover',onClick:browseDiscovery});
     host.append(h('form',{className:'stalker-searchbar stalker-vod-search-top',onSubmit:function(e){e.preventDefault();submit();}},[discover,search,mode,h('button',{className:'btn primary',type:'submit',text:'Search'}),favourites]),h('div',{className:'stalker-vod-filters'},[
@@ -1174,7 +1174,7 @@ window.VaultcastStalkerVod=function(host,options){
     step();
   }
   function snapshot(){
-    return {kind:kind,language:language,category:category,providerFolderId:providerFolderId,providerSelections:providerSelections,query:query,genreFilter:genreFilter,scanCursor:scanCursor,scanQuery:scanQuery,searchMode:searchMode,sortOrder:sortOrder,minRating:minRating,yearFilter:yearFilter,searchAllMode:searchAllMode,
+    return {kind:kind,language:language,category:category,providerFolderId:providerFolderId,providerSelections:providerSelections,query:query,genreFilter:genreFilter,scanCursor:scanCursor,scanQuery:scanQuery,searchMode:searchMode,sortOrder:sortOrder,fullSortRequested:fullSortRequested,minRating:minRating,yearFilter:yearFilter,searchAllMode:searchAllMode,
       titles:titles.slice(),categories:categories.slice(),progress:JSON.parse(JSON.stringify(progress)),
       tasks:tasks.map(function(t){return {key:t.key,feedId:t.feed&&t.feed.id,category:t.category};}),
       titlesStarted:titlesStarted,scrollY:window.scrollY||document.documentElement.scrollTop||0};
@@ -1183,7 +1183,7 @@ window.VaultcastStalkerVod=function(host,options){
     if(!saved||saved.kind!==kind)return false;
     stop();active=true;serial++;feeds=options.connections.filter(function(f){return f.enabled;});
     if(typeof saved.language==='string')language=saved.language;
-    category=saved.category||'';providerFolderId=saved.providerFolderId||saved.providerFilter||'';providerSelections=saved.providerSelections||{};query=saved.query||'';genreFilter=saved.genreFilter||'';scanCursor=saved.scanCursor||0;scanQuery=saved.scanQuery===undefined?(saved.query||''):saved.scanQuery;searchMode=saved.searchMode||'title';sortOrder=saved.sortOrder||'provider';minRating=saved.minRating||'';yearFilter=saved.yearFilter||'';searchAllMode=!!saved.searchAllMode;showFolderBrowser=!(category||searchAllMode);
+    category=saved.category||'';providerFolderId=saved.providerFolderId||saved.providerFilter||'';providerSelections=saved.providerSelections||{};query=saved.query||'';genreFilter=saved.genreFilter||'';scanCursor=saved.scanCursor||0;scanQuery=saved.scanQuery===undefined?(saved.query||''):saved.scanQuery;searchMode=saved.searchMode||'title';sortOrder=saved.sortOrder||'provider';fullSortRequested=!!saved.fullSortRequested;minRating=saved.minRating||'';yearFilter=saved.yearFilter||'';searchAllMode=!!saved.searchAllMode;showFolderBrowser=!(category||searchAllMode);
     titles=(saved.titles||[]).slice();categories=(saved.categories||[]).slice();progress=saved.progress||{};Object.keys(progress).forEach(function(key){var p=progress[key];p.pageSignatures=p.pageSignatures||{};p.seenIds=p.seenIds||{};});
     seenSourceItems={};titles.forEach(function(item){(item.sources||[]).forEach(function(source){seenSourceItems[String(source.feed)+'|'+String(source.id)]=item;});(item.numberedParts||[]).forEach(function(part){seenSourceItems[String(part.feed)+'|'+String(part.id)]=item;});});
     tasks=(saved.tasks||[]).map(function(t){return {key:t.key,feed:feeds.find(function(f){return f.id===t.feedId;}),category:t.category};}).filter(function(t){return !!t.feed;});
@@ -1207,7 +1207,7 @@ window.VaultcastStalkerVod=function(host,options){
   }
   return {showDiagnostics:showDiagnostics,show:function(value){
     if(active&&kind===value)return;
-    stop();active=true;kind=value;letter='#';query='';genreFilter='';providerFolderId='';searchAllMode=false;titlesStarted=false;showFolderBrowser=true;category='';categories=[];providerSelections={};sortOrder=value==='vod'?'rating':'provider';groupsLoading=true;reset();render();
+    stop();active=true;kind=value;letter='#';query='';genreFilter='';providerFolderId='';searchAllMode=false;titlesStarted=false;showFolderBrowser=true;category='';categories=[];providerSelections={};sortOrder=value==='vod'?'rating':'provider';fullSortRequested=false;groupsLoading=true;reset();render();
     // Load the account preference before choosing the default provider.
     var showToken=serial;
     loadAccountSettings().then(function(){
