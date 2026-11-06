@@ -12,10 +12,10 @@ final class StalkerDirect {
     public static function item(array $feed,string $id): ?array {
         return \Vaultcast\Repository::cacheGet(self::key($feed,'item:'.$id));
     }
-    private static function categories(array $feed,string $kind): array {
+    private static function categories(array $feed,string $kind,bool $refresh=false): array {
         $key=self::key($feed,'categories:'.$kind);
         $cached=\Vaultcast\Repository::cacheGet($key);
-        if($cached!==null)return $cached;
+        if(!$refresh&&$cached!==null)return $cached;
         $categories=[];
         try {
             $result=stalker_call($feed,'get_categories',[],$kind);
@@ -24,6 +24,8 @@ final class StalkerDirect {
             if(count($categories)>=500)break;
             }
         } catch (RuntimeException $ignored) {
+            // Keep the previous usable list when a refresh fails.
+            if($cached!==null)return $cached;
             // Categories are optional; a provider may allow page browsing without them.
         }
         \Vaultcast\Repository::cachePut($key,$categories,$categories?3600:300);
@@ -333,7 +335,7 @@ final class StalkerDirect {
             return ['ok'=>true,'kind'=>$kind,'selectedFeed'=>$feed['id'],'categories'=>$out,'count'=>count($out)];
         }
         // Browse and playback do not require an administrator to have indexed anything.
-        $categories=$parent===''?self::categories($feed,$kind):[];
+        $categories=$parent===''?self::categories($feed,$kind,$refresh):[];
         if(!empty($opts['categories_only']))return ['ok'=>true,'items'=>[],'total'=>null,'hasMore'=>false,'categories'=>$categories,'selectedFeed'=>$feed['id'],'shared'=>false];
         $result=self::page($feed,$kind,$page,$category,$query,$parent,$refresh);
         foreach($result['items'] as &$item)$item['sources']=[array_intersect_key($item,array_flip(['id','feed','connection','kind','playable']))];

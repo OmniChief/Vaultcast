@@ -2,6 +2,7 @@
 'use strict';
 window.VaultcastStalkerVod=function(host,options){
   var genreFilter='',genreSelect=null,languageSelect=null,providerFolderId='',searchMode='title',sortOrder='provider',fullSortRequested=false,minRating='',yearFilter='',scanCursor=0,scanQuery=null;
+  var cataloguePages=new Map(),catalogueGeneration=0;
   var h=options.h,active=false,kind='vod',serial=0,timer=null,letter='#',query='',feeds=[],progress={},titles=[],seen={},seenSourceItems={},loading=false;
   var status,results,next,search,letters,exportButton,groupExportButton,fieldProbeButton,liveProbeButton,epgProbeButton,groups,group='',categories=[],category='',groupsLoading=false,titlesStarted=false,categoryStatus=null,scopeActions=null,prefixGroups=null,showMoreCategories=false,searchAllMode=false,showFolderBrowser=true,language='UK',tasks=[],providerSelections={},preferredTileKeys={},visibleLimit=48;
   // English is the initial scope; remember explicit selections per user/browser.
@@ -489,6 +490,7 @@ window.VaultcastStalkerVod=function(host,options){
   }
   function stop(){active=false;serial++;favouriteLookupToken++;clearTimeout(timer);if(exportJob)exportJob.cancelled=true;}
   function loadCategories(refresh){
+    if(refresh){cataloguePages.clear();catalogueGeneration++;}
     var token=++serial,index=0;
     // Refresh provider discovery without throwing the viewer out of the selected folder.
     var previousCategory=category;
@@ -536,12 +538,22 @@ window.VaultcastStalkerVod=function(host,options){
   }
   function categoryLanguage(name){
     var n=String(name||'').normalize('NFKC').toUpperCase().replace(/\u00a0/g,' ');
-    // Explicit locale markers take priority; unmarked folders stay unspecified.
-    var m=n.match(/(?:^|\s)[|┃│¦]\s*([A-Z]{2,3})\s*[|┃│¦]/)||n.match(/\[\s*([A-Z]{2,3})\s*\]/);
+    // Subtitle availability is not the spoken language, even inside an EN folder.
+    if(/\b(?:ENG(?:LISH)?[ -]*SUB(?:S|TITLES)?|SUB(?:S|TITLES)?[ -]*ENG(?:LISH)?)\b/.test(n)){
+      if(/\bFRENCH\b/.test(n))return 'French';
+      if(/\bITALIAN\b/.test(n))return 'Italian';
+      if(/\bFOREIGN\b/.test(n))return 'Foreign / English subtitles';
+    }
+    if(/\bFOREIGN MOVIES\b/.test(n))return 'Foreign / unspecified';
+    var suffix=n.match(/\((EN|ENG|NL|FR|DE|IT|ES|PT)\)\s*$/);
+    if(suffix)return {EN:'UK',ENG:'UK',NL:'Dutch',FR:'French',DE:'German',IT:'Italian',ES:'Spanish',PT:'Portuguese'}[suffix[1]];
+    // Quality tags do not describe language; look past them for a locale marker.
+    var localeText=n.replace(/(?:[|┃│¦]\s*(?:4K|8K|UHD|FHD|HD|SD|HDR|HEVC)\s*(?=[|┃│¦])|\[\s*(?:4K|8K|UHD|FHD|HD|SD|HDR|HEVC)\s*\])/g,' ');
+    var m=localeText.match(/(?:^|\s)[|┃│¦]\s*([A-Z]{2,3})\s*[|┃│¦]/)||localeText.match(/\[\s*([A-Z]{2,3})\s*\]/);
     var code=m?m[1]:'';
-    var known={EN:'UK',US:'UK',UK:'UK',GB:'UK',IR:'Iran',FR:'French',IT:'Italian',DE:'German',ES:'Spanish',NL:'Dutch',PT:'Portuguese',TR:'Turkish',AR:'Arabic',AF:'African'};
+    var known={EN:'UK',ENG:'UK',US:'UK',USA:'UK',UK:'UK',GB:'UK',GBR:'UK',AU:'UK',AUS:'UK',NZ:'UK',NZL:'UK',IE:'UK',IRL:'UK',CA:'UK',CAN:'UK',SPT:'Sports / unspecified',IR:'Iran',FR:'French',IT:'Italian',DE:'German',ES:'Spanish',NL:'Dutch',PT:'Portuguese',TR:'Turkish',AR:'Arabic',AF:'African'};
     if(code)return known[code]||code;
-    var prefix=n.match(/^\s*(PT\s*\/\s*BR|FR|DE|IT|ES|NL|PT|TR|BG|PL|RO|CZ|SK|HU|GR|DK|NO|SE|FI|AL|BR|IL|IN|KU|MT|PK|RU|SO|SV|EN|EX)\s*[-:]/),prefixLanguages={'PT/BR':'Portuguese',FR:'French',DE:'German',IT:'Italian',ES:'Spanish',NL:'Dutch',PT:'Portuguese',TR:'Turkish',BG:'Slavic',PL:'Slavic',RO:'Romanian',CZ:'Slavic',SK:'Slavic',HU:'Hungarian',GR:'Greek',DK:'Scandinavian',NO:'Scandinavian',SE:'Scandinavian',FI:'Finnish',AL:'Albanian',BR:'Portuguese',IL:'Hebrew',IN:'Indian',KU:'Kurdish',MT:'Maltese',PK:'Urdu',RU:'Russian',SO:'Somali',SV:'Swedish',EN:'UK',EX:'Serbian/Croatian/Bosnian'};
+    var prefix=n.match(/^\s*(PT\s*\/\s*BR|FR|DE|IT|ES|NL|PT|TR|BG|PL|RO|CZ|SK|HU|GR|DK|NO|SE|FI|AL|BR|IL|IN|KU|MT|PK|RU|SO|SV|EN|ENG|UK|US|USA|GB|AU|NZ|IE|LA|EX)\s*[-:]/),prefixLanguages={'PT/BR':'Portuguese',FR:'French',DE:'German',IT:'Italian',ES:'Spanish',NL:'Dutch',PT:'Portuguese',TR:'Turkish',BG:'Slavic',PL:'Slavic',RO:'Romanian',CZ:'Slavic',SK:'Slavic',HU:'Hungarian',GR:'Greek',DK:'Scandinavian',NO:'Scandinavian',SE:'Scandinavian',FI:'Finnish',AL:'Albanian',BR:'Portuguese',IL:'Hebrew',IN:'Indian',KU:'Kurdish',MT:'Maltese',PK:'Urdu',RU:'Russian',SO:'Somali',SV:'Swedish',EN:'UK',ENG:'UK',UK:'UK',US:'UK',USA:'UK',GB:'UK',AU:'UK',NZ:'UK',IE:'UK',LA:'Spanish',EX:'Serbian/Croatian/Bosnian'};
     if(prefix)return prefixLanguages[prefix[1].replace(/\s/g,'')];
     if(/\b(?:BANGLA|BENGALI)\b/.test(n))return 'Bengali';
     if(/\bGUJARATI\b/.test(n))return 'Gujarati';
@@ -1062,8 +1074,9 @@ window.VaultcastStalkerVod=function(host,options){
     function submit(){searchAllMode=true;showFolderBrowser=false;category='';providerFolderId='';renderCategories();rerunScopedSearch();}
     var clearFilters=h('button',{className:'btn ghost',type:'button',text:'Reset filters',onClick:function(){query='';genreFilter='';minRating='';yearFilter='';sortOrder='provider';fullSortRequested=false;searchMode='title';render();submit();}});
     var favourites=h('button',{className:'btn ghost',type:'button',text:'Favourites',onClick:function(){serial++;titlesStarted=false;loading=false;tasks=[];showFolderBrowser=false;renderCategories();showFavourites();}});
+    var refreshCatalogue=h('button',{className:'btn ghost',type:'button',text:'Refresh catalogue',onClick:function(){category='';providerFolderId='';providerSelections={};searchAllMode=false;showFolderBrowser=true;reset();loadCategories(true);}});
     var discover=h('button',{className:'btn ghost',type:'button',text:'Discover',onClick:browseDiscovery});
-    host.append(h('form',{className:'stalker-searchbar stalker-vod-search-top',onSubmit:function(e){e.preventDefault();submit();}},[discover,search,mode,h('button',{className:'btn primary',type:'submit',text:'Search'}),favourites]),h('div',{className:'stalker-vod-filters'},[
+    host.append(h('form',{className:'stalker-searchbar stalker-vod-search-top',onSubmit:function(e){e.preventDefault();submit();}},[discover,refreshCatalogue,search,mode,h('button',{className:'btn primary',type:'submit',text:'Search'}),favourites]),h('div',{className:'stalker-vod-filters'},[
       h('label',{className:'stalker-vod-filter'},[h('span',{text:'Language'}),languageSelect]),h('label',{className:'stalker-vod-filter'},[h('span',{text:'Genre'}),genreSelect]),sort,rating,release,clearFilters
     ]),categoryStatus,status,results,next);
     renderGenreFilter();renderCategories();
@@ -1178,7 +1191,7 @@ window.VaultcastStalkerVod=function(host,options){
         ])
       ]));
     });
-    if(!ordered.length)results.appendChild(h('p',{className:'muted',text:titlesStarted?(unfinished?(loading?'No matches in the pages received yet. Catalogue loading…':'No matches in the pages loaded yet. Load more to continue.'):'No matching titles found.'):'Search to browse titles.'}));
+    if(!ordered.length)results.appendChild(h('p',{className:'muted',text:loading&&!titles.length?'Waiting for the provider’s first titles…':titles.length?'Loaded titles are hidden by the current filters. Adjust Genre, Minimum rating or Release year.':titlesStarted?(unfinished?(loading?'No matches in the pages received yet. Catalogue loading…':'No matches in the pages loaded yet. Load more to continue.'):'No matching titles found.'):'Search to browse titles.'}));
     var done=tasks.filter(function(t){return progress[t.key]&&progress[t.key].done;}).length;
     var failed=tasks.filter(function(t){return progress[t.key]&&progress[t.key].failed;}).length;
     status.className='muted stalker-vod-scan-status';
@@ -1188,10 +1201,21 @@ window.VaultcastStalkerVod=function(host,options){
       var label=unfinished?(loading?'Loading catalogue…':'More titles available'):failed?'Catalogue loaded with provider errors':'Catalogue ready';
       var bar=h('div',{className:'stalker-vod-scan-progress','role':'progressbar','aria-label':'Catalogue loading progress','aria-valuemin':'0','aria-valuemax':'100','aria-valuenow':String(percent)}),fill=h('span');
       fill.style.width=percent+'%';bar.appendChild(fill);
-      status.append(h('span',{className:'stalker-vod-scan-label',text:label}),bar);
+      status.append(h('span',{className:'stalker-vod-scan-label',text:label+(titles.length?' · '+titles.length+' titles loaded':'')}),bar);
+      tasks.filter(function(t){return progress[t.key]&&progress[t.key].error;}).slice(0,3).forEach(function(t){status.appendChild(h('span',{className:'bad',text:t.feed.name+': '+progress[t.key].error}));});
     }else if(titlesStarted)status.textContent='Preparing catalogue…';
     next.hidden=!titlesStarted||!(ordered.length>visibleLimit||tasks.some(function(t){return progress[t.key]&&!progress[t.key].done;}));
     next.disabled=loading;
+  }
+  function cataloguePage(params,refresh){
+    var key=params.toString(),cached=cataloguePages.get(key),generation=catalogueGeneration;
+    if(!refresh&&cached&&Date.now()-cached.at<600000)return Promise.resolve(cached.data);
+    return options.api('stalker_vod_catalogue',key).then(function(data){
+      if(data&&data.ok&&generation===catalogueGeneration){cataloguePages.delete(key);cataloguePages.set(key,{at:Date.now(),data:data});
+        while(cataloguePages.size>24)cataloguePages.delete(cataloguePages.keys().next().value);
+      }
+      return data;
+    });
   }
   function scan(refresh){
     if(loading||!active||!titlesStarted)return;
@@ -1218,7 +1242,7 @@ window.VaultcastStalkerVod=function(host,options){
       tasks=interleaved;
       tasks.forEach(function(t){progress[t.key]={page:1,done:false,failed:false,pageSignatures:{},seenIds:{}};});
     }
-    loading=true;var token=++serial;
+    loading=true;var token=++serial;renderResults();
     var pending=tasks.slice(scanCursor).concat(tasks.slice(0,scanCursor)).filter(function(t){return progress[t.key]&&!progress[t.key].done;}).slice(0,12);
     var index=0,attempts=0,pagesPerSource=1;
     function step(){
@@ -1234,9 +1258,10 @@ window.VaultcastStalkerVod=function(host,options){
       var task=pending[index],p=progress[task.key];
       if(attempts>=pagesPerSource||!p||p.done){index++;attempts=0;step();return;}
       attempts++;scanCursor=(tasks.indexOf(task)+1)%Math.max(1,tasks.length);
-      status.textContent='Loading '+task.feed.name+' (page '+p.page+')…';
+      status.textContent='Loading '+task.feed.name+' · page '+p.page+(titles.length?' · '+titles.length+' titles received':' · waiting for first titles')+'…';
+      var slowNotice=setTimeout(function(){if(valid(token)&&loading)status.textContent=task.feed.name+' is still responding. Titles will appear as soon as this page arrives.';},8000);
       var params=new URLSearchParams({kind:kind,feed:task.feed.id,category:task.category,q:requestQuery,page:String(p.page),refresh:refresh?'1':''});
-      options.api('stalker_vod_catalogue',params.toString()).then(function(result){
+      cataloguePage(params,refresh).then(function(result){
         if(!valid(token))return;
         if(!result||!result.ok)throw Error(result&&result.error||'Portal unavailable');
         var rows=(result.items||[]),ids=rows.map(function(item){return String(item&&item.id||'');}).filter(Boolean),signature=ids.length+':'+ids.reduce(function(hash,id){for(var n=0;n<id.length;n++)hash=Math.imul(hash^id.charCodeAt(n),16777619)>>>0;return Math.imul(hash^124,16777619)>>>0;},2166136261).toString(36);
@@ -1247,8 +1272,8 @@ window.VaultcastStalkerVod=function(host,options){
         if(!fresh.length){p.done=true;return;}
         add(fresh,task.feed,task.category);p.page++;p.done=!result.hasMore||p.page>10000;
         if(p.done){index++;attempts=0;}
-      }).catch(function(){if(valid(token)){p.done=true;p.failed=true;index++;attempts=0;}})
-        .then(function(){if(valid(token)){renderResults();step();}});
+      }).catch(function(error){if(valid(token)){p.done=true;p.failed=true;p.error=error.message||'Provider unavailable';index++;attempts=0;}})
+        .then(function(){clearTimeout(slowNotice);if(valid(token)){renderResults();step();}});
     }
     step();
   }
