@@ -73,8 +73,19 @@
   }
 
   // ------------------------------------------------------------------ Arcade hub
+  function nfs(host){
+    var url = 'https://nfsu2.xyz/';
+    host.appendChild(hero('NFS Underground 2', 'Launch the hosted browser game in a separate tab. The game site prevents embedding inside Vaultcast.', [
+      btn('Back to Arcade', function(){ go('arcade'); }, 'ghost')
+    ], 'ARCADE'));
+    var link = h('a', { href:url, target:'_blank', rel:'noopener noreferrer', className:'vc-button', text:'Launch NFS' });
+    host.appendChild(h('div', { className:'vc-card-actions' }, [link]));
+    host.appendChild(h('p', { className:'muted', text:'The game runs in your browser, not on the NAS. A modern browser with WebGPU is required.' }));
+  }
+
   function arcade(host, sub){
     var parts = String(sub || '').split('/');
+    if (parts[0] === 'nfs') return nfs(host);
     if (RUN.indexOf(parts[0]) >= 0) return runGame(host, parts[0]);
     if (parts[0] === 'word') return dailyFive(host);
     if (parts[0] === 'chess') return chessView(host, parts[1] || '');
@@ -92,6 +103,13 @@
       ]);
       card._best = best; grid.appendChild(card);
     });
+    grid.appendChild(h('article', { className:'vc-game-card', style:'--vc-hue:215', tabindex:'0', role:'button', 'aria-label':'Play NFS Underground 2',
+      onClick:function(e){ if (e.target.closest('.vc-card-actions')) return; go('arcade','nfs'); },
+      onKeydown:function(e){ if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go('arcade','nfs'); } } }, [
+      h('div', { className:'vc-game-art', text:'NFS' }),
+      h('div', { className:'vc-game-copy' }, [h('h3', { text:'NFS Underground 2' }), h('p', { className:'muted', text:'Play the hosted browser revival. Requires WebGPU.' })]),
+      h('div', { className:'vc-card-actions' }, [btn('Play', function(){ go('arcade','nfs'); }, 'primary')])
+    ]));
     host.appendChild(grid);
     if (signed()) {
       call('/play/arcade/summary').then(function(j){ Array.prototype.forEach.call(grid.children, function(card, i){ var id = Object.keys(GAMES)[i]; if (j.bests[id] != null) card._best.textContent = j.bests[id] ? 'Your best ' + fmt(j.bests[id]) : 'No score yet'; else if (id === 'chess') card._best.textContent = 'Async with friends · vs computer'; }); }).catch(function(){});

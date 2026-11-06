@@ -5,12 +5,12 @@
   window.VaultcastAc3Audio = function (video, player, options) {
     var mse = player._msectl, originalInit = mse.appendInitSegment, originalMedia = mse.appendMediaSegment;
     var active = false, closed = false, worker, context, gain, interval, packets = [], sources = [], scheduled = new Set();
-    var pending = new Map(), pendingBytes = 0, pcmBytes = 0, nextId = 0, waiters = [], anchor;
+    var pending = new Map(), pendingBytes = 0, pcmBytes = 0, nextId = 0, waiters = [];
     var frame = video.closest('#player-overlay') || video.parentElement;
     function notify() { var list = waiters; waiters = []; list.forEach(function (resolve) { resolve(); }); }
     function stopSources() {
       sources.forEach(function (source) { try { source.stop(); } catch (ignored) {} source.disconnect(); });
-      sources = []; scheduled.clear(); anchor = null;
+      sources = []; scheduled.clear();
     }
     function releaseAudio() {
       active = false; clearInterval(interval); stopSources();
@@ -36,10 +36,8 @@
       });
       notify();
       if (video.paused || video.seeking || video.readyState < 3 || context.state !== 'running') { stopSources(); return; }
-      if (anchor && Math.abs(time - (anchor.video + (context.currentTime - anchor.audio) * rate)) > 0.12) stopSources();
-      if (!anchor) anchor = { video: time, audio: context.currentTime };
       packets.forEach(function (packet) {
-        if (scheduled.has(packet.id) || packet.time > time + 1 || packet.time + packet.buffer.duration <= time) return;
+        if (scheduled.has(packet.id) || packet.time > time + 2 || packet.time + packet.buffer.duration <= time) return;
         var source = context.createBufferSource(), offset = Math.max(0, time - packet.time);
         source.buffer = packet.buffer; source.playbackRate.value = rate; source.connect(gain);
         scheduled.add(packet.id); sources.push(source);

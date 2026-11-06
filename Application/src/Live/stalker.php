@@ -272,6 +272,112 @@ function stalker_ordered_page(array $feed, string $type, array $params, int $pag
     return stalker_call($feed,'get_ordered_list',$params,$type);
 }
 
+/**
+ * Connection diagnostics inspect the provider directly, not the legacy SQL
+ * catalogue. A count reported by an empty local catalogue is not a portal count.
+ * Keep requests bounded and do not persist fetched channel rows.
+ */
+/**
+ * Check a small number of account endpoints, without exposing profile details.
+ * Missing expiry and failed account endpoints have different diagnostic outcomes.
+ */
+function stalker_account_expiry(array $feed): array {
+    $responses=[];$worked=[];$errors=[];
+    $requests=[
+        ['account_info','get_main_info',[]],
+        ['stb','get_profile',[
+            'hd'=>1,'stb_type'=>'MAG250','sn'=>$feed['serial']??'',
+            'device_id'=>$feed['deviceId']??'','device_id2'=>$feed['deviceId2']??'',
+            'auth_second_step'=>1,'image_version'=>218,'hw_version'=>'1.7-BD-00',
+            'num_banks'=>2,'not_valid_token'=>0,
+            'ver'=>'ImageDescription: 0.2.18-r14-pub-250; PORTAL version: 5.5.0; API Version: JS API version: 328; STB API version: 134; Player Engine version: 0x58c','client_type'=>'STB','video_out'=>'hdmi'
+        ]]
+    ];
+    foreach ($requests as $request) {
+        [$type,$action,$params]=$request;
+        try {
+            $data=stalker_call($feed,$action,$params,$type);
+            $responses[]=$data;$worked[]=$type.'/'.$action;
+        } catch (RuntimeException $ignored) {
+            $errors[]=$type.'/'.$action;
+        }
+    }
+    // MAG portals commonly expose the human-readable expiry in account_info.phone.
+    // Treat that field as a date only when it looks like one, never as a telephone number.
+    $fields=['expire_billing_date','end_date','expire_date','expiration_date','expires_at','subscription_end','expiration','expiry_date','expiry','exp_date','tariff_expired_date','tariff_instead_expired','phone'];
+    foreach ($responses as $response) {
+        $pending=[[$response,0]];
+        while($pending) {
+            [$data,$depth]=array_pop($pending);
+            if(!is_array($data))continue;
+            foreach ($data as $key=>$value) {
+                if(is_string($key)&&in_array(strtolower($key),$fields,true)&&is_scalar($value)) {
+                    $raw=trim((string)$value);
+                    if($raw===''||in_array(strtolower($raw),['0','0000-00-00','0000-00-00 00:00:00','unlimited','null','false'],true))continue;
+                    if(strtolower($key)==='phone'&&!preg_match('/(?:[.\/-]|[a-z]{3,}|\\s\\d{4}\\b)/i',$raw))continue;
+                    $timestamp=null;
+                    if(ctype_digit($raw)) {
+                        $number=(int)$raw;
+                        $timestamp=$number>1000000000000?(int)floor($number/1000):$number;
+                    } else {
+                        $parsed=strtotime($raw);
+                        if($parsed!==false)$timestamp=$parsed;
+                    }
+                    if($timestamp!==null&&$timestamp>=946684800&&$timestamp<=4102444800) {
+                        // A provider date without a time must stay date-only.
+                        // Preserve a provider's wall-clock time if it gives no timezone;
+                        // numeric Unix timestamps and timezone-qualified values are UTC.
+                        $hasTime=ctype_digit($raw)||preg_match('/(?:T|\\s)(\\d{1,2}):(\\d{2})(?::\\d{2})?/', $raw, $timeMatch);
+                        $hasZone=ctype_digit($raw)||preg_match('/(?:Z|[+-]\\d{2}:?\\d{2})$/i', $raw);
+                        $clock=$hasTime?($hasZone?gmdate('H:i',$timestamp):sprintf('%02d:%s',(int)$timeMatch[1],$timeMatch[2])):null;
+                        $date=$hasZone?gmdate('Y-m-d',$timestamp):($hasTime||!ctype_digit($raw)?date('Y-m-d',$timestamp):gmdate('Y-m-d',$timestamp));
+                        return ['date'=>$date,'time'=>$clock,'timeZone'=>$clock?($hasZone?'UTC':'provider time'):null,
+                            'status'=>'found','sources'=>$worked];
+                    }
+                }
+                if($depth<3&&is_array($value))$pending[]=[$value,$depth+1];
+            }
+        }
+    }
+    return ['date'=>null,'status'=>$worked?'not_exposed':'account_requests_failed','sources'=>$worked];
+}
+
+function stalker_connection_check(array $feed): array {
+    stalker_session($feed,true);
+    $lastError=null;$reported=null;$sample=0;
+    foreach ([0,1] as $page) {
+        try {
+            $result=stalker_call($feed,'get_ordered_list',['sortby'=>'number','genre'=>'*','search'=>'','fav'=>0,'p'=>$page],'itv');
+            $rows=$result['data']??null;
+            if(!is_array($rows))throw new RuntimeException('Portal returned an invalid ordered channel page.');
+            $sample=max($sample,count($rows));
+            if(isset($result['total_items'])&&is_numeric($result['total_items']))$reported=max((int)($reported??0),(int)$result['total_items']);
+            if($sample>0)break;
+        } catch (RuntimeException $e) {$lastError=$e;}
+    }
+    if($sample===0){
+        // Some portals only implement the bulk channel action. Use it only if
+        // the lightweight ordered-page probe returned no actual channels.
+        try {
+            $result=stalker_call($feed,'get_all_channels');
+            $rows=$result['data']??$result;
+            if(!is_array($rows))throw new RuntimeException('Portal returned an invalid channel list.');
+            $sample=count($rows);
+            if(isset($result['total_items'])&&is_numeric($result['total_items']))$reported=max((int)($reported??0),(int)$result['total_items']);
+        } catch (RuntimeException $e) {
+            if($lastError!==null)throw new RuntimeException('Portal session connected, but channel requests failed: '.$e->getMessage());
+            throw $e;
+        }
+    }
+    $expiry=stalker_account_expiry($feed);
+    return ['ok'=>true,'expiryDate'=>$expiry['date'],'expiryTime'=>$expiry['time']??null,
+        'expiryTimeZone'=>$expiry['timeZone']??null,'expiryStatus'=>$expiry['status'],
+        'expirySources'=>$expiry['sources'],
+        'channelCount'=>$reported!==null&&$reported>0?$reported:($sample>0?$sample:null),
+        'sampleCount'=>$sample,'countEstimated'=>!($reported!==null&&$reported>0),
+        'endpoint'=>stalker_endpoint($feed)];
+}
+
 function stalker_live_scan_key(array $feed): string {return 'stalker_live_search_v2_'.hash('sha256',json_encode($feed));}
 
 function stalker_live_groups(array $feed): array {
@@ -367,46 +473,57 @@ function stalker_vod_resolve(array $feed, string $id, ?array $item = null): stri
 }
 
 function stalker_channel_detail(array $feed,string $id,bool $refresh=false,bool $includeGuide=true): array {
+    $presentation=StalkerLiveBrowse::presentation($feed,$id);
     $item=\Vaultcast\Repository::cacheGet('stalker_channel_v2_'.hash('sha256',json_encode([$feed,$id,StalkerCatalogues::active($feed,'live')])));
     $scan=\Vaultcast\Repository::cacheGet(stalker_live_scan_key($feed));
     if(!$item)$item=$scan['rows'][$id]??null;
     if(!$item){$item=StalkerCountries::entry($feed,$id);if($item)unset($item['playback']);}
     if(!$item)$item=['name'=>'Channel '.$id,'description'=>$feed['name']];
-    $guideError='';$programs=[];
-    if($includeGuide)try{
+    if(empty($item['name']))$item['name']=$presentation['name']??'Channel '.$id;
+    $guideError='';$programs=$includeGuide?($presentation['programs']??[]):[];
+    if($includeGuide&&(!$programs||$refresh))try{
         $key='stalker_channel_epg_'.hash('sha256',json_encode($feed));$guide=$refresh?null:\Vaultcast\Repository::cacheGet($key);
         if($guide===null){$guide=stalker_guide($feed);\Vaultcast\Repository::cachePut($key,$guide,300);}
         if(!empty($guide['__unavailable']))$guideError='The provider programme guide is currently unavailable.';
-        $stableId='stalker-'.substr(hash('sha256',$feed['id'].':'.$id),0,20);$programs=$guide[$stableId]??[];
+        $stableId='stalker-'.substr(hash('sha256',$feed['id'].':'.$id),0,20);
+        foreach($guide[$stableId]??[] as $event){
+            $overlap=false;foreach($programs as $known)if($event['startUnix']<$known['endUnix']&&$event['endUnix']>$known['startUnix']){$overlap=true;break;}
+            if(!$overlap)$programs[]=$event;
+        }
     }catch(RuntimeException $e){$guideError='The provider programme guide is currently unavailable.';\Vaultcast\Repository::cachePut($key,['__unavailable'=>true],300);}
     usort($programs,static function($a,$b){return $a['startUnix']<=>$b['startUnix'];});
     $now=(int)round(microtime(true)*1000);$programs=array_values(array_filter($programs,static function($p)use($now){return $p['endUnix']>$now-3600000;}));
-    return ['ok'=>true,'channel'=>['id'=>'stalker:'.$feed['id'].':'.$id,'provider'=>'stalker','kind'=>'iptv','number'=>ctype_digit($id)?(int)$id:0,'name'=>$item['name'],'slogan'=>($item['description']??'')?:$feed['name'],'logo'=>'','programs'=>$programs],'guideError'=>$guideError];
+    return ['ok'=>true,'channel'=>['id'=>'stalker:'.$feed['id'].':'.$id,'provider'=>'stalker','kind'=>'iptv','number'=>ctype_digit($id)?(int)$id:0,'name'=>$presentation['name']??$item['name'],'slogan'=>($item['description']??'')?:$feed['name'],'logo'=>$presentation['logo']??'','programs'=>$programs],'guideError'=>$guideError];
 }
 
 /** Bounded GET of the actual media endpoint; never return its URL or body. */
 function stalker_check_media(array $feed,string $id,string $kind,string $profile='stb'): array {
     require_once __DIR__.'/iptv_hls.php';
-    if(!in_array($profile,['stb','http1','vlc','browser'],true)||($kind!=='live'&&$profile!=='stb'))throw new InvalidArgumentException('Unknown playback check profile.');
+    if(!in_array($profile,['stb','http1','vlc','browser'],true)||($kind!=='live'&&!in_array($profile,['stb','browser'],true)))throw new InvalidArgumentException('Unknown playback check profile.');
     $url=$kind==='live'?stalker_resolve($feed,$id):stalker_vod_resolve($feed,$id);
     $entry=$kind==='live'?\Vaultcast\Repository::cacheGet(stalker_live_key($feed,$id)):null;
     $linkMode=$entry&&stalker_static_live_url($entry)!==null?'static':'create_link';
     $ua='Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 MAG250 stbapp ver: 4 rev: 1812 Mobile Safari/533.3';
     if($profile==='vlc')$ua='VLC/3.0.21 LibVLC/3.0.21';
     if($profile==='browser')$ua='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+    $browserRange=$profile==='browser';
     $probeJar='st'.bin2hex(random_bytes(16));stalker_media_cookies($feed,$probeJar,$url);$probeCookies=iptv_hls_jar_path($probeJar);
     try {
     for($hop=0;$hop<5;$hop++){
         $ips=stalker_public_addresses($url);$p=parse_url($url);$host=$p['host'];$port=$p['port']??($p['scheme']==='https'?443:80);$ip=strpos($ips[0],':')!==false?'['.$ips[0].']':$ips[0];
         $body='';$headers=[];$ch=curl_init($url);
-        curl_setopt_array($ch,[CURLOPT_HTTPGET=>true,CURLOPT_FOLLOWLOCATION=>false,CURLOPT_PROTOCOLS=>CURLPROTO_HTTP|CURLPROTO_HTTPS,CURLOPT_RESOLVE=>[$host.':'.$port.':'.$ip],CURLOPT_CONNECTTIMEOUT=>8,CURLOPT_TIMEOUT=>15,CURLOPT_USERAGENT=>$ua,CURLOPT_COOKIEFILE=>$probeCookies,CURLOPT_COOKIEJAR=>$probeCookies,CURLOPT_HTTPHEADER=>['Accept: */*'],
+        $mediaHeaders=['Accept: video/*, application/vnd.apple.mpegurl, application/x-mpegURL, */*;q=0.8'];
+        if($browserRange)$mediaHeaders[]='Range: bytes=0-8191';
+        curl_setopt_array($ch,[CURLOPT_HTTPGET=>true,CURLOPT_FOLLOWLOCATION=>false,CURLOPT_PROTOCOLS=>CURLPROTO_HTTP|CURLPROTO_HTTPS,CURLOPT_RESOLVE=>[$host.':'.$port.':'.$ip],CURLOPT_CONNECTTIMEOUT=>8,CURLOPT_TIMEOUT=>15,CURLOPT_USERAGENT=>$ua,CURLOPT_COOKIEFILE=>$probeCookies,CURLOPT_COOKIEJAR=>$probeCookies,CURLOPT_HTTPHEADER=>$mediaHeaders,
             CURLOPT_HEADERFUNCTION=>static function($h,$line)use(&$headers){if(preg_match('#^HTTP/#',$line))$headers=[];elseif(strpos($line,':')!==false){[$key,$value]=explode(':',$line,2);$headers[strtolower(trim($key))]=trim($value);}return strlen($line);},
             CURLOPT_WRITEFUNCTION=>static function($h,$chunk)use(&$body){$body.=substr($chunk,0,max(0,8192-strlen($body)));return strlen($body)>=8192?0:strlen($chunk);}]);
         if(in_array($profile,['stb','http1'],true))curl_setopt($ch,CURLOPT_REFERER,preg_replace('#/(?:server/load|portal)\.php$#','/c/',stalker_endpoint($feed)));
         if($profile!=='stb')curl_setopt($ch,CURLOPT_HTTP_VERSION,CURL_HTTP_VERSION_1_1);
         $ok=curl_exec($ch);$status=(int)curl_getinfo($ch,CURLINFO_HTTP_CODE);curl_close($ch);
-        if($status>=300&&$status<400&&!empty($headers['location'])){$url=iptv_hls_resolve_uri($url,$headers['location']);continue;}
         $type=strtolower(explode(';',$headers['content-type']??'unknown')[0]);
+        if($browserRange&&($status===458||($status===400&&$type==='video/mp4'))){$browserRange=false;$hop--;continue;}
+        if($status>=300&&$status<400&&!empty($headers['location'])){$url=iptv_hls_resolve_uri($url,$headers['location']);continue;}
+        if($status===400&&$type==='video/mp4'&&strpos(substr($body,0,64),'ftyp')!==false)$status=200;
         $format=strpos(ltrim($body),'#EXTM3U')===0?'HLS playlist':((strlen($body)>188&&ord($body[0])===71&&ord($body[188])===71)?'MPEG-TS stream':(strpos($type,'video/')===0?'Video stream':(strpos($type,'html')!==false?'HTML page':'Unrecognised response')));
         return ['ok'=>true,'http'=>$status,'method'=>'GET','profile'=>$profile,'linkMode'=>$linkMode,'temporaryLink'=>$entry['use_http_tmp_link']??null,'loadBalancing'=>$entry['use_load_balancing']??null,'type'=>$type,'format'=>$format,'redirects'=>$hop,'https'=>$p['scheme']==='https','samePortalHost'=>strtolower($host)===strtolower((string)parse_url(stalker_endpoint($feed),PHP_URL_HOST)),'cloudflare'=>stripos($body,'cloudflare')!==false,'allow'=>preg_replace('/[^A-Z, ]/','',(string)($headers['allow']??'')),'received'=>strlen($body),'timedOutOrFailed'=>$ok===false&&strlen($body)<8192];
     }

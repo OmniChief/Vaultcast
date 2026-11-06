@@ -12,10 +12,10 @@ final class StalkerDirect {
     public static function item(array $feed,string $id): ?array {
         return \Vaultcast\Repository::cacheGet(self::key($feed,'item:'.$id));
     }
-    private static function categories(array $feed,string $kind): array {
+    private static function categories(array $feed,string $kind,bool $refresh=false): array {
         $key=self::key($feed,'categories:'.$kind);
         $cached=\Vaultcast\Repository::cacheGet($key);
-        if($cached!==null)return $cached;
+        if(!$refresh&&$cached!==null)return $cached;
         $categories=[];
         try {
             $result=stalker_call($feed,'get_categories',[],$kind);
@@ -24,10 +24,41 @@ final class StalkerDirect {
             if(count($categories)>=500)break;
             }
         } catch (RuntimeException $ignored) {
+            // Keep the previous usable list when a refresh fails.
+            if($cached!==null)return $cached;
             // Categories are optional; a provider may allow page browsing without them.
         }
         \Vaultcast\Repository::cachePut($key,$categories,$categories?3600:300);
         return $categories;
+    }
+    /** Copy presentation-only metadata already supplied with a catalogue page. */
+    private static function descriptiveFields(array $row): array {
+        $text=['o_name','genres_str','genre','genres','director','actors','cast','country','language',
+            'original_language','rating_imdb','rating_mpaa','rating_kinopoisk','age','added',
+            'imdb_id','tmdb_id','kinopoisk_id','movie_year','release_date','premiered','duration',
+            'category_id','category','genre_id','genre_id_1','genre_id_2','genre_id_3','genre_id_4',
+            'cat_genre_id_1','cat_genre_id_2','cat_genre_id_3','cat_genre_id_4','rating','time',
+            'hd','high_quality','low_quality','season','season_number','series_number',
+            'episodes_count','seasons_count','year_end','audio_languages','subtitle_languages'];
+        $out=[];
+        foreach([$row,is_array($row['info']??null)?$row['info']:[],
+                 is_array($row['movie_info']??null)?$row['movie_info']:[],
+                 is_array($row['video_info']??null)?$row['video_info']:[]] as $section) {
+            foreach($text as $field) {
+                if(array_key_exists($field,$out)||!array_key_exists($field,$section))continue;
+                $value=$section[$field];
+                if(is_array($value)&&in_array($field,['actors','cast','director','genres','audio_languages','subtitle_languages'],true))
+                    $value=implode(', ',StalkerProgramme::names($value));
+                if(!is_scalar($value))continue;
+                $value=trim(html_entity_decode(strip_tags((string)$value),ENT_QUOTES|ENT_HTML5,'UTF-8'));
+                if($value===''||preg_match('/^(?:n\/?a|none|null|unknown|undefined|not available)$/i',$value))continue;
+                if(preg_match('~(?:https?://|[a-z0-9+.-]+://|(?:token|auth|password|cookie|session|mac)[=:])~i',$value))continue;
+                // Provider sends 0 for missing genres; preserve quality flags and time as-is.
+                if(preg_match('/^(?:genre_id(?:_[1-4])?|cat_genre_id_[1-4])$/',$field)&&$value==='0')continue;
+                $out[$field]=mb_substr(preg_replace('/[\x00-\x1f\x7f]/',' ',$value),0,in_array($field,['actors','cast','director'],true)?3000:300);
+            }
+        }
+        return $out;
     }
     private static function page(array $feed,string $kind,int $page,string $category,string $query,string $parent,bool $refresh): array {
         $key=self::key($feed,'page:'.json_encode([$kind,$page,$category,$query,$parent]));
@@ -66,6 +97,9 @@ final class StalkerDirect {
             $playable=$cmd!==''&&empty($row['is_series'])&&empty($episodes)&&($kind==='vod'||$parent!=='');
             $publicId=$playable?$kind.':'.$id:$id;
             $item=array_merge($meta,['id'=>$publicId,'kind'=>$kind,'playable'=>$playable,'feed'=>$feed['id'],'connection'=>$feed['name']]);
+            // No extra provider calls: extract safe fields from existing page data.
+            $item=array_merge($item,self::descriptiveFields($row));
+
             if($playable)\Vaultcast\Repository::cachePut(self::key($feed,'item:'.$publicId),['cmd'=>$cmd,'series'=>(string)($row['series_number']??''),'metadata'=>$item],7200);
             $items[]=$item;
         }
@@ -148,6 +182,111 @@ final class StalkerDirect {
         return ['ok'=>true,'items'=>$items,'groups'=>$counts,'total'=>$total,'hasMore'=>$offset+count($items)<$total,
             'indexing'=>$indexing,'connections'=>$progress,'shared'=>false];
     }
+    /** Single-item, opt-in metadata diagnostic. Never return provider transport or auth fields. */
+    public static function probe(array $state,array $opts): array {
+        $kind=(string)($opts['kind']??'');
+        if(!in_array($kind,['vod','series'],true))throw new InvalidArgumentException('Select movies or series.');
+        $wanted=(string)($opts['feed']??'');
+        $id=(string)($opts['id']??'');
+        // Only accept catalogue-issued IDs; do not allow arbitrary provider actions.
+        if(!preg_match('/^(?:vod:)?[0-9]{1,12}$/D',$id)&&!preg_match('/^[0-9]{1,12}:[0-9]{1,12}$/D',$id))
+            throw new InvalidArgumentException('Choose a valid catalogue item.');
+        $feed=null;
+        foreach(($state['feeds']??[]) as $candidate){
+            if(($candidate['id']??'')===$wanted&&($candidate['type']??'')==='stalker'&&!empty($candidate['enabled'])){$feed=$candidate;break;}
+        }
+        if(!$feed)throw new InvalidArgumentException('Select an enabled Stalker connection.');
+        $rawId=preg_replace('/^vod:/','',$id);
+        if(strpos($rawId,':')!==false)$rawId=explode(':',$rawId,2)[0];
+        // One provider operation per user-triggered probe, no playback or episode crawl.
+        $result=stalker_call($feed,'get_info',['movie_id'=>$rawId],$kind);
+        $row=is_array($result['data']??null)?$result['data']:$result;
+        if(!is_array($row))return ['ok'=>true,'supported'=>false,'fields'=>[],'field_names'=>[]];
+        $sourceSections=[$row];
+        foreach(['info','movie_info','video_info'] as $field){
+            if(is_array($row[$field]??null))$sourceSections[]=$row[$field];
+        }
+        $allow=['id','name','o_name','year','movie_year','release_date','premiered','category_id','category',
+            'genre_id','genre_id_1','genre_id_2','genre_id_3','genre_id_4','genres_str','genre','genres',
+            'director','actors','cast','description','descr','plot','summary','overview','time','duration',
+            'country','language','original_language','rating_imdb','rating_mpaa','rating','age','hd',
+            'high_quality','added','tmdb_id','imdb_id','kinopoisk_id','series_number','season','season_number',
+            'episode','episode_number','episodes_count','seasons_count','is_series','audio_languages',
+            'subtitle_languages','audio_tracks','subtitles'];
+        $fields=[];$names=[];
+        foreach($sourceSections as $section){
+            foreach($section as $key=>$value){
+                if(!is_string($key))continue;
+                // Provider field names can reveal new possibilities; names alone never include secrets.
+                if(preg_match('/^[a-z][a-z0-9_]{0,49}$/i',$key)&&!preg_match('/(?:token|auth|pass|secret|cookie|key|mac|serial|device|url|link|cmd|stream|ticket)/i',$key))$names[$key]=true;
+                if(!in_array($key,$allow,true)||isset($fields[$key]))continue;
+                if(is_bool($value)||is_int($value)||is_float($value))$value=(string)$value;
+                if(!is_string($value)||trim($value)==='')continue;
+                $value=mb_substr(trim(html_entity_decode(strip_tags($value),ENT_QUOTES|ENT_HTML5,'UTF-8')),0,$key==='description'||$key==='plot'||$key==='overview'?1200:250);
+                if(preg_match('~(?:https?://|[a-z0-9]{2,}://|(?:token|auth|password|session|cookie)[=:])~i',$value))continue;
+                $fields[$key]=$value;
+            }
+        }
+        return ['ok'=>true,'supported'=>!empty($fields),'fields'=>$fields,'field_names'=>array_keys($names)];
+    }
+
+    /**
+     * Admin-only catalogue field inventory from one ordinary provider page.
+     * The raw page is inspected in memory; no transport, session or playback data escapes.
+     */
+    public static function catalogueFieldProbe(array $state,array $opts): array {
+        $kind=(string)($opts['kind']??'vod');
+        if(!in_array($kind,['vod','series'],true))throw new InvalidArgumentException('Choose movies or series.');
+        $wanted=(string)($opts['feed']??'');
+        $category=(string)($opts['category']??'');
+        if($category!==''&&!preg_match('/^[0-9]{1,12}$/D',$category))
+            throw new InvalidArgumentException('Choose a valid provider category.');
+        $feed=null;
+        foreach(($state['feeds']??[]) as $candidate) {
+            if(($candidate['id']??'')===$wanted&&($candidate['type']??'')==='stalker'&&!empty($candidate['enabled'])){$feed=$candidate;break;}
+        }
+        if(!$feed)throw new InvalidArgumentException('Choose an enabled Stalker connection.');
+        // Never inspect more than one normal catalogue page, no get_info or playback.
+        $result=stalker_ordered_page($feed,$kind,['sortby'=>'name','category'=>$category?:'*','search'=>''],1);
+        $rows=$result['data']??$result;
+        if(!is_array($rows))throw new RuntimeException('Invalid provider catalogue page.');
+        $count=0;$inventory=[];
+        $safeExamples=['name','o_name','year','movie_year','release_date','premiered','category_id','genre_id',
+            'genre','genres','genres_str','director','actors','cast','description','descr','plot','summary','overview',
+            'time','duration','country','language','original_language','rating_imdb','rating_mpaa','rating',
+            'age','hd','high_quality','added','tmdb_id','imdb_id','kinopoisk_id','season','season_number',
+            'series_number','episode','episode_number','episodes_count','seasons_count','audio_languages',
+            'subtitle_languages'];
+        $inspect=function(array $section,string $prefix='') use (&$inspect,&$inventory,$safeExamples): void {
+            foreach($section as $key=>$value){
+                if(!is_string($key)||!preg_match('/^[a-z][a-z0-9_]{0,49}$/i',$key))continue;
+                if(preg_match('/(?:token|auth|pass|secret|cookie|key|mac|serial|device|url|link|cmd|stream|ticket|host|ip|login|account|user|pin|drm|license|proxy|path|file|play)/i',$key))continue;
+                $path=$prefix.$key;
+                $type=is_array($value)?'array':(is_object($value)?'object':gettype($value));
+                if(!isset($inventory[$path]))$inventory[$path]=['type'=>$type,'present'=>0,'populated'=>0];
+                $inventory[$path]['present']++;
+                if($value!==null&&$value!==''&&$value!==[])$inventory[$path]['populated']++;
+                if(in_array($key,$safeExamples,true)&&!is_array($value)&&is_scalar($value)&&!isset($inventory[$path]['example'])){
+                    $sample=trim(html_entity_decode(strip_tags((string)$value),ENT_QUOTES|ENT_HTML5,'UTF-8'));
+                    if($sample!==''&&!preg_match('~(?:https?://|[a-z][a-z0-9+.-]*://|(?:token|auth|pass|session|cookie)[=:]|[?&][a-z_]+=)~i',$sample)){
+                        $inventory[$path]['example']=mb_substr(preg_replace('/[\x00-\x1f\x7f]/',' ',$sample),0,120);
+                    }
+                }
+                if($prefix===''&&in_array($key,['info','movie_info','video_info'],true)&&is_array($value)){
+                    $inspect($value,$key.'.');
+                }
+            }
+        };
+        foreach($rows as $row) {
+            if(!is_array($row))continue;
+            $inspect($row);
+            if(++$count>=15)break;
+        }
+        ksort($inventory);
+        return ['ok'=>true,'kind'=>$kind,'connection'=>$feed['name'],'category'=>$category?:'*',
+            'rows_inspected'=>$count,'fields'=>$inventory,'note'=>'Inventory of up to 15 entries from one raw catalogue page; sensitive fields omitted.'];
+    }
+
     public static function browse(array $state,array $opts): array {
         $kind=(string)($opts['kind']??'vod');
         if(!in_array($kind,['vod','series'],true))throw new InvalidArgumentException('Choose Movies or Series.');
@@ -196,7 +335,7 @@ final class StalkerDirect {
             return ['ok'=>true,'kind'=>$kind,'selectedFeed'=>$feed['id'],'categories'=>$out,'count'=>count($out)];
         }
         // Browse and playback do not require an administrator to have indexed anything.
-        $categories=$parent===''?self::categories($feed,$kind):[];
+        $categories=$parent===''?self::categories($feed,$kind,$refresh):[];
         if(!empty($opts['categories_only']))return ['ok'=>true,'items'=>[],'total'=>null,'hasMore'=>false,'categories'=>$categories,'selectedFeed'=>$feed['id'],'shared'=>false];
         $result=self::page($feed,$kind,$page,$category,$query,$parent,$refresh);
         foreach($result['items'] as &$item)$item['sources']=[array_intersect_key($item,array_flip(['id','feed','connection','kind','playable']))];

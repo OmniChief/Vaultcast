@@ -266,3 +266,85 @@ html{background:transparent}
 .compat-controller-panel{margin:14px 0}.compat-controller-row{padding:9px 0;border-bottom:1px solid #35506b}.compat-controller-row strong{display:inline-block;width:85px;vertical-align:middle}.compat-controller-keys{display:inline-block;width:42%;min-width:150px;margin:4px 10px 4px 0;vertical-align:middle}.compat-controller-row button{margin:3px 6px 3px 0}#compat-controller-status{margin:16px 0}#compat-controller-toggle{margin:10px 0}
 
 #compat-channel-number{position:fixed;top:20px;right:20px;z-index:100001;padding:16px 24px;background:#101b2a;color:#edf2f7;border:2px solid #70dfea;font-size:28px;font-weight:bold}
+
+/* Older Tizen native fullscreen is not always exposed through :fullscreen.
+   Remove the inline border at the source so it cannot be carried into the
+   hardware fullscreen surface. Scope this to the actual media player only. */
+#compat-media{
+  border:0!important;
+  -webkit-border-radius:0!important;
+  -moz-border-radius:0!important;
+  border-radius:0!important;
+  outline:0;
+  -webkit-box-shadow:none;
+  -moz-box-shadow:none;
+  box-shadow:none;
+  background:#000;
+}
+
+/* Fullscreen playback must not inherit the framed inline-player border.
+   Legacy Samsung/Tizen WebKit uses the prefixed fullscreen selectors. */
+#compat-media:-webkit-full-screen,
+#compat-media:-moz-full-screen,
+#compat-media:-ms-fullscreen,
+#compat-media:fullscreen,
+.compat-video-stage:-webkit-full-screen,
+.compat-video-stage:-moz-full-screen,
+.compat-video-stage:-ms-fullscreen,
+.compat-video-stage:fullscreen{
+  margin:0;
+  padding:0;
+  border:0;
+  -webkit-border-radius:0;
+  -moz-border-radius:0;
+  border-radius:0;
+  outline:0;
+  -webkit-box-shadow:none;
+  -moz-box-shadow:none;
+  box-shadow:none;
+  background:#000;
+  width:100%;
+  height:100%;
+  max-width:none;
+  min-height:0;
+}
+.compat-video-stage:-webkit-full-screen #compat-media,
+.compat-video-stage:-moz-full-screen #compat-media,
+.compat-video-stage:-ms-fullscreen #compat-media,
+.compat-video-stage:fullscreen #compat-media{
+  margin:0;
+  padding:0;
+  border:0;
+  -webkit-border-radius:0;
+  -moz-border-radius:0;
+  border-radius:0;
+  outline:0;
+  -webkit-box-shadow:none;
+  -moz-box-shadow:none;
+  box-shadow:none;
+  background:#000;
+  width:100%;
+  height:100%;
+  max-width:none;
+  min-height:0;
+}
+
+/* Optional small overscan for Tizen video planes that reveal a pixel rim.
+   Applied on the video itself because some TVs do not expose fullscreen CSS
+   state to the document. Does not change the streamed video or its codecs. */
+#compat-media.compat-edge-crop{
+  -webkit-transform:scale(1.012);
+  -moz-transform:scale(1.012);
+  -ms-transform:scale(1.012);
+  transform:scale(1.012);
+  -webkit-transform-origin:50% 50%;
+  transform-origin:50% 50%;
+}
+.compat-video-stage{overflow:hidden;background:#000}
+
+/* TV remote: keep the optional display adjustment above the media surface,
+   where native Tizen fullscreen cannot hide it before the user enables it. */
+.compat-edge-crop-control{margin:12px 0;padding:10px 14px;background:#17354a;border:2px solid #6de9f5}
+.compat-edge-crop-control button{font-weight:bold;font-size:18px;padding:12px 18px;margin:0 12px 0 0;background:#08202e;border-color:#6de9f5}
+.compat-edge-crop-control button:focus{outline:4px solid #fff;outline-offset:3px}
+.compat-edge-crop-control span{display:inline-block;vertical-align:middle;font-size:14px;color:#e4f5ff}
