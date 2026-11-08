@@ -1,6 +1,13 @@
 <?php
 /** Stalker/Ministra live TV adapter. Credentials and commands never leave the server. */
 class StalkerAuthenticationException extends RuntimeException {}
+class StalkerRateLimitException extends RuntimeException {
+    public int $retryAt;
+    public function __construct(int $retryAt) {parent::__construct('Provider rate limited requests (HTTP 429).',429);$this->retryAt=$retryAt;}
+}
+function stalker_cooldown_key(array $feed): string {
+    return 'stalker_cooldown_'.hash('sha256',json_encode([$feed['url'],$feed['mac']]));
+}
 
 function stalker_public_feed(array $feed): array {
     if (($feed['type'] ?? '') !== 'stalker') return $feed;
@@ -59,6 +66,8 @@ function stalker_cookie_path(array $feed): string {
 
 function stalker_request(array $feed, string $type, string $action, array $params = [], string $token = '', ?string $endpoint = null): array {
     if (!function_exists('curl_init')) throw new RuntimeException('Stalker connections require the PHP cURL extension.');
+    $cooldown=\Vaultcast\Repository::cacheGet(stalker_cooldown_key($feed));
+    if(($cooldown['until']??0)>time())throw new StalkerRateLimitException((int)$cooldown['until']);
     $url = ($endpoint ?? stalker_endpoint($feed)).'?'.http_build_query(array_merge($params, ['type'=>$type,'action'=>$action,'JsHttpRequest'=>'1-xml']));
     $ips = stalker_public_addresses($url);
     $host = (string)parse_url($url,PHP_URL_HOST);
@@ -66,7 +75,7 @@ function stalker_request(array $feed, string $type, string $action, array $param
     $headers = ['Accept: application/json', 'X-User-Agent: Model: MAG250; Link: Ethernet'];
     if ($token !== '') $headers[] = 'Authorization: Bearer '.$token;
     $ch = curl_init($url);
-    $body = '';
+    $body = ''; $retryAfter='';
     $resolvedIp = strpos($ips[0],':')!==false ? '['.$ips[0].']' : $ips[0];
     curl_setopt_array($ch, [CURLOPT_RESOLVE=>[$host.':'.$port.':'.$resolvedIp],CURLOPT_FOLLOWLOCATION=>false, CURLOPT_CONNECTTIMEOUT=>8, CURLOPT_TIMEOUT=>30,
         CURLOPT_PROTOCOLS=>CURLPROTO_HTTP | CURLPROTO_HTTPS, CURLOPT_SSL_VERIFYPEER=>true,
@@ -75,11 +84,18 @@ function stalker_request(array $feed, string $type, string $action, array $param
         CURLOPT_COOKIE=>'mac='.rawurlencode($feed['mac']).'; stb_lang=en; timezone=Europe/London',
         CURLOPT_COOKIEFILE=>stalker_cookie_path($feed),CURLOPT_COOKIEJAR=>stalker_cookie_path($feed),
         CURLOPT_HTTPHEADER=>$headers,
+        CURLOPT_HEADERFUNCTION=>static function($handle,$line)use(&$retryAfter){if(stripos($line,'Retry-After:')===0)$retryAfter=trim(substr($line,12));return strlen($line);},
         CURLOPT_WRITEFUNCTION=>function ($handle, $chunk) use (&$body) { if (strlen($body)+strlen($chunk)>16*1024*1024) return 0; $body.=$chunk; return strlen($chunk); }]);
     if (function_exists('release_request_locks')) release_request_locks();
     $ok = curl_exec($ch); $status = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE); curl_close($ch);
+    if($status===429){
+        $until=ctype_digit($retryAfter)?time()+min(31536000,(int)$retryAfter):(strtotime($retryAfter)?:0);
+        $until=max(time()+60,$until);
+        \Vaultcast\Repository::cachePut(stalker_cooldown_key($feed),['until'=>$until],max(60,$until-time()));
+        throw new StalkerRateLimitException($until);
+    }
     if (in_array($status,[401,403],true)) throw new StalkerAuthenticationException('Portal rejected authentication. Check the registered device and account.');
-    if ($ok === false || $status < 200 || $status >= 300) throw new RuntimeException('Portal '.$type.'/'.$action.' request failed (HTTP '.$status.').');
+    if ($ok === false || $status < 200 || $status >= 300) throw new RuntimeException('Portal '.$type.'/'.$action.' request failed (HTTP '.$status.').',$status);
     $data = json_decode($body, true);
     if ($action==='do_auth' && isset($data['js']) && is_bool($data['js'])) return ['status'=>$data['js']];
     if (is_array($data) && array_key_exists('js',$data) && ($data['js']===null || $data['js']===false || (is_array($data['js']) && !empty($data['js']['error'])))) throw new StalkerAuthenticationException('Portal rejected the session or device.');
@@ -111,7 +127,7 @@ function stalker_session(array $feed, bool $renew = false): string {
             if (empty($handshake['token'])) throw new RuntimeException('Portal handshake returned no session token.');
             \Vaultcast\Repository::cachePut('stalker_endpoint_'.hash('sha256',$feed['url']),['path'=>parse_url($candidate,PHP_URL_PATH)],86400);
             $lastError = null; break;
-        } catch (RuntimeException $e) { $lastError = $e; }
+        } catch (StalkerRateLimitException $e) { throw $e; } catch (RuntimeException $e) { $lastError = $e; }
     }
     if ($lastError) throw $lastError;
     $token = (string)($handshake['token'] ?? '');
@@ -252,17 +268,13 @@ function stalker_item_key(array $feed, string $id): string {
 
 /** Learn whether this portal numbers ordered-list pages from zero or one. */
 function stalker_ordered_page(array $feed, string $type, array $params, int $page): array {
-    $key='stalker_paging_'.hash('sha256',json_encode([$feed,$type]));
+    $key='stalker_paging_v2_'.hash('sha256',json_encode([$feed,$type,$params]));
     $mode=\Vaultcast\Repository::cacheGet($key);
     if ($mode) { $params['p']=$page-1+$mode['offset'];return stalker_call($feed,'get_ordered_list',$params,$type); }
     $params['p']=0;
-    try {$zero=stalker_call($feed,'get_ordered_list',$params,$type);}
-    catch (RuntimeException $e) {
-        $params['p']=$page;$result=stalker_call($feed,'get_ordered_list',$params,$type);
-        \Vaultcast\Repository::cachePut($key,['offset'=>1],86400);
-        return $result;
-    }
+    $zero=stalker_call($feed,'get_ordered_list',$params,$type);
     $params['p']=1;$one=stalker_call($feed,'get_ordered_list',$params,$type);
+    if(in_array($type,['vod','series'],true)){StalkerCatalogueScan::page($zero);StalkerCatalogueScan::page($one);}
     $first=is_array($zero['data'] ?? null)?$zero['data']:[];
     $second=is_array($one['data'] ?? null)?$one['data']:[];
     $offset=(!$first || array_column($first,'id')===array_column($second,'id'))?1:0;

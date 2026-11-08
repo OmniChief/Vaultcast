@@ -8,7 +8,13 @@ final class StalkerCatalogues {
     private static function feeds(): array {require_once STREAM_ROOT.'/src/Live/iptv.php';return array_values(array_filter(iptv_load()['feeds']??[],static function($f){return ($f['type']??'')==='stalker'&&!empty($f['enabled']);}));}
     public static function status(): array {
         self::ensureWorker();$feeds=array_column(self::feeds(),null,'id');$sources=[];
-        foreach(\Vaultcast\Database::connection()->query('SELECT feed_id,kind,status,processed,error,next_run FROM vaultcast_stalker_jobs') as $r){$r['name']=$feeds[$r['feed_id']]['name']??'Removed connection';$r['scanned']=(int)$r['processed'];$sources[]=$r;}
+        foreach(\Vaultcast\Database::connection()->query('SELECT feed_id,kind,status,processed,error,next_run FROM vaultcast_stalker_jobs') as $r){$r['name']=$feeds[$r['feed_id']]['name']??'Removed connection';$r['scanned']=(int)$r['processed'];
+            $q=\Vaultcast\Database::connection()->prepare("SELECT f.folder_id,f.title,f.status,f.next_page,f.processed,f.total,f.last_success,f.error,f.next_run FROM vaultcast_stalker_folders f JOIN vaultcast_stalker_jobs j ON j.feed_id=f.feed_id AND j.kind=f.kind AND j.generation=f.generation WHERE f.feed_id=? AND f.kind=? ORDER BY f.folder_id='*',f.folder_id");
+            $q->execute([$r['feed_id'],$r['kind']]);$folders=$q->fetchAll();
+            $r['foldersTotal']=count(array_filter($folders,static function($f){return $f['folder_id']!=='';}));
+            $r['foldersComplete']=count(array_filter($folders,static function($f){return $f['folder_id']!==''&&$f['status']==='complete';}));
+            $r['currentFolder']=null;foreach($folders as $folder)if($folder['status']!=='complete'){$r['currentFolder']=$folder;break;}
+            $sources[]=$r;}
         return ['ok'=>true,'sources'=>$sources,'worker'=>is_file(STREAM_DATA.'/runtime/stalker-library.heartbeat')&&filemtime(STREAM_DATA.'/runtime/stalker-library.heartbeat')>time()-180];
     }
     public static function control(array $opts): array {
@@ -20,7 +26,6 @@ final class StalkerCatalogues {
                 // Lock the job row so a response fetched before pause/rebuild cannot commit afterwards.
                 $q=$pdo->prepare('SELECT status FROM vaultcast_stalker_jobs WHERE feed_id=? AND kind=? FOR UPDATE');$q->execute([$f['id'],$type]);$status=$q->fetchColumn();
                 if($op==='pause'){$q=$pdo->prepare("UPDATE vaultcast_stalker_jobs SET status='paused' WHERE feed_id=? AND kind=?");$q->execute([$f['id'],$type]);}
-                elseif($op==='load'&&$status==='paused'){$q=$pdo->prepare("UPDATE vaultcast_stalker_jobs SET status='queued',next_run=? WHERE feed_id=? AND kind=?");$q->execute([time(),$f['id'],$type]);}
                 else StalkerLibrary::queue($f,$type,$op==='refresh');
             }
             $pdo->commit();
@@ -35,7 +40,7 @@ final class StalkerCatalogues {
         foreach($after as $f)if(($f['type']??'')==='stalker'&&!empty($f['enabled'])&&(!isset($old[$f['id']])||empty($old[$f['id']]['enabled'])||self::config($old[$f['id']])!==self::config($f)))foreach(['vod','series'] as $kind)StalkerLibrary::queue($f,$kind);
         self::ensureWorker();
     }
-    private static function revision(): string {return hash('sha256',hash_file('sha256',__FILE__).hash_file('sha256',__DIR__.'/StalkerLibrary.php'));}
+    private static function revision(): string {return hash('sha256',hash_file('sha256',__FILE__).hash_file('sha256',__DIR__.'/StalkerLibrary.php').hash_file('sha256',__DIR__.'/StalkerCatalogueScan.php').hash_file('sha256',STREAM_ROOT.'/src/Live/stalker.php'));}
     public static function ensureWorker(): void {
         if(PHP_SAPI==='cli'||!is_file(STREAM_DATA.'/runtime/stalker-library.enabled'))return;
         $dir=STREAM_DATA.'/runtime';$probe=@fopen($dir.'/stalker-library.worker.lock','c');if(!$probe)return;

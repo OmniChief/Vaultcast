@@ -409,3 +409,25 @@ CREATE TABLE IF NOT EXISTS vaultcast_stalker_aliases (
  catalogue_id CHAR(32) CHARACTER SET ascii NOT NULL, title_key CHAR(64) CHARACTER SET ascii NOT NULL, year SMALLINT NOT NULL,
  PRIMARY KEY(catalogue_id,title_key,year), INDEX alias_match(title_key,year,catalogue_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS vaultcast_stalker_folders (
+ feed_id VARCHAR(120) NOT NULL, kind VARCHAR(8) CHARACTER SET ascii NOT NULL,
+ generation CHAR(32) CHARACTER SET ascii NOT NULL, folder_id VARCHAR(120) NOT NULL,
+ title VARCHAR(500) NOT NULL, status VARCHAR(16) CHARACTER SET ascii NOT NULL DEFAULT 'pending',
+ next_page INT NOT NULL DEFAULT 1, processed INT NOT NULL DEFAULT 0, total BIGINT NULL,
+ last_success BIGINT NULL, error VARCHAR(255) NOT NULL DEFAULT '', failures INT NOT NULL DEFAULT 0,
+ next_run BIGINT NOT NULL DEFAULT 0,
+ PRIMARY KEY(feed_id,kind,generation,folder_id), INDEX folder_work(feed_id,kind,generation,status,next_run)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS vaultcast_stalker_staging (
+ feed_id VARCHAR(120) NOT NULL, kind VARCHAR(8) CHARACTER SET ascii NOT NULL,
+ generation CHAR(32) CHARACTER SET ascii NOT NULL, item_id VARCHAR(120) NOT NULL,
+ category VARCHAR(500) NOT NULL, payload MEDIUMTEXT NOT NULL,
+ PRIMARY KEY(feed_id,kind,generation,item_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS vaultcast_stalker_folder_items (
+ feed_id VARCHAR(120) NOT NULL, kind VARCHAR(8) CHARACTER SET ascii NOT NULL,
+ generation CHAR(32) CHARACTER SET ascii NOT NULL, folder_id VARCHAR(120) NOT NULL,
+ item_id VARCHAR(120) NOT NULL,
+ PRIMARY KEY(feed_id,kind,generation,folder_id,item_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

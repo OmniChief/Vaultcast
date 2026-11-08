@@ -348,16 +348,17 @@ window.VaultcastStalkerVod=function(host,options){
     var idx=Number(selection)-1;
     if(!Number.isInteger(idx)||idx<0||idx>=list.length){status.textContent='Invalid connection choice.';return;}
     var feed=list[idx],params=new URLSearchParams({kind:kind,feed:feed.id});
-    // The currently selected category narrows the one-page sample, if numeric.
-    if(/^\d{1,12}$/.test(String(category)))params.set('category',category);
+    // The currently selected provider folder narrows the one-page sample.
+    if(/^[a-zA-Z0-9_-]{1,120}$/.test(String(category)))params.set('category',category);
     fieldProbeButton.disabled=true;
     status.textContent='Inspecting one raw catalogue page from '+feed.name+' ('+kind+')…';
     Promise.resolve(options.api('stalker_vod_fields',params.toString())).then(function(result){
       if(!result||!result.ok)throw Error(result&&result.error||'Catalogue field inspection failed');
       var output={generated:new Date().toISOString(),source:'One Stalker get_ordered_list page',
-        complete:true,connection:result.connection,type:result.kind,category:result.category,
+        complete:false,sampleComplete:result.sampleComplete,connection:result.connection,type:result.kind,category:result.category,
+        page:result.page,rows_returned:result.rows_returned,total_items:result.total_items,folder_ids:result.folder_ids,response_fields:result.response_fields,emptyConfirmed:result.emptyConfirmed,
         rows_inspected:result.rows_inspected,fields:result.fields,
-        note:'Sanitised field inventory; transport details, credentials, playback commands and URLs omitted.'};
+        note:result.note};
       var blob=new Blob([JSON.stringify(output,null,2)+'\n'],{type:'application/json;charset=utf-8'});
       var url=URL.createObjectURL(blob),a=document.createElement('a');
       a.href=url;a.download='stalker-vod-provider-fields-'+kind+'-'+new Date().toISOString().slice(0,10)+'.json';
@@ -1351,15 +1352,15 @@ window.VaultcastStalkerVod=function(host,options){
   function card(item){
     var sources=(item.sources||[]).slice();
     if(filters.language)sources.sort(function(a,b){return Number((b.languages||[]).includes(filters.language))-Number((a.languages||[]).includes(filters.language));});
-    var selected=sources[0],label=item.local?'In local Vaultcast library':item.available?'Available from providers':'No longer available from providers';
+    var selected=sources[0],label=item.local?'In local Vaultcast library':item.verificationPending?'Provider availability is being verified':item.available?'Available from providers':'No longer available from providers';
     function open(){if(!selected)return;options.open(selected.feed,Object.assign({},item,selected,{sources:sources,poster:selected.poster||item.poster}),poster);}
     var poster=h('button',{className:'stalker-vod-cover',type:'button','aria-label':(selected?'Open ':'Unavailable: ')+item.name,disabled:!selected,onClick:open},[h('span',{className:'stalker-vod-placeholder',text:item.name})]);
     if(item.poster)poster.appendChild(h('img',{src:item.poster,alt:'',loading:'lazy',decoding:'async',referrerpolicy:'no-referrer',onError:function(e){e.target.remove();}}));
-    var dot=h('span',{className:'stalker-library-dot '+(item.local?'local':item.available?'available':'unavailable'),title:label,role:'img','aria-label':label});
+    var dot=h('span',{className:'stalker-library-dot '+(item.local?'local':item.verificationPending?'pending':item.available?'available':'unavailable'),title:label,role:'img','aria-label':label});
     var choices=h('select',{'aria-label':'Connection for '+item.name,onChange:function(e){selected=sources[Number(e.target.value)];}},sources.map(function(source,i){return h('option',{value:String(i),text:source.connection+(source.quality?' · '+source.quality:'')+' · '+((source.languages||[]).join(', ')||'Audio language unknown')});}));
     var details=h('details',{className:'stalker-library-details'},[h('summary',{text:'Details & connections'}),h('p',{text:item.description||'No description supplied by providers.'}),h('p',{className:'muted',text:'Audio: '+((item.languages||[]).join(', ')||'Unknown')+' · Audience: '+((item.audienceLanguages||[]).join(', ')||'Unknown')})]);
     if(sources.length)details.append(choices,h('button',{type:'button',className:'btn',text:kind==='series'||!selected.playable?'Browse titles':'Open video',onClick:open}));
-    else details.appendChild(h('p',{text:'No provider connection is currently available. This catalogue entry is retained for up to 15 days in case it returns.'}));
+    else details.appendChild(h('p',{text:item.verificationPending?'Provider availability is being verified. The previous catalogue is retained; no removal countdown has started.':item.unavailableSince?'All provider sources were confirmed unavailable. This entry is retained for 15 days from confirmed loss.':'Availability has not yet been verified. This entry is retained without a removal countdown.'}));
     if(item.local)details.appendChild(h('p',{text:'Also available in your local Vaultcast library.'}));
     return h('article',{className:'stalker-vod-card'},[h('div',{className:'stalker-vod-poster-frame'},[poster,dot]),h('div',{className:'stalker-vod-copy'},[h('button',{className:'stalker-vod-title',text:item.name,disabled:!selected,onClick:open}),h('small',{className:'muted',text:[item.year,(item.genres||[]).join(', ')].filter(Boolean).join(' · ')}),details])]);
   }

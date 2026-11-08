@@ -19,10 +19,7 @@ final class StalkerDirect {
         $categories=[];
         try {
             $result=stalker_call($feed,'get_categories',[],$kind);
-            foreach(($result['data']??$result) as $row)if(is_array($row)&&isset($row['id'])){
-            $categories[]=['id'=>(string)$row['id'],'name'=>(string)($row['title']??$row['name']??$row['id'])];
-            if(count($categories)>=500)break;
-            }
+            foreach(StalkerCatalogueScan::groups($result) as $id=>$name)$categories[]=['id'=>(string)$id,'name'=>$name];
         } catch (RuntimeException $ignored) {
             // Keep the previous usable list when a refresh fails.
             if($cached!==null)return $cached;
@@ -239,25 +236,28 @@ final class StalkerDirect {
         if(!in_array($kind,['vod','series'],true))throw new InvalidArgumentException('Choose movies or series.');
         $wanted=(string)($opts['feed']??'');
         $category=(string)($opts['category']??'');
-        if($category!==''&&!preg_match('/^[0-9]{1,12}$/D',$category))
+        if($category!==''&&!preg_match('/^(?:[a-zA-Z0-9_-]{1,120}|\*)$/D',$category))
             throw new InvalidArgumentException('Choose a valid provider category.');
         $feed=null;
         foreach(($state['feeds']??[]) as $candidate) {
             if(($candidate['id']??'')===$wanted&&($candidate['type']??'')==='stalker'&&!empty($candidate['enabled'])){$feed=$candidate;break;}
         }
         if(!$feed)throw new InvalidArgumentException('Choose an enabled Stalker connection.');
-        // Never inspect more than one normal catalogue page, no get_info or playback.
-        $result=stalker_ordered_page($feed,$kind,['sortby'=>'name','category'=>$category?:'*','search'=>''],1);
-        $rows=$result['data']??$result;
-        if(!is_array($rows))throw new RuntimeException('Invalid provider catalogue page.');
+        $pageNumber=max(1,min(10000,(int)($opts['page']??1)));
+        $groups=StalkerCatalogueScan::groups(stalker_call($feed,'get_categories',[],$kind));
+        // The relocated diagnostic has no provider folder selected. Prefer a real
+        // folder instead of silently sampling an empty or truncated wildcard listing.
+        if($category==='')foreach($groups as $id=>$name)if((string)$id!=='*'){$category=(string)$id;break;}
+        $result=stalker_ordered_page($feed,$kind,['sortby'=>'name','category'=>$category?:'*','search'=>''],$pageNumber);
+        $parsed=StalkerCatalogueScan::page($result);$rows=$parsed['rows'];
         $count=0;$inventory=[];
-        $safeExamples=['name','o_name','year','movie_year','release_date','premiered','category_id','genre_id',
+        $safeExamples=['id','imdb','tmdb','name','o_name','year','movie_year','release_date','premiered','category_id','genre_id',
             'genre','genres','genres_str','director','actors','cast','description','descr','plot','summary','overview',
             'time','duration','country','language','original_language','rating_imdb','rating_mpaa','rating',
             'age','hd','high_quality','added','tmdb_id','imdb_id','kinopoisk_id','season','season_number',
             'series_number','episode','episode_number','episodes_count','seasons_count','audio_languages',
             'subtitle_languages'];
-        $inspect=function(array $section,string $prefix='') use (&$inspect,&$inventory,$safeExamples): void {
+        $inspect=function(array $section,string $prefix='') use (&$inspect,&$inventory,$safeExamples,$feed): void {
             foreach($section as $key=>$value){
                 if(!is_string($key)||!preg_match('/^[a-z][a-z0-9_]{0,49}$/i',$key))continue;
                 if(preg_match('/(?:token|auth|pass|secret|cookie|key|mac|serial|device|url|link|cmd|stream|ticket|host|ip|login|account|user|pin|drm|license|proxy|path|file|play)/i',$key))continue;
@@ -268,6 +268,8 @@ final class StalkerDirect {
                 if($value!==null&&$value!==''&&$value!==[])$inventory[$path]['populated']++;
                 if(in_array($key,$safeExamples,true)&&!is_array($value)&&is_scalar($value)&&!isset($inventory[$path]['example'])){
                     $sample=trim(html_entity_decode(strip_tags((string)$value),ENT_QUOTES|ENT_HTML5,'UTF-8'));
+                    foreach(['mac','username','password','serial','deviceId','deviceId2','url'] as $secret)if((string)($feed[$secret]??'')!==''&&stripos($sample,(string)$feed[$secret])!==false)$sample='';
+                    if(preg_match('/(?:[0-9a-f]{2}:){5}[0-9a-f]{2}/i',$sample))$sample='';
                     if($sample!==''&&!preg_match('~(?:https?://|[a-z][a-z0-9+.-]*://|(?:token|auth|pass|session|cookie)[=:]|[?&][a-z_]+=)~i',$sample)){
                         $inventory[$path]['example']=mb_substr(preg_replace('/[\x00-\x1f\x7f]/',' ',$sample),0,120);
                     }
@@ -284,7 +286,12 @@ final class StalkerDirect {
         }
         ksort($inventory);
         return ['ok'=>true,'kind'=>$kind,'connection'=>$feed['name'],'category'=>$category?:'*',
-            'rows_inspected'=>$count,'fields'=>$inventory,'note'=>'Inventory of up to 15 entries from one raw catalogue page; sensitive fields omitted.'];
+            'rows_inspected'=>$count,'fields'=>$inventory,'complete'=>false,'sampleComplete'=>true,
+            'page'=>$pageNumber,'rows_returned'=>count($rows),'total_items'=>$parsed['total'],
+            'folder_ids'=>array_map('strval',array_keys($groups)),
+            'response_fields'=>array_values(array_intersect(['data','total_items','max_page_items','total_pages','cur_page','page'],array_keys($result))),
+            'emptyConfirmed'=>!$rows&&$parsed['total']===0,
+            'note'=>'One page sample, not a complete catalogue. Empty content without an explicit zero total is unverified; sensitive fields omitted.'];
     }
 
     public static function browse(array $state,array $opts): array {
@@ -309,8 +316,8 @@ final class StalkerDirect {
             // Allowlist descriptive and artwork fields; never return arbitrary provider fields,
             // portal credentials, cookies, authorization headers or query tokens.
             $result=stalker_call($feed,'get_categories',[],$kind);
+            StalkerCatalogueScan::groups($result);
             $rows=$result['data']??$result;
-            if(!is_array($rows))throw new RuntimeException('Provider returned invalid category data.');
             $fields=['id','title','name','description','logo','icon','image','poster','cover','pic','screenshot_uri','movie_image','thumbnail','thumb','image_url','poster_url','cover_url'];
             $out=[];
             foreach($rows as $row){
@@ -330,7 +337,6 @@ final class StalkerDirect {
                     $safe[$field]=$value;
                 }
                 if($safe)$out[]=$safe;
-                if(count($out)>=500)break;
             }
             return ['ok'=>true,'kind'=>$kind,'selectedFeed'=>$feed['id'],'categories'=>$out,'count'=>count($out)];
         }
