@@ -39,6 +39,7 @@ final class BrowseIndex
             if ($initial && $p['show_key']!=='') $dirty[$p['show_key']]=true;
             if ($prior && $prior['source_sig']===$p['source_sig']) continue;
             self::saveProjection($p);
+            StalkerLibrary::syncLocal($it);
             if ($prior && $prior['show_key']!=='') $dirty[$prior['show_key']]=true;
             if ($p['show_key']!=='') $dirty[$p['show_key']]=true;
         }

@@ -32,7 +32,7 @@ final class StalkerDirect {
         return $categories;
     }
     /** Copy presentation-only metadata already supplied with a catalogue page. */
-    private static function descriptiveFields(array $row): array {
+    public static function descriptiveFields(array $row): array {
         $text=['o_name','genres_str','genre','genres','director','actors','cast','country','language',
             'original_language','rating_imdb','rating_mpaa','rating_kinopoisk','age','added',
             'imdb_id','tmdb_id','kinopoisk_id','movie_year','release_date','premiered','duration',

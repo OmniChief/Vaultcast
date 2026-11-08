@@ -439,6 +439,7 @@ function stalker_catalogue(array $feed, array $opts): array {
 }
 
 function stalker_vod_entry(array $feed,string $id): ?array {
+    $catalogued=StalkerLibrary::entry($feed,$id);if($catalogued)return $catalogued;
     $direct=StalkerDirect::item($feed,$id);
     if($direct)return $direct;
     $key=stalker_item_key($feed,$id);$item=\Vaultcast\Repository::cacheGet($key);

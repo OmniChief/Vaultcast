@@ -3417,3 +3417,10 @@ html[data-motion="reduced"] .vca-overall span,html[data-motion="reduced"] .vca-b
 .stalker-vod-network-logo-mubi{background:#101010;color:#fff}
 .stalker-vod-network-logo-mgm{background:#161616;color:#d6bd75}
 .stalker-vod-network-logo-starz{background:#101010;color:#fff}
+
+/* Shared VOD library: stable poster grid with explicit availability. */
+.stalker-library-dot{position:absolute;top:8px;left:8px;width:13px;height:13px;border:2px solid #fff;border-radius:50%;z-index:2;box-shadow:0 1px 5px #0009;pointer-events:none}
+.stalker-library-dot.available{background:#22c55e}.stalker-library-dot.unavailable{background:#ef4444}.stalker-library-dot.local{background:#3b82f6}
+.stalker-library-alphabet{display:flex;flex-wrap:wrap;gap:3px;margin:12px 0}.stalker-library-alphabet .btn{min-width:32px;padding:6px}.stalker-library-alphabet .active{outline:2px solid currentColor}
+.stalker-library-details{font-size:.85rem}.stalker-library-details summary{cursor:pointer;padding:6px 0}.stalker-library-details select{max-width:100%;width:100%}.stalker-library-details p{overflow-wrap:anywhere}.stalker-vod-poster-frame{position:relative}
+.stalker-library-legend .available{color:#22c55e}.stalker-library-legend .unavailable{color:#ef4444}.stalker-library-legend .local{color:#60a5fa}

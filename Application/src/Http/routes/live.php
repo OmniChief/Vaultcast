@@ -311,7 +311,7 @@ if ($__liveAction !== null) {
             $body=$isWrite?body_json():$_GET;
             if ($__liveAction==='stalker_catalogue_status') {Permissions::require('iptv_manage');json_out(StalkerCatalogues::status());}
             if ($__liveAction==='stalker_catalogue_control') {Permissions::require('iptv_manage');json_out(StalkerCatalogues::control($body));}
-            if ($__liveAction==='stalker_vod_catalogue') json_out(StalkerDirect::browse($state,$body));
+            if ($__liveAction==='stalker_vod_catalogue') json_out(!empty($body['indexed'])?StalkerLibrary::browse($state,$body):StalkerDirect::browse($state,$body));
             if ($__liveAction==='stalker_vod_probe') {Permissions::require('iptv_manage');json_out(StalkerDirect::probe($state,$body));}
             if ($__liveAction==='stalker_vod_fields') {Permissions::require('iptv_manage');json_out(StalkerDirect::catalogueFieldProbe($state,$body));}
             if ($__liveAction==='stalker_epg_fields') {

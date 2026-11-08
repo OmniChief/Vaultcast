@@ -6,7 +6,7 @@
  */
 final class Migrations
 {
-    const VERSION = 19; // 19: admin-owned shared provider catalogues; 18: incremental Stalker on-demand catalogue; 17: achievements and badges; 16: trailers and extras index; 15: media requests (and requests.create for existing custom roles); 14: unified inbox; 13: smart collections and their facts index; 12: age ratings and parental controls / kids profiles; 11: site-wide webcam registry (Ambient); 10: calendars, events, reminders and personal pictures (Misc); 9: leaderboard covering indexes, Drop anonymous origin column and MEDIUMTEXT notes; 8: play scores/points and drop storage; 2: library folder access pass for nginx (step 5); 3: re-run it, recording results; 4: media facts table; 5: arrival timestamps and indexed running times; 6: chat storage; 7: prepared browsing
+    const VERSION = 20; // 20: persistent deduplicated VOD library; 19: admin-owned shared provider catalogues; 18: incremental Stalker on-demand catalogue; 17: achievements and badges; 16: trailers and extras index; 15: media requests (and requests.create for existing custom roles); 14: unified inbox; 13: smart collections and their facts index; 12: age ratings and parental controls / kids profiles; 11: site-wide webcam registry (Ambient); 10: calendars, events, reminders and personal pictures (Misc); 9: leaderboard covering indexes, Drop anonymous origin column and MEDIUMTEXT notes; 8: play scores/points and drop storage; 2: library folder access pass for nginx (step 5); 3: re-run it, recording results; 4: media facts table; 5: arrival timestamps and indexed running times; 6: chat storage; 7: prepared browsing
 
     public static function stampFile(): string
     {

@@ -364,3 +364,48 @@ CREATE TABLE IF NOT EXISTS vaultcast_stalker_titles (
  KEY stalker_group(kind,group_key),
  KEY stalker_year(kind,year)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS vaultcast_stalker_library (
+ id CHAR(32) CHARACTER SET ascii NOT NULL PRIMARY KEY,
+ kind VARCHAR(8) CHARACTER SET ascii NOT NULL,
+ title VARCHAR(500) NOT NULL, title_key CHAR(64) CHARACTER SET ascii NOT NULL,
+ year SMALLINT NULL, imdb_id VARCHAR(16) CHARACTER SET ascii NOT NULL DEFAULT '',
+ tmdb_id VARCHAR(12) CHARACTER SET ascii NOT NULL DEFAULT '',
+ available TINYINT NOT NULL DEFAULT 0, unavailable_since BIGINT NULL, payload MEDIUMTEXT NOT NULL,
+ INDEX library_title(kind,title(120),id), INDEX library_match(kind,title_key,year),
+ INDEX library_imdb(kind,imdb_id), INDEX library_tmdb(kind,tmdb_id),
+ INDEX library_year(kind,year), INDEX library_expiry(available,unavailable_since)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS vaultcast_stalker_offers (
+ feed_id VARCHAR(120) NOT NULL, kind VARCHAR(8) CHARACTER SET ascii NOT NULL,
+ item_id VARCHAR(120) NOT NULL, catalogue_id CHAR(32) CHARACTER SET ascii NOT NULL,
+ config CHAR(64) CHARACTER SET ascii NOT NULL, generation CHAR(32) CHARACTER SET ascii NOT NULL,
+ available TINYINT NOT NULL DEFAULT 1, last_seen BIGINT NOT NULL,
+ payload MEDIUMTEXT NOT NULL, playback MEDIUMTEXT NOT NULL,
+ PRIMARY KEY(feed_id,kind,item_id), INDEX offer_title(catalogue_id,available),
+ INDEX offer_generation(feed_id,kind,generation), INDEX offer_active(available,feed_id,kind,config)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS vaultcast_stalker_facets (
+ catalogue_id CHAR(32) CHARACTER SET ascii NOT NULL, facet VARCHAR(24) CHARACTER SET ascii NOT NULL,
+ value VARCHAR(80) NOT NULL, PRIMARY KEY(catalogue_id,facet,value), INDEX facet_lookup(facet,value,catalogue_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS vaultcast_stalker_jobs (
+ feed_id VARCHAR(120) NOT NULL, kind VARCHAR(8) CHARACTER SET ascii NOT NULL,
+ config CHAR(64) CHARACTER SET ascii NOT NULL, generation CHAR(32) CHARACTER SET ascii NOT NULL,
+ status VARCHAR(16) CHARACTER SET ascii NOT NULL, next_page INT NOT NULL DEFAULT 1,
+ processed INT NOT NULL DEFAULT 0, last_hash CHAR(64) CHARACTER SET ascii NOT NULL DEFAULT '',
+ error VARCHAR(255) NOT NULL DEFAULT '', next_run BIGINT NOT NULL,
+ PRIMARY KEY(feed_id,kind), INDEX job_due(status,next_run)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS vaultcast_stalker_local (
+ item_id VARCHAR(64) CHARACTER SET ascii NOT NULL PRIMARY KEY,
+ kind VARCHAR(8) CHARACTER SET ascii NOT NULL, title_key CHAR(64) CHARACTER SET ascii NOT NULL,
+ year SMALLINT NULL, imdb_id VARCHAR(16) CHARACTER SET ascii NOT NULL DEFAULT '', tmdb_id VARCHAR(12) CHARACTER SET ascii NOT NULL DEFAULT '',
+ INDEX local_title(kind,title_key,year), INDEX local_imdb(kind,imdb_id), INDEX local_tmdb(kind,tmdb_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS vaultcast_stalker_aliases (
+ catalogue_id CHAR(32) CHARACTER SET ascii NOT NULL, title_key CHAR(64) CHARACTER SET ascii NOT NULL, year SMALLINT NOT NULL,
+ PRIMARY KEY(catalogue_id,title_key,year), INDEX alias_match(title_key,year,catalogue_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
