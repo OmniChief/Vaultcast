@@ -36,9 +36,33 @@ final class StalkerCatalogues {
         return ['ok'=>true,'sources'=>$sources,'worker'=>is_file(STREAM_DATA.'/runtime/stalker-library.heartbeat')&&filemtime(STREAM_DATA.'/runtime/stalker-library.heartbeat')>time()-180];
     }
     public static function control(array $opts): array {
-        $op=(string)($opts['operation']??'load');if(!in_array($op,['load','refresh','pause','folders'],true))throw new InvalidArgumentException('Unknown catalogue operation.');
+        $op=(string)($opts['operation']??'load');if(!in_array($op,['load','refresh','pause','folders','discover'],true))throw new InvalidArgumentException('Unknown catalogue operation.');
         $kind=(string)($opts['kind']??'all');if(!in_array($kind,['all','vod','series'],true))throw new InvalidArgumentException('Choose Movies, Series, or both. Live TV is browsed on demand.');
         $selected=(string)($opts['feed']??'');$pdo=\Vaultcast\Database::connection();
+        if($op==='discover'){
+            if($selected===''||!in_array($kind,['vod','series'],true))throw new InvalidArgumentException('Choose one connection and Movies or Series to discover folders.');
+            $feeds=array_column(self::feeds(),null,'id');
+            if(!isset($feeds[$selected]))throw new InvalidArgumentException('Unknown or disabled Stalker connection.');
+            require_once STREAM_ROOT.'/src/Live/stalker.php';
+            // Provider requests are outside transactions and only fetch folder names.
+            $groups=StalkerCatalogueScan::groups(stalker_call($feeds[$selected],'get_categories',[],$kind));
+            $selection=self::folderSelection($selected,$kind);
+            $pdo->beginTransaction();
+            try {
+                StalkerLibrary::queue($feeds[$selected],$kind,true);
+                $q=$pdo->prepare('SELECT generation FROM vaultcast_stalker_jobs WHERE feed_id=? AND kind=? FOR UPDATE');
+                $q->execute([$selected,$kind]);$generation=$q->fetchColumn();
+                $q=$pdo->prepare('INSERT INTO vaultcast_stalker_folders(feed_id,kind,generation,folder_id,title,status,last_success) VALUES(?,?,?,?,?,?,?)');
+                $q->execute([$selected,$kind,$generation,'','Folder discovery','complete',time()]);
+                foreach($groups as $id=>$title){
+                    $q->execute([$selected,$kind,$generation,(string)$id,$title,self::folderSelected($selection,(string)$id)?'pending':'skipped',null]);
+                }
+                $q=$pdo->prepare("UPDATE vaultcast_stalker_jobs SET status='paused',last_hash='discovered',error='',next_run=? WHERE feed_id=? AND kind=?");
+                $q->execute([time(),$selected,$kind]);
+                $pdo->commit();
+            }catch(Throwable $e){if($pdo->inTransaction())$pdo->rollBack();throw $e;}
+            return self::status();
+        }
         if($op==='folders'){
             if($selected===''||!in_array($kind,['vod','series'],true))throw new InvalidArgumentException('Choose one connection and Movies or Series to save folder selection.');
             $feeds=array_column(self::feeds(),null,'id');
