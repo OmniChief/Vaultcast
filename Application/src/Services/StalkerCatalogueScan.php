@@ -46,6 +46,19 @@ final class StalkerCatalogueScan {
         try{
             // A new generation starts with a durable discovery task (empty ID is internal).
             self::q("INSERT IGNORE INTO vaultcast_stalker_folders(feed_id,kind,generation,folder_id,title) VALUES(?,?,?,'','Folder discovery')",$key);
+            // Publish staged additions before requesting another provider page. This makes
+            // successfully scanned titles visible while the scan is still running.
+            // The generation check prevents stale/paused workers from publishing.
+            $pending=self::q('SELECT item_id,category,payload FROM vaultcast_stalker_staging WHERE feed_id=? AND kind=? AND generation=? ORDER BY item_id LIMIT 50',$key)->fetchAll();
+            if($pending){
+                self::db()->beginTransaction();
+                if(!self::locked($job)){self::db()->rollBack();return;}
+                StalkerLibrary::publish($feed,$job['kind'],$job['generation'],$pending);
+                foreach($pending as $item)self::q('DELETE FROM vaultcast_stalker_staging WHERE feed_id=? AND kind=? AND generation=? AND item_id=?',array_merge($key,[$item['item_id']]));
+                self::q("UPDATE vaultcast_stalker_jobs SET status='partial',last_hash='publish',error='',next_run=? WHERE feed_id=? AND kind=?",[time(),$job['feed_id'],$job['kind']]);
+                self::db()->commit();
+                return;
+            }
             $folder=self::q("SELECT * FROM vaultcast_stalker_folders WHERE feed_id=? AND kind=? AND generation=? AND status<>'complete' ORDER BY folder_id='*',folder_id LIMIT 1",$key)->fetch();
             if($folder){
                 if((int)$folder['next_run']>time())return;
