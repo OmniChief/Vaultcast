@@ -166,7 +166,7 @@ final class StalkerLibrary {
             $deleted=self::query('DELETE FROM '.$tables[$index].' LIMIT 500')->rowCount();
             if($deleted===0){
                 $state['table']=$index+1;
-                \\Vaultcast\\Repository::putDocument('stalker-catalogue-reset',$state);
+                \Vaultcast\Repository::putDocument('stalker-catalogue-reset',$state);
             }
             return true;
         }
@@ -176,7 +176,7 @@ final class StalkerLibrary {
             // Existing connection and folder selections remain unchanged.
             self::query('DELETE FROM vaultcast_stalker_jobs');
             foreach($feeds as $feed)foreach(['vod','series'] as $kind)self::queue($feed,$kind,true);
-            \\Vaultcast\\Repository::putDocument('stalker-catalogue-reset',['state'=>'complete','finished'=>time()]);
+            \Vaultcast\Repository::putDocument('stalker-catalogue-reset',['state'=>'complete','finished'=>time()]);
             self::db()->commit();
         }catch(Throwable $e){if(self::db()->inTransaction())self::db()->rollBack();throw $e;}
         return true;
@@ -184,7 +184,7 @@ final class StalkerLibrary {
     public static function tick(): bool {
         require_once STREAM_ROOT.'/src/Live/iptv.php';require_once STREAM_ROOT.'/src/Live/stalker.php';
         $feeds=[];foreach(iptv_load()['feeds']??[] as $f)if(($f['type']??'')==='stalker'&&!empty($f['enabled']))$feeds[$f['id']]=$f;
-        $reset=\\Vaultcast\\Repository::document('stalker-catalogue-reset',['state'=>'idle']);
+        $reset=\Vaultcast\Repository::document('stalker-catalogue-reset',['state'=>'idle']);
         if(($reset['state']??'idle')==='purging')return self::resetBatch($reset,$feeds);
         foreach(self::query('SELECT * FROM vaultcast_stalker_jobs') as $j){
             $f=$feeds[$j['feed_id']]??null;
