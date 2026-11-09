@@ -6836,9 +6836,10 @@ try {
       if(draftKey!==k){draftKey=k;draft=null;}
       if(!draft)draft={mode:source&&source.folderMode==='include'?'include':'all',ids:new Set(source&&source.folderIds||[])};
       list.replaceChildren();
-      var ready=!!source&&folders.length>0;
+      var ready=!!source&&(folders.length>0||(source.folders||[]).some(function(f){return f.folder_id==='*';}));
       all.disabled=none.disabled=save.disabled=busy||!ready;
-      if(!ready){info.textContent='Build / update the catalogue first to discover provider folders for this connection and content type.';return;}
+      if(!ready){info.textContent='Click Discover provider folders to retrieve the folder list without scanning titles.';return;}
+      if(!folders.length)info.textContent='No named folders were returned. Select all to scan provider-wide All or select none to skip.';
       folders.forEach(function(folder){
         var check=h('input',{type:'checkbox',checked:draft.mode==='all'||draft.ids.has(folder.folder_id)});
         check.onchange=function(){
@@ -6882,7 +6883,7 @@ try {
       if(!draft||busy)return;
       busy=true;save.disabled=true;info.textContent='Saving folder selection…';
       stalkerPost('stalker_catalogue_control',{operation:'folders',feed:feed.value,kind:kind.value,mode:draft.mode,folders:Array.from(draft.ids)}).then(function(data){
-        sources=data.sources||[];draft=null;draw();
+        sources=data.sources||[];draft=null;draw();refresh();
       }).catch(function(error){info.className='bad';info.textContent=error.message;})
         .finally(function(){busy=false;save.disabled=false;});
     };
