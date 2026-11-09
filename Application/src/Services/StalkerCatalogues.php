@@ -33,12 +33,27 @@ final class StalkerCatalogues {
             $r['foldersComplete']=count(array_filter($folders,static function($f){return $f['folder_id']!==''&&in_array($f['status'],['complete','skipped'],true);}));
             $r['currentFolder']=null;foreach($folders as $folder)if(!in_array($folder['status'],['complete','skipped'],true)){$r['currentFolder']=$folder;break;}
             $sources[]=$r;}
-        return ['ok'=>true,'sources'=>$sources,'worker'=>is_file(STREAM_DATA.'/runtime/stalker-library.heartbeat')&&filemtime(STREAM_DATA.'/runtime/stalker-library.heartbeat')>time()-180];
+        return ['ok'=>true,'sources'=>$sources,'reset'=>\Vaultcast\Repository::document('stalker-catalogue-reset',['state'=>'idle']),'worker'=>is_file(STREAM_DATA.'/runtime/stalker-library.heartbeat')&&filemtime(STREAM_DATA.'/runtime/stalker-library.heartbeat')>time()-180];
     }
     public static function control(array $opts): array {
-        $op=(string)($opts['operation']??'load');if(!in_array($op,['load','refresh','pause','folders','discover'],true))throw new InvalidArgumentException('Unknown catalogue operation.');
+        $op=(string)($opts['operation']??'load');if(!in_array($op,['load','refresh','pause','folders','discover','reset_rebuild'],true))throw new InvalidArgumentException('Unknown catalogue operation.');
         $kind=(string)($opts['kind']??'all');if(!in_array($kind,['all','vod','series'],true))throw new InvalidArgumentException('Choose Movies, Series, or both. Live TV is browsed on demand.');
         $selected=(string)($opts['feed']??'');$pdo=\Vaultcast\Database::connection();
+        $reset=\Vaultcast\Repository::document('stalker-catalogue-reset',['state'=>'idle']);
+        if(($reset['state']??'idle')==='purging')throw new InvalidArgumentException('Catalogue reset is in progress. Wait for it to finish.');
+        if($op==='reset_rebuild'){
+            if($selected!==''||$kind!=='all'||($opts['confirmation']??'')!=='RESET STALKER CATALOGUE')throw new InvalidArgumentException('Confirm a full Stalker Movies and Series reset.');
+            $pdo->beginTransaction();
+            try {
+                // In-flight worker page commits lock the job row. Pausing every job
+                // invalidates subsequent page responses before any purge begins.
+                $pdo->exec("UPDATE vaultcast_stalker_jobs SET status='paused',next_run=0");
+                \Vaultcast\Repository::putDocument('stalker-catalogue-reset',['state'=>'purging','table'=>0,'started'=>time()]);
+                $pdo->commit();
+            }catch(Throwable $e){if($pdo->inTransaction())$pdo->rollBack();throw $e;}
+            file_put_contents(STREAM_DATA.'/runtime/stalker-library.enabled','1');
+            self::ensureWorker();return self::status();
+        }
         if($op==='discover'){
             if($selected===''||!in_array($kind,['vod','series'],true))throw new InvalidArgumentException('Choose one connection and Movies or Series to discover folders.');
             $feeds=array_column(self::feeds(),null,'id');
