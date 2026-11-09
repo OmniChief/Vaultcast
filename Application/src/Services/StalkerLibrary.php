@@ -153,9 +153,39 @@ final class StalkerLibrary {
         foreach(array_keys($changed) as $id)self::aggregate($id);
         return !$rows;
     }
+    /** Destructive initial setup is processed in bounded batches by the existing worker.
+     * Do not delete the local-library index or user favourites/preferences.
+     */
+    private static function resetBatch(array $state,array $feeds): bool {
+        $tables=['vaultcast_stalker_staging','vaultcast_stalker_folder_items','vaultcast_stalker_folders',
+            'vaultcast_stalker_offers','vaultcast_stalker_facets','vaultcast_stalker_aliases',
+            'vaultcast_stalker_library'];
+        $index=max(0,(int)($state['table']??0));
+        if($index<count($tables)){
+            // Each step bounds locks and memory; no full-table TRUNCATE/implicit DDL commit.
+            $deleted=self::query('DELETE FROM '.$tables[$index].' LIMIT 500')->rowCount();
+            if($deleted===0){
+                $state['table']=$index+1;
+                \\Vaultcast\\Repository::putDocument('stalker-catalogue-reset',$state);
+            }
+            return true;
+        }
+        self::db()->beginTransaction();
+        try {
+            // The old catalogue is gone: missing items have no grace period.
+            // Existing connection and folder selections remain unchanged.
+            self::query('DELETE FROM vaultcast_stalker_jobs');
+            foreach($feeds as $feed)foreach(['vod','series'] as $kind)self::queue($feed,$kind,true);
+            \\Vaultcast\\Repository::putDocument('stalker-catalogue-reset',['state'=>'complete','finished'=>time()]);
+            self::db()->commit();
+        }catch(Throwable $e){if(self::db()->inTransaction())self::db()->rollBack();throw $e;}
+        return true;
+    }
     public static function tick(): bool {
         require_once STREAM_ROOT.'/src/Live/iptv.php';require_once STREAM_ROOT.'/src/Live/stalker.php';
         $feeds=[];foreach(iptv_load()['feeds']??[] as $f)if(($f['type']??'')==='stalker'&&!empty($f['enabled']))$feeds[$f['id']]=$f;
+        $reset=\\Vaultcast\\Repository::document('stalker-catalogue-reset',['state'=>'idle']);
+        if(($reset['state']??'idle')==='purging')return self::resetBatch($reset,$feeds);
         foreach(self::query('SELECT * FROM vaultcast_stalker_jobs') as $j){
             $f=$feeds[$j['feed_id']]??null;
             if(!$f){
