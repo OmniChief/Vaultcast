@@ -6845,7 +6845,7 @@ try {
       var names={EN:'English',DE:'German',ES:'Spanish',NL:'Dutch',IT:'Italian',LA:'Latin American',FR:'French',PT:'Portuguese',BR:'Brazilian',PL:'Polish',TR:'Turkish',AR:'Arabic',RU:'Russian',IN:'Indian',BE:'Belgian'};
       var grouped={};
       folders.forEach(function(folder){
-        var match=/^([A-Z]{2,3})\\s*[-–:]\\s*/.exec((folder.title||'').trim());
+        var match=/^([A-Z]{2,3})\s*[-–:]\s*/.exec((folder.title||'').trim());
         var code=match?match[1]:'OTHER';
         if(!grouped[code])grouped[code]=[];
         grouped[code].push(folder);
