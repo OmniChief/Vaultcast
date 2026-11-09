@@ -131,7 +131,7 @@ final class StalkerLibrary {
         $old=self::query('SELECT * FROM vaultcast_stalker_jobs WHERE feed_id=? AND kind=?',[$feed['id'],$kind])->fetch();
         if(!$reset&&$old&&$old['config']===StalkerCatalogues::config($feed)){
             if(in_array($old['status'],['paused','failed','error'],true)){
-                self::query("UPDATE vaultcast_stalker_folders SET status='pending',failures=0,next_run=0,error='' WHERE feed_id=? AND kind=? AND generation=? AND status<>'complete'",[$feed['id'],$kind,$old['generation']]);
+                self::query("UPDATE vaultcast_stalker_folders SET status='pending',failures=0,next_run=0,error='' WHERE feed_id=? AND kind=? AND generation=? AND status NOT IN ('complete','skipped')",[$feed['id'],$kind,$old['generation']]);
                 self::query("UPDATE vaultcast_stalker_jobs SET status='queued',next_page=1,next_run=?,error='' WHERE feed_id=? AND kind=?",[time(),$feed['id'],$kind]);
             }
             return;
