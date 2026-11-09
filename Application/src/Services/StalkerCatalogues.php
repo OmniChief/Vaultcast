@@ -43,6 +43,9 @@ final class StalkerCatalogues {
             if($selected===''||!in_array($kind,['vod','series'],true))throw new InvalidArgumentException('Choose one connection and Movies or Series to discover folders.');
             $feeds=array_column(self::feeds(),null,'id');
             if(!isset($feeds[$selected]))throw new InvalidArgumentException('Unknown or disabled Stalker connection.');
+            $q=$pdo->prepare('SELECT status FROM vaultcast_stalker_jobs WHERE feed_id=? AND kind=?');
+            $q->execute([$selected,$kind]);
+            if(in_array($q->fetchColumn(),['queued','running','partial','waiting'],true))throw new InvalidArgumentException('Pause the current catalogue scan before rediscovering provider folders.');
             require_once STREAM_ROOT.'/src/Live/stalker.php';
             // Provider requests are outside transactions and only fetch folder names.
             $groups=StalkerCatalogueScan::groups(stalker_call($feeds[$selected],'get_categories',[],$kind));
