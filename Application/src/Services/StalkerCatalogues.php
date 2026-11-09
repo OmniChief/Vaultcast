@@ -22,7 +22,7 @@ final class StalkerCatalogues {
             $q=\Vaultcast\Database::connection()->prepare("SELECT f.folder_id,f.title,f.status,f.next_page,f.processed,f.total,f.last_success,f.error,f.next_run FROM vaultcast_stalker_folders f JOIN vaultcast_stalker_jobs j ON j.feed_id=f.feed_id AND j.kind=f.kind AND j.generation=f.generation WHERE f.feed_id=? AND f.kind=? ORDER BY f.folder_id='*',f.folder_id");
             $q->execute([$r['feed_id'],$r['kind']]);$folders=$q->fetchAll();
             $selection=self::folderSelection($r['feed_id'],$r['kind']);
-            $r['folderMode']=$selection['mode'];
+            $r['folderMode']=$selection['mode'];$r['folderIds']=$selection['ids'];
             $r['folders']=[];
             foreach($folders as $folder)if($folder['folder_id']!==''){
                 $folder['selected']=self::folderSelected($selection,$folder['folder_id']);
