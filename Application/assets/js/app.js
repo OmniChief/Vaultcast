@@ -6812,6 +6812,74 @@ try {
     function status(){if(!card.isConnected)return;liveApi('stalker_catalogue_status').then(render).catch(function(error){if(card.isConnected)message.textContent=error.message;});}
     [['load','Build / update / resume catalogue'],['refresh','Restart verification of selected catalogue'],['pause','Pause loading']].forEach(function(spec){card.appendChild(h('button',{className:'btn',text:spec[1],onClick:function(e){var button=e.currentTarget;button.disabled=true;message.textContent='Updating shared catalogue job…';stalkerPost('stalker_catalogue_control',{operation:spec[0],feed:feed.value,kind:kind.value}).then(render).catch(function(error){message.textContent=error.message;}).finally(function(){button.disabled=false;});}}));});status();
   }
+  function stalkerFolderSettings(host,connections){
+    var enabled=connections.filter(function(c){return c.enabled;});
+    if(!enabled.length)return;
+    var feed=h('select',{'aria-label':'Provider folder connection'},enabled.map(function(c){return h('option',{value:c.id,text:c.name});}));
+    var kind=h('select',{'aria-label':'Provider folder media type'},[['vod','Movies'],['series','Series']].map(function(k){return h('option',{value:k[0],text:k[1]});}));
+    var info=h('p',{className:'muted',role:'status'}),list=h('div',{className:'stack'});
+    var all=h('button',{className:'btn',text:'Select all'}),none=h('button',{className:'btn',text:'Select none'}),save=h('button',{className:'btn primary',text:'Save selection'});
+    var card=h('section',{className:'settings-card stack'},[
+      h('h3',{text:'Provider folders to scan'}),
+      h('p',{className:'muted',text:'Choose which provider folders to scan for each connection and Movies or Series. Unselected folders are considered complete/skipped and their existing catalogue titles are retained. New titles appear as each batch is published. Select all includes the provider-wide All folder.'}),
+      h('div',{className:'row-actions'},[feed,kind]),info,list,
+      h('div',{className:'row-actions'},[all,none,save])
+    ]);
+    host.appendChild(card);
+    var sources=[],previous={},draft=null,draftKey='',timer=null,busy=false;
+    function key(){return feed.value+'/'+kind.value;}
+    function draw(){
+      if(!card.isConnected)return;
+      var k=key(),source=sources.find(function(s){return s.feed_id===feed.value&&s.kind===kind.value;});
+      if(source&&source.folders&&source.folders.length)previous[k]=source.folders;
+      var folders=(source&&source.folders&&source.folders.length?source.folders:previous[k]||[]).filter(function(f){return f.folder_id&&f.folder_id!=='*';});
+      if(draftKey!==k){draftKey=k;draft=null;}
+      if(!draft)draft={mode:source&&source.folderMode==='include'?'include':'all',ids:new Set(source&&source.folderIds||[])};
+      list.replaceChildren();
+      var ready=!!source&&folders.length>0;
+      all.disabled=none.disabled=save.disabled=busy||!ready;
+      if(!ready){info.textContent='Build / update the catalogue first to discover provider folders for this connection and content type.';return;}
+      folders.forEach(function(folder){
+        var check=h('input',{type:'checkbox',checked:draft.mode==='all'||draft.ids.has(folder.folder_id)});
+        check.onchange=function(){
+          if(draft.mode==='all'){draft.mode='include';draft.ids=new Set(folders.map(function(f){return f.folder_id;}));}
+          if(check.checked)draft.ids.add(folder.folder_id);else draft.ids.delete(folder.folder_id);
+          info.textContent=draft.ids.size+' of '+folders.length+' folders selected · Save to apply.';
+        };
+        var detail=folder.status==='skipped'?'skipped':folder.status||'pending';
+        list.appendChild(h('label',{className:'row-actions'},[check,h('span',{text:(folder.title||folder.folder_id)+' ['+folder.folder_id+'] · '+detail+(folder.processed?' · '+Number(folder.processed).toLocaleString()+' items':'')})]));
+      });
+      info.textContent=folders.length+' folders · '+(draft.mode==='all'?'Scanning all (including provider-wide All)':'Scanning '+draft.ids.size+' selected')+'.';
+    }
+    function refresh(){
+      if(!card.isConnected)return;
+      liveApi('stalker_catalogue_status').then(function(data){
+        if(!card.isConnected)return;sources=data.sources||[];draw();
+        clearTimeout(timer);
+        if(sources.some(function(s){return ['queued','running','partial','waiting'].includes(s.status);}))timer=setTimeout(refresh,3000);
+      }).catch(function(error){if(card.isConnected)info.textContent=error.message;});
+    }
+    feed.onchange=kind.onchange=function(){draft=null;draftKey='';draw();};
+    all.onclick=function(){
+      if(!draft)return;draft.mode='all';draft.ids.clear();
+      list.querySelectorAll('input[type="checkbox"]').forEach(function(c){c.checked=true;});
+      info.textContent='All provider folders selected, including provider-wide All · Save to apply.';
+    };
+    none.onclick=function(){
+      if(!draft)return;draft.mode='include';draft.ids.clear();
+      list.querySelectorAll('input[type="checkbox"]').forEach(function(c){c.checked=false;});
+      info.textContent='All provider folders will be skipped · Save to apply.';
+    };
+    save.onclick=function(){
+      if(!draft||busy)return;
+      busy=true;save.disabled=true;info.textContent='Saving folder selection…';
+      stalkerPost('stalker_catalogue_control',{operation:'folders',feed:feed.value,kind:kind.value,mode:draft.mode,folders:Array.from(draft.ids)}).then(function(data){
+        sources=data.sources||[];draft=null;draw();
+      }).catch(function(error){info.className='bad';info.textContent=error.message;})
+        .finally(function(){busy=false;save.disabled=false;});
+    };
+    refresh();
+  }
   function paintStalkerSettings(host){
     var owner=state.user&&state.user.id;
     host.replaceChildren(pendingContent());
@@ -6862,7 +6930,7 @@ try {
           h('button',{className:'btn danger',text:'Remove',onClick:function(){if(!confirm('Remove '+connection.name+'?'))return;stalkerPost('stalker_manage',{operation:'remove',id:connection.id}).then(function(){try{localStorage.removeItem(expiryStorageKey(connection.id));}catch(ignore){}if(host.isConnected)paintStalkerSettings(host);}).catch(showError);}})
         ])]));
       });
-      edit();stalkerCatalogueSettings(host,result.connections||[]);stalkerUpdateSettings(host,result.connections||[]);
+      edit();stalkerCatalogueSettings(host,result.connections||[]);stalkerFolderSettings(host,result.connections||[]);stalkerUpdateSettings(host,result.connections||[]);
       if(state.user&&state.user.role==='admin'){
         var diagnosticsHost=h('div'),diagnostics=h('details',{className:'settings-card'},[h('summary',{text:'Stalker diagnostics & exports'}),diagnosticsHost]),diagnosticsBrowser=null,diagnosticsLoading=false;
         host.appendChild(diagnostics);
