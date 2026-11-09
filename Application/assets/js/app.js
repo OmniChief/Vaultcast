@@ -6826,7 +6826,7 @@ try {
       h('div',{className:'row-actions'},[all,none,save])
     ]);
     host.appendChild(card);
-    var sources=[],previous={},draft=null,draftKey='',timer=null,busy=false;
+    var sources=[],previous={},draft=null,draftKey='',timer=null,busy=false,openGroups={};
     function key(){return feed.value+'/'+kind.value;}
     function draw(){
       if(!card.isConnected)return;
@@ -6840,15 +6840,47 @@ try {
       all.disabled=none.disabled=save.disabled=busy||!ready;
       if(!ready){info.textContent='Click Discover provider folders to retrieve the folder list without scanning titles.';return;}
       if(!folders.length)info.textContent='No named folders were returned. Select all to scan provider-wide All or select none to skip.';
+      // Group provider categories by their explicit language prefix; unprefixed
+      // provider brands remain in Other. Keep folder IDs and saved choices intact.
+      var names={EN:'English',DE:'German',ES:'Spanish',NL:'Dutch',IT:'Italian',LA:'Latin American',FR:'French',PT:'Portuguese',BR:'Brazilian',PL:'Polish',TR:'Turkish',AR:'Arabic',RU:'Russian',IN:'Indian',BE:'Belgian'};
+      var grouped={};
       folders.forEach(function(folder){
-        var check=h('input',{type:'checkbox',checked:draft.mode==='all'||draft.ids.has(folder.folder_id)});
-        check.onchange=function(){
-          if(draft.mode==='all'){draft.mode='include';draft.ids=new Set(folders.map(function(f){return f.folder_id;}));}
-          if(check.checked)draft.ids.add(folder.folder_id);else draft.ids.delete(folder.folder_id);
-          info.textContent=draft.ids.size+' of '+folders.length+' folders selected · Save to apply.';
-        };
-        var detail=folder.status==='skipped'?'skipped':folder.status||'pending';
-        list.appendChild(h('label',{className:'row-actions'},[check,h('span',{text:(folder.title||folder.folder_id)+' ['+folder.folder_id+'] · '+detail+(folder.processed?' · '+Number(folder.processed).toLocaleString()+' items':'')})]));
+        var match=/^([A-Z]{2,3})\\s*[-–:]\\s*/.exec((folder.title||'').trim());
+        var code=match?match[1]:'OTHER';
+        if(!grouped[code])grouped[code]=[];
+        grouped[code].push(folder);
+      });
+      var codes=Object.keys(grouped).sort(function(a,b){
+        if(a==='EN')return -1;if(b==='EN')return 1;
+        if(a==='OTHER')return 1;if(b==='OTHER')return -1;
+        return a.localeCompare(b);
+      });
+      function selected(folder){return draft.mode==='all'||draft.ids.has(folder.folder_id);}
+      function updateCount(){
+        var count=draft.mode==='all'?folders.length:folders.filter(selected).length;
+        info.textContent=count+' of '+folders.length+' folders selected · Save to apply.';
+      }
+      codes.forEach(function(code){
+        var entries=grouped[code],groupKey=k+'/'+code;
+        var details=h('details',{className:'settings-card'},[]);
+        details.open=Object.prototype.hasOwnProperty.call(openGroups,groupKey)?openGroups[groupKey]:code==='EN';
+        details.addEventListener('toggle',function(){openGroups[groupKey]=details.open;});
+        var summary=h('summary',{text:(code==='OTHER'?'Other / Providers':(names[code]||code)+' ('+code+')')+' · '+entries.length+' folders'});
+        var children=h('div',{className:'stack'});
+        entries.forEach(function(folder){
+          var check=h('input',{type:'checkbox',checked:selected(folder)});
+          check.onchange=function(){
+            if(draft.mode==='all'){
+              draft.mode='include';
+              draft.ids=new Set(folders.map(function(f){return f.folder_id;}));
+            }
+            if(check.checked)draft.ids.add(folder.folder_id);else draft.ids.delete(folder.folder_id);
+            updateCount();
+          };
+          var detail=folder.status==='skipped'?'skipped':folder.status||'pending';
+          children.appendChild(h('label',{className:'row-actions'},[check,h('span',{text:(folder.title||folder.folder_id)+' ['+folder.folder_id+'] · '+detail+(folder.processed?' · '+Number(folder.processed).toLocaleString()+' items':'')})]));
+        });
+        details.appendChild(summary);details.appendChild(children);list.appendChild(details);
       });
       info.textContent=folders.length+' folders · '+(draft.mode==='all'?'Scanning all (including provider-wide All)':'Scanning '+draft.ids.size+' selected')+'.';
     }
