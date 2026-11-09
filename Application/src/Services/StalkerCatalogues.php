@@ -5,22 +5,70 @@ declare(strict_types=1);
 final class StalkerCatalogues {
     public static function config(array $feed): string {return hash('sha256',json_encode(array_intersect_key($feed,array_flip(['id','url','mac','username','password','serial','deviceId','deviceId2']))));}
     public static function active(array $feed,string $kind): string {$saved=\Vaultcast\Repository::document('stalker-catalogues',['sources'=>[]]);$record=$saved['sources'][$feed['id'].'/'.$kind]??null;return $record&&$record['config']===self::config($feed)&&!empty($record['active'])?$record['active']:hash('sha256',json_encode($feed));}
+    /** Stored independently per connection and media type; legacy jobs scan all folders. */
+    public static function folderSelection(string $feedId,string $kind): array {
+        $saved=\Vaultcast\Repository::document('stalker-catalogue-folder-selection',['sources'=>[]]);
+        $entry=$saved['sources'][$feedId.'/'.$kind]??null;
+        if(!is_array($entry)||($entry['mode']??'all')!=='include')return ['mode'=>'all','ids'=>[]];
+        return ['mode'=>'include','ids'=>array_values(array_filter((array)($entry['ids']??[]),'is_string'))];
+    }
+    public static function folderSelected(array $selection,string $folderId): bool {
+        return $folderId===''||$selection['mode']==='all'||($folderId!=='*'&&in_array($folderId,$selection['ids'],true));
+    }
     private static function feeds(): array {require_once STREAM_ROOT.'/src/Live/iptv.php';return array_values(array_filter(iptv_load()['feeds']??[],static function($f){return ($f['type']??'')==='stalker'&&!empty($f['enabled']);}));}
     public static function status(): array {
         self::ensureWorker();$feeds=array_column(self::feeds(),null,'id');$sources=[];
         foreach(\Vaultcast\Database::connection()->query('SELECT feed_id,kind,status,processed,error,next_run FROM vaultcast_stalker_jobs') as $r){$r['name']=$feeds[$r['feed_id']]['name']??'Removed connection';$r['scanned']=(int)$r['processed'];
             $q=\Vaultcast\Database::connection()->prepare("SELECT f.folder_id,f.title,f.status,f.next_page,f.processed,f.total,f.last_success,f.error,f.next_run FROM vaultcast_stalker_folders f JOIN vaultcast_stalker_jobs j ON j.feed_id=f.feed_id AND j.kind=f.kind AND j.generation=f.generation WHERE f.feed_id=? AND f.kind=? ORDER BY f.folder_id='*',f.folder_id");
             $q->execute([$r['feed_id'],$r['kind']]);$folders=$q->fetchAll();
+            $selection=self::folderSelection($r['feed_id'],$r['kind']);
+            $r['folderMode']=$selection['mode'];
+            $r['folders']=[];
+            foreach($folders as $folder)if($folder['folder_id']!==''){
+                $folder['selected']=self::folderSelected($selection,$folder['folder_id']);
+                $r['folders'][]=$folder;
+            }
+            $r['foldersSelected']=count(array_filter($r['folders'],static function($f){return $f['selected'];}));
             $r['foldersTotal']=count(array_filter($folders,static function($f){return $f['folder_id']!=='';}));
-            $r['foldersComplete']=count(array_filter($folders,static function($f){return $f['folder_id']!==''&&$f['status']==='complete';}));
-            $r['currentFolder']=null;foreach($folders as $folder)if($folder['status']!=='complete'){$r['currentFolder']=$folder;break;}
+            $r['foldersComplete']=count(array_filter($folders,static function($f){return $f['folder_id']!==''&&in_array($f['status'],['complete','skipped'],true);}));
+            $r['currentFolder']=null;foreach($folders as $folder)if(!in_array($folder['status'],['complete','skipped'],true)){$r['currentFolder']=$folder;break;}
             $sources[]=$r;}
         return ['ok'=>true,'sources'=>$sources,'worker'=>is_file(STREAM_DATA.'/runtime/stalker-library.heartbeat')&&filemtime(STREAM_DATA.'/runtime/stalker-library.heartbeat')>time()-180];
     }
     public static function control(array $opts): array {
-        $op=(string)($opts['operation']??'load');if(!in_array($op,['load','refresh','pause'],true))throw new InvalidArgumentException('Unknown catalogue operation.');
+        $op=(string)($opts['operation']??'load');if(!in_array($op,['load','refresh','pause','folders'],true))throw new InvalidArgumentException('Unknown catalogue operation.');
         $kind=(string)($opts['kind']??'all');if(!in_array($kind,['all','vod','series'],true))throw new InvalidArgumentException('Choose Movies, Series, or both. Live TV is browsed on demand.');
-        $selected=(string)($opts['feed']??'');$pdo=\Vaultcast\Database::connection();$pdo->beginTransaction();
+        $selected=(string)($opts['feed']??'');$pdo=\Vaultcast\Database::connection();
+        if($op==='folders'){
+            if($selected===''||!in_array($kind,['vod','series'],true))throw new InvalidArgumentException('Choose one connection and Movies or Series to save folder selection.');
+            $feeds=array_column(self::feeds(),null,'id');
+            if(!isset($feeds[$selected]))throw new InvalidArgumentException('Unknown or disabled Stalker connection.');
+            $mode=(string)($opts['mode']??'');
+            if(!in_array($mode,['all','include'],true))throw new InvalidArgumentException('Invalid folder selection mode.');
+            $ids=$opts['folders']??[];
+            if(!is_array($ids)||count($ids)>500)throw new InvalidArgumentException('Invalid folder selection.');
+            if($mode==='all')$ids=[];
+            else {
+                $known=$pdo->prepare("SELECT DISTINCT folder_id FROM vaultcast_stalker_folders WHERE feed_id=? AND kind=? AND folder_id NOT IN ('','*')");
+                $known->execute([$selected,$kind]);$allowed=array_fill_keys($known->fetchAll(PDO::FETCH_COLUMN),true);
+                foreach($ids as $id)if(!is_string($id)||!isset($allowed[$id]))throw new InvalidArgumentException('Unknown provider folder. Reload the catalogue folder list.');
+                $ids=array_values(array_unique($ids));
+            }
+            $pdo->beginTransaction();
+            try {
+                $saved=\Vaultcast\Repository::document('stalker-catalogue-folder-selection',['sources'=>[]]);
+                if(!isset($saved['sources'])||!is_array($saved['sources']))$saved=['sources'=>[]];
+                $saved['sources'][$selected.'/'.$kind]=['mode'=>$mode,'ids'=>$ids];
+                \Vaultcast\Repository::putDocument('stalker-catalogue-folder-selection',$saved);
+                // A fresh generation invalidates any in-flight page response without
+                // invalidating offers already published from earlier generations.
+                StalkerLibrary::queue($feeds[$selected],$kind,true);
+                $pdo->commit();
+            }catch(Throwable $e){if($pdo->inTransaction())$pdo->rollBack();throw $e;}
+            file_put_contents(STREAM_DATA.'/runtime/stalker-library.enabled','1');
+            self::ensureWorker();return self::status();
+        }
+        $pdo->beginTransaction();
         try {
             foreach(self::feeds() as $f)if($selected===''||$f['id']===$selected)foreach($kind==='all'?['vod','series']:[$kind] as $type){
                 // Lock the job row so a response fetched before pause/rebuild cannot commit afterwards.
