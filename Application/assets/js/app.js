@@ -6818,11 +6818,11 @@ try {
     var feed=h('select',{'aria-label':'Provider folder connection'},enabled.map(function(c){return h('option',{value:c.id,text:c.name});}));
     var kind=h('select',{'aria-label':'Provider folder media type'},[['vod','Movies'],['series','Series']].map(function(k){return h('option',{value:k[0],text:k[1]});}));
     var info=h('p',{className:'muted',role:'status'}),list=h('div',{className:'stack'});
-    var all=h('button',{className:'btn',text:'Select all'}),none=h('button',{className:'btn',text:'Select none'}),save=h('button',{className:'btn primary',text:'Save selection'});
+    var discover=h('button',{className:'btn',text:'Discover provider folders'}),all=h('button',{className:'btn',text:'Select all'}),none=h('button',{className:'btn',text:'Select none'}),save=h('button',{className:'btn primary',text:'Save selection'});
     var card=h('section',{className:'settings-card stack'},[
       h('h3',{text:'Provider folders to scan'}),
       h('p',{className:'muted',text:'Choose which provider folders to scan for each connection and Movies or Series. Unselected folders are considered complete/skipped and their existing catalogue titles are retained. New titles appear as each batch is published. Select all includes the provider-wide All folder.'}),
-      h('div',{className:'row-actions'},[feed,kind]),info,list,
+      h('div',{className:'row-actions'},[feed,kind,discover]),info,list,
       h('div',{className:'row-actions'},[all,none,save])
     ]);
     host.appendChild(card);
@@ -6860,6 +6860,14 @@ try {
       }).catch(function(error){if(card.isConnected)info.textContent=error.message;});
     }
     feed.onchange=kind.onchange=function(){draft=null;draftKey='';draw();};
+    discover.onclick=function(){
+      if(busy||!feed.value)return;
+      busy=true;discover.disabled=true;info.textContent='Fetching provider folder names…';
+      stalkerPost('stalker_catalogue_control',{operation:'discover',feed:feed.value,kind:kind.value}).then(function(data){
+        sources=data.sources||[];draft=null;draftKey='';draw();
+      }).catch(function(error){info.className='bad';info.textContent=error.message;})
+        .finally(function(){busy=false;discover.disabled=false;});
+    };
     all.onclick=function(){
       if(!draft)return;draft.mode='all';draft.ids.clear();
       list.querySelectorAll('input[type="checkbox"]').forEach(function(c){c.checked=true;});
