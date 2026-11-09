@@ -59,13 +59,17 @@ final class StalkerCatalogueScan {
                 self::db()->commit();
                 return;
             }
-            $folder=self::q("SELECT * FROM vaultcast_stalker_folders WHERE feed_id=? AND kind=? AND generation=? AND status<>'complete' ORDER BY folder_id='*',folder_id LIMIT 1",$key)->fetch();
+            $folder=self::q("SELECT * FROM vaultcast_stalker_folders WHERE feed_id=? AND kind=? AND generation=? AND status NOT IN ('complete','skipped') ORDER BY folder_id='*',folder_id LIMIT 1",$key)->fetch();
             if($folder){
                 if((int)$folder['next_run']>time())return;
                 if($folder['folder_id']===''){
                     $groups=self::groups(stalker_call($feed,'get_categories',[],$job['kind']));
                     self::db()->beginTransaction();if(!self::locked($job)){self::db()->rollBack();return;}
-                    foreach($groups as $id=>$title)self::q('INSERT IGNORE INTO vaultcast_stalker_folders(feed_id,kind,generation,folder_id,title) VALUES(?,?,?,?,?)',array_merge($key,[(string)$id,$title]));
+                    $selection=StalkerCatalogues::folderSelection($feed['id'],$job['kind']);
+                    foreach($groups as $id=>$title){
+                        $state=StalkerCatalogues::folderSelected($selection,(string)$id)?'pending':'skipped';
+                        self::q('INSERT IGNORE INTO vaultcast_stalker_folders(feed_id,kind,generation,folder_id,title,status) VALUES(?,?,?,?,?,?)',array_merge($key,[(string)$id,$title,$state]));
+                    }
                     self::q("UPDATE vaultcast_stalker_folders SET status='complete',last_success=?,error='',failures=0 WHERE feed_id=? AND kind=? AND generation=? AND folder_id=''",array_merge([time()],$key));
                     self::q("UPDATE vaultcast_stalker_jobs SET status='running',last_hash='scan',processed=0,error='',next_run=? WHERE feed_id=? AND kind=?",[time(),$job['feed_id'],$job['kind']]);
                     self::db()->commit();return;
@@ -103,7 +107,10 @@ final class StalkerCatalogueScan {
                 StalkerLibrary::publish($feed,$job['kind'],$job['generation'],$rows);
                 foreach($rows as $row)self::q('DELETE FROM vaultcast_stalker_staging WHERE feed_id=? AND kind=? AND generation=? AND item_id=?',array_merge($key,[$row['item_id']]));
                 self::q("UPDATE vaultcast_stalker_jobs SET status='partial',last_hash='publish',next_page=1,error='',next_run=? WHERE feed_id=? AND kind=?",[time(),$job['feed_id'],$job['kind']]);
-            }elseif(StalkerLibrary::reconcile($job)){
+            }elseif(StalkerCatalogues::folderSelection($feed['id'],$job['kind'])['mode']==='include'||StalkerLibrary::reconcile($job)){
+                // A filtered scan cannot prove missing titles are gone: excluded
+                // folders may still contain them, including duplicate folder entries.
+                // Preserve all prior offers unless an unfiltered scan verifies loss.
                 self::q("UPDATE vaultcast_stalker_jobs SET status='complete',last_hash='complete',error='',next_run=? WHERE feed_id=? AND kind=?",[time()+86400,$job['feed_id'],$job['kind']]);
             }
             self::db()->commit();
