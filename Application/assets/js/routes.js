@@ -80,7 +80,7 @@
     if (head === 'tvshows') return { view:'home' };
     if(head==='live'&&parts[1]==='stalker-vod'&&parts[2]&&parts[3])return {view:'live',liveTab:'stalker',liveCh:'stalker-vod:'+parts[2]+':'+parts[3]};
     if(head==='live'&&parts[1]==='stalker'&&parts[2]&&parts[3])return {view:'live',liveTab:'stalker',liveCh:'stalker:'+parts[2]+':'+parts[3]};
-    if (head === 'live') return ['now','relay','iptv','stalker','radio','guide'].indexOf(parts[1])>=0 ? {view:'live',liveTab:parts[1]==='guide'?'now':parts[1],liveCh:parts[1]==='radio'&&parts[2]?'radio:'+parts[2]:null} : {view:'live',liveTab:'now',liveCh:parts[1]||null};
+    if (head === 'live') return ['now','relay','iptv','stalker','xtream','radio','guide'].indexOf(parts[1])>=0 ? {view:'live',liveTab:parts[1]==='guide'?'now':parts[1],liveCh:parts[1]==='radio'&&parts[2]?'radio:'+parts[2]:null} : {view:'live',liveTab:'now',liveCh:parts[1]||null};
     if (head === 'play') {
       var pt = parts[1] || 'arcade';
       if (['arcade','quiz','social','achievements'].indexOf(pt) < 0) return { view:'notfound', path:path };
