@@ -105,9 +105,9 @@ function epg_index_xmltv($path, $wanted, $fromMs, $toMs) {
         if(isset($wanted[$channel])||isset($wanted[$base])||isset($bases[$base])){
             $start=epg_parse_xmltv_time($reader->getAttribute('start'));$stop=epg_parse_xmltv_time($reader->getAttribute('stop'));
             if($start!==null){$stop=$stop ?? $start+3600000;
-                if($stop>=$fromMs&&$start<=$toMs){$title='Programme';$description='';$node=$reader->readOuterXML();
-                    if($node&&function_exists('simplexml_load_string')){$xml=@simplexml_load_string($node,'SimpleXMLElement',LIBXML_NONET);if($xml){$title=trim((string)($xml->title ?? '')) ?: 'Programme';$description=trim((string)($xml->desc ?? ''));}}
-                    $row=['startUnix'=>$start,'endUnix'=>$stop,'title'=>$title,'subtitle'=>$description,'kind'=>'epg'];$programs[$channel][]=$row;if($base!==$channel)$programs[$base][]=$row;
+                if($stop>=$fromMs&&$start<=$toMs){$title='Programme';$description='';$metadata=[];$node=$reader->readOuterXML();
+                    if($node&&function_exists('simplexml_load_string')){$xml=@simplexml_load_string($node,'SimpleXMLElement',LIBXML_NONET);if($xml){$title=StalkerProgramme::text((string)($xml->title ?? ''),180) ?: 'Programme';$description=StalkerProgramme::text((string)($xml->desc ?? ''),5000);$metadata=StalkerProgramme::xml($xml);}}
+                    $row=array_merge($metadata,['startUnix'=>$start,'endUnix'=>$stop,'title'=>$title,'subtitle'=>$description,'kind'=>'epg']);$programs[$channel][]=$row;if($base!==$channel)$programs[$base][]=$row;
                 }
             }
         }
@@ -115,6 +115,81 @@ function epg_index_xmltv($path, $wanted, $fromMs, $toMs) {
         $available=$reader->next('programme');
     }
     $reader->close();return $programs;
+}
+
+/**
+ * Build Stalker-only fallback indexes from the UK and US Open EPG guides.
+ * Streaming reads and a short window keep the generated index small on a NAS.
+ * Never guess regional variants and never replace an existing index on failure.
+ */
+function epg_build_stalker_open_index(string $path,string $country,int $fromMs,int $toMs,string $source='open-epg'): array {
+    if(!in_array($country,['GB','US'],true)||!class_exists('XMLReader'))throw new RuntimeException('XMLTV parser unavailable.');
+    $reader=new XMLReader();
+    if(!@$reader->open($path,null,LIBXML_NONET|LIBXML_COMPACT))throw new RuntimeException('Cannot open downloaded XMLTV guide.');
+    $wanted=[];$names=[];$logos=[];$channelCount=0;
+    while($reader->read()){
+        if($reader->nodeType!==XMLReader::ELEMENT)continue;
+        if($reader->localName==='programme')break;
+        if($reader->localName!=='channel')continue;
+        $id=trim((string)$reader->getAttribute('id'));
+        if($id===''||strlen($id)>160||isset($wanted[$id]))continue;
+        if(++$channelCount>1000)break;
+        $wanted[$id]=true;
+        $xml=$reader->readOuterXML();
+        if($xml&&function_exists('simplexml_load_string')){
+            $node=@simplexml_load_string($xml,'SimpleXMLElement',LIBXML_NONET);
+            if($node){
+                $label=trim((string)($node->{'display-name'}??''));
+                if($label!=='')$names[$id]=mb_substr($label,0,160);
+                // Only expose public HTTPS artwork, never private portal links,
+                // credentials, query tokens or arbitrary local file paths.
+                $icon=$node->icon ?? null;
+                $url=$icon ? trim((string)($icon['src']??'')) : '';
+                if(strlen($url)<=500&&preg_match('~^https://[a-z0-9.-]+(?::443)?/[a-z0-9_./%+@-]+$~iD',$url)
+                    && !preg_match('~(?:^https://(?:localhost|127\\.|10\\.|192\\.168\\.|172\\.(?:1[6-9]|2[0-9]|3[01])\\.|169\\.254\\.|[^/]*\\.local/))~i',$url))
+                    $logos[$id]=$url;
+            }
+        }
+    }
+    $reader->close();
+    if(!$wanted)throw new RuntimeException('No channel IDs found in the XMLTV guide.');
+    $programmes=epg_index_xmltv($path,$wanted,$fromMs,$toMs);
+    $slim=[];$total=0;
+    foreach($wanted as $id=>$_){
+        if(!isset($programmes[$id]))continue;
+        $entries=[];
+        foreach($programmes[$id] as $event){
+            if($event['endUnix']<=$event['startUnix'])continue;
+            $entries[]=array_merge(array_intersect_key($event,array_flip(['cast','director','presenter','categories','rating','ratingSystem','episode','language','subtitles','poster'])),['start'=>(int)floor($event['startUnix']/1000),
+                'end'=>(int)floor($event['endUnix']/1000),
+                'title'=>mb_substr((string)$event['title'],0,180),
+                'description'=>mb_substr((string)($event['subtitle']??''),0,5000),'source'=>$source]);
+            if(count($entries)>=60)break;
+        }
+        if($entries){$slim[$id]=$entries;$total+=count($entries);}
+    }
+    if(!$slim)throw new RuntimeException('No programmes found in the current 48-hour guide window.');
+    $payload=json_encode(['schema'=>2,'updatedAt'=>time(),'channels'=>$names,'logos'=>$logos,'programmes'=>$slim],
+        JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE);
+    if($payload===false)throw new RuntimeException('Could not encode the Stalker guide index.');
+    // Rich credits/posters must not make an otherwise usable guide disappear.
+    // Keep the nearest programmes for every channel within the existing NAS budget.
+    for($limit=30;strlen($payload)>16777216&&$limit>=6;$limit=(int)floor($limit/2)){
+        $total=0;
+        foreach($slim as &$entries){usort($entries,static function($a,$b){return $a['start']<=>$b['start'];});$entries=array_slice($entries,0,$limit);$total+=count($entries);}
+        unset($entries);
+        $payload=json_encode(['schema'=>2,'updatedAt'=>time(),'channels'=>$names,'logos'=>$logos,'programmes'=>$slim],JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE);
+        if($payload===false)throw new RuntimeException('Could not encode the Stalker guide index.');
+    }
+    if(strlen($payload)>16777216)throw new RuntimeException('Stalker guide index exceeds the 16 MiB cache limit.');
+    $pathOut=epg_cache_dir().'/stalker-open-'.strtolower($country).($source==='freeview'?'-freeview':'').'.json';
+    $tmp=$pathOut.'.'.bin2hex(random_bytes(4)).'.tmp';
+    if(@file_put_contents($tmp,$payload,LOCK_EX)===false || !@rename($tmp,$pathOut)){
+        @unlink($tmp);
+        throw new RuntimeException('Could not save the Stalker guide index.');
+    }
+    return ['country'=>$country,'channelsInXmltv'=>count($wanted),
+        'channelsWithProgrammes'=>count($slim),'programmes'=>$total,'updatedAt'=>time()];
 }
 
 function epg_pick_for_channel($programsById, $ch) {
@@ -178,7 +253,14 @@ function epg_refresh($force = false) {
 
 function epg_refresh_locked($force) {
     $iptv = iptv_load();
-    $urls = $iptv['epgUrls'];
+    // Stalker Open EPG sources are managed automatically. Preserve any user IPTV guides.
+    $openSources=['GB'=>'https://www.open-epg.com/files/unitedkingdom.xml.gz',
+        'GB-freeview'=>'https://raw.githubusercontent.com/dp247/Freeview-EPG/master/epg.xml',
+        'US'=>'https://www.open-epg.com/files/unitedstates1.xml.gz'];
+    $hasStalker=false;
+    foreach($iptv['feeds'] as $feed) if(($feed['type']??'')==='stalker'&&!empty($feed['enabled'])){$hasStalker=true;break;}
+    if(!$hasStalker)$openSources=[];
+    $urls = array_values(array_unique(array_merge($iptv['epgUrls'],array_values($openSources))));
     if ($urls && !class_exists('XMLReader')) throw new RuntimeException('PHP XMLReader is required to import XMLTV programme guides.');
     $wanted = epg_wanted_ids($iptv);
     $fetched = array();
@@ -199,6 +281,8 @@ function epg_refresh_locked($force) {
     $to = $now + 48 * 3600000;
     $programsById = array();
     foreach ($fetched as $f) {
+        // Open EPG is indexed separately for on-demand Stalker channels, not IPTV favourites.
+        if(in_array((string)($f['url']??''),$openSources,true))continue;
         $chunk = epg_index_xmltv($f['path'], $wanted, $from, $to);
         foreach ($chunk as $cid => $list) {
             if (!isset($programsById[$cid])) $programsById[$cid] = array();
@@ -235,6 +319,22 @@ function epg_refresh_locked($force) {
         if (!empty($ch['tvgId'])) $slim[$ch['tvgId']] = $deduped;
     }
     epg_build_channel_catalogue();
+    // Re-index only as part of the normal guide refresh, not Stalker browsing.
+    $stalkerOpenEpg=[];
+    foreach($openSources as $country=>$url)$stalkerOpenEpg[$country]=['status'=>'download_failed','channelsWithProgrammes'=>0];
+    foreach($fetched as $source){
+        $url=(string)($source['url']??'');
+        $country=array_search($url,$openSources,true);
+        if($country===false)continue;
+        try{
+            $stalkerOpenEpg[$country]=array_merge(['status'=>'indexed'],
+                epg_build_stalker_open_index($source['path'],substr($country,0,2),$from,$to,$country==='GB-freeview'?'freeview':'open-epg'));
+        } catch(Throwable $error){
+            $stalkerOpenEpg[$country]=['status'=>'index_failed','error'=>$error->getMessage(),
+                'retainedPreviousCache'=>is_file(epg_cache_dir().'/stalker-open-'.strtolower($country).'.json')];
+            error_log('Open EPG Stalker fallback index: '.$error->getMessage());
+        }
+    }
     $indexPath = epg_cache_dir() . '/favourites.json';
     $tempPath=$indexPath.'.'.bin2hex(random_bytes(4));
     $encoded = json_encode(array(
@@ -254,6 +354,8 @@ function epg_refresh_locked($force) {
         'errors' => $errors,
         'channelsWithEpg' => count(array_filter($slim, function ($v) { return !empty($v); })),
         'favourites' => count($iptv['channels']),
+        'stalkerOpenEpg' => $stalkerOpenEpg,
+        'note' => 'Open EPG channelsWithProgrammes counts XMLTV channel IDs, not Stalker matches. Stalker matches are reported by the live guide page.',
     );
 }
 

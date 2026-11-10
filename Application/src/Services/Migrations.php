@@ -6,7 +6,7 @@
  */
 final class Migrations
 {
-    const VERSION = 19; // 19: admin-owned shared provider catalogues; 18: incremental Stalker on-demand catalogue; 17: achievements and badges; 16: trailers and extras index; 15: media requests (and requests.create for existing custom roles); 14: unified inbox; 13: smart collections and their facts index; 12: age ratings and parental controls / kids profiles; 11: site-wide webcam registry (Ambient); 10: calendars, events, reminders and personal pictures (Misc); 9: leaderboard covering indexes, Drop anonymous origin column and MEDIUMTEXT notes; 8: play scores/points and drop storage; 2: library folder access pass for nginx (step 5); 3: re-run it, recording results; 4: media facts table; 5: arrival timestamps and indexed running times; 6: chat storage; 7: prepared browsing
+    const VERSION = 21; // 21: resumable folder enumeration and safe reconciliation; 20: persistent deduplicated VOD library; 19: admin-owned shared provider catalogues; 18: incremental Stalker on-demand catalogue; 17: achievements and badges; 16: trailers and extras index; 15: media requests (and requests.create for existing custom roles); 14: unified inbox; 13: smart collections and their facts index; 12: age ratings and parental controls / kids profiles; 11: site-wide webcam registry (Ambient); 10: calendars, events, reminders and personal pictures (Misc); 9: leaderboard covering indexes, Drop anonymous origin column and MEDIUMTEXT notes; 8: play scores/points and drop storage; 2: library folder access pass for nginx (step 5); 3: re-run it, recording results; 4: media facts table; 5: arrival timestamps and indexed running times; 6: chat storage; 7: prepared browsing
 
     public static function stampFile(): string
     {
@@ -132,6 +132,17 @@ final class Migrations
             if (preg_match('/CREATE TABLE IF NOT EXISTS vaultcast_(stalker_|chat_|browse_items|show_summaries|play_|drop_|cal_|pictures\b|webcams\b|content_ratings\b|parental\b|smart_|inbox|media_request|extras\b|achievement)/i',$sql)) $pdo->exec($sql);
         }
         self::stalkerSchema($pdo);
+        if(!\Vaultcast\Repository::document('stalker-folder-repair-v1',false)){
+            $pdo->beginTransaction();
+            try{
+                // Old wildcard scans are unverified. Preserve titles and paused jobs;
+                // discover the missing folders once, without clearing any associations.
+                $pdo->exec("UPDATE vaultcast_stalker_jobs SET status=IF(status='paused','paused','queued'),generation=REPLACE(UUID(),'-',''),next_page=1,processed=0,last_hash='',error='',next_run=0 WHERE status<>'removed'");
+                $pdo->exec('UPDATE vaultcast_stalker_library SET unavailable_since=NULL WHERE available=0');
+                \Vaultcast\Repository::putDocument('stalker-folder-repair-v1',true);
+                $pdo->commit();
+            }catch(Throwable $e){if($pdo->inTransaction())$pdo->rollBack();throw $e;}
+        }
         if (is_file(STREAM_DATA.'/runtime/migrations-v18.done')) return ['shared_stalker_catalogue'=>true];
         if (is_file(STREAM_DATA.'/runtime/migrations-v17.done')) return ['stalker_catalogue'=>true];
         $upgrade = self::playDropUpgrade($pdo);

@@ -38,6 +38,16 @@ function iptv_hls_resolve_uri($baseUrl, $ref) {
     $p = parse_url($baseUrl);
     if (!$p || empty($p['scheme']) || empty($p['host'])) return $ref;
     $origin = $p['scheme'] . '://' . $p['host'] . (isset($p['port']) ? ':' . $p['port'] : '');
+    // Query-only redirects (common for signed provider links) keep the current
+    // path and replace its query; they are not relative filenames.
+    if (isset($ref[0]) && $ref[0] === '?') {
+        $path = $p['path'] ?? '/';
+        return $origin . $path . $ref;
+    }
+    if (isset($ref[0]) && $ref[0] === '#') {
+        $path = $p['path'] ?? '/';
+        return $origin . $path . (isset($p['query']) ? '?' . $p['query'] : '') . $ref;
+    }
     if (isset($ref[0]) && $ref[0] === '/') {
         return $origin . $ref;
     }
@@ -139,6 +149,7 @@ function iptv_hls_proxy_request() {
     $body = '';
     $sent = false;
     $tooLarge = false;
+    $retryingWithoutRange = false;
     $started = microtime(true);
     $emitMedia = function ($chunk) use (&$sent, &$status, &$responseHeaders, $head) {
         if (!$sent) {
@@ -196,13 +207,25 @@ function iptv_hls_proxy_request() {
             }
             return strlen($line);
         },
-        CURLOPT_WRITEFUNCTION => function ($handle, $chunk) use (&$status, &$responseHeaders, &$mode, &$body, &$tooLarge, $emitMedia) {
+        CURLOPT_WRITEFUNCTION => function ($handle, $chunk) use (&$status, &$responseHeaders, &$mode, &$body, &$tooLarge, &$retryingWithoutRange, $emitMedia) {
             $length = strlen($chunk);
             if (connection_aborted()) return 0;
             // cURL follows redirects; their bodies must not reach the player.
             if ($status >= 300 && $status < 400) return $length;
             if ($status >= 400) {
                 $body .= substr($chunk, 0, max(0, 65536 - strlen($body)));
+                if ($retryingWithoutRange && $status === 400
+                    && stripos($responseHeaders['content-type'] ?? '', 'video/mp4') === 0
+                    && strpos(substr($body, 0, 64), 'ftyp') !== false) {
+                    // A small set of portals labels a valid MP4 body as HTTP 400.
+                    // Only pass it through after verifying the MP4 file signature.
+                    $status = 200;
+                    unset($responseHeaders['content-range']);
+                    $mode = 'media';
+                    $emitMedia($body);
+                    $body = '';
+                    return connection_aborted() ? 0 : $length;
+                }
                 return strlen($body) >= 65536 ? 0 : $length;
             }
             if ($mode === 'media') { $emitMedia($chunk); return connection_aborted() ? 0 : $length; }
@@ -230,6 +253,23 @@ function iptv_hls_proxy_request() {
     $ctype = (string) curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
     $final = (string) curl_getinfo($ch, CURLINFO_EFFECTIVE_URL);
     $cerr = curl_error($ch);
+    // Some Stalker portals reject byte ranges for progressive MP4 files even
+    // though the same URL works as a normal download. Retry that one case
+    // without Range so browser video elements can play the MP4 from the start.
+    if ($code === 400 && stripos($ctype, 'video/mp4') === 0 && !empty($_SERVER['HTTP_RANGE'])) {
+        $sent = false; $status = 0; $responseHeaders = array(); $mode = null;
+        $body = ''; $tooLarge = false;
+        $retryingWithoutRange = true;
+        $retryHeaders = array_values(array_filter($headers, static function ($header) {
+            return stripos($header, 'Range:') !== 0;
+        }));
+        curl_setopt($ch, CURLOPT_HTTPHEADER, $retryHeaders);
+        $ok = curl_exec($ch);
+        $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $ctype = (string) curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
+        $final = (string) curl_getinfo($ch, CURLINFO_EFFECTIVE_URL);
+        $cerr = curl_error($ch);
+    }
     curl_close($ch);
 
     if ($sent) exit;

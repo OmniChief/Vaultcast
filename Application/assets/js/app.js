@@ -2,6 +2,8 @@
   'use strict';
   var BASE = window.__STREAM_BASE__ || '/';
   var API = BASE + 'api';
+  var tvSelectPicker = /(?:\bLG\b|LGE|Tizen|Web0S|WebOS|SMART-TV|SmartTV|Android TV|Google TV|AFT[A-Z0-9]*|Roku|Viera|HbbTV|NetCast|BRAVIA|Hisense|Philips)/i.test(navigator.userAgent || '');
+  if(tvSelectPicker)document.documentElement.classList.add('tv-poster-device');
   var _navSilent = false;
   function streamPlayUrl(url){
     if (!url) return url;
@@ -4978,6 +4980,35 @@ try {
     closeMenus();
   });
 
+  // Several TV browsers close their native select popup while the remote moves
+  // focus between options. Use an in-page, D-pad-friendly picker on those TVs.
+  function openTvSelectPicker(select){
+    if(!tvSelectPicker||!select||select.disabled||select.multiple||document.querySelector('.tv-select-picker'))return;
+    var options=Array.prototype.slice.call(select.options).map(function(option,index){return {option:option,index:index};}).filter(function(row){return !row.option.disabled;});
+    if(!options.length)return;
+    var current=options.findIndex(function(row){return row.index===select.selectedIndex;});if(current<0)current=0;
+    var label=select.getAttribute('aria-label')||((select.labels&&select.labels[0]&&select.labels[0].textContent)||'Choose an option').trim();
+    var overlay=h('div',{className:'tv-select-picker',role:'presentation'}),dialog=h('section',{className:'tv-select-picker-dialog',role:'dialog','aria-modal':'true','aria-label':label},[
+      h('h2',{text:label}),h('div',{className:'tv-select-picker-options',role:'listbox','aria-label':label})
+    ]),list=dialog.querySelector('.tv-select-picker-options'),buttons=[];
+    function close(){overlay.remove();select.focus();}
+    function choose(index){var row=options[index];if(!row)return;select.selectedIndex=row.index;select.dispatchEvent(new Event('input',{bubbles:true}));select.dispatchEvent(new Event('change',{bubbles:true}));close();}
+    options.forEach(function(row,index){var button=h('button',{type:'button',className:'tv-select-picker-option'+(row.index===select.selectedIndex?' selected':''),role:'option','aria-selected':String(row.index===select.selectedIndex),text:row.option.textContent.trim(),onFocus:function(){current=index;},onClick:function(){choose(index);}});buttons.push(button);list.appendChild(button);});
+    function move(index){current=Math.max(0,Math.min(options.length-1,index));buttons[current].focus();list.scrollTop=Math.max(0,buttons[current].offsetTop-list.offsetTop-list.clientHeight/2);}
+    overlay.appendChild(dialog);overlay.addEventListener('click',function(event){if(event.target===overlay)close();});
+    overlay.addEventListener('keydown',function(event){var key=event.key;if(key==='Escape'){event.preventDefault();event.stopPropagation();close();}else if(key==='ArrowDown'||key==='ArrowRight'){event.preventDefault();event.stopPropagation();move(current+1);}else if(key==='ArrowUp'||key==='ArrowLeft'){event.preventDefault();event.stopPropagation();move(current-1);}else if(key==='Home'){event.preventDefault();event.stopPropagation();move(0);}else if(key==='End'){event.preventDefault();event.stopPropagation();move(options.length-1);}else if(key==='PageDown'){event.preventDefault();event.stopPropagation();move(current+6);}else if(key==='PageUp'){event.preventDefault();event.stopPropagation();move(current-6);}else if(key==='Enter'||key===' '){event.preventDefault();event.stopPropagation();choose(current);}});
+    document.body.appendChild(overlay);move(current);
+  }
+  if(tvSelectPicker){
+    document.addEventListener('pointerdown',function(event){var select=event.target&&event.target.closest&&event.target.closest('select');if(!select)return;event.preventDefault();select.focus();openTvSelectPicker(select);},true);
+    document.addEventListener('click',function(event){var select=event.target&&event.target.closest&&event.target.closest('select');if(!select)return;event.preventDefault();openTvSelectPicker(select);},true);
+    document.addEventListener('keydown',function(event){var select=event.target&&event.target.closest&&event.target.closest('select');if(!select||['Enter',' ','ArrowDown'].indexOf(event.key)<0)return;event.preventDefault();event.stopPropagation();openTvSelectPicker(select);},true);
+  }
+  document.addEventListener('load',function(event){
+    var image=event.target,cover=image&&image.closest&&image.closest('.stalker-vod-cover');
+    if(image&&cover&&image.naturalWidth&&image.naturalHeight)cover.classList.toggle('stalker-vod-landscape',image.naturalWidth/image.naturalHeight>1.15);
+  },true);
+
   var accountDrawerClose = null;
   function accountHasUnread(){
     var owner=state.user&&state.user.role!=='guest'&&state.user.id;
@@ -5741,7 +5772,7 @@ try {
     if (live.tickTimer) { clearInterval(live.tickTimer); live.tickTimer = null; }
   }
   function fmtClock(ms){
-    try { return new Date(ms).toLocaleTimeString([], { hour:'numeric', minute:'2-digit' }); } catch (e) { return ''; }
+    try { return new Date(ms).toLocaleTimeString([], { hour:'numeric', minute:'2-digit', timeZone:'Europe/London' }); } catch (e) { return ''; }
   }
   function fmtLeft(endMs){
     var m = Math.max(0, Math.round((endMs - Date.now()) / 60000));
@@ -5816,7 +5847,9 @@ try {
     var progs = ch.programs || [];
     for (var i = 0; i < progs.length; i++) {
       var p = progs[i];
-      if (p.startUnix <= now && p.endUnix > now) cur = p;
+      // XMLTV feeds can overlap at hand-offs. Keep the programme that began
+      // first until it ends instead of letting a later listing replace it.
+      if (p.startUnix <= now && p.endUnix > now && (!cur || p.startUnix < cur.startUnix)) cur = p;
       else if (p.startUnix > now && !isFiller(p) && !nxt) nxt = p;
     }
     if (!cur) cur = ch.now || null;
@@ -6066,8 +6099,77 @@ try {
   function stalkerPost(action,body){
     return liveApiPost(action,body).then(function(result){if(!result.ok||!result.body||!result.body.ok)throw new Error(result.body&&result.body.error||'Provider request failed.');return result.body;});
   }
+  function stalkerFormatBytes(value){
+    var bytes=Math.max(0,Number(value)||0);
+    if(bytes>=1000000000)return(bytes/1000000000).toFixed(1)+' GB';
+    if(bytes>=1000000)return(bytes/1000000).toFixed(1)+' MB';
+    if(bytes>=1000)return(bytes/1000).toFixed(1)+' KB';
+    return Math.round(bytes)+' B';
+  }
+  function stalkerOfflineTransferDetails(job){
+    if(!job)return'';
+    var bytes=Number(job.bytes)||0,total=Number(job.totalBytes)||0,speed=Number(job.speedBytesPerSecond)||0,active=job.status==='downloading',parts=[];
+    if(total>0)parts.push(stalkerFormatBytes(bytes)+' of '+stalkerFormatBytes(total));
+    else if(bytes>0)parts.push(stalkerFormatBytes(bytes)+' transferred');
+    else if(active)parts.push('Waiting for provider data');
+    if(total===0&&active)parts.push('Size not reported');
+    if(active&&Number(job.providerHttpStatus)>0)parts.push('Provider HTTP '+Number(job.providerHttpStatus));
+    if(speed>0)parts.push(stalkerFormatBytes(speed)+'/s');else if(active)parts.push('0 B/s');
+    var elapsed=Math.max(0,Number(job.elapsedSeconds)||0);if(active&&elapsed>0)parts.push('Elapsed '+(elapsed>=60?Math.floor(elapsed/60)+'m '+(elapsed%60)+'s':elapsed+'s'));
+    return parts.join(' · ');
+  }
+  function stalkerOfflineTitle(item){
+    var name=String(item&&item.name||'Provider video'),show=String(item&&item.showName||'').trim();
+    if(!show){var embedded=name.match(/^(.+?)\s*[·|—-]\s*(?:Season\s+\d+|S\d{1,3}E\d{1,3})\b/i);if(embedded)show=embedded[1].trim();}
+    if(!show)return name;
+    var season=Number(item&&item.season),episode=Number(item&&item.episode);
+    if(!Number.isInteger(season)){var sm=String(item&&item.seasonName||name).match(/(?:Season\s*|\bS)(\d{1,3})\b/i);if(sm)season=Number(sm[1]);else if(/specials/i.test(String(item&&item.seasonName||'')))season=0;}
+    if(!Number.isInteger(episode)){var em=name.match(/\bS(\d{1,3})E(\d{1,3})\b/i);if(em){season=season||Number(em[1]);episode=Number(em[2]);}else{em=String(item&&item.episode||'').match(/\d+/);if(em)episode=Number(em[0]);}}
+    if(Number.isInteger(season)&&Number.isInteger(episode))return show+' S'+String(season).padStart(2,'0')+'E'+String(episode).padStart(2,'0');
+    return show+' · '+name;
+  }
+  function stalkerSaveVideo(feed,item,status,button,destination,playbackTicket){
+    button.disabled=true;status.textContent=destination==='browser'?'Preparing your browser download…':'Adding video to the library download queue…';
+    var owner=state.user&&state.user.id;
+    function current(){return status.isConnected&&owner===(state.user&&state.user.id);}
+    function poll(id){
+      if(!current())return;
+      liveApi('stalker_offline').then(function(result){
+        if(!current())return;
+        if(!result||!result.ok)throw new Error(result&&result.error||'Could not read download status.');
+        var job=(result.items||[]).find(function(row){return row.id===id;});
+        if(!job)throw new Error('Download not found. Open Downloads to check the queue.');
+        if(job.status==='failed'||job.status==='cancelled')throw new Error(job.error||'Download stopped. Open Downloads to retry.');
+        if(job.status==='ready'||job.status==='imported'){
+          button.disabled=false;status.replaceChildren();
+          if(destination==='browser'){
+            var link=h('a',{className:'btn',href:LIVE_API+'stalker_offline_file?id='+encodeURIComponent(id),download:'',text:'Save video to device'});
+            status.append('Your video is ready. ',link);link.click();
+          }else status.append('Download complete. ',h('button',{className:'btn',text:'Open ingest inbox',onClick:function(){openSettings('ingest');}}));
+          return;
+        }
+        var details=[job.stage|| (job.status==='queued'?'Queued for download':'Downloading video'),job.percent!=null?job.percent+'% downloaded':'',stalkerOfflineTransferDetails(job),job.showName&&job.showName!==item.name?job.showName:'',job.seasonName||'',job.episode?('Episode '+job.episode):'',job.episodeTitle&&job.episodeTitle!==item.name?job.episodeTitle:''].filter(Boolean);
+        status.textContent=details.join(' · ')+'. You can leave this page; progress is saved in Downloads.';
+        setTimeout(function(){poll(id);},5000);
+      }).catch(function(error){if(current()){button.disabled=false;status.textContent=error.message;}});
+    }
+    stalkerPost('stalker_download',{feed:feed,id:item.id,name:item.name,destination:destination,playback_ticket:playbackTicket||''}).then(function(result){poll(result.id);}).catch(function(error){if(current()){button.disabled=false;status.textContent=error.message;}});
+  }
+  function stalkerDownloadToBrowser(feed,item,status,button){
+    button.disabled=true;status.textContent='Preparing the browser download…';
+    stalkerPost('stalker_play',{feed:feed,kind:'vod',id:item.id}).then(function(result){
+      var source=result&&result.source&&result.source.url;if(!source)throw new Error('The provider did not return a browser-playable link.');
+      // HLS is a playlist, not a video file. Keep using the server-side
+      // remuxer for those; progressive files can stream straight to the browser.
+      if(/[?&]format=\.m3u8(?:&|$)/i.test(source)){stalkerSaveVideo(feed,item,status,button,'browser');return;}
+      var filename=String(item.name||'Provider video').replace(/[\\/:*?"<>|\x00-\x1f]/g,'_').trim().slice(0,180)||'Provider video';
+      if(!/\.(?:mp4|mkv|avi|mov|webm|mpg|mpeg|ts)$/i.test(filename))filename+='.mkv';
+      var link=h('a',{className:'btn',href:source,download:filename,text:'Download video to this device'});
+      status.replaceChildren('Starting a direct browser download. If it does not start, use this link: ',link);link.click();button.disabled=false;
+    }).catch(function(error){button.disabled=false;status.textContent=error.message;});
+  }
   function playStalkerItem(feed,item,button){
-    if(item.kind==='live'){state._stalkerChannelHint={id:'stalker:'+feed+':'+item.id,name:item.name,slogan:item.description||''};openLiveChannel('stalker:'+feed+':'+item.id);return;}
+    if(item.kind==='live'){state._stalkerChannelHint={id:'stalker:'+feed+':'+item.id,name:item.name,slogan:item.description||'',sources:Array.isArray(item.sources)?item.sources:[],tried:Array.isArray(item._failoverTried)?item._failoverTried:[],sequence:Array.isArray(item._channelSequence)?item._channelSequence:[],guide:item._guide||null};openLiveChannel('stalker:'+feed+':'+item.id);return;}
     state._stalkerVodHint={feed:feed,item:item};openLiveChannel('stalker-vod:'+feed+':'+item.id);
   }
   function liveChannelPath(id){
@@ -6075,7 +6177,7 @@ try {
     if(String(id).indexOf('stalker:')===0){var parts=String(id).split(':');return 'live/stalker/'+encodeURIComponent(parts[1])+'/'+encodeURIComponent(parts.slice(2).join(':'));}
     return 'live/'+encodeURIComponent(id);
   }
-  function stalkerCheckButton(feed,id,kind,status,cancelPending){return h('button',{className:'btn ghost',text:'Check playback',onClick:function(e){var button=e.currentTarget;button.disabled=true;if(cancelPending)cancelPending();closePlayer();status.textContent='Checking the provider media response…';stalkerPost('stalker_check_media',{feed:feed,id:id,kind:kind}).then(function(r){status.textContent='Playback check: GET · HTTP '+r.http+' · '+r.type+' · '+r.format+(r.allow?' · Allowed methods: '+r.allow:'')+(r.timedOutOrFailed?' · Request incomplete/timed out':'');}).catch(function(error){status.textContent=error.message;}).finally(function(){button.disabled=false;});}});}
+  function stalkerCheckButton(feed,id,kind,status){return h('button',{className:'btn ghost',text:'Check playback',onClick:function(e){var button=e.currentTarget,profile=kind==='live'?'stb':'browser';button.disabled=true;status.textContent='Checking the provider media response…';stalkerPost('stalker_check_media',{feed:feed,id:id,kind:kind,profile:profile}).then(function(r){if(!status.isConnected)return;var result='Playback check ('+(profile==='browser'?'browser':'Stalker')+' profile): GET · HTTP '+r.http+' · '+r.type+' · '+r.format+(r.allow?' · Allowed methods: '+r.allow:'')+(r.timedOutOrFailed?' · Request incomplete/timed out':'');if(Number(r.http)===458)result+=' · The provider returned an HTML rejection page, not playable media. Try another source if available.';status.textContent=result;}).catch(function(error){if(status.isConnected)status.textContent=error.message;}).finally(function(){button.disabled=false;});}});}
   function startStalkerSimple(host,source,status,current,onPlaying){
     closePlayer();stopRadio();
     var alive=true,stream=null,video=h('video',{id:'player-media',controls:true,autoplay:true,muted:true,playsinline:true,preload:'auto'}),frame=h('div',{id:'player-overlay',className:'player-inline stalker-vod-inline'},[video]);
@@ -6088,52 +6190,232 @@ try {
     status.textContent='Connecting with simple player…';
     attachIptvStream(video,source,{current:function(){return alive&&current();},play:play,stream:function(value){stream=value;},error:function(message){if(alive)status.textContent=message;}});
   }
+  // Stalker on-demand uses the same native player surface and mini-player
+  // lifecycle as the library. The stream remains provider-authenticated and
+  // never invokes library-only transcode, conversion or progress endpoints.
+  function startStalkerLibraryPlayer(host,source,item,context){
+    closePlayer();stopRadio();
+    var key='stalker-vod:'+context.id,alive=true,stream=null;
+    var video=h('video',{id:'player-media',controls:true,autoplay:true,playsinline:true,preload:'metadata'});
+    video.setAttribute('webkit-playsinline','true');
+    var frame=h('div',{id:'player-overlay',className:'player-overlay player-simple player-inline stalker-library-player'},[video]);
+    frame._miniKey=key;frame._miniTitle=item.name||'Provider video';
+    frame._miniReturn=function(){if(context.onReturn)context.onReturn();};
+    host.replaceChildren(frame);
+    var tools=detailPlayerTools(host),trackBar=h('div',{className:'player-tracks',role:'group','aria-label':'Audio and subtitles'}),audioLabel=h('label',{},[h('span',{text:'Audio'}),h('select',{'aria-label':'Audio track'})]),subtitleLabel=h('label',{},[h('span',{text:'Subtitles'}),h('select',{'aria-label':'Subtitles'},[h('option',{value:'-1',text:'Off'})])]),audioSelect=audioLabel.querySelector('select'),subtitleSelect=subtitleLabel.querySelector('select'),trackNote=h('span',{className:'player-track-note',role:'status'}),hasTracks=false,usingStreamAudio=false,usingStreamSubtitles=false;
+    trackBar.append(audioLabel,subtitleLabel,trackNote);trackBar.hidden=true;tools.appendChild(trackBar);
+    var autoNext=null;
+    if(context.nextEpisode){autoNext=h('input',{type:'checkbox',checked:state._stalkerAutoNext!==false,'aria-label':'Automatically play next episode'});autoNext.addEventListener('change',function(){state._stalkerAutoNext=autoNext.checked;});tools.appendChild(h('label',{className:'player-auto-next'},[autoNext,' Automatically play next episode']));}
+    function refreshTracks(stream){
+      hasTracks=false;
+      var nativeAudio=Array.from(video.audioTracks||[]),nativeSubtitles=Array.from(video.textTracks||[]).filter(function(track){return track.kind==='subtitles'||track.kind==='captions';});
+      var audioTracks=stream&&stream.audioTracks&&stream.audioTracks.length?stream.audioTracks:nativeAudio;
+      var subTracks=stream&&stream.subtitleTracks&&stream.subtitleTracks.length?stream.subtitleTracks:nativeSubtitles;
+      usingStreamAudio=!!(stream&&stream.audioTracks&&stream.audioTracks.length);
+      usingStreamSubtitles=!!(stream&&stream.subtitleTracks&&stream.subtitleTracks.length);
+      var audVal=stream&&Number.isInteger(stream.audioTrack)?stream.audioTrack:-1;
+      var subVal=stream&&Number.isInteger(stream.subtitleTrack)?stream.subtitleTrack:-1;
+      if(audioTracks.length){audioSelect.replaceChildren();audioTracks.forEach(function(track,index){var label=track.name||track.label||track.lang||track.language||('Track '+(index+1));if(track.channels)label+=' · '+track.channels+'ch';audioSelect.appendChild(h('option',{value:String(index),text:label,selected:index===audVal||(!stream&&track.enabled)}));});audioLabel.style.display='grid';hasTracks=true;}else audioLabel.style.display='none';
+      if(subTracks.length){subtitleSelect.replaceChildren(h('option',{value:'-1',text:'Off',selected:usingStreamSubtitles?subVal<0:!nativeSubtitles.some(function(track){return track.mode==='showing';})}));subTracks.forEach(function(track,index){var label=track.name||track.label||track.lang||track.language||('Subtitle '+(index+1));subtitleSelect.appendChild(h('option',{value:String(index),text:label,selected:usingStreamSubtitles?index===subVal:track.mode==='showing'}));});subtitleLabel.style.display='grid';hasTracks=true;}else subtitleLabel.style.display='none';
+      trackBar.hidden=!hasTracks;
+    }
+    audioSelect.onchange=function(){var index=Number(audioSelect.value);if(usingStreamAudio&&stream&&Number.isInteger(stream.audioTrack))stream.audioTrack=index;else if(video.audioTracks&&video.audioTracks[index]){for(var i=0;i<video.audioTracks.length;i++)video.audioTracks[i].enabled=i===index;}};
+    subtitleSelect.onchange=function(){var index=Number(subtitleSelect.value);if(usingStreamSubtitles&&stream&&Number.isInteger(stream.subtitleTrack))stream.subtitleTrack=index;else{var tracks=Array.from(video.textTracks||[]).filter(function(track){return track.kind==='subtitles'||track.kind==='captions';});tracks.forEach(function(track,i){track.mode=i===index?'showing':'disabled';});}};
+    ['addtrack','removetrack','change'].forEach(function(event){if(video.audioTracks)video.audioTracks.addEventListener(event,function(){refreshTracks(stream);});if(video.textTracks)video.textTracks.addEventListener(event,function(){refreshTracks(stream);});});
+    function play(){var p=video.play();if(p&&p.catch)p.catch(function(){if(context.onError)context.onError('Press play in the player to start.');});}
+    addCentrePlay(frame,video,play);
+    _liveCleanup=function(){
+      alive=false;
+      if(stream){try{stream.destroy();}catch(ignore){}stream=null;}
+      try{video.pause();video.removeAttribute('src');video.load();}catch(ignore2){}
+    };
+    video.addEventListener('playing',function(){if(alive&&context.onPlaying)context.onPlaying();});
+    video.addEventListener('error',function(){if(alive&&context.onError)context.onError('The provider video could not be played by this browser.');});
+    video.addEventListener('ended',function(){if(alive&&context.onEnded&&(!autoNext||autoNext.checked))context.onEnded();});
+    attachIptvStream(video,source,{
+      current:function(){return alive&&!frame._closing&&frame.isConnected;},
+      play:play,
+      stream:function(value){stream=value;refreshTracks(value);if(value&&value.on){var events=(window.Hls&&window.Hls.Events)||value.Events||{},names=['AUDIO_TRACKS_UPDATED','AUDIO_TRACK_SWITCHED','SUBTITLE_TRACKS_UPDATED','SUBTITLE_TRACK_SWITCH'],fallback=['hlsAudioTracksUpdated','hlsAudioTrackSwitched','hlsSubtitleTracksUpdated','hlsSubtitleTrackSwitch'];names.forEach(function(name,index){var event=events[name]||fallback[index];value.on(event,function(){refreshTracks(value);});});}},
+      error:function(message){if(alive&&context.onError)context.onError(message);}
+    });
+    video.addEventListener('loadedmetadata',function(){if(!stream)refreshTracks(null);});
+    host.scrollIntoView({block:'nearest',behavior:'smooth'});
+  }
+  function stalkerVodMetadata(item){
+    var text=function(value){return Array.isArray(value)?value.filter(function(v){return typeof v==='string';}).join(', '):value==null?'':String(value);};
+    var fields=[['Genres',item.genres_str||item.genre||item.genres],['Rating',item.rating_imdb],['Age rating',item.age||item.rating_mpaa],['Duration',item.duration||item.time],['Cast',item.actors||item.cast],['Director',item.director],['Audio',item.audio_languages||item.language],['Subtitles',item.subtitle_languages]];
+    var section=h('dl',{className:'stalker-vod-full-metadata'});
+    fields.forEach(function(field){var value=text(field[1]);if(value)section.append(h('dt',{text:field[0]}),h('dd',{text:value}));});
+    if(Array.isArray(item.sources)&&item.sources.length)section.append(h('dt',{text:'Available sources'}),h('dd',{text:String(item.sources.length)}));
+    return section;
+  }
+  function stalkerVodFavouriteButton(item,tab,feedId){
+    var favourite=Object.assign({},item,{name:item.showName||item._stalkerMatchTitle||item.name,tab:tab,feed:item.feed||feedId}),controller=state._stalkerVodFavourite;
+    var button=h('button',{type:'button',className:'btn ghost stalker-save',text:'☆',title:'Add to favourites','aria-label':'Add to favourites','aria-pressed':'false'});
+    function refresh(){var active=controller&&controller.has?controller.has(favourite,tab,favourite.feed):false;button.textContent=active?'★':'☆';button.title=active?'Remove from favourites':'Add to favourites';button.setAttribute('aria-label',button.title);button.setAttribute('aria-pressed',String(active));}
+    button.onclick=function(){if(!controller||!controller.toggle){toast('Favourites are unavailable right now.',{kind:'bad'});return;}var result=controller.toggle(favourite,tab,favourite.feed);if(!result)return;refresh();toast(result.active?'Added to favourites.':'Removed from favourites.');};
+    refresh();return button;
+  }
   function viewStalkerVod(id){
-    var parts=id.split(':'),feed=parts[1],itemId=parts.slice(2).join(':'),hint=state._stalkerVodHint,item=hint&&hint.feed===feed&&hint.item.id===itemId?hint.item:{id:itemId,name:'Provider video',kind:'vod',playable:true},attempt=0,stream=null;
-    var wrap=h('div',{className:'live-channel-page stalker-vod-detail'}),hero=h('section',{className:'stalker-vod-hero'}),host=h('div',{className:'detail-player'}),status=h('p',{role:'status',className:'muted'});
+    var parts=id.split(':'),feed=parts[1],itemId=parts.slice(2).join(':'),hint=state._stalkerVodHint,item=hint&&hint.feed===feed&&hint.item.id===itemId?hint.item:{id:itemId,name:'Provider video',kind:'vod',playable:true},attempt=0,stream=null,lookupToken=0,lookupPending=false,lookupMessage='';
+    var wrap=h('div',{className:'live-channel-page stalker-vod-detail'}),hero=h('section',{className:'stalker-vod-hero'}),host=h('div',{className:'detail-player'}),status=h('p',{role:'status',className:'muted'}),watchButton=null,playbackTicket='';
     function current(){return wrap.isConnected&&state.liveChannel===id;}
     function stop(){attempt++;closePlayer();host.replaceChildren();status.textContent='Playback stopped.';}
     function watch(e){
       var button=e.currentTarget,mine=++attempt;button.disabled=true;closePlayer();stopRadio();status.textContent='Connecting…';
       stalkerPost('stalker_play',{feed:feed,kind:item.kind||'vod',id:itemId}).then(function(result){
         if(!current()||mine!==attempt)return;closePlayer();stopRadio();
-        var video=h('video',{id:'player-media',controls:true,autoplay:true,playsinline:true,preload:'metadata',style:'width:100%;max-height:75vh'}),frame=h('div',{id:'player-overlay',className:'player-inline stalker-vod-inline'},[video]),alive=true;
-        host.replaceChildren(frame);addCentrePlay(frame,video,function(){var promise=video.play();if(promise&&promise.catch)promise.catch(function(){status.textContent='Press play in the player to start.';});});_liveCleanup=function(){alive=false;if(stream){stream.destroy();stream=null;}video.pause();video.removeAttribute('src');video.load();};
-        video.addEventListener('playing',function(){status.textContent='';});video.addEventListener('error',function(){status.textContent='This video could not play. Its format or codec may be unsupported.';});
-        attachIptvStream(video,result.source,{current:function(){return alive&&current();},play:function(){var p=video.play();if(p&&p.catch)p.catch(function(){status.textContent='Press play to start watching.';});},stream:function(value){stream=value;},error:function(message){status.textContent=message;}});
-        host.scrollIntoView({block:'start',behavior:'smooth'});
+        var ticketMatch=String(result.source&&result.source.url||'').match(/[?&]ticket=([a-f0-9]{32})(?:&|$)/i);playbackTicket=ticketMatch?ticketMatch[1]:'';
+        var navigation=state._stalkerEpisodeNav,nextEpisode=null;
+        if(navigation&&Array.isArray(navigation.items)){
+          var position=navigation.items.findIndex(function(entry){return String(entry.id)===String(itemId)&&String(entry.feed||feed)===String(feed)||Array.isArray(entry.sources)&&entry.sources.some(function(src){return String(src.feed)===String(feed)&&String(src.id)===String(itemId);});});
+          if(position>=0&&position<navigation.items.length-1){nextEpisode=navigation.items[position+1];var nextSource=nextEpisode.sources&&nextEpisode.sources.find(function(src){return String(src.feed)===String(feed);});if(nextSource)nextEpisode=Object.assign({},nextEpisode,nextSource,{sources:nextEpisode.sources});else if(nextEpisode.sources&&nextEpisode.sources.length)nextEpisode=Object.assign({},nextEpisode,nextEpisode.sources[0],{sources:nextEpisode.sources});}
+        }
+        startStalkerLibraryPlayer(host,result.source,item,{
+          id:id,
+          nextEpisode:nextEpisode,
+          onError:function(message){if(current()&&mine===attempt){status.className='bad';status.textContent=message;}},
+          onPlaying:function(){if(current())status.textContent='';},
+          onEnded:function(){if(!current()||!nextEpisode)return;status.className='muted';status.textContent='Playing next episode: '+(nextEpisode.episodeTitle||nextEpisode.name||'Episode')+'…';playStalkerItem(feed,nextEpisode,null);},
+          onReturn:function(){openLiveChannel(id);}
+        });
       }).catch(function(error){if(current()&&mine===attempt){status.className='bad';status.textContent=error.message;}}).finally(function(){button.disabled=false;});
     }
     function paint(){
       // Multiple matching provider copies are carried from the catalogue to this page.
       // Keep playback bound to the active feed/item ID and reload on source changes.
       var copies=Array.isArray(item.sources)?item.sources.filter(function(x){return x&&x.id&&x.feed;}):[];
-      var selector=null;
+      var selector=null,sourceControls=null,lookupNote=lookupPending||lookupMessage?h('p',{className:'muted',text:lookupPending?'Checking all folders in this language group…':lookupMessage}):null;
       if(copies.length>1){
         selector=h('select',{'aria-label':'Choose provider connection for this title'});
         copies.forEach(function(src,i){
           selector.appendChild(h('option',{value:String(i),text:src.connection||src.feed}));
           if(String(src.feed)===String(feed)&&String(src.id)===String(itemId))selector.value=String(i);
         });
-        selector.onchange=function(){
-          var selected=copies[Number(selector.value)];
-          if(!selected||String(selected.feed)===String(feed)&&String(selected.id)===String(itemId))return;
+        function switchSource(next){
+          if(!next||String(next.feed)===String(feed)&&String(next.id)===String(itemId))return;
           attempt++;closePlayer();
-          playStalkerItem(selected.feed,Object.assign({},item,selected,{sources:copies}),null);
-        };
+          playStalkerItem(next.feed,Object.assign({},item,next,{sources:copies}),null);
+        }
+        selector.onchange=function(){switchSource(copies[Number(selector.value)]);};
+        var tryNext=h('button',{type:'button',className:'btn ghost',text:'Try next',title:'Try the next available connection',
+          onClick:function(){
+            var position=copies.findIndex(function(src){return String(src.feed)===String(feed)&&String(src.id)===String(itemId);});
+            switchSource(copies[(position+1)%copies.length]);
+          }});
+        sourceControls=h('div',{className:'row-actions stalker-vod-source-actions'},[
+          h('label',{className:'stalker-vod-source-select'},[h('span',{text:'Connection'}),selector]),tryNext
+        ]);
       }
-      var download=can('downloads_request')&&can('ingest_view')&&userAreaAllowed('library')?h('button',{className:'btn',text:'Add to library',onClick:function(e){var button=e.currentTarget;button.disabled=true;stalkerPost('stalker_download',{feed:feed,id:itemId,name:item.name}).then(function(){button.textContent='Queued for library';status.textContent='Downloading to the server. Match and import the finished video from Offline downloads.';}).catch(function(error){button.disabled=false;status.textContent=error.message;});}}):null;
-      hero.replaceChildren(h('div',{className:'stalker-vod-detail-poster'},[item.poster?h('img',{src:item.poster,alt:'',onError:function(e){e.target.remove();}}):h('span',{text:item.name.slice(0,1).toUpperCase()})]),h('div',{className:'stalker-vod-detail-copy'},[h('span',{className:'eyebrow',text:'Provider video'}),h('h1',{text:item.name}),item.year?h('p',{className:'muted',text:item.year}):null,selector?h('label',{className:'stalker-vod-source-select'},[h('span',{text:'Connection'}),selector]):null,h('div',{className:'row-actions'},[h('button',{className:'btn primary',text:'Watch',onClick:watch}),download,stalkerCheckButton(feed,itemId,item.kind||'vod',status,function(){attempt++;}),h('button',{className:'btn ghost',text:'Stop playback',onClick:stop})]),item.description?h('p',{text:item.description}):null,h('p',{className:'muted',text:'Add to library downloads a local copy first, then lets you match it in the import inbox.'})]));
+      var navigation=state._stalkerEpisodeNav,navButtons=null;
+      if(navigation&&Array.isArray(navigation.items)){
+        var position=navigation.items.findIndex(function(entry){return String(entry.id)===String(itemId)&&String(entry.feed||feed)===String(feed)||Array.isArray(entry.sources)&&entry.sources.some(function(src){return String(src.feed)===String(feed)&&String(src.id)===String(itemId);});});
+        if(position>=0){
+          function stepEpisode(offset){
+            var target=navigation.items[position+offset];
+            if(!target)return;
+            attempt++;closePlayer();
+            var targetSource=target.sources&&target.sources.find(function(src){return String(src.feed)===String(feed);});
+            if(!targetSource&&target.sources&&target.sources.length)targetSource=target.sources[0];
+            playStalkerItem(targetSource?targetSource.feed:feed,targetSource?Object.assign({},target,targetSource,{sources:target.sources}):target,null);
+          }
+          navButtons=h('div',{className:'row-actions stalker-episode-navigation'},[
+            h('button',{type:'button',className:'btn ghost',text:'← Previous episode',disabled:position===0,onClick:function(){stepEpisode(-1);}}),
+            h('button',{type:'button',className:'btn ghost',text:'Next episode →',disabled:position===navigation.items.length-1,onClick:function(){stepEpisode(1);}})
+          ]);
+        }
+      }
+      var canSave=can('downloads_request')&&can('ingest_view')&&userAreaAllowed('library');
+      var download=canSave?h('button',{className:'btn',text:'Download',onClick:function(e){stalkerDownloadToBrowser(feed,Object.assign({},item,{id:itemId}),status,e.currentTarget);}}):null;
+      var addLibrary=canSave?h('button',{className:'btn',text:'Add to library',onClick:function(e){stalkerSaveVideo(feed,Object.assign({},item,{id:itemId}),status,e.currentTarget,'library',playbackTicket);}}):null;
+      watchButton=h('button',{className:'btn primary',text:'Play again',onClick:watch});
+      var favourite=stalkerVodFavouriteButton(item,item.showName?'series':'vod',feed);
+      hero.replaceChildren(h('div',{className:'stalker-vod-detail-poster'},[item.poster?h('img',{src:item.poster,alt:'',onError:function(e){e.target.remove();}}):h('span',{text:item.name.slice(0,1).toUpperCase()})]),h('div',{className:'stalker-vod-detail-copy'},[h('span',{className:'eyebrow',text:'Provider video'}),h('h1',{text:item.name}),item.year?h('p',{className:'muted',text:item.year}):null,navButtons,sourceControls,lookupNote,h('div',{className:'row-actions'},[favourite,watchButton,download,addLibrary,stalkerCheckButton(feed,itemId,item.kind||'vod',status),h('button',{className:'btn ghost',text:'Stop playback',onClick:stop})]),item.description?h('p',{text:item.description}):null,stalkerVodMetadata(item),h('p',{className:'muted',text:'Add to library saves to your server and ingest inbox. Download prepares a video file to save on this device.'})]));
     }
-    wrap.appendChild(h('div',{className:'row-actions live-channel-back'},[h('button',{className:'btn',text:'← Back to catalogue',onClick:function(){attempt++;closePlayer();goLiveTab('stalker');}})]));wrap.appendChild(hero);wrap.appendChild(status);wrap.appendChild(host);paint();
-    setTimeout(function(){if(!current())return;liveApi('stalker_vod_detail','feed='+encodeURIComponent(feed)+'&id='+encodeURIComponent(itemId)).then(function(result){if(current()&&result&&result.ok){item=Object.assign({},item,result.item);paint();}}).catch(function(error){if(current())status.textContent=error.message;});},0);
-    return shell(wrap);
+    function normalizedVodTitle(value){
+      var name=String(value||'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').trim();
+      for(var i=0;i<8;i++){var prefix=name.match(/^(?:[┃|│¦]\s*([A-Za-z]{2,5})\s*[┃|│¦]\s*|\[\s*([A-Za-z]{2,5})\s*\]\s*[-:|]?\s*|((?:[A-Za-z]{2,5}|[A-Za-z]\s*\+|4K|8K|FULL HD))\s*[-:]\s+)/i);if(!prefix)break;name=name.slice(prefix[0].length).trim();}
+      return name.replace(/\s*[([](?:19|20)\d{2}[)\]]\s*$/,'').replace(/\s*\[(?:4K|8K|UHD|FHD|HD|SD)\]\s*/gi,' ').toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu,'');
+    }
+    function lookupYear(row){var explicit=String(row&&row.year||'').match(/^(?:19|20)\d{2}$/);if(explicit)return explicit[0];var match=String(row&&row.name||'').match(/[([]((?:19|20)\d{2})[)\]]\s*$/);return match?match[1]:'';}
+    function findAlternateConnections(){
+      var isEpisode=!!(item&&(item.episode!=null||item.showName&&(item.season!=null||item.seasonName||/\bS\d{1,2}\s*E\d{1,3}\b|\bEpisode\s*\d+\b/i.test(item.name||'')))),isMovie=!!(item&&item.kind==='vod'&&!isEpisode&&!item.seasonId);
+      if((!isMovie&&!isEpisode)||!Array.isArray(item._stalkerLookupFolders)||!item._stalkerLookupFolders.length)return;
+      var matchTitle=isEpisode?(item.showName||item._stalkerMatchTitle||item.name):(item._stalkerMatchTitle||item.name),wanted=normalizedVodTitle(matchTitle),copies=Array.isArray(item.sources)?item.sources.slice():[{id:itemId,feed:feed,connection:'',kind:'vod',playable:true}],folders=item._stalkerLookupFolders.filter(function(folder,index,array){return folder&&folder.feed&&folder.id&&String(folder.feed)!==String(feed)&&!copies.some(function(source){return String(source.feed)===String(folder.feed);})&&(!item._stalkerLanguage||folder.language===item._stalkerLanguage)&&array.findIndex(function(other){return other&&String(other.feed)===String(folder.feed)&&String(other.id)===String(folder.id);})===index;});
+      if(!wanted||!folders.length)return;
+      folders.sort(function(a,b){return a.priority===b.priority?0:a.priority?-1:1;});
+      var query=String(matchTitle||item.name||'').replace(/\s*[([](?:19|20)\d{2}[)\]]\s*$/,'').trim(),words=query.normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean).sort(function(a,b){return b.length-a.length;});
+      query=words[0]||query;if(query.length>24)query=query.slice(0,5);
+      var token=++lookupToken;lookupPending=true;lookupMessage='';paint();
+      function episodeCoordinates(candidate){
+        var rawName=String(candidate&&candidate.name||''),season=candidate&&candidate.season!=null&&candidate.season!==''?Number(candidate.season):NaN,episode=candidate&&candidate.episode!=null&&candidate.episode!==''?Number(candidate.episode):NaN;
+        var code=rawName.match(/\bS(\d{1,2})\s*E(\d{1,3})\b/i),seasonMatch=String(candidate&&candidate.seasonName||rawName).match(/(?:Season\s*(\d+)|\bS(\d{1,2})E\d+\b)/i),episodeMatch=rawName.match(/\bEpisode\s*(\d+)\b/i)||String(candidate&&candidate.id||'').match(/:(\d+)$/);
+        if(!Number.isFinite(season))season=code?Number(code[1]):seasonMatch?Number(seasonMatch[1]||seasonMatch[2]):NaN;
+        if(!Number.isFinite(episode)||episode<=0)episode=code?Number(code[2]):episodeMatch?Number(episodeMatch[1]):NaN;
+        return {season:season,episode:episode,title:normalizedVodTitle(candidate&&candidate.episodeTitle||'')};
+      }
+      function sameEpisode(candidate){
+        var wantedEpisode=episodeCoordinates(item),candidateEpisode=episodeCoordinates(candidate);
+        if(!Number.isFinite(wantedEpisode.season)||!Number.isFinite(wantedEpisode.episode)||wantedEpisode.season!==candidateEpisode.season||wantedEpisode.episode!==candidateEpisode.episode)return false;
+        return !wantedEpisode.title||!candidateEpisode.title||wantedEpisode.title===candidateEpisode.title;
+      }
+      function findEpisode(series,folder,page){
+        var params='feed='+encodeURIComponent(folder.feed)+'&kind=series&parent='+encodeURIComponent(series.id)+'&page='+page;
+        return liveApi('stalker_browse',params).then(function(result){
+          if(!result||!result.ok)return null;
+          var found=(result.items||[]).find(function(candidate){return candidate&&candidate.playable&&sameEpisode(candidate);});
+          if(found)return found;
+          return result.hasMore&&page<3?findEpisode(series,folder,page+1):null;
+        }).catch(function(){return null;});
+      }
+      function searchFolder(folder,page){
+        var params='feed='+encodeURIComponent(folder.feed)+'&kind='+(isEpisode?'series':'vod')+'&category='+encodeURIComponent(folder.id)+'&q='+encodeURIComponent(query)+'&page='+page;
+        return liveApi('stalker_browse',params).then(function(result){
+          if(!result||!result.ok)return [];
+          var found=(result.items||[]).filter(function(candidate){if(!candidate||normalizedVodTitle(candidate.name)!==wanted)return false;var wantedYear=String(item.year||'')||lookupYear(item),candidateYear=lookupYear(candidate);return !(wantedYear&&candidateYear&&wantedYear!==candidateYear);});
+          if(isEpisode){
+            var series=found.find(function(candidate){return !candidate.playable;});
+            if(!series)return result.hasMore&&page<3?searchFolder(folder,page+1):[];
+            return findEpisode(series,folder,1).then(function(episode){return episode?[{episode:episode}]:[];});
+          }
+          found=found.filter(function(candidate){return candidate.playable;});
+          if(found.length||!result.hasMore||page>=3)return found;
+          return searchFolder(folder,page+1);
+        }).catch(function(){return [];});
+      }
+      var groups=[];folders.forEach(function(folder){var group=groups.find(function(entry){return String(entry.feed)===String(folder.feed);});if(!group){group={feed:folder.feed,folders:[]};groups.push(group);}group.folders.push(folder);});
+      function searchProvider(group){
+        function nextFolder(index){if(index>=group.folders.length)return Promise.resolve(null);var folder=group.folders[index];return searchFolder(folder,1).then(function(matches){return matches.length?{folder:folder,item:matches[0]}:nextFolder(index+1);});}
+        return nextFolder(0);
+      }
+      var cursor=0,results=[];
+      function worker(){if(cursor>=groups.length)return Promise.resolve();var group=groups[cursor++];return searchProvider(group).then(function(found){if(found)results.push(found);return worker();});}
+      Promise.all([worker(),worker(),worker()]).then(function(){
+        if(!current()||token!==lookupToken)return;
+        var changed=false;
+        results.forEach(function(result){
+          if(copies.some(function(source){return String(source.feed)===String(result.folder.feed);}))return;
+          var found=isEpisode?result.item.episode:result.item;
+          copies.push({id:found.id,feed:result.folder.feed,connection:found.connection||result.folder.feedName||'',kind:'vod',playable:true,categoryId:result.folder.id,categoryName:result.folder.name,language:result.folder.language});changed=true;
+        });
+        if(changed)item.sources=copies;
+        lookupPending=false;lookupMessage=results.length||copies.length>1?'':'No other matching title found in this language group.';paint();
+      });
+    }
+    wrap.appendChild(h('div',{className:'row-actions live-channel-back'},[h('button',{className:'btn',text:'← Back to catalogue',onClick:function(){attempt++;closePlayer();goLiveTab('stalker');}})]));wrap.appendChild(host);wrap.appendChild(status);wrap.appendChild(hero);paint();
+    setTimeout(function(){if(!current())return;liveApi('stalker_vod_detail','feed='+encodeURIComponent(feed)+'&id='+encodeURIComponent(itemId)).then(function(result){if(current()&&result&&result.ok){item=Object.assign({},item,result.item,{sources:item.sources,_stalkerLookupFolders:item._stalkerLookupFolders,_stalkerLanguage:item._stalkerLanguage,_stalkerMatchTitle:item._stalkerMatchTitle,_stalkerFolder:item._stalkerFolder,showName:item.showName});paint();}}).catch(function(error){if(current())status.textContent=error.message;});findAlternateConnections();},0);
+    // Reattach a still-playing Stalker video after returning from another tab.
+    // This moves the same media element, preserving the provider session and position.
+    var displayed=shell(wrap);
+    var resumed=restoreMiniVideo('stalker-vod:'+id,host);if(resumed)status.textContent='';
+    else setTimeout(function(){if(current()&&watchButton)watchButton.click();},0);
+    return displayed;
   }
   function viewStalkerChannel(id){
     var parts=id.split(':'),feed=parts[1],channelId=parts.slice(2).join(':'),context=null,attempt=0;
     var player=h('div',{id:'live-channel-player',className:'detail-player live-channel-player'}),info=h('section',{id:'live-channel-information',className:'live-channel-information'}),status=h('p',{role:'status',className:'muted',text:'Loading channel and programme guide…'}),wrap=h('div',{id:'live-channel-page',className:'live-channel-page'});
     function current(){return wrap.isConnected&&state.liveChannel===id;}
-    function refreshGuide(force){return liveApi('stalker_channel','feed='+encodeURIComponent(feed)+'&id='+encodeURIComponent(channelId)+(force===true?'&refresh=1':'')).then(function(result){if(!current())return;if(!result||!result.ok)throw new Error(result&&result.error||'Could not load this channel.');context.channels=[result.channel];context.guideMessage=result.guideError||'';if(context.updateChannel)context.updateChannel();if(!context.playError)status.textContent=result.guideError||(result.channel.programs.length?'':'No programme listings were supplied for this channel.');return result;});}
+    function refreshGuide(force){if(force!==true&&liveHint.guide)return Promise.resolve({ok:true,channel:context.channels[0]});return liveApi('stalker_channel','feed='+encodeURIComponent(feed)+'&id='+encodeURIComponent(channelId)+(force===true?'&refresh=1':'')).then(function(result){if(!current())return;if(!result||!result.ok)throw new Error(result&&result.error||'Could not load this channel.');context.channels=[result.channel];context.guideMessage=result.guideError||'';if(context.updateChannel)context.updateChannel();if(!context.playError)status.textContent=result.guideError||(result.channel.programs.length?'':'No programme listings were supplied for this channel.');return result;});}
     function simple(){
       if(!context)return;attempt++;context.simpleTried=true;
       var source=can('iptv_manage')?{kind:'live',url:LIVE_API+'stalker_stream?feed='+encodeURIComponent(feed)+'&channel='+encodeURIComponent(channelId)+'&format=.m3u8'}:context.sources[id];
@@ -6141,32 +6423,124 @@ try {
       startStalkerSimple(player,source,status,current,context.onPlaying);
     }
     function play(){
-      if(!context||!context.channels.length)return;var mine=++attempt;closePlayer();stopRadio();context.playError=false;context.simpleTried=false;status.className='muted';status.textContent='Connecting…';
-      stalkerPost('stalker_play',{feed:feed,kind:'live',id:channelId}).then(function(result){if(!current()||mine!==attempt)return;context.sources[id]=result.source;startLivePlayer(id,player,context);status.textContent=context.guideMessage||(context.channels[0].programs.length?'':'No programme listings were supplied for this channel.');}).catch(function(error){if(current()&&mine===attempt){context.playError=true;status.className='bad';status.textContent=error.message;}});
+      failed=false;playing=false;if(!context||!context.channels.length)return;var mine=++attempt;closePlayer();stopRadio();context.playError=false;context.simpleTried=false;status.className='muted';status.textContent='Connecting…';
+      stalkerPost('stalker_play',{feed:feed,kind:'live',id:channelId}).then(function(result){if(!current()||mine!==attempt)return;context.sources[id]=result.source;startLivePlayer(id,player,context);status.textContent=context.guideMessage||(context.channels[0].programs.length?'':'No programme listings were supplied for this channel.');}).catch(function(error){if(current()&&mine===attempt){context.playError=true;failover(error.message);}});
     }
-    wrap.appendChild(h('div',{className:'row-actions live-channel-back'},[h('button',{className:'btn',text:'← Back to Stalker',onClick:function(){closePlayer();goLiveTab('stalker');}}),h('button',{className:'btn',text:'Watch channel',onClick:play}),h('button',{className:'btn ghost',text:'Use simple player',onClick:simple}),stalkerCheckButton(feed,channelId,'live',status,function(){attempt++;}),h('button',{className:'btn ghost',text:'Stop playback',onClick:function(){attempt++;closePlayer();status.textContent='Playback stopped.';}}),h('button',{className:'btn ghost',text:'Refresh guide',onClick:function(){refreshGuide(true).then(function(){if(current())paintChannelInformation(context.channels[0]);}).catch(function(error){status.textContent=error.message;});}})]));
+    wrap.appendChild(h('div',{className:'row-actions live-channel-back'},[h('button',{className:'btn',text:'← Back to Stalker',onClick:function(){attempt++;failed=true;closePlayer();goLiveTab('stalker');}}),h('button',{className:'btn',text:'Watch channel',onClick:play}),h('button',{className:'btn ghost',text:'Use simple player',onClick:simple}),stalkerCheckButton(feed,channelId,'live',status),h('button',{className:'btn ghost',text:'Stop playback',onClick:function(){attempt++;failed=true;closePlayer();status.textContent='Playback stopped.';}}),h('button',{className:'btn ghost',text:'Refresh guide',onClick:function(){refreshGuide(true).then(function(){if(current())paintChannelInformation(context.channels[0]);}).catch(function(error){status.textContent=error.message;});}})]));
+    var liveHint=state._stalkerChannelHint&&state._stalkerChannelHint.id===id?state._stalkerChannelHint:{};
+    var liveCopies=Array.isArray(liveHint.sources)?liveHint.sources.filter(function(src){return src&&src.feed&&src.id;}):[];
+    var tried=Array.isArray(liveHint.tried)?liveHint.tried.slice():[];
+    var sequence=Array.isArray(liveHint.sequence)?liveHint.sequence:[];
+    function zapStalker(direction){
+      if(!current()||sequence.length<2)return;
+      var at=sequence.findIndex(function(ch){
+        return (ch.sources||[]).some(function(src){
+          return String(src.feed)===String(feed)&&String(src.id)===String(channelId);
+        }) || (String(ch.feed)===String(feed)&&String(ch.id)===String(channelId));
+      });
+      if(at<0)return;
+      var next=sequence[(at+direction+sequence.length)%sequence.length];
+      if(!next||next===sequence[at])return;
+      var sources=Array.isArray(next.sources)?next.sources.filter(function(src){return src&&src.feed&&src.id;}):[];
+      var target=sources[0]||(next.feed&&next.id?next:null);
+      if(!target)return;
+      attempt++;failed=true;closePlayer();
+      playStalkerItem(target.feed,Object.assign({},target,{
+        name:next.name||target.name,kind:'live',sources:sources.length?sources:[target],
+        _channelSequence:sequence,_guide:next._guide
+      }),null);
+    }
+    var playing=false,failed=false;
+    function failover(message){
+      // A stream can fail after first playback too; continue through the remaining
+      // known qualities/connections rather than stopping on its first success.
+      if(!current()||failed)return;
+      failed=true;
+      var currentKey=feed+'|'+channelId;
+      if(tried.indexOf(currentKey)<0)tried.push(currentKey);
+      var next=liveCopies.find(function(src){return tried.indexOf(src.feed+'|'+src.id)<0;});
+      if(next){
+        status.className='muted';status.textContent='Playback failed. Trying '+(next.quality||'another quality')+' on '+(next.connection||'another connection')+'…';
+        ++attempt;closePlayer();
+        playStalkerItem(next.feed,Object.assign({},next,{sources:liveCopies,_failoverTried:tried,_channelSequence:sequence,_guide:liveHint.guide}),null);
+      }else{
+        context.playError=true;status.className='bad';
+        status.textContent=(message||'Stream unavailable')+' · All available qualities and connections were tried.';
+      }
+    }
+    if(liveCopies.length>1){
+      var liveSelect=h('select',{'aria-label':'Choose Live TV connection'});
+      liveCopies.forEach(function(src,i){
+        liveSelect.appendChild(h('option',{value:String(i),text:src.connection||src.feed}));
+        if(String(src.feed)===String(feed)&&String(src.id)===String(channelId))liveSelect.value=String(i);
+      });
+      liveSelect.onchange=function(){
+        var src=liveCopies[Number(liveSelect.value)];
+        if(!src||String(src.feed)===String(feed)&&String(src.id)===String(channelId))return;
+        attempt++;closePlayer();
+        playStalkerItem(src.feed,Object.assign({},src,{sources:liveCopies,_channelSequence:sequence,_guide:liveHint.guide}),null);
+      };
+      wrap.appendChild(h('label',{className:'stalker-vod-source-select'},[h('span',{text:'Connection'}),liveSelect]));
+    }
     wrap.appendChild(player);wrap.appendChild(status);wrap.appendChild(info);
     setTimeout(function(){
       if(!current())return;
       var hint=state._stalkerChannelHint&&state._stalkerChannelHint.id===id?state._stalkerChannelHint:{};
-      context={channels:[{id:id,provider:'stalker',kind:'iptv',number:0,name:hint.name||'Channel '+channelId,slogan:hint.slogan||'Stalker',logo:'',programs:[]}],sources:{},refresh:refreshGuide,
-        onError:function(message){context.playError=true;if(current()){status.className='bad';status.textContent=message+' You can select Use simple player to try it manually.';}},
-        onPlaying:function(){if(!context.guideRequested){context.guideRequested=true;refreshGuide().catch(function(){if(current()&&!context.playError)status.textContent='Programme guide unavailable; playback can continue.';});}}
+      context={channels:[{id:id,provider:'stalker',kind:'iptv',number:0,name:hint.name||'Channel '+channelId,slogan:hint.slogan||'Stalker',logo:hint.guide&&hint.guide.logo||'',programs:hint.guide&&hint.guide.programs||[]}],sources:{},guideRequested:!!hint.guide,refresh:refreshGuide,
+        hasNextChannel:sequence.length>1,onZap:zapStalker,
+        onError:function(message){if(current())failover(message);},
+        onPlaying:function(){playing=true;if(!context.guideRequested){context.guideRequested=true;refreshGuide().catch(function(){if(current()&&!context.playError)status.textContent='Programme guide unavailable; playback can continue.';});}}
       };
       play();
-      liveApi('stalker_channel','feed='+encodeURIComponent(feed)+'&id='+encodeURIComponent(channelId)+'&guide=0').then(function(result){if(!current()||!result||!result.ok)return;context.channels=[result.channel];if(context.updateChannel)context.updateChannel();}).catch(function(){});
+      liveApi('stalker_channel','feed='+encodeURIComponent(feed)+'&id='+encodeURIComponent(channelId)+'&guide=0').then(function(result){if(!current()||!result||!result.ok)return;result.channel.programs=context.channels[0].programs;result.channel.logo=context.channels[0].logo||result.channel.logo;context.channels=[result.channel];if(context.updateChannel)context.updateChannel();}).catch(function(){});
     },0);
     return shell(wrap);
   }
   function showStalkerOffline(host){
+    if(host._stalkerOfflineTimer){clearTimeout(host._stalkerOfflineTimer);host._stalkerOfflineTimer=null;}
     host.replaceChildren(h('h2',{text:'Offline downloads'}),pendingContent());
     liveApi('stalker_offline').then(function(result){
       if(!host.isConnected)return;if(!result||!result.ok)throw new Error(result&&result.error||'Could not load offline downloads.');
-      host.replaceChildren(h('div',{className:'row-head'},[h('h2',{text:'Offline downloads'}),h('button',{className:'btn',text:'Refresh status',onClick:function(){showStalkerOffline(host);}})]),h('p',{className:'muted',text:'Downloads run on the server. Finished videos wait in the import inbox, where you can match the title and choose its library location.'}));
-      (result.items||[]).forEach(function(item){host.appendChild(h('div',{className:'settings-card'},[h('h3',{text:item.name}),h('p',{text:item.status+(item.bytes?' · '+Math.round(item.bytes/1048576)+' MB':'')}),item.error?h('p',{className:'bad',text:item.error}):null,
-        ['queued','downloading'].indexOf(item.status)>=0&&can('downloads_request')?h('button',{className:'btn ghost',text:'Cancel download',onClick:function(){stalkerPost('stalker_cancel',{id:item.id}).then(function(){showStalkerOffline(host);}).catch(function(error){toast(error.message,{kind:'bad'});});}}):null,item.status==='ready'&&can('ingest_import')?h('button',{className:'btn',text:'Match and add to library',onClick:function(){openSettings('ingest');}}):null,
-        ['failed','cancelled','queued','downloading'].indexOf(item.status)>=0&&can('downloads_request')?h('button',{className:'btn',text:'Retry interrupted download',onClick:function(e){var b=e.currentTarget;b.disabled=true;stalkerPost('stalker_retry',{id:item.id}).then(function(){showStalkerOffline(host);}).catch(function(error){toast(error.message,{kind:'bad'});}).finally(function(){b.disabled=false;});}}):null]));});
+      function offlineProgress(item){
+        if(['queued','downloading'].indexOf(item.status)<0)return null;
+        var known=item.percent!=null,pct=known?Math.max(0,Math.min(100,Number(item.percent)||0)):0;
+        var fill=h('span',{style:'width:'+pct+'%'}),track=h('div',{className:'offline-download-progress-track'},[fill]);
+        var label=h('span',{className:'offline-download-progress-label',text:known?pct+'% downloaded':item.status==='queued'?'Waiting in queue':'Receiving data'});
+        var wrap=h('div',{className:'offline-download-progress'+(known?'':' indeterminate'),'data-offline-progress':item.id},[track,label]);
+        wrap.setAttribute('role','progressbar');wrap.setAttribute('aria-label','Download progress');wrap.setAttribute('aria-valuemin','0');wrap.setAttribute('aria-valuemax','100');if(known)wrap.setAttribute('aria-valuenow',String(pct));
+        return wrap;
+      }
+      host.replaceChildren(h('div',{className:'row-head'},[h('h2',{text:'Offline downloads'}),h('button',{className:'btn',text:'Refresh status',onClick:function(){showStalkerOffline(host);}})]),h('p',{className:'muted',text:'Prepared videos can be saved to this device. Library downloads also appear in the ingest inbox for matching.'}));
+      (result.items||[]).forEach(function(item){
+        var seriesDetails=[item.seasonName,item.episodeTitle].filter(Boolean).join(' · ');
+        var details=[item.stage,item.percent!=null?item.percent+'% downloaded':'',stalkerOfflineTransferDetails(item),item.connection?'Provider: '+item.connection:'',item.destination==='browser'?'Destination: this device':'Destination: library'].filter(Boolean).join(' · ');
+        var admin=!!(state.user&&state.user.role==='admin');
+        var statusLine=h('p',{text:item.status,'data-offline-status':item.id,'data-offline-state':item.status});
+        host.appendChild(h('div',{className:'settings-card','data-offline-job':item.id},[h('h3',{text:stalkerOfflineTitle(item)}),seriesDetails?h('p',{className:'muted',text:seriesDetails}):null,statusLine,h('p',{className:'muted',text:details,'data-offline-details':item.id}),offlineProgress(item),item.error?h('p',{className:'bad',text:item.error}):null,
+        ['queued','downloading'].indexOf(item.status)>=0&&can('downloads_request')?h('button',{className:'btn ghost',text:'Cancel download',onClick:function(){stalkerPost('stalker_cancel',{id:item.id}).then(function(){showStalkerOffline(host);}).catch(function(error){toast(error.message,{kind:'bad'});});}}):null,item.status==='ready'&&item.destination!=='browser'&&can('ingest_import')?h('button',{className:'btn',text:'Match and add to library',onClick:function(){openSettings('ingest');}}):null,
+        item.status==='ready'&&can('downloads_request')?h('a',{className:'btn',href:LIVE_API+'stalker_offline_file?id='+encodeURIComponent(item.id),download:'',text:'Save video to device'}):null,
+        !item.delete_requested&&['failed','cancelled'].indexOf(item.status)>=0&&can('downloads_request')?h('button',{className:'btn',text:'Retry interrupted download',onClick:function(e){var b=e.currentTarget;b.disabled=true;stalkerPost('stalker_retry',{id:item.id}).then(function(){showStalkerOffline(host);}).catch(function(error){toast(error.message,{kind:'bad'});}).finally(function(){b.disabled=false;});}}):null,
+        admin&&!['queued','downloading'].includes(item.status)?h('button',{className:'btn danger',text:item.delete_requested?'Finish deleting':'Delete download',onClick:function(e){if(!item.delete_requested&&!confirm('Delete “'+item.name+'” and its saved files?'))return;var b=e.currentTarget;b.disabled=true;stalkerPost('stalker_delete',{id:item.id}).then(function(){showStalkerOffline(host);}).catch(function(error){toast(error.message,{kind:'bad'});}).finally(function(){b.disabled=false;});}}):null]));});
       if(!(result.items||[]).length)host.appendChild(h('p',{className:'muted',text:'No provider videos have been downloaded yet.'}));
+      function updateProgress(){
+        liveApi('stalker_offline').then(function(next){
+          if(!host.isConnected||!next||!next.ok)return;
+          var rows=next.items||[],active=rows.some(function(row){return row.status==='queued'||row.status==='downloading'||row.delete_requested;}),changed=false;
+          rows.forEach(function(row){
+            var card=Array.from(host.querySelectorAll('[data-offline-job]')).find(function(node){return node.getAttribute('data-offline-job')===row.id;});
+            if(!card)return;
+            var line=card.querySelector('[data-offline-status]'),detail=card.querySelector('[data-offline-details]');
+            if(line&&line.getAttribute('data-offline-state')!==row.status){changed=true;return;}
+            if(line)line.textContent=row.status;
+            if(detail)detail.textContent=[row.stage,row.percent!=null?row.percent+'% downloaded':'',stalkerOfflineTransferDetails(row),row.connection?'Provider: '+row.connection:'',row.destination==='browser'?'Destination: this device':'Destination: library'].filter(Boolean).join(' · ');
+            var progress=card.querySelector('[data-offline-progress]'),nextProgress=offlineProgress(row);if(progress&&nextProgress)progress.replaceWith(nextProgress);else if(progress&&!nextProgress)progress.remove();else if(!progress&&nextProgress&&detail)detail.after(nextProgress);
+          });
+          Array.from(host.querySelectorAll('[data-offline-job]')).forEach(function(card){var id=card.getAttribute('data-offline-job');if(!rows.some(function(row){return row.id===id;}))changed=true;});
+          if(changed){showStalkerOffline(host);return;}
+          if(active&&host.isConnected)host._stalkerOfflineTimer=setTimeout(updateProgress,4000);
+        }).catch(function(){if(host.isConnected)host._stalkerOfflineTimer=setTimeout(updateProgress,10000);});
+      }
+      if((result.items||[]).some(function(item){return item.status==='queued'||item.status==='downloading'||item.delete_requested;}))host._stalkerOfflineTimer=setTimeout(updateProgress,4000);
     }).catch(function(error){if(host.isConnected)host.replaceChildren(h('p',{className:'bad',text:error.message}));});
   }
   function stalkerUpdateSettings(host,connections){
@@ -6240,14 +6614,32 @@ try {
       if(!vodLoading)vodLoading=window.VaultcastStalkerVod?Promise.resolve():new Promise(function(resolve,reject){var script=document.createElement('script');script.src=window.VaultcastDependencies.stalkerVod;script.onload=resolve;script.onerror=function(){script.remove();reject(new Error('Could not load on-demand browsing.'));};document.head.appendChild(script);});
       vodLoading.then(function(){if(!current()||kind==='live'||parent||root.classList.contains('stalker-downloads'))return;
         if(!state._stalkerVodBrowse||state._stalkerVodBrowse.owner!==owner)state._stalkerVodBrowse={owner:owner,tabs:{}};
-        if(!vodBrowser)vodBrowser=window.VaultcastStalkerVod(vodHost,{h:h,api:liveApi,owner:owner,connections:connections,manage:can('iptv_manage')?function(){openSettings('live-stalker');}:null,current:function(){return current()&&kind!=='live'&&!parent&&!root.classList.contains('stalker-downloads');},saved:function(tab){return state._stalkerVodBrowse.tabs[tab];},save:function(tab,value){state._stalkerVodBrowse.tabs[tab]=value;},open:function(source,item,button){feed.value=source;if(item.playable){state._stalkerVodReturn=vodBrowser&&vodBrowser.snapshot?vodBrowser.snapshot():null;playStalkerItem(source,item,button);}else{parent=item.id;showContext=Object.assign({},item);trail=[{id:item.id,name:item.name}];query.value='';page=1;back.hidden=false;load(false,true);}},download:can('downloads_request')&&can('ingest_view')&&userAreaAllowed('library')?function(source,item){return stalkerPost('stalker_download',{feed:source,id:item.id,name:item.name});}:null});
+        if(!vodBrowser)vodBrowser=window.VaultcastStalkerVod(vodHost,{h:h,api:liveApi,owner:owner,connections:connections,isAdmin:!!(state.user&&state.user.role==='admin'),manage:can('iptv_manage')?function(){openSettings('live-stalker');}:null,current:function(){return current()&&kind!=='live'&&!parent&&!root.classList.contains('stalker-downloads');},saved:function(tab){return state._stalkerVodBrowse.tabs[tab];},save:function(tab,value){state._stalkerVodBrowse.tabs[tab]=value;},open:function(source,item,button){feed.value=source;if(item.playable){state._stalkerVodReturn=vodBrowser&&vodBrowser.snapshot?vodBrowser.snapshot():null;playStalkerItem(source,item,button);}else{parent=item.id;showContext=Object.assign({},item);trail=[{id:item.id,name:item.name}];query.value='';page=1;back.hidden=false;load(false,true);}},download:can('downloads_request')&&can('ingest_view')&&userAreaAllowed('library')?function(source,item){return stalkerPost('stalker_download',{feed:source,id:item.id,name:item.name});}:null});
         var previous=state._stalkerVodReturn;
         if(previous&&previous.kind===kind&&vodBrowser.restore(previous))state._stalkerVodReturn=null;
         else vodBrowser.show(kind);
       }).catch(function(error){vodLoading=null;if(current())vodHost.replaceChildren(h('p',{className:'bad',text:error.message}),h('button',{className:'btn',text:'Retry',onClick:onDemandView}));});
     }
     var folderState=new Map(resume&&resume.folders||[]),drawingSearch=false,availableGroups=[],trail=[],tools=h('div',{className:'stalker-browse-tools'});
-    function saved(){try{return JSON.parse(localStorage.getItem('stalker-favourites-'+owner+'-'+feed.value)||'[]').filter(function(x){return x&&typeof x.id==='string'&&typeof x.name==='string';}).slice(0,100);}catch(ignore){return [];}}
+    function saved(){try{var key='stalker-favourites-'+owner+'-'+feed.value,raw=JSON.parse(localStorage.getItem(key)||'[]'),changed=false,list=raw.filter(function(x){return x&&typeof x.id==='string'&&typeof x.name==='string';}).map(function(x){var prefix=String(x.name).match(/^\s*(?:[A-Z]{2,3}|ENGLISH)\s*[-:|]\s*/i);if(!prefix)return x;var clean=String(x.name).slice(prefix[0].length).trim().replace(/^#\s*/,'').replace(/([a-z0-9])([A-Z])/g,'$1 $2').replace(/\s+/g,' ').trim();if(clean===x.name)return x;changed=true;return Object.assign({},x,{name:clean});}).slice(0,100);if(changed)localStorage.setItem(key,JSON.stringify(list));return list;}catch(ignore){return [];}}
+    function legacyFavouriteList(feedId){try{var list=JSON.parse(localStorage.getItem('stalker-favourites-'+owner+'-'+feedId)||'[]');return Array.isArray(list)?list.filter(function(entry){return entry&&typeof entry.name==='string';}):[];}catch(ignore){return [];}}
+    function favouriteNameKey(value){return String(value||'').toLocaleLowerCase().replace(/\s*[([](?:19|20)\d{2}[)\]]\s*$/,'').replace(/[^\p{L}\p{N}]+/gu,'');}
+    state._stalkerVodFavourite={
+      has:function(item,tab,feedId){
+        if(!item||owner!==(state.user&&state.user.id))return false;
+        if(vodBrowser&&vodBrowser.hasFavourite)return vodBrowser.hasFavourite(item,tab,item._stalkerLanguage,item._stalkerFolder);
+        var id=String(item.seasonId||item.showId||item.id||''),name=favouriteNameKey(item.name);
+        return legacyFavouriteList(feedId||item.feed||feed.value).some(function(entry){return entry.tab===tab&&(String(entry.id)===id||favouriteNameKey(entry.name)===name);});
+      },
+      toggle:function(item,tab,feedId){
+        if(!item||owner!==(state.user&&state.user.id))return null;
+        if(vodBrowser&&vodBrowser.toggleFavourite)return vodBrowser.toggleFavourite(item,tab,item._stalkerLanguage,item._stalkerFolder);
+        var key=feedId||item.feed||feed.value,id=String(item.seasonId||item.showId||item.id||''),name=String(item.name||''),list=legacyFavouriteList(key),exists=list.some(function(entry){return entry.tab===tab&&(String(entry.id)===id||favouriteNameKey(entry.name)===favouriteNameKey(name));});
+        list=list.filter(function(entry){return !(entry.tab===tab&&(String(entry.id)===id||favouriteNameKey(entry.name)===favouriteNameKey(name)));});
+        if(!exists)list.unshift({id:id,name:name,tab:tab});
+        try{localStorage.setItem('stalker-favourites-'+owner+'-'+key,JSON.stringify(list.slice(0,100)));return {active:!exists};}catch(ignore){toast('Could not save this favourite on the device.',{kind:'bad'});return null;}
+      }
+    };
     function chooseCategory(id){liveRequested=kind==='live';parent='';trail=[];query.value='';category.value=id;page=1;load(false);}
     function browseTools(){
       tools.replaceChildren();root.classList.remove('stalker-downloads');if(downloads)downloads.classList.remove('primary');root.classList.toggle('stalker-is-live',kind==='live');
@@ -6259,7 +6651,7 @@ try {
         list.appendChild(option(kind==='live'?'*':'',kind==='live'?'All channels':kind==='vod'?'All movies':'All series'));availableGroups.forEach(function(group){list.appendChild(option(group.id,group.name));});
         tools.appendChild(h('details',{className:'stalker-filter-panel',open:true},[h('summary',{text:'Browse categories'}),list]));
       }
-      if(favourites.length){var list=h('div',{className:'stalker-category-nav'});favourites.forEach(function(entry){list.appendChild(h('button',{className:'stalker-nav-item',text:'★ '+entry.name,onClick:function(){query.value=entry.name;parent='';trail=[];category.value='';page=1;load(false);}}));});tools.appendChild(h('details',{className:'stalker-filter-panel',open:false},[h('summary',{text:'Favourites · '+favourites.length}),list]));}
+      if(favourites.length&&!parent){var list=h('div',{className:'stalker-category-nav'});favourites.forEach(function(entry){list.appendChild(h('button',{className:'stalker-nav-item',text:'★ '+entry.name,onClick:function(){query.value=entry.name;parent='';trail=[];category.value='';page=1;load(false);}}));});tools.appendChild(h('details',{className:'stalker-filter-panel',open:false},[h('summary',{text:'Favourites · '+favourites.length}),list]));}
       var crumbs=h('nav',{className:'stalker-breadcrumbs','aria-label':'Catalogue location'});
       if(parent){crumbs.appendChild(h('button',{className:'btn ghost',text:kind==='vod'?'Movies':'Series',onClick:function(){chooseCategory('');}}));trail.forEach(function(entry,index){crumbs.appendChild(h('button',{className:'btn ghost',text:'› '+entry.name,onClick:function(){trail=trail.slice(0,index+1);parent=entry.id;page=1;load(false,true);}}));});}
       breadcrumbs.replaceChildren(crumbs);
@@ -6280,7 +6672,7 @@ try {
       search.hidden=kind==='series'&&!!parent;
       seriesHero.hidden=kind!=='series'||!parent||!showContext;if(seriesHero.hidden)return;
       var title=showContext.name||'Provider series';
-      seriesHero.replaceChildren(h('div',{className:'stalker-vod-hero'},[h('div',{className:'stalker-vod-detail-poster'},[showContext.poster?h('img',{src:showContext.poster,alt:title+' poster',loading:'lazy',referrerpolicy:'no-referrer',onError:function(e){e.target.replaceWith(h('span',{text:title}));}}):h('span',{text:title.slice(0,1)})]),h('div',{className:'stalker-vod-detail-copy'},[h('span',{className:'eyebrow',text:'Provider series'}),h('h2',{text:title}),showContext.year?h('p',{className:'muted',text:String(showContext.year)}):null,h('p',{text:showContext.description||'No description was supplied by this provider.'})])]));
+      seriesHero.replaceChildren(h('div',{className:'stalker-vod-hero'},[h('div',{className:'stalker-vod-detail-poster'},[showContext.poster?h('img',{src:showContext.poster,alt:title+' poster',loading:'lazy',referrerpolicy:'no-referrer',onError:function(e){e.target.replaceWith(h('span',{text:title}));}}):h('span',{text:title.slice(0,1)})]),h('div',{className:'stalker-vod-detail-copy'},[h('span',{className:'eyebrow',text:'Provider series'}),h('h2',{text:title}),showContext.year?h('p',{className:'muted',text:String(showContext.year)}):null,h('div',{className:'row-actions'},[stalkerVodFavouriteButton(showContext,'series',feed.value)]),h('p',{text:showContext.description||'No description was supplied by this provider.'}),stalkerVodMetadata(showContext)])]));
     }
     function showMetadata(show){if(show)showContext=Object.assign({},showContext||{},show);paintShow();}
     function draw(){
@@ -6291,12 +6683,34 @@ try {
       results.replaceChildren();results.className=kind==='live'?'stalker-channel-list':'stalker-vod-grid';results.setAttribute('role','region');
       drawingSearch=kind==='live'&&!!query.value.trim();
       var seasons=new Map(),episodeView=kind==='series'&&!!parent;
-      if(episodeView)results.className='stalker-series-episodes';
+      if(episodeView){
+        results.className='stalker-series-episodes';
+        // Keep the provider's currently loaded episode IDs in chronological order for
+        // item-page navigation. No server catalogue or extra scan is required.
+        function episodeOrder(item){
+          var season=Number(item.season);
+          if(!Number.isFinite(season)){
+            var m=String(item.seasonName||item.name||'').match(/(?:Season\\s*|\\bS)(\\d+)/i);
+            season=m?Number(m[1]):0;
+          }
+          var episode=Number(item.episode);
+          if(!Number.isFinite(episode)||!episode){
+            var idPart=String(item.id||'').match(/:(\\d+)$/);
+            episode=idPart?Number(idPart[1]):0;
+          }
+          return {season:season,episode:episode};
+        }
+        var orderedEpisodes=loaded.filter(function(entry){return entry&&entry.playable;}).slice().sort(function(a,b){
+          var aa=episodeOrder(a),bb=episodeOrder(b);
+          return aa.season-bb.season||aa.episode-bb.episode||String(a.id).localeCompare(String(b.id));
+        });
+        state._stalkerEpisodeNav={feed:feed.value,parent:parent,items:orderedEpisodes};
+      }
       loaded.forEach(function(item){
         if(episodeView&&query.value.trim()&&(item.name+' '+(item.episodeTitle||'')).toLowerCase().indexOf(query.value.trim().toLowerCase())<0)return;
-        var button=h('button',{className:'btn',text:item.kind==='live'?'Watch':item.playable?'View details':'Explore',onClick:function(){if(state._stalkerBrowse)state._stalkerBrowse.folders=Array.from(results.querySelectorAll('details[data-folder]')).map(function(folder){return [folder.getAttribute('data-folder'),folder.open];});if(item.kind==='live'||item.playable)playStalkerItem(feed.value,item,button);else{parent=item.id;showContext=Object.assign({},item);trail.push({id:item.id,name:item.name});query.value='';page=1;back.hidden=false;load(false,true);}}});
+        var button=h('button',{className:'btn',text:item.kind==='live'?'Watch':item.playable?'View details':'Explore',onClick:function(){if(state._stalkerBrowse)state._stalkerBrowse.folders=Array.from(results.querySelectorAll('details[data-folder]')).map(function(folder){return [folder.getAttribute('data-folder'),folder.open];});if(item.kind==='live'||item.playable){var playItem=item;if(kind==='series'&&showContext){playItem=Object.assign({},item,{showName:item.showName||(trail.length?trail[0].name:showContext.name),_stalkerMatchTitle:showContext._stalkerMatchTitle||showContext.name,_stalkerLanguage:showContext._stalkerLanguage,_stalkerLookupFolders:showContext._stalkerLookupFolders});}else if(kind==='series'&&!playItem.showName&&trail.length)playItem=Object.assign({},item,{showName:trail[0].name});playStalkerItem(feed.value,playItem,button);}else{parent=item.id;showContext=Object.assign({},item);trail.push({id:item.id,name:item.name});query.value='';page=1;back.hidden=false;load(false,true);}}});
         var isSaved=saved().some(function(x){return x.id===item.id&&x.tab===kind;}),star=h('button',{className:'btn ghost stalker-save',text:isSaved?'★':'☆','aria-label':(isSaved?'Remove favourite: ':'Save favourite: ')+item.name,'aria-pressed':String(isSaved),onClick:function(){var list=saved().filter(function(x){return !(x.id===item.id&&x.tab===kind);});if(!isSaved)list.unshift({id:item.id,name:item.name,tab:kind});try{localStorage.setItem('stalker-favourites-'+owner+'-'+feed.value,JSON.stringify(list.slice(0,100)));}catch(ignore){}draw();}});
-        var download=item.kind!=='live'&&item.playable&&can('downloads_request')&&can('ingest_view')&&userAreaAllowed('library')?h('button',{className:'btn ghost',text:'Download for library',onClick:function(e){var b=e.currentTarget;b.disabled=true;stalkerPost('stalker_download',{feed:feed.value,id:item.id,name:item.name}).then(function(){toast('Download queued. Match it in the import inbox when it finishes.');}).catch(function(error){toast(error.message,{kind:'bad'});}).finally(function(){b.disabled=false;});}}):null;
+        var download=item.kind!=='live'&&item.playable&&can('downloads_request')&&can('ingest_view')&&userAreaAllowed('library')?h('button',{className:'btn ghost',text:'Download for library',onClick:function(e){var b=e.currentTarget;b.disabled=true;var showName=item.showName||(kind==='series'&&trail.length?trail[0].name:'');stalkerPost('stalker_download',{feed:feed.value,id:item.id,name:item.name,showName:showName}).then(function(){toast('Download queued. Match it in the import inbox when it finishes.');}).catch(function(error){toast(error.message,{kind:'bad'});}).finally(function(){b.disabled=false;});}}):null;
         if(episodeView&&item.playable){
           var seasonLabel=item.seasonName||(item.season!=null?(Number(item.season)===0?'Specials':'Season '+item.season):'Season unknown');
           var match=String(item.name||'').match(/(?:season\s*(\d+)|\bS(\d{1,2})E\d+\b)/i);
@@ -6313,12 +6727,56 @@ try {
               h('small',{className:'muted',text:[item.airdate,item.runtime?item.runtime+' min':null].filter(Boolean).join(' · ')})
             ])
           ]);
-          folder._episodes.push(h('div',{className:'stalker-episode-row'},[episodeOpen,download]));return;
+          folder._episodes.push({number:/^\d+$/.test(episodeNumber)?Number(episodeNumber):-1,row:h('div',{className:'stalker-episode-row'},[episodeOpen,download])});return;
         }
         if(item.kind==='live')results.appendChild(h('div',{className:'stalker-channel-row',role:'listitem'},[h('span',{className:'stalker-channel-name',text:item.name,title:item.name}),item.description&&item.description!=='Provider live channel'?h('span',{className:'stalker-channel-group muted',text:item.description,title:item.description}):null,star,button]));else results.appendChild(h('article',{className:'stalker-vod-card'},[h('button',{className:'stalker-vod-cover',type:'button','aria-label':(item.playable?'Watch ':'Open ')+item.name,onClick:function(){button.click();}},[h('span',{className:'stalker-vod-placeholder',text:item.name.slice(0,1).toUpperCase()}),item.poster?h('img',{src:item.poster,alt:'',loading:'lazy',onError:function(e){e.target.remove();}}):null,h('span',{className:'stalker-vod-badge',text:item.playable?'View details':kind==='series'?'Browse series':'View options'})]),h('div',{className:'stalker-vod-copy'},[h('div',{className:'row-head'},[h('h3',{text:item.name,title:item.name}),star]),h('p',{className:'muted',text:[item.year,item.playable?'Available to watch':kind==='series'?'Seasons & episodes':'Choose a video'].filter(Boolean).join(' · ')}),h('div',{className:'row-actions'},[button])])]));
       });
-      seasons.forEach(function(folder,key){folder.firstChild.textContent+=' · '+folder._episodes.length+' episodes';function fill(){if(folder.open&&!folder._filled){folder._episodes.forEach(function(row){folder.appendChild(row);});folder._filled=true;}seasonState.set(key,folder.open);if(state._stalkerBrowse)state._stalkerBrowse.seasons=Array.from(seasonState);}folder.ontoggle=fill;fill();results.appendChild(folder);});
+      Array.from(seasons.entries()).sort(function(a,b){
+        function seasonNumber(entry){var label=entry[1].firstChild.textContent,match=label.match(/^Season\s+(\d+)/i);return match?Number(match[1]):/^Specials$/i.test(label)?0:Number.MAX_SAFE_INTEGER;}
+        return seasonNumber(b)-seasonNumber(a)||b[1].firstChild.textContent.localeCompare(a[1].firstChild.textContent,undefined,{numeric:true});
+      }).forEach(function(pair){var key=pair[0],folder=pair[1];folder.firstChild.textContent+=' · '+folder._episodes.length+' episodes';function fill(){if(folder.open&&!folder._filled){folder._episodes.slice().sort(function(a,b){return b.number-a.number;}).forEach(function(entry){folder.appendChild(entry.row);});folder._filled=true;}seasonState.set(key,folder.open);if(state._stalkerBrowse)state._stalkerBrowse.seasons=Array.from(seasonState);}folder.ontoggle=fill;fill();results.appendChild(folder);});
       if(episodeView&&!results.childElementCount)results.appendChild(h('p',{className:'muted',text:query.value.trim()?'No matching episodes in the loaded seasons. Load more seasons or clear the search.':'No episodes are available in the shared catalogue yet.'}));
+    }
+    function episodeCoordinates(item){
+      var season=item.season==null||item.season===''?NaN:Number(item.season);
+      if(!Number.isFinite(season)){var seasonMatch=String(item.seasonName||item.name||'').match(/(?:Season\s*|\bS)(\d+)/i);season=seasonMatch?Number(seasonMatch[1]):null;}
+      var episode=Number(item.episode);
+      if(!Number.isFinite(episode)||!episode){var episodeMatch=String(item.id||'').match(/:(\d+)$/)||String(item.name||'').match(/\bE(?:pisode\s*)?(\d+)\b/i);episode=episodeMatch?Number(episodeMatch[1]):null;}
+      return {season:season,episode:episode,title:String(item.episodeTitle||'').trim().toLowerCase()};
+    }
+    function enrichEpisodeConnections(items,token){
+      if(kind!=='series'||!parent||!showContext||!Array.isArray(showContext.sources))return;
+      var alternatives=showContext.sources.filter(function(source,index,array){return source&&source.feed&&source.id&&!(String(source.feed)===String(feed.value)&&String(source.id)===String(parent))&&array.findIndex(function(other){return other&&String(other.feed)===String(source.feed)&&String(other.id)===String(source.id);})===index;});
+      if(!alternatives.length)return;
+      status.textContent='Checking alternate provider connections…';
+      Promise.all(alternatives.map(function(source){
+        var params='feed='+encodeURIComponent(source.feed)+'&kind=series&page=1&q=&category=&parent='+encodeURIComponent(source.id);
+        return liveApi('stalker_browse',params).then(function(result){return {source:source,items:result&&result.ok&&Array.isArray(result.items)?result.items.filter(function(row){return row&&row.playable;}):[]};}).catch(function(){return {source:source,items:[]};});
+      })).then(function(results){
+        if(!current()||token!==sequence||kind!=='series'||!parent)return;
+        var changed=false;
+        items.forEach(function(item){
+          if(!item||!item.playable)return;
+          var wanted=episodeCoordinates(item),matches=[];
+          results.forEach(function(result){
+            var candidates=result.items.map(function(candidate){return {item:candidate,coords:episodeCoordinates(candidate)};}).filter(function(entry){
+              if(wanted.episode==null||entry.coords.episode==null||wanted.episode!==entry.coords.episode)return false;
+              if(wanted.season!=null&&entry.coords.season!=null&&wanted.season!==entry.coords.season)return false;
+              return true;
+            });
+            if(wanted.title){var titled=candidates.filter(function(entry){return entry.coords.title===wanted.title;});if(titled.length)candidates=titled;}
+            if(candidates.length===1){var found=candidates[0].item;matches.push({id:found.id,feed:result.source.feed,connection:found.connection||result.source.connection||result.source.name,kind:'vod',playable:true});}
+          });
+          if(matches.length){
+            var currentConnection=connections.find(function(c){return String(c.id)===String(feed.value);});
+            var sources=Array.isArray(item.sources)?item.sources.slice():[{id:item.id,feed:feed.value,connection:currentConnection?currentConnection.name:'',kind:'vod',playable:true}];
+            matches.forEach(function(match){if(!sources.some(function(source){return String(source.feed)===String(match.feed)&&String(source.id)===String(match.id);}))sources.push(match);});
+            item.sources=sources;changed=true;
+          }
+        });
+        if(changed)draw();
+        status.textContent=loaded.filter(function(item){return item&&item.playable;}).length+' episodes available'+(changed?' · Alternate connections ready':'')+(next.hidden?'':' · More seasons available');
+      });
     }
     function load(refresh,resetCategories,advancing){
       clearTimeout(query._searchTimer);search.hidden=kind==='series'&&!!parent;back.hidden=!parent;var token=++sequence;browseTools();countryView();onDemandView();seriesHero.hidden=true;if(kind==='live'||!parent)return;
@@ -6333,6 +6791,7 @@ try {
         if(page===1&&result.categories)availableGroups=result.categories;loaded=page===1?result.items:loaded.concat(result.items||[]);
         if(page===1){var selected=resetCategories?'':category.value;category.replaceChildren(h('option',{value:'',text:kind==='live'?'Choose category':'All categories'}));if(kind==='live')category.appendChild(h('option',{value:'*',text:'All channels',selected:selected==='*'}));(result.categories||[]).forEach(function(row){category.appendChild(h('option',{value:row.id,text:row.name,selected:row.id===selected}));});}
         showMetadata(result.show||null);draw();
+        if(kind==='series'&&parent)enrichEpisodeConnections((result.items||[]),token);
         status.textContent=result.foldersOnly?'Choose a category on the left to load its channels.':loaded.length?'Showing '+loaded.length+' · '+result.total+' available':'No titles returned. Try another category or Refresh. If this persists, use Check connection in Stalker settings.';
         if(kind==='series'&&parent)status.textContent=result.catalogueLoading?'An administrator needs to finish loading these seasons in Stalker settings.':loaded.filter(function(item){return item.playable;}).length+' episodes available'+(result.hasMore?' · More seasons available':'');
         if(result.indexing&&kind==='live'&&query.value.trim()){status.textContent='Searching all channels · '+result.scanned+(result.catalogueTotal?' of '+result.catalogueTotal:'')+' checked · '+result.total+' matches';next.hidden=true;next.disabled=true;setTimeout(function(){if(current()&&token===sequence)load(false,false,true);},150);return;}
@@ -6347,11 +6806,131 @@ try {
     liveApi('stalker').then(function(result){if(!current())return;if(!result||!result.ok)throw new Error(result&&result.error||'Could not load Stalker connections.');connections=result.connections||[];var remembered='';try{remembered=localStorage.getItem('vaultcast-stalker-'+owner)||'';}catch(ignore){}connections.filter(function(c){return c.enabled;}).forEach(function(c){feed.appendChild(h('option',{value:c.id,text:c.name,selected:c.id===remembered}));});load(false,!resume);}).catch(function(error){if(current()){status.className='bad';status.textContent=error.message;}});
   }
   function stalkerCatalogueSettings(host,connections){
-    var message=h('p',{className:'muted',role:'status'}),rows=h('div',{className:'stack'}),feed=h('select',{'aria-label':'Catalogue connection'},[h('option',{value:'',text:'All enabled connections'})].concat(connections.filter(function(c){return c.enabled;}).map(function(c){return h('option',{value:c.id,text:c.name});}))),kind=h('select',{'aria-label':'Catalogue type'},[['all','Live TV, Movies & Series'],['live','Live TV'],['vod','Movies'],['series','Series']].map(function(row){return h('option',{value:row[0],text:row[1]});}));
-    var card=h('section',{className:'settings-card stack'},[h('h3',{text:'Shared provider catalogue'}),h('p',{text:'Load once for everyone. Browsing reads the shared database; this background job fetches provider metadata only and continues after you close this page. Posters load directly in each browser.'}),h('div',{className:'row-actions'},[feed,kind]),message,rows]);host.appendChild(card);var timer=null;
-    function render(result){if(!card.isConnected)return;rows.replaceChildren();(result.sources||[]).forEach(function(source){rows.appendChild(h('p',{className:source.error?'bad':'muted',text:source.name+' · '+({live:'Live TV',vod:'Movies',series:'Series'}[source.kind])+' · '+source.status+' · '+source.scanned.toLocaleString()+' provider entries'+(source.error?' · '+source.error:'')}));});message.textContent=result.sources&&result.sources.length?(result.worker?'Catalogue worker is running.':'Completed catalogues remain available to every user.'):'No shared load has been started. Choose the connections and content to load.';clearTimeout(timer);if((result.sources||[]).some(function(source){return source.status==='queued'||source.status==='running';}))timer=setTimeout(status,3000);}
+    var message=h('p',{className:'muted',role:'status'}),rows=h('div',{className:'stack'}),feed=h('select',{'aria-label':'Catalogue connection'},[h('option',{value:'',text:'All enabled connections'})].concat(connections.filter(function(c){return c.enabled;}).map(function(c){return h('option',{value:c.id,text:c.name});}))),kind=h('select',{'aria-label':'Catalogue type'},[['all','Movies & Series'],['vod','Movies'],['series','Series']].map(function(row){return h('option',{value:row[0],text:row[1]});}));
+    var card=h('section',{className:'settings-card stack'},[h('h3',{text:'Shared provider catalogue'}),h('p',{text:'Build once, then update existing titles daily. Matching uses provider metadata only. Restart verification rescans selected connections while retaining existing titles. Only confirmed loss of every source starts the 15-day removal countdown. The background job continues after this page closes.'}),h('div',{className:'row-actions'},[feed,kind]),message,rows]);host.appendChild(card);var timer=null;
+    function render(result){if(!card.isConnected)return;rows.replaceChildren();if(result.reset&&result.reset.state==='purging'){resetProgress.textContent='Deleting old catalogue · stage '+((result.reset.table||0)+1)+' of 7';resetButton.disabled=true;}else if(result.reset&&result.reset.state==='complete'){resetProgress.textContent='Reset complete. Rebuilding selected folders.';resetButton.disabled=false;}else resetButton.disabled=false;(result.sources||[]).forEach(function(source){rows.appendChild(h('p',{className:source.error?'bad':'muted',text:source.name+' · '+({live:'Live TV',vod:'Movies',series:'Series'}[source.kind])+' · '+source.status+' · '+source.scanned.toLocaleString()+' provider entries · '+(source.foldersComplete||0)+'/'+(source.foldersTotal||0)+' folders'+(source.currentFolder?' · Folder '+(source.currentFolder.folder_id||'discovery')+' · page '+source.currentFolder.next_page:'')+(source.status==='waiting'?' · Retry '+new Date(source.next_run*1000).toLocaleTimeString():'')+(source.error?' · '+source.error:'')}));});message.textContent=result.sources&&result.sources.length?(result.worker?'Catalogue worker is running.':'Completed catalogues remain available to every user.'):'No shared load has been started. Choose the connections and content to load.';clearTimeout(timer);if((result.reset&&result.reset.state==='purging')||(result.sources||[]).some(function(source){return ['queued','running','partial','waiting'].includes(source.status);}))timer=setTimeout(status,3000);}
     function status(){if(!card.isConnected)return;liveApi('stalker_catalogue_status').then(render).catch(function(error){if(card.isConnected)message.textContent=error.message;});}
-    [['load','Load / resume shared catalogue'],['refresh','Rebuild selected catalogue'],['pause','Pause loading']].forEach(function(spec){card.appendChild(h('button',{className:'btn',text:spec[1],onClick:function(e){var button=e.currentTarget;button.disabled=true;message.textContent='Updating shared catalogue job…';stalkerPost('stalker_catalogue_control',{operation:spec[0],feed:feed.value,kind:kind.value}).then(render).catch(function(error){message.textContent=error.message;}).finally(function(){button.disabled=false;});}}));});status();
+    var resetButton=h('button',{className:'btn danger',text:'Reset & rebuild Stalker catalogue (initial setup)'});
+    var resetProgress=h('p',{className:'muted',role:'status'});
+    card.appendChild(resetButton);card.appendChild(resetProgress);
+    resetButton.onclick=function(){
+      if(!window.confirm('Permanently delete all shared Stalker Movies and Series catalogue titles and provider offers? Saved folder selections, favourites, connections and local media remain. This cannot be undone.'))return;
+      var confirmation=window.prompt('Type RESET STALKER CATALOGUE to confirm:');
+      if(confirmation!=='RESET STALKER CATALOGUE')return;
+      resetButton.disabled=true;resetProgress.textContent='Reset requested. Old titles will be removed in bounded batches.';
+      stalkerPost('stalker_catalogue_control',{operation:'reset_rebuild',feed:'',kind:'all',confirmation:confirmation}).then(render)
+        .catch(function(error){resetProgress.textContent=error.message;resetButton.disabled=false;});
+    };
+    [['load','Build / update / resume catalogue'],['refresh','Restart verification of selected catalogue'],['pause','Pause loading']].forEach(function(spec){card.appendChild(h('button',{className:'btn',text:spec[1],onClick:function(e){var button=e.currentTarget;button.disabled=true;message.textContent='Updating shared catalogue job…';stalkerPost('stalker_catalogue_control',{operation:spec[0],feed:feed.value,kind:kind.value}).then(render).catch(function(error){message.textContent=error.message;}).finally(function(){button.disabled=false;});}}));});status();
+  }
+  function stalkerFolderSettings(host,connections){
+    var enabled=connections.filter(function(c){return c.enabled;});
+    if(!enabled.length)return;
+    var feed=h('select',{'aria-label':'Provider folder connection'},enabled.map(function(c){return h('option',{value:c.id,text:c.name});}));
+    var kind=h('select',{'aria-label':'Provider folder media type'},[['vod','Movies'],['series','Series']].map(function(k){return h('option',{value:k[0],text:k[1]});}));
+    var info=h('p',{className:'muted',role:'status'}),list=h('div',{className:'stack'});
+    var discover=h('button',{className:'btn',text:'Discover provider folders'}),all=h('button',{className:'btn',text:'Select all'}),none=h('button',{className:'btn',text:'Select none'}),save=h('button',{className:'btn primary',text:'Save selection'});
+    var card=h('section',{className:'settings-card stack'},[
+      h('h3',{text:'Provider folders to scan'}),
+      h('p',{className:'muted',text:'Choose which provider folders to scan for each connection and Movies or Series. Unselected folders are considered complete/skipped and their existing catalogue titles are retained. New titles appear as each batch is published. Select all includes the provider-wide All folder.'}),
+      h('div',{className:'row-actions'},[feed,kind,discover]),info,list,
+      h('div',{className:'row-actions'},[all,none,save])
+    ]);
+    host.appendChild(card);
+    var sources=[],previous={},draft=null,draftKey='',timer=null,busy=false,openGroups={};
+    function key(){return feed.value+'/'+kind.value;}
+    function draw(){
+      if(!card.isConnected)return;
+      var k=key(),source=sources.find(function(s){return s.feed_id===feed.value&&s.kind===kind.value;});
+      if(source&&source.folders&&source.folders.length)previous[k]=source.folders;
+      var folders=(source&&source.folders&&source.folders.length?source.folders:previous[k]||[]).filter(function(f){return f.folder_id&&f.folder_id!=='*';});
+      if(draftKey!==k){draftKey=k;draft=null;}
+      if(!draft)draft={mode:source&&source.folderMode==='include'?'include':'all',ids:new Set(source&&source.folderIds||[])};
+      list.replaceChildren();
+      var ready=!!source&&(folders.length>0||(source.folders||[]).some(function(f){return f.folder_id==='*';}));
+      all.disabled=none.disabled=save.disabled=busy||!ready;
+      if(!ready){info.textContent='Click Discover provider folders to retrieve the folder list without scanning titles.';return;}
+      if(!folders.length)info.textContent='No named folders were returned. Select all to scan provider-wide All or select none to skip.';
+      // Group provider categories by their explicit language prefix; unprefixed
+      // provider brands remain in Other. Keep folder IDs and saved choices intact.
+      var names={EN:'English',DE:'German',ES:'Spanish',NL:'Dutch',IT:'Italian',LA:'Latin American',FR:'French',PT:'Portuguese',BR:'Brazilian',PL:'Polish',TR:'Turkish',AR:'Arabic',RU:'Russian',IN:'Indian',BE:'Belgian'};
+      var grouped={};
+      folders.forEach(function(folder){
+        var match=/^([A-Z]{2,3})\s*[-–:]\s*/.exec((folder.title||'').trim());
+        var code=match?match[1]:'OTHER';
+        if(!grouped[code])grouped[code]=[];
+        grouped[code].push(folder);
+      });
+      var codes=Object.keys(grouped).sort(function(a,b){
+        if(a==='EN')return -1;if(b==='EN')return 1;
+        if(a==='OTHER')return 1;if(b==='OTHER')return -1;
+        return a.localeCompare(b);
+      });
+      function selected(folder){return draft.mode==='all'||draft.ids.has(folder.folder_id);}
+      function updateCount(){
+        var count=draft.mode==='all'?folders.length:folders.filter(selected).length;
+        info.textContent=count+' of '+folders.length+' folders selected · Save to apply.';
+      }
+      codes.forEach(function(code){
+        var entries=grouped[code],groupKey=k+'/'+code;
+        var details=h('details',{className:'settings-card'},[]);
+        details.open=Object.prototype.hasOwnProperty.call(openGroups,groupKey)?openGroups[groupKey]:code==='EN';
+        details.addEventListener('toggle',function(){openGroups[groupKey]=details.open;});
+        var summary=h('summary',{text:(code==='OTHER'?'Other / Providers':(names[code]||code)+' ('+code+')')+' · '+entries.length+' folders'});
+        var children=h('div',{className:'stack'});
+        entries.forEach(function(folder){
+          var check=h('input',{type:'checkbox',checked:selected(folder)});
+          check.onchange=function(){
+            if(draft.mode==='all'){
+              draft.mode='include';
+              draft.ids=new Set(folders.map(function(f){return f.folder_id;}));
+            }
+            if(check.checked)draft.ids.add(folder.folder_id);else draft.ids.delete(folder.folder_id);
+            updateCount();
+          };
+          var detail=folder.status==='skipped'?'skipped':folder.status||'pending';
+          children.appendChild(h('label',{className:'row-actions'},[check,h('span',{text:(folder.title||folder.folder_id)+' ['+folder.folder_id+'] · '+detail+(folder.processed?' · '+Number(folder.processed).toLocaleString()+' items':'')})]));
+        });
+        details.appendChild(summary);details.appendChild(children);list.appendChild(details);
+      });
+      info.textContent=folders.length+' folders · '+(draft.mode==='all'?'Scanning all (including provider-wide All)':'Scanning '+draft.ids.size+' selected')+'.';
+    }
+    function refresh(){
+      if(!card.isConnected)return;
+      liveApi('stalker_catalogue_status').then(function(data){
+        if(!card.isConnected)return;sources=data.sources||[];draw();
+        clearTimeout(timer);
+        if(sources.some(function(s){return ['queued','running','partial','waiting'].includes(s.status);}))timer=setTimeout(refresh,3000);
+      }).catch(function(error){if(card.isConnected)info.textContent=error.message;});
+    }
+    feed.onchange=kind.onchange=function(){draft=null;draftKey='';draw();};
+    discover.onclick=function(){
+      if(busy||!feed.value)return;
+      busy=true;discover.disabled=true;info.textContent='Fetching provider folder names…';
+      stalkerPost('stalker_catalogue_control',{operation:'discover',feed:feed.value,kind:kind.value}).then(function(data){
+        sources=data.sources||[];draft=null;draftKey='';draw();
+      }).catch(function(error){info.className='bad';info.textContent=error.message;})
+        .finally(function(){busy=false;discover.disabled=false;});
+    };
+    all.onclick=function(){
+      if(!draft)return;draft.mode='all';draft.ids.clear();
+      list.querySelectorAll('input[type="checkbox"]').forEach(function(c){c.checked=true;});
+      info.textContent='All provider folders selected, including provider-wide All · Save to apply.';
+    };
+    none.onclick=function(){
+      if(!draft)return;draft.mode='include';draft.ids.clear();
+      list.querySelectorAll('input[type="checkbox"]').forEach(function(c){c.checked=false;});
+      info.textContent='All provider folders will be skipped · Save to apply.';
+    };
+    save.onclick=function(){
+      if(!draft||busy)return;
+      busy=true;save.disabled=true;info.textContent='Saving folder selection…';
+      stalkerPost('stalker_catalogue_control',{operation:'folders',feed:feed.value,kind:kind.value,mode:draft.mode,folders:Array.from(draft.ids)}).then(function(data){
+        sources=data.sources||[];draft=null;draw();refresh();
+      }).catch(function(error){info.className='bad';info.textContent=error.message;})
+        .finally(function(){busy=false;save.disabled=false;});
+    };
+    refresh();
   }
   function paintStalkerSettings(host){
     var owner=state.user&&state.user.id;
@@ -6381,14 +6960,44 @@ try {
           stalkerPost('stalker_manage',{operation:'save',id:connection.id||'',connection:value}).then(function(){if(host.isConnected)paintStalkerSettings(host);}).catch(showError).finally(function(){button.disabled=false;});
         }}));
       }
+      function expiryStorageKey(id){return 'vaultcast-stalker-expiry-'+owner+'-'+id;}
+      function expiryLabel(saved){
+        if(!saved)return 'Subscription expiry: Check connection to retrieve';
+        return 'Subscription expiry: '+(saved.expiryDate?
+          saved.expiryDate+(saved.expiryTime?' · '+saved.expiryTime+(saved.expiryTimeZone?' '+saved.expiryTimeZone:''):''):
+          (saved.expiryStatus==='account_requests_failed'?'Could not retrieve account information':'Not exposed by the portal'))+
+          (saved.expiryDate?'':saved.expirySources&&saved.expirySources.length?' (checked '+saved.expirySources.join(', ')+')':'');
+      }
       (result.connections||[]).forEach(function(connection){
-        list.appendChild(h('div',{className:'settings-card'},[h('h3',{text:connection.name}),h('p',{className:'muted',text:connection.url+(connection.enabled?'':' · Disabled')}),h('div',{className:'row-actions'},[
+        var storedExpiry=null;
+        try{storedExpiry=JSON.parse(localStorage.getItem(expiryStorageKey(connection.id))||'null');}catch(ignore){}
+        var expiryInfo=h('p',{className:'muted',text:expiryLabel(storedExpiry)});
+        list.appendChild(h('div',{className:'settings-card'},[expiryInfo,h('h3',{text:connection.name}),h('p',{className:'muted',text:connection.url+(connection.enabled?'':' · Disabled')}),h('div',{className:'row-actions'},[
           h('button',{className:'btn',text:'Edit',onClick:function(){edit(connection);}}),h('button',{className:'btn ghost',text:'Restore previous details',onClick:function(){stalkerPost('stalker_updates',{operation:'rollback',feed:connection.id}).then(function(){if(host.isConnected)paintStalkerSettings(host);}).catch(showError);}}),
-          h('button',{className:'btn',text:'Check connection',onClick:function(e){var button=e.currentTarget;button.disabled=true;message.className='muted';message.textContent='Checking provider connection…';stalkerPost('stalker_manage',{operation:'check',id:connection.id}).then(function(res){message.textContent='Connected · '+res.channelCount+' live channels · '+res.endpoint;}).catch(showError).finally(function(){button.disabled=false;});}}),
-          h('button',{className:'btn danger',text:'Remove',onClick:function(){if(!confirm('Remove '+connection.name+'?'))return;stalkerPost('stalker_manage',{operation:'remove',id:connection.id}).then(function(){if(host.isConnected)paintStalkerSettings(host);}).catch(showError);}})
+          h('button',{className:'btn',text:'Check connection',onClick:function(e){var button=e.currentTarget;button.disabled=true;message.className='muted';message.textContent='Checking provider connection…';stalkerPost('stalker_manage',{operation:'check',id:connection.id}).then(function(res){message.textContent='Connected · '+(res.channelCount==null?'channel count unavailable':res.channelCount+(res.countEstimated?' channels returned (provider total unavailable)':' live channels reported'))+' · '+res.endpoint;var expiryRecord={expiryDate:res.expiryDate||null,expiryTime:res.expiryTime||null,
+                expiryTimeZone:res.expiryTimeZone||null,expiryStatus:res.expiryStatus||'not_exposed',
+                expirySources:Array.isArray(res.expirySources)?res.expirySources:[]};
+              try{localStorage.setItem(expiryStorageKey(connection.id),JSON.stringify(expiryRecord));}catch(ignore){}
+              expiryInfo.textContent=expiryLabel(expiryRecord);}).catch(showError).finally(function(){button.disabled=false;});}}),
+          h('button',{className:'btn danger',text:'Remove',onClick:function(){if(!confirm('Remove '+connection.name+'?'))return;stalkerPost('stalker_manage',{operation:'remove',id:connection.id}).then(function(){try{localStorage.removeItem(expiryStorageKey(connection.id));}catch(ignore){}if(host.isConnected)paintStalkerSettings(host);}).catch(showError);}})
         ])]));
       });
-      edit();stalkerCatalogueSettings(host,result.connections||[]);stalkerUpdateSettings(host,result.connections||[]);
+      edit();stalkerCatalogueSettings(host,result.connections||[]);stalkerFolderSettings(host,result.connections||[]);stalkerUpdateSettings(host,result.connections||[]);
+      if(state.user&&state.user.role==='admin'){
+        var diagnosticsHost=h('div'),diagnostics=h('details',{className:'settings-card'},[h('summary',{text:'Stalker diagnostics & exports'}),diagnosticsHost]),diagnosticsBrowser=null,diagnosticsLoading=false;
+        host.appendChild(diagnostics);
+        function diagnosticsCurrent(){return diagnosticsHost.isConnected&&owner===(state.user&&state.user.id)&&state.user.role==='admin';}
+        diagnostics.addEventListener('toggle',function(){
+          if(!diagnostics.open||diagnosticsBrowser||diagnosticsLoading)return;
+          diagnosticsLoading=true;diagnosticsHost.replaceChildren(pendingContent());
+          var ready=window.VaultcastStalkerVod?Promise.resolve():new Promise(function(resolve,reject){var script=document.createElement('script');script.src=window.VaultcastDependencies.stalkerVod;script.onload=resolve;script.onerror=function(){script.remove();reject(new Error('Could not load Stalker diagnostics. Close and reopen this section to retry.'));};document.head.appendChild(script);});
+          ready.then(function(){
+            if(!diagnosticsCurrent())return;
+            diagnosticsBrowser=window.VaultcastStalkerVod(diagnosticsHost,{h:h,owner:owner,isAdmin:true,connections:result.connections||[],current:diagnosticsCurrent,api:function(action,args){if(!diagnosticsCurrent())return Promise.reject(new Error('Settings closed.'));return liveApi(action,args);}});
+            diagnosticsBrowser.showDiagnostics();
+          }).catch(function(error){if(diagnosticsCurrent())diagnosticsHost.replaceChildren(h('p',{className:'bad',text:error.message}));}).finally(function(){diagnosticsLoading=false;});
+        });
+      }
     }).catch(function(error){if(host.isConnected)host.replaceChildren(h('p',{className:'bad',text:error.message}));});
   }
   function viewLive(){
@@ -6567,6 +7176,8 @@ try {
     }
     var rows = chans.map(function(ch){
       var progs = (ch.programs && ch.programs.length) ? ch.programs : [ch.now, ch.next].filter(Boolean);
+      var current = null;
+      progs.forEach(function(p){ if (p && p.startUnix <= now && p.endUnix > now && (!current || p.startUnix < current.startUnix)) current = p; });
       var blocks = [];
       var segs = [], run = null;
       function flushRun(){
@@ -6594,7 +7205,7 @@ try {
       segs.forEach(function(p){
         var s = Math.max(p.startUnix, start), e = Math.min(p.endUnix, end);
         if (e - s < 60000) return;
-        var on = p.startUnix <= now && p.endUnix > now;
+        var on = p === current || p.kind === 'run' && p.startUnix <= now && p.endUnix > now;
         var title = (ch.kind === 'iptv' && p.kind === 'live') ? (ch.name + ' \u00b7 live') : p.title;
         blocks.push(h('button', {
           className:'g-prog' + (on ? ' on' : '') + (p.endUnix <= now ? ' past' : ''), type:'button',
@@ -6766,8 +7377,9 @@ try {
   }
 
   function startLivePlayer(chId,inlineHost,providerContext){
+    var vodMode=!!(providerContext&&providerContext.vod);
     function playerChannels(){return providerContext?providerContext.channels:liveChannels();}
-    if(restoreMiniVideo('live:'+chId,inlineHost))return;
+    if(!vodMode&&restoreMiniVideo('live:'+chId,inlineHost))return;
     closePlayer();stopRadio();
     var list = playerChannels();
     if (!list.length) { toast('No live channels'); return; }
@@ -6778,7 +7390,7 @@ try {
     var lp = { idx: idx, ch: null, block: null, hls: null, token: 0, errors: 0, idleT: null, tickT: null, guideOpen: false, epgOpen: false, keyH: null, mode: 'live', playAt: 0, nextRelay: null, historyMs: ((live.guide && live.guide.historyDays) || 7) * 86400000, skew: 0 };
     var video = h('video', { id:'player-media', autoplay:true, playsinline:true, preload:'auto' });
     video.setAttribute('webkit-playsinline', 'true');
-    if(providerContext){video.muted=true;video.defaultMuted=true;}
+    if(providerContext&&!vodMode){video.muted=true;video.defaultMuted=true;}
     var elNum = h('span', { className:'lp-num' }), elName = h('span', { className:'lp-name' }), elPill = h('span', { className:'lc-pill' });
     var elTitle = h('h2', { className:'lp-title', text:'Tuning\u2026' }), elWhen = h('p', { className:'lp-when muted' }), elNext = h('p', { className:'lp-next muted' });
     var elEpg = h('div', { className:'lp-epg', 'aria-label':'This channel schedule' });
@@ -6802,15 +7414,15 @@ try {
       ]),
       epgBody
     ]);
-    var overlay = h('div', { className:'player-overlay live-player'+(inlineHost?' player-inline live-player-inline':''), id:'player-overlay' }, [
+    var overlay = h('div', { className:'player-overlay live-player'+(inlineHost?' player-inline live-player-inline':'')+(vodMode?' stalker-vod-live-player':''), id:'player-overlay' }, [
       video,
       h('div', { className:'lp-tuning' }, [ h('div', { className:'spinner' }) ]),
       h('div', { className:'lp-chrome' }, [
         h('div', { className:'lp-top' }, [
-          h('button', { className:'lp-btn lp-back', type:'button', title:providerContext?'Close player':'Hide player controls', 'aria-label':providerContext?'Close player':'Hide player controls', onClick: function(e){if(providerContext){closePlayer();goLiveTab('stalker');return;} e.currentTarget.blur(); clearTimeout(lp.idleT); overlay.classList.add('idle'); } }, [ icon('close') ]),
+          h('button', { className:'lp-btn lp-back', type:'button', title:providerContext?'Close player':'Hide player controls', 'aria-label':providerContext?'Close player':'Hide player controls', onClick: function(e){if(vodMode){closePlayer();return;}if(providerContext){closePlayer();goLiveTab('stalker');return;} e.currentTarget.blur(); clearTimeout(lp.idleT); overlay.classList.add('idle'); } }, [ icon('close') ]),
           h('div', { className:'lp-chan' }, [ elNum, elName, elPill ]),
           h('div', { className:'lp-spacer' }),
-          shareButton(function(){ var c = playerChannels()[lp.idx] || list[lp.idx]; return liveChannelPath(c ? c.id : ''); }, 'Copy link to this channel'),
+          vodMode?null:shareButton(function(){ var c = playerChannels()[lp.idx] || list[lp.idx]; return liveChannelPath(c ? c.id : ''); }, 'Copy link to this channel'),
           elClock
         ]),
         h('div', { className:'lp-bottom' }, [
@@ -6836,13 +7448,27 @@ try {
       guide,
       epgFull
     ]);
-    if(providerContext&&list.length<2)overlay.querySelectorAll('.lp-zap').forEach(function(button){button.hidden=true;});
-    overlay._miniKey='live:'+chId;overlay._miniTitle=(list[idx]&&list[idx].name)||'Live television';overlay._miniReturn=function(){openLiveChannel(lp.ch?lp.ch.id:chId);};
+    if(providerContext&&list.length<2&&!providerContext.hasNextChannel)overlay.querySelectorAll('.lp-zap').forEach(function(button){button.hidden=true;});
+    if(vodMode){
+      shiftCluster.style.display='';
+      btnPrevProg.hidden=true;btnNextProg.hidden=true;btnGoLive.hidden=true;
+      btnBack15.title='Rewind 15 seconds';btnFwd30.title='Forward 30 seconds';
+      elProg.classList.add('seekable');
+      elProg.setAttribute('aria-label','Seek in video');
+      overlay.querySelectorAll('.lp-guide,.lp-epg-full,.lp-epg,.lp-next,.lp-zap').forEach(function(node){node.hidden=true;});
+      overlay.querySelectorAll('.lp-controls button').forEach(function(button){
+        if(/Channel list|Full EPG/.test(button.title||''))button.hidden=true;
+      });
+      var eyebrow=overlay.querySelector('.eyebrow');
+      if(eyebrow)eyebrow.textContent='On demand';
+    }
+    overlay._miniKey=(vodMode?'stalker-vod:':'live:')+chId;overlay._miniTitle=(list[idx]&&list[idx].name)||'Live television';
+    overlay._miniReturn=vodMode?function(){if(providerContext&&providerContext.onReturn)providerContext.onReturn();}:function(){openLiveChannel(lp.ch?lp.ch.id:chId);};
     addCentrePlay(overlay,video,safePlay);
     if(inlineHost)overlay.setAttribute('tabindex','0');
     (inlineHost||document.body).appendChild(overlay);
     // Achievements: one beacon a minute while a channel is really playing (IPTV counts as Live TV, the rest is PseudoTV Relay).
-    var achTimer = setInterval(function(){
+    var achTimer = vodMode?null:setInterval(function(){
       if (!overlay.isConnected) { clearInterval(achTimer); return; }
       if (video.paused || video.readyState < 2 || document.hidden) return;
       var c = playerChannels()[lp.idx] || list[lp.idx]; var cid = String((c && c.id) || '');
@@ -6888,8 +7514,12 @@ try {
         return;
       }
       var now = Date.now();
+      var current = null;
+      for (var ci = 0; ci < items.length; ci++) {
+        if (items[ci].startUnix <= now && items[ci].endUnix > now && (!current || items[ci].startUnix < current.startUnix)) current = items[ci];
+      }
       var rows = items.map(function(p, i){
-        var on = p.startUnix <= now && p.endUnix > now;
+        var on = p === current;
         var meta = parseProgMeta(p);
         var label = channelEpgLabel(p, c);
         var when = fmtClock(p.startUnix) + '\u2013' + fmtClock(p.endUnix);
@@ -6961,6 +7591,7 @@ try {
       } catch (e) {nativeFullscreen();}
     }
     function paintShiftPill(){
+      if(vodMode){elPill.textContent='VOD';elPill.className='lc-pill iptv';shiftCluster.style.display='';elProg.classList.add('seekable');return;}
       var c = lp.ch;
       if (!c) return;
       if (c.kind === 'iptv') {
@@ -6981,11 +7612,12 @@ try {
     function paintHeader(){
       var c = lp.ch;
       overlay.classList.toggle('is-iptv',c.kind==='iptv');
-      elNum.textContent = String(c.number);
+      elNum.textContent = vodMode?'':String(c.number);
       elName.textContent = c.name || ('Channel ' + c.number);
       paintShiftPill();
     }
     function paintNow(b){
+      if(vodMode)return;
       var c = lp.ch;
       if (c.kind === 'iptv') {
         var nn = progNowAndNext(c);
@@ -7125,7 +7757,7 @@ try {
       var n = list.length;
       lp.idx = ((i % n) + n) % n;
       lp.ch = list[lp.idx];
-      overlay._miniKey='live:'+lp.ch.id;overlay._miniTitle=lp.ch.name;
+      overlay._miniKey=(vodMode?'stalker-vod:':'live:')+lp.ch.id;overlay._miniTitle=lp.ch.name;
       lp.errors = 0;
       lp.block = null;
       lp.mode = 'live';
@@ -7134,21 +7766,27 @@ try {
       msg('');
       overlay.classList.remove('needs-tap');
       paintHeader();
-      elTitle.textContent = 'Tuning\u2026'; elWhen.textContent = ''; elNext.textContent = ''; elFill.style.width = '0%';
+      elTitle.textContent = vodMode?(lp.ch.name||'Provider video'):'Tuning\u2026'; elWhen.textContent = vodMode?'On-demand video':''; elNext.textContent = ''; elFill.style.width = '0%';
       elEpg.innerHTML = '';
       if (lp.guideOpen) paintGuideList();
       if (lp.epgOpen) paintFullEpg();
-      if(inlineHost&&overlay.classList.contains('player-inline')){state.liveChannel=lp.ch.id;state.liveTab=providerContext?'stalker':lp.ch.kind==='iptv'?'iptv':'relay';try{paintChannelInformation(lp.ch);}catch(error){if(!providerContext)throw error;}document.querySelectorAll('.subnav .subnav-btn').forEach(function(button){button.classList.toggle('active',button.textContent===(providerContext?'Stalker':lp.ch.kind==='iptv'?'IPTV':'Relay'));});}
-      try { if(!overlay.classList.contains('player-mini'))history.replaceState(Object.assign({}, history.state || {}, { live: lp.ch.id,liveChannel:lp.ch.id,liveTab:providerContext?'stalker':lp.ch.kind==='iptv'?'iptv':'relay' }), '', navUrl({ live: lp.ch.id })); } catch (e) {}
+      if(!vodMode&&inlineHost&&overlay.classList.contains('player-inline')){state.liveChannel=lp.ch.id;state.liveTab=providerContext?'stalker':lp.ch.kind==='iptv'?'iptv':'relay';try{paintChannelInformation(lp.ch);}catch(error){if(!providerContext)throw error;}document.querySelectorAll('.subnav .subnav-btn').forEach(function(button){button.classList.toggle('active',button.textContent===(providerContext?'Stalker':lp.ch.kind==='iptv'?'IPTV':'Relay'));});}
+      try { if(!vodMode&&!overlay.classList.contains('player-mini'))history.replaceState(Object.assign({}, history.state || {}, { live: lp.ch.id,liveChannel:lp.ch.id,liveTab:providerContext?'stalker':lp.ch.kind==='iptv'?'iptv':'relay' }), '', navUrl({ live: lp.ch.id })); } catch (e) {}
       if (lp.ch.kind === 'iptv') tuneIptv(); else tuneRelay(0);
       wake();
     }
-    function zap(d){ tune(lp.idx + d); }
+    function zap(d){
+      if(providerContext&&typeof providerContext.onZap==='function'){
+        providerContext.onZap(d);return;
+      }
+      tune(lp.idx + d);
+    }
 
     video.addEventListener('playing', function(){ if(providerContext&&providerContext.onPlaying)providerContext.onPlaying();setTuning(false); overlay.classList.remove('needs-tap'); lp.errors = 0; btnPlay.innerHTML = ICONS.pause; });
     video.addEventListener('pause', function(){ btnPlay.innerHTML = ICONS.playFill; });
     video.addEventListener('waiting', function(){ setTuning(true); });
     video.addEventListener('ended', function(){
+      if(vodMode&&providerContext&&providerContext.onEnded)providerContext.onEnded();
       if (lp.ch && lp.ch.kind !== 'iptv' && lp.block) relayNext(lp.block);
     });
     video.addEventListener('error', function(){
@@ -7164,12 +7802,13 @@ try {
       if (!lp.hls) { setTuning(false); msg('Playback failed. The stream may be offline or unsupported here.'); }
     });
     btnPlay.addEventListener('click', function(){ if (video.paused) safePlay(); else video.pause(); });
-    btnBack15.addEventListener('click', function(){ skipMs(-15000); });
-    btnFwd30.addEventListener('click', function(){ skipMs(30000); });
+    btnBack15.addEventListener('click', function(){ if(vodMode){if(Number.isFinite(video.duration))video.currentTime=Math.max(0,video.currentTime-15);}else skipMs(-15000); });
+    btnFwd30.addEventListener('click', function(){ if(vodMode){if(Number.isFinite(video.duration))video.currentTime=Math.min(video.duration,video.currentTime+30);}else skipMs(30000); });
     btnPrevProg.addEventListener('click', function(){ skipProg(-1); });
     btnNextProg.addEventListener('click', function(){ skipProg(1); });
     btnGoLive.addEventListener('click', function(){ goLive(); });
     elProg.addEventListener('click', function(e){
+      if(vodMode){var rect=elProg.getBoundingClientRect();if(rect.width&&Number.isFinite(video.duration)&&video.duration>0)video.currentTime=Math.max(0,Math.min(video.duration,(e.clientX-rect.left)/rect.width*video.duration));return;}
       if (!lp.block || !lp.ch || lp.ch.kind === 'iptv') return;
       var rect = elProg.getBoundingClientRect();
       if (!rect.width) return;
@@ -7211,11 +7850,15 @@ try {
     lp.keyH = function(e){
       if (!document.getElementById('player-overlay')) return;
       if(overlay.classList.contains('player-mini'))return;
+      if(e.target&&e.target.closest&&e.target.closest('.tv-select-picker'))return;
       if(inlineHost&&!overlay.contains(document.activeElement)&&document.fullscreenElement!==overlay)return;
       var tag = (e.target && e.target.tagName || '').toLowerCase();
-      if (tag === 'input' && e.target.type !== 'range') return;
+      if (tag === 'select'||tag === 'textarea'||(e.target&&e.target.isContentEditable)||(tag === 'input' && e.target.type !== 'range')) return;
       var k = e.key;
-      if (k === 'ArrowUp' || k === 'PageUp' || k === 'ChannelUp') { e.preventDefault(); if (lp.guideOpen) return; zap(-1); }
+      if (vodMode&&(k === 'ArrowLeft'||k === 'ArrowRight')) {if(Number.isFinite(video.duration)){e.preventDefault();video.currentTime=Math.max(0,Math.min(video.duration,video.currentTime+(k==='ArrowLeft'?-15:30)));}}
+      else if(vodMode&&(k==='Escape')){e.preventDefault();closePlayer();}
+      else if(vodMode&&(k==='g'||k==='G'||k==='e'||k==='E'||k==='l'||k==='L'||k==='ArrowUp'||k==='ArrowDown'||k==='PageUp'||k==='PageDown'))return;
+      else if (k === 'ArrowUp' || k === 'PageUp' || k === 'ChannelUp') { e.preventDefault(); if (lp.guideOpen) return; zap(-1); }
       else if (k === 'ArrowDown' || k === 'PageDown' || k === 'ChannelDown') { e.preventDefault(); if (lp.guideOpen) return; zap(1); }
       else if (k === ' ' && tag !== 'button') { e.preventDefault(); if (video.paused) safePlay(); else video.pause(); }
       else if (k === 'ArrowLeft') { e.preventDefault(); if (lp.ch && lp.ch.kind !== 'iptv') skipMs(-15000); }
@@ -7231,7 +7874,15 @@ try {
     document.addEventListener('keydown', lp.keyH);
     lp.guideAt=Date.now();
     lp.tickT = setInterval(function(){
-      if(inlineHost&&overlay.classList.contains('player-inline')&&!document.hidden&&!lp.guideRefreshing&&Date.now()-lp.guideAt>90000){lp.guideAt=Date.now();lp.guideRefreshing=true;(providerContext?providerContext.refresh():ensureLiveData(false)).then(function(){if(!overlay.isConnected)return;list=playerChannels();var current=list.find(function(ch){return ch.id===lp.ch.id;});if(current){lp.ch=current;lp.idx=list.indexOf(current);if(overlay.classList.contains('player-inline'))paintChannelInformation(current);paintChannelEpg();}}).catch(function(){}).finally(function(){lp.guideRefreshing=false;});}
+      if(!vodMode&&inlineHost&&overlay.classList.contains('player-inline')&&!document.hidden&&!lp.guideRefreshing&&Date.now()-lp.guideAt>90000){lp.guideAt=Date.now();lp.guideRefreshing=true;(providerContext?providerContext.refresh():ensureLiveData(false)).then(function(){if(!overlay.isConnected)return;list=playerChannels();var current=list.find(function(ch){return ch.id===lp.ch.id;});if(current){lp.ch=current;lp.idx=list.indexOf(current);if(overlay.classList.contains('player-inline'))paintChannelInformation(current);paintChannelEpg();}}).catch(function(){}).finally(function(){lp.guideRefreshing=false;});}
+      if(vodMode){
+        var d=video.duration,t=video.currentTime||0;
+        var vclock=function(n){var whole=Math.max(0,Math.floor(n||0)),h=Math.floor(whole/3600),m=Math.floor((whole%3600)/60),sec=whole%60;return (h?h+':'+String(m).padStart(2,'0'):String(m))+':'+String(sec).padStart(2,'0');};
+        elClock.textContent=vclock(t)+(Number.isFinite(d)&&d>0?' / '+vclock(d):'');
+        elWhen.textContent=Number.isFinite(d)&&d>0?'Duration '+vclock(d):'On-demand video';
+        elFill.style.width=Number.isFinite(d)&&d>0?Math.max(0,Math.min(100,100*t/d))+'%':'0%';
+        return;
+      }
       elClock.textContent = fmtClock(Date.now());
       var c = lp.ch;
       if (!c) return;
@@ -7261,7 +7912,7 @@ try {
       if (lp.hls) { try { lp.hls.destroy(); } catch (e) {} lp.hls = null; }
       try { if (document.fullscreenElement) document.exitFullscreen(); } catch (e2) {}
     };
-    if(providerContext)providerContext.updateChannel=function(){if(!overlay.isConnected||!providerContext.channels.length)return;list=providerContext.channels;lp.ch=list[0];paintHeader();paintNow(null);try{paintChannelInformation(lp.ch);}catch(ignore){}};
+    if(providerContext&&!vodMode)providerContext.updateChannel=function(){if(!overlay.isConnected||!providerContext.channels.length)return;list=providerContext.channels;lp.ch=list[0];paintHeader();paintNow(null);try{paintChannelInformation(lp.ch);}catch(ignore){}};
     elClock.textContent = fmtClock(Date.now());
     tune(idx);
   }
@@ -15690,7 +16341,7 @@ function viewCollectionDetail(){
                 }}), ' On'
               ])]),
               h('td', { className: 'row-actions' }, [
-                f.type==='stalker'?h('button',{className:'btn ghost',type:'button',text:'Check connection',onClick:function(ev){var button=ev.currentTarget;button.disabled=true;liveApiPost('iptv_save',{portalAction:'check',feedId:f.id}).then(function(result){if(!result.ok||!result.body||!result.body.ok)throw new Error(result.body&&result.body.error||'Connection failed');liveSetMsg('Connected to '+(f.name||f.id)+' — '+result.body.channelCount+' live channels.',false);}).catch(function(error){liveSetMsg(error.message||'Connection failed.',true);}).finally(function(){button.disabled=false;});}}):null,
+                f.type==='stalker'?h('button',{className:'btn ghost',type:'button',text:'Check connection',onClick:function(ev){var button=ev.currentTarget;button.disabled=true;liveApiPost('iptv_save',{portalAction:'check',feedId:f.id}).then(function(result){if(!result.ok||!result.body||!result.body.ok)throw new Error(result.body&&result.body.error||'Connection failed');liveSetMsg('Connected to '+(f.name||f.id)+' — '+(result.body.channelCount==null?'channel count unavailable':result.body.channelCount+(result.body.countEstimated?' channels returned (total unavailable)':' live channels reported'))+'.',false);}).catch(function(error){liveSetMsg(error.message||'Connection failed.',true);}).finally(function(){button.disabled=false;});}}):null,
                 h('button', { className: 'btn ghost', type: 'button', text: 'Edit', onClick: function(){ liveSet.feedEditId = f.id; paintLiveIptv(host); }}),
                 h('button', { className: 'btn ghost', type: 'button', text: 'Remove', onClick: function(){
                   if (!confirm('Remove feed ' + (f.name||f.id) + '?' + (f.preinstalled ? ' It will not be added back automatically; you can re-add it any time with its URL.' : ''))) return;

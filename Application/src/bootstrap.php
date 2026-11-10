@@ -49,3 +49,5 @@ if (PHP_SAPI !== 'cli') Cors::handle();
 Migrations::runIfNeeded();
 // Only configured installations start the lightweight provider-update worker.
 if(PHP_SAPI!=='cli' && (is_file(STREAM_DATA.'/runtime/stalker-updates.enabled')||is_file(STREAM_DATA.'/runtime/stalker-updates.enabled-v2'))) StalkerUpdates::ensureWorker();
+
+if(PHP_SAPI!=='cli' && is_file(STREAM_DATA.'/runtime/stalker-library.enabled')) StalkerCatalogues::ensureWorker();

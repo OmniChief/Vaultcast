@@ -180,6 +180,61 @@ if ($path === '/me/parental/unlock' && $method === 'POST') {
 }
 if ($path === '/me/parental/lock' && $method === 'POST') json_out(Parental::lock(Auth::requireUser()));
 
+// Stalker VOD favourites are per account, not per browser. Store only
+// title/year identities and preferred category names, never portal credentials,
+// playback URLs, poster blobs or scanned catalogues.
+if ($path === '/me/stalker-vod-favourites' && in_array($method,['GET','POST'],true)) {
+    $user=Auth::requireUser();
+    if($method==='GET'){
+        $prefs=$user['prefs']??[];
+        json_out(['ok'=>true,'favourites'=>$prefs['stalker_vod_favourites']??null,
+            'defaults'=>$prefs['stalker_vod_defaults']??null]);
+    }
+    $body=body_json();
+    $hasFavourites=array_key_exists('favourites',$body);
+    $hasDefaults=array_key_exists('defaults',$body);
+    if(!$hasFavourites&&!$hasDefaults)json_error('No favourite settings supplied.',422);
+    $favourites=null;$defaults=null;
+    if($hasFavourites){
+        if(!is_array($body['favourites'])||count($body['favourites'])>200)json_error('Invalid Stalker favourites.',422);
+        $favourites=[];$unique=[];
+        foreach($body['favourites'] as $item){
+            if(!is_array($item)||!in_array($item['tab']??'',['vod','series'],true))json_error('Invalid Stalker favourite.',422);
+            $name=trim((string)($item['name']??''));
+            if($name===''||mb_strlen($name)>200)json_error('Invalid favourite title.',422);
+            $entry=['name'=>$name,'tab'=>$item['tab'],'year'=>mb_substr((string)($item['year']??''),0,4),
+                'language'=>mb_substr((string)($item['language']??''),0,50),
+                'folder'=>mb_substr((string)($item['folder']??''),0,200)];
+            $key=$entry['tab'].'|'.mb_strtolower($entry['name']).'|'.$entry['year'];
+            if(isset($unique[$key]))continue;
+            $unique[$key]=true;$favourites[]=$entry;
+        }
+    }
+    if($hasDefaults){
+        if(!is_array($body['defaults']))json_error('Invalid preferred providers.',422);
+        $defaults=[];
+        foreach(['vod','series'] as $kind){
+            $entry=$body['defaults'][$kind]??null;
+            if($entry===null){$defaults[$kind]=null;continue;}
+            if(!is_array($entry))json_error('Invalid default provider.',422);
+            $value=[];
+            foreach(['id','section','language','type'] as $key){
+                if(!is_string($entry[$key]??null)||mb_strlen($entry[$key])>160)json_error('Invalid default provider.',422);
+                $value[$key]=$entry[$key];
+            }
+            if(!in_array($value['type'],['provider','folder'],true)||$value['id']===''||$value['section']===''||$value['language']==='')json_error('Invalid default provider.',422);
+            $defaults[$kind]=$value;
+        }
+    }
+    \Vaultcast\Repository::updateUser($user['id'],static function(array $saved)use($hasFavourites,$hasDefaults,$favourites,$defaults):array{
+        if(!is_array($saved['prefs']??null))$saved['prefs']=[];
+        if($hasFavourites)$saved['prefs']['stalker_vod_favourites']=$favourites;
+        if($hasDefaults)$saved['prefs']['stalker_vod_defaults']=$defaults;
+        return $saved;
+    });
+    json_out(['ok'=>true]);
+}
+
 // Prefs require a real logged-in user
 if ($path === '/me/prefs' && $method === 'POST') {
     require_once STREAM_ROOT . '/src/Live/formats.php';
