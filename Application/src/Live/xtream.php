@@ -9,6 +9,14 @@ function xtream_connections(): array {
 function xtream_public(array $feed): array {
     return array_intersect_key($feed,array_flip(['id','name','url','enabled']));
 }
+function xtream_config_lock(): void {
+    $dir=STREAM_DATA.'/runtime/xtream';
+    if(!is_dir($dir)&&!@mkdir($dir,0700,true)&&!is_dir($dir))throw new RuntimeException('Cannot open connection settings storage.');
+    $lock=@fopen($dir.'/configuration.lock','c+');
+    if(!$lock)throw new RuntimeException('Cannot open connection settings lock.');
+    if(!flock($lock,LOCK_EX|LOCK_NB)){fclose($lock);throw new RuntimeException('Connection settings are being saved. Please try again.',409);}
+    register_shutdown_function(static function()use($lock){flock($lock,LOCK_UN);fclose($lock);});
+}
 /** One playback owner per provider account, including duplicate saved connections. */
 function xtream_account_path(array $feed): string {
     $dir=STREAM_DATA.'/runtime/xtream';
@@ -149,12 +157,19 @@ function xtream_item(array $row,string $kind): array {
 }
 function xtream_handle(string $action): void {
     $viewer=Auth::requireUser();header('Cache-Control: private, no-store');
-    if(!in_array($action,['xtream_connections','xtream_manage','xtream_categories','xtream_browse','xtream_play','xtream_guide','xtream_stream','xtream_stop','xtream_heartbeat'],true))json_error('Unknown Xtream action.',404);
+    if(!in_array($action,['xtream_connections','xtream_manage','xtream_categories','xtream_browse','xtream_play','xtream_guide','xtream_stream','xtream_stop','xtream_heartbeat','xtream_import','xtream_import_status'],true))json_error('Unknown Xtream action.',404);
     if(Parental::filtering())json_error('Provider catalogues are unavailable for restricted profiles.',403);
     $write=($_SERVER['REQUEST_METHOD']??'GET')==='POST';
     if(!in_array($_SERVER['REQUEST_METHOD']??'GET',['GET','POST','HEAD'],true)||($_SERVER['REQUEST_METHOD']==='HEAD'&&$action!=='xtream_stream'))json_error('Method not allowed.',405);
-    if(in_array($action,['xtream_manage','xtream_play','xtream_stop','xtream_heartbeat'],true)!==$write)json_error('Method not allowed.',405);
-    $input=$write?body_json():$_GET;$feeds=xtream_connections();$id=(string)($input['feed']??'');$feed=$feeds[$id]??null;
+    if(in_array($action,['xtream_manage','xtream_play','xtream_stop','xtream_heartbeat','xtream_import'],true)!==$write)json_error('Method not allowed.',405);
+    $input=$write?body_json():$_GET;
+    if(in_array($action,['xtream_import','xtream_import_status','xtream_manage'],true)){
+        Permissions::require('iptv_manage');
+        if(($action==='xtream_manage'&&($input['operation']??'save')!=='check')||($action==='xtream_import'&&in_array($input['operation']??'',['add','configure'],true)))xtream_config_lock();
+        if($action==='xtream_import_status')json_out(XtreamImport::status());
+        if($action==='xtream_import')json_out(XtreamImport::handle($input,$viewer));
+    }
+    $feeds=xtream_connections();$id=(string)($input['feed']??'');$feed=$feeds[$id]??null;
     if($action==='xtream_connections')json_out(['ok'=>true,'connections'=>array_values(array_map('xtream_public',array_filter($feeds,static function($f)use($viewer){return !empty($f['enabled'])||Permissions::allowed($viewer,'iptv_manage');})))]);
     if($action==='xtream_manage'){
         Permissions::require('iptv_manage');$op=$input['operation']??'save';

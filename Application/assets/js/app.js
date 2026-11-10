@@ -6947,6 +6947,40 @@ try {
     };
     refresh();
   }
+  function paintXtreamImport(host){
+    var page=h('input',{type:'password',autocomplete:'off',placeholder:'Private provider page URL','aria-label':'Provider page URL'}),width=h('input',{type:'text',inputmode:'numeric',value:'1270','aria-label':'Table width'}),message=h('p',{role:'status',className:'muted'}),entries=h('div',{className:'stack'}),configured=false,busy=false;
+    var save=h('button',{className:'btn',type:'button',text:'Save page settings',onClick:function(){run(function(){return stalkerPost('xtream_import',{operation:'configure',url:page.value,width:width.value});},function(data){configured=data.configured;page.value='';page.placeholder='Saved privately — leave blank to keep';entries.replaceChildren();message.textContent='Provider page settings saved. Fetch the table to discover connections.';});}});
+    var discover=h('button',{className:'btn primary',type:'button',text:'Fetch connections',disabled:true,onClick:function(){entries.replaceChildren();run(function(){return stalkerPost('xtream_import',{operation:'discover'});},function(data){
+      message.textContent=(data.entries||[]).length+' connections found. Check verifies the account without starting playback. Credentials remain on the server.';
+      if(!(data.entries||[]).length){entries.appendChild(h('p',{text:'No account details found in the selected table. Check the table width. Pages requiring browser login or JavaScript are not supported.'}));return;}
+      var listPage=1,filter=h('input',{type:'search',placeholder:'Filter discovered connections','aria-label':'Filter discovered connections'}),cards=h('div',{className:'stack'}),count=h('span',{role:'status'});
+      var previous=h('button',{className:'btn',text:'Previous',onClick:function(){listPage--;renderRows();}}),next=h('button',{className:'btn',text:'Next',onClick:function(){listPage++;renderRows();}});
+      filter.oninput=function(){listPage=1;renderRows();};
+      entries.replaceChildren(filter,count,cards,h('div',{className:'row-actions'},[previous,next]));
+      function renderRows(){
+        var term=filter.value.trim().toLowerCase(),matches=data.entries.filter(function(entry){return !term||(entry.name+' '+entry.url+' '+Object.values(entry.details||{}).join(' ')).toLowerCase().indexOf(term)>=0;});
+        listPage=Math.max(1,Math.min(listPage,Math.ceil(matches.length/25)||1));cards.replaceChildren();previous.disabled=listPage===1;next.disabled=listPage*25>=matches.length;count.textContent=matches.length+' matching connections · Page '+listPage+' of '+(Math.ceil(matches.length/25)||1);
+        matches.slice((listPage-1)*25,listPage*25).forEach(function(entry){
+        var name=h('input',{value:entry.name,'aria-label':'Connection name',maxlength:160,onInput:function(e){entry.name=e.target.value;}}),feedback=h('p',{role:'status',className:entry.noteBad||!entry.valid?'bad':'muted',text:entry.note||entry.issue|| (entry.added?'Already saved.':entry.credentials)}),details=entry.details||{},checking=false,adding=false;
+        var check=h('button',{className:'btn',type:'button',text:'Check',disabled:!entry.valid||entry.busy,onClick:function(){
+          if(checking||adding||entry.busy)return;checking=true;entry.busy=true;check.disabled=true;add.disabled=true;feedback.textContent='Checking account…';
+          stalkerPost('xtream_import',{operation:'check',token:data.token,id:entry.id}).then(function(result){if(!host.isConnected)return;var a=result.account||{};feedback.className='muted';feedback.textContent=(a.status||'Authenticated')+' · Connections '+(a.active_cons||0)+' / '+(a.max_connections||'not supplied')+' · Expires '+(Number(a.exp_date)>0?new Date(Number(a.exp_date)*1000).toLocaleDateString():'not supplied');}).catch(function(error){feedback.className='bad';feedback.textContent=error.message;}).finally(function(){checking=false;entry.busy=false;entry.note=feedback.textContent;entry.noteBad=feedback.className==='bad';renderRows();});
+        }});
+        var add=h('button',{className:'btn primary',type:'button',text:entry.added?'Added':'Add',disabled:!entry.valid||entry.added||entry.busy,onClick:function(){
+          if(checking||adding||entry.busy)return;adding=true;entry.busy=true;add.disabled=true;check.disabled=true;
+          stalkerPost('xtream_import',{operation:'add',token:data.token,id:entry.id,name:name.value}).then(function(result){entry.added=true;add.textContent='Added';feedback.className='muted';feedback.textContent=result.message;}).catch(function(error){feedback.className='bad';feedback.textContent=error.message;}).finally(function(){adding=false;entry.busy=false;entry.note=feedback.textContent;entry.noteBad=feedback.className==='bad';renderRows();});
+        }});
+        cards.appendChild(h('div',{className:'settings-card'},[h('label',{className:'stack'},['Connection name',name]),h('p',{text:entry.url||'Server unavailable'}),h('p',{className:'muted',text:'Created: '+(details.created||'not supplied')+' · Expires: '+(details.expiry||'not supplied')}),h('p',{className:'muted',text:'Connections: '+(details.connections||'0')+' / '+(details.maximum||'not supplied')+' · Port: '+(details.port||'from server URL')+' · Status: '+(details.status||'not supplied')}),h('p',{className:'muted',text:'Username / password: '+(entry.valid?'•••• / ••••':'missing or masked')}),feedback,h('div',{className:'row-actions'},[check,add])]));
+        });
+      }
+      renderRows();
+    });}});
+    var clear=h('button',{className:'btn ghost',type:'button',text:'Forget page',onClick:function(){if(!confirm('Forget this provider page? Connections already added will remain.'))return;run(function(){return stalkerPost('xtream_import',{operation:'configure',clear:true});},function(){configured=false;page.value='';page.placeholder='Private provider page URL';entries.replaceChildren();message.textContent='Provider page forgotten. Saved connections retained.';});}});
+    function buttons(){save.disabled=busy;discover.disabled=busy||!configured;clear.disabled=busy||!configured;}
+    function run(request,done){if(busy)return;busy=true;buttons();message.className='muted';message.textContent='Working…';request().then(function(data){if(host.isConnected)done(data);}).catch(function(error){if(host.isConnected){message.className='bad';message.textContent=error.message;}}).finally(function(){busy=false;buttons();});}
+    host.replaceChildren(h('h3',{text:'Import from provider table'}),h('p',{className:'muted',text:'Save your private provider page, fetch its table, then check and add the connections you want. Table width 1270 matches the supplied layout; leave blank to search all tables. Refreshing discovery never changes saved connections.'}),h('label',{className:'stack'},['Provider page URL',page]),h('label',{className:'stack'},['Table width',width]),h('div',{className:'row-actions'},[save,discover,clear,h('button',{className:'btn',text:'Show saved connections',onClick:function(){var panel=host.parentNode;if(panel)paintXtreamSettings(panel);}})]),message,entries);
+    busy=true;buttons();liveApi('xtream_import_status').then(function(data){if(!host.isConnected)return;configured=data.configured;width.value=data.width;page.placeholder=configured?'Saved privately — leave blank to keep':'Private provider page URL';message.textContent=configured?'Provider page saved. Fetch connections to review the latest table.':'No provider page configured.';}).catch(function(error){message.textContent=error.message;}).finally(function(){busy=false;buttons();});
+  }
   function paintXtreamSettings(host){
     host.replaceChildren(pendingContent());
     liveApi('xtream_connections').then(function(result){
@@ -6973,7 +7007,8 @@ try {
           h('button',{className:'btn danger',text:'Remove',onClick:function(){if(confirm('Remove '+connection.name+'?'))stalkerPost('xtream_manage',{operation:'remove',feed:connection.id}).then(function(){if(host.isConnected)paintXtreamSettings(host);}).catch(error);}})
         ])]));
       });
-      host.replaceChildren(h('button',{className:'btn',text:'Open Xtream Codes',onClick:function(){goLiveTab('xtream');}}),message,list,h('button',{className:'btn',text:'Add connection',onClick:function(){edit();}}),editor);edit();
+      var importer=h('section',{className:'settings-card'});
+      host.replaceChildren(h('button',{className:'btn',text:'Open Xtream Codes',onClick:function(){goLiveTab('xtream');}}),importer,message,list,h('button',{className:'btn',text:'Add connection',onClick:function(){edit();}}),editor);edit();paintXtreamImport(importer);
     }).catch(function(error){if(host.isConnected)host.replaceChildren(h('p',{className:'bad',text:error.message}));});
   }
   function stopXtreamSource(source){
