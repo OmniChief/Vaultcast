@@ -5760,7 +5760,7 @@ try {
       body: JSON.stringify(body || {})
     }).then(function(r){
       return r.json().then(function(j){
-        if (r.ok && j && j.ok !== false && action !== 'iptv_probe' && action !== 'radio_save' && action !== 'stalker_play') invalidateLiveData(false);
+        if (r.ok && j && j.ok !== false && action !== 'iptv_probe' && action !== 'radio_save' && action !== 'stalker_play' && action.indexOf('xtream_') !== 0) invalidateLiveData(false);
         return { ok: r.ok, status: r.status, body: j };
       });
     });
@@ -6195,7 +6195,7 @@ try {
   // never invokes library-only transcode, conversion or progress endpoints.
   function startStalkerLibraryPlayer(host,source,item,context){
     closePlayer();stopRadio();
-    var key='stalker-vod:'+context.id,alive=true,stream=null;
+    var key='stalker-vod:'+context.id,alive=true,stream=null,xtream=String(source.url||'').indexOf('/api/live/xtream_stream?')!==-1,heartbeat=null,heartbeatBusy=false;
     var video=h('video',{id:'player-media',controls:true,autoplay:true,playsinline:true,preload:'metadata'});
     video.setAttribute('webkit-playsinline','true');
     var frame=h('div',{id:'player-overlay',className:'player-overlay player-simple player-inline stalker-library-player'},[video]);
@@ -6224,19 +6224,34 @@ try {
     ['addtrack','removetrack','change'].forEach(function(event){if(video.audioTracks)video.audioTracks.addEventListener(event,function(){refreshTracks(stream);});if(video.textTracks)video.textTracks.addEventListener(event,function(){refreshTracks(stream);});});
     function play(){var p=video.play();if(p&&p.catch)p.catch(function(){if(context.onError)context.onError('Press play in the player to start.');});}
     addCentrePlay(frame,video,play);
-    _liveCleanup=function(){
-      alive=false;
-      if(stream){try{stream.destroy();}catch(ignore){}stream=null;}
+    function cleanupProvider(){
+      if(!alive)return;alive=false;
+      if(heartbeat)clearInterval(heartbeat);heartbeat=null;
+      window.removeEventListener('pagehide',cleanupProvider);
+      if(stream){try{stream.stopLoad();stream.destroy();}catch(ignore){}stream=null;}
       try{video.pause();video.removeAttribute('src');video.load();}catch(ignore2){}
-    };
+      if(xtream)stopXtreamSource(source);
+    }
+    _liveCleanup=cleanupProvider;
+    if(xtream){
+      tools.appendChild(h('button',{className:'btn',type:'button',text:'Stop playback',onClick:function(){cleanupProvider();if(context.onError)context.onError('Playback stopped. Select a title to play again.');}}));
+      window.addEventListener('pagehide',cleanupProvider);
+      heartbeat=setInterval(function(){
+        if(!alive||heartbeatBusy)return;
+        if(!frame.isConnected){cleanupProvider();return;}
+        heartbeatBusy=true;
+        var token=new URL(source.url,location.href).searchParams.get('ticket');
+        stalkerPost('xtream_heartbeat',{ticket:token}).catch(function(error){if(alive){cleanupProvider();if(context.onError)context.onError(error.message);}}).finally(function(){heartbeatBusy=false;});
+      },15000);
+    }
     video.addEventListener('playing',function(){if(alive&&context.onPlaying)context.onPlaying();});
-    video.addEventListener('error',function(){if(alive&&context.onError)context.onError('The provider video could not be played by this browser.');});
-    video.addEventListener('ended',function(){if(alive&&context.onEnded&&(!autoNext||autoNext.checked))context.onEnded();});
+    video.addEventListener('error',function(){if(alive){if(xtream)cleanupProvider();if(context.onError)context.onError('The provider video could not be played by this browser.');}});
+    video.addEventListener('ended',function(){if(!alive)return;if(xtream)cleanupProvider();if(context.onEnded&&(!autoNext||autoNext.checked))context.onEnded();});
     attachIptvStream(video,source,{
       current:function(){return alive&&!frame._closing&&frame.isConnected;},
       play:play,
       stream:function(value){stream=value;refreshTracks(value);if(value&&value.on){var events=(window.Hls&&window.Hls.Events)||value.Events||{},names=['AUDIO_TRACKS_UPDATED','AUDIO_TRACK_SWITCHED','SUBTITLE_TRACKS_UPDATED','SUBTITLE_TRACK_SWITCH'],fallback=['hlsAudioTracksUpdated','hlsAudioTrackSwitched','hlsSubtitleTracksUpdated','hlsSubtitleTrackSwitch'];names.forEach(function(name,index){var event=events[name]||fallback[index];value.on(event,function(){refreshTracks(value);});});}},
-      error:function(message){if(alive&&context.onError)context.onError(message);}
+      error:function(message){if(alive){if(xtream)cleanupProvider();if(context.onError)context.onError(message);}}
     });
     video.addEventListener('loadedmetadata',function(){if(!stream)refreshTracks(null);});
     host.scrollIntoView({block:'nearest',behavior:'smooth'});
@@ -6946,7 +6961,7 @@ try {
           editor.appendChild(h('label',{className:'stack'},[spec[1],fields[spec[0]]]));
         });
         editor.appendChild(h('label',{},[enabled,' Enabled']));
-        editor.appendChild(h('p',{className:'muted',text:'Connections are shared with users who can access Live. Account credentials stay on the server. Your provider’s connection limits still apply.'}));
+        editor.appendChild(h('p',{className:'muted',text:'Connections are shared with users who can access Live. Vaultcast allows one active playback per provider account; stop it before using another tab or device. Account credentials stay on the server.'}));
         var save=h('button',{type:'submit',className:'btn primary',text:'Save connection'});editor.appendChild(save);
         editor.onsubmit=function(event){event.preventDefault();save.disabled=true;var value={enabled:enabled.checked};Object.keys(fields).forEach(function(key){value[key]=fields[key].value;});
           stalkerPost('xtream_manage',{operation:'save',feed:connection.id||'',connection:value}).then(function(){if(host.isConnected)paintXtreamSettings(host);}).catch(error).finally(function(){save.disabled=false;});};
@@ -6961,7 +6976,13 @@ try {
       host.replaceChildren(h('button',{className:'btn',text:'Open Xtream Codes',onClick:function(){goLiveTab('xtream');}}),message,list,h('button',{className:'btn',text:'Add connection',onClick:function(){edit();}}),editor);edit();
     }).catch(function(error){if(host.isConnected)host.replaceChildren(h('p',{className:'bad',text:error.message}));});
   }
+  function stopXtreamSource(source){
+    var match=String(source&&source.url||'').match(/[?&]ticket=([a-f0-9]+)(?:&|$)/);
+    if(!match)return Promise.resolve();
+    return fetch(LIVE_API+'xtream_stop',{method:'POST',credentials:'same-origin',keepalive:true,headers:{'Content-Type':'application/json'},body:JSON.stringify({ticket:match[1]})}).catch(function(){});
+  }
   function paintXtreamPage(root){
+    var xtreamClient=liveUid('xtream')+liveUid('client'),playQueue=Promise.resolve();
     var feed=h('select',{'aria-label':'Provider'}),kind=h('select',{'aria-label':'Library'},[['live','Live TV'],['vod','Movies'],['series','Series']].map(function(x){return h('option',{value:x[0],text:x[1]});})),category=h('select',{'aria-label':'Category'}),query=h('input',{type:'search',placeholder:'Search titles','aria-label':'Search titles'}),status=h('p',{role:'status'}),results=h('div',{className:'stack'}),player=h('div',{className:'detail-player'}),guide=h('div',{className:'stack'}),page=1,series='',serial=0,playSerial=0;
     var previous=h('button',{className:'btn',text:'Previous',onClick:function(){page--;load();}}),next=h('button',{className:'btn',text:'Next',onClick:function(){page++;load();}}),back=h('button',{className:'btn',text:'Back to series',hidden:true,onClick:function(){series='';back.hidden=true;page=1;load();}});
     function fail(error){if(root.isConnected){status.className='bad';status.textContent=error.message;}}
@@ -6973,8 +6994,14 @@ try {
         if(!root.isConnected||mine!==serial)return;status.textContent=data.total?data.total+' titles · Page '+page:'No titles found.';previous.disabled=page<=1;next.disabled=page*60>=data.total;
         (data.items||[]).forEach(function(item){results.appendChild(h('button',{className:'btn',text:(series?'S'+item.season+' E'+item.episode+' · ':'')+item.name,onClick:function(){
           if(kind.value==='series'&&!series){series=item.id;page=1;query.value='';back.hidden=false;load();return;}
-          var request=parameters(),play=++playSerial;request.id=item.id;status.textContent='Connecting…';
-          stalkerPost('xtream_play',request).then(function(data){if(!root.isConnected||play!==playSerial)return;startStalkerLibraryPlayer(player,data.source,item,{id:'xtream:'+request.feed+':'+item.id,onError:function(message){fail(new Error(message));},onPlaying:function(){status.textContent=item.name;}});}).catch(fail);
+          var request=parameters(),play=++playSerial;request.id=item.id;request.client=xtreamClient;request.sequence=play;closePlayer();player.replaceChildren();status.textContent='Connecting…';
+          playQueue=playQueue.catch(function(){}).then(function(){
+            if(!root.isConnected||play!==playSerial)return;
+            return stalkerPost('xtream_play',request).then(function(data){
+              if(!root.isConnected||play!==playSerial)return stopXtreamSource(data.source);
+              startStalkerLibraryPlayer(player,data.source,item,{id:'xtream:'+request.feed+':'+item.id,onError:function(message){fail(new Error(message));},onPlaying:function(){status.textContent=item.name;}});
+            });
+          }).catch(function(error){if(play===playSerial)fail(error);});
           guide.replaceChildren();if(kind.value==='live')liveApi('xtream_guide',new URLSearchParams({feed:request.feed,id:item.id})).then(function(data){if(!root.isConnected||play!==playSerial)return;guide.replaceChildren(h('h3',{text:'Programme guide'}));(data.programmes||[]).forEach(function(p){guide.appendChild(h('p',{text:p.start+' · '+p.title}));});if(!(data.programmes||[]).length)guide.appendChild(h('p',{text:'No programme information supplied.'}));}).catch(function(){if(play===playSerial)guide.replaceChildren(h('p',{text:'Programme guide unavailable.'}));});
         }}));});
       }).catch(function(error){if(mine===serial)fail(error);});
@@ -7367,7 +7394,7 @@ try {
   }
   function attachIptvStream(video,source,options){
     var current=options.current||function(){return true;},url=source.url;
-    var portalStream=url.indexOf('/api/live/stalker_stream?')!==-1;
+    var portalStream=url.indexOf('/api/live/stalker_stream?')!==-1,xtreamStream=url.indexOf('/api/live/xtream_stream?')!==-1;
     if(portalStream&&(source.kind==='live'||url.indexOf('ticket=')===-1)){
       if(!window._vaultcastStalkerStreamLoading)window._vaultcastStalkerStreamLoading=new Promise(function(resolve,reject){
         if(window.attachStalkerStream){resolve();return;}
@@ -7386,15 +7413,22 @@ try {
     return loadHls().then(function(Hls){
       if(!current())return;
       if(Hls&&Hls.isSupported()){
-        var stream=null;stream=new Hls({enableWorker:true,lowLatencyMode:false,manifestLoadingTimeOut:portalStream?45000:10000,manifestLoadingMaxRetry:portalStream?2:1,levelLoadingTimeOut:portalStream?30000:10000,fLoader:iptvFragmentLoader(Hls,function(){return stream;})});var recovered=false;options.stream(stream);
+        var stream=null,config={enableWorker:true,lowLatencyMode:false,manifestLoadingTimeOut:portalStream?45000:10000,manifestLoadingMaxRetry:portalStream?2:1,levelLoadingTimeOut:portalStream?30000:10000,fLoader:iptvFragmentLoader(Hls,function(){return stream;})};
+        if(xtreamStream){
+          // Server-side cancellation completes before the browser can retry an abandoned request.
+          delete config.manifestLoadingTimeOut;delete config.manifestLoadingMaxRetry;delete config.levelLoadingTimeOut;
+          ['manifestLoadPolicy','playlistLoadPolicy','fragLoadPolicy','keyLoadPolicy'].forEach(function(key){config[key]={default:{maxTimeToFirstByteMs:40000,maxLoadTimeMs:60000,timeoutRetry:null,errorRetry:null}};});
+          config.startFragPrefetch=false;config.testBandwidth=false;config.maxBufferLength=20;config.maxMaxBufferLength=30;
+        }
+        stream=new Hls(config);var recovered=false;options.stream(stream);
         stream.on(Hls.Events.MANIFEST_PARSED,function(){if(current())options.play();});
         stream.on(Hls.Events.ERROR,function(event,data){
           if(!current()||!data||!data.fatal)return;
           if(data.type===Hls.ErrorTypes.MEDIA_ERROR&&!recovered){recovered=true;try{stream.recoverMediaError();return;}catch(ignore){}}
-          var response=data.response||{},http=Number(response.code||data.networkDetails&&data.networkDetails.status||0),detail=data.details||'';var origin='';try{if(data.networkDetails&&data.networkDetails.getResponseHeader)origin=data.networkDetails.getResponseHeader('X-Vaultcast-Error-Origin')||'';}catch(ignore){}var reason=http?' HTTP '+http+(origin==='provider'?' from provider':origin==='application'?' from Vaultcast':'')+'.':detail.toLowerCase().indexOf('timeout')>=0?' The provider did not respond in time.':'';if(portalStream&&response.data){try{var failure=typeof response.data==='string'?JSON.parse(response.data):response.data;if(failure&&typeof failure.error==='string')reason+=' '+failure.error;}catch(ignore){}}options.error('Stream error ('+(data.type||'?')+(detail?' / '+detail:'')+').'+reason+(http===401||http===403?' The server or provider refused access.':http>=500?' The server could not fetch the provider playlist.':''));
+          var response=data.response||{},http=Number(response.code||data.networkDetails&&data.networkDetails.status||0),detail=data.details||'';var origin='';try{if(data.networkDetails&&data.networkDetails.getResponseHeader)origin=data.networkDetails.getResponseHeader('X-Vaultcast-Error-Origin')||'';}catch(ignore){}var reason=http?' HTTP '+http+(origin==='provider'?' from provider':origin==='application'?' from Vaultcast':'')+'.':detail.toLowerCase().indexOf('timeout')>=0?' The provider did not respond in time.':'';if((portalStream||xtreamStream)&&response.data){try{var failure=typeof response.data==='string'?JSON.parse(response.data):response.data;if(failure&&typeof failure.error==='string')reason+=' '+failure.error;}catch(ignore){}}options.error('Stream error ('+(data.type||'?')+(detail?' / '+detail:'')+').'+reason+(http===401||http===403?' The server or provider refused access.':http>=500?' The server could not fetch the provider playlist.':''));
         });stream.loadSource(proxy);stream.attachMedia(video);
       }else nativeFallback('This browser cannot play HLS. Try another device or VLC.');
-    }).catch(function(){nativeFallback('HLS player failed to load.');});
+    }).catch(function(){if(xtreamStream){if(current())options.error('HLS player failed to load. Playback has been stopped.');}else nativeFallback('HLS player failed to load.');});
   }
   function hlsJar(){
     try {

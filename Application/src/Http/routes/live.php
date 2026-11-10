@@ -233,7 +233,7 @@ if ($__liveAction !== null) {
         require_once STREAM_ROOT.'/src/Live/xtream.php';
         try {xtream_handle($__liveAction);}
         catch (InvalidArgumentException $error) {json_error($error->getMessage(),422);}
-        catch (RuntimeException $error) {json_error($error->getMessage(),502);}
+        catch (RuntimeException $error) {json_error($error->getMessage(),in_array($error->getCode(),[409,504],true)?$error->getCode():502);}
         exit;
     }
     $readActions = ['stalker_offline_file','stalker_epg_fields','stalker_live_fields','stalker_vod_fields','stalker_vod_probe','stalker_vod_detail','stalker_art','stalker_channel','stalker_offline','stalker_update_status','stalker','stalker_catalogue_status','stalker_vod_catalogue','stalker_live_categories','stalker_live_channels','stalker_live_guide','stalker_countries','stalker_browse','stalker_stream', 'guide', 'now', 'iptv', 'iptv_status', 'file', 'iptv_hls', 'logo', 'local_file', 'station', 'catalogue', 'programme_source', 'duration', 'channel_logo', 'iptv_browse', 'epg_refresh', 'm3u', 'tune', 'tv_studio', 'tv_preview', 'tv_health', 'xmltv', 'playlist', 'channels', 'radio', 'radio_search', 'epg_channels'];
