@@ -1166,7 +1166,7 @@ function confirmDialog(message, opts){
     return !areas || areas[area] === true;
   }
   function can(permission){return !!(state.user&&(state.user.role==='admin'||state.user.role!=='user'&&state.user.capabilities&&state.user.capabilities[permission]===true));}
-  function canSettings(section){if(state.user&&state.user.role==='admin')return true;var permission={matching:'fix_match',ingest:'ingest_view','live-iptv':'iptv_manage','live-stalker':'iptv_manage','live-radio':'radio_manage','artwork-integrity':'artwork_manage'}[section];return !!permission&&can(permission)&&(['ingest','matching'].indexOf(section)<0||userAreaAllowed('library'));}
+  function canSettings(section){if(state.user&&state.user.role==='admin')return true;var permission={matching:'fix_match',ingest:'ingest_view','live-iptv':'iptv_manage','live-stalker':'iptv_manage','live-xtream':'iptv_manage','live-radio':'radio_manage','artwork-integrity':'artwork_manage'}[section];return !!permission&&can(permission)&&(['ingest','matching'].indexOf(section)<0||userAreaAllowed('library'));}
   function canSearchRss(){return can('rss_search')&&!!(state.home&&state.home.features&&state.home.features.downloads);}
   function canManageDownloads(){return can('downloads_request')&&!!(state.home&&state.home.features&&state.home.features.downloads);}
   /* Media requests (Library → Requests). The flags come from /me because custom roles and the User role are resolved server-side. */
@@ -5165,7 +5165,7 @@ try {
       items.push({ label:'Collections', active: state.view === 'collections' || state.view === 'collection', go: function(){ navigate('collections'); } });
       if (canRequestMedia()) items.push({ label:'Requests', active: state.view === 'requests', go: function(){ openRequests('discover'); } });
     } else if (mode === 'live') {
-      [['On now','now'],['Relay','relay'],['IPTV','iptv'],['Stalker','stalker'],['Radio','radio']].forEach(function(page){
+      [['On now','now'],['Relay','relay'],['IPTV','iptv'],['Stalker','stalker'],['Xtream Codes','xtream'],['Radio','radio']].forEach(function(page){
         items.push({label:page[0],active:(state.liveTab||'now')===page[1],go:function(){goLiveTab(page[1]);}});
       });
     } else if (mode === 'play') {
@@ -5760,7 +5760,7 @@ try {
       body: JSON.stringify(body || {})
     }).then(function(r){
       return r.json().then(function(j){
-        if (r.ok && j && j.ok !== false && action !== 'iptv_probe' && action !== 'radio_save' && action !== 'stalker_play') invalidateLiveData(false);
+        if (r.ok && j && j.ok !== false && action !== 'iptv_probe' && action !== 'radio_save' && action !== 'stalker_play' && action.indexOf('xtream_') !== 0) invalidateLiveData(false);
         return { ok: r.ok, status: r.status, body: j };
       });
     });
@@ -5983,7 +5983,7 @@ try {
     goLiveTab('now');ensureLiveData(false).then(function(){var target=document.getElementById('live-guide');if(target)target.scrollIntoView({behavior:'smooth',block:'start'});});
   }
   function goLiveTab(tab){
-    state.liveTab=['now','relay','iptv','stalker','radio'].indexOf(tab)>=0?tab:'now';
+    state.liveTab=['now','relay','iptv','stalker','xtream','radio'].indexOf(tab)>=0?tab:'now';
     state._openLiveCh=null;state.liveChannel=null;navigate('live');
     // Returning from a Stalker title restores its previous scroll position.
     if(!(tab==='stalker'&&state._stalkerVodReturn))try{window.scrollTo(0,0);}catch(e){}
@@ -6195,7 +6195,7 @@ try {
   // never invokes library-only transcode, conversion or progress endpoints.
   function startStalkerLibraryPlayer(host,source,item,context){
     closePlayer();stopRadio();
-    var key='stalker-vod:'+context.id,alive=true,stream=null;
+    var key='stalker-vod:'+context.id,alive=true,stream=null,xtream=String(source.url||'').indexOf('/api/live/xtream_stream?')!==-1,heartbeat=null,heartbeatBusy=false;
     var video=h('video',{id:'player-media',controls:true,autoplay:true,playsinline:true,preload:'metadata'});
     video.setAttribute('webkit-playsinline','true');
     var frame=h('div',{id:'player-overlay',className:'player-overlay player-simple player-inline stalker-library-player'},[video]);
@@ -6224,19 +6224,34 @@ try {
     ['addtrack','removetrack','change'].forEach(function(event){if(video.audioTracks)video.audioTracks.addEventListener(event,function(){refreshTracks(stream);});if(video.textTracks)video.textTracks.addEventListener(event,function(){refreshTracks(stream);});});
     function play(){var p=video.play();if(p&&p.catch)p.catch(function(){if(context.onError)context.onError('Press play in the player to start.');});}
     addCentrePlay(frame,video,play);
-    _liveCleanup=function(){
-      alive=false;
-      if(stream){try{stream.destroy();}catch(ignore){}stream=null;}
+    function cleanupProvider(){
+      if(!alive)return;alive=false;
+      if(heartbeat)clearInterval(heartbeat);heartbeat=null;
+      window.removeEventListener('pagehide',cleanupProvider);
+      if(stream){try{stream.stopLoad();stream.destroy();}catch(ignore){}stream=null;}
       try{video.pause();video.removeAttribute('src');video.load();}catch(ignore2){}
-    };
+      if(xtream)stopXtreamSource(source);
+    }
+    _liveCleanup=cleanupProvider;
+    if(xtream){
+      tools.appendChild(h('button',{className:'btn',type:'button',text:'Stop playback',onClick:function(){cleanupProvider();if(context.onError)context.onError('Playback stopped. Select a title to play again.');}}));
+      window.addEventListener('pagehide',cleanupProvider);
+      heartbeat=setInterval(function(){
+        if(!alive||heartbeatBusy)return;
+        if(!frame.isConnected){cleanupProvider();return;}
+        heartbeatBusy=true;
+        var token=new URL(source.url,location.href).searchParams.get('ticket');
+        stalkerPost('xtream_heartbeat',{ticket:token}).catch(function(error){if(alive){cleanupProvider();if(context.onError)context.onError(error.message);}}).finally(function(){heartbeatBusy=false;});
+      },15000);
+    }
     video.addEventListener('playing',function(){if(alive&&context.onPlaying)context.onPlaying();});
-    video.addEventListener('error',function(){if(alive&&context.onError)context.onError('The provider video could not be played by this browser.');});
-    video.addEventListener('ended',function(){if(alive&&context.onEnded&&(!autoNext||autoNext.checked))context.onEnded();});
+    video.addEventListener('error',function(){if(alive){if(xtream)cleanupProvider();if(context.onError)context.onError('The provider video could not be played by this browser.');}});
+    video.addEventListener('ended',function(){if(!alive)return;if(xtream)cleanupProvider();if(context.onEnded&&(!autoNext||autoNext.checked))context.onEnded();});
     attachIptvStream(video,source,{
       current:function(){return alive&&!frame._closing&&frame.isConnected;},
       play:play,
       stream:function(value){stream=value;refreshTracks(value);if(value&&value.on){var events=(window.Hls&&window.Hls.Events)||value.Events||{},names=['AUDIO_TRACKS_UPDATED','AUDIO_TRACK_SWITCHED','SUBTITLE_TRACKS_UPDATED','SUBTITLE_TRACK_SWITCH'],fallback=['hlsAudioTracksUpdated','hlsAudioTrackSwitched','hlsSubtitleTracksUpdated','hlsSubtitleTrackSwitch'];names.forEach(function(name,index){var event=events[name]||fallback[index];value.on(event,function(){refreshTracks(value);});});}},
-      error:function(message){if(alive&&context.onError)context.onError(message);}
+      error:function(message){if(alive){if(xtream)cleanupProvider();if(context.onError)context.onError(message);}}
     });
     video.addEventListener('loadedmetadata',function(){if(!stream)refreshTracks(null);});
     host.scrollIntoView({block:'nearest',behavior:'smooth'});
@@ -6932,6 +6947,110 @@ try {
     };
     refresh();
   }
+  function paintXtreamImport(host){
+    var page=h('input',{type:'password',autocomplete:'off',placeholder:'Private provider page URL','aria-label':'Provider page URL'}),width=h('input',{type:'text',inputmode:'numeric',value:'1270','aria-label':'Table width'}),message=h('p',{role:'status',className:'muted'}),entries=h('div',{className:'stack'}),configured=false,busy=false;
+    var save=h('button',{className:'btn',type:'button',text:'Save page settings',onClick:function(){run(function(){return stalkerPost('xtream_import',{operation:'configure',url:page.value,width:width.value});},function(data){configured=data.configured;page.value='';page.placeholder='Saved privately — leave blank to keep';entries.replaceChildren();message.textContent='Provider page settings saved. Fetch the table to discover connections.';});}});
+    var discover=h('button',{className:'btn primary',type:'button',text:'Fetch connections',disabled:true,onClick:function(){entries.replaceChildren();run(function(){return stalkerPost('xtream_import',{operation:'discover'});},function(data){
+      message.textContent=(data.entries||[]).length+' connections found. Check verifies the account without starting playback. Credentials remain on the server.';
+      if(!(data.entries||[]).length){entries.appendChild(h('p',{text:'No account details found in the selected table. Check the table width. Pages requiring browser login or JavaScript are not supported.'}));return;}
+      var listPage=1,filter=h('input',{type:'search',placeholder:'Filter discovered connections','aria-label':'Filter discovered connections'}),cards=h('div',{className:'stack'}),count=h('span',{role:'status'});
+      var previous=h('button',{className:'btn',text:'Previous',onClick:function(){listPage--;renderRows();}}),next=h('button',{className:'btn',text:'Next',onClick:function(){listPage++;renderRows();}});
+      filter.oninput=function(){listPage=1;renderRows();};
+      entries.replaceChildren(filter,count,cards,h('div',{className:'row-actions'},[previous,next]));
+      function renderRows(){
+        var term=filter.value.trim().toLowerCase(),matches=data.entries.filter(function(entry){return !term||(entry.name+' '+entry.url+' '+Object.values(entry.details||{}).join(' ')).toLowerCase().indexOf(term)>=0;});
+        listPage=Math.max(1,Math.min(listPage,Math.ceil(matches.length/25)||1));cards.replaceChildren();previous.disabled=listPage===1;next.disabled=listPage*25>=matches.length;count.textContent=matches.length+' matching connections · Page '+listPage+' of '+(Math.ceil(matches.length/25)||1);
+        matches.slice((listPage-1)*25,listPage*25).forEach(function(entry){
+        var name=h('input',{value:entry.name,'aria-label':'Connection name',maxlength:160,onInput:function(e){entry.name=e.target.value;}}),feedback=h('p',{role:'status',className:entry.noteBad||!entry.valid?'bad':'muted',text:entry.note||entry.issue|| (entry.added?'Already saved.':entry.credentials)}),details=entry.details||{},checking=false,adding=false;
+        var check=h('button',{className:'btn',type:'button',text:'Check',disabled:!entry.valid||entry.busy,onClick:function(){
+          if(checking||adding||entry.busy)return;checking=true;entry.busy=true;check.disabled=true;add.disabled=true;feedback.textContent='Checking account…';
+          stalkerPost('xtream_import',{operation:'check',token:data.token,id:entry.id}).then(function(result){if(!host.isConnected)return;var a=result.account||{};feedback.className='muted';feedback.textContent=(a.status||'Authenticated')+' · Connections '+(a.active_cons||0)+' / '+(a.max_connections||'not supplied')+' · Expires '+(Number(a.exp_date)>0?new Date(Number(a.exp_date)*1000).toLocaleDateString():'not supplied');}).catch(function(error){feedback.className='bad';feedback.textContent=error.message;}).finally(function(){checking=false;entry.busy=false;entry.note=feedback.textContent;entry.noteBad=feedback.className==='bad';renderRows();});
+        }});
+        var add=h('button',{className:'btn primary',type:'button',text:entry.added?'Added':'Add',disabled:!entry.valid||entry.added||entry.busy,onClick:function(){
+          if(checking||adding||entry.busy)return;adding=true;entry.busy=true;add.disabled=true;check.disabled=true;
+          stalkerPost('xtream_import',{operation:'add',token:data.token,id:entry.id,name:name.value}).then(function(result){entry.added=true;add.textContent='Added';feedback.className='muted';feedback.textContent=result.message;}).catch(function(error){feedback.className='bad';feedback.textContent=error.message;}).finally(function(){adding=false;entry.busy=false;entry.note=feedback.textContent;entry.noteBad=feedback.className==='bad';renderRows();});
+        }});
+        cards.appendChild(h('div',{className:'settings-card'},[h('label',{className:'stack'},['Connection name',name]),h('p',{text:entry.url||'Server unavailable'}),h('p',{className:'muted',text:'Created: '+(details.created||'not supplied')+' · Expires: '+(details.expiry||'not supplied')}),h('p',{className:'muted',text:'Connections: '+(details.connections||'0')+' / '+(details.maximum||'not supplied')+' · Port: '+(details.port||'from server URL')+' · Status: '+(details.status||'not supplied')}),h('p',{className:'muted',text:'Username / password: '+(entry.valid?'•••• / ••••':'missing or masked')}),feedback,h('div',{className:'row-actions'},[check,add])]));
+        });
+      }
+      renderRows();
+    });}});
+    var clear=h('button',{className:'btn ghost',type:'button',text:'Forget page',onClick:function(){if(!confirm('Forget this provider page? Connections already added will remain.'))return;run(function(){return stalkerPost('xtream_import',{operation:'configure',clear:true});},function(){configured=false;page.value='';page.placeholder='Private provider page URL';entries.replaceChildren();message.textContent='Provider page forgotten. Saved connections retained.';});}});
+    function buttons(){save.disabled=busy;discover.disabled=busy||!configured;clear.disabled=busy||!configured;}
+    function run(request,done){if(busy)return;busy=true;buttons();message.className='muted';message.textContent='Working…';request().then(function(data){if(host.isConnected)done(data);}).catch(function(error){if(host.isConnected){message.className='bad';message.textContent=error.message;}}).finally(function(){busy=false;buttons();});}
+    host.replaceChildren(h('h3',{text:'Import from provider table'}),h('p',{className:'muted',text:'Save your private provider page, fetch its table, then check and add the connections you want. Table width 1270 matches the supplied layout; leave blank to search all tables. Refreshing discovery never changes saved connections.'}),h('label',{className:'stack'},['Provider page URL',page]),h('label',{className:'stack'},['Table width',width]),h('div',{className:'row-actions'},[save,discover,clear,h('button',{className:'btn',text:'Show saved connections',onClick:function(){var panel=host.parentNode;if(panel)paintXtreamSettings(panel);}})]),message,entries);
+    busy=true;buttons();liveApi('xtream_import_status').then(function(data){if(!host.isConnected)return;configured=data.configured;width.value=data.width;page.placeholder=configured?'Saved privately — leave blank to keep':'Private provider page URL';message.textContent=configured?'Provider page saved. Fetch connections to review the latest table.':'No provider page configured.';}).catch(function(error){message.textContent=error.message;}).finally(function(){busy=false;buttons();});
+  }
+  function paintXtreamSettings(host){
+    host.replaceChildren(pendingContent());
+    liveApi('xtream_connections').then(function(result){
+      if(!host.isConnected)return;
+      var message=h('p',{role:'status'}),list=h('div',{className:'stack'}),editor=h('form',{className:'settings-card'});
+      function error(err){message.textContent=err.message;message.className='bad';}
+      function edit(connection){
+        connection=connection||{};var fields={},enabled=h('input',{type:'checkbox',checked:connection.enabled!==false});
+        editor.replaceChildren(h('h3',{text:connection.id?'Edit connection':'Add connection'}));
+        [['name','Connection name','text'],['url','Server URL (including port, if supplied)','url'],['username','Username','text'],['password','Password','password']].forEach(function(spec){
+          fields[spec[0]]=h('input',{type:spec[2],value:connection[spec[0]]||'',required:!connection.id||spec[0]==='name'||spec[0]==='url',autocomplete:spec[0]==='password'?'new-password':'off',placeholder:connection.id&&['username','password'].indexOf(spec[0])>=0?'Saved — leave blank to keep':''});
+          editor.appendChild(h('label',{className:'stack'},[spec[1],fields[spec[0]]]));
+        });
+        editor.appendChild(h('label',{},[enabled,' Enabled']));
+        editor.appendChild(h('p',{className:'muted',text:'Connections are shared with users who can access Live. Vaultcast allows one active playback per provider account; stop it before using another tab or device. Account credentials stay on the server.'}));
+        var save=h('button',{type:'submit',className:'btn primary',text:'Save connection'});editor.appendChild(save);
+        editor.onsubmit=function(event){event.preventDefault();save.disabled=true;var value={enabled:enabled.checked};Object.keys(fields).forEach(function(key){value[key]=fields[key].value;});
+          stalkerPost('xtream_manage',{operation:'save',feed:connection.id||'',connection:value}).then(function(){if(host.isConnected)paintXtreamSettings(host);}).catch(error).finally(function(){save.disabled=false;});};
+      }
+      (result.connections||[]).forEach(function(connection){
+        list.appendChild(h('div',{className:'settings-card'},[h('h3',{text:connection.name+(connection.enabled?'':' · Disabled')}),h('p',{text:connection.url}),h('div',{className:'row-actions'},[
+          h('button',{className:'btn',text:'Edit',onClick:function(){edit(connection);}}),
+          h('button',{className:'btn',text:'Check account',onClick:function(e){var button=e.currentTarget;button.disabled=true;message.textContent='Checking account…';stalkerPost('xtream_manage',{operation:'check',feed:connection.id}).then(function(data){var a=data.account||{};message.className='muted';message.textContent=(a.status||'Connected')+' · Connections '+(a.active_cons||0)+' / '+(a.max_connections||'provider managed')+' · Expires '+(Number(a.exp_date)>0?new Date(Number(a.exp_date)*1000).toLocaleDateString():'not supplied');}).catch(error).finally(function(){button.disabled=false;});}}),
+          h('button',{className:'btn danger',text:'Remove',onClick:function(){if(confirm('Remove '+connection.name+'?'))stalkerPost('xtream_manage',{operation:'remove',feed:connection.id}).then(function(){if(host.isConnected)paintXtreamSettings(host);}).catch(error);}})
+        ])]));
+      });
+      var importer=h('section',{className:'settings-card'});
+      host.replaceChildren(h('button',{className:'btn',text:'Open Xtream Codes',onClick:function(){goLiveTab('xtream');}}),importer,message,list,h('button',{className:'btn',text:'Add connection',onClick:function(){edit();}}),editor);edit();paintXtreamImport(importer);
+    }).catch(function(error){if(host.isConnected)host.replaceChildren(h('p',{className:'bad',text:error.message}));});
+  }
+  function stopXtreamSource(source){
+    var match=String(source&&source.url||'').match(/[?&]ticket=([a-f0-9]+)(?:&|$)/);
+    if(!match)return Promise.resolve();
+    return fetch(LIVE_API+'xtream_stop',{method:'POST',credentials:'same-origin',keepalive:true,headers:{'Content-Type':'application/json'},body:JSON.stringify({ticket:match[1]})}).catch(function(){});
+  }
+  function paintXtreamPage(root){
+    var xtreamClient=liveUid('xtream')+liveUid('client'),playQueue=Promise.resolve();
+    var feed=h('select',{'aria-label':'Provider'}),kind=h('select',{'aria-label':'Library'},[['live','Live TV'],['vod','Movies'],['series','Series']].map(function(x){return h('option',{value:x[0],text:x[1]});})),category=h('select',{'aria-label':'Category'}),query=h('input',{type:'search',placeholder:'Search titles','aria-label':'Search titles'}),status=h('p',{role:'status'}),results=h('div',{className:'stack'}),player=h('div',{className:'detail-player'}),guide=h('div',{className:'stack'}),page=1,series='',serial=0,playSerial=0;
+    var previous=h('button',{className:'btn',text:'Previous',onClick:function(){page--;load();}}),next=h('button',{className:'btn',text:'Next',onClick:function(){page++;load();}}),back=h('button',{className:'btn',text:'Back to series',hidden:true,onClick:function(){series='';back.hidden=true;page=1;load();}});
+    function fail(error){if(root.isConnected){status.className='bad';status.textContent=error.message;}}
+    function parameters(){return {feed:feed.value,kind:kind.value,category:category.value,series:series,q:query.value,page:page};}
+    function load(refresh){
+      var mine=++serial;status.className='muted';status.textContent='Loading…';results.replaceChildren();previous.disabled=true;next.disabled=true;
+      var params=parameters();if(refresh)params.refresh='1';
+      liveApi('xtream_browse',new URLSearchParams(params)).then(function(data){
+        if(!root.isConnected||mine!==serial)return;status.textContent=data.total?data.total+' titles · Page '+page:'No titles found.';previous.disabled=page<=1;next.disabled=page*60>=data.total;
+        (data.items||[]).forEach(function(item){results.appendChild(h('button',{className:'btn',text:(series?'S'+item.season+' E'+item.episode+' · ':'')+item.name,onClick:function(){
+          if(kind.value==='series'&&!series){series=item.id;page=1;query.value='';back.hidden=false;load();return;}
+          var request=parameters(),play=++playSerial;request.id=item.id;request.client=xtreamClient;request.sequence=play;closePlayer();player.replaceChildren();status.textContent='Connecting…';
+          playQueue=playQueue.catch(function(){}).then(function(){
+            if(!root.isConnected||play!==playSerial)return;
+            return stalkerPost('xtream_play',request).then(function(data){
+              if(!root.isConnected||play!==playSerial)return stopXtreamSource(data.source);
+              startStalkerLibraryPlayer(player,data.source,item,{id:'xtream:'+request.feed+':'+item.id,onError:function(message){fail(new Error(message));},onPlaying:function(){status.textContent=item.name;}});
+            });
+          }).catch(function(error){if(play===playSerial)fail(error);});
+          guide.replaceChildren();if(kind.value==='live')liveApi('xtream_guide',new URLSearchParams({feed:request.feed,id:item.id})).then(function(data){if(!root.isConnected||play!==playSerial)return;guide.replaceChildren(h('h3',{text:'Programme guide'}));(data.programmes||[]).forEach(function(p){guide.appendChild(h('p',{text:p.start+' · '+p.title}));});if(!(data.programmes||[]).length)guide.appendChild(h('p',{text:'No programme information supplied.'}));}).catch(function(){if(play===playSerial)guide.replaceChildren(h('p',{text:'Programme guide unavailable.'}));});
+        }}));});
+      }).catch(function(error){if(mine===serial)fail(error);});
+    }
+    function reset(refresh){series='';page=1;back.hidden=true;query.value='';category.replaceChildren(h('option',{value:'',text:'All categories'}));var selected=feed.value,type=kind.value,mine=++serial;playSerial++;closePlayer();player.replaceChildren();guide.replaceChildren();
+      if(!selected){status.textContent='No enabled connections. Ask an administrator to add your provider.';return;}
+      status.textContent='Loading categories…';results.replaceChildren();
+      liveApi('xtream_categories',new URLSearchParams({feed:selected,kind:type,refresh:refresh?'1':''})).then(function(data){if(!root.isConnected||mine!==serial)return;(data.categories||[]).forEach(function(c){category.appendChild(h('option',{value:c.id,text:c.name}));});load(refresh);}).catch(function(error){if(mine===serial)fail(error);});
+    }
+    var search=h('form',{className:'row-actions'},[query,h('button',{className:'btn',type:'submit',text:'Search'})]);search.onsubmit=function(e){e.preventDefault();page=1;load();};
+    feed.onchange=function(){reset();};kind.onchange=function(){reset();};category.onchange=function(){series='';back.hidden=true;page=1;load();};
+    root.replaceChildren(h('h1',{text:'Xtream Codes'}),h('p',{className:'muted',text:'Live TV, movies and series from your connected providers.'}),h('div',{className:'row-actions'},[feed,kind,category,h('button',{className:'btn',text:'Refresh',onClick:function(){reset(true);}}),can('iptv_manage')?h('button',{className:'btn',text:'Settings',onClick:function(){openSettings('live-xtream');}}):null]),search,back,status,player,guide,results,h('div',{className:'row-actions'},[previous,next]));
+    liveApi('xtream_connections').then(function(data){if(!root.isConnected)return;(data.connections||[]).filter(function(c){return c.enabled;}).forEach(function(c){feed.appendChild(h('option',{value:c.id,text:c.name}));});reset();}).catch(fail);
+  }
   function paintStalkerSettings(host){
     var owner=state.user&&state.user.id;
     host.replaceChildren(pendingContent());
@@ -7003,6 +7122,7 @@ try {
   function viewLive(){
     if(state.liveChannel&&String(state.liveChannel).indexOf('stalker-vod:')===0)return viewStalkerVod(state.liveChannel);
     if(state.liveChannel&&String(state.liveChannel).indexOf('stalker:')===0)return viewStalkerChannel(state.liveChannel);
+    if(state.liveTab==='xtream'){stopLiveTimers();var xtreamRoot=h('div',{className:'live-view'});setTimeout(function(){if(xtreamRoot.isConnected)paintXtreamPage(xtreamRoot);},0);return shell(xtreamRoot);}
     if(state.liveTab==='stalker'){stopLiveTimers();var stalkerRoot=h('div',{className:'live-view'});setTimeout(function(){if(stalkerRoot.isConnected)paintStalkerPage(stalkerRoot);},0);return shell(stalkerRoot);}
     if(state.liveChannel)return viewLiveChannel(state.liveChannel);
     if(state.liveTab==='radio'){stopLiveTimers();var radioRoot=h('div',{id:'live-view',className:'live-view'});setTimeout(function(){if(radioRoot.isConnected)paintRadioPage(radioRoot);},0);return shell(radioRoot);}
@@ -7309,7 +7429,7 @@ try {
   }
   function attachIptvStream(video,source,options){
     var current=options.current||function(){return true;},url=source.url;
-    var portalStream=url.indexOf('/api/live/stalker_stream?')!==-1;
+    var portalStream=url.indexOf('/api/live/stalker_stream?')!==-1,xtreamStream=url.indexOf('/api/live/xtream_stream?')!==-1;
     if(portalStream&&(source.kind==='live'||url.indexOf('ticket=')===-1)){
       if(!window._vaultcastStalkerStreamLoading)window._vaultcastStalkerStreamLoading=new Promise(function(resolve,reject){
         if(window.attachStalkerStream){resolve();return;}
@@ -7321,22 +7441,29 @@ try {
     }
     // Keep normal viewing and browse previews on exactly the same playback path.
     if(!/\.m3u8(?:[?#]|$)/i.test(url)){video.src=url;options.play();if(options.note)options.note('Non-HLS stream: browser DirectPlay attempted.');return Promise.resolve();}
-    var proxy=portalStream?url+'&playback='+encodeURIComponent(liveUid('st')):LIVE_API+'iptv_hls?u='+encodeURIComponent(url)+'&jar='+encodeURIComponent(options.jar||hlsJar());
+    var proxy=url.indexOf('/api/live/xtream_stream?')!==-1?url:portalStream?url+'&playback='+encodeURIComponent(liveUid('st')):LIVE_API+'iptv_hls?u='+encodeURIComponent(url)+'&jar='+encodeURIComponent(options.jar||hlsJar());
     if(source.userAgent)proxy+='&ua='+encodeURIComponent(source.userAgent);
     if(source.referrer)proxy+='&ref='+encodeURIComponent(source.referrer);
     function nativeFallback(message){if(!current())return;if(video.canPlayType('application/vnd.apple.mpegurl')){video.src=proxy;options.play();}else options.error(message);}
     return loadHls().then(function(Hls){
       if(!current())return;
       if(Hls&&Hls.isSupported()){
-        var stream=null;stream=new Hls({enableWorker:true,lowLatencyMode:false,manifestLoadingTimeOut:portalStream?45000:10000,manifestLoadingMaxRetry:portalStream?2:1,levelLoadingTimeOut:portalStream?30000:10000,fLoader:iptvFragmentLoader(Hls,function(){return stream;})});var recovered=false;options.stream(stream);
+        var stream=null,config={enableWorker:true,lowLatencyMode:false,manifestLoadingTimeOut:portalStream?45000:10000,manifestLoadingMaxRetry:portalStream?2:1,levelLoadingTimeOut:portalStream?30000:10000,fLoader:iptvFragmentLoader(Hls,function(){return stream;})};
+        if(xtreamStream){
+          // Server-side cancellation completes before the browser can retry an abandoned request.
+          delete config.manifestLoadingTimeOut;delete config.manifestLoadingMaxRetry;delete config.levelLoadingTimeOut;
+          ['manifestLoadPolicy','playlistLoadPolicy','fragLoadPolicy','keyLoadPolicy'].forEach(function(key){config[key]={default:{maxTimeToFirstByteMs:40000,maxLoadTimeMs:60000,timeoutRetry:null,errorRetry:null}};});
+          config.startFragPrefetch=false;config.testBandwidth=false;config.maxBufferLength=20;config.maxMaxBufferLength=30;
+        }
+        stream=new Hls(config);var recovered=false;options.stream(stream);
         stream.on(Hls.Events.MANIFEST_PARSED,function(){if(current())options.play();});
         stream.on(Hls.Events.ERROR,function(event,data){
           if(!current()||!data||!data.fatal)return;
           if(data.type===Hls.ErrorTypes.MEDIA_ERROR&&!recovered){recovered=true;try{stream.recoverMediaError();return;}catch(ignore){}}
-          var response=data.response||{},http=Number(response.code||data.networkDetails&&data.networkDetails.status||0),detail=data.details||'';var origin='';try{if(data.networkDetails&&data.networkDetails.getResponseHeader)origin=data.networkDetails.getResponseHeader('X-Vaultcast-Error-Origin')||'';}catch(ignore){}var reason=http?' HTTP '+http+(origin==='provider'?' from provider':origin==='application'?' from Vaultcast':'')+'.':detail.toLowerCase().indexOf('timeout')>=0?' The provider did not respond in time.':'';if(portalStream&&response.data){try{var failure=typeof response.data==='string'?JSON.parse(response.data):response.data;if(failure&&typeof failure.error==='string')reason+=' '+failure.error;}catch(ignore){}}options.error('Stream error ('+(data.type||'?')+(detail?' / '+detail:'')+').'+reason+(http===401||http===403?' The server or provider refused access.':http>=500?' The server could not fetch the provider playlist.':''));
+          var response=data.response||{},http=Number(response.code||data.networkDetails&&data.networkDetails.status||0),detail=data.details||'';var origin='';try{if(data.networkDetails&&data.networkDetails.getResponseHeader)origin=data.networkDetails.getResponseHeader('X-Vaultcast-Error-Origin')||'';}catch(ignore){}var reason=http?' HTTP '+http+(origin==='provider'?' from provider':origin==='application'?' from Vaultcast':'')+'.':detail.toLowerCase().indexOf('timeout')>=0?' The provider did not respond in time.':'';if((portalStream||xtreamStream)&&response.data){try{var failure=typeof response.data==='string'?JSON.parse(response.data):response.data;if(failure&&typeof failure.error==='string')reason+=' '+failure.error;}catch(ignore){}}options.error('Stream error ('+(data.type||'?')+(detail?' / '+detail:'')+').'+reason+(http===401||http===403?' The server or provider refused access.':http>=500?' The server could not fetch the provider playlist.':''));
         });stream.loadSource(proxy);stream.attachMedia(video);
       }else nativeFallback('This browser cannot play HLS. Try another device or VLC.');
-    }).catch(function(){nativeFallback('HLS player failed to load.');});
+    }).catch(function(){if(xtreamStream){if(current())options.error('HLS player failed to load. Playback has been stopped.');}else nativeFallback('HLS player failed to load.');});
   }
   function hlsJar(){
     try {
@@ -9471,7 +9598,7 @@ try {
       {title:'Your account',description:'Your identity, personal preferences and saved games.',items:[{id:'inbox',label:'Inbox',hint:'Messages, invitations and anything that needs you'},{id:'settings-home',label:'Settings overview',hint:'Find a setting or choose a task'},{id:'account',label:'Profile & security',hint:'Display name, avatar, password and sign out'},{id:'parental',label:'Parental controls',hint:'Kids profile, age limits and PIN'},{id:'appearance',label:'Appearance & motion',hint:'Themes, animation and reduced motion'},{id:'playback',label:'Playback & skipping',hint:'Autoplay, mini player, intros and credits'},{id:'home-preferences',label:'Home & spoilers',hint:'Start page, compact layout and unwatched episode details'},{id:'cloud-saves',label:'Cloud saves',hint:'Save slots, backups, uploads and sharing'}]},
       {title:'Library & metadata',description:'Connect folders, organise titles and correct missing information.',admin:true,items:[{id:'sections',label:'Libraries & folders',section:'Sources',hint:'Media types, paths and enabled libraries'},{id:'scan',label:'Scan for media',section:'Sources',hint:'Discover new or removed files'},{id:'ingest',label:'Import inbox',section:'Sources',hint:'Review incoming downloads before importing'},{id:'media',label:'Media manager',section:'Organise',hint:'Search and edit library records'},{id:'collections',label:'Collections',section:'Organise',hint:'Film sets and series groups'},{id:'library',label:'Find & rename',section:'Organise',hint:'Match names and organise files'},{id:'matching',label:'Metadata matching',section:'Metadata',hint:'Fix titles, posters and descriptions'},{id:'reports',label:'User reports',section:'Metadata',hint:'Review incorrect labels reported by users'}]},
       {title:'Artwork & design',description:'Site branding, bundled posters and library artwork.',admin:true,items:[{id:'site-artwork',label:'Site & theme posters',hint:'Replace default artwork and create smaller WebP images'},{id:'posters',label:'Library artwork',hint:'Fetch missing movie, show, season and game images'},{id:'artwork-integrity',label:'Repair missing images',hint:'Find broken records and missing files'},{id:'poster-optimise',label:'Optimise library images',hint:'Generate full, grid and search WebP variants'}]},
-      {title:'Live broadcasting',description:'Build channels, schedule programmes and manage public streams.',admin:true,items:[{id:'live-studio',label:'PseudoTV Studio',section:'Relay',hint:'Schedule programmes, filler and advertising'},{id:'live-channels',label:'Relay channels',section:'Relay',hint:'Create channels and manage rotations'},{id:'live-library',label:'Live media library',section:'Relay',hint:'Import programmes and prepare durations'},{id:'live-playlists',label:'Rotation playlists',section:'Relay',hint:'Reusable channel programme rotations'},{id:'live-schedule',label:'Rotation rules',section:'Relay',hint:'Legacy rotation scheduling; Studio manages weekly slots'},{id:'live-stalker',label:'Stalker portals',section:'Sources',hint:'Provider connections, live channels, movies and series'},{id:'live-iptv',label:'IPTV & guide matching',section:'Sources',hint:'Feeds, channel mapping and EPG'},{id:'live-radio',label:'Radio stations',section:'Sources',hint:'Add stations or browse the public directory'},{id:'live-station',label:'Station & outputs',section:'Outputs',hint:'Streams, guide exports and station configuration'}]},
+      {title:'Live broadcasting',description:'Build channels, schedule programmes and manage public streams.',admin:true,items:[{id:'live-studio',label:'PseudoTV Studio',section:'Relay',hint:'Schedule programmes, filler and advertising'},{id:'live-channels',label:'Relay channels',section:'Relay',hint:'Create channels and manage rotations'},{id:'live-library',label:'Live media library',section:'Relay',hint:'Import programmes and prepare durations'},{id:'live-playlists',label:'Rotation playlists',section:'Relay',hint:'Reusable channel programme rotations'},{id:'live-schedule',label:'Rotation rules',section:'Relay',hint:'Legacy rotation scheduling; Studio manages weekly slots'},{id:'live-xtream',label:'Xtream Codes',section:'Sources',hint:'Provider accounts, live TV, movies and series'},{id:'live-stalker',label:'Stalker portals',section:'Sources',hint:'Provider connections, live channels, movies and series'},{id:'live-iptv',label:'IPTV & guide matching',section:'Sources',hint:'Feeds, channel mapping and EPG'},{id:'live-radio',label:'Radio stations',section:'Sources',hint:'Add stations or browse the public directory'},{id:'live-station',label:'Station & outputs',section:'Outputs',hint:'Streams, guide exports and station configuration'}]},
       {title:'People & permissions',description:'Control who can access content and administrative tools.',admin:true,items:[{id:'users',label:'Accounts, roles & permissions',hint:'Create users and roles; assign individual access'}]},
       {title:'Playback & delivery',description:'Server delivery options and player dependencies.',admin:true,items:[{id:'directplay',label:'DirectPlay Settings',hint:'Playback policy, transcoding, threads and reusable copies'},{id:'trailers',label:'Trailers & extras',hint:'Online trailers, the muted hero trailer and extras thumbnails'},{id:'streaming',label:'Delivery & subtitles',hint:'Seeking, playback tokens and subtitles'},{id:'players',label:'Player assets',hint:'Local or CDN player files and emulator cores'},{id:'video-optimise',label:'Video conversion',hint:'Convert files, review requests and manage encoding jobs'}]},
       {title:'Downloads',description:'Configure providers and review download activity.',admin:true,items:[{id:'acquisition',label:'Providers & integrations',hint:'RSS search, download clients and API connections'},{id:'queue',label:'Download queue',hint:'Active downloads, imports and errors'}]},
@@ -14655,6 +14782,7 @@ function viewCollectionDetail(){
       'live-playlists': { title: 'Playlists & programming', blurb: 'Set programs air first, in order; under the fill window Relay fills at random from the channel library. Commercial breaks, bumpers and the random seed live here too.' },
       'live-schedule': { title: 'Rolling schedule', blurb: '24-hour wall-clock slots: rotate a movie nightly, or advance one TV episode per day. Deterministic from the calendar day.' },
       'live-radio': { title:'Radio stations', blurb:'Your shared radio lineup. Find public stations or add a direct stream, then listen while browsing.' },
+      'live-xtream': { title:'Xtream Codes', blurb:'Connect your provider account. Watch under Live → Xtream Codes.' },
       'live-stalker': { title:'Stalker portals', blurb:'Manage provider URLs, registered devices and connection checks. Watch channels, movies and series under Live → Stalker.' },
       'live-iptv': { title: 'IPTV feeds', blurb: 'M3U playlist feeds, browse and search channels, favourites lineup, on-demand stream Check, inactive filter, and XMLTV EPG.' },
       'live-station': { title: 'Station & outputs', blurb: 'Station identity, media base URL, timeshift history, guide lookahead, external-player stream URLs, and JSON backup / merge import.' }
@@ -14665,7 +14793,7 @@ function viewCollectionDetail(){
   function liveNativeSettingsKids(sec){
     if (sec === 'live') sec = 'live-channels';
     var meta = liveSectionMeta(sec);
-    var stationSection = sec !== 'live-stalker' && sec !== 'live-iptv' && sec !== 'live-studio' && sec !== 'live-radio';
+    var stationSection = sec !== 'live-xtream' && sec !== 'live-stalker' && sec !== 'live-iptv' && sec !== 'live-studio' && sec !== 'live-radio';
     setTimeout(function(){ fillLiveNativePanel(sec); }, 0);
     return [
       h('div', { className: 'settings-live-head' }, [
@@ -14702,6 +14830,7 @@ function viewCollectionDetail(){
     var p;
     if (sec === 'live-studio') { paintTvStudio(host); return; }
     if (sec === 'live-radio') {host.replaceChildren(h('div',{className:'row-actions'},[h('button',{className:'btn primary',text:'Browse public directory',onClick:radioDirectory}),h('button',{className:'btn',text:'Add stream URL',onClick:function(){editRadio();}}),h('button',{className:'btn',text:'Open Radio',onClick:function(){goLiveTab('radio');}})]));loadRadio(true).then(function(stations){if(!host.isConnected)return;stations.forEach(function(station){host.appendChild(h('div',{className:'radio-directory-row'},[h('div',{},[h('strong',{text:station.name}),h('p',{className:'muted',text:radioMeta(station)})]),h('button',{className:'btn',text:'Edit station',onClick:function(){editRadio(station);}})]));});if(!stations.length)host.appendChild(emptyState('No stations yet','Search the public directory or add a stream URL.'));}).catch(function(e){if(host.isConnected)host.appendChild(h('p',{text:e.message}));});return;}
+    if (sec === 'live-xtream') {paintXtreamSettings(host);return;}
     if (sec === 'live-stalker') {paintStalkerSettings(host);return;}
     if (sec === 'live-iptv') p = liveLoadIptv(true).then(function(){if(host.isConnected&&state.settingsSection===sec)paintLiveIptv(host);});
     else p = liveLoadStation(!liveSet.dirty).then(function(){
@@ -16992,7 +17121,7 @@ function viewCollectionDetail(){
       if (!state.settingsSection || state.settingsSection === 'account') state.settingsSection = state.adminTab || 'general';
     }
     if (state.view === 'settings') {
-      var adminOnly = { 'site-artwork':1,maintenance:1, players:1, features:1, diagnostics:1, sections:1, libraries:1, scan:1, library:1, media:1, collections:1, streaming:1, directplay:1, convert:1, queue:1, acquisition:1, system:1, general:1, users:1, advanced:1, ingest:1, matching:1, reports:1, live:1, 'live-channels':1, 'live-library':1, 'live-playlists':1, 'live-iptv':1, 'live-stalker':1, 'live-schedule':1, 'live-station':1, 'live-studio':1, 'live-radio':1 };
+      var adminOnly = { 'site-artwork':1,maintenance:1, players:1, features:1, diagnostics:1, sections:1, libraries:1, scan:1, library:1, media:1, collections:1, streaming:1, directplay:1, convert:1, queue:1, acquisition:1, system:1, general:1, users:1, advanced:1, ingest:1, matching:1, reports:1, live:1, 'live-channels':1, 'live-library':1, 'live-playlists':1, 'live-iptv':1, 'live-stalker':1, 'live-xtream':1, 'live-schedule':1, 'live-station':1, 'live-studio':1, 'live-radio':1 };
       if (adminOnly[state.settingsSection] && !canSettings(state.settingsSection)) {
         state._wantAdmin = true;
         state._settingsAfterLogin = state.settingsSection;
