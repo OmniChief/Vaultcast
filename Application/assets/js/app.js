@@ -2715,8 +2715,12 @@ function confirmDialog(message, opts){
   }
   function lobbyStopPoll(){
     if (state.lobby && state.lobby.pollTimer) {
-      try { clearInterval(state.lobby.pollTimer); } catch (e) {}
+      clearTimeout(state.lobby.pollTimer);
       state.lobby.pollTimer = null;
+    }
+    if (state.lobby && state.lobby.pollAbort) {
+      state.lobby.pollAbort.abort();
+      state.lobby.pollAbort = null;
     }
   }
   function lobbyEndHostSession(){
@@ -3984,12 +3988,12 @@ function confirmDialog(message, opts){
     if (state.view !== 'play') navigate('play');
     else render();
   }
-  function fetchLobbySessions(){
+  function fetchLobbySessions(watch){
     state.lobby.loading = true;
-    return api('/lobby/sessions').then(function(j){
+    return api('/lobby/sessions' + (watch ? '?events=1' : '')).then(function(j){
       state.lobby.loading = false;
       state.lobby.sessions = (j && j.sessions) || [];
-      return state.lobby.sessions;
+      return watch ? j : state.lobby.sessions;
     }).catch(function(e){
       state.lobby.loading = false;
       throw e;
@@ -4340,20 +4344,36 @@ function confirmDialog(message, opts){
     wrap.appendChild(h('div', { className:'lobby-footnote muted' }, [
       h('p', { text:'Keep the host game open while others join. Each guest controls their assigned player using their normal Player 1 controls. Everyone needs the same game, emulator core and core settings. If the host leaves, start a new session from Lobby.' })
     ]));
-    fetchLobbySessions().then(paintLobbySessions).catch(function(e){
-      var list = wrap.querySelector('#lobby-session-list');
-      if (list) {
-        list.innerHTML = '';
-        list.appendChild(emptyState('Lobby unavailable', friendlyMessage(e), [
-          h('button', { className:'btn', type:'button', text:'Retry', onClick: function(){ fetchLobbySessions().then(paintLobbySessions); } })
-        ]));
-      }
-    });
-    state.lobby.pollTimer = setInterval(function(){
-      if (state.playTab !== 'lobby' || state.view !== 'play') { lobbyStopPoll(); return; }
-      if(document.hidden||state.lobby.loading)return;
-      fetchLobbySessions().then(paintLobbySessions).catch(function(){});
-    }, 5000);
+    function schedule(delay) {
+      if (state.playTab === 'lobby' && state.view === 'play') state.lobby.pollTimer = setTimeout(follow, delay);
+    }
+    function follow(){
+      if (!wrap.isConnected || state.playTab !== 'lobby' || state.view !== 'play') return;
+      if (document.hidden || state.lobby.loading) { schedule(5000); return; }
+      fetchLobbySessions(true).then(function(result){
+        if (!wrap.isConnected) return;
+        paintLobbySessions();
+        if (!result || !window.AbortController || !/^\/netplay\/runtime\/events\/[a-f0-9]{48}$/.test(result.events || '')) { schedule(5000); return; }
+        var abort = new AbortController();
+        state.lobby.pollAbort = abort;
+        fetch(result.events, {cache:'no-store', signal:abort.signal}).then(function(response){
+          if (!response.ok) throw new Error('Lobby update unavailable');
+          return response.json();
+        }).then(function(){ if (wrap.isConnected) schedule(0); }).catch(function(){
+          if (!abort.signal.aborted && wrap.isConnected) schedule(5000);
+        }).finally(function(){ if (state.lobby.pollAbort === abort) state.lobby.pollAbort = null; });
+      }).catch(function(e){
+        if (!wrap.isConnected) return;
+        var list = wrap.querySelector('#lobby-session-list');
+        if (list && !state.lobby.sessions.length) {
+          list.replaceChildren(emptyState('Lobby unavailable', friendlyMessage(e), [
+            h('button', { className:'btn', type:'button', text:'Retry', onClick: refresh })
+          ]));
+        }
+        schedule(5000);
+      });
+    }
+    schedule(0);
     return shell(wrap);
   }
 

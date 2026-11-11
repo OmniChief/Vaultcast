@@ -266,7 +266,7 @@ final class Quiz {
         $dir = STREAM_SHM . '/quiz-pulse'; if (!is_dir($dir)) @mkdir($dir, 0775, true);
         $f = self::pulseFile((string)$r['code']); $tmp = $f . '.' . getmypid();
         $data = ['v' => (int)$r['version'], 'status' => (string)$r['status'], 'ends_at' => (int)($r['ends_at'] ?? 0), 'reveal_at' => (int)($r['reveal_at'] ?? 0), 'intro_at' => (int)($r['intro_at'] ?? 0), 'scores_at' => (int)($r['scores_at'] ?? 0), 'auto' => !empty($r['settings']['auto'])];
-        if (@file_put_contents($tmp, json_encode($data)) !== false) @rename($tmp, $f);
+        if (@file_put_contents($tmp, json_encode($data)) !== false && @rename($tmp, $f)) NodeEvents::signal('quiz-' . strtolower((string)$r['code']));
     }
     /** True when a poll at version $v can be answered "same" from the pulse file alone. */
     private static function quiet(string $code, int $v): bool {
@@ -436,7 +436,7 @@ final class Quiz {
     }
     public static function state(array $user, string $code, array $q): array {
         $code = self::code($code);
-        if (self::quiet($code, (int)($q['v'] ?? 0))) return ['ok' => true, 'same' => true, 'version' => (int)$q['v'], 'now' => microtime(true)];
+        if (empty($q['events']) && self::quiet($code, (int)($q['v'] ?? 0))) return ['ok' => true, 'same' => true, 'version' => (int)$q['v'], 'now' => microtime(true)];
         $r = self::room($code);
         $host = self::isHost($r, $user, (string)($q['host_token'] ?? ''));
         $pid = self::playerFor($r, $user, (string)($q['player'] ?? ''), (string)($q['player_token'] ?? ''));
@@ -448,8 +448,20 @@ final class Quiz {
                 if ($host && $r['settings']['auto'] && $r['status'] === 'scores') return self::advance(array_merge($r, ['status' => 'next']));
                 return $r;
             });
-        } elseif ((int)($q['v'] ?? 0) === (int)$r['version']) return ['ok' => true, 'same' => true, 'version' => (int)$r['version'], 'now' => microtime(true)];
-        return self::view($r, $user, $host, $pid);
+        }
+        $view = (int)($q['v'] ?? 0) === (int)$r['version']
+            ? ['ok'=>true, 'same'=>true, 'version'=>(int)$r['version'], 'now'=>microtime(true)]
+            : self::view($r, $user, $host, $pid);
+        if (!empty($q['events']) && ($host || ($pid !== null && empty($r['players'][$pid]['kicked']) && empty($r['players'][$pid]['left'])))) {
+            $view['events'] = NodeEvents::issue('quiz-' . strtolower($code), true);
+            if ($r['status'] === 'question') $view['next_poll_at'] = (int)$r['ends_at'];
+            elseif ($host && !empty($r['settings']['auto'])) {
+                if ($r['status'] === 'reveal') $view['next_poll_at'] = (int)$r['reveal_at'] + self::REVEAL_SECONDS;
+                if ($r['status'] === 'intro') $view['next_poll_at'] = (int)$r['intro_at'] + 5;
+                if ($r['status'] === 'scores') $view['next_poll_at'] = (int)$r['scores_at'] + 10;
+            }
+        }
+        return $view;
     }
     /** 1-based place among players still in the room (standings are sorted by score); never false or 0. */
     private static function rankIn(array $players, string $pid): int {
