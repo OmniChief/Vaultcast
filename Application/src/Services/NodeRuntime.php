@@ -40,7 +40,8 @@ final class NodeRuntime
 
     public static function mediaReady(): bool
     {
-        return (self::health()['mediaRelay'] ?? false) === true;
+        $health = self::health();
+        return ($health['mediaRelay'] ?? false) === true && ($health['mediaApiRevision'] ?? 0) >= 2;
     }
 
     private static function health(): array

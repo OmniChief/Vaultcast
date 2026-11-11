@@ -18,6 +18,7 @@ const updateMarker = path.join(__dirname, '../data/runtime/maintenance.json');
 
 const app = express();
 let serveMedia;
+const mediaApiRevision = 2;
 function mediaHandler() {
   if (!serveMedia) {
     try { serveMedia = require('../src/Workers/media-relay'); }
@@ -108,6 +109,7 @@ app.get('/health', (_req, res) => {
     service: 'vaultcast-netplay',
     runtimeRevision,
     mediaRelay: Boolean(mediaHandler()),
+    mediaApiRevision,
     version: 'vaultcast-lockstep-4',
     rooms: Object.keys(rooms).length,
     roomIds: Object.keys(rooms),

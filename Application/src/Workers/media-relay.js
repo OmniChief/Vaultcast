@@ -8,24 +8,26 @@ const { isIP } = require('net');
 const { pipeline } = require('stream/promises');
 
 const ticketDirectory = path.join(__dirname, '../../data/runtime/node-media');
+const consumedTickets = new Set();
 let active = 0;
 let playlists = 0;
 
 async function takeTicket(token) {
   if (!/^[a-f0-9]{48}$/.test(token)) return null;
   const file = path.join(ticketDirectory, token + '.json');
-  const claimed = file + '.used';
+  if (consumedTickets.has(token)) return null;
+  let ticket;
   try {
-    await fs.rename(file, claimed);
+    ticket = JSON.parse(await fs.readFile(file, 'utf8'));
   } catch (error) {
     return null;
   }
-  try {
-    const ticket = JSON.parse(await fs.readFile(claimed, 'utf8'));
-    return ticket.expires >= Date.now() / 1000 ? ticket : null;
-  } finally {
-    await fs.unlink(claimed).catch(() => {});
-  }
+  if (consumedTickets.has(token) || ticket.expires < Date.now() / 1000) return null;
+  consumedTickets.add(token);
+  setTimeout(() => consumedTickets.delete(token), 16000).unref();
+  // On Windows the relay can read the ticket while PHP retains cleanup ownership.
+  fs.unlink(file).catch(() => {});
+  return ticket;
 }
 
 function providerResponse(ticket, url, method, signal) {
