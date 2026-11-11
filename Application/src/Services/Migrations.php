@@ -6,7 +6,7 @@
  */
 final class Migrations
 {
-    const VERSION = 21; // 21: resumable folder enumeration and safe reconciliation; 20: persistent deduplicated VOD library; 19: admin-owned shared provider catalogues; 18: incremental Stalker on-demand catalogue; 17: achievements and badges; 16: trailers and extras index; 15: media requests (and requests.create for existing custom roles); 14: unified inbox; 13: smart collections and their facts index; 12: age ratings and parental controls / kids profiles; 11: site-wide webcam registry (Ambient); 10: calendars, events, reminders and personal pictures (Misc); 9: leaderboard covering indexes, Drop anonymous origin column and MEDIUMTEXT notes; 8: play scores/points and drop storage; 2: library folder access pass for nginx (step 5); 3: re-run it, recording results; 4: media facts table; 5: arrival timestamps and indexed running times; 6: chat storage; 7: prepared browsing
+    const VERSION = 22; // 22: linked servers; 21: resumable folder enumeration and safe reconciliation; 20: persistent deduplicated VOD library; 19: admin-owned shared provider catalogues; 18: incremental Stalker on-demand catalogue; 17: achievements and badges; 16: trailers and extras index; 15: media requests (and requests.create for existing custom roles); 14: unified inbox; 13: smart collections and their facts index; 12: age ratings and parental controls / kids profiles; 11: site-wide webcam registry (Ambient); 10: calendars, events, reminders and personal pictures (Misc); 9: leaderboard covering indexes, Drop anonymous origin column and MEDIUMTEXT notes; 8: play scores/points and drop storage; 2: library folder access pass for nginx (step 5); 3: re-run it, recording results; 4: media facts table; 5: arrival timestamps and indexed running times; 6: chat storage; 7: prepared browsing
 
     public static function stampFile(): string
     {
@@ -129,8 +129,9 @@ final class Migrations
     {
         $log = [];
         foreach (explode(';', (string)file_get_contents(dirname(__DIR__) . '/schema.sql')) as $sql) {
-            if (preg_match('/CREATE TABLE IF NOT EXISTS vaultcast_(stalker_|chat_|browse_items|show_summaries|play_|drop_|cal_|pictures\b|webcams\b|content_ratings\b|parental\b|smart_|inbox|media_request|extras\b|achievement)/i',$sql)) $pdo->exec($sql);
+            if (preg_match('/CREATE TABLE IF NOT EXISTS vaultcast_(linked_|stalker_|chat_|browse_items|show_summaries|play_|drop_|cal_|pictures\b|webcams\b|content_ratings\b|parental\b|smart_|inbox|media_request|extras\b|achievement)/i',$sql)) $pdo->exec($sql);
         }
+        if (is_file(STREAM_DATA . '/runtime/migrations-v21.done')) return ['linked_servers' => true];
         self::stalkerSchema($pdo);
         if(!\Vaultcast\Repository::document('stalker-folder-repair-v1',false)){
             $pdo->beginTransaction();

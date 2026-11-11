@@ -69,7 +69,7 @@ final class Cors {
         if($explicit){
             // Bearer keys or existing stream/share tokens, never ambient browser cookies.
             $auth=(string)($server['HTTP_AUTHORIZATION']??$server['REDIRECT_HTTP_AUTHORIZATION']??'');
-            $tokenRead=in_array($method,['GET','HEAD'],true)&&(strpos($path,'/stream/')===0||strpos($path,'/live/')===0||strpos($path,'/drop/s/')===0);
+            $tokenRead=in_array($method,['GET','HEAD'],true)&&(strpos($path,'/stream/')===0||strpos($path,'/live/')===0||strpos($path,'/drop/s/')===0||preg_match('#^/linked-peer/[a-f0-9]{32}/media$#D',$path));
             if(!$tokenRead&&!preg_match('/^Bearer[ \t]+vc_[a-f0-9]{64}$/iD',trim($auth)))return ['status'=>401,'headers'=>$headers,'explicit'=>true];
         } elseif($write&&(($raw!==''&&!$same)||($server['HTTP_SEC_FETCH_SITE']??'')==='cross-site'))return ['status'=>403,'headers'=>[],'explicit'=>false];
         // Token-based media responses already support public cross-origin reads.

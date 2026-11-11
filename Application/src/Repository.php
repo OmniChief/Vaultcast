@@ -338,6 +338,7 @@ final class Repository
             \Chat::removeUser($id);
             $pdo->prepare('DELETE FROM vaultcast_sessions WHERE user_id=?')->execute([$id]);
             $pdo->prepare('DELETE FROM vaultcast_progress WHERE user_id=?')->execute([$id]);
+            $pdo->prepare('DELETE FROM vaultcast_linked_progress WHERE user_id=?')->execute([$id]);
             $pdo->prepare("DELETE FROM vaultcast_playback_tokens WHERE JSON_UNQUOTE(JSON_EXTRACT(payload,'$.user_id'))=?")->execute([$id]);
             $pdo->prepare('DELETE FROM vaultcast_documents WHERE name IN (?,?,?,?)')->execute(['home-hub:'.$id,'home-extra:'.$id,'game-saves:'.$id,'misc-prefs:'.$id]);
             $pdo->prepare('DELETE FROM vaultcast_documents WHERE name LIKE ?')->execute(['personal-list:'.$id.':%']);

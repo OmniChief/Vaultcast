@@ -983,6 +983,7 @@ function confirmDialog(message, opts){
     opts = opts || {};
     var method = String(opts.method || 'GET').toUpperCase();
     if (method !== 'GET') {
+      if (/^\/linked-servers\/[a-f0-9]{32}\/(?:play|progress)$/.test(path)) return apiRequest(path, opts);
       if (path === '/hub/ratings' || path === '/downloads/tick' || /^\/me\/api-keys(?:\/|$)/.test(path)) return apiRequest(path,opts);
       if (/^\/hub\/(?:game|rooms|shelf|review|friend|invite|dismiss|saves|lists|chat)(?:\/|$)/.test(path)) return apiRequest(path,opts);
       if (/^\/items\/[a-f0-9]+\/play$/.test(path) || path === '/admin/posters/audit' || path === '/live/iptv_preview') return apiRequest(path, opts);
@@ -4918,6 +4919,7 @@ try {
     if (r.view === 'requests') { state.view = 'requests'; state.requestsTab = r.requestsTab || 'discover'; return Promise.resolve(); }
     if (r.view === 'inbox') { state.view = 'inbox'; state.inboxPane = r.inboxPane || null; return Promise.resolve(); }
     if (r.view === 'library') { state.view = 'library'; return Promise.resolve(); }
+    if (r.view === 'linked-libraries') { state.view = 'linked-libraries'; return Promise.resolve(); }
     if (r.view === 'collection') { state.view = 'collection'; state.collectionId = r.collectionId; return Promise.resolve(); }
     if (r.view === 'search') { state.view = 'search'; state.searchQuery = r.searchQuery || ''; return Promise.resolve(); }
     state.view = 'home';
@@ -5163,6 +5165,7 @@ try {
         items.push({ label: s.label, active: (state.view === 'section' && state.section === s.id), go: function(){ navigate('section', s.id); } });
       });
       items.push({ label:'Collections', active: state.view === 'collections' || state.view === 'collection', go: function(){ navigate('collections'); } });
+      if (canBrowseLinkedServers()) items.push({ label:'Linked libraries', active:state.view === 'linked-libraries', go:function(){ navigate('linked-libraries'); } });
       if (canRequestMedia()) items.push({ label:'Requests', active: state.view === 'requests', go: function(){ openRequests('discover'); } });
     } else if (mode === 'live') {
       [['On now','now'],['Relay','relay'],['IPTV','iptv'],['Stalker','stalker'],['Xtream Codes','xtream'],['Radio','radio']].forEach(function(page){
@@ -9442,6 +9445,41 @@ try {
     });
   }
 
+  var linkedServersApp;
+  function canBrowseLinkedServers(){
+    var user = state.user;
+    var parental = user && user.parental;
+    return !!user && user.role !== 'guest' && userAreaAllowed('library') &&
+      !(parental && (parental.kid || parental.restricted || (parental.settings || {}).enabled));
+  }
+
+  function linkedServers(){
+    if (linkedServersApp) return Promise.resolve(linkedServersApp);
+    return loadModule('vc-linked-servers.js', 'VaultcastLinkedServers').then(function (create) {
+      if (!linkedServersApp) linkedServersApp = create({
+        h:h, api:api, modal:window.VaultcastHub.modal, base:BASE, copy:copyText, toast:toast,
+        isAdmin:function () { return state.user && state.user.role === 'admin'; },
+        openSettings:function () { openSettings('linked-servers'); },
+        stopPlayback:function () { closePlayer(); stopRadio(); }
+      });
+      return linkedServersApp;
+    });
+  }
+
+  function viewLinkedLibraries(){
+    var host = h('div', { className:'stack panel' }, [pendingContent()]);
+    if (!canBrowseLinkedServers()) {
+      host.replaceChildren(h('p', { text:'Linked libraries are unavailable for this account.' }));
+    } else {
+      linkedServers().then(function (links) {
+        if (host.isConnected) links.browse(host);
+      }).catch(function (error) {
+        host.replaceChildren(h('p', { className:'bad', text:error.message }));
+      });
+    }
+    return shell(h('div', {}, [h('div', { className:'hero' }, [h('h1', { text:'Linked libraries' })]), host]));
+  }
+
   function viewSearch(){
     var q = state.searchQuery || '';
     var res = state.searchResult || { catalogue:[], count:0, weak:true };
@@ -9450,7 +9488,7 @@ try {
       h('div', { className:'hero' }, [
         h('h1', { text: q ? ('Search: '+q) : 'Search' }),
         h('p', { className:'muted', text: state.searchBusy ? 'Searching…' : (
-          (res.count||0)+' catalogue hit'+(res.count===1?'':'s')
+          (res.count||0)+' local catalogue hit'+(res.count===1?'':'s')
           + (res.weak && canSearchRss() ? ' · Search download sources' : '')
         ) })
       ])
@@ -9459,7 +9497,7 @@ try {
       kids.push(pendingContent({ className:'muted', style:'padding:0 20px', }));
     } else if (!(res.catalogue||[]).length) {
       kids.push(emptyState(
-        q ? 'No catalogue matches' : 'Type a title to search',
+        q ? 'No local catalogue matches' : 'Type a title to search',
         q ? 'Try a different title or check your library filters.' : 'Press / then type. Catalogue results appear first.',
         (function(){
           var acts = [];
@@ -9541,6 +9579,13 @@ try {
         ]));
       }
     }
+    if (q && !state.searchBusy && canBrowseLinkedServers()) {
+      var linkedResults = h('section', { className:'row stack', 'aria-label':'Linked library results' });
+      kids.push(linkedResults);
+      linkedServers().then(function (links) {
+        if (linkedResults.isConnected) links.search(linkedResults, q);
+      }).catch(function () { /* Keep local results usable if optional assets are unavailable. */ });
+    }
     return shell(h('div', { id:'search-view' }, kids));
   }
 
@@ -9552,7 +9597,7 @@ try {
   function clearSettingsDraft(){if(settingsDraft)settingsDraft.fields.clear();var status=document.querySelector('.settings-draft-status');if(status)status.hidden=true;}
   function installSettingsDraftGuard(root){
     settingsDraft={root:root,fields:new Map()};var status=h('span',{className:'settings-draft-status',role:'status',text:'Unsaved changes',hidden:true});root.querySelector('.settings-hero').appendChild(status);
-    function eligible(el){return el&&/^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName)&&el.type!=='search'&&!el.disabled&&el.closest('.settings-main')&&!el.closest('.tvs-root,.convert-admin,.po-admin,.task-centre,.settings-overview-grid,.site-artwork-card');}
+    function eligible(el){return el&&/^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName)&&el.type!=='search'&&!el.disabled&&el.closest('.settings-main')&&!el.closest('.tvs-root,.convert-admin,.po-admin,.task-centre,.settings-overview-grid,.site-artwork-card,.linked-server-settings');}
     function remember(e){if(eligible(e.target)&&!settingsDraft.fields.has(e.target))settingsDraft.fields.set(e.target,settingsFieldValue(e.target));}
     root.addEventListener('focusin',remember);root.addEventListener('pointerdown',remember,true);
     function changed(){status.hidden=!settingsDraftChanged();}
@@ -9599,7 +9644,7 @@ try {
       {title:'Library & metadata',description:'Connect folders, organise titles and correct missing information.',admin:true,items:[{id:'sections',label:'Libraries & folders',section:'Sources',hint:'Media types, paths and enabled libraries'},{id:'scan',label:'Scan for media',section:'Sources',hint:'Discover new or removed files'},{id:'ingest',label:'Import inbox',section:'Sources',hint:'Review incoming downloads before importing'},{id:'media',label:'Media manager',section:'Organise',hint:'Search and edit library records'},{id:'collections',label:'Collections',section:'Organise',hint:'Film sets and series groups'},{id:'library',label:'Find & rename',section:'Organise',hint:'Match names and organise files'},{id:'matching',label:'Metadata matching',section:'Metadata',hint:'Fix titles, posters and descriptions'},{id:'reports',label:'User reports',section:'Metadata',hint:'Review incorrect labels reported by users'}]},
       {title:'Artwork & design',description:'Site branding, bundled posters and library artwork.',admin:true,items:[{id:'site-artwork',label:'Site & theme posters',hint:'Replace default artwork and create smaller WebP images'},{id:'posters',label:'Library artwork',hint:'Fetch missing movie, show, season and game images'},{id:'artwork-integrity',label:'Repair missing images',hint:'Find broken records and missing files'},{id:'poster-optimise',label:'Optimise library images',hint:'Generate full, grid and search WebP variants'}]},
       {title:'Live broadcasting',description:'Build channels, schedule programmes and manage public streams.',admin:true,items:[{id:'live-studio',label:'PseudoTV Studio',section:'Relay',hint:'Schedule programmes, filler and advertising'},{id:'live-channels',label:'Relay channels',section:'Relay',hint:'Create channels and manage rotations'},{id:'live-library',label:'Live media library',section:'Relay',hint:'Import programmes and prepare durations'},{id:'live-playlists',label:'Rotation playlists',section:'Relay',hint:'Reusable channel programme rotations'},{id:'live-schedule',label:'Rotation rules',section:'Relay',hint:'Legacy rotation scheduling; Studio manages weekly slots'},{id:'live-xtream',label:'Xtream Codes',section:'Sources',hint:'Provider accounts, live TV, movies and series'},{id:'live-stalker',label:'Stalker portals',section:'Sources',hint:'Provider connections, live channels, movies and series'},{id:'live-iptv',label:'IPTV & guide matching',section:'Sources',hint:'Feeds, channel mapping and EPG'},{id:'live-radio',label:'Radio stations',section:'Sources',hint:'Add stations or browse the public directory'},{id:'live-station',label:'Station & outputs',section:'Outputs',hint:'Streams, guide exports and station configuration'}]},
-      {title:'People & permissions',description:'Control who can access content and administrative tools.',admin:true,items:[{id:'users',label:'Accounts, roles & permissions',hint:'Create users and roles; assign individual access'}]},
+      {title:'People & permissions',description:'Control who can access content and administrative tools.',admin:true,items:[{id:'users',label:'Accounts, roles & permissions',hint:'Create users and roles; assign individual access'},{id:'linked-servers',label:'Linked servers',hint:'Share a library or connect another Vaultcast server by invite'}]},
       {title:'Playback & delivery',description:'Server delivery options and player dependencies.',admin:true,items:[{id:'directplay',label:'DirectPlay Settings',hint:'Playback policy, transcoding, threads and reusable copies'},{id:'trailers',label:'Trailers & extras',hint:'Online trailers, the muted hero trailer and extras thumbnails'},{id:'streaming',label:'Delivery & subtitles',hint:'Seeking, playback tokens and subtitles'},{id:'players',label:'Player assets',hint:'Local or CDN player files and emulator cores'},{id:'video-optimise',label:'Video conversion',hint:'Convert files, review requests and manage encoding jobs'}]},
       {title:'Downloads',description:'Configure providers and review download activity.',admin:true,items:[{id:'acquisition',label:'Providers & integrations',hint:'RSS search, download clients and API connections'},{id:'queue',label:'Download queue',hint:'Active downloads, imports and errors'}]},
       {title:'Application & server',description:'Site defaults, updates, performance and troubleshooting.',admin:true,items:[{id:'general',label:'Site defaults & access',hint:'Branding, guest access, public URL and installable app'},{id:'features',label:'Enabled features',hint:'Turn optional services on or off'},{id:'achievements',label:'Achievements',hint:'Turn achievements on or off and count past activity'},{id:'ambient',label:'Ambient & webcams',hint:'Webcams from boards and which ones Ambient offers'},{id:'updates',label:'Updates & branches',hint:'Manually check, install or switch update channels'},{id:'maintenance',label:'Task centre',hint:'Preparation jobs, progress, cancellation and history'},{id:'optimise-system',label:'Storage & caches',hint:'Generated files and safe cache tools'},{id:'diagnostics',label:'Diagnostics',hint:'Run selected checks and inspect failures'},{id:'system',label:'Server tools',hint:'Resource usage and service controls'},{id:'advanced',label:'Advanced & reset',hint:'PHP CLI, ffmpeg, ffprobe, tool paths, raw configuration and database reset'}]}
@@ -9679,6 +9724,7 @@ try {
             h('button', { className: 'btn primary', text: 'Save preferences', onClick: savePrefs }),
             h('button', {className: 'btn', text: 'Sign out', onClick: function(){ api('/logout', {method:'POST'}).then(function(result){
               if (!result.ok) return toast(result.error || 'Could not sign out', {kind:'bad'});
+              if (linkedServersApp) linkedServersApp.close();
               closePlayer(); stopRadio(); state.user = null; state._guest = false; state.home = null;
               return api('/me').then(function(me){
                 state._guestBrowsing = !!me.guest_browsing; state._guest = state._guestBrowsing;
@@ -9694,6 +9740,14 @@ try {
     } else if (sec === 'cloud-saves') {
       var savesHost=h('div');bodyKids=[h('h2',{text:'Cloud saves'}),savesHost];
       setTimeout(function(){window.VaultcastHomeExtras.savesPanel(savesHost);},0);
+    } else if (sec === 'linked-servers' && isAdmin) {
+      var linkedSettings = h('div', { className:'linked-server-settings stack' }, [pendingContent()]);
+      bodyKids = [h('h2', { text:'Linked servers' }), linkedSettings];
+      linkedServers().then(function (links) {
+        if (linkedSettings.isConnected) links.settings(linkedSettings);
+      }).catch(function (error) {
+        linkedSettings.replaceChildren(h('p', { className:'bad', text:error.message }));
+      });
     } else if (sec === 'updates' && isAdmin) {
       var updHost = h('div', { className:'stack updates-panel' });
       bodyKids = [
@@ -17133,6 +17187,7 @@ function viewCollectionDetail(){
     }
     if (state.view === 'home') root.appendChild(window.VaultcastHub.view());
     else if (state.view === 'library') root.appendChild(viewHome());
+    else if (state.view === 'linked-libraries') root.appendChild(viewLinkedLibraries());
     else if (state.view === 'section') root.appendChild(viewSection());
     else if (state.view === 'show') root.appendChild(viewShow());
     else if (state.view === 'movie' || state.view === 'game') root.appendChild(viewMovie());

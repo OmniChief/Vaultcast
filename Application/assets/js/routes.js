@@ -12,6 +12,7 @@
     st = st || {};
     var v = st.view;
     if (v === 'library') return 'library';
+    if (v === 'linked-libraries') return 'linked-libraries';
     if (v === 'home') return st.cinemaId ? 'home/cinema/' + enc(st.cinemaId) : (st.hubTab && st.hubTab !== 'overview' ? 'home/' + enc(st.hubTab) : '');
     if (v === 'movie' && (st.movieSlug || st.movieId)) return 'movies/' + enc(st.movieSlug || st.movieId);
     if (v === 'show' && (st.showSlug || st.showKey)) {
@@ -74,6 +75,7 @@
       return {view:'home',hubTab:tab,cinemaId:tab === 'cinema' && /^[a-f0-9]{16}$/.test(parts[2] || '') ? parts[2] : null};
     }
     if (head === 'library' && !parts[1]) return {view:'library'};
+    if (head === 'linked-libraries' && !parts[1]) return {view:'linked-libraries'};
     if (head === 'movies' && parts[1]) return { view:'movie', slug:parts[1], resolve:true };
     if (head === 'movies') return { view:'home' };
     if (head === 'tvshows' && parts[1]) return { view:'show', slug:parts[1], resolve:true };

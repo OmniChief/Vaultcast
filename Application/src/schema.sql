@@ -57,6 +57,50 @@ CREATE TABLE IF NOT EXISTS vaultcast_items (
     INDEX generation_index (generation)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS vaultcast_linked_shares (
+    id CHAR(32) CHARACTER SET ascii NOT NULL PRIMARY KEY,
+    label VARCHAR(120) NOT NULL,
+    section_id VARCHAR(120) NOT NULL,
+    invite_hash CHAR(64) CHARACTER SET ascii NOT NULL,
+    invite_until BIGINT NOT NULL,
+    allow_downloads TINYINT NOT NULL DEFAULT 0,
+    peer_hash CHAR(64) CHARACTER SET ascii DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS vaultcast_linked_servers (
+    id CHAR(32) CHARACTER SET ascii NOT NULL PRIMARY KEY,
+    share_id CHAR(32) CHARACTER SET ascii NOT NULL,
+    base_url VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    label VARCHAR(120) NOT NULL,
+    peer_key CHAR(64) CHARACTER SET ascii NOT NULL,
+    connected TINYINT NOT NULL DEFAULT 0,
+    UNIQUE KEY linked_remote (base_url, share_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS vaultcast_linked_progress (
+    user_id VARCHAR(64) NOT NULL,
+    link_id CHAR(32) CHARACTER SET ascii NOT NULL,
+    item_id VARCHAR(64) CHARACTER SET ascii NOT NULL,
+    position DOUBLE NOT NULL,
+    PRIMARY KEY (user_id, link_id, item_id),
+    INDEX linked_progress_link (link_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS vaultcast_linked_downloads (
+    id CHAR(24) CHARACTER SET ascii NOT NULL PRIMARY KEY,
+    link_id CHAR(32) CHARACTER SET ascii NOT NULL,
+    item_id VARCHAR(64) CHARACTER SET ascii NOT NULL,
+    title VARCHAR(240) NOT NULL,
+    storage_dir TEXT NOT NULL,
+    extension VARCHAR(4) CHARACTER SET ascii NOT NULL,
+    file_key CHAR(64) CHARACTER SET ascii NOT NULL,
+    bytes BIGINT UNSIGNED NOT NULL,
+    state VARCHAR(16) CHARACTER SET ascii NOT NULL,
+    error VARCHAR(240) NOT NULL DEFAULT '',
+    updated_at BIGINT NOT NULL,
+    UNIQUE KEY linked_copy (link_id,item_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS vaultcast_progress (
     user_id VARCHAR(64) NOT NULL,
     item_id VARCHAR(64) NOT NULL,
