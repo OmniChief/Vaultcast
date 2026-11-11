@@ -168,15 +168,41 @@ final class Quiz {
         }
         return null;
     }
-    /** After the response is sent (PHP-FPM), extract the frames a quiz will need so questions never wait on ffmpeg. */
+    /** Prepare quiz frames away from PHP-FPM when the local relay is available. */
     private static function prewarm(array $items): void {
-        $items = array_values(array_unique(array_filter($items))); if (!$items || !function_exists('fastcgi_finish_request')) return;
-        register_shutdown_function(function () use ($items) {
-            @fastcgi_finish_request(); ignore_user_abort(true); if (function_exists('set_time_limit')) @set_time_limit(150);
-            $until = time() + 120;
-            foreach (array_slice($items, 0, 40) as $id) { if (time() > $until) break; try { self::frame((string)$id, true); } catch (Throwable $e) {} }
+        $items = array_slice(array_values(array_unique(array_filter($items))), 0, 40);
+        if (!$items) return;
+        if (PHP_OS_FAMILY === 'Linux' && NodeRuntime::quizReady()) {
+            try {
+                $php = Process::phpCli();
+                $token = $php ? NodeMedia::writeTicket(['purpose'=>'quiz-warmup','php'=>$php,
+                    'ini'=>php_ini_loaded_file() ?: '', 'items'=>$items]) : null;
+                if ($token !== null) {
+                    $context = stream_context_create(['http'=>['timeout'=>1, 'follow_location'=>0]]);
+                    $ack = @file_get_contents(NodeRuntime::loopback('/runtime/quiz-warmup/' . $token), false, $context, 0, 64);
+                    if ($ack === 'queued') return;
+                }
+            } catch (Throwable $ignored) {}
+        }
+        if (!function_exists('fastcgi_finish_request')) return;
+        register_shutdown_function(static function () use ($items) {
+            @fastcgi_finish_request();
+            ignore_user_abort(true);
+            self::warmFrames($items);
         });
     }
+
+    public static function warmFrames(array $items): array {
+        if (function_exists('set_time_limit')) @set_time_limit(150);
+        $until = time() + 120;
+        foreach (array_slice($items, 0, 40) as $id) {
+            if (time() > $until) break;
+            if (!is_string($id) || $id === '') continue;
+            try { self::frame($id, true); } catch (Throwable $ignored) {}
+        }
+        return ['ok'=>true];
+    }
+
     private static function sendImage(?string $file): void {
         if (!$file) { http_response_code(404); exit; }
         $type = @mime_content_type($file) ?: 'image/jpeg';

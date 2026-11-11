@@ -291,31 +291,51 @@ function iptv_playlist_url($kind, $key = '') {
     throw new InvalidArgumentException('Unknown playlist kind');
 }
 
+function iptv_refresh_m3u_cache($url, $path, $maxAge, $forceRefresh) {
+    if (!$forceRefresh && is_file($path) && time() - filemtime($path) < $maxAge) return;
+    $lock = fopen($path . '.lock', 'c');
+    if (!$lock) throw new RuntimeException('Could not lock IPTV playlist cache.');
+    $temporary = null;
+    try {
+        if (!flock($lock, LOCK_EX)) throw new RuntimeException('Could not lock IPTV playlist cache.');
+        clearstatcache(true, $path);
+        if (!$forceRefresh && is_file($path) && time() - filemtime($path) < $maxAge) return;
+        $temporary = $path . '.' . bin2hex(random_bytes(8)) . '.tmp';
+        $downloaded = false;
+        try { $downloaded = NodeDownloads::playlist($url, $temporary); } catch (RuntimeException $ignored) {}
+        if (!$downloaded && function_exists('curl_init')) {
+            $file = fopen($temporary, 'wb');
+            if (!$file) throw new RuntimeException('Could not write IPTV playlist cache.');
+            $curl = curl_init($url);
+            try {
+                curl_setopt_array($curl, [CURLOPT_FILE=>$file, CURLOPT_FOLLOWLOCATION=>true, CURLOPT_CONNECTTIMEOUT=>8,
+                    CURLOPT_TIMEOUT=>60, CURLOPT_USERAGENT=>'Vaultcast/' . STREAM_VERSION . ' (+iptv)',
+                    CURLOPT_SSL_VERIFYPEER=>true, CURLOPT_HTTPHEADER=>['Accept: */*']]);
+                $downloaded = curl_exec($curl) !== false && (int)curl_getinfo($curl, CURLINFO_HTTP_CODE) < 400;
+            } finally { curl_close($curl); fclose($file); }
+        } elseif (!$downloaded) {
+            $body = iptv_http_get($url, 60);
+            $downloaded = file_put_contents($temporary, $body) === strlen($body);
+        }
+        if (!$downloaded || !rename($temporary, $path)) throw new RuntimeException('IPTV playlist refresh failed.');
+        clearstatcache(true, $path);
+    } finally {
+        if ($temporary !== null && is_file($temporary)) @unlink($temporary);
+        fclose($lock);
+    }
+}
+
 function iptv_fetch_feed_body($feed, $maxAge = 86400, $forceRefresh = false) {
     $path = iptv_cache_path_feed($feed['id']);
-    if (!$forceRefresh && is_file($path) && (time() - filemtime($path)) < $maxAge) {
-        return file_get_contents($path);
-    }
-    $body = iptv_http_get($feed['url'], 60);
-    file_put_contents($path, $body);
-    return $body;
+    iptv_refresh_m3u_cache($feed['url'], $path, $maxAge, $forceRefresh);
+    return file_get_contents($path);
 }
 
 function iptv_fetch_playlist($kind, $key = '', $maxAge = 86400, $forceRefresh = false) {
     $kind = strtolower(trim((string)$kind));
-    if ($kind === 'feed') {
-        $state = iptv_load();
-        $f = iptv_feed_by_id($state, $key);
-        if (!$f) throw new InvalidArgumentException('Unknown feed: ' . $key);
-        return iptv_fetch_feed_body($f, $maxAge, $forceRefresh);
-    }
     $path = iptv_cache_path($kind, $key);
-    if (!$forceRefresh && is_file($path) && (time() - filemtime($path)) < $maxAge) {
-        return file_get_contents($path);
-    }
-    $body = iptv_http_get(iptv_playlist_url($kind, $key), 60);
-    file_put_contents($path, $body);
-    return $body;
+    iptv_refresh_m3u_cache(iptv_playlist_url($kind, $key), $path, $maxAge, $forceRefresh);
+    return file_get_contents($path);
 }
 
 function iptv_cache_meta_feed($feedId) {
@@ -360,7 +380,28 @@ function iptv_attr($line, $name) {
 }
 
 function iptv_parse_m3u($text) {
-    $lines = preg_split("/\n|\n|\r/", $text);
+    return iptv_parse_m3u_lines(preg_split("/\r\n|\n|\r/", $text));
+}
+
+function iptv_m3u_file_lines($path) {
+    $file = fopen($path, 'rb');
+    if (!$file) throw new RuntimeException('Could not open IPTV playlist cache.');
+    $tail = '';
+    try {
+        while (!feof($file)) {
+            $chunk = fread($file, 65536);
+            if ($chunk === false) throw new RuntimeException('Could not read IPTV playlist cache.');
+            $lines = preg_split('/[\r\n]/', $tail . $chunk);
+            $tail = array_pop($lines);
+            foreach ($lines as $line) yield $line;
+        }
+        if ($tail !== '') yield $tail;
+    } finally {
+        fclose($file);
+    }
+}
+
+function iptv_parse_m3u_lines(iterable $lines) {
     $out = array();
     $epgUrls = array();
     $pending = null;
@@ -450,15 +491,15 @@ function iptv_feed_index($feed, $forceRefresh = false) {
         unset($index['commands']);
         return $index;
     }
-    $body = iptv_fetch_feed_body($feed, 86400, $forceRefresh);
     $raw = iptv_cache_path_feed($feed['id']);
-    $sig = is_file($raw) ? (filemtime($raw) . ':' . filesize($raw)) : sha1($body);
+    iptv_refresh_m3u_cache($feed['url'], $raw, 86400, $forceRefresh);
+    $sig = filemtime($raw) . ':' . filesize($raw);
     $idx = $raw . '.index.json';
     if (!$forceRefresh && is_file($idx)) {
         $j = json_decode((string)file_get_contents($idx), true);
         if (is_array($j) && ($j['sig'] ?? '') === $sig && isset($j['channels'])) return $j;
     }
-    $parsed = iptv_parse_m3u($body);
+    $parsed = iptv_parse_m3u_lines(iptv_m3u_file_lines($raw));
     foreach ($parsed['channels'] as &$ch) {
         $ch['country'] = iptv_channel_country($ch);
         $ch['categories'] = iptv_channel_categories($ch['group']);
@@ -526,8 +567,10 @@ function iptv_browse($opts) {
     // Legacy country/category browse (iptv-org CDN subsets)
     if ($kind === 'country' || $kind === 'category' || $kind === 'language') {
         if ($key === '') $key = ($kind === 'category') ? 'news' : 'uk';
-        $parsed = iptv_parse_m3u(iptv_fetch_playlist($kind, $key, 86400, $forceRefresh));
         $source = iptv_playlist_url($kind, $key);
+        $raw = iptv_cache_path($kind, $key);
+        iptv_refresh_m3u_cache($source, $raw, 86400, $forceRefresh);
+        $parsed = iptv_parse_m3u_lines(iptv_m3u_file_lines($raw));
         $cache = iptv_cache_meta($kind, $key);
         $feedId = $kind;
         $feedLabel = $kind . '/' . $key;

@@ -40,6 +40,12 @@ app.get('/runtime/events/:token', (req, res) => {
   try { return require('../src/Workers/events')(req, res); }
   catch (error) { return res.sendStatus(503); }
 });
+let quizWarmup;
+if (process.platform === 'linux') {
+  try { quizWarmup = require('../src/Workers/quiz-warmup'); }
+  catch (error) { console.warn('Quiz warmup worker is unavailable'); }
+}
+app.get('/runtime/quiz-warmup/:token', (req, res) => quizWarmup ? quizWarmup(req, res) : res.sendStatus(503));
 let transcodeRunner;
 function playbackWorker() {
   if (process.platform !== 'linux' || !fs.promises.statfs) return null;
@@ -152,6 +158,8 @@ app.get('/health', (_req, res) => {
     mediaRelay: Boolean(mediaHandler()),
     mediaApiRevision,
     eventsRevision: 1,
+    quizRevision: quizWarmup ? 1 : 0,
+    playlistRevision: fileWorker() ? 1 : 0,
     transcodeRevision: playbackWorker() ? 1 : 0,
     downloadRevision: fileWorker() ? 2 : 0,
     videoUploadRevision: videoUpload ? 1 : 0,
@@ -437,7 +445,7 @@ setInterval(async () => {
   try {
     const source = await fs.promises.readFile(__filename);
     const installed = createHash('sha256').update(source).digest('hex');
-    if (installed !== runtimeRevision && !Object.keys(rooms).length && !transcodeRunner?.active() && !downloadRunner?.active() && !videoUpload?.active() && !fs.existsSync(updateMarker)) {
+    if (installed !== runtimeRevision && !Object.keys(rooms).length && !transcodeRunner?.active() && !downloadRunner?.active() && !videoUpload?.active() && !quizWarmup?.active() && !fs.existsSync(updateMarker)) {
       process.exit(75);
     }
   } catch (error) {

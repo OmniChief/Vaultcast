@@ -9,9 +9,10 @@ const data = resolve(__dirname, '../../data');
 let active = 0;
 
 async function download(ticket, signal) {
-  const asset = ticket.type === 'player';
+  const playlist = ticket.type === 'playlist';
+  const asset = playlist || ticket.type === 'player';
   if (!asset && ticket.type !== 'stalker') throw new Error('Unknown download type');
-  const allowed = join(data, asset ? 'players' : 'stalker-offline') + sep;
+  const allowed = join(data, playlist ? 'live/iptv_cache' : (asset ? 'players' : 'stalker-offline')) + sep;
   const target = resolve(ticket.target);
   if (!target.startsWith(allowed)) throw new Error('Invalid download path');
   const url = new URL(ticket.url);
@@ -126,7 +127,7 @@ module.exports = async function serveDownload(request, response) {
   response.flushHeaders();
   const controller = new AbortController();
   response.once('close', () => controller.abort());
-  const timeout = ticket.type === 'player' ? setTimeout(() => controller.abort(), 120000) : null;
+  const timeout = ['player', 'playlist'].includes(ticket.type) ? setTimeout(() => controller.abort(), ticket.type === 'playlist' ? 60000 : 120000) : null;
   const heartbeat = setInterval(() => response.write(' '), 15000);
   try {
     const ok = await download(ticket, controller.signal);

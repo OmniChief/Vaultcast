@@ -38,6 +38,16 @@ final class NodeRuntime
         }
     }
 
+    public static function playlistReady(): bool
+    {
+        return (self::health()['playlistRevision'] ?? 0) === 1;
+    }
+
+    public static function quizReady(): bool
+    {
+        return (self::health()['quizRevision'] ?? 0) === 1;
+    }
+
     public static function aiUploadReady(): bool
     {
         return (self::health()['videoUploadRevision'] ?? 0) === 1;

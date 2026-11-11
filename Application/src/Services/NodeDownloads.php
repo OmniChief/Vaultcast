@@ -3,6 +3,18 @@ declare(strict_types=1);
 
 final class NodeDownloads
 {
+    public static function playlist(string $url, string $target): bool
+    {
+        if (!NodeRuntime::playlistReady()) return false;
+        $parts = parse_url($url);
+        if (!$parts || !in_array($parts['scheme'] ?? '', ['http','https'], true)
+            || empty($parts['host']) || isset($parts['user']) || isset($parts['pass'])) return false;
+        $host = strtolower($parts['host']);
+        $ips = WebFetch::resolve($host);
+        return self::transfer($url, $host, $ips, ['purpose'=>'download','type'=>'playlist',
+            'target'=>$target,'limit'=>128*1024*1024,'ua'=>'Vaultcast/' . STREAM_VERSION . ' (+iptv)']);
+    }
+
     public static function playerAsset(string $url, string $target): bool
     {
         $host = strtolower((string)parse_url($url, PHP_URL_HOST));
