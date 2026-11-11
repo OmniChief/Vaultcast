@@ -69,7 +69,7 @@ final class NodeMedia
     }
 
     /** Select cookies from cURL's Netscape jar for the one authorised upstream request. */
-    private static function cookies(string $jar, string $host, string $path, bool $secure): ?string
+    public static function cookies(string $jar, string $host, string $path, bool $secure): ?string
     {
         if (!is_file($jar)) return '';
         $size = @filesize($jar);

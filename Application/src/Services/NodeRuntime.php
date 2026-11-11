@@ -38,6 +38,11 @@ final class NodeRuntime
         }
     }
 
+    public static function downloadReady(): bool
+    {
+        return (self::health()['downloadRevision'] ?? 0) === 1;
+    }
+
     public static function transcodeReady(): bool
     {
         return (self::health()['transcodeRevision'] ?? 0) === 1;

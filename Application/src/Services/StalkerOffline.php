@@ -207,7 +207,10 @@ final class StalkerOffline {
         if(is_file($signatureFile)&&file_get_contents($signatureFile)!==$encoded)throw new RuntimeException('Provider changed this video while it was downloading. Existing partial files were preserved.');
         file_put_contents($signatureFile,$encoded);
         if($jobId!==''){$job=self::job($jobId);$job['is_hls']=true;$job['segments_total']=count($segments);$job['segments_done']=0;$job['updated']=date('c');self::save($job);}
-        foreach($segments as $number=>$segment){self::fetch($segment,$dir.'/segment-'.$number,$feed,512*1024*1024);if($jobId!==''){$job=self::job($jobId);$job['segments_done']=$number+1;$job['updated']=date('c');self::save($job);}}
+        foreach($segments as $number=>$segment){
+            $target = $dir . '/segment-' . $number;
+            if (!is_file($target) && !NodeDownloads::stalkerSegment($segment, $target, $feed)) self::fetch($segment, $target, $feed, 512*1024*1024);
+            if($jobId!==''){$job=self::job($jobId);$job['segments_done']=$number+1;$job['updated']=date('c');self::save($job);}}
         $local=$dir.'/offline.m3u8';file_put_contents($local,implode("\n",$out)."\n");return $local;
     }
     public static function run(string $id): array {

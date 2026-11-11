@@ -97,21 +97,28 @@ final class PlayerAssets {
                 $target = $dir . '/' . $entry['path'];
                 if (!is_dir(dirname($target)) && !mkdir(dirname($target), 0770, true)) throw new RuntimeException('Cannot create player directory.');
                 $temporary = $target . '.part';
-                $stream = fopen($temporary, 'wb');
-                if (!$stream) throw new RuntimeException('Cannot write player file.');
-                $curl = curl_init($entry['url']);
-                $written = 0;
-                curl_setopt_array($curl, [CURLOPT_CONNECTTIMEOUT=>10, CURLOPT_TIMEOUT=>120,
-                    CURLOPT_FOLLOWLOCATION=>false, CURLOPT_PROTOCOLS=>CURLPROTO_HTTPS,
-                    CURLOPT_WRITEFUNCTION=>function ($handle, string $chunk) use ($stream, &$written) {
-                        $written += strlen($chunk);
-                        if ($written > 128 * 1024 * 1024) return 0;
-                        return fwrite($stream, $chunk);
-                    }]);
-                $ok = curl_exec($curl);
-                $http = curl_getinfo($curl, CURLINFO_HTTP_CODE);
-                curl_close($curl);
-                fclose($stream);
+                $node = NodeDownloads::playerAsset($entry['url'], $temporary);
+                if ($node) {
+                    $written = (int)filesize($temporary);
+                    $ok = true;
+                    $http = 200;
+                } else {
+                    $stream = fopen($temporary, 'wb');
+                    if (!$stream) throw new RuntimeException('Cannot write player file.');
+                    $curl = curl_init($entry['url']);
+                    $written = 0;
+                    curl_setopt_array($curl, [CURLOPT_CONNECTTIMEOUT=>10, CURLOPT_TIMEOUT=>120,
+                        CURLOPT_FOLLOWLOCATION=>false, CURLOPT_PROTOCOLS=>CURLPROTO_HTTPS,
+                        CURLOPT_WRITEFUNCTION=>function ($handle, string $chunk) use ($stream, &$written) {
+                            $written += strlen($chunk);
+                            if ($written > 128 * 1024 * 1024) return 0;
+                            return fwrite($stream, $chunk);
+                        }]);
+                    $ok = curl_exec($curl);
+                    $http = curl_getinfo($curl, CURLINFO_HTTP_CODE);
+                    curl_close($curl);
+                    fclose($stream);
+                }
                 $prefix = (string)file_get_contents($temporary, false, null, 0, 256);
                 if (!$ok || $http !== 200 || !$written || ($entry['size'] > 0 && $written !== $entry['size']) || preg_match('/^\s*<(?:!doctype html|html)/i', $prefix)) {
                     @unlink($temporary);

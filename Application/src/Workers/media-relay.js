@@ -218,3 +218,5 @@ module.exports = serveMedia;
 module.exports.metadata = serveMetadata;
 
 module.exports.takeTicket = takeTicket;
+
+module.exports.providerResponse = providerResponse;
