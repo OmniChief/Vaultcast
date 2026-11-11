@@ -1071,17 +1071,30 @@
    * control: { paused, cancelled, abort() } — cancelling deletes the partial upload on the server.
    * onProgress({ sent, id, done, item, rate, eta })
    */
+  var dropSocketLibrary;
+  function dropSocket(){
+    if (!dropSocketLibrary) dropSocketLibrary = new Promise(function(resolve, reject){
+      var script = document.createElement('script');
+      script.src = '/netplay/socket.io/socket.io.js';
+      var deadline = setTimeout(function(){ reject(new Error('Upload relay unavailable')); }, 4000);
+      script.onload = function(){ clearTimeout(deadline); if (typeof window.io === 'function') resolve(window.io); else reject(new Error('Upload relay unavailable')); };
+      script.onerror = function(error){ clearTimeout(deadline); reject(error); };
+      document.head.appendChild(script);
+    });
+    return dropSocketLibrary;
+  }
   function uploadFile(file, opts, onProgress, control){
     control = control || {};
     var key = fileKey(file), saved = store(key), id = null, chunk = 8388608, started = Date.now(), base = 0, xhr = null;
-    control.abort = function(){ control.cancelled = true; if (xhr) xhr.abort(); if (control.resume) control.resume(); };
+    var socket = null, socketEnabled = true;
+    control.abort = function(){ control.cancelled = true; if (xhr) xhr.abort(); if (socket) socket.disconnect(); if (control.resume) control.resume(); };
     function begin(){
       if (saved && saved.id) return api('/drop/upload/' + saved.id).then(function(j){ if (j && j.ok && !j.complete && !j.purged && j.bytes === file.size) { id = saved.id; chunk = j.chunk || chunk; return j.received; } store(key, null); return fresh(); });
       return fresh();
     }
     function fresh(){ return call('/drop/upload', { method:'POST', body:Object.assign({ name:file.name, size:file.size, mime:file.type || 'application/octet-stream' }, opts) }).then(function(j){ id = j.id; chunk = j.chunk || chunk; store(key, { id:id, at:Date.now() }); return 0; }); }
     function report(sent, extra){ var secs = (Date.now() - started) / 1000, rate = secs > 0.5 ? (sent - base) / secs : 0; onProgress(Object.assign({ sent:sent, id:id, rate:rate, eta:rate > 0 ? (file.size - sent) / rate : null }, extra || {})); }
-    function piece(offset){
+    function httpPiece(offset){
       return new Promise(function(resolve, reject){
         var end = Math.min(file.size, offset + chunk), x = new XMLHttpRequest(); xhr = x;
         x.open('POST', A.API + '/drop/upload/' + id + '?offset=' + offset); x.withCredentials = true; x.setRequestHeader('Content-Type', 'application/octet-stream');
@@ -1090,6 +1103,40 @@
         x.onerror = function(){ reject({ error:'Connection lost', retry:true }); };
         x.onabort = function(){ reject({ error:'Cancelled', cancelled:true }); };
         x.send(file.slice(offset, end));
+      });
+    }
+    function openSocket(){
+      if (!socketEnabled || control.cancelled) return Promise.resolve(null);
+      if (socket && socket.connected) return Promise.resolve(socket);
+      return api('/drop/upload/' + id + '/node', {method:'POST', body:{}}).then(function(j){
+        if (!j || !/^[a-f0-9]{48}$/.test(j.ticket || '')) throw new Error('Upload relay unavailable');
+        return dropSocket().then(function(connect){
+          return new Promise(function(resolve, reject){
+            if (control.cancelled) return reject(new Error('Cancelled'));
+            socket = connect('/drop-upload', {path:'/netplay/socket.io', transports:['websocket'],
+              auth:{ticket:j.ticket}, reconnection:false, timeout:3500});
+            var deadline = setTimeout(function(){ reject(new Error('Upload relay unavailable')); }, 4000);
+            socket.once('connect', function(){ clearTimeout(deadline); resolve(socket); });
+            socket.once('connect_error', function(error){ clearTimeout(deadline); reject(error); });
+          });
+        });
+      }).catch(function(){ socketEnabled = false; if (socket) socket.disconnect(); socket = null; return null; });
+    }
+    function piece(offset){
+      return openSocket().then(function(relay){
+        if (control.cancelled) throw {error:'Cancelled',cancelled:true};
+        if (!relay) return httpPiece(offset);
+        return new Promise(function(resolve, reject){
+          var block = file.slice(offset, Math.min(file.size, offset + chunk, offset + 4194304));
+          relay.timeout(30000).emit('chunk', offset, block, function(error, result){
+            if (error || !result || (!result.ok && result.status !== 409)) {
+              socketEnabled = false; relay.disconnect(); socket = null;
+              reject({error:'Upload relay interrupted',retry:true});
+              return;
+            }
+            resolve(result);
+          });
+        });
       });
     }
     function waitIfPaused(){ return control.paused ? new Promise(function(res){ control.resume = function(){ control.resume = null; started = Date.now(); res(); }; }) : Promise.resolve(); }
@@ -1102,7 +1149,11 @@
           if (control.cancelled) return reject({ error:'Cancelled', cancelled:true });
           waitIfPaused().then(function(){
             if (control.cancelled) return reject({ error:'Cancelled', cancelled:true });
-            if (offset >= file.size) { store(key, null); return resolve({}); }
+            if (offset >= file.size) {
+              return call('/drop/upload/' + id + '/finish', {method:'POST',body:{}}).then(function(j){
+                store(key, null); report(file.size, {done:true,item:j.item}); resolve(j);
+              }).catch(reject);
+            }
             return piece(offset).then(function(j){
               if (j.status === 413) return reject({ error:'The web server refused a ' + (chunk / 1048576).toFixed(1) + ' MB upload piece (HTTP 413). Ask the administrator to raise the web server body limit (client_max_body_size / LimitRequestBody) to at least ' + Math.ceil(chunk / 1048576 + 1) + ' MB.', fatal:true });
               if (j.status === 409 && j.received != null) { offset = j.received; return step(); }
@@ -1123,7 +1174,7 @@
     return begin().then(run).catch(function(e){
       if (e && e.cancelled && id) { store(key, null); api('/drop/items/' + id, { method:'DELETE' }); }
       throw e;
-    });
+    }).finally(function(){ if (socket) socket.disconnect(); });
   }
   /** Run uploads two at a time so a batch of files does not saturate the link or the server. */
   var upQueue = [], upRunning = 0;

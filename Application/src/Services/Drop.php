@@ -231,6 +231,36 @@ final class Drop {
         if ($have !== (int)$r['received'] && !(int)$r['complete']) self::q('UPDATE vaultcast_drop_files SET received=? WHERE id=?', [$have, $id]);
         return ['ok' => true, 'id' => $id, 'received' => $have, 'bytes' => (int)$r['bytes'], 'complete' => (bool)$r['complete'], 'purged' => (bool)$r['purged'], 'chunk' => self::limits($user)['chunk']];
     }
+    public static function nodeUpload(array $user, string $id): array {
+        self::requireUpload($user);
+        if (self::isAnon($user) || rtrim(\Vaultcast\Database::basePath(), '/') !== '' || !NodeRuntime::dropUploadReady()) return ['ok'=>true];
+        $r = self::own($user, $id);
+        if ($r['kind'] !== 'file' || (int)$r['complete'] || (int)$r['purged'] || (int)$r['created_at'] < time() - 86400) return ['ok'=>true];
+        return ['ok'=>true,'ticket'=>NodeMedia::writeTicket(['purpose'=>'drop-upload','id'=>$id,
+            'bytes'=>(int)$r['bytes'],'chunk'=>min(4194304,self::limits($user)['chunk'])])];
+    }
+
+    /** Finalize a file after the relay has acknowledged its last chunk. */
+    public static function finishNodeUpload(array $user, string $id): array {
+        self::requireUpload($user);
+        $r = self::own($user, $id);
+        if (self::isAnon($user) || $r['kind'] !== 'file' || (int)$r['purged']
+            || (!(int)$r['complete'] && (int)$r['created_at'] < time() - 86400)) throw new DomainException('Upload unavailable.');
+        $file = @fopen(self::path($id), 'rb');
+        if (!$file) throw new DomainException('Upload unavailable.');
+        try {
+            if (!flock($file, LOCK_EX)) throw new DomainException('Could not lock upload.');
+            $have = (int)fstat($file)['size'];
+            if ($have !== (int)$r['bytes']) return ['ok'=>false,'received'=>$have,'error'=>'Upload is incomplete.'];
+            $saved = self::q('UPDATE vaultcast_drop_files SET received=?, complete=1 WHERE id=? AND purged=0 AND complete=0', [$have, $id]);
+            if ($saved->rowCount() && (int)$r['inbox']) self::selfNotice($user, $id, (string)$r['name']);
+            $item = self::own($user, $id);
+            if ((int)$item['purged']) throw new DomainException('Upload was deleted.');
+            return ['ok'=>true,'received'=>$have,'complete'=>(bool)$item['complete'],'item'=>self::fullRow($item)];
+        } finally {
+            fclose($file);
+        }
+    }
     /** Append one chunk. The offset is checked under the file lock, so parallel or retried requests cannot interleave. */
     public static function chunk(array $user, string $id, int $offset): array {
         self::requireUpload($user);

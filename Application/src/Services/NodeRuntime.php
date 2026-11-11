@@ -38,6 +38,11 @@ final class NodeRuntime
         }
     }
 
+    public static function dropUploadReady(): bool
+    {
+        return (self::health()['dropUploadRevision'] ?? 0) === 1;
+    }
+
     public static function metadataRelayReady(): bool
     {
         return (self::health()['metadataRelayRevision'] ?? 0) === 1;
