@@ -38,6 +38,11 @@ final class NodeRuntime
         }
     }
 
+    public static function metadataRelayReady(): bool
+    {
+        return (self::health()['metadataRelayRevision'] ?? 0) === 1;
+    }
+
     public static function xtreamRelayReady(): bool
     {
         return (self::health()['xtreamRelayRevision'] ?? 0) === 1;

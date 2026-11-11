@@ -13,6 +13,7 @@ const { flock, lockFile } = require('./file-lock');
 const ticketDirectory = path.join(__dirname, '../../data/runtime/node-media');
 const consumedTickets = new Set();
 const metadataRequests = new Map();
+const metadataStarts = new Map();
 let active = 0;
 let playlists = 0;
 
@@ -39,6 +40,11 @@ function providerResponse(ticket, url, method, signal) {
   const urlIp = isIP(url.hostname);
   if (!family || (urlIp && url.hostname !== ticket.ip)) throw new Error('Invalid pinned address');
   const headers = { accept: '*/*', 'user-agent': ticket.ua, 'accept-encoding': 'identity' };
+  if (ticket.purpose === 'metadata' && ticket.headers && !Array.isArray(ticket.headers)) {
+    for (const key of ['accept', 'authorization', 'user-agent']) {
+      if (typeof ticket.headers[key] === 'string') headers[key] = ticket.headers[key];
+    }
+  }
   if (ticket.ref) headers.referer = ticket.ref;
   if (ticket.range) headers.range = ticket.range;
   if (ticket.ifRange) headers['if-range'] = ticket.ifRange;
@@ -258,14 +264,28 @@ async function serveMetadata(request, response) {
     const url = new URL(ticket.url);
     if (!['http:', 'https:'].includes(url.protocol) || url.hostname !== ticket.host
       || url.username || url.password) return response.sendStatus(400);
-    const key = JSON.stringify([ticket.url, ticket.ip, ticket.ua]);
+    const key = JSON.stringify([ticket.url, ticket.ip, ticket.ua, ticket.headers, ticket.timeout, ticket.gap]);
     let entry = metadataRequests.get(key);
     if (!entry) {
       if (metadataRequests.size >= 2) return response.sendStatus(503);
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 30000);
+      const timeout = Math.max(1, Math.min(30, Number(ticket.timeout) || 30)) * 1000;
+      const timer = setTimeout(() => controller.abort(), timeout);
+      const gap = Math.max(0, Math.min(1000, Number(ticket.gap) || 0));
+      let wait = 0;
+      if (gap) {
+        const now = Date.now();
+        const start = Math.max(now, (metadataStarts.get(url.host) || 0) + gap);
+        metadataStarts.set(url.host, start);
+        wait = start - now;
+      }
       entry = { controller, clients: 0, work: null };
-      entry.work = providerMetadata(ticket, url, controller.signal).finally(() => {
+      const perform = async () => {
+        if (wait) await new Promise(resolve => setTimeout(resolve, wait));
+        if (controller.signal.aborted) throw new Error('Provider request cancelled');
+        return providerMetadata(ticket, url, controller.signal);
+      };
+      entry.work = perform().finally(() => {
         clearTimeout(timer);
         if (metadataRequests.get(key) === entry) metadataRequests.delete(key);
       });

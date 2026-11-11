@@ -89,14 +89,21 @@
   }
   function follow(task, paint){
     var r = running[task]; if (!r || !r.job) return;
-    api('/admin/maintenance/' + r.job).then(function(j){
+    api('/admin/maintenance/' + r.job + '?events=1').then(function(j){
       var job = j && j.job; if (!job) throw new Error('The task status is unavailable.');
       var p = job.progress || {};
       if (job.status === 'complete') { running[task] = { state:'done', text:'Done. Everything is up to date.' }; paint(); setTimeout(function(){ load(true); }, 1200); return; }
       if (job.status === 'failed' || job.status === 'cancelled') { running[task] = { state:'failed', text:job.status === 'cancelled' ? 'Cancelled.' : (job.error || 'The task failed. See Settings → Maintenance for details.') }; paint(); return; }
       r.text = job.status === 'queued' ? 'Queued…' : (p.phase ? p.phase + ' · ' : 'Running · ') + (p.total ? (p.done || 0) + ' of ' + p.total : 'working');
       r.pct = p.total ? Math.min(100, Math.round(100 * (p.done || 0) / p.total)) : null;
-      paint(); setTimeout(function(){ if (running[task] === r) follow(task, paint); }, 2000);
+      paint();
+      function again(){ if (running[task] === r) follow(task, paint); }
+      if (j.events && /^\/netplay\/runtime\/events\/[a-f0-9]{48}$/.test(j.events)) {
+        fetch(j.events, {cache:'no-store'}).then(function(res){
+          if (!res.ok) throw new Error('Progress event unavailable');
+          return res.json();
+        }).then(again).catch(function(){ setTimeout(again, 2000); });
+      } else setTimeout(again, 2000);
     }).catch(function(e){ running[task] = { state:'failed', text:e.message || 'Lost track of the task.' }; paint(); });
   }
 
