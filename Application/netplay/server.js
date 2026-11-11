@@ -408,4 +408,6 @@ setInterval(async () => {
 server.listen(PORT, HOST, () => {
   npLog('listen', { host: HOST, port: PORT, logFile: LOG_FILE, version: 'vaultcast-lockstep-4' });
   console.log(`vaultcast-netplay listening on http://${HOST}:${PORT}`);
+  try { require('../src/Workers/stalker-clock')(path.join(__dirname, '..')); }
+  catch (error) { console.warn('Stalker background worker is unavailable'); }
 });

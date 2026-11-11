@@ -49,7 +49,7 @@ final class StalkerCatalogues {
     public static function status(bool $summary=false): array {
         self::ensureWorker();$feeds=array_column(self::feeds(),null,'id');$sources=[];
         $heartbeat=STREAM_DATA.'/runtime/stalker-library.heartbeat';
-        $worker=is_file($heartbeat)&&filemtime($heartbeat)>time()-180;
+        $worker=StalkerWorkerClock::managed('catalogue') || (is_file($heartbeat)&&filemtime($heartbeat)>time()-180);
         $active=$worker?json_decode((string)@file_get_contents(STREAM_DATA.'/runtime/stalker-library.active'),true):null;
         $seen=[];
         foreach(\Vaultcast\Database::connection()->query('SELECT feed_id,kind,config,generation,status,processed,error,next_run,last_hash FROM vaultcast_stalker_jobs') as $r){$r['name']=$feeds[$r['feed_id']]['name']??'Removed connection';$r['scanned']=(int)$r['processed'];
@@ -189,21 +189,25 @@ final class StalkerCatalogues {
     }
     public static function ensureWorker(): void {
         if(PHP_SAPI==='cli'||!is_file(STREAM_DATA.'/runtime/stalker-library.enabled'))return;
+        StalkerWorkerClock::configure();
+        if (StalkerWorkerClock::managed('catalogue')) return;
         $dir=STREAM_DATA.'/runtime';$probe=@fopen($dir.'/stalker-library.worker.lock','c');if(!$probe)return;
         if(!flock($probe,LOCK_EX|LOCK_NB)){fclose($probe);if(trim((string)@file_get_contents($dir.'/stalker-library.revision'))===self::revision())return;}else{flock($probe,LOCK_UN);fclose($probe);}
         $lock=@fopen($dir.'/stalker-library.launch','c+');if(!$lock)return;if(!flock($lock,LOCK_EX|LOCK_NB)){fclose($lock);return;}
         try{$last=(int)stream_get_contents($lock);if($last>time()-10)return;ftruncate($lock,0);rewind($lock);fwrite($lock,(string)time());fflush($lock);Process::startPhpWorker('stalker-catalogue','stalkerlibrary');}catch(Throwable $e){error_log('Stalker catalogue worker could not start.');}finally{flock($lock,LOCK_UN);fclose($lock);}
     }
-    public static function run(): array {
+    public static function run(bool $slice = false): array {
         $dir=STREAM_DATA.'/runtime';$lock=fopen($dir.'/stalker-library.worker.lock','c');if(!$lock||!flock($lock,LOCK_EX|LOCK_NB))return ['ok'=>true,'alreadyRunning'=>true];
         $revision=self::revision();$version=trim((string)file_get_contents(STREAM_ROOT.'/VERSION'));file_put_contents($dir.'/stalker-library.revision',$revision);
         $checkpoint=json_decode((string)@file_get_contents($dir.'/stalker-library.active'),true);
         $current=is_array($checkpoint)&&array_keys($checkpoint)===[0,1,2]
             &&is_string($checkpoint[0])&&in_array($checkpoint[1],self::KINDS,true)&&is_string($checkpoint[2])
             ?$checkpoint:null;
-        try{while(is_file($dir.'/stalker-library.enabled')&&self::revision()===$revision&&trim((string)file_get_contents(STREAM_ROOT.'/VERSION'))===$version){touch($dir.'/stalker-library.heartbeat');$busy=false;try{$busy=StalkerLibrary::tick($current);}catch(Throwable $e){error_log('Stalker catalogue step failed: '.$e->getMessage());}\Vaultcast\Database::releaseForStreaming();sleep($busy?1:30);clearstatcache();}}
+        $deadline = microtime(true) + 12;
+        $busy = false;
+        try{while(($slice || !StalkerWorkerClock::managed('catalogue')) && is_file($dir.'/stalker-library.enabled')&&self::revision()===$revision&&trim((string)file_get_contents(STREAM_ROOT.'/VERSION'))===$version){touch($dir.'/stalker-library.heartbeat');$busy=false;try{$busy=StalkerLibrary::tick($current);}catch(Throwable $e){error_log('Stalker catalogue step failed: '.$e->getMessage());}\Vaultcast\Database::releaseForStreaming();if ($slice && (!$busy || microtime(true) >= $deadline)) break;sleep($busy?1:30);clearstatcache();}}
         finally{@unlink($dir.'/stalker-library.heartbeat');flock($lock,LOCK_UN);fclose($lock);}
-        if(is_file($dir.'/stalker-library.enabled'))try{Process::startPhpWorker('stalker-catalogue','stalkerlibrary');}catch(Throwable $ignored){}
-        return ['ok'=>true];
+        if(!$slice && !StalkerWorkerClock::managed('catalogue') && is_file($dir.'/stalker-library.enabled'))try{Process::startPhpWorker('stalker-catalogue','stalkerlibrary');}catch(Throwable $ignored){}
+        return ['ok'=>true, 'busy'=>$busy];
     }
 }

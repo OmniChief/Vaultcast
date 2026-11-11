@@ -5,18 +5,8 @@ declare(strict_types=1);
 final class Process {
     public static function startPhpWorker(string $command,string $id): int {
         if(!function_exists('proc_open'))throw new RuntimeException('PHP proc_open is disabled. Enable it for the web PHP service to start playback workers.');
-        $configured=trim(trim((string)(Store::settings()['tools']['php_cli'] ?? '')), "\"'");
-        $binary=PHP_OS_FAMILY==='Windows'?'php.exe':'php';
-        $candidates=[$configured,dirname(PHP_BINARY).'/'.$binary,PHP_BINDIR.'/'.$binary];
-        foreach(explode(PATH_SEPARATOR,(string)getenv('PATH')) as $dir)if($dir!=='')$candidates[]=rtrim($dir,'/\\').'/'.$binary;
-        $php='';
-        foreach(array_unique($candidates) as $candidate){
-            if($candidate===''||!is_file($candidate)||(PHP_OS_FAMILY!=='Windows'&&!is_executable($candidate)))continue;
-            // A CGI/FPM binary cannot run Console.php, even when it exists on disk.
-            $sapi=self::capture([$candidate,'-r','echo PHP_SAPI;'],5);
-            if(trim((string)$sapi)==='cli'){$php=$candidate;break;}
-        }
-        if($php==='')throw new RuntimeException('No usable PHP CLI executable was found. Set the full path to php'.(PHP_OS_FAMILY==='Windows'?'.exe':'').' in Advanced settings (not php-cgi or php-fpm).');
+        $php = self::phpCli();
+        if ($php === null) throw new RuntimeException('No usable PHP CLI executable was found. Set the full path to the PHP CLI in Advanced settings.');
         $args=[];if(php_ini_loaded_file())array_push($args,'-c',php_ini_loaded_file());
         array_push($args,STREAM_ROOT.'/src/Console.php',$command,$id);
         if(PHP_OS_FAMILY==='Windows') {
@@ -30,6 +20,21 @@ final class Process {
         if((int)$pid<=0)throw new RuntimeException('Could not launch the PHP playback worker. Check process permissions'.(PHP_OS_FAMILY==='Windows'?' and that powershell.exe is available to the PHP service.':'.'));
         return (int)$pid;
     }
+    public static function phpCli(): ?string {
+        $configured=trim(trim((string)(Store::settings()['tools']['php_cli'] ?? '')), "\"'");
+        $binary=PHP_OS_FAMILY==='Windows'?'php.exe':'php';
+        $candidates=[$configured,dirname(PHP_BINARY).'/'.$binary,PHP_BINDIR.'/'.$binary];
+        foreach(explode(PATH_SEPARATOR,(string)getenv('PATH')) as $dir)if($dir!=='')$candidates[]=rtrim($dir,'/\\').'/'.$binary;
+        $php='';
+        foreach(array_unique($candidates) as $candidate){
+            if($candidate===''||!is_file($candidate)||(PHP_OS_FAMILY!=='Windows'&&!is_executable($candidate)))continue;
+            // A CGI/FPM binary cannot run Console.php, even when it exists on disk.
+            $sapi=self::capture([$candidate,'-r','echo PHP_SAPI;'],5);
+            if(trim((string)$sapi)==='cli'){$php=$candidate;break;}
+        }
+        return $php !== '' ? $php : null;
+    }
+
     public static function terminatePhpWorker(int $pid,string $command,string $id): bool {
         if($pid<2||!preg_match('/^[a-z0-9-]{1,40}$/D',$command)||!preg_match('/^[a-f0-9]{24}$/D',$id))return false;
         if(PHP_OS_FAMILY==='Windows'){

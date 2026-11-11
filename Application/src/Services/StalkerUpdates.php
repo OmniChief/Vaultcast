@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 final class StalkerUpdates {
     private static function settings(): array {return \Vaultcast\Repository::document('stalker-update-settings',[]);}
-    public static function status(): array {$s=self::settings();return ['configured'=>!empty($s['url']),'paused'=>!empty($s['paused']),'mappings'=>$s['mappings']??[],'last_check'=>$s['last_check']??null,'next_check'=>$s['next_check']??null,'message'=>$s['message']??'Add your provider update page to discover its connections.','worker'=>is_file(STREAM_DATA.'/runtime/stalker-updates.heartbeat')&&filemtime(STREAM_DATA.'/runtime/stalker-updates.heartbeat')>time()-180];}
+    public static function status(): array {$s=self::settings();return ['configured'=>!empty($s['url']),'paused'=>!empty($s['paused']),'mappings'=>$s['mappings']??[],'last_check'=>$s['last_check']??null,'next_check'=>$s['next_check']??null,'message'=>$s['message']??'Add your provider update page to discover its connections.','worker'=>StalkerWorkerClock::managed('updates')||(is_file(STREAM_DATA.'/runtime/stalker-updates.heartbeat')&&filemtime(STREAM_DATA.'/runtime/stalker-updates.heartbeat')>time()-180)];}
     private static function values(string $text): array {
         $text=html_entity_decode($text,ENT_QUOTES|ENT_HTML5,'UTF-8');
         preg_match_all('/\b(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}\b/i',$text,$macs);
@@ -136,6 +136,8 @@ final class StalkerUpdates {
         // updates. Its flag disappears; a fresh worker waits for its lock.
         if(is_file($dir.'/stalker-updates.enabled')&&!is_file($dir.'/stalker-updates.enabled-v2'))self::migrateWorkerFlag($dir);
         if(!is_file($dir.'/stalker-updates.enabled-v2'))return;
+        StalkerWorkerClock::configure();
+        if (StalkerWorkerClock::managed('updates')) return;
         // An OS-released lock detects a stopped worker immediately after a reboot;
         // a recent heartbeat file alone must not suppress its restart.
         $probe=@fopen(STREAM_DATA.'/runtime/stalker-updates.worker.lock','c');if(!$probe)return;
@@ -189,9 +191,10 @@ final class StalkerUpdates {
         require_once STREAM_ROOT.'/src/Live/iptv.php';$prior=\Vaultcast\Repository::document('stalker-update-backup:'.$id,[]);if(!$prior)throw new RuntimeException('No previous connection details are saved.');
         $state=iptv_load();foreach($state['feeds'] as &$feed)if($feed['id']===$id)$feed=$prior;unset($feed);iptv_update_meta(['feeds'=>$state['feeds']]);$s=self::settings();foreach($s['mappings']??[] as $key=>$map)if($map['feed']===$id)$s['mappings'][$key]['auto']=false;\Vaultcast\Repository::putDocument('stalker-update-settings',$s);return ['ok'=>true];
     }
-    public static function run(): array {
+    public static function run(bool $slice = false): array {
         if(PHP_SAPI!=='cli')throw new RuntimeException('Worker only.');$dir=STREAM_DATA.'/runtime';if(!is_dir($dir))@mkdir($dir,0700,true);$lock=fopen($dir.'/stalker-updates.worker.lock','c');if(!$lock)return ['ok'=>true,'busy'=>true];
         if(!flock($lock,LOCK_EX|LOCK_NB)){
+            if ($slice) { fclose($lock); return ['ok'=>true, 'busy'=>true]; }
             if(trim((string)@file_get_contents($dir.'/stalker-updates.revision'))===hash_file('sha256',__FILE__)){fclose($lock);return ['ok'=>true,'busy'=>true];}
             $handoff=@fopen($dir.'/stalker-updates.handoff.lock','c');if(!$handoff||!flock($handoff,LOCK_EX|LOCK_NB)){if($handoff)fclose($handoff);fclose($lock);return ['ok'=>true,'busy'=>true];}
             $deadline=time()+120;$acquired=false;
@@ -200,9 +203,9 @@ final class StalkerUpdates {
             if(!$acquired){fclose($lock);return ['ok'=>true,'busy'=>true];}
         }
         $version=trim((string)file_get_contents(STREAM_ROOT.'/VERSION'));$revision=hash_file('sha256',__FILE__);file_put_contents($dir.'/stalker-updates.revision',$revision);
-        try{while(is_file($dir.'/stalker-updates.enabled-v2')&&trim((string)file_get_contents(STREAM_ROOT.'/VERSION'))===$version&&hash_file('sha256',__FILE__)===$revision){file_put_contents($dir.'/stalker-updates.enabled','1');file_put_contents($dir.'/stalker-updates.heartbeat',(string)time());try{self::check();}catch(Throwable $ignored){}\Vaultcast\Database::releaseForStreaming();sleep(60);clearstatcache();}}
+        try{while(($slice || !StalkerWorkerClock::managed('updates')) && is_file($dir.'/stalker-updates.enabled-v2')&&trim((string)file_get_contents(STREAM_ROOT.'/VERSION'))===$version&&hash_file('sha256',__FILE__)===$revision){file_put_contents($dir.'/stalker-updates.enabled','1');file_put_contents($dir.'/stalker-updates.heartbeat',(string)time());try{self::check();}catch(Throwable $ignored){}\Vaultcast\Database::releaseForStreaming();if ($slice) break;sleep(60);clearstatcache();}}
         finally{@unlink($dir.'/stalker-updates.heartbeat');flock($lock,LOCK_UN);fclose($lock);}
-        if(is_file($dir.'/stalker-updates.enabled-v2'))try{file_put_contents($dir.'/stalker-updates.enabled','1');Process::startPhpWorker('stalker-updates','stalkerupdates');}catch(Throwable $ignored){}
-        return ['ok'=>true];
+        if(!$slice && !StalkerWorkerClock::managed('updates') && is_file($dir.'/stalker-updates.enabled-v2'))try{file_put_contents($dir.'/stalker-updates.enabled','1');Process::startPhpWorker('stalker-updates','stalkerupdates');}catch(Throwable $ignored){}
+        return ['ok'=>true, 'nextCheck'=>(int)(self::settings()['next_check'] ?? 0)];
     }
 }
