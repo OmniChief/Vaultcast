@@ -58,6 +58,7 @@ final class AIVideos {
             $id=bin2hex(random_bytes(8));
             $job=['id'=>$id,'user_id'=>(string)$user['id'],'prompt'=>$prompt,'negative_prompt'=>$negative,'width'=>$width,'height'=>$height,'frames'=>$frames,'fps'=>24,'steps'=>20,'seed'=>$seed===null || $seed==='' ? random_int(0,4294967295) : (int)$seed,'status'=>'queued','progress'=>0,'created_at'=>time()];
             self::locked($id,static function(&$stored) use($job){$stored=$job;});
+            NodeEvents::signal('ai-video');
             return ['ok'=>true,'job'=>self::publicJob($job)];
         } finally {flock($queue,LOCK_UN);fclose($queue);}
     }
@@ -138,7 +139,7 @@ final class AIVideos {
                 });
                 if ($result) return ['ok'=>true,'job'=>$result];
             }
-            return ['ok'=>true,'job'=>null];
+            return ['ok'=>true,'job'=>null,'wait'=>!empty(body_json()['wait']) ? NodeEvents::issue('ai-video', true) : null];
         }
         $lease=(string)($_SERVER['HTTP_X_VAULTCAST_LEASE'] ?? '');
         return self::locked($id,static function(&$job,$base) use($worker,$action,$lease){

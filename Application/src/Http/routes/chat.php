@@ -8,7 +8,11 @@ if (preg_match('#^/hub/chat/files/([a-f0-9]{32})$#',$path,$m) && in_array($metho
 if (preg_match('#^/hub/chat/files/([a-f0-9]{32})/(\d+)$#',$path,$m) && $method==='POST') json_out(Chat::chunk($user,$m[1],(int)$m[2]));
 if (preg_match('#^/hub/chat/([a-z0-9-]{1,64})(/join|/upload)?$#',$path,$m)) {
     $suffix=$m[2] ?? '';
-    if ($method==='GET' && $suffix==='') json_out(Chat::history($user,$m[1],(int)($_GET['revision'] ?? -1),(int)($_GET['before'] ?? 0)));
+    if ($method==='GET' && $suffix==='') {
+        $history = Chat::history($user,$m[1],(int)($_GET['revision'] ?? -1),(int)($_GET['before'] ?? 0));
+        if (!empty($_GET['push'])) $history['events'] = NodeEvents::issue('chat-' . $m[1]);
+        json_out($history);
+    }
     if ($method==='POST') {
         Chat::cleanup();
         if ($suffix==='/join') json_out(Chat::join($user,$m[1]));

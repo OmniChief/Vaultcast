@@ -19,12 +19,12 @@ def run(cfg, stop):
         try:
             worker.slot_status(cfg, "Waiting for GPU / Vaultcast video job")
             with cfg["_gpu_coordinator"].reserve(cfg):
-                result = worker.request(cfg["server"] + "/api/ai/worker/video/claim", "POST", {}, worker.worker_headers(cfg))
+                result = worker.request(cfg["server"] + "/api/ai/worker/video/claim", "POST", {"wait": True}, worker.worker_headers(cfg))
                 job = result.get("job")
                 if job:
                     generate(cfg, job, engine, stop)
             if not job:
-                stop.wait(5)
+                worker.wait_for_job(cfg, stop, result, 5)
         except (InterruptedError, KeyboardInterrupt):
             return
         except urllib.error.HTTPError as error:

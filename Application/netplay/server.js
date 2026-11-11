@@ -36,6 +36,10 @@ app.get('/runtime/provider/:token', (req, res) => {
   if (!handle || !handle.metadata) return res.sendStatus(503);
   return handle.metadata(req, res);
 });
+app.get('/runtime/events/:token', (req, res) => {
+  try { return require('../src/Workers/events')(req, res); }
+  catch (error) { return res.sendStatus(503); }
+});
 const server = http.createServer(app);
 
 app.use(cors({
@@ -115,6 +119,7 @@ app.get('/health', (_req, res) => {
     runtimeRevision,
     mediaRelay: Boolean(mediaHandler()),
     mediaApiRevision,
+    eventsRevision: 1,
     version: 'vaultcast-lockstep-4',
     rooms: Object.keys(rooms).length,
     roomIds: Object.keys(rooms),

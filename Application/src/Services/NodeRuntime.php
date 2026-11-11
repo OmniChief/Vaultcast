@@ -38,6 +38,11 @@ final class NodeRuntime
         }
     }
 
+    public static function eventsReady(): bool
+    {
+        return (self::health()['eventsRevision'] ?? 0) === 1;
+    }
+
     public static function mediaReady(): bool
     {
         $health = self::health();

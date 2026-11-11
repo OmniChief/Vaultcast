@@ -216,3 +216,5 @@ async function serveMetadata(request, response) {
 
 module.exports = serveMedia;
 module.exports.metadata = serveMetadata;
+
+module.exports.takeTicket = takeTicket;

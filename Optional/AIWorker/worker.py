@@ -574,12 +574,13 @@ def run_slot(cfg, stop):
                     prefer_encoding = False
                     continue
             prefer_encoding = True
+            image_result = None
             if image_ready and _image_lock.acquire(blocking=False):
                 try:
                     slot_status(cfg, "Waiting for GPU / image job")
                     with cfg["_gpu_coordinator"].reserve(cfg):
-                        result = request(cfg["server"] + "/api/ai/worker/claim", "POST", {"models":model_report(cfg.get("models",[]))}, headers, timeout=15)
-                        job = result.get("job")
+                        image_result = request(cfg["server"] + "/api/ai/worker/claim", "POST", {"models":model_report(cfg.get("models",[])), "wait":True}, headers, timeout=15)
+                        job = image_result.get("job")
                         if job:
                             try:
                                 run_job(cfg, job)
@@ -599,7 +600,7 @@ def run_slot(cfg, stop):
                             continue
                 finally:
                     _image_lock.release()
-            stop.wait(10 if encoding and not image_ready else 3)
+            wait_for_job(cfg, stop, image_result if not encoding else None, 10 if encoding and not image_ready else 3)
         except KeyboardInterrupt:
             break
         except Exception as error:
@@ -607,6 +608,19 @@ def run_slot(cfg, stop):
             print(slot_label(cfg), "Connection error:", error)
             slot_status(cfg, "Connection retry: " + str(error))
             stop.wait(10)
+
+
+def wait_for_job(cfg, stop, result, delay):
+    path = (result or {}).get("wait")
+    if not stop.is_set() and isinstance(path, str) and path.startswith("/netplay/runtime/events/"):
+        token = path.rsplit("/", 1)[-1]
+        if len(token) == 48 and all(char in "0123456789abcdef" for char in token):
+            try:
+                request(cfg["server"].rstrip("/") + path, "GET", timeout=15)
+                return
+            except Exception:
+                pass
+    stop.wait(delay)
 
 
 def heartbeat(cfg, ready=True):
