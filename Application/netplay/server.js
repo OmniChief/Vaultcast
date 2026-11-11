@@ -40,6 +40,20 @@ app.get('/runtime/events/:token', (req, res) => {
   try { return require('../src/Workers/events')(req, res); }
   catch (error) { return res.sendStatus(503); }
 });
+let transcodeRunner;
+function playbackWorker() {
+  if (process.platform !== 'linux' || !fs.promises.statfs) return null;
+  if (!transcodeRunner) {
+    try { transcodeRunner = require('../src/Workers/transcode-runner'); }
+    catch (error) { return null; }
+  }
+  return transcodeRunner;
+}
+app.get('/runtime/transcode/:token', (req, res) => {
+  const runner = playbackWorker();
+  if (!runner) return res.sendStatus(503);
+  return runner(req, res);
+});
 const server = http.createServer(app);
 
 app.use(cors({
@@ -120,6 +134,7 @@ app.get('/health', (_req, res) => {
     mediaRelay: Boolean(mediaHandler()),
     mediaApiRevision,
     eventsRevision: 1,
+    transcodeRevision: playbackWorker() ? 1 : 0,
     version: 'vaultcast-lockstep-4',
     rooms: Object.keys(rooms).length,
     roomIds: Object.keys(rooms),
@@ -402,7 +417,7 @@ setInterval(async () => {
   try {
     const source = await fs.promises.readFile(__filename);
     const installed = createHash('sha256').update(source).digest('hex');
-    if (installed !== runtimeRevision && !Object.keys(rooms).length && !fs.existsSync(updateMarker)) {
+    if (installed !== runtimeRevision && !Object.keys(rooms).length && !transcodeRunner?.active() && !fs.existsSync(updateMarker)) {
       process.exit(75);
     }
   } catch (error) {

@@ -250,6 +250,13 @@ final class Transcode {
         return ['ok'=>$job['status']==='done','status'=>$job['status']];
     }
     private static function execute(array $args,array &$job): void {
+        if (PHP_OS_FAMILY === 'Linux' && NodeRuntime::transcodeReady()) {
+            $token = NodeMedia::writeTicket(['purpose'=>'transcode','arguments'=>$args,'job'=>$job]);
+            if ($token !== null) {
+                self::executeNode($token, $job);
+                return;
+            }
+        }
         $dir=self::dir($job['id']);$null=PHP_OS_FAMILY==='Windows'?'NUL':'/dev/null';
         $proc=proc_open($args,[0=>['file',$null,'r'],1=>['file',$null,'w'],2=>['file',$dir.'/ffmpeg.log','a']],$pipes,null,null,['bypass_shell'=>true]);
         if(!is_resource($proc))throw new RuntimeException('Could not start FFmpeg. Check the executable in Advanced settings.');
@@ -282,6 +289,26 @@ final class Transcode {
             $state=proc_get_status($proc);if($state['running'])@proc_terminate($proc,9);@proc_close($proc);
         }
     }
+    private static function executeNode(string $token, array &$job): void
+    {
+        \Vaultcast\Database::releaseForStreaming();
+        $context = stream_context_create(['http'=>['timeout'=>35, 'follow_location'=>0, 'header'=>'Connection: close']]);
+        $stream = @fopen(NodeRuntime::loopback('/runtime/transcode/' . $token), 'rb', false, $context);
+        try {
+            if (!$stream) throw new RuntimeException('The Node playback worker is unavailable. Select the title to retry.');
+            $body = stream_get_contents($stream, 4194304);
+            $result = json_decode(trim((string)$body), true);
+            if (!is_array($result) || empty($result['ok'])) {
+                throw new RuntimeException($result['error'] ?? 'The playback worker disconnected. Select the title to retry.');
+            }
+            $updated = self::read($job['id']);
+            if ($updated) $job = array_replace($job, $updated);
+        } finally {
+            if (is_resource($stream)) fclose($stream);
+            @unlink(STREAM_DATA . '/runtime/node-media/' . $token . '.json');
+        }
+    }
+
     public static function cleanup(bool $force = false): int {
         $removed=0;
         foreach(glob(self::root().'/*/session.json') ?: [] as $file) {
