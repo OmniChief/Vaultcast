@@ -65,6 +65,30 @@ function stalker_cookie_path(array $feed): string {
     return $path;
 }
 
+/** Portal reads may share one in-flight request for the same credentials and cookies. */
+function stalker_relay_read(array $feed, string $url, string $type, string $action, string $token, string $ip, string $referer, string $jar): ?array {
+    if ($token === '' || !in_array($type, ['itv','vod','series'], true)
+        || !in_array($action, ['get_genres','get_categories','get_ordered_list','get_all_channels','get_epg_info','get_short_epg'], true)
+        || !NodeRuntime::stalkerReadReady()) return null;
+    $scope = hash('sha256', json_encode($feed));
+    $compatibilityKey = 'stalker-relay-cookie:' . $scope;
+    if (\Vaultcast\Repository::cacheGet($compatibilityKey)) return null;
+    $parts = parse_url($url);
+    $host = strtolower($parts['host']);
+    $cookies = NodeMedia::cookies($jar, $host, $parts['path'] ?? '/', strtolower($parts['scheme']) === 'https');
+    if ($cookies === null) return null;
+    $mag = 'mac='.rawurlencode($feed['mac']).'; stb_lang=en; timezone=Europe/London';
+    $result = NodeProvider::get($url, $host, $ip, 30,
+        ['accept'=>'application/json','authorization'=>'Bearer '.$token,'x-user-agent'=>'Model: MAG250; Link: Ethernet'], 0,
+        ['stalkerScope'=>$scope,'cookies'=>$cookies === '' ? $mag : $cookies.'; '.$mag,'ref'=>$referer,
+            'ua'=>'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 MAG250 stbapp ver: 4 rev: 1812 Mobile Safari/533.3']);
+    if (($result[1]['compatibility'] ?? '') === 'cookies') {
+        \Vaultcast\Repository::cachePut($compatibilityKey, ['cookies'=>true], 600);
+        return null;
+    }
+    return $result;
+}
+
 function stalker_request(array $feed, string $type, string $action, array $params = [], string $token = '', ?string $endpoint = null): array {
     if (!function_exists('curl_init')) throw new RuntimeException('Stalker connections require the PHP cURL extension.');
     $cooldown=\Vaultcast\Repository::cacheGet(stalker_cooldown_key($feed));
@@ -75,20 +99,29 @@ function stalker_request(array $feed, string $type, string $action, array $param
     $port = parse_url($url,PHP_URL_PORT) ?: (parse_url($url,PHP_URL_SCHEME)==='https' ? 443 : 80);
     $headers = ['Accept: application/json', 'X-User-Agent: Model: MAG250; Link: Ethernet'];
     if ($token !== '') $headers[] = 'Authorization: Bearer '.$token;
-    $ch = curl_init($url);
-    $body = ''; $retryAfter='';
-    $resolvedIp = strpos($ips[0],':')!==false ? '['.$ips[0].']' : $ips[0];
-    curl_setopt_array($ch, [CURLOPT_RESOLVE=>[$host.':'.$port.':'.$resolvedIp],CURLOPT_FOLLOWLOCATION=>false, CURLOPT_CONNECTTIMEOUT=>8, CURLOPT_TIMEOUT=>30,
-        CURLOPT_PROTOCOLS=>CURLPROTO_HTTP | CURLPROTO_HTTPS, CURLOPT_SSL_VERIFYPEER=>true,
-        CURLOPT_USERAGENT=>'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 MAG250 stbapp ver: 4 rev: 1812 Mobile Safari/533.3',
-        CURLOPT_REFERER=>preg_replace('#/(?:server/load|portal)\.php$#', '/c/', stalker_endpoint($feed)),
-        CURLOPT_COOKIE=>'mac='.rawurlencode($feed['mac']).'; stb_lang=en; timezone=Europe/London',
-        CURLOPT_COOKIEFILE=>stalker_cookie_path($feed),CURLOPT_COOKIEJAR=>stalker_cookie_path($feed),
-        CURLOPT_HTTPHEADER=>$headers,
-        CURLOPT_HEADERFUNCTION=>static function($handle,$line)use(&$retryAfter){if(stripos($line,'Retry-After:')===0)$retryAfter=trim(substr($line,12));return strlen($line);},
-        CURLOPT_WRITEFUNCTION=>function ($handle, $chunk) use (&$body) { if (strlen($body)+strlen($chunk)>16*1024*1024) return 0; $body.=$chunk; return strlen($chunk); }]);
+    $referer = preg_replace('#/(?:server/load|portal)\.php$#', '/c/', stalker_endpoint($feed));
+    $jar = stalker_cookie_path($feed);
     if (function_exists('release_request_locks')) release_request_locks();
-    $ok = curl_exec($ch); $status = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE); curl_close($ch);
+    $relayed = stalker_relay_read($feed, $url, $type, $action, $token, $ips[0], $referer, $jar);
+    if ($relayed !== null) {
+        [$status, $responseHeaders, $body] = $relayed;
+        $retryAfter = $responseHeaders['retry-after'] ?? '';
+        $ok = true;
+    } else {
+        $ch = curl_init($url);
+        $body = ''; $retryAfter='';
+        $resolvedIp = strpos($ips[0],':')!==false ? '['.$ips[0].']' : $ips[0];
+        curl_setopt_array($ch, [CURLOPT_RESOLVE=>[$host.':'.$port.':'.$resolvedIp],CURLOPT_FOLLOWLOCATION=>false, CURLOPT_CONNECTTIMEOUT=>8, CURLOPT_TIMEOUT=>30,
+            CURLOPT_PROTOCOLS=>CURLPROTO_HTTP | CURLPROTO_HTTPS, CURLOPT_SSL_VERIFYPEER=>true,
+            CURLOPT_USERAGENT=>'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 MAG250 stbapp ver: 4 rev: 1812 Mobile Safari/533.3',
+            CURLOPT_REFERER=>$referer,
+            CURLOPT_COOKIE=>'mac='.rawurlencode($feed['mac']).'; stb_lang=en; timezone=Europe/London',
+            CURLOPT_COOKIEFILE=>$jar,CURLOPT_COOKIEJAR=>$jar,
+            CURLOPT_HTTPHEADER=>$headers,
+            CURLOPT_HEADERFUNCTION=>static function($handle,$line)use(&$retryAfter){if(stripos($line,'Retry-After:')===0)$retryAfter=trim(substr($line,12));return strlen($line);},
+            CURLOPT_WRITEFUNCTION=>function ($handle, $chunk) use (&$body) { if (strlen($body)+strlen($chunk)>16*1024*1024) return 0; $body.=$chunk; return strlen($chunk); }]);
+        $ok = curl_exec($ch); $status = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE); curl_close($ch);
+    }
     if($status===429){
         $until=ctype_digit($retryAfter)?time()+min(31536000,(int)$retryAfter):(strtotime($retryAfter)?:0);
         $until=max(time()+60,$until);

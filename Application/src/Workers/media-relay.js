@@ -41,7 +41,7 @@ function providerResponse(ticket, url, method, signal) {
   if (!family || (urlIp && url.hostname !== ticket.ip)) throw new Error('Invalid pinned address');
   const headers = { accept: '*/*', 'user-agent': ticket.ua, 'accept-encoding': 'identity' };
   if (ticket.purpose === 'metadata' && ticket.headers && !Array.isArray(ticket.headers)) {
-    for (const key of ['accept', 'authorization', 'user-agent']) {
+    for (const key of ['accept', 'authorization', 'user-agent', 'x-user-agent']) {
       if (typeof ticket.headers[key] === 'string') headers[key] = ticket.headers[key];
     }
   }
@@ -245,10 +245,12 @@ async function providerMetadata(ticket, url, signal) {
   try {
     const status = upstream.statusCode;
     const location = upstream.headers.location;
-    if (status < 200 || status >= 300) return { status, body: location };
+    const retryAfter = upstream.headers['retry-after'];
+    if (ticket.stalkerScope && status !== 429 && upstream.headers['set-cookie']) return { compatibility: true };
+    if (status < 200 || status >= 300) return { status, body: location, retryAfter };
     const encoding = upstream.headers['content-encoding'];
     if (encoding && encoding !== 'identity') throw new Error('Encoded API response');
-    return { status, body: await readBody(upstream, 32 * 1024 * 1024) };
+    return { status, retryAfter, body: await readBody(upstream, (ticket.stalkerScope ? 16 : 32) * 1024 * 1024) };
   } finally {
     upstream.destroy();
   }
@@ -264,7 +266,8 @@ async function serveMetadata(request, response) {
     const url = new URL(ticket.url);
     if (!['http:', 'https:'].includes(url.protocol) || url.hostname !== ticket.host
       || url.username || url.password) return response.sendStatus(400);
-    const key = JSON.stringify([ticket.url, ticket.ip, ticket.ua, ticket.headers, ticket.timeout, ticket.gap]);
+    const key = JSON.stringify([ticket.url, ticket.ip, ticket.ua, ticket.headers, ticket.timeout, ticket.gap,
+      ticket.stalkerScope, ticket.cookies, ticket.ref]);
     let entry = metadataRequests.get(key);
     if (!entry) {
       if (metadataRequests.size >= 2) return response.sendStatus(503);
@@ -305,6 +308,10 @@ async function serveMetadata(request, response) {
     response.once('close', release);
     const result = await entry.work;
     if (response.destroyed) return;
+    if (result.compatibility) return response.set('X-Vaultcast-Portal-Compatibility', 'cookies').status(409).end();
+    if (typeof result.retryAfter === 'string' && /^[\x20-\x7e]{1,128}$/.test(result.retryAfter)) {
+      response.set('X-Vaultcast-Upstream-Retry-After', result.retryAfter);
+    }
     response.set({
       'Cache-Control': 'private, no-store',
       'X-Vaultcast-Upstream-Status': String(result.status),

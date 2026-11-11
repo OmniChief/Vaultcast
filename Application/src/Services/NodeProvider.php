@@ -23,12 +23,12 @@ final class NodeProvider
         return self::get($url, $host, $ips[0], $timeout, $requestHeaders, $gap);
     }
 
-    public static function get(string $url, string $host, string $ip, int $timeout = 30, array $headers = [], int $gap = 0): ?array
+    public static function get(string $url, string $host, string $ip, int $timeout = 30, array $headers = [], int $gap = 0, array $portal = []): ?array
     {
         if (!WebFetch::publicIp($ip) || !NodeRuntime::mediaReady()) return null;
         $timeout = max(1, min(30, $timeout));
         $token = NodeMedia::writeTicket(['purpose'=>'metadata', 'url'=>$url, 'host'=>strtolower($host),
-            'ip'=>$ip, 'ua'=>'Vaultcast/' . STREAM_VERSION, 'timeout'=>$timeout, 'headers'=>$headers, 'gap'=>$gap]);
+            'ip'=>$ip, 'ua'=>$portal['ua'] ?? ('Vaultcast/' . STREAM_VERSION), 'timeout'=>$timeout, 'headers'=>$headers, 'gap'=>$gap] + $portal);
         if ($token === null) return null;
         $context = stream_context_create(['http'=>['timeout'=>$timeout + 1, 'follow_location'=>0, 'ignore_errors'=>true, 'header'=>'Connection: close']]);
         $stream = null;
@@ -36,16 +36,24 @@ final class NodeProvider
             $stream = @fopen(NodeRuntime::loopback('/runtime/provider/' . $token), 'rb', false, $context);
             if (!$stream) return null;
             $status = 0;
+            $responseHeaders = [];
             $statusHeader = 'X-Vaultcast-Upstream-Status: ';
             foreach ((array)(stream_get_meta_data($stream)['wrapper_data'] ?? []) as $line) {
                 if (stripos($line, $statusHeader) === 0) $status = (int)substr($line, strlen($statusHeader));
+                if (stripos($line, 'X-Vaultcast-Upstream-Retry-After: ') === 0) {
+                    $responseHeaders['retry-after'] = trim(substr($line, strlen('X-Vaultcast-Upstream-Retry-After: ')));
+                }
+                if ($portal && strcasecmp($line, 'X-Vaultcast-Portal-Compatibility: cookies') === 0) {
+                    return [0, ['compatibility'=>'cookies'], ''];
+                }
             }
             if ($status < 100 || $status > 599) return null;
-            $body = stream_get_contents($stream, 32 * 1024 * 1024 + 1);
-            if ($body === false || !feof($stream) || strlen($body) > 32 * 1024 * 1024
+            $limit = ($portal ? 16 : 32) * 1024 * 1024;
+            $body = stream_get_contents($stream, $limit + 1);
+            if ($body === false || !feof($stream) || strlen($body) > $limit
                 || stream_get_meta_data($stream)['timed_out']) return null;
-            if ($status >= 300 && $status < 400 && $body !== '') return [$status, ['location'=>$body], ''];
-            return [$status, [], $body];
+            if ($status >= 300 && $status < 400 && $body !== '') return [$status, $responseHeaders + ['location'=>$body], ''];
+            return [$status, $responseHeaders, $body];
         } finally {
             if (is_resource($stream)) fclose($stream);
             @unlink(STREAM_DATA . '/runtime/node-media/' . $token . '.json');

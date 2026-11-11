@@ -38,6 +38,11 @@ final class NodeRuntime
         }
     }
 
+    public static function stalkerReadReady(): bool
+    {
+        return (self::health()['stalkerReadRevision'] ?? 0) === 1;
+    }
+
     public static function maintenanceQueueReady(): bool
     {
         return (self::health()['maintenanceQueueRevision'] ?? 0) === 1;
