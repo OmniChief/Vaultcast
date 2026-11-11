@@ -372,7 +372,7 @@ CREATE TABLE IF NOT EXISTS vaultcast_stalker_library (
  year SMALLINT NULL, imdb_id VARCHAR(16) CHARACTER SET ascii NOT NULL DEFAULT '',
  tmdb_id VARCHAR(12) CHARACTER SET ascii NOT NULL DEFAULT '',
  available TINYINT NOT NULL DEFAULT 0, unavailable_since BIGINT NULL, payload MEDIUMTEXT NOT NULL,
- INDEX library_title(kind,title(120),id), INDEX library_match(kind,title_key,year),
+ INDEX library_title(kind,title(120),id), INDEX library_title_full(kind,title,id), INDEX library_match(kind,title_key,year),
  INDEX library_imdb(kind,imdb_id), INDEX library_tmdb(kind,tmdb_id),
  INDEX library_year(kind,year), INDEX library_expiry(available,unavailable_since)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

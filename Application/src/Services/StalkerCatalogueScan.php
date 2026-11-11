@@ -99,8 +99,10 @@ final class StalkerCatalogueScan {
                 self::q("UPDATE vaultcast_stalker_jobs SET status='partial',processed=processed+?,next_run=?,error='' WHERE feed_id=? AND kind=?",[$added,time(),$job['feed_id'],$job['kind']]);
                 self::db()->commit();return;
             }
+            if($job['kind']==='series'&&self::importNextEpisodePage($feed,$job))return;
             // All folders have succeeded. Publication and reconciliation are resumable,
             // bounded transactions; a failed replacement never removes the previous offers.
+            $completed=false;
             self::db()->beginTransaction();if(!self::locked($job)){self::db()->rollBack();return;}
             $rows=self::q('SELECT item_id,category,payload FROM vaultcast_stalker_staging WHERE feed_id=? AND kind=? AND generation=? ORDER BY item_id LIMIT 50',$key)->fetchAll();
             if($rows){
@@ -111,9 +113,12 @@ final class StalkerCatalogueScan {
                 // A filtered scan cannot prove missing titles are gone: excluded
                 // folders may still contain them, including duplicate folder entries.
                 // Preserve all prior offers unless an unfiltered scan verifies loss.
-                self::q("UPDATE vaultcast_stalker_jobs SET status='complete',last_hash='complete',error='',next_run=? WHERE feed_id=? AND kind=?",[time()+86400,$job['feed_id'],$job['kind']]);
+                $phase=$job['kind']==='series'?'episodes_complete':'complete';
+                self::q("UPDATE vaultcast_stalker_jobs SET status='complete',last_hash=?,error='',next_run=0 WHERE feed_id=? AND kind=?",[$phase,$job['feed_id'],$job['kind']]);
+                $completed=true;
             }
             self::db()->commit();
+            if($completed)StalkerLibrary::refreshFilters($job['kind'],true);
         }catch(Throwable $e){
             if(self::db()->inTransaction())self::db()->rollBack();
             self::db()->beginTransaction();
@@ -121,9 +126,10 @@ final class StalkerCatalogueScan {
                 if(self::locked($job)){
                     $failures=$folder?(int)$folder['failures']+1:max(1,(int)$job['next_page']);
                     $delay=min(3600,60*(2**min(6,$failures-1)))+random_int(0,30);
-                    $retryAt=max(time()+$delay,$e instanceof StalkerRateLimitException?$e->retryAt:0);
-                    $failed=$e instanceof StalkerAuthenticationException||$failures>=8;
-                    $message=$e instanceof StalkerRateLimitException?'HTTP 429; connection requests paused. Checkpoint retained.':($e instanceof StalkerAuthenticationException?'Authentication rejected; check this connection.':'Folder/page could not be verified. Checkpoint retained; refresh this connection if provider contents changed.');
+                    $rateLimited=$e instanceof StalkerRateLimitException;
+                    $retryAt=$rateLimited?$e->retryAt:time()+$delay;
+                    $failed=!$rateLimited&&($e instanceof StalkerAuthenticationException||$failures>=8);
+                    $message=$rateLimited?'HTTP 429; connection requests paused. Checkpoint retained.':($e instanceof StalkerAuthenticationException?'Authentication rejected; check this connection.':'Folder/page could not be verified. Checkpoint retained; refresh this connection if provider contents changed.');
                     if($e->getCode()>=400&&$e->getCode()<=599&&!($e instanceof StalkerRateLimitException))$message='Provider HTTP '.(int)$e->getCode().'; checkpoint retained.';
                     if($e instanceof RuntimeException&&in_array($e->getMessage(),[
                         'Invalid provider folder response.','Invalid provider folder.','Unsupported provider folder ID.',
@@ -134,16 +140,53 @@ final class StalkerCatalogueScan {
                         'Empty folder without an explicit zero total; absence is unverified.',
                         'Overlapping provider folder pages; completeness is unverified.'
                     ],true))$message=$e->getMessage();
-                    if($folder)self::q('UPDATE vaultcast_stalker_folders SET status=?,error=?,failures=?,next_run=? WHERE feed_id=? AND kind=? AND generation=? AND folder_id=?',array_merge([$failed?'failed':'waiting',$message,$failures,$retryAt],$key,[$folder['folder_id']]));
-                    self::q('UPDATE vaultcast_stalker_jobs SET status=?,error=?,next_run=?,next_page=? WHERE feed_id=? AND kind=?',[$failed?'failed':'waiting',$message,$retryAt,$failures+1,$job['feed_id'],$job['kind']]);
-                    if($e instanceof StalkerRateLimitException){
+                    if($folder)self::q('UPDATE vaultcast_stalker_folders SET status=?,error=?,failures=?,next_run=? WHERE feed_id=? AND kind=? AND generation=? AND folder_id=?',array_merge([$failed?'failed':'waiting',$message,$rateLimited?(int)$folder['failures']:$failures,$retryAt],$key,[$folder['folder_id']]));
+                    self::q('UPDATE vaultcast_stalker_jobs SET status=?,error=?,next_run=?,next_page=? WHERE feed_id=? AND kind=?',[$failed?'failed':'waiting',$message,$retryAt,$rateLimited?(int)$job['next_page']:$failures+1,$job['feed_id'],$job['kind']]);
+                    if($rateLimited){
                         \Vaultcast\Repository::cachePut(stalker_cooldown_key($feed),['until'=>$retryAt],max(60,$retryAt-time()));
-                        self::q('UPDATE vaultcast_stalker_jobs SET next_run=GREATEST(next_run,?) WHERE feed_id=?',[$retryAt,$job['feed_id']]);
+                        self::q("UPDATE vaultcast_stalker_jobs SET next_run=GREATEST(next_run,?) WHERE feed_id=? AND config=? AND status IN ('queued','running','partial','waiting')",[$retryAt,$job['feed_id'],$job['config']]);
                     }
                 }
                 self::db()->commit();
             }catch(Throwable $failure){if(self::db()->inTransaction())self::db()->rollBack();throw $failure;}
         }
+    }
+    private static function importNextEpisodePage(array $feed,array $job): bool {
+        $key='stalker-episode-import-'.hash('sha256',$job['feed_id']);
+        $cursor=\Vaultcast\Repository::document($key,[]);
+        if(($cursor['generation']??null)!==$job['generation'])$cursor=['generation'=>$job['generation'],'after'=>'','parent'=>'','page'=>1,'root'=>'','children'=>[],'visited'=>[]];
+        $parent=$cursor['parent'];
+        if($parent===''){
+            $parent=self::q("SELECT item_id FROM vaultcast_stalker_offers WHERE feed_id=? AND kind='series' AND item_id>? AND generation=? AND available=1 ORDER BY item_id LIMIT 1",[$job['feed_id'],$cursor['after'],$job['generation']])->fetchColumn();
+            if($parent===false)return false;
+            $cursor['root']=$parent;
+            $cursor['children']=[];
+            $cursor['visited']=[(string)$parent];
+        }
+        if($cursor['page']>10000)throw new RuntimeException('Episode page safety limit reached.');
+        $result=StalkerDirect::importEpisodes($feed,(string)$parent,(int)$cursor['page'],(string)$cursor['root']);
+        foreach($result['items'] as $item){
+            $id=(string)$item['id'];
+            if(!empty($item['hasChildren'])&&!in_array($id,$cursor['visited'],true)){
+                $cursor['visited'][]=$id;
+                $cursor['children'][]=$id;
+            }
+        }
+        if(count($cursor['visited'])>1000)throw new RuntimeException('Series folder safety limit reached.');
+        \Vaultcast\Database::transaction(static function () use ($job,$key,$cursor,$parent,$result): void {
+            if(!self::locked($job))return;
+            if($result['hasMore']){
+                $cursor['parent']=$parent;
+                $cursor['page']++;
+            }else{
+                $cursor['parent']=array_shift($cursor['children'])??'';
+                $cursor['page']=1;
+                if($cursor['parent']==='')$cursor['after']=$cursor['root'];
+            }
+            \Vaultcast\Repository::putDocument($key,$cursor);
+            self::q("UPDATE vaultcast_stalker_jobs SET status='partial',last_hash='episodes',next_page=1,next_run=?,error='' WHERE feed_id=? AND kind='series'",[time(),$job['feed_id']]);
+        });
+        return true;
     }
     public static function cleanup(): void {
         // Obsolete generations are disposable staging only, never catalogue associations.
