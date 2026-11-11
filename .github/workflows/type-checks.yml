@@ -1,7 +1,7 @@
 name: Type and syntax checks
 on:
   push:
-    branches: ['1.3.1']
+    branches: ['1.3.1', '1.6']
   pull_request:
     branches: ['main', '1.3.1']
   workflow_dispatch:
@@ -26,4 +26,4 @@ jobs:
           node-version: '22'
       - name: Check JavaScript syntax
         run: |
-          find Application/assets/js Application/netplay -type f -name '*.js' ! -path '*/node_modules/*' -print0 | xargs -0 -n1 node --check
+          find Application/assets/js Application/netplay Application/src/Workers -type f -name '*.js' ! -path '*/node_modules/*' -print0 | xargs -0 -n1 node --check
