@@ -28,22 +28,55 @@ final class StalkerLibrary {
     }
     private static function languages($v,bool $knownOnly=false): array {
         $map=['en'=>'English','eng'=>'English','uk'=>'English','us'=>'English','english'=>'English','fr'=>'French','fra'=>'French','fre'=>'French','french'=>'French','de'=>'German','deu'=>'German','ger'=>'German','german'=>'German','es'=>'Spanish','spa'=>'Spanish','spanish'=>'Spanish','it'=>'Italian','ita'=>'Italian','italian'=>'Italian','pt'=>'Portuguese','por'=>'Portuguese','portuguese'=>'Portuguese','nl'=>'Dutch','nld'=>'Dutch','dut'=>'Dutch','dutch'=>'Dutch','el'=>'Greek','gr'=>'Greek','gre'=>'Greek','greek'=>'Greek','ru'=>'Russian','rus'=>'Russian','russian'=>'Russian','ar'=>'Arabic','ara'=>'Arabic','arabic'=>'Arabic','hi'=>'Hindi','hin'=>'Hindi','hindi'=>'Hindi','tr'=>'Turkish','tur'=>'Turkish','turkish'=>'Turkish','ja'=>'Japanese','jp'=>'Japanese','jpn'=>'Japanese','japanese'=>'Japanese','ko'=>'Korean','kor'=>'Korean','korean'=>'Korean','zh'=>'Chinese','chi'=>'Chinese','zho'=>'Chinese','chinese'=>'Chinese'];
-        $out=[];foreach(self::names($v) as $name){$key=mb_strtolower(trim(preg_replace('/\s*\[[^]]*\]\s*/','',$name)));if(preg_match('/^([a-z]{2,3})[-_][a-z]{2}$/i',$key,$locale))$key=$locale[1];if(isset($map[$key]))$out[]=$map[$key];elseif(!$knownOnly&&!in_array($key,['unknown','multi','multilingual','n/a','none','null'],true))$out[]=$name;}return array_values(array_unique($out));
+        $values=[];
+        $collect=static function($value,int $depth=0)use(&$collect,&$values): void {
+            if($depth>4||count($values)>=64)return;
+            if(is_array($value)){
+                foreach(['language','lang','code','iso_639_1','iso_639_2','name','title'] as $field)if(isset($value[$field])){$collect($value[$field],$depth+1);return;}
+                foreach($value as $entry)$collect($entry,$depth+1);
+            }elseif(is_scalar($value)){
+                $value=trim((string)$value);$decoded=json_decode($value,true);
+                if(is_array($decoded)){$collect($decoded,$depth+1);return;}
+                foreach(preg_split('/[,;|\/+]+/u',$value) as $entry){if(count($values)>=64)break;$values[]=$entry;}
+            }
+        };
+        $collect($v);$out=[];
+        foreach($values as $name){$key=mb_strtolower(trim(preg_replace('/\s*[\[(][^\])]*[\])]\s*/','',$name)));if(preg_match('/^([a-z]{2,3})[-_][a-z]{2}$/i',$key,$locale))$key=$locale[1];if(isset($map[$key]))$out[]=$map[$key];elseif(!$knownOnly&&!in_array($key,['','unknown','multi','multilingual','multi audio','dual audio','n/a','none','null'],true))$out[]=mb_substr($name,0,80);}
+        return array_values(array_unique($out));
+    }
+    /** Audience labels describe provider editions, not verified audio tracks. */
+    public static function languageMetadata(array $m,array $audio): array {
+        $title=self::text($m['providerTitle']??$m['name']??'');
+        $prefix=preg_replace('/^(?:(?:4k|uhd|fhd|hd|sd|2160p|1080p|720p)\s*[-|:]\s*)+/iu','',$title);
+        $audience=[];$evidence='unknown';
+        if(preg_match('/^([a-z]{2,3})\s*[-|:]/i',$prefix,$match))$audience=self::languages($match[1],true);
+        if($audience)$evidence='provider title prefix';
+        else {
+            $category=preg_replace('/\b(?:with\s+)?(?:english|en|eng)\s+(?:subtitles?|subs?)\b/i','',self::text($m['category']??''));
+            $category=preg_replace('/^\s*(?:4k|uhd|fhd|hd|sd)\s*[-|:]?\s*/i','',$category);
+            if(preg_match_all('/(?:^|[|:\[(])\s*([A-Za-z]{2,3})\s*(?=[-|:\])]|$)|\b(English|French|German|Spanish|Italian|Portuguese|Dutch|Greek|Russian|Arabic|Hindi|Turkish|Japanese|Korean|Chinese)\b/i',$category,$matches,PREG_SET_ORDER))foreach($matches as $match)$audience=array_merge($audience,self::languages(($match[1]??'')?:($match[2]??''),true));
+            if($audience)$evidence='provider folder';
+        }
+        $m['audienceLanguages']=array_values(array_unique($audience));$m['audienceEvidence']=$evidence;
+        $languages=[];$multi=false;
+        foreach($audio as $value){$languages=array_merge($languages,self::languages($value,true));if(preg_match('/"(?:multi(?:lingual|[ -]audio)?|dual[ -]audio)"/i',json_encode($value,JSON_UNESCAPED_UNICODE)))$multi=true;}
+        $m['languages']=array_values(array_unique($languages));$m['audioMultilingual']=$multi||count($m['languages'])>1;
+        $m['audioLanguageData']=['languages'=>$m['languages'],'marker'=>$multi?'multi':''];$m['languageEvidence']=$m['languages']?'provider audio metadata':($multi?'provider multilingual marker; individual languages unknown':'unknown');
+        $m['audioChoices']=$m['languages'];
+        if($m['audioMultilingual'])$m['audioChoices'][]='Multilingual';
+        if(!$m['languages'])$m['audioChoices'][]='Unknown / not supplied';
+        $m['name']=self::displayTitle($title);return $m;
     }
     private static function metadata(array $feed,array $row,string $kind,string $category): array {
+        $audio=[];
+        foreach([$row,$row['info']??[],$row['movie_info']??[],$row['video_info']??[]] as $section)if(is_array($section)){
+            foreach(['audio_languages','audio_language','audio_tracks'] as $field)if(isset($section[$field])&&$section[$field]!==''&&$section[$field]!==[])$audio[]=$section[$field];
+        }
         foreach(['info','movie_info','video_info'] as $section)if(is_array($row[$section]??null))$row=array_merge($row[$section],$row);
         $m=array_merge(StalkerSeries::metadata($feed,$row),StalkerDirect::descriptiveFields($row));
         [$imdb,$tmdb]=self::ids($row);$m['imdb_id']=$imdb;$m['tmdb_id']=$tmdb;
         if(empty($m['year'])&&preg_match('/[\[(]((?:19|20)\d{2})[\])]/',$m['name'],$year))$m['year']=$year[1];
         $m['year']=preg_match('/^(19|20)\d{2}$/D',(string)$m['year'])?(int)$m['year']:null;
-        $m['languages']=self::languages($row['audio_languages']??$row['audio_language']??$row['language']??'');
-        $m['languageEvidence']=$m['languages']?'provider audio metadata':'unknown';
-        // A category label is an audience hint, never proof of an audio track.
-        $m['audienceLanguages']=[];
-        $audience=preg_replace('/\b(?:with\s+)?(?:english|en|eng)\s+(?:subtitles?|subs?)\b/i','',$category);
-        $audience=preg_replace('/^\s*(?:4k|uhd|fhd|hd|sd)\s*[-|:]?\s*/i','',$audience);
-        if(preg_match_all('/(?:^|[|:\[(])\s*([A-Za-z]{2,3})\s*(?=[-|:\])]|$)|\b(English|French|German|Spanish|Italian|Portuguese|Dutch|Greek|Russian|Arabic|Hindi|Turkish|Japanese|Korean|Chinese)\b/i',$audience,$matches,PREG_SET_ORDER))foreach($matches as $match)$m['audienceLanguages']=array_merge($m['audienceLanguages'],self::languages(($match[1]??'')?:($match[2]??''),true));
-        $m['audienceLanguages']=array_values(array_unique($m['audienceLanguages']));
         $m['subtitleLanguages']=self::languages($row['subtitle_languages']??'');
         $m['genres']=self::names($row['genres']??$row['genres_str']??$row['genre_name']??$row['genre']??'');
         if(!$m['genres'])foreach(['Action','Adventure','Animation','Comedy','Crime','Documentary','Drama','Family','Fantasy','History','Horror','Music','Mystery','Romance','Science Fiction','Thriller','War','Western','Sport'] as $genre)if(preg_match('/\b'.preg_quote($genre,'/').'\b/i',$category))$m['genres'][]=$genre;
@@ -52,7 +85,8 @@ final class StalkerLibrary {
         $m['providerTitle']=self::text($row['name']??$row['o_name']??$m['name']);$m['name']=self::displayTitle($m['name']);
         $m['category']=$category;$m['kind']=$kind;$m['playable']=$kind==='vod'&&!empty($row['cmd'])&&empty($row['is_series'])&&empty($row['series']);
         $m['id']=$m['playable']?$kind.':'.$row['id']:(string)$row['id'];$m['feed']=$feed['id'];$m['connection']=$feed['name'];
-        return $m;
+        if(preg_match('/^(?:multi(?:lingual|[ -]audio)?|dual[ -]audio)$/i',self::text($row['language']??'')))$audio['provider_marker']=$row['language'];
+        return self::languageMetadata($m,$audio);
     }
     private static function compatible(array $a,array $b): bool {
         foreach(['imdb_id','tmdb_id'] as $id)if(!empty($a[$id])&&!empty($b[$id])&&$a[$id]!==$b[$id])return false;
@@ -107,15 +141,15 @@ final class StalkerLibrary {
         if($old&&$old['catalogue_id']!==$id)self::aggregate($old['catalogue_id']);
         return $id;
     }
-    private static function aggregate(string $id): void {
+    private static function aggregate(string $id,bool $confirmed=true): void {
         $rows=self::query('SELECT available,payload FROM vaultcast_stalker_offers WHERE catalogue_id=? ORDER BY available DESC,last_seen DESC,feed_id,item_id',[$id])->fetchAll();
-        $available=false;$m=[];$sets=['languages'=>[],'audienceLanguages'=>[],'subtitleLanguages'=>[],'genres'=>[]];
+        $available=false;$m=[];$sets=['languages'=>[],'audienceLanguages'=>[],'subtitleLanguages'=>[],'audioChoices'=>[],'genres'=>[]];
         foreach($rows as $r){$item=json_decode($r['payload'],true);if(!$m)$m=$item;foreach(['description','poster','director','actors','year','imdb_id','tmdb_id','rating_imdb'] as $field)if(empty($m[$field])&&!empty($item[$field]))$m[$field]=$item[$field];if($r['available']){$available=true;foreach($sets as $field=>$_)$sets[$field]=array_merge($sets[$field],$item[$field]??[]);}}
         $previous=self::query('SELECT payload FROM vaultcast_stalker_library WHERE id=?',[$id])->fetchColumn();$previous=$previous?json_decode($previous,true):[];
         if($m)foreach(['description','poster','director','actors','year','rating_imdb'] as $field)if(empty($m[$field])&&!empty($previous[$field]))$m[$field]=$previous[$field];
         if(!$available&&$m)$sets['genres']=$m['genres']??[];
-        if($m){foreach($sets as $field=>$values)$m[$field]=array_values(array_unique($values));self::query('UPDATE vaultcast_stalker_library SET title=?,year=COALESCE(?,year),payload=?,available=?,unavailable_since=IF(?=1,NULL,COALESCE(unavailable_since,?)) WHERE id=?',[mb_substr($m['name'],0,500),$m['year'],self::json($m),$available?1:0,$available?1:0,time(),$id]);}
-        else self::query('UPDATE vaultcast_stalker_library SET available=0,unavailable_since=COALESCE(unavailable_since,?) WHERE id=?',[time(),$id]);
+        if($m){foreach($sets as $field=>$values)$m[$field]=array_values(array_unique($values));self::query('UPDATE vaultcast_stalker_library SET title=?,year=COALESCE(?,year),payload=?,available=?,unavailable_since=IF(?=1,NULL,IF(?=1,COALESCE(unavailable_since,?),unavailable_since)) WHERE id=?',[mb_substr($m['name'],0,500),$m['year'],self::json($m),$available?1:0,$available?1:0,$confirmed?1:0,time(),$id]);}
+        elseif($confirmed)self::query('UPDATE vaultcast_stalker_library SET available=0,unavailable_since=COALESCE(unavailable_since,?) WHERE id=?',[time(),$id]);
         $desired=[];foreach($sets as $field=>$values)foreach(array_unique($values) as $value)$desired[$field.'\0'.$value]=true;
         $existing=[];foreach(self::query('SELECT facet,value FROM vaultcast_stalker_facets WHERE catalogue_id=?',[$id]) as $facet)$existing[$facet['facet'].'\0'.$facet['value']]=true;
         if(!array_diff_key($desired,$existing)&&!array_diff_key($existing,$desired))return;
@@ -215,6 +249,26 @@ final class StalkerLibrary {
         self::query("UPDATE vaultcast_stalker_jobs SET status='waiting',next_run=GREATEST(next_run,?),error=? WHERE feed_id=? AND config=? AND status IN ('queued','running','partial','waiting')",
             [$retryAt,'Provider rate limited requests. Import will resume after the cooldown.',$job['feed_id'],$job['config']]);
     }
+    public static function repairLanguages(): bool {
+        $cursor=\Vaultcast\Repository::document('stalker-language-repair-v1',['id'=>'','done'=>false]);
+        if($cursor['done'])return false;
+        $rows=self::query('SELECT id FROM vaultcast_stalker_library WHERE id>? ORDER BY id LIMIT 25',[$cursor['id']])->fetchAll(PDO::FETCH_COLUMN);
+        foreach($rows as $id){
+            self::db()->beginTransaction();
+            try{
+                foreach(self::query('SELECT feed_id,kind,item_id,payload,playback FROM vaultcast_stalker_offers WHERE catalogue_id=? FOR UPDATE',[$id])->fetchAll() as $offer){
+                    $m=json_decode($offer['payload'],true);$audio=$m['audioLanguageData']??[];
+                    if(!isset($m['audioLanguageData']))foreach(['audio_languages','audio_language','audio_tracks'] as $field)if(isset($m[$field]))$audio[$field]=$m[$field];
+                    if(preg_match('/^(?:multi(?:lingual|[ -]audio)?|dual[ -]audio)$/i',self::text($m['language']??'')))$audio['provider_marker']=$m['language'];
+                    $fixed=self::languageMetadata($m,$audio);$playback=json_decode($offer['playback'],true);$playback['metadata']=$fixed;
+                    self::query('UPDATE vaultcast_stalker_offers SET payload=?,playback=? WHERE feed_id=? AND kind=? AND item_id=?',[self::json($fixed),self::json($playback),$offer['feed_id'],$offer['kind'],$offer['item_id']]);
+                }
+                self::aggregate($id,false);$cursor['id']=$id;\Vaultcast\Repository::putDocument('stalker-language-repair-v1',$cursor);self::db()->commit();
+            }catch(Throwable $e){if(self::db()->inTransaction())self::db()->rollBack();throw $e;}
+        }
+        if(count($rows)<25){foreach(['vod','series'] as $kind)self::refreshFilters($kind,true);$cursor['done']=true;\Vaultcast\Repository::putDocument('stalker-language-repair-v1',$cursor);}
+        return !$cursor['done'];
+    }
     public static function tick(?array &$current): bool {
         require_once STREAM_ROOT.'/src/Live/iptv.php';require_once STREAM_ROOT.'/src/Live/stalker.php';
         $feeds=[];foreach(iptv_load()['feeds']??[] as $f)if(($f['type']??'')==='stalker'&&!empty($f['enabled']))$feeds[$f['id']]=$f;
@@ -247,7 +301,7 @@ final class StalkerLibrary {
             // A completed catalogue is a snapshot. Only an explicit refresh or a
             // connection change starts another provider enumeration.
         }
-        self::refreshLocal();self::expire();StalkerCatalogueScan::cleanup();
+        $repairing=self::repairLanguages();self::refreshLocal();self::expire();StalkerCatalogueScan::cleanup();
         $now=time();
         $due="SELECT * FROM vaultcast_stalker_jobs WHERE status IN ('queued','running','partial','waiting') AND next_run<=?";
         // Stay with the current provider while it has work ready. If it must
@@ -261,7 +315,7 @@ final class StalkerLibrary {
         if(!$job){
             if($current!==null){$current=null;@unlink($activeFile);}
             foreach(['vod','series'] as $kind)self::refreshFilters($kind);
-            return false;
+            return $repairing;
         }
         $feed=$feeds[$job['feed_id']]??null;if(!$feed)return false;
         $selected=[$job['feed_id'],$job['kind'],$job['generation']];
@@ -336,20 +390,32 @@ final class StalkerLibrary {
         return false;
     }
     public static function refreshFilters(string $kind,bool $force=false): void {
-        $key='stalker_library_filters_v3_'.$kind;
+        $key='stalker_library_filters_v4_'.$kind;
         if(!$force&&\Vaultcast\Repository::cacheGet($key)!==null)return;
         $facets=[];foreach(self::query('SELECT f.facet,f.value,COUNT(*) AS count FROM vaultcast_stalker_facets f JOIN vaultcast_stalker_library c ON c.id=f.catalogue_id WHERE c.kind=? GROUP BY f.facet,f.value ORDER BY f.value',[$kind]) as $f)$facets[$f['facet']][]=['value'=>$f['value'],'count'=>(int)$f['count']];
         $years=self::query('SELECT DISTINCT year FROM vaultcast_stalker_library WHERE kind=? AND year IS NOT NULL ORDER BY year DESC',[$kind])->fetchAll(PDO::FETCH_COLUMN);
         \Vaultcast\Repository::cachePut($key,['facets'=>$facets,'years'=>$years],0);
     }
+    private static function sourceFilter(array $feeds,array $opts,array &$args): string {
+        $connections=[];foreach($feeds as $feed){$connections[]='(s.feed_id=? AND s.config=?)';$args[]=$feed['id'];$args[]=StalkerCatalogues::config($feed);}
+        $where='s.available=1 AND ('.($connections?implode(' OR ',$connections):'0=1').')';
+        foreach(['language'=>'audioChoices','audience'=>'audienceLanguages'] as $param=>$field)if(!empty($opts[$param])){
+            $where.=" AND JSON_CONTAINS(s.payload,JSON_QUOTE(?),'$.".$field."')=1";$args[]=mb_substr(self::text($opts[$param]),0,80);
+        }
+        return $where;
+    }
     public static function browse(array $state,array $opts): array {
         $kind=($opts['kind']??'vod')==='series'?'series':'vod';$where='c.kind=?';$args=[$kind];
+        $feeds=[];foreach($state['feeds']??[] as $f)if(($f['type']??'')==='stalker'&&!empty($f['enabled'])&&!StalkerCatalogues::expired($f))$feeds[$f['id']]=$f;
+        $sourceArgs=[];$sourceWhere=self::sourceFilter($feeds,$opts,$sourceArgs);
+        $languageFiltered=!empty($opts['language'])||!empty($opts['audience']);
         $term=mb_substr(self::text($opts['q']??''),0,160);if($term!==''){$where.=" AND c.title LIKE ? ESCAPE '!'";$args[]='%'.strtr($term,['!'=>'!!','%'=>'!%','_'=>'!_']).'%';}
-        $facetJoin='';$joinArgs=[];foreach(['language'=>'languages','audience'=>'audienceLanguages','genre'=>'genres'] as $param=>$facet)if(!empty($opts[$param])){
+        $facetJoin='';$joinArgs=[];foreach(['language'=>'audioChoices','audience'=>'audienceLanguages','genre'=>'genres'] as $param=>$facet)if(!empty($opts[$param])){
             $value=mb_substr(self::text($opts[$param]),0,80);
             if($facetJoin===''){$facetJoin=' JOIN vaultcast_stalker_facets f0 ON f0.catalogue_id=c.id AND f0.facet=? AND f0.value=?';$joinArgs=[$facet,$value];}
             else {$where.=' AND EXISTS(SELECT 1 FROM vaultcast_stalker_facets f WHERE f.catalogue_id=c.id AND f.facet=? AND f.value=?)';$args[]=$facet;$args[]=$value;}
         }
+        if($languageFiltered){$where.=' AND EXISTS(SELECT 1 FROM vaultcast_stalker_offers s WHERE s.catalogue_id=c.id AND '.$sourceWhere.')';$args=array_merge($args,$sourceArgs);}
         if(preg_match('/^[A-Z]$/D',(string)($opts['letter']??''))){$where.=' AND c.title LIKE ?';$args[]=$opts['letter'].'%';}
         if(preg_match('/^(19|20)\d{2}$/D',(string)($opts['year']??''))){$where.=' AND c.year=?';$args[]=(int)$opts['year'];}
         if(in_array($opts['availability']??'',['available','unavailable'],true)){$where.=' AND c.available=?';$args[]=($opts['availability']==='available')?1:0;}
@@ -359,13 +425,25 @@ final class StalkerLibrary {
         $started=microtime(true);$rows=self::query('SELECT c.* FROM '.$from.' WHERE '.$where.' ORDER BY '.$sort.',c.id LIMIT 49 OFFSET '.$offset,$args)->fetchAll();if(class_exists('RequestTiming',false))RequestTiming::add('stalker_rows',$started);
         $hasMore=count($rows)>48;
         if($hasMore)array_pop($rows);
-        $feeds=[];foreach($state['feeds']??[] as $f)if(($f['type']??'')==='stalker'&&!empty($f['enabled'])&&!StalkerCatalogues::expired($f))$feeds[$f['id']]=$f;
-        $started=microtime(true);$offers=[];if($rows){$ids=array_column($rows,'id');foreach(self::query('SELECT catalogue_id,feed_id,config,payload FROM vaultcast_stalker_offers WHERE available=1 AND catalogue_id IN ('.implode(',',array_fill(0,count($ids),'?')).') ORDER BY feed_id,item_id',$ids) as $s){$feed=$feeds[$s['feed_id']]??null;if(!$feed||StalkerCatalogues::config($feed)!==$s['config'])continue;$m=json_decode($s['payload'],true);$m['connection']=$feed['name'];$offers[$s['catalogue_id']][]=$m;}}if(class_exists('RequestTiming',false))RequestTiming::add('stalker_offers',$started);
-        $canSeeLocal=AreaAccess::allowed(AreaAccess::viewer(),'library');
-        $started=microtime(true);$items=[];foreach($rows as $r){$m=json_decode($r['payload'],true);$m['catalogueId']=$r['id'];$m['sources']=$offers[$r['id']]??[];$m['available']=(bool)$r['available'];$m['verificationPending']=!$m['sources']&&($m['available']||$r['unavailable_since']===null);$m['local']=$canSeeLocal&&self::local($m,$kind);$m['unavailableSince']=$r['unavailable_since'];$items[]=$m;}if(class_exists('RequestTiming',false))RequestTiming::add('stalker_local',$started);
+        $offers=[];
+        if($rows){
+            $ids=array_column($rows,'id');
+            foreach(self::query('SELECT s.catalogue_id,s.feed_id,s.payload FROM vaultcast_stalker_offers s WHERE s.catalogue_id IN ('.implode(',',array_fill(0,count($ids),'?')).') AND '.$sourceWhere.' ORDER BY s.feed_id,s.item_id',array_merge($ids,$sourceArgs)) as $source){
+                $m=json_decode($source['payload'],true);$m['connection']=$feeds[$source['feed_id']]['name'];$offers[$source['catalogue_id']][]=$m;
+            }
+        }
+        $canSeeLocal=AreaAccess::allowed(AreaAccess::viewer(),'library');$items=[];
+        foreach($rows as $r){
+            $m=json_decode($r['payload'],true);$sources=$offers[$r['id']]??[];
+            // Use the edition matching BOTH filters for its name, poster and language labels.
+            if($languageFiltered&&$sources)$m=array_merge($m,$sources[0]);
+            $m['catalogueId']=$r['id'];$m['sources']=$sources;$m['available']=(bool)$r['available'];
+            $m['verificationPending']=!$sources&&($m['available']||$r['unavailable_since']===null);
+            $m['local']=$canSeeLocal&&self::local($m,$kind);$m['unavailableSince']=$r['unavailable_since'];$items[]=$m;
+        }
         // The worker prepares filter choices for all pages of this catalogue.
-        $filterData=\Vaultcast\Repository::cacheGet('stalker_library_filters_v3_'.$kind);
+        $filterData=\Vaultcast\Repository::cacheGet('stalker_library_filters_v4_'.$kind);
         $facets=$filterData['facets']??[];$years=$filterData['years']??[];
-        return ['ok'=>true,'items'=>$items,'hasMore'=>$hasMore,'facets'=>$facets,'years'=>$years];
+        return ['ok'=>true,'items'=>$items,'hasMore'=>$hasMore,'facets'=>$facets,'years'=>$years,'languageRepairing'=>!((\Vaultcast\Repository::document('stalker-language-repair-v1',[]))['done']??false)];
     }
 }

@@ -1343,10 +1343,16 @@ window.VaultcastStalkerVod=function(host,options){
   function change(key,value){filters[key]=value;offset=0;load();}
   function select(label,key,values){return h('label',{className:'stalker-vod-filter'},[h('span',{text:label}),h('select',{'aria-label':label,onChange:function(e){change(key,e.target.value);}},values.map(function(v){return h('option',{value:v[0],text:v[1],selected:filters[key]===String(v[0])});}))]);}
   function renderFilters(){
-    function choices(field,label){return [['',label]].concat((facetData[field]||[]).map(function(f){return [f.value,f.value+' ('+f.count+')'];}));}
+    function choices(field,label,key){
+      var values=(facetData[field]||[]).map(function(f){return [f.value,f.value+' ('+f.count+')'];});
+      var keep=field==='audioChoices'?['Multilingual','Unknown / not supplied']:[];
+      if(key&&filters[key])keep.push(filters[key]);
+      keep.forEach(function(value){if(!values.some(function(v){return v[0]===value;}))values.push([value,value+' (0)']);});
+      return [['',label]].concat(values);
+    }
     filterHost.replaceChildren(
-      select('Audio language','language',choices('languages','All audio languages')),
-      select('Intended audience','audience',choices('audienceLanguages','All audience languages')),
+      select('Audio language','language',choices('audioChoices','All audio languages','language')),
+      select('Intended audience','audience',choices('audienceLanguages','All audience languages','audience')),
       select('Genre','genre',choices('genres','All genres')),
       select('Release year','year',[['','All years']].concat(years.map(function(y){return [String(y),String(y)];}))),
       select('Availability','availability',[['','All titles'],['available','Available from providers'],['unavailable','Unavailable from providers']]),
@@ -1357,14 +1363,13 @@ window.VaultcastStalkerVod=function(host,options){
   }
   function card(item){
     var sources=(item.sources||[]).slice();
-    if(filters.language)sources.sort(function(a,b){return Number((b.languages||[]).includes(filters.language))-Number((a.languages||[]).includes(filters.language));});
     var selected=sources[0],label=item.local?'In local Vaultcast library':item.verificationPending?'Provider availability is being verified':item.available?'Available from providers':'No longer available from providers';
     function open(){if(!selected)return;options.open(selected.feed,Object.assign({},item,selected,{sources:sources,poster:selected.poster||item.poster}),poster);}
     var poster=h('button',{className:'stalker-vod-cover',type:'button','aria-label':(selected?'Open ':'Unavailable: ')+item.name,disabled:!selected,onClick:open},[h('span',{className:'stalker-vod-placeholder',text:item.name})]);
     if(item.poster)poster.appendChild(h('img',{src:item.poster,alt:'',loading:'lazy',decoding:'async',referrerpolicy:'no-referrer',onError:function(e){e.target.remove();}}));
     var dot=h('span',{className:'stalker-library-dot '+(item.local?'local':item.verificationPending?'pending':item.available?'available':'unavailable'),title:label,role:'img','aria-label':label});
-    var choices=h('select',{'aria-label':'Connection for '+item.name,onChange:function(e){selected=sources[Number(e.target.value)];}},sources.map(function(source,i){return h('option',{value:String(i),text:source.connection+(source.quality?' · '+source.quality:'')+' · '+((source.languages||[]).join(', ')||'Audio language unknown')});}));
-    var details=h('details',{className:'stalker-library-details'},[h('summary',{text:'Details & connections'}),h('p',{text:item.description||'No description supplied by providers.'}),h('p',{className:'muted',text:'Audio: '+((item.languages||[]).join(', ')||'Unknown')+' · Audience: '+((item.audienceLanguages||[]).join(', ')||'Unknown')})]);
+    var choices=h('select',{'aria-label':'Connection for '+item.name,onChange:function(e){selected=sources[Number(e.target.value)];}},sources.map(function(source,i){return h('option',{value:String(i),text:source.connection+(source.quality?' · '+source.quality:'')+' · '+((source.languages||[]).join(', ')||(source.audioMultilingual?'Multilingual (languages unspecified)':'Audio language unknown'))});}));
+    var details=h('details',{className:'stalker-library-details'},[h('summary',{text:'Details & connections'}),h('p',{text:item.description||'No description supplied by providers.'}),h('p',{className:'muted',text:'Audio: '+((item.languages||[]).join(', ')||(item.audioMultilingual?'Multilingual — languages not supplied':'Unknown / not supplied'))+' · Audience: '+((item.audienceLanguages||[]).join(', ')||'Unknown')})]);
     if(sources.length)details.append(choices,h('button',{type:'button',className:'btn',text:kind==='series'||!selected.playable?'Browse titles':'Open video',onClick:open}));
     else details.appendChild(h('p',{text:item.verificationPending?'Provider availability is being verified. The previous catalogue is retained; no removal countdown has started.':item.unavailableSince?'All provider sources were confirmed unavailable. This entry is retained for 15 days from confirmed loss.':'Availability has not yet been verified. This entry is retained without a removal countdown.'}));
     if(item.local)details.appendChild(h('p',{text:'Also available in your local Vaultcast library.'}));
@@ -1382,6 +1387,7 @@ window.VaultcastStalkerVod=function(host,options){
       if(!alive(token))return;if(!data||!data.ok)throw Error(data&&data.error||'Could not load the catalogue.');
       items=data.items||[];more=!!data.hasMore;var choices=filterCache[kind];facetData=choices&&Date.now()-choices.time<300000?choices.facets:data.facets||{};years=choices&&Date.now()-choices.time<300000?choices.years:data.years||[];renderFilters();grid.replaceChildren();items.forEach(function(item){grid.appendChild(card(item));});
       status.textContent=items.length?'Titles '+(offset+1)+'–'+(offset+items.length):'No matching catalogue titles. An administrator can build the catalogue in Stalker settings.';
+      if(data.languageRepairing)status.textContent+=' · Updating stored language labels…';
       next.disabled=!more;previous.disabled=offset===0;
       if(typeof scroll==='number')requestAnimationFrame(function(){if(alive(token))window.scrollTo(0,scroll);});
     }).catch(function(error){if(alive(token)){status.textContent=error.message+' Use Reload to retry.';previous.disabled=offset===0;}}).finally(function(){if(alive(token)){loading=false;grid.setAttribute('aria-busy','false');}});
@@ -1393,7 +1399,7 @@ window.VaultcastStalkerVod=function(host,options){
     next=h('button',{type:'button',className:'btn',text:'Next →',onClick:function(){if(loading||!more)return;offset+=48;load(0);}});
     var actions=[h('button',{className:'btn ghost',type:'button',text:'Reload',onClick:function(){pageCache.clear();filterCache={};load(undefined,true);}}),h('button',{className:'btn ghost',type:'button',text:'Provider folders & favourites',onClick:function(){stop();mode='provider';legacy.show(kind);host.prepend(h('button',{type:'button',className:'btn ghost',text:'← VOD catalogue',onClick:function(){show(kind);}}));}})];
     if(options.manage)actions.push(h('button',{className:'btn ghost',type:'button',text:'Catalogue settings',onClick:options.manage}));
-    host.replaceChildren(h('h2',{text:kind==='series'?'Series catalogue':'Movie catalogue'}),h('form',{className:'stalker-searchbar',onSubmit:function(e){e.preventDefault();clearTimeout(timer);offset=0;load();}},[search,h('button',{className:'btn primary',type:'submit',text:'Search'})]),h('div',{className:'row-actions'},actions),filterHost,alphabet,h('p',{className:'stalker-library-legend muted'},[h('span',{className:'available',text:'● Green: provider available'}),' · ',h('span',{className:'unavailable',text:'● Red: unavailable'}),' · ',h('span',{className:'local',text:'● Blue: in local library'}),h('br'), 'Audio languages come from provider metadata; audience language is inferred from provider folders.']),status,grid,h('div',{className:'row-actions'},[previous,next]));
+    host.replaceChildren(h('h2',{text:kind==='series'?'Series catalogue':'Movie catalogue'}),h('form',{className:'stalker-searchbar',onSubmit:function(e){e.preventDefault();clearTimeout(timer);offset=0;load();}},[search,h('button',{className:'btn primary',type:'submit',text:'Search'})]),h('div',{className:'row-actions'},actions),filterHost,alphabet,h('p',{className:'stalker-library-legend muted'},[h('span',{className:'available',text:'● Green: provider available'}),' · ',h('span',{className:'unavailable',text:'● Red: unavailable'}),' · ',h('span',{className:'local',text:'● Blue: in local library'}),h('br'), 'Audio languages use explicit provider audio metadata; multilingual does not imply English. Audience labels use provider title prefixes, then folders.']),status,grid,h('div',{className:'row-actions'},[previous,next]));
     renderFilters();
   }
   function show(value){stop();mode='catalogue';active=true;kind=value;offset=0;items=[];render();load();}
