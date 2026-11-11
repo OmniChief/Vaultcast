@@ -1,9 +1,39 @@
 <?php
 declare(strict_types=1);
 
-/** Admin-owned provider catalogue scheduler; Live TV remains on demand. */
+/** Admin-owned provider catalogue scheduler. */
 final class StalkerCatalogues {
     public static function config(array $feed): string {return hash('sha256',json_encode(array_intersect_key($feed,array_flip(['id','url','mac','username','password','serial','deviceId','deviceId2']))));}
+    public const KINDS=['live','vod','series'];
+    private static function accountKey(array $feed): string {return 'stalker-account-'.self::config($feed);}
+    public static function expired(array $feed): bool {
+        $account=\Vaultcast\Repository::document(self::accountKey($feed),[]);
+        return !empty($account['expires'])&&(int)$account['expires']<=time();
+    }
+    public static function recordExpiry(array $feed): void {
+        $key=self::accountKey($feed);
+        if(\Vaultcast\Repository::document($key,null)!==null)return;
+        $expiry=stalker_account_expiry($feed);
+        \Vaultcast\Repository::putDocument($key,['expires'=>$expiry['expires']??null]);
+    }
+    public static function notifyAdmins(array $feed,bool $expired=false): void {
+        $event=$expired?'expired':'scan-needed';
+        foreach(Auth::users() as $user){
+            if(!Permissions::allowed($user,'iptv_manage')||empty($user['id']))continue;
+            Inbox::add((string)$user['id'],'system','stalker','stalker-'.$event.'-'.self::config($feed),null,
+                $expired?'Stalker provider expired':'Stalker catalogue needs a scan',
+                $feed['name'].($expired?' expired. Scan its replacement once it is available.':' is ready to scan in Stalker settings.'),
+                ['kind'=>'settings','section'=>'live-stalker']);
+        }
+    }
+    public static function localArtwork(array $data): array {
+        foreach($data as $key=>&$value){
+            if(in_array($key,['poster','logo','logoUrl'],true))$value='';
+            elseif(in_array($key,['posterCandidates','channelLogos'],true))$value=[];
+            elseif(is_array($value))$value=self::localArtwork($value);
+        }
+        return $data;
+    }
     public static function active(array $feed,string $kind): string {$saved=\Vaultcast\Repository::document('stalker-catalogues',['sources'=>[]]);$record=$saved['sources'][$feed['id'].'/'.$kind]??null;return $record&&$record['config']===self::config($feed)&&!empty($record['active'])?$record['active']:hash('sha256',json_encode($feed));}
     /** Stored independently per connection and media type; legacy jobs scan all folders. */
     public static function folderSelection(string $feedId,string $kind): array {
@@ -16,9 +46,30 @@ final class StalkerCatalogues {
         return $folderId===''||$selection['mode']==='all'||($folderId!=='*'&&in_array($folderId,$selection['ids'],true));
     }
     private static function feeds(): array {require_once STREAM_ROOT.'/src/Live/iptv.php';return array_values(array_filter(iptv_load()['feeds']??[],static function($f){return ($f['type']??'')==='stalker'&&!empty($f['enabled']);}));}
-    public static function status(): array {
+    public static function status(bool $summary=false): array {
         self::ensureWorker();$feeds=array_column(self::feeds(),null,'id');$sources=[];
-        foreach(\Vaultcast\Database::connection()->query('SELECT feed_id,kind,status,processed,error,next_run FROM vaultcast_stalker_jobs') as $r){$r['name']=$feeds[$r['feed_id']]['name']??'Removed connection';$r['scanned']=(int)$r['processed'];
+        $heartbeat=STREAM_DATA.'/runtime/stalker-library.heartbeat';
+        $worker=is_file($heartbeat)&&filemtime($heartbeat)>time()-180;
+        $active=$worker?json_decode((string)@file_get_contents(STREAM_DATA.'/runtime/stalker-library.active'),true):null;
+        $seen=[];
+        foreach(\Vaultcast\Database::connection()->query('SELECT feed_id,kind,config,generation,status,processed,error,next_run,last_hash FROM vaultcast_stalker_jobs') as $r){$r['name']=$feeds[$r['feed_id']]['name']??'Removed connection';$r['scanned']=(int)$r['processed'];
+            $feed=$feeds[$r['feed_id']]??null;
+            if($feed&&$r['config']!==self::config($feed))$r['status']='scan_required';
+            if($r['kind']==='series'&&$r['status']==='complete'&&$r['last_hash']!=='episodes_complete')$r['status']='scan_required';
+            if($feed&&self::expired($feed))$r['status']='expired';
+            $r['active']=$active===[$r['feed_id'],$r['kind'],$r['generation']]&&in_array($r['status'],['queued','running','partial','waiting'],true);
+            if($r['active']&&(int)$r['next_run']>time())$r['active']=false;
+            unset($r['config'],$r['generation']);
+            $seen[$r['feed_id']][$r['kind']]=true;
+            if($summary){
+                $q=\Vaultcast\Database::connection()->prepare("SELECT COUNT(*) AS total,COALESCE(SUM(f.status IN ('complete','skipped')),0) AS done FROM vaultcast_stalker_folders f JOIN vaultcast_stalker_jobs j ON j.feed_id=f.feed_id AND j.kind=f.kind AND j.generation=f.generation WHERE f.feed_id=? AND f.kind=? AND f.folder_id<>''");
+                $q->execute([$r['feed_id'],$r['kind']]);
+                $progress=$q->fetch();
+                $r['foldersTotal']=(int)$progress['total'];
+                $r['foldersComplete']=(int)$progress['done'];
+                $sources[]=$r;
+                continue;
+            }
             $q=\Vaultcast\Database::connection()->prepare("SELECT f.folder_id,f.title,f.status,f.next_page,f.processed,f.total,f.last_success,f.error,f.next_run FROM vaultcast_stalker_folders f JOIN vaultcast_stalker_jobs j ON j.feed_id=f.feed_id AND j.kind=f.kind AND j.generation=f.generation WHERE f.feed_id=? AND f.kind=? ORDER BY f.folder_id='*',f.folder_id");
             $q->execute([$r['feed_id'],$r['kind']]);$folders=$q->fetchAll();
             $selection=self::folderSelection($r['feed_id'],$r['kind']);
@@ -33,11 +84,14 @@ final class StalkerCatalogues {
             $r['foldersComplete']=count(array_filter($folders,static function($f){return $f['folder_id']!==''&&in_array($f['status'],['complete','skipped'],true);}));
             $r['currentFolder']=null;foreach($folders as $folder)if(!in_array($folder['status'],['complete','skipped'],true)){$r['currentFolder']=$folder;break;}
             $sources[]=$r;}
-        return ['ok'=>true,'sources'=>$sources,'reset'=>\Vaultcast\Repository::document('stalker-catalogue-reset',['state'=>'idle']),'worker'=>is_file(STREAM_DATA.'/runtime/stalker-library.heartbeat')&&filemtime(STREAM_DATA.'/runtime/stalker-library.heartbeat')>time()-180];
+        foreach($feeds as $feed)foreach(self::KINDS as $kind)if(empty($seen[$feed['id']][$kind]))$sources[]=[
+            'feed_id'=>$feed['id'],'kind'=>$kind,'name'=>$feed['name'],'scanned'=>0,'status'=>self::expired($feed)?'expired':'scan_required',
+        ];
+        return ['ok'=>true,'sources'=>$sources,'reset'=>\Vaultcast\Repository::document('stalker-catalogue-reset',['state'=>'idle']),'worker'=>$worker];
     }
     public static function control(array $opts): array {
         $op=(string)($opts['operation']??'load');if(!in_array($op,['load','refresh','pause','folders','discover','reset_rebuild'],true))throw new InvalidArgumentException('Unknown catalogue operation.');
-        $kind=(string)($opts['kind']??'all');if(!in_array($kind,['all','vod','series'],true))throw new InvalidArgumentException('Choose Movies, Series, or both. Live TV is browsed on demand.');
+        $kind=(string)($opts['kind']??'all');if($kind!=='all'&&!in_array($kind,self::KINDS,true))throw new InvalidArgumentException('Choose Live TV, Movies, Series, or all.');
         $selected=(string)($opts['feed']??'');$pdo=\Vaultcast\Database::connection();
         $reset=\Vaultcast\Repository::document('stalker-catalogue-reset',['state'=>'idle']);
         if(($reset['state']??'idle')==='purging')throw new InvalidArgumentException('Catalogue reset is in progress. Wait for it to finish.');
@@ -47,7 +101,7 @@ final class StalkerCatalogues {
             try {
                 // In-flight worker page commits lock the job row. Pausing every job
                 // invalidates subsequent page responses before any purge begins.
-                $pdo->exec("UPDATE vaultcast_stalker_jobs SET status='paused',next_run=0");
+                $pdo->exec("UPDATE vaultcast_stalker_jobs SET status='paused',next_run=0 WHERE kind IN ('vod','series')");
                 \Vaultcast\Repository::putDocument('stalker-catalogue-reset',['state'=>'purging','table'=>0,'started'=>time()]);
                 $pdo->commit();
             }catch(Throwable $e){if($pdo->inTransaction())$pdo->rollBack();throw $e;}
@@ -112,7 +166,7 @@ final class StalkerCatalogues {
         }
         $pdo->beginTransaction();
         try {
-            foreach(self::feeds() as $f)if($selected===''||$f['id']===$selected)foreach($kind==='all'?['vod','series']:[$kind] as $type){
+            foreach(self::feeds() as $f)if($selected===''||$f['id']===$selected)foreach($kind==='all'?self::KINDS:[$kind] as $type){
                 // Lock the job row so a response fetched before pause/rebuild cannot commit afterwards.
                 $q=$pdo->prepare('SELECT status FROM vaultcast_stalker_jobs WHERE feed_id=? AND kind=? FOR UPDATE');$q->execute([$f['id'],$type]);$status=$q->fetchColumn();
                 if($op==='pause'){$q=$pdo->prepare("UPDATE vaultcast_stalker_jobs SET status='paused' WHERE feed_id=? AND kind=?");$q->execute([$f['id'],$type]);}
@@ -123,14 +177,16 @@ final class StalkerCatalogues {
         file_put_contents(STREAM_DATA.'/runtime/stalker-library.enabled','1');self::ensureWorker();return self::status();
     }
     public static function connectionsChanged(array $before,array $after): void {
-        if(!is_file(STREAM_DATA.'/runtime/stalker-library.enabled'))return;
         $old=array_column($before,null,'id');$next=array_column($after,null,'id');$pdo=\Vaultcast\Database::connection();
-        // Saving settings only schedules work. Reconciliation runs in the background.
+        // A new or changed connection requires an explicit admin import.
         foreach($before as $f)if(($f['type']??'')==='stalker'&&(!isset($next[$f['id']])||empty($next[$f['id']]['enabled']))){$q=$pdo->prepare("UPDATE vaultcast_stalker_jobs SET status='removed',next_run=? WHERE feed_id=?");$q->execute([time(),$f['id']]);}
-        foreach($after as $f)if(($f['type']??'')==='stalker'&&!empty($f['enabled'])&&(!isset($old[$f['id']])||empty($old[$f['id']]['enabled'])||self::config($old[$f['id']])!==self::config($f)))foreach(['vod','series'] as $kind)StalkerLibrary::queue($f,$kind);
-        self::ensureWorker();
+        foreach($after as $f)if(($f['type']??'')==='stalker'&&!empty($f['enabled'])&&(!isset($old[$f['id']])||empty($old[$f['id']]['enabled'])||self::config($old[$f['id']])!==self::config($f)))self::notifyAdmins($f);
     }
-    private static function revision(): string {return hash('sha256',hash_file('sha256',__FILE__).hash_file('sha256',__DIR__.'/StalkerLibrary.php').hash_file('sha256',__DIR__.'/StalkerCatalogueScan.php').hash_file('sha256',STREAM_ROOT.'/src/Live/stalker.php'));}
+    private static function revision(): string {
+        $files=[__FILE__,__DIR__.'/StalkerLibrary.php',__DIR__.'/StalkerCatalogueScan.php',
+            __DIR__.'/StalkerDirect.php',__DIR__.'/StalkerLiveBrowse.php',STREAM_ROOT.'/src/Live/stalker.php'];
+        return hash('sha256',implode('',array_map(static function($file){return hash_file('sha256',$file);},$files)));
+    }
     public static function ensureWorker(): void {
         if(PHP_SAPI==='cli'||!is_file(STREAM_DATA.'/runtime/stalker-library.enabled'))return;
         $dir=STREAM_DATA.'/runtime';$probe=@fopen($dir.'/stalker-library.worker.lock','c');if(!$probe)return;
@@ -141,7 +197,11 @@ final class StalkerCatalogues {
     public static function run(): array {
         $dir=STREAM_DATA.'/runtime';$lock=fopen($dir.'/stalker-library.worker.lock','c');if(!$lock||!flock($lock,LOCK_EX|LOCK_NB))return ['ok'=>true,'alreadyRunning'=>true];
         $revision=self::revision();$version=trim((string)file_get_contents(STREAM_ROOT.'/VERSION'));file_put_contents($dir.'/stalker-library.revision',$revision);
-        try{while(is_file($dir.'/stalker-library.enabled')&&self::revision()===$revision&&trim((string)file_get_contents(STREAM_ROOT.'/VERSION'))===$version){touch($dir.'/stalker-library.heartbeat');$busy=false;try{$busy=StalkerLibrary::tick();}catch(Throwable $e){error_log('Stalker catalogue step failed: '.$e->getMessage());}\Vaultcast\Database::releaseForStreaming();sleep($busy?1:30);clearstatcache();}}
+        $checkpoint=json_decode((string)@file_get_contents($dir.'/stalker-library.active'),true);
+        $current=is_array($checkpoint)&&array_keys($checkpoint)===[0,1,2]
+            &&is_string($checkpoint[0])&&in_array($checkpoint[1],self::KINDS,true)&&is_string($checkpoint[2])
+            ?$checkpoint:null;
+        try{while(is_file($dir.'/stalker-library.enabled')&&self::revision()===$revision&&trim((string)file_get_contents(STREAM_ROOT.'/VERSION'))===$version){touch($dir.'/stalker-library.heartbeat');$busy=false;try{$busy=StalkerLibrary::tick($current);}catch(Throwable $e){error_log('Stalker catalogue step failed: '.$e->getMessage());}\Vaultcast\Database::releaseForStreaming();sleep($busy?1:30);clearstatcache();}}
         finally{@unlink($dir.'/stalker-library.heartbeat');flock($lock,LOCK_UN);fclose($lock);}
         if(is_file($dir.'/stalker-library.enabled'))try{Process::startPhpWorker('stalker-catalogue','stalkerlibrary');}catch(Throwable $ignored){}
         return ['ok'=>true];

@@ -75,7 +75,7 @@ function live_bridge_require_admin(): void {
     $action=live_bridge_action();
     if($action==='stalker_play'){Auth::requireUser();return;}
     if($action==='stalker_check_media'){Auth::requireUser();return;}
-    if($action==='stalker_manage'){Permissions::require('iptv_manage');return;}
+    if(in_array($action,['stalker_manage','stalker_catalogue_control'],true)){Permissions::require('iptv_manage');return;}
     if($action==='stalker_updates'){Permissions::require('iptv_manage');return;}
     if(in_array($action,['stalker_download','stalker_retry','stalker_cancel'],true)){Permissions::require('downloads_request');Permissions::require('ingest_view');return;}
     if($action==='radio_save'){Permissions::require('radio_manage');return;}
@@ -316,9 +316,12 @@ if ($__liveAction !== null) {
             $state=iptv_load();
             if ($__liveAction==='stalker') json_out(['ok'=>true,'connections'=>array_values(array_map('stalker_public_feed',array_filter($state['feeds'],static function($f){return ($f['type'] ?? '')==='stalker';})))]);
             $body=$isWrite?body_json():$_GET;
-            if ($__liveAction==='stalker_catalogue_status') {Permissions::require('iptv_manage');json_out(StalkerCatalogues::status());}
+            if ($__liveAction==='stalker_catalogue_status') {Permissions::require('iptv_manage');json_out(StalkerCatalogues::status(!empty($body['summary'])));}
             if ($__liveAction==='stalker_catalogue_control') {Permissions::require('iptv_manage');json_out(StalkerCatalogues::control($body));}
-            if ($__liveAction==='stalker_vod_catalogue') json_out(!empty($body['indexed'])?StalkerLibrary::browse($state,$body):StalkerDirect::browse($state,$body));
+            if ($__liveAction==='stalker_vod_catalogue') {
+                if(!empty($body['raw_categories_export']))Permissions::require('iptv_manage');
+                json_out(StalkerCatalogues::localArtwork(!empty($body['indexed'])?StalkerLibrary::browse($state,$body):StalkerDirect::browse($state,$body)));
+            }
             if ($__liveAction==='stalker_vod_probe') {Permissions::require('iptv_manage');json_out(StalkerDirect::probe($state,$body));}
             if ($__liveAction==='stalker_vod_fields') {Permissions::require('iptv_manage');json_out(StalkerDirect::catalogueFieldProbe($state,$body));}
             if ($__liveAction==='stalker_epg_fields') {
@@ -366,14 +369,17 @@ if ($__liveAction !== null) {
             if (!$feed || ($feed['type'] ?? '')!=='stalker' || empty($feed['enabled'])) throw new InvalidArgumentException('Select an enabled Stalker connection in settings.');
             if ($__liveAction==='stalker_live_categories') json_out(StalkerLiveBrowse::categories($feed,!empty($body['refresh'])));
             if ($__liveAction==='stalker_live_channels') json_out(StalkerLiveBrowse::channels($feed,$body));
-            if ($__liveAction==='stalker_live_guide') json_out(StalkerLiveBrowse::guidePage($feed,$body));
-            if ($__liveAction==='stalker_browse') json_out(in_array((string)($body['kind']??'live'),['vod','series'],true)?StalkerDirect::browse(['feeds'=>[$feed]],$body):stalker_catalogue($feed,$body));
+            if ($__liveAction==='stalker_live_guide') json_out(StalkerCatalogues::localArtwork(StalkerLiveBrowse::guidePage($feed,$body)));
+            if ($__liveAction==='stalker_browse') {
+                if(!empty($body['raw_categories_export']))Permissions::require('iptv_manage');
+                json_out(StalkerCatalogues::localArtwork(in_array((string)($body['kind']??'live'),['vod','series'],true)?StalkerDirect::browse(['feeds'=>[$feed]],$body):stalker_catalogue($feed,$body)));
+            }
             if ($__liveAction==='stalker_vod_detail') {
                 $item=stalker_vod_entry($feed,(string)($body['id']??''));
                 if(!$item)throw new RuntimeException('This catalogue entry has expired. Return to Stalker and refresh the catalogue.');
-                json_out(['ok'=>true,'item'=>$item['metadata']??['id'=>(string)$body['id'],'name'=>'Provider video','kind'=>'vod','playable'=>true]]);
+                json_out(StalkerCatalogues::localArtwork(['ok'=>true,'item'=>$item['metadata']??['id'=>(string)$body['id'],'name'=>'Provider video','kind'=>'vod','playable'=>true]]));
             }
-            if ($__liveAction==='stalker_channel') json_out(stalker_channel_detail($feed,(string)($body['id']??''),!empty($body['refresh']),($body['guide']??'1')!=='0'));
+            if ($__liveAction==='stalker_channel') json_out(StalkerCatalogues::localArtwork(stalker_channel_detail($feed,(string)($body['id']??''),!empty($body['refresh']),($body['guide']??'1')!=='0')));
             $kind=(string)($body['kind'] ?? 'live');$id=(string)($body['id'] ?? '');
             if (!in_array($kind,['live','vod','series'],true)) throw new InvalidArgumentException('Unknown provider media type.');
             if($__liveAction==='stalker_check_media')json_out(stalker_check_media($feed,$id,$kind,(string)($body['profile']??'stb')));
@@ -392,12 +398,7 @@ if ($__liveAction !== null) {
     if ($__liveAction === 'stalker_art') {
         Auth::requireUser();
         if(Parental::filtering())live_bridge_deny(403,'Provider artwork is unavailable for restricted profiles.');
-        $key=(string)($_GET['art']??'');if(!preg_match('/^[a-f0-9]{64}$/D',$key))live_bridge_deny(404,'Artwork unavailable.');
-        $art=\Vaultcast\Repository::cacheGet('stalker-art:'.$key);if(!$art)live_bridge_deny(404,'Artwork expired.');
-        require_once STREAM_ROOT.'/src/Live/iptv.php';$feed=iptv_feed_by_id(iptv_load(),$art['feed']);
-        if(!$feed||empty($feed['enabled'])||($feed['type']??'')!=='stalker')live_bridge_deny(404,'Artwork unavailable.');
-        $url=(string)($art['url']??'');$parts=parse_url($url);if(!$parts||!in_array($parts['scheme']??'',['http','https'],true)||isset($parts['user'])||isset($parts['pass'])||preg_match('/[\r\n]/',$url))live_bridge_deny(404,'Artwork unavailable.');
-        header('Location: '.$url,true,302);header('Cache-Control: private, max-age=300');exit;
+        live_bridge_deny(404,'No locally saved artwork is available.');
     }
     if ($__liveAction === 'stalker_stream') {
         require_once STREAM_ROOT.'/src/bootstrap.php';
@@ -407,6 +408,7 @@ if ($__liveAction !== null) {
         try {
             $feed = iptv_feed_by_id(iptv_load(), (string)($_GET['feed'] ?? ''));
             if (!$feed || ($feed['type'] ?? '') !== 'stalker' || empty($feed['enabled'])) live_bridge_deny(404, 'Portal source is unavailable.');
+            if (StalkerCatalogues::expired($feed)) live_bridge_deny(410, 'This provider subscription has expired.');
             $id = (string)($_GET['channel'] ?? '');
             if (class_exists('Parental') && Parental::filtering()) live_bridge_deny(403,'Provider catalogues are unavailable for restricted profiles.');
             $ticketState=null;
@@ -445,7 +447,7 @@ if ($__liveAction !== null) {
             // Preserve hosts discovered in nested playlists on subsequent playlist reloads.
             if (!is_file($allow) && @file_put_contents($allow,$host."\n",LOCK_EX)===false) throw new RuntimeException('Could not authorise portal playback.');
             @chmod($allow,0600);
-            iptv_hls_proxy_request();
+            iptv_hls_proxy_request($ticketState && $ticketState['kind']!=='live' && strpos($id,'series:')===0);
         } catch (InvalidArgumentException $e) { live_bridge_deny(422,$e->getMessage()); }
           catch (RuntimeException $e) { live_bridge_deny(502,$e->getMessage()); }
         exit;

@@ -1,23 +1,24 @@
 <?php
 declare(strict_types=1);
 
-/**
- * Provider-native Live TV discovery: one small genres call per connection, followed
- * by one paginated channel request only after the viewer selects a folder.
- * No catalogue tables, background jobs, or poster storage.
- */
+/** Live TV snapshots are fetched by the catalogue worker and read locally by viewers. */
 final class StalkerLiveBrowse {
     private static function key(array $feed,string $suffix): string {
-        return 'stalker_live_direct_v1_'.hash('sha256',json_encode([$feed,$suffix]));
+        return 'stalker_live_snapshot_'.hash('sha256',json_encode([StalkerCatalogues::config($feed),$suffix]));
     }
     public static function presentation(array $feed,string $id): array {
         $value=\Vaultcast\Repository::cacheGet(self::key($feed,'presentation:v3:'.$id));
         return is_array($value)?$value:[];
     }
     public static function categories(array $feed,bool $refresh=false): array {
-        $key=self::key($feed,'genres:v5');
-        $cached=\Vaultcast\Repository::cacheGet($key);
-        if($cached!==null&&!$refresh)return ['ok'=>true,'categories'=>$cached];
+        $snapshot=self::snapshot($feed);
+        return ['ok'=>true,'categories'=>$snapshot['categories']??[],'catalogueLoading'=>$snapshot===null];
+    }
+    public static function snapshot(array $feed): ?array {
+        if(StalkerCatalogues::expired($feed))return null;
+        return \Vaultcast\Repository::stalkerSnapshot(self::key($feed,'imported-live'));
+    }
+    public static function fetchSnapshot(array $feed): array {
         $result=stalker_call($feed,'get_genres',[],'itv');
         $rows=$result['data']??$result;
         if(!is_array($rows))throw new RuntimeException('Provider returned invalid Live TV categories.');
@@ -30,59 +31,51 @@ final class StalkerLiveBrowse {
                 'genre'=>StalkerCountries::group($title,$title)];
             if(count($categories)>=1000)break;
         }
-        \Vaultcast\Repository::cachePut($key,$categories,$categories?3600:180);
-        return ['ok'=>true,'categories'=>$categories];
+        $result=stalker_call($feed,'get_all_channels',[],'itv');
+        $rows=$result['data']??$result;
+        if(!is_array($rows)||count($rows)>50000||(isset($result['total_items'])&&(int)$result['total_items']>count($rows)))
+            throw new RuntimeException('Provider returned an incomplete or oversized Live TV list.');
+        $channels=[];
+        foreach($rows as $row)if(is_array($row)&&isset($row['id'])&&is_scalar($row['id'])&&!empty($row['cmd']))$channels[(string)$row['id']]=$row;
+        if(!$channels)throw new RuntimeException('Provider returned no playable Live TV channels.');
+        uasort($channels,static function($a,$b){
+            return ((int)($a['number']??0)<=> (int)($b['number']??0)) ?: strcmp((string)$a['id'],(string)$b['id']);
+        });
+        $guide=[];
+        try{
+            $response=stalker_call($feed,'get_epg_info',['period'=>48],'itv');
+            $data=$response['data']??$response;
+            if(is_array($data))$guide=$data;
+        }catch(RuntimeException $ignored){}
+        return ['categories'=>$categories,'channels'=>$channels,'guide'=>$guide,'imported'=>time()];
+    }
+    public static function saveSnapshot(array $feed,array $snapshot): void {
+        \Vaultcast\Repository::saveStalkerSnapshot(self::key($feed,'imported-live'),$snapshot);
     }
     public static function channels(array $feed,array $opts): array {
         $category=mb_substr((string)($opts['category']??''),0,120);
         if($category==='')throw new InvalidArgumentException('Choose a provider category.');
         // Never permit arbitrary category IDs as a way to trigger cross-provider scans.
-        $categories=self::categories($feed)['categories'];
+        $snapshot=self::snapshot($feed);
+        if($snapshot===null)return ['ok'=>true,'items'=>[],'total'=>0,'hasMore'=>false,'catalogueLoading'=>true];
+        $categories=$snapshot['categories'];
         $selected=null;
         foreach($categories as $candidate)if($candidate['id']===$category){$selected=$candidate;break;}
         if($selected===null)throw new InvalidArgumentException('Unknown provider category.');
         $page=max(1,min(10000,(int)($opts['page']??1)));
-        $key=self::key($feed,'channels:v2:'.json_encode([$category,$page]));
-        $cached=\Vaultcast\Repository::cacheGet($key);
-        if($cached!==null&&empty($opts['refresh'])){
-            // Channel-page caching and playback-command caching have independent
-            // lifetimes. Rehydrate a missing command when a cached page is used,
-            // otherwise a visible channel can fail to resolve on selection.
-            $ready=true;
-            foreach($cached['items']??[] as $item){
-                $id=(string)($item['id']??'');
-                if($id!==''&&\Vaultcast\Repository::cacheGet(stalker_live_key($feed,$id))===null
-                    &&\Vaultcast\Repository::cacheGet(self::key($feed,'item:'.$id))===null){
-                    $ready=false;break;
-                }
-            }
-            if($ready)return $cached;
-        }
-        $result=stalker_ordered_page($feed,'itv',['sortby'=>'number','genre'=>$category,'search'=>'','fav'=>0],$page);
-        $rows=$result['data']??$result;
-        if(!is_array($rows))throw new RuntimeException('Provider returned invalid channels.');
+        $rows=array_filter($snapshot['channels'],static function($row)use($category){return $category==='*'||(string)($row['tv_genre_id']??'')===$category;});
+        $total=count($rows);$perPage=60;
+        $rows=array_slice($rows,($page-1)*$perPage,$perPage);
         $items=[];
         foreach($rows as $row){
             if(!is_array($row)||!isset($row['id'])||!is_scalar($row['id'])||empty($row['cmd']))continue;
             $id=(string)$row['id'];if($id===''||strlen($id)>120)continue;
             $name=mb_substr((string)($row['name']??$id),0,300);
             if(preg_match('/[#═━☰]{3,}/u',$name))continue;
-            $playback=stalker_live_entry($row);
-            \Vaultcast\Repository::cachePut(self::key($feed,'item:'.$id),$playback,7200);
-            // The compatibility player uses the same on-demand Stalker resolver.
-            \Vaultcast\Repository::cachePut(stalker_live_key($feed,$id),$playback,7200);
             // Carry presentation metadata already included in the same provider page.
             // Keep commands and private provider URLs in the existing server-side cache.
             $xmltvId=trim((string)($row['xmltv_id']??''));
             if(strlen($xmltvId)>160||preg_match('~(?:/|\\\\|https?:|[?&=]|[\\x00-\\x1f])~',$xmltvId))$xmltvId='';
-            $logoUrl=trim((string)($row['logo']??''));
-            // Do not leak authenticated portal URLs or local addresses to browsers.
-            // Images are browser-loaded directly; never proxy through the NAS.
-            if(strlen($logoUrl)>500
-                ||!preg_match('~^https://[a-z0-9.-]+(?::443)?/[a-z0-9_./%+@-]+$~iD',$logoUrl)
-                ||preg_match('~^https://(?:localhost|127\\.|10\\.|192\\.168\\.|172\\.(?:1[6-9]|2[0-9]|3[01])\\.|169\\.254\\.|[^/]*\\.local/)~i',$logoUrl)){
-                $logoUrl='';
-            }
             $number=filter_var($row['number']??null,FILTER_VALIDATE_INT,
                 ['options'=>['min_range'=>1,'max_range'=>1000000]]);
             $flag=static function($value): bool {
@@ -95,14 +88,9 @@ final class StalkerLiveBrowse {
                 'archive'=>$flag($row['archive']??0)&&$flag($row['enable_tv_archive']??0),
                 'archiveHours'=>max(0,min(720,(int)($row['tv_archive_duration']??0))),
                 'pvr'=>$flag($row['allow_pvr']??0),'timeshift'=>$flag($row['allow_local_timeshift']??0),
-                'logoAvailable'=>$logoUrl!=='','logoUrl'=>$logoUrl];
+                'logoAvailable'=>false,'logoUrl'=>''];
         }
-        $count=count($rows);$perPage=max(1,(int)($result['max_page_items']??$count));
-        $total=isset($result['total_items'])&&is_numeric($result['total_items'])?max(0,(int)$result['total_items']):null;
-        $out=['ok'=>true,'items'=>$items,'page'=>$page,'total'=>$total,
-            'hasMore'=>$total!==null?$page*$perPage<$total:$count>0&&$count>=$perPage];
-        \Vaultcast\Repository::cachePut($key,$out,600);
-        return $out;
+        return ['ok'=>true,'items'=>$items,'page'=>$page,'total'=>$total,'hasMore'=>$page*$perPage<$total];
     }
     /**
      * Load a short on-demand guide for one visible provider channel page.
@@ -154,34 +142,17 @@ final class StalkerLiveBrowse {
             $indexPath=STREAM_DATA.'/live/epg_cache/stalker-open-'.$region.'.json';
             $indexRevision[$region]=is_file($indexPath)?(int)@filemtime($indexPath):0;
         }
-        $key=self::key($feed,'guide:v5:'.json_encode([$category,$page,$indexRevision]));
+        $snapshot=self::snapshot($feed);
+        if($snapshot===null)return ['ok'=>true,'programmes'=>[],'available'=>false,'channelCount'=>0,'catalogueLoading'=>true];
+        $key=self::key($feed,'imported-guide:'.json_encode([$snapshot['imported']??0,$category,$page,$indexRevision]));
         $cached=$refresh?null:\Vaultcast\Repository::cacheGet($key);
         if($cached!==null)return $cached;
-        // A user opening Stalker EPG can request a refresh without browser-side
-        // downloading or per-channel polling. Maintenance queues only one CLI job.
-        $missingGuide=false;
-        foreach(['gb','gb-freeview','us'] as $region){
-            $index=STREAM_DATA.'/live/epg_cache/stalker-open-'.$region.'.json';
-            if(!is_file($index)||time()-@filemtime($index)>21600){$missingGuide=true;break;}
-        }
-        if($missingGuide && class_exists('LiveGuideCache')) LiveGuideCache::queueEpg();
         $visible=self::channels($feed,['category'=>$category,'page'=>$page]);
         $ids=[];
         foreach($visible['items'] as $item)$ids[(string)$item['id']]=true;
         if(!$ids)return ['ok'=>true,'programmes'=>[],'available'=>false,'channelCount'=>0];
-        // This portal action returns its own channel-indexed structure. Request the
-        // minimum period and filter it immediately to the selected visible page.
-        $portalFailed=false;
-        try {
-            $response=stalker_request($feed,'itv','get_epg_info',['period'=>1],stalker_session($feed));
-            $data=$response['data']??$response;
-            if(!is_array($data))throw new RuntimeException('Provider returned an invalid programme guide.');
-        } catch (\Throwable $error) {
-            // A temporary provider EPG outage must not hide already-cached Open EPG
-            // programmes. Never retry the remote provider within this request.
-            $portalFailed=true;
-            $data=[];
-        }
+        $data=$snapshot['guide'];
+        $portalFailed=!$data;
         $now=time();$programmes=[];$total=0;
         $portalMatched=[];$openMatched=[];$openEpgIndexStatus=[];$channelLogos=[];
         foreach($data as $channelId=>$rows){
@@ -353,7 +324,7 @@ final class StalkerLiveBrowse {
                 'startUnix'=>$event['start']*1000,'endUnix'=>$event['end']*1000,
                 'subtitle'=>$event['description']??'','kind'=>'epg']);
             \Vaultcast\Repository::cachePut(self::key($feed,'presentation:v3:'.$id),[
-                'name'=>$channel['name'],'logo'=>$channel['logoUrl']?:($channelLogos[$id]??''),
+                'name'=>$channel['name'],'logo'=>'',
                 'programs'=>$events],600);
         }
         $out=['ok'=>true,'programmes'=>$programmes,'available'=>count($programmes)>0,
@@ -516,7 +487,7 @@ final class StalkerLiveBrowse {
     }
 
     public static function entry(array $feed,string $id): ?array {
-        $playback=\Vaultcast\Repository::cacheGet(self::key($feed,'item:'.$id));
-        return $playback===null?null:['playback'=>$playback];
+        $row=self::snapshot($feed)['channels'][$id]??null;
+        return $row===null?null:['id'=>$id,'name'=>(string)($row['name']??$id),'description'=>'','playback'=>stalker_live_entry($row)];
     }
 }

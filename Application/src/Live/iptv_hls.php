@@ -111,7 +111,7 @@ function iptv_hls_default_referrer($url, $ref) {
     return null;
 }
 
-function iptv_hls_proxy_request() {
+function iptv_hls_proxy_request(bool $stalkerEpisode = false) {
     $url = isset($_GET['u']) ? $_GET['u'] : (isset($_GET['url']) ? $_GET['url'] : '');
     $url = iptv_hls_validate_url($url);
     $jar = isset($_GET['jar']) ? $_GET['jar'] : '';
@@ -256,7 +256,9 @@ function iptv_hls_proxy_request() {
     // Some Stalker portals reject byte ranges for progressive MP4 files even
     // though the same URL works as a normal download. Retry that one case
     // without Range so browser video elements can play the MP4 from the start.
-    if ($code === 400 && stripos($ctype, 'video/mp4') === 0 && !empty($_SERVER['HTTP_RANGE'])) {
+    $range = (string)($_SERVER['HTTP_RANGE'] ?? '');
+    $episodeRangeRejected = $stalkerEpisode && in_array($code,[456,458],true) && preg_match('/^bytes=0-\d*$/D',$range);
+    if (($code === 400 && stripos($ctype, 'video/mp4') === 0 && $range !== '') || $episodeRangeRejected) {
         $sent = false; $status = 0; $responseHeaders = array(); $mode = null;
         $body = ''; $tooLarge = false;
         $retryingWithoutRange = true;

@@ -29,6 +29,31 @@ final class Repository
         return self::cacheDir() . '/' . substr($h, 0, 2) . '/' . $h . '.json';
     }
 
+    private static function stalkerSnapshotFile(string $key): string {
+        $hash=hash('sha256',$key);
+        return STREAM_DATA.'/stalker-catalogue/'.substr($hash,0,2).'/'.$hash.'.json';
+    }
+
+    public static function stalkerSnapshot(string $key): ?array {
+        $file=self::stalkerSnapshotFile($key);
+        $raw=is_file($file)?@file_get_contents($file):false;
+        if($raw===false)return null;
+        $value=json_decode($raw,true);
+        return is_array($value)?$value:null;
+    }
+
+    public static function saveStalkerSnapshot(string $key,array $value): void {
+        $file=self::stalkerSnapshotFile($key);
+        $dir=dirname($file);
+        if(!is_dir($dir))@mkdir($dir,0700,true);
+        $body=self::encode($value);
+        $tmp=$file.'.'.bin2hex(random_bytes(4)).'.tmp';
+        if(@file_put_contents($tmp,$body)!==strlen($body)||!@chmod($tmp,0600)||!@rename($tmp,$file)){
+            @unlink($tmp);
+            throw new \RuntimeException('Could not save the Stalker catalogue snapshot.');
+        }
+    }
+
     public static function cacheGet(string $key): ?array {
         if (class_exists('\RequestTiming', false)) \RequestTiming::count('cache_read');
         $f = self::cacheFile($key);
@@ -157,6 +182,8 @@ final class Repository
                 foreach(array_chunk(array_keys($existing),200) as $ids){
                     $delete=$pdo->prepare('DELETE FROM vaultcast_items WHERE id IN ('.implode(',',array_fill(0,count($ids),'?')).')');
                     $delete->execute($ids);
+                    $deleteMatches=$pdo->prepare('DELETE FROM vaultcast_stalker_local WHERE item_id IN ('.implode(',',array_fill(0,count($ids),'?')).')');
+                    $deleteMatches->execute($ids);
                 }
                 if (class_exists('BrowseIndex')) { \BrowseIndex::sync($value['items'] ?? [],$value['sections'] ?? []); \BrowseIndex::schedule(); }
                 unset($value['items']);
@@ -212,6 +239,7 @@ final class Repository
             $next = $change($item);
             if (!is_array($next) || $next === $item) return null;
             $pdo->prepare('UPDATE vaultcast_items SET payload=? WHERE id=?')->execute([self::encode($next), $id]);
+            \StalkerLibrary::syncLocal($next);
             $pdo->exec("UPDATE vaultcast_documents SET revision=revision+1 WHERE name='catalogue'");
             return $next;
         });
@@ -227,6 +255,7 @@ final class Repository
         Database::transaction(function (\PDO $pdo) use ($id): void {
             $pdo->prepare('DELETE FROM vaultcast_items WHERE id=?')->execute([$id]);
             $pdo->prepare('DELETE FROM vaultcast_browse_items WHERE item_id=?')->execute([$id]);
+            $pdo->prepare('DELETE FROM vaultcast_stalker_local WHERE item_id=?')->execute([$id]);
             $pdo->exec("UPDATE vaultcast_documents SET revision=revision+1 WHERE name='catalogue'");
         });
         if (class_exists('Store', false)) \Store::invalidate('catalogue');

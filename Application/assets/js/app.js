@@ -6222,7 +6222,11 @@ try {
     audioSelect.onchange=function(){var index=Number(audioSelect.value);if(usingStreamAudio&&stream&&Number.isInteger(stream.audioTrack))stream.audioTrack=index;else if(video.audioTracks&&video.audioTracks[index]){for(var i=0;i<video.audioTracks.length;i++)video.audioTracks[i].enabled=i===index;}};
     subtitleSelect.onchange=function(){var index=Number(subtitleSelect.value);if(usingStreamSubtitles&&stream&&Number.isInteger(stream.subtitleTrack))stream.subtitleTrack=index;else{var tracks=Array.from(video.textTracks||[]).filter(function(track){return track.kind==='subtitles'||track.kind==='captions';});tracks.forEach(function(track,i){track.mode=i===index?'showing':'disabled';});}};
     ['addtrack','removetrack','change'].forEach(function(event){if(video.audioTracks)video.audioTracks.addEventListener(event,function(){refreshTracks(stream);});if(video.textTracks)video.textTracks.addEventListener(event,function(){refreshTracks(stream);});});
-    function play(){var p=video.play();if(p&&p.catch)p.catch(function(){if(context.onError)context.onError('Press play in the player to start.');});}
+    function play(){var p=video.play();if(p&&p.catch)p.catch(function(error){if(alive&&error.name==='NotAllowedError'&&context.onError)context.onError('Press play in the player to start.');});}
+    function playbackFailed(message){
+      if(context.onPlaybackFailure)context.onPlaybackFailure(message);
+      else if(context.onError)context.onError(message);
+    }
     addCentrePlay(frame,video,play);
     function cleanupProvider(){
       if(!alive)return;alive=false;
@@ -6245,13 +6249,13 @@ try {
       },15000);
     }
     video.addEventListener('playing',function(){if(alive&&context.onPlaying)context.onPlaying();});
-    video.addEventListener('error',function(){if(alive){if(xtream)cleanupProvider();if(context.onError)context.onError('The provider video could not be played by this browser.');}});
+    video.addEventListener('error',function(){if(alive){if(xtream)cleanupProvider();playbackFailed('The provider video could not be played by this browser.');}});
     video.addEventListener('ended',function(){if(!alive)return;if(xtream)cleanupProvider();if(context.onEnded&&(!autoNext||autoNext.checked))context.onEnded();});
     attachIptvStream(video,source,{
       current:function(){return alive&&!frame._closing&&frame.isConnected;},
       play:play,
       stream:function(value){stream=value;refreshTracks(value);if(value&&value.on){var events=(window.Hls&&window.Hls.Events)||value.Events||{},names=['AUDIO_TRACKS_UPDATED','AUDIO_TRACK_SWITCHED','SUBTITLE_TRACKS_UPDATED','SUBTITLE_TRACK_SWITCH'],fallback=['hlsAudioTracksUpdated','hlsAudioTrackSwitched','hlsSubtitleTracksUpdated','hlsSubtitleTrackSwitch'];names.forEach(function(name,index){var event=events[name]||fallback[index];value.on(event,function(){refreshTracks(value);});});}},
-      error:function(message){if(alive){if(xtream)cleanupProvider();if(context.onError)context.onError(message);}}
+      error:function(message){if(alive){if(xtream)cleanupProvider();playbackFailed(message);}}
     });
     video.addEventListener('loadedmetadata',function(){if(!stream)refreshTracks(null);});
     host.scrollIntoView({block:'nearest',behavior:'smooth'});
@@ -6278,6 +6282,24 @@ try {
     function stop(){attempt++;closePlayer();host.replaceChildren();status.textContent='Playback stopped.';}
     function watch(e){
       var button=e.currentTarget,mine=++attempt;button.disabled=true;closePlayer();stopRadio();status.textContent='Connecting…';
+      var started=false,failed=false;
+      function fail(message){
+        if(!current()||mine!==attempt||failed)return;
+        failed=true;
+        status.className='bad';status.textContent=message;
+        if(started||itemId.indexOf('series:')!==0)return;
+        var tried=(item._stalkerEpisodeTried||[]).concat(feed+'|'+itemId);
+        function switchToAlternate(){
+          if(!current()||mine!==attempt)return;
+          var next=(item.sources||[]).find(function(source){return source&&source.feed&&source.id&&tried.indexOf(source.feed+'|'+source.id)===-1;});
+          if(next)playStalkerItem(next.feed,Object.assign({},item,next,{_stalkerEpisodeTried:tried}),null);
+        }
+        if(item._stalkerEpisodeAlternates)Promise.resolve(item._stalkerEpisodeAlternates).then(function(sources){
+          if(sources.length)item.sources=sources;
+          switchToAlternate();
+        });
+        else switchToAlternate();
+      }
       stalkerPost('stalker_play',{feed:feed,kind:item.kind||'vod',id:itemId}).then(function(result){
         if(!current()||mine!==attempt)return;closePlayer();stopRadio();
         var ticketMatch=String(result.source&&result.source.url||'').match(/[?&]ticket=([a-f0-9]{32})(?:&|$)/i);playbackTicket=ticketMatch?ticketMatch[1]:'';
@@ -6290,11 +6312,12 @@ try {
           id:id,
           nextEpisode:nextEpisode,
           onError:function(message){if(current()&&mine===attempt){status.className='bad';status.textContent=message;}},
-          onPlaying:function(){if(current())status.textContent='';},
+          onPlaybackFailure:fail,
+          onPlaying:function(){started=true;if(current())status.textContent='';},
           onEnded:function(){if(!current()||!nextEpisode)return;status.className='muted';status.textContent='Playing next episode: '+(nextEpisode.episodeTitle||nextEpisode.name||'Episode')+'…';playStalkerItem(feed,nextEpisode,null);},
           onReturn:function(){openLiveChannel(id);}
         });
-      }).catch(function(error){if(current()&&mine===attempt){status.className='bad';status.textContent=error.message;}}).finally(function(){button.disabled=false;});
+      }).catch(function(error){fail(error.message);}).finally(function(){button.disabled=false;});
     }
     function paint(){
       // Multiple matching provider copies are carried from the catalogue to this page.
@@ -6418,6 +6441,9 @@ try {
       });
     }
     wrap.appendChild(h('div',{className:'row-actions live-channel-back'},[h('button',{className:'btn',text:'← Back to catalogue',onClick:function(){attempt++;closePlayer();goLiveTab('stalker');}})]));wrap.appendChild(host);wrap.appendChild(status);wrap.appendChild(hero);paint();
+    if(item._stalkerEpisodeAlternates)item._stalkerEpisodeAlternates.then(function(sources){
+      if(current()&&sources.length>1){item.sources=sources;paint();}
+    });
     setTimeout(function(){if(!current())return;liveApi('stalker_vod_detail','feed='+encodeURIComponent(feed)+'&id='+encodeURIComponent(itemId)).then(function(result){if(current()&&result&&result.ok){item=Object.assign({},item,result.item,{sources:item.sources,_stalkerLookupFolders:item._stalkerLookupFolders,_stalkerLanguage:item._stalkerLanguage,_stalkerMatchTitle:item._stalkerMatchTitle,_stalkerFolder:item._stalkerFolder,showName:item.showName});paint();}}).catch(function(error){if(current())status.textContent=error.message;});findAlternateConnections();},0);
     // Reattach a still-playing Stalker video after returning from another tab.
     // This moves the same media element, preserving the provider session and position.
@@ -6759,36 +6785,44 @@ try {
       if(!Number.isFinite(episode)||!episode){var episodeMatch=String(item.id||'').match(/:(\d+)$/)||String(item.name||'').match(/\bE(?:pisode\s*)?(\d+)\b/i);episode=episodeMatch?Number(episodeMatch[1]):null;}
       return {season:season,episode:episode,title:String(item.episodeTitle||'').trim().toLowerCase()};
     }
-    function enrichEpisodeConnections(items,token){
-      if(kind!=='series'||!parent||!showContext||!Array.isArray(showContext.sources))return;
+    function requestEpisodeAlternates(){
+      if(kind!=='series'||!parent||!showContext||!Array.isArray(showContext.sources))return null;
       var alternatives=showContext.sources.filter(function(source,index,array){return source&&source.feed&&source.id&&!(String(source.feed)===String(feed.value)&&String(source.id)===String(parent))&&array.findIndex(function(other){return other&&String(other.feed)===String(source.feed)&&String(other.id)===String(source.id);})===index;});
-      if(!alternatives.length)return;
-      status.textContent='Checking alternate provider connections…';
-      Promise.all(alternatives.map(function(source){
+      if(!alternatives.length)return null;
+      return Promise.all(alternatives.map(function(source){
         var params='feed='+encodeURIComponent(source.feed)+'&kind=series&page=1&q=&category=&parent='+encodeURIComponent(source.id);
         return liveApi('stalker_browse',params).then(function(result){return {source:source,items:result&&result.ok&&Array.isArray(result.items)?result.items.filter(function(row){return row&&row.playable;}):[]};}).catch(function(){return {source:source,items:[]};});
-      })).then(function(results){
-        if(!current()||token!==sequence||kind!=='series'||!parent)return;
-        var changed=false;
-        items.forEach(function(item){
-          if(!item||!item.playable)return;
+      }));
+    }
+    function enrichEpisodeConnections(items,token,requests){
+      if(!requests)return;
+      var primaryFeed=feed.value;
+      var matchesByEpisode=items.filter(function(item){return item&&item.playable;}).map(function(item){
+        item._stalkerEpisodeAlternates=requests.then(function(results){
           var wanted=episodeCoordinates(item),matches=[];
           results.forEach(function(result){
             var candidates=result.items.map(function(candidate){return {item:candidate,coords:episodeCoordinates(candidate)};}).filter(function(entry){
               if(wanted.episode==null||entry.coords.episode==null||wanted.episode!==entry.coords.episode)return false;
-              if(wanted.season!=null&&entry.coords.season!=null&&wanted.season!==entry.coords.season)return false;
+              if(wanted.season==null||entry.coords.season==null||wanted.season!==entry.coords.season)return false;
               return true;
             });
             if(wanted.title){var titled=candidates.filter(function(entry){return entry.coords.title===wanted.title;});if(titled.length)candidates=titled;}
             if(candidates.length===1){var found=candidates[0].item;matches.push({id:found.id,feed:result.source.feed,connection:found.connection||result.source.connection||result.source.name,kind:'vod',playable:true});}
           });
           if(matches.length){
-            var currentConnection=connections.find(function(c){return String(c.id)===String(feed.value);});
-            var sources=Array.isArray(item.sources)?item.sources.slice():[{id:item.id,feed:feed.value,connection:currentConnection?currentConnection.name:'',kind:'vod',playable:true}];
+            var currentConnection=connections.find(function(c){return String(c.id)===String(primaryFeed);});
+            var sources=Array.isArray(item.sources)?item.sources.slice():[{id:item.id,feed:primaryFeed,connection:currentConnection?currentConnection.name:'',kind:'vod',playable:true}];
             matches.forEach(function(match){if(!sources.some(function(source){return String(source.feed)===String(match.feed)&&String(source.id)===String(match.id);}))sources.push(match);});
-            item.sources=sources;changed=true;
+            item.sources=sources;
+            return sources;
           }
+          return [];
         });
+        return item._stalkerEpisodeAlternates;
+      });
+      Promise.all(matchesByEpisode).then(function(matches){
+        if(!current()||token!==sequence||kind!=='series'||!parent)return;
+        var changed=matches.some(function(sources){return sources.length>1;});
         if(changed)draw();
         status.textContent=loaded.filter(function(item){return item&&item.playable;}).length+' episodes available'+(changed?' · Alternate connections ready':'')+(next.hidden?'':' · More seasons available');
       });
@@ -6800,15 +6834,17 @@ try {
       status.className='muted';status.textContent='Loading '+({live:'channels',vod:'movies',series:'series'}[kind])+'…';next.disabled=true;
       if(page===1&&!advancing){loaded=[];results.replaceChildren();next.hidden=true;}
       var params='feed='+encodeURIComponent(feed.value)+'&kind='+kind+'&page='+page+'&q='+encodeURIComponent(kind==='series'&&parent?'':query.value.trim())+'&category='+encodeURIComponent(resetCategories?'':category.value)+'&parent='+encodeURIComponent(parent)+(kind==='live'&&liveRequested?'&load=1':'')+(refresh?'&refresh=1':'');
-      liveApi('stalker_browse',params).then(function(result){
+      var primary=liveApi('stalker_browse',params);
+      var alternates=requestEpisodeAlternates();
+      primary.then(function(result){
         if(!current()||token!==sequence)return;
         if(!result||!result.ok)throw new Error(result&&result.error||'Provider catalogue could not be loaded.');
         if(page===1&&result.categories)availableGroups=result.categories;loaded=page===1?result.items:loaded.concat(result.items||[]);
         if(page===1){var selected=resetCategories?'':category.value;category.replaceChildren(h('option',{value:'',text:kind==='live'?'Choose category':'All categories'}));if(kind==='live')category.appendChild(h('option',{value:'*',text:'All channels',selected:selected==='*'}));(result.categories||[]).forEach(function(row){category.appendChild(h('option',{value:row.id,text:row.name,selected:row.id===selected}));});}
         showMetadata(result.show||null);draw();
-        if(kind==='series'&&parent)enrichEpisodeConnections((result.items||[]),token);
+        if(kind==='series'&&parent)enrichEpisodeConnections((result.items||[]),token,alternates);
         status.textContent=result.foldersOnly?'Choose a category on the left to load its channels.':loaded.length?'Showing '+loaded.length+' · '+result.total+' available':'No titles returned. Try another category or Refresh. If this persists, use Check connection in Stalker settings.';
-        if(kind==='series'&&parent)status.textContent=result.catalogueLoading?'An administrator needs to finish loading these seasons in Stalker settings.':loaded.filter(function(item){return item.playable;}).length+' episodes available'+(result.hasMore?' · More seasons available':'');
+        if(kind==='series'&&parent)status.textContent=result.catalogueLoading?'These episodes are not saved yet. Ask an administrator to import Series in Stalker settings.':loaded.filter(function(item){return item.playable;}).length+' episodes available'+(result.hasMore?' · More seasons available':'');
         if(result.indexing&&kind==='live'&&query.value.trim()){status.textContent='Searching all channels · '+result.scanned+(result.catalogueTotal?' of '+result.catalogueTotal:'')+' checked · '+result.total+' matches';next.hidden=true;next.disabled=true;setTimeout(function(){if(current()&&token===sequence)load(false,false,true);},150);return;}
         next.hidden=!result.hasMore;next.disabled=false;
       }).catch(function(error){if(current()&&token===sequence){status.className='bad';status.textContent=error.message;if(page>1)page--;next.disabled=false;}});
@@ -6821,13 +6857,14 @@ try {
     liveApi('stalker').then(function(result){if(!current())return;if(!result||!result.ok)throw new Error(result&&result.error||'Could not load Stalker connections.');connections=result.connections||[];var remembered='';try{remembered=localStorage.getItem('vaultcast-stalker-'+owner)||'';}catch(ignore){}connections.filter(function(c){return c.enabled;}).forEach(function(c){feed.appendChild(h('option',{value:c.id,text:c.name,selected:c.id===remembered}));});load(false,!resume);}).catch(function(error){if(current()){status.className='bad';status.textContent=error.message;}});
   }
   function stalkerCatalogueSettings(host,connections){
-    var message=h('p',{className:'muted',role:'status'}),rows=h('div',{className:'stack'}),feed=h('select',{'aria-label':'Catalogue connection'},[h('option',{value:'',text:'All enabled connections'})].concat(connections.filter(function(c){return c.enabled;}).map(function(c){return h('option',{value:c.id,text:c.name});}))),kind=h('select',{'aria-label':'Catalogue type'},[['all','Movies & Series'],['vod','Movies'],['series','Series']].map(function(row){return h('option',{value:row[0],text:row[1]});}));
-    var card=h('section',{className:'settings-card stack'},[h('h3',{text:'Shared provider catalogue'}),h('p',{text:'Build once, then update existing titles daily. Matching uses provider metadata only. Restart verification rescans selected connections while retaining existing titles. Only confirmed loss of every source starts the 15-day removal countdown. The background job continues after this page closes.'}),h('div',{className:'row-actions'},[feed,kind]),message,rows]);host.appendChild(card);var timer=null;
-    function render(result){if(!card.isConnected)return;rows.replaceChildren();if(result.reset&&result.reset.state==='purging'){resetProgress.textContent='Deleting old catalogue · stage '+((result.reset.table||0)+1)+' of 7';resetButton.disabled=true;}else if(result.reset&&result.reset.state==='complete'){resetProgress.textContent='Reset complete. Rebuilding selected folders.';resetButton.disabled=false;}else resetButton.disabled=false;(result.sources||[]).forEach(function(source){rows.appendChild(h('p',{className:source.error?'bad':'muted',text:source.name+' · '+({live:'Live TV',vod:'Movies',series:'Series'}[source.kind])+' · '+source.status+' · '+source.scanned.toLocaleString()+' provider entries · '+(source.foldersComplete||0)+'/'+(source.foldersTotal||0)+' folders'+(source.currentFolder?' · Folder '+(source.currentFolder.folder_id||'discovery')+' · page '+source.currentFolder.next_page:'')+(source.status==='waiting'?' · Retry '+new Date(source.next_run*1000).toLocaleTimeString():'')+(source.error?' · '+source.error:'')}));});message.textContent=result.sources&&result.sources.length?(result.worker?'Catalogue worker is running.':'Completed catalogues remain available to every user.'):'No shared load has been started. Choose the connections and content to load.';clearTimeout(timer);if((result.reset&&result.reset.state==='purging')||(result.sources||[]).some(function(source){return ['queued','running','partial','waiting'].includes(source.status);}))timer=setTimeout(status,3000);}
+    var message=h('p',{className:'muted',role:'status'}),rows=h('div',{className:'stack'}),feed=h('select',{'aria-label':'Catalogue connection'},[h('option',{value:'',text:'All enabled connections'})].concat(connections.filter(function(c){return c.enabled;}).map(function(c){return h('option',{value:c.id,text:c.name});}))),kind=h('select',{'aria-label':'Catalogue type'},[['all','Live TV, Movies & Series'],['live','Live TV'],['vod','Movies'],['series','Series']].map(function(row){return h('option',{value:row[0],text:row[1]});}));
+    var card=h('section',{className:'settings-card stack'},[h('h3',{text:'Shared provider catalogue'}),h('p',{text:'Start an import to save the provider catalogue for everyone. Browsing uses the saved data. Expired connections stop offering playback. Imports continue after this page closes.'}),h('div',{className:'row-actions'},[feed,kind]),message,rows]);host.appendChild(card);var timer=null;
+    function render(result){if(!card.isConnected)return;rows.replaceChildren();if(result.reset&&result.reset.state==='purging'){resetProgress.textContent='Deleting old catalogue · stage '+((result.reset.table||0)+1)+' of 7';resetButton.disabled=true;}else if(result.reset&&result.reset.state==='complete'){resetProgress.textContent='Reset complete. Rebuilding selected folders.';resetButton.disabled=false;}else resetButton.disabled=false;(result.sources||[]).forEach(function(source){rows.appendChild(h('p',{className:source.error?'bad':'muted',text:source.name+' · '+({live:'Live TV',vod:'Movies',series:'Series'}[source.kind])+' · '+({scan_required:'Ready to scan',expired:'Subscription expired'}[source.status]||source.status)+(source.last_hash==='episodes'?' · Saving seasons and episodes':'')+' · '+source.scanned.toLocaleString()+' provider entries · '+(source.foldersComplete||0)+'/'+(source.foldersTotal||0)+' folders'+(source.currentFolder?' · Folder '+(source.currentFolder.folder_id||'discovery')+' · page '+source.currentFolder.next_page:'')+(source.status==='waiting'?' · Retry '+new Date(source.next_run*1000).toLocaleTimeString():'')+(source.error?' · '+source.error:'')}));});message.textContent=result.sources&&result.sources.length?(result.worker?'Catalogue worker is running.':'Completed catalogues remain available to every user.'):'No shared load has been started. Choose the connections and content to load.';clearTimeout(timer);if((result.reset&&result.reset.state==='purging')||(result.sources||[]).some(function(source){return ['queued','running','partial','waiting'].includes(source.status);}))timer=setTimeout(status,3000);}
     function status(){if(!card.isConnected)return;liveApi('stalker_catalogue_status').then(render).catch(function(error){if(card.isConnected)message.textContent=error.message;});}
     var resetButton=h('button',{className:'btn danger',text:'Reset & rebuild Stalker catalogue (initial setup)'});
     var resetProgress=h('p',{className:'muted',role:'status'});
-    card.appendChild(resetButton);card.appendChild(resetProgress);
+    card.appendChild(resetButton);
+    card.appendChild(resetProgress);
     resetButton.onclick=function(){
       if(!window.confirm('Permanently delete all shared Stalker Movies and Series catalogue titles and provider offers? Saved folder selections, favourites, connections and local media remain. This cannot be undone.'))return;
       var confirmation=window.prompt('Type RESET STALKER CATALOGUE to confirm:');
@@ -6836,7 +6873,18 @@ try {
       stalkerPost('stalker_catalogue_control',{operation:'reset_rebuild',feed:'',kind:'all',confirmation:confirmation}).then(render)
         .catch(function(error){resetProgress.textContent=error.message;resetButton.disabled=false;});
     };
-    [['load','Build / update / resume catalogue'],['refresh','Restart verification of selected catalogue'],['pause','Pause loading']].forEach(function(spec){card.appendChild(h('button',{className:'btn',text:spec[1],onClick:function(e){var button=e.currentTarget;button.disabled=true;message.textContent='Updating shared catalogue job…';stalkerPost('stalker_catalogue_control',{operation:spec[0],feed:feed.value,kind:kind.value}).then(render).catch(function(error){message.textContent=error.message;}).finally(function(){button.disabled=false;});}}));});status();
+    var actions=h('div',{className:'row-actions'});
+    [['load','Start or resume import'],['refresh','Reimport selected catalogue'],['pause','Pause import']].forEach(function(spec){
+      actions.appendChild(h('button',{className:'btn'+(spec[0]==='load'?' primary':''),type:'button',text:spec[1],onClick:function(e){
+        var button=e.currentTarget;
+        button.disabled=true;
+        message.textContent='Updating shared catalogue job…';
+        stalkerPost('stalker_catalogue_control',{operation:spec[0],feed:feed.value,kind:kind.value})
+          .then(render).catch(function(error){message.textContent=error.message;}).finally(function(){button.disabled=false;});
+      }}));
+    });
+    card.appendChild(actions);
+    status();
   }
   function stalkerFolderSettings(host,connections){
     var enabled=connections.filter(function(c){return c.enabled;});
@@ -9561,28 +9609,104 @@ try {
   window.addEventListener('beforeunload',function(e){if(state.view==='settings'&&(settingsDraftChanged()||(state.settingsSection==='live-studio'&&tvs.dirty))){e.preventDefault();e.returnValue='';}});
   function renderTaskCentre(host){
     var info={'age-ratings':['Library','Look up age ratings (NFO, OMDb, TMDB) for films and shows so kids profiles can hide what’s above their limit.'],'smart-index':['Library','Gather genres, cast and resolution so smart collections can match on them.'],browse:['Browsing','Build the search index and show summaries together. Useful after importing a large library.'],search:['Browsing','Rebuild fast search suggestions without rescanning folders.'],views:['Browsing','Prepare cached library rows, collections and the live guide.'],scan:['Library','Discover files in configured folders. Does not download artwork.'],metadata:['Library','Fetch missing artwork and descriptions, then preserve sidecars. Network requests may take time.'],'game-metadata':['Library','Refresh game posters and descriptions using the current game matching rules.'],facts:['Library','Probe file codecs and durations and store show guides. Reads media files.'],collections:['Library','Match media to public collections.'],segments:['Playback','Match episode intro/credit timings and available movie credits.'],epg:['Live','Refresh the programme guide from configured sources.'],durations:['Live','Read missing Live media durations.'],downloads:['Downloads','Import completed downloads using the configured rules.'],'site-artwork':['Artwork','Create WebP copies of bundled theme posters and custom site uploads. Originals remain unchanged.'],'drop-cleanup':['Storage','Delete the stored bytes of Drop items that expired, used their last download or were abandoned mid-upload. They are already unavailable; this frees the space. Schedule with: php src/Console.php drop-cleanup']};
-    var filter='All',busy=false,timer=null,sequence=0,lastData=null;
+    var stalkerTask='stalker-catalogue';
+    var showStalker=!!(state.home&&state.home.features&&state.home.features.live&&can('iptv_manage'));
+    info[stalkerTask]=['Live','Save Live TV, Movies, Series and episodes from enabled Stalker connections for local browsing.'];
+    var filter='All',busy=false,timer=null,sequence=0,lastData=null,refreshPending=false;
     function requestAction(url,body,button){button.disabled=true;return api(url,{method:'POST',body:body}).then(function(j){if(!j.ok)throw new Error(j.error||'Task request failed');if(host.isConnected)refresh();}).catch(function(e){toast(e.message,{kind:'bad'});if(button.isConnected)button.disabled=false;});}
+    function requestStalker(operation,button,source){
+      button.disabled=true;
+      stalkerPost('stalker_catalogue_control',{operation:operation,feed:source?source.feed_id:'',kind:source?source.kind:'all'})
+        .then(function(){
+          if(!host.isConnected)return;
+          if(busy)refreshPending=true;
+          else refresh();
+        })
+        .catch(function(error){toast(error.message,{kind:'bad'});if(button.isConnected)button.disabled=false;});
+    }
+    function loadTasks(){
+      var stalker=showStalker?liveApi('stalker_catalogue_status','summary=1').catch(function(){return null;}):Promise.resolve(null);
+      return Promise.all([api('/admin/maintenance'),stalker]).then(function(results){
+        var data=results[0];
+        if(!data.ok||!showStalker)return data;
+        var status=results[1],sources=status&&status.ok?status.sources||[]:[];
+        data.tasks[stalkerTask]='Import Stalker catalogue';
+        data.stalkerDisabled=!sources.some(function(source){return !['expired','removed'].includes(source.status);});
+        data.details=data.details||{};
+        if(data.stalkerDisabled)data.details[stalkerTask]=status&&status.ok?'An active Stalker connection is required.':'Stalker import status is unavailable.';
+        var pendingStates=['queued','running','partial','waiting'];
+        var jobs=sources.filter(function(source){return !['scan_required','removed'].includes(source.status);}).map(function(source){
+          var pending=pendingStates.includes(source.status);
+          var waiting=pending&&!source.active&&source.next_run*1000>Date.now();
+          var jobStatus=source.active?'running':waiting?'waiting':pending?'queued':source.status;
+          var foldersKnown=source.foldersTotal>0&&source.last_hash!=='episodes'&&source.foldersComplete<source.foldersTotal;
+          var phase=source.last_hash==='episodes'?'Saving seasons and episodes':source.currentFolder?'Scanning '+source.currentFolder.title:'Importing catalogue';
+          if(waiting)phase='Waiting to retry · '+new Date(source.next_run*1000).toLocaleTimeString();
+          else if(jobStatus==='queued')phase='Waiting for the Stalker import worker';
+          return {
+            id:stalkerTask+':'+source.feed_id+':'+source.kind,
+            task:stalkerTask,source:source,error:source.error,
+            title:'Import Stalker catalogue · '+source.name+' · '+({live:'Live TV',vod:'Movies',series:'Series'}[source.kind]||source.kind),
+            status:jobStatus,
+            progress:{
+              phase:pending?phase:'',
+              file:(source.scanned||0).toLocaleString()+' provider entries',
+              done:foldersKnown?source.foldersComplete:0,
+              total:foldersKnown?source.foldersTotal:0
+            }
+          };
+        });
+        data.jobs=jobs.concat(data.jobs);
+        return data;
+      });
+    }
     function refresh(useCache){
       clearTimeout(timer);if(!host.isConnected||busy)return;busy=true;var mine=++sequence;
-      (useCache===true&&lastData?Promise.resolve(lastData):api('/admin/maintenance')).then(function(j){if(!host.isConnected||mine!==sequence)return;if(!j.ok)throw new Error(j.error||'Could not load tasks');
-        var openResults=new Set(Array.from(host.querySelectorAll('details[data-job-id][open]')).map(function(details){return details.getAttribute('data-job-id');}));lastData=j;host.replaceChildren();var running=j.jobs.filter(function(job){return job.status==='queued'||job.status==='running';});
+      (useCache===true&&lastData?Promise.resolve(lastData):loadTasks()).then(function(j){if(!host.isConnected||mine!==sequence)return;if(!j.ok)throw new Error(j.error||'Could not load tasks');
+        var openResults=new Set(Array.from(host.querySelectorAll('details[data-job-id][open]')).map(function(details){return details.getAttribute('data-job-id');}));lastData=j;host.replaceChildren();var running=j.jobs.filter(function(job){return ['queued','running','waiting'].includes(job.status);});
         host.appendChild(h('div',{className:'task-centre-toolbar'},[h('p',{className:'muted',text:running.length?running.length+' active / queued tasks':'No maintenance tasks running'}),h('button',{className:'btn',text:'Refresh status',onClick:refresh})]));
         if((j.requirements||[]).length)host.appendChild(h('section',{className:'settings-callout'},[h('h3',{text:'Recommended after your update'}),h('p',{text:'Features keep working with slower fallbacks until you choose to prepare this data.'})].concat(j.requirements.map(function(req){return h('p',{},[h('strong',{text:req.label+' · '}),req.reason]);}))));
         var filters=h('div',{className:'settings-filter-tabs',role:'group','aria-label':'Task category'});['All','Browsing','Library','Artwork','Playback','Live','Downloads','Storage'].forEach(function(name){filters.appendChild(h('button',{type:'button',className:'btn'+(filter===name?' active':''),'aria-pressed':String(filter===name),text:name,onClick:function(){filter=name;refresh(true);}}));});host.appendChild(filters);
-        var cards=h('div',{className:'task-catalogue'});Object.keys(j.tasks).forEach(function(task){var meta=info[task]||['Other','Run this server preparation task.'];if(filter!=='All'&&meta[0]!==filter)return;var features=state.home&&state.home.features||{};if((meta[0]==='Live'&&!features.live)||(meta[0]==='Downloads'&&!features.downloads))return;var active=running.some(function(job){return job.task===task;});cards.appendChild(h('article',{className:'settings-task-card'},[h('small',{text:meta[0]}),h('h3',{text:j.tasks[task]}),h('p',{text:meta[1]}),j.details&&j.details[task]?h('p',{className:'task-detail',text:j.details[task]}):null,h('button',{className:'btn',type:'button',disabled:active,text:active?'Queued / running':'Run task',onClick:function(e){requestAction('/admin/maintenance',{task:task},e.currentTarget);}})]));});host.appendChild(cards);
+        var cards=h('div',{className:'task-catalogue'});Object.keys(j.tasks).forEach(function(task){
+          var meta=info[task]||['Other','Run this server preparation task.'];
+          if(filter!=='All'&&meta[0]!==filter)return;
+          var features=state.home&&state.home.features||{};
+          if((meta[0]==='Live'&&!features.live)||(meta[0]==='Downloads'&&!features.downloads))return;
+          var active=running.some(function(job){return job.task===task;});
+          cards.appendChild(h('article',{className:'settings-task-card'},[
+            h('small',{text:meta[0]}),h('h3',{text:j.tasks[task]}),h('p',{text:meta[1]}),
+            j.details&&j.details[task]?h('p',{className:'task-detail',text:j.details[task]}):null,
+            h('button',{className:'btn',type:'button',disabled:active||(task===stalkerTask&&j.stalkerDisabled),
+              text:active?'Queued / running':'Run task',onClick:function(e){
+                if(task===stalkerTask)requestStalker('load',e.currentTarget);
+                else requestAction('/admin/maintenance',{task:task},e.currentTarget);
+              }})
+          ]));
+        });host.appendChild(cards);
         host.appendChild(h('h3',{text:'Activity & results'}));if(!j.jobs.length)host.appendChild(h('p',{className:'muted',text:'Tasks you run will appear here with their progress and results.'}));
-        j.jobs.forEach(function(job){var active=job.status==='queued'||job.status==='running',progress=job.progress||{},row=h('article',{className:'settings-job'},[h('div',{className:'settings-job-head'},[h('strong',{text:j.tasks[job.task]||job.task}),h('span',{className:'settings-job-state '+job.status,text:job.status})]),h('small',{className:'muted',text:(job.created_at?new Date(job.created_at).toLocaleString():'')+(job.requested_by?' · '+job.requested_by:'')})]);
+        j.jobs.forEach(function(job){var active=['queued','running','waiting'].includes(job.status),progress=job.progress||{},row=h('article',{className:'settings-job'},[h('div',{className:'settings-job-head'},[h('strong',{text:job.title||j.tasks[job.task]||job.task}),h('span',{className:'settings-job-state '+job.status,text:job.status})]),job.created_at||job.requested_by?h('small',{className:'muted',text:(job.created_at?new Date(job.created_at).toLocaleString():'')+(job.requested_by?' · '+job.requested_by:'')}):null]);
           if(progress.total>0)row.appendChild(h('progress',{value:progress.done||0,max:progress.total,'aria-label':'Task progress'}));
+          else if(job.task===stalkerTask&&job.status==='running')row.appendChild(h('progress',{'aria-label':'Task progress'}));
           if(progress.phase||progress.file)row.appendChild(h('p',{className:'muted',text:[progress.phase,progress.total>0?(progress.done||0)+' / '+progress.total:'',progress.file].filter(Boolean).join(' · ')}));
           if(job.result&&job.result.warning)row.appendChild(h('p',{className:'bad',text:String(job.result.warning)}));
           if(job.result&&job.task==='site-artwork')row.appendChild(h('p',{text:(job.result.optimised||0)+' images optimised · '+(job.result.already_ready||0)+' already prepared · '+(job.result.failed||0)+' failed · '+fmtBytes(job.result.bytes_saved||0)+' saved'}));
           if(job.error)row.appendChild(h('p',{className:'bad',text:job.error}));
           if(job.result)row.appendChild(h('details',{className:'settings-job-result','data-job-id':job.id,open:openResults.has(job.id)},[h('summary',{text:job.result.continuation?'Pass complete · continuing in another job':'View result details'}),h('pre',{text:JSON.stringify(job.result,null,2)})]));
-          if(active)row.appendChild(h('button',{className:'btn',text:'Cancel task',onClick:function(e){requestAction('/admin/maintenance/cancel',{id:job.id},e.currentTarget);}}));
-          else if(job.status==='failed'&&j.tasks[job.task])row.appendChild(h('button',{className:'btn',text:'Run again',onClick:function(e){requestAction('/admin/maintenance',{task:job.task},e.currentTarget);}}));host.appendChild(row);
-        });if(running.length)timer=setTimeout(function(){if(host.isConnected)refresh();},3000);
-      }).catch(function(error){if(host.isConnected){host.replaceChildren(h('p',{className:'bad',role:'alert',text:error.message}),h('button',{className:'btn',text:'Retry',onClick:refresh}));}}).then(function(){busy=false;});
+          if(job.task===stalkerTask){
+            if(active)row.appendChild(h('button',{className:'btn',type:'button',text:'Pause task',onClick:function(e){requestStalker('pause',e.currentTarget,job.source);}}));
+            else if(['failed','paused'].includes(job.status))row.appendChild(h('button',{className:'btn',type:'button',text:'Resume task',onClick:function(e){requestStalker('load',e.currentTarget,job.source);}}));
+          }else if(active)row.appendChild(h('button',{className:'btn',text:'Cancel task',onClick:function(e){requestAction('/admin/maintenance/cancel',{id:job.id},e.currentTarget);}}));
+          else if(job.status==='failed'&&j.tasks[job.task])row.appendChild(h('button',{className:'btn',text:'Run again',onClick:function(e){requestAction('/admin/maintenance',{task:job.task},e.currentTarget);}}));
+          host.appendChild(row);
+        });
+        if(running.length){
+          var delay=running.every(function(job){return job.status==='waiting';})?30000:3000;
+          timer=setTimeout(function(){if(host.isConnected)refresh();},delay);
+        }
+      }).catch(function(error){if(host.isConnected){host.replaceChildren(h('p',{className:'bad',role:'alert',text:error.message}),h('button',{className:'btn',text:'Retry',onClick:refresh}));}}).finally(function(){
+        busy=false;
+        if(refreshPending){refreshPending=false;refresh();}
+      });
     }
     refresh();
   }
@@ -9703,7 +9827,9 @@ try {
       ];
       setTimeout(function(){ renderUpdatesPanel(updHost); }, 0);
     } else if (sec === 'maintenance' && isAdmin) {
-      var jobsHost=h('div',{className:'task-centre'});bodyKids=[h('h2',{text:'Task centre'}),h('p',{className:'muted',text:'Run preparation when it suits you. Nothing here starts automatically on an update or page visit. The worker runs one maintenance task at a time, at lower CPU priority.'}),jobsHost];setTimeout(function(){renderTaskCentre(jobsHost);},0);
+      var jobsHost=h('div',{className:'task-centre'});
+      bodyKids=[h('h2',{text:'Task centre'}),h('p',{className:'muted',text:'Start preparation tasks when it suits you.'}),jobsHost];
+      setTimeout(function(){renderTaskCentre(jobsHost);},0);
     } else if (sec === 'achievements' && isAdmin) {
       var achHost = h('div', { className:'stack vca-admin' }, [ pendingContent({ text:'Loading achievement settings…' }) ]);
       bodyKids = [ h('h2', { text:'Achievements' }), achHost ];

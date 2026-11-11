@@ -9,24 +9,28 @@ final class StalkerDirect {
     private static function key(array $feed,string $suffix): string {
         return 'stalker_direct_v2_'.hash('sha256',json_encode([$feed,$suffix]));
     }
+    private static function snapshotKey(array $feed,string $suffix): string {
+        return 'episodes:'.StalkerCatalogues::config($feed).':'.$suffix;
+    }
     public static function item(array $feed,string $id): ?array {
+        if(strpos($id,'series:')===0){
+            $entry=\Vaultcast\Repository::stalkerSnapshot(self::snapshotKey($feed,'item:'.$id));
+            if($entry&&self::savedEpisodeUsable($feed,$entry,self::seriesJob($feed)))return $entry;
+        }
         return \Vaultcast\Repository::cacheGet(self::key($feed,'item:'.$id));
     }
-    private static function categories(array $feed,string $kind,bool $refresh=false): array {
-        $key=self::key($feed,'categories:'.$kind);
-        $cached=\Vaultcast\Repository::cacheGet($key);
-        if(!$refresh&&$cached!==null)return $cached;
-        $categories=[];
-        try {
-            $result=stalker_call($feed,'get_categories',[],$kind);
-            foreach(StalkerCatalogueScan::groups($result) as $id=>$name)$categories[]=['id'=>(string)$id,'name'=>$name];
-        } catch (RuntimeException $ignored) {
-            // Keep the previous usable list when a refresh fails.
-            if($cached!==null)return $cached;
-            // Categories are optional; a provider may allow page browsing without them.
-        }
-        \Vaultcast\Repository::cachePut($key,$categories,$categories?3600:300);
-        return $categories;
+    private static function seriesJob(array $feed): ?array {
+        $query=\Vaultcast\Database::connection()->prepare(
+            "SELECT generation,status FROM vaultcast_stalker_jobs WHERE feed_id=? AND kind='series' AND config=? AND status NOT IN ('removed','expired','scan_required')"
+        );
+        $query->execute([$feed['id'],StalkerCatalogues::config($feed)]);
+        return $query->fetch(PDO::FETCH_ASSOC)?:null;
+    }
+    private static function savedEpisodeUsable(array $feed,array $snapshot,?array $job): bool {
+        if(!$job||!isset($snapshot['episodeGeneration']))return false;
+        if($snapshot['episodeGeneration']===$job['generation'])return true;
+        return isset($snapshot['root'])&&StalkerLibrary::seriesAvailable($feed,(string)$snapshot['root'],
+            $job['status']==='complete'?$snapshot['episodeGeneration']:null);
     }
     /** Copy presentation-only metadata already supplied with a catalogue page. */
     public static function descriptiveFields(array $row): array {
@@ -57,16 +61,30 @@ final class StalkerDirect {
         }
         return $out;
     }
-    private static function page(array $feed,string $kind,int $page,string $category,string $query,string $parent,bool $refresh): array {
-        $key=self::key($feed,'page:'.json_encode([$kind,$page,$category,$query,$parent]));
-        if(!$refresh){$cached=\Vaultcast\Repository::cacheGet($key);if($cached!==null)return $cached;}
-        // At most one provider catalogue page per visit (page-number detection
-        // may make two requests on the first page of a new connection).
-        $params=['sortby'=>'name','category'=>$category!==''?$category:'*','search'=>$query];
-        if($parent!=='')$params['movie_id']=$parent;
+    public static function importEpisodes(array $feed,string $parent,int $page,string $root): array {
+        return self::episodePage($feed,$parent,$page,$root);
+    }
+    private static function episodePage(array $feed,string $parent,int $page,?string $root=null): array {
+        $kind='series';
+        $import=$root!==null;
+        $job=self::seriesJob($feed);
+        $generation=$job['generation']??null;
+        $key=self::snapshotKey($feed,'page:'.json_encode([$parent,$page]));
+        $cached=$generation===null?null:\Vaultcast\Repository::stalkerSnapshot($key);
+        if($cached!==null&&($import?($cached['episodeGeneration']??null)===$generation:self::savedEpisodeUsable($feed,$cached,$job))){
+            unset($cached['episodeGeneration'],$cached['pageSignature'],$cached['root']);
+            return $cached;
+        }
+        if(!$import||$generation===null)return ['items'=>[],'total'=>0,'hasMore'=>false,'catalogueLoading'=>true];
+        $params=['sortby'=>'name','category'=>'*','search'=>'','movie_id'=>$parent];
         $result=stalker_ordered_page($feed,$kind,$params,$page);
-        $rows=$result['data']??$result;
-        if(!is_array($rows))throw new RuntimeException('Provider returned an invalid catalogue page.');
+        $rows=StalkerCatalogueScan::page($result)['rows'];
+        $signature=hash('sha256',json_encode(array_column($rows,'id')));
+        if($rows&&$page>1){
+            $previous=\Vaultcast\Repository::stalkerSnapshot(self::snapshotKey($feed,'page:'.json_encode([$parent,$page-1])));
+            if(($previous['episodeGeneration']??null)===$generation&&($previous['pageSignature']??null)===$signature)
+                throw new RuntimeException('Provider repeated an episode page.');
+        }
         $items=[];
         foreach($rows as $row){
             if(!is_array($row)||!isset($row['id'])||!is_scalar($row['id']))continue;
@@ -86,7 +104,7 @@ final class StalkerDirect {
                     if(is_scalar($seasonRaw)&&preg_match('/^\\d+$/D',(string)$seasonRaw))$item['season']=(int)$seasonRaw;
                     $item['seasonName']=isset($item['season'])?'Season '.$item['season']:'Season unknown';
                     $item['seasonId']=$id;
-                    \Vaultcast\Repository::cachePut(self::key($feed,'item:'.$publicId),['cmd'=>$cmd,'series'=>$episode,'metadata'=>$item],7200);
+                    self::rememberPlayback($feed,$publicId,$cmd,$episode,$item,$generation,$root);
                     $items[]=$item;
                 }
                 continue;
@@ -94,10 +112,11 @@ final class StalkerDirect {
             $playable=$cmd!==''&&empty($row['is_series'])&&empty($episodes)&&($kind==='vod'||$parent!=='');
             $publicId=$playable?$kind.':'.$id:$id;
             $item=array_merge($meta,['id'=>$publicId,'kind'=>$kind,'playable'=>$playable,'feed'=>$feed['id'],'connection'=>$feed['name']]);
+            $item['hasChildren']=!$playable&&!empty($row['is_series']);
             // No extra provider calls: extract safe fields from existing page data.
             $item=array_merge($item,self::descriptiveFields($row));
 
-            if($playable)\Vaultcast\Repository::cachePut(self::key($feed,'item:'.$publicId),['cmd'=>$cmd,'series'=>(string)($row['series_number']??''),'metadata'=>$item],7200);
+            if($playable)self::rememberPlayback($feed,$publicId,$cmd,(string)($row['series_number']??''),$item,$generation,$root);
             $items[]=$item;
         }
         $reportedTotal=(int)($result['total_items']??0);
@@ -108,25 +127,20 @@ final class StalkerDirect {
         $perPage=$reportedSize>0?$reportedSize:max(1,$received);
         $hasMore=$reportedTotal>0
             ? $page*$perPage<$reportedTotal
-            : $received>0&&$reportedSize>0&&$received>=$reportedSize;
+            : $received>0&&($reportedSize<=0||$received>=$reportedSize);
         $out=['items'=>$items,'total'=>$reportedTotal>0?$reportedTotal:null,'hasMore'=>$hasMore];
-        \Vaultcast\Repository::cachePut($key,$out,600);
+        \Vaultcast\Repository::saveStalkerSnapshot($key,$out+['episodeGeneration'=>$generation,'pageSignature'=>$signature,'root'=>$root]);
         return $out;
     }
+    private static function rememberPlayback(array $feed,string $id,string $cmd,string $episode,array $item,string $generation,string $root): void {
+        $entry=['cmd'=>$cmd,'series'=>$episode,'metadata'=>$item,'episodeGeneration'=>$generation,'root'=>$root];
+        \Vaultcast\Repository::saveStalkerSnapshot(self::snapshotKey($feed,'item:'.$id),$entry);
+    }
     /** Cache the provider's complete Live list once, never one SQL record per channel. */
-    private static function liveRows(array $feed): array {
-        $key=self::key($feed,'live:all');
-        $cached=\Vaultcast\Repository::cacheGet($key);
-        if($cached!==null)return $cached;
-        $result=stalker_call($feed,'get_all_channels');
-        $rows=$result['data']??$result;
-        if(!is_array($rows))throw new RuntimeException('Provider returned an invalid live-channel list.');
-        $total=(int)($result['total_items']??0);
-        if($total>count($rows))throw new RuntimeException('Provider returned only part of its channel list; complete country browsing is unavailable.');
-        if(count($rows)>50000)throw new RuntimeException('Provider channel list exceeds the safe NAS limit.');
+    private static function liveRows(array $snapshot): array {
         $items=[];
-        $genres=stalker_live_groups($feed);
-        foreach($rows as $row){
+        $genres=array_column($snapshot['categories'],'name','id');
+        foreach($snapshot['channels'] as $row){
             if(!is_array($row)||!isset($row['id'])||empty($row['cmd']))continue;
             $id=(string)$row['id'];if($id===''||strlen($id)>120)continue;
             $name=mb_substr((string)($row['name']??$id),0,300);
@@ -137,36 +151,26 @@ final class StalkerDirect {
                 'group'=>StalkerCountries::group($name,$groupName),
                 'playback'=>stalker_live_entry($row)];
         }
-        // A shorter TTL bounds memory and disk without reimporting entire SQL tables.
-        \Vaultcast\Repository::cachePut($key,$items,1800);
         return $items;
     }
     public static function liveEntry(array $feed,string $id): ?array {
-        $cached=\Vaultcast\Repository::cacheGet(self::key($feed,'live:all'));
-        return $cached[$id]??null;
+        return StalkerLiveBrowse::entry($feed,$id);
     }
     public static function countries(array $state,array $opts): array {
         $country=strtoupper((string)($opts['country']??''));
-        if(!preg_match('/^[A-Z]{2}$/D',$country)||($country!=='ZZ'&&strpos(' '.StalkerCountries::CODES.' ',' '.$country.' ')===false))throw new InvalidArgumentException('Choose a country.');
+        if($country!==''&&(!preg_match('/^[A-Z]{2}$/D',$country)||($country!=='ZZ'&&strpos(' '.StalkerCountries::CODES.' ',' '.$country.' ')===false)))throw new InvalidArgumentException('Choose a country.');
         $feeds=array_values(array_filter($state['feeds']??[],static function($f){return ($f['type']??'')==='stalker'&&!empty($f['enabled']);}));
         $selected=(string)($opts['group']??'');
         $query=mb_strtolower(mb_substr(trim((string)($opts['q']??'')),0,160));
         $offset=max(0,min(1000000,(int)($opts['offset']??0)));
         $counts=array_fill_keys(StalkerCountries::GROUPS,0);$items=[];$total=0;$progress=[];$indexing=false;
-        // Only contact one uncached provider per request to protect a six-worker NAS.
-        $requested=false;
         foreach($feeds as $feed){
-            $key=self::key($feed,'live:all');
-            $rows=\Vaultcast\Repository::cacheGet($key);
-            if($rows===null&&!$requested){
-                $requested=true;
-                try{$rows=self::liveRows($feed);}
-                catch(RuntimeException $e){$progress[]=['name'=>$feed['name'],'scanned'=>0,'total'=>null,'done'=>false,'error'=>'Provider could not supply a complete channel list.'];continue;}
-            }
-            if($rows===null){$indexing=true;$progress[]=['name'=>$feed['name'],'scanned'=>0,'total'=>null,'done'=>false,'error'=>null];continue;}
+            $snapshot=StalkerLiveBrowse::snapshot($feed);
+            if($snapshot===null){$progress[]=['name'=>$feed['name'],'scanned'=>0,'total'=>null,'done'=>false,'error'=>'No saved Live TV catalogue.'];continue;}
+            $rows=self::liveRows($snapshot);
             $progress[]=['name'=>$feed['name'],'scanned'=>count($rows),'total'=>count($rows),'done'=>true,'error'=>null];
             foreach($rows as $row){
-                if($row['country']!==$country||($query!==''&&mb_strpos(mb_strtolower($row['name'].' '.$row['description']),$query)===false))continue;
+                if(($country!==''&&$row['country']!==$country)||($query!==''&&mb_strpos(mb_strtolower($row['name'].' '.$row['description']),$query)===false))continue;
                 $counts[$row['group']]++;
                 if($selected!==''&&$row['group']!==$selected)continue;
                 if($total>=$offset&&count($items)<120){
@@ -310,7 +314,6 @@ final class StalkerDirect {
         $category=mb_substr((string)($opts['category']??''),0,120);
         $query=mb_substr(trim((string)($opts['q']??'')),0,160);
         $parent=mb_substr((string)($opts['parent']??''),0,120);
-        $refresh=!empty($opts['refresh']);
         if(!empty($opts['raw_categories_export'])){
             // Explicit diagnostic only: use the provider response, not the simplified category cache.
             // Allowlist descriptive and artwork fields; never return arbitrary provider fields,
@@ -340,15 +343,16 @@ final class StalkerDirect {
             }
             return ['ok'=>true,'kind'=>$kind,'selectedFeed'=>$feed['id'],'categories'=>$out,'count'=>count($out)];
         }
-        // Browse and playback do not require an administrator to have indexed anything.
-        $categories=$parent===''?self::categories($feed,$kind,$refresh):[];
+        if(StalkerCatalogues::expired($feed))return ['ok'=>true,'items'=>[],'total'=>0,'hasMore'=>false,'categories'=>[],'catalogueLoading'=>false];
+        // Viewer browsing only reads the existing import.
+        $categories=$parent===''?StalkerLibrary::providerFolders($feed,$kind):[];
         if(!empty($opts['categories_only']))return ['ok'=>true,'items'=>[],'total'=>null,'hasMore'=>false,'categories'=>$categories,'selectedFeed'=>$feed['id'],'shared'=>false];
-        $result=self::page($feed,$kind,$page,$category,$query,$parent,$refresh);
+        $result=$parent===''?StalkerLibrary::providerPage($feed,$kind,$category,$query,$page):($kind==='series'?self::episodePage($feed,$parent,$page):['items'=>[],'total'=>0,'hasMore'=>false]);
         foreach($result['items'] as &$item)$item['sources']=[array_intersect_key($item,array_flip(['id','feed','connection','kind','playable']))];
         unset($item);
         $result['ok']=true;$result['facets']=['category'=>array_map(static function($c){return ['value'=>$c['id'],'name'=>$c['name']];},$categories)];
         $result['categories']=$categories;$result['page']=$page;
-        $result['expandedEpisodes']=$parent!=='';$result['catalogueLoading']=false;
+        $result['expandedEpisodes']=$parent!=='';$result['catalogueLoading']=$result['catalogueLoading']??false;
         if($parent!==''){$parentItem=self::item($feed,$parent);$result['show']=$parentItem['metadata']??null;}
         $result['connections']=[['name'=>$feed['name'],'scanned'=>count($result['items']),'total'=>$result['total'],'done'=>true,'error'=>'']];
         $result['selectedFeed']=$feed['id'];$result['shared']=false;$result['indexing']=false;

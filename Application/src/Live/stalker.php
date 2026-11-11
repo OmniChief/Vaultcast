@@ -12,6 +12,7 @@ function stalker_cooldown_key(array $feed): string {
 function stalker_public_feed(array $feed): array {
     if (($feed['type'] ?? '') !== 'stalker') return $feed;
     $feed['configured'] = !empty($feed['mac']);
+    $feed['expired'] = StalkerCatalogues::expired($feed);
     foreach (['mac','username','password','serial','deviceId','deviceId2'] as $key) unset($feed[$key]);
     return $feed;
 }
@@ -212,7 +213,8 @@ function stalker_index(array $feed, bool $refresh = false): array {
 function stalker_live_key(array $feed,string $id): string {return 'stalker_live_v3_'.hash('sha256',json_encode([$feed,$id,StalkerCatalogues::active($feed,'live')])) ;}
 
 function stalker_resolve(array $feed, string $id): string {
-    $cached=\Vaultcast\Repository::cacheGet(stalker_live_key($feed,$id));
+    if(StalkerCatalogues::expired($feed))throw new InvalidArgumentException('This provider subscription has expired.');
+    $cached=StalkerLiveBrowse::entry($feed,$id)['playback']??null;
     if (!$cached) {
         $countryEntry=StalkerCountries::entry($feed,$id);
         $cached=$countryEntry['playback']??null;
@@ -243,9 +245,8 @@ function stalker_resolve(array $feed, string $id): string {
 
 /** Provider guide rows, keyed by the same stable IDs as the saved lineup. */
 function stalker_guide(array $feed): array {
-    // An optional guide failure must not renew/invalidate a working playback session.
-    $data = stalker_request($feed,'itv','get_epg_info',['period'=>48],stalker_session($feed));
-    $data = $data['data'] ?? $data; $out = [];
+    $data = StalkerLiveBrowse::snapshot($feed)['guide']??[];
+    $out = [];
     foreach ($data as $channelId=>$rows) {
         if (!is_array($rows)) continue;
         foreach ($rows as $row) {
@@ -344,6 +345,7 @@ function stalker_account_expiry(array $feed): array {
                         $clock=$hasTime?($hasZone?gmdate('H:i',$timestamp):sprintf('%02d:%s',(int)$timeMatch[1],$timeMatch[2])):null;
                         $date=$hasZone?gmdate('Y-m-d',$timestamp):($hasTime||!ctype_digit($raw)?date('Y-m-d',$timestamp):gmdate('Y-m-d',$timestamp));
                         return ['date'=>$date,'time'=>$clock,'timeZone'=>$clock?($hasZone?'UTC':'provider time'):null,
+                            'expires'=>$hasTime?$timestamp:strtotime($date.' +1 day'),
                             'status'=>'found','sources'=>$worked];
                     }
                 }
@@ -445,14 +447,20 @@ function stalker_catalogue(array $feed, array $opts): array {
     $query = mb_substr(trim((string)($opts['q'] ?? '')),0,200);
     $category = mb_substr((string)($opts['category'] ?? ''),0,120);
     $parent = mb_substr((string)($opts['parent'] ?? ''),0,120);
-    if($kind==='live')return StalkerVod::liveBrowse(['feeds'=>[$feed]],$opts);
+    if($kind==='live')return StalkerDirect::countries(['feeds'=>[$feed]],$opts);
     if($parent!=='')return StalkerVod::children($feed,$opts);
     return StalkerVod::browse(['feeds'=>[$feed]],$opts);
 }
 
 function stalker_vod_entry(array $feed,string $id): ?array {
+    if(StalkerCatalogues::expired($feed))return null;
+    $isEpisode=strpos($id,'series:')===0;
+    if($isEpisode){
+        $episode=StalkerDirect::item($feed,$id);
+        if($episode)return $episode;
+    }
     $catalogued=StalkerLibrary::entry($feed,$id);if($catalogued)return $catalogued;
-    $direct=StalkerDirect::item($feed,$id);
+    $direct=$isEpisode?null:StalkerDirect::item($feed,$id);
     if($direct)return $direct;
     $key=stalker_item_key($feed,$id);$item=\Vaultcast\Repository::cacheGet($key);
     if(!$item){$item=StalkerVod::entry($feed,$id);if($item)\Vaultcast\Repository::cachePut($key,$item,7200);}
@@ -496,7 +504,7 @@ function stalker_channel_detail(array $feed,string $id,bool $refresh=false,bool 
     $guideError='';$programs=$includeGuide?($presentation['programs']??[]):[];
     if($includeGuide&&(!$programs||$refresh))try{
         $key='stalker_channel_epg_'.hash('sha256',json_encode($feed));$guide=$refresh?null:\Vaultcast\Repository::cacheGet($key);
-        if($guide===null){$guide=stalker_guide($feed);\Vaultcast\Repository::cachePut($key,$guide,300);}
+        if($guide===null)$guide=stalker_guide($feed);
         if(!empty($guide['__unavailable']))$guideError='The provider programme guide is currently unavailable.';
         $stableId='stalker-'.substr(hash('sha256',$feed['id'].':'.$id),0,20);
         foreach($guide[$stableId]??[] as $event){
