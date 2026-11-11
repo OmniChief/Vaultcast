@@ -38,6 +38,11 @@ final class NodeRuntime
         }
     }
 
+    public static function conversionUploadReady(): bool
+    {
+        return (self::health()['conversionUploadRevision'] ?? 0) === 1;
+    }
+
     public static function dropUploadReady(): bool
     {
         return (self::health()['dropUploadRevision'] ?? 0) === 1;

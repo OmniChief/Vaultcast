@@ -94,6 +94,10 @@ const io = socketIo(server, {
   maxHttpBufferSize: 20e6,
 });
 
+let conversionUpload;
+try { conversionUpload = require('../src/Workers/conversion-upload')(io); }
+catch (error) { console.warn('Conversion relay uploads are unavailable'); }
+
 let dropUpload;
 try { dropUpload = require('../src/Workers/drop-upload')(io); }
 catch (error) { console.warn('Drop relay uploads are unavailable'); }
@@ -170,6 +174,7 @@ app.get('/health', (_req, res) => {
     downloadRevision: fileWorker() ? 2 : 0,
     videoUploadRevision: videoUpload ? 1 : 0,
     dropUploadRevision: dropUpload ? 1 : 0,
+    conversionUploadRevision: conversionUpload ? 1 : 0,
     version: 'vaultcast-lockstep-4',
     rooms: Object.keys(rooms).length,
     roomIds: Object.keys(rooms),
@@ -452,7 +457,7 @@ setInterval(async () => {
   try {
     const source = await fs.promises.readFile(__filename);
     const installed = createHash('sha256').update(source).digest('hex');
-    if (installed !== runtimeRevision && !Object.keys(rooms).length && !transcodeRunner?.active() && !downloadRunner?.active() && !videoUpload?.active() && !dropUpload?.active() && !quizWarmup?.active() && !fs.existsSync(updateMarker)) {
+    if (installed !== runtimeRevision && !Object.keys(rooms).length && !transcodeRunner?.active() && !downloadRunner?.active() && !videoUpload?.active() && !dropUpload?.active() && !conversionUpload?.active() && !quizWarmup?.active() && !fs.existsSync(updateMarker)) {
       process.exit(75);
     }
   } catch (error) {
