@@ -18,7 +18,7 @@ const updateMarker = path.join(__dirname, '../data/runtime/maintenance.json');
 
 const app = express();
 let serveMedia;
-const mediaApiRevision = 3;
+const mediaApiRevision = 4;
 function mediaHandler() {
   if (!serveMedia) {
     try { serveMedia = require('../src/Workers/media-relay'); }
@@ -30,6 +30,11 @@ app.get('/runtime/media/:token', (req, res) => {
   const handle = mediaHandler();
   if (!handle) return res.sendStatus(503);
   return handle(req, res);
+});
+app.get('/runtime/provider/:token', (req, res) => {
+  const handle = mediaHandler();
+  if (!handle || !handle.metadata) return res.sendStatus(503);
+  return handle.metadata(req, res);
 });
 const server = http.createServer(app);
 

@@ -39,26 +39,33 @@ final class NodeMedia
         foreach (headers_list() as $header) {
             if (stripos($header, 'Access-Control-Allow-Origin: ') === 0) $origin = substr($header, 29);
         }
+        $query = $action === 'stalker_stream'
+            ? array_intersect_key($_GET, array_flip(['feed', 'channel', 'ticket', 'playback', 'format']))
+            : ['u'=>$url, 'jar'=>$jar, 'ua'=>$ua, 'ref'=>$ref];
+        $fallback = '/api/live/' . $action . '?' . http_build_query($query + ['_php'=>'1'], '', '&', PHP_QUERY_RFC3986);
+        $token = self::writeTicket(['purpose'=>'media', 'url'=>$url, 'host'=>$host, 'ip'=>$ips[0], 'jar'=>$jar,
+            'ua'=>$ua, 'ref'=>$ref, 'cookies'=>$cookies, 'range'=>$range, 'origin'=>$origin, 'fallback'=>$fallback]);
+        if ($token === null) return;
+
+        if (function_exists('release_request_locks')) release_request_locks();
+        \Vaultcast\Database::releaseForStreaming();
+        header('X-Accel-Redirect: /netplay/runtime/media/' . $token);
+        exit;
+    }
+
+    public static function writeTicket(array $data): ?string
+    {
         $dir = STREAM_DATA . '/runtime/node-media';
-        if (!is_dir($dir) && !@mkdir($dir, 0770, true) && !is_dir($dir)) return;
+        if (!is_dir($dir) && !@mkdir($dir, 0770, true) && !is_dir($dir)) return null;
         if (random_int(1, 64) === 1) {
             foreach (glob($dir . '/*.json') ?: [] as $old) {
                 if (@filemtime($old) < time() - 60) @unlink($old);
             }
         }
         $token = bin2hex(random_bytes(24));
-        $query = $action === 'stalker_stream'
-            ? array_intersect_key($_GET, array_flip(['feed', 'channel', 'ticket', 'playback', 'format']))
-            : ['u'=>$url, 'jar'=>$jar, 'ua'=>$ua, 'ref'=>$ref];
-        $fallback = '/api/live/' . $action . '?' . http_build_query($query + ['_php'=>'1'], '', '&', PHP_QUERY_RFC3986);
-        $data = json_encode(['url'=>$url, 'host'=>$host, 'ip'=>$ips[0], 'jar'=>$jar, 'ua'=>$ua, 'ref'=>$ref, 'cookies'=>$cookies,
-            'range'=>$range, 'origin'=>$origin, 'fallback'=>$fallback, 'expires'=>time()+15]);
-        if ($data === false || @file_put_contents($dir . '/' . $token . '.json', $data, LOCK_EX) !== strlen($data)) return;
-
-        if (function_exists('release_request_locks')) release_request_locks();
-        \Vaultcast\Database::releaseForStreaming();
-        header('X-Accel-Redirect: /netplay/runtime/media/' . $token);
-        exit;
+        $encoded = json_encode($data + ['expires'=>time()+15]);
+        if ($encoded === false || @file_put_contents($dir . '/' . $token . '.json', $encoded, LOCK_EX) !== strlen($encoded)) return null;
+        return $token;
     }
 
     /** Select cookies from cURL's Netscape jar for the one authorised upstream request. */

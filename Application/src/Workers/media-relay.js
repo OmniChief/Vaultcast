@@ -9,10 +9,11 @@ const { pipeline } = require('stream/promises');
 
 const ticketDirectory = path.join(__dirname, '../../data/runtime/node-media');
 const consumedTickets = new Set();
+const metadataRequests = new Map();
 let active = 0;
 let playlists = 0;
 
-async function takeTicket(token) {
+async function takeTicket(token, purpose) {
   if (!/^[a-f0-9]{48}$/.test(token)) return null;
   const file = path.join(ticketDirectory, token + '.json');
   if (consumedTickets.has(token)) return null;
@@ -22,7 +23,7 @@ async function takeTicket(token) {
   } catch (error) {
     return null;
   }
-  if (consumedTickets.has(token) || ticket.expires < Date.now() / 1000) return null;
+  if (consumedTickets.has(token) || ticket.purpose !== purpose || ticket.expires < Date.now() / 1000) return null;
   consumedTickets.add(token);
   setTimeout(() => consumedTickets.delete(token), 16000).unref();
   // On Windows the relay can read the ticket while PHP retains cleanup ownership.
@@ -73,15 +74,15 @@ function rewritePlaylist(body, base, ticket) {
   }).join('\n');
 }
 
-async function playlistBody(source) {
+async function readBody(source, limit) {
   const chunks = [];
   let length = 0;
   for await (const chunk of source) {
     length += chunk.length;
-    if (length > 5_000_000) throw new Error('Playlist exceeds the size limit');
+    if (length > limit) throw new Error('Provider response exceeds the size limit');
     chunks.push(chunk);
   }
-  return Buffer.concat(chunks, length).toString('utf8');
+  return Buffer.concat(chunks, length);
 }
 
 async function serveMedia(request, response) {
@@ -92,7 +93,7 @@ async function serveMedia(request, response) {
   const abort = new AbortController();
   response.once('close', () => abort.abort());
   try {
-    ticket = await takeTicket(request.params.token);
+    ticket = await takeTicket(request.params.token, 'media');
     if (!ticket) return response.sendStatus(404);
     if (active >= 12) return response.sendStatus(503);
     active++;
@@ -113,7 +114,7 @@ async function serveMedia(request, response) {
       if (playlists >= 2) throw new Error('Playlist readers are busy');
       playlists++;
       readingPlaylist = true;
-      body = rewritePlaylist(await playlistBody(upstream), url, ticket);
+      body = rewritePlaylist((await readBody(upstream, 5_000_000)).toString('utf8'), url, ticket);
     }
     response.set({
       'Cache-Control': 'private, no-store',
@@ -147,4 +148,71 @@ async function serveMedia(request, response) {
   }
 }
 
+async function providerMetadata(ticket, url, signal) {
+  const upstream = await providerResponse(ticket, url, 'GET', signal);
+  try {
+    const status = upstream.statusCode;
+    const location = upstream.headers.location;
+    if (status < 200 || status >= 300) return { status, body: location };
+    const encoding = upstream.headers['content-encoding'];
+    if (encoding && encoding !== 'identity') throw new Error('Encoded API response');
+    return { status, body: await readBody(upstream, 32 * 1024 * 1024) };
+  } finally {
+    upstream.destroy();
+  }
+}
+
+async function serveMetadata(request, response) {
+  if (request.method !== 'GET') return response.sendStatus(405);
+  let release;
+  try {
+    const ticket = await takeTicket(request.params.token, 'metadata');
+    if (!ticket) return response.sendStatus(404);
+    if (response.destroyed) return;
+    const url = new URL(ticket.url);
+    if (!['http:', 'https:'].includes(url.protocol) || url.hostname !== ticket.host
+      || url.username || url.password) return response.sendStatus(400);
+    const key = JSON.stringify([ticket.url, ticket.ip, ticket.ua]);
+    let entry = metadataRequests.get(key);
+    if (!entry) {
+      if (metadataRequests.size >= 2) return response.sendStatus(503);
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 30000);
+      entry = { controller, clients: 0, work: null };
+      entry.work = providerMetadata(ticket, url, controller.signal).finally(() => {
+        clearTimeout(timer);
+        if (metadataRequests.get(key) === entry) metadataRequests.delete(key);
+      });
+      metadataRequests.set(key, entry);
+    }
+    entry.clients++;
+    let released = false;
+    release = () => {
+      if (released) return;
+      released = true;
+      entry.clients--;
+      if (entry.clients === 0 && metadataRequests.get(key) === entry) {
+        metadataRequests.delete(key);
+        entry.controller.abort();
+      }
+    };
+    response.once('close', release);
+    const result = await entry.work;
+    if (response.destroyed) return;
+    response.set({
+      'Cache-Control': 'private, no-store',
+      'X-Vaultcast-Upstream-Status': String(result.status),
+    });
+    response.end(result.body);
+  } catch (error) {
+    if (!response.destroyed) response.sendStatus(502);
+  } finally {
+    if (release) {
+      response.removeListener('close', release);
+      release();
+    }
+  }
+}
+
 module.exports = serveMedia;
+module.exports.metadata = serveMetadata;

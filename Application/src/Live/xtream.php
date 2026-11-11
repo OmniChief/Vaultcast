@@ -76,40 +76,47 @@ function xtream_http(string $url, bool $stream=false, ?callable $link=null, ?cal
         $body=''; $headers=[]; $status=0; $sent=false; $playlist=false;
         $requestHeaders=['Accept: */*','Connection: close'];
         if ($stream && preg_match('/^bytes=\d*-\d*$/D',$_SERVER['HTTP_RANGE']??'')) $requestHeaders[]='Range: '.$_SERVER['HTTP_RANGE'];
-        $ch=curl_init($url);
-        curl_setopt_array($ch,[CURLOPT_RESOLVE=>[$host.':'.$port.':'.$address],CURLOPT_PROXY=>'',CURLOPT_FOLLOWLOCATION=>false,CURLOPT_PROTOCOLS=>CURLPROTO_HTTP|CURLPROTO_HTTPS,
-            CURLOPT_CONNECTTIMEOUT=>8,CURLOPT_TIMEOUT=>$stream?0:30,CURLOPT_LOW_SPEED_LIMIT=>1,CURLOPT_LOW_SPEED_TIME=>30,
-            CURLOPT_FORBID_REUSE=>true,CURLOPT_NOPROGRESS=>false,
-            CURLOPT_PROGRESSFUNCTION=>static function()use($stream,$stillCurrent,$started,&$sent){return $stream&&(!$stillCurrent()||(!$sent&&microtime(true)-$started>20))?1:0;},
-            CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_USERAGENT=>'Vaultcast/'.STREAM_VERSION,CURLOPT_HTTPHEADER=>$requestHeaders,
-            CURLOPT_HEADERFUNCTION=>function($ch,$line)use(&$headers,&$status){
-                if(preg_match('#^HTTP/\S+\s+(\d+)#',$line,$m)){$status=(int)$m[1];$headers=[];}
-                elseif(strpos($line,':')!==false){[$key,$value]=explode(':',$line,2);$headers[strtolower(trim($key))]=trim($value);}
-                return strlen($line);
-            },
-            CURLOPT_WRITEFUNCTION=>function($ch,$chunk)use($stream,$url,$stillCurrent,$resolved,&$body,&$headers,&$status,&$sent,&$playlist){
-                $length=strlen($chunk);
-                if($status<200||$status>=300)return $length;
-                if(!$stream){if(strlen($body)+$length>32*1024*1024)return 0;$body.=$chunk;return $length;}
-                if(!$stillCurrent())return 0;
-                if(!$sent){
-                    $body.=$chunk;
-                    $playlist=$playlist||preg_match('/mpegurl/i',$headers['content-type']??'')||preg_match('/\.m3u8(?:\?|$)/i',$url)||strpos(ltrim($body),'#EXTM3U')===0;
-                    if($playlist)return strlen($body)>5*1024*1024?0:$length;
-                    if(strlen($body)<16)return $length;
-                    // Do not reflect provider error pages (which may contain credentials).
-                    if(preg_match('/text\/html|application\/json/i',$headers['content-type']??''))return 0;
-                    if($resolved)$resolved($url);
-                    http_response_code($status);header('Content-Type: '.($headers['content-type']??'application/octet-stream'));
-                    header('Cache-Control: private, no-store');header('X-Content-Type-Options: nosniff');header('X-Accel-Buffering: no');
-                    foreach(['content-range','content-length','accept-ranges'] as $key)if(isset($headers[$key]))header($key.': '.$headers[$key]);
-                    while(ob_get_level()>0){if(!@ob_end_flush())break;}
-                    $sent=true;echo $body;$body='';
-                }else echo $chunk;
-                flush();return $length;
-            }]);
-        if($cookie!=='')curl_setopt_array($ch,[CURLOPT_COOKIEFILE=>$cookie,CURLOPT_COOKIEJAR=>$cookie]);
-        try{$ok=curl_exec($ch);$errno=curl_errno($ch);}finally{curl_close($ch);unset($ch);}
+        $node = !$stream && $cookie === '' ? NodeProvider::get($url, $host, $ips[0]) : null;
+        if ($node !== null) {
+            [$status, $headers, $body] = $node;
+            $ok = true;
+            $errno = 0;
+        } else {
+            $ch=curl_init($url);
+            curl_setopt_array($ch,[CURLOPT_RESOLVE=>[$host.':'.$port.':'.$address],CURLOPT_PROXY=>'',CURLOPT_FOLLOWLOCATION=>false,CURLOPT_PROTOCOLS=>CURLPROTO_HTTP|CURLPROTO_HTTPS,
+                CURLOPT_CONNECTTIMEOUT=>8,CURLOPT_TIMEOUT=>$stream?0:30,CURLOPT_LOW_SPEED_LIMIT=>1,CURLOPT_LOW_SPEED_TIME=>30,
+                CURLOPT_FORBID_REUSE=>true,CURLOPT_NOPROGRESS=>false,
+                CURLOPT_PROGRESSFUNCTION=>static function()use($stream,$stillCurrent,$started,&$sent){return $stream&&(!$stillCurrent()||(!$sent&&microtime(true)-$started>20))?1:0;},
+                CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_USERAGENT=>'Vaultcast/'.STREAM_VERSION,CURLOPT_HTTPHEADER=>$requestHeaders,
+                CURLOPT_HEADERFUNCTION=>function($ch,$line)use(&$headers,&$status){
+                    if(preg_match('#^HTTP/\S+\s+(\d+)#',$line,$m)){$status=(int)$m[1];$headers=[];}
+                    elseif(strpos($line,':')!==false){[$key,$value]=explode(':',$line,2);$headers[strtolower(trim($key))]=trim($value);}
+                    return strlen($line);
+                },
+                CURLOPT_WRITEFUNCTION=>function($ch,$chunk)use($stream,$url,$stillCurrent,$resolved,&$body,&$headers,&$status,&$sent,&$playlist){
+                    $length=strlen($chunk);
+                    if($status<200||$status>=300)return $length;
+                    if(!$stream){if(strlen($body)+$length>32*1024*1024)return 0;$body.=$chunk;return $length;}
+                    if(!$stillCurrent())return 0;
+                    if(!$sent){
+                        $body.=$chunk;
+                        $playlist=$playlist||preg_match('/mpegurl/i',$headers['content-type']??'')||preg_match('/\.m3u8(?:\?|$)/i',$url)||strpos(ltrim($body),'#EXTM3U')===0;
+                        if($playlist)return strlen($body)>5*1024*1024?0:$length;
+                        if(strlen($body)<16)return $length;
+                        // Do not reflect provider error pages (which may contain credentials).
+                        if(preg_match('/text\/html|application\/json/i',$headers['content-type']??''))return 0;
+                        if($resolved)$resolved($url);
+                        http_response_code($status);header('Content-Type: '.($headers['content-type']??'application/octet-stream'));
+                        header('Cache-Control: private, no-store');header('X-Content-Type-Options: nosniff');header('X-Accel-Buffering: no');
+                        foreach(['content-range','content-length','accept-ranges'] as $key)if(isset($headers[$key]))header($key.': '.$headers[$key]);
+                        while(ob_get_level()>0){if(!@ob_end_flush())break;}
+                        $sent=true;echo $body;$body='';
+                    }else echo $chunk;
+                    flush();return $length;
+                }]);
+            if($cookie!=='')curl_setopt_array($ch,[CURLOPT_COOKIEFILE=>$cookie,CURLOPT_COOKIEJAR=>$cookie]);
+            try{$ok=curl_exec($ch);$errno=curl_errno($ch);}finally{curl_close($ch);unset($ch);}
+        }
         if($sent)exit;
         if($status>=300&&$status<400&&isset($headers['location'])){$url=iptv_hls_resolve_uri($url,$headers['location']);continue;}
         if($stream&&!$stillCurrent())throw new RuntimeException('Playback was stopped or replaced.',409);

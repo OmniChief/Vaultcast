@@ -41,16 +41,21 @@ final class NodeRuntime
     public static function mediaReady(): bool
     {
         $health = self::health();
-        return ($health['mediaRelay'] ?? false) === true && ($health['mediaApiRevision'] ?? 0) >= 3;
+        return ($health['mediaRelay'] ?? false) === true && ($health['mediaApiRevision'] ?? 0) >= 4;
+    }
+
+    public static function loopback(string $path): string
+    {
+        $saved = json_decode((string)@file_get_contents(STREAM_DATA . '/runtime/setup.json'), true) ?: [];
+        $port = (int)($saved['netplayPort'] ?? 3100);
+        if ($port < 1 || $port > 65535) $port = 3100;
+        return 'http://127.0.0.1:' . $port . $path;
     }
 
     private static function health(): array
     {
-        $saved = json_decode((string)@file_get_contents(STREAM_DATA . '/runtime/setup.json'), true) ?: [];
-        $port = (int)($saved['netplayPort'] ?? 3100);
-        if ($port < 1 || $port > 65535) return [];
         $context = stream_context_create(['http' => ['timeout' => 0.25, 'follow_location' => 0]]);
-        $result = @file_get_contents('http://127.0.0.1:' . $port . '/health', false, $context, 0, 65536);
+        $result = @file_get_contents(self::loopback('/health'), false, $context, 0, 65536);
         $health = json_decode((string)$result, true);
         return is_array($health) ? $health : [];
     }
