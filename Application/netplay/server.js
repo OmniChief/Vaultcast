@@ -11,6 +11,10 @@ const socketIo = require('socket.io');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
+const { createHash } = require('crypto');
+
+const runtimeRevision = createHash('sha256').update(fs.readFileSync(__filename)).digest('hex');
+const updateMarker = path.join(__dirname, '../data/runtime/maintenance.json');
 
 const app = express();
 const server = http.createServer(app);
@@ -89,6 +93,7 @@ app.get('/health', (_req, res) => {
   res.json({
     ok: true,
     service: 'vaultcast-netplay',
+    runtimeRevision,
     version: 'vaultcast-lockstep-4',
     rooms: Object.keys(rooms).length,
     roomIds: Object.keys(rooms),
@@ -363,6 +368,21 @@ io.on('connection', (socket) => {
     npLog('socket_error', { socketId: socket.id, sessionId: socket.sessionId || null, error: String(err && err.message ? err.message : err) });
   });
 });
+
+// The updater swaps files atomically. Let active rooms finish before the
+// service manager restarts this process with the new entry point.
+setInterval(async () => {
+  if (Object.keys(rooms).length || fs.existsSync(updateMarker)) return;
+  try {
+    const source = await fs.promises.readFile(__filename);
+    const installed = createHash('sha256').update(source).digest('hex');
+    if (installed !== runtimeRevision && !Object.keys(rooms).length && !fs.existsSync(updateMarker)) {
+      process.exit(75);
+    }
+  } catch (error) {
+    // The current process can keep serving while the application files are unavailable.
+  }
+}, 30_000).unref();
 
 server.listen(PORT, HOST, () => {
   npLog('listen', { host: HOST, port: PORT, logFile: LOG_FILE, version: 'vaultcast-lockstep-4' });
