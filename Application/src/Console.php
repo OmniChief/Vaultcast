@@ -27,6 +27,9 @@ try {
         case 'stalker-download': $result=StalkerOffline::run($argv[2] ?? ''); break;
         case 'stalker-updates': $result=StalkerUpdates::run(); break;
         case 'transcode': $result=Transcode::run($argv[2] ?? ''); break;
+        case 'maintenance-relay':
+            $result = Maintenance::run($argv[2] ?? '', true);
+            exit(!empty($result['busy']) ? 75 : 76);
         case 'maintenance':
             $result = Maintenance::run($argv[2] ?? '');
             break;

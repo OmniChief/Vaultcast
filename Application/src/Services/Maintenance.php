@@ -44,6 +44,9 @@ final class Maintenance
         if (!is_file($php)) throw new RuntimeException('Configure the PHP CLI path in Settings before starting maintenance.');
         if ($payload !== null) \Vaultcast\Repository::putDocument($task . '-request:' . $id, $payload);
         self::saveJob($id, $job);
+        if ($task !== 'acquisition-tick' && PHP_OS_FAMILY === 'Linux' && NodeRuntime::maintenanceQueueReady() && self::enqueue($id, $php)) {
+            return ['ok'=>true, 'job'=>$job];
+        }
         $log = STREAM_DATA . '/maintenance.log';
         if (PHP_OS_FAMILY === 'Windows') {
             $quote = function ($value) { return "'" . str_replace("'", "''", $value) . "'"; };
@@ -60,6 +63,21 @@ final class Maintenance
             throw new RuntimeException($job['error']);
         }
         return ['ok' => true, 'job' => $job];
+    }
+
+    private static function enqueue(string $id, string $php): bool
+    {
+        $php = realpath($php);
+        if ($php === false || !is_executable($php)) return false;
+        $dir = STREAM_DATA . '/runtime/maintenance-queue';
+        if (!is_dir($dir) && !@mkdir($dir, 0700, true) && !is_dir($dir)) return false;
+        $path = $dir . '/' . $id . '.json';
+        $temporary = $path . '.part';
+        $data = json_encode(['php'=>$php, 'ini'=>php_ini_loaded_file() ?: '', 'created'=>microtime(true)]);
+        if ($data !== false && @file_put_contents($temporary, $data, LOCK_EX) === strlen($data)
+            && @rename($temporary, $path)) return true;
+        @unlink($temporary);
+        return false;
     }
 
     public static function cancel(string $id): array
@@ -82,7 +100,7 @@ final class Maintenance
         if (\Vaultcast\Repository::document('maintenance-cancel:' . self::$active, false)) throw new RuntimeException('Cancelled by administrator.');
     }
 
-    public static function run(string $id): array
+    public static function run(string $id, bool $managed = false): array
     {
         if (PHP_SAPI !== 'cli' || !preg_match('/^\d{14}-[a-f0-9]{12}$/D', $id)) throw new RuntimeException('Invalid maintenance worker.');
         // Children (including probes and artwork encoders) inherit the lower CPU priority.
@@ -93,10 +111,24 @@ final class Maintenance
                 Process::capture([$ionice,'-c','3','-p',(string)getmypid()],2);break;
             }
         }
-        $job = \Vaultcast\Repository::document('maintenance-job:' . $id);
-        if (!$job || $job['status'] !== 'queued') throw new RuntimeException('Task is no longer queued.');
         $lock = fopen(STREAM_DATA . '/maintenance.lock', 'c');
         if (!$lock) throw new RuntimeException('Cannot open maintenance lock.');
+        if ($managed && !flock($lock, LOCK_EX | LOCK_NB)) {
+            fclose($lock);
+            return ['ok'=>true, 'busy'=>true];
+        }
+        $job = \Vaultcast\Repository::document('maintenance-job:' . $id);
+        if (!$job || $job['status'] !== 'queued') {
+            if ($managed && ($job['status'] ?? '') === 'running') {
+                $job['status'] = 'failed';
+                $job['error'] = 'The maintenance worker stopped before reporting completion.';
+                $job['finished_at'] = date('c');
+                self::saveJob($id, $job);
+            }
+            fclose($lock);
+            if ($managed) return ['ok'=>true, 'already_handled'=>true];
+            throw new RuntimeException('Task is no longer queued.');
+        }
         self::$active = $id;
         register_shutdown_function(function () use ($id) {
             if (self::$active !== $id) return;
@@ -116,7 +148,7 @@ final class Maintenance
                 $job['status'] = 'complete';
                 return ['ok' => true, 'job' => $job];
             }
-            while (!flock($lock, LOCK_EX | LOCK_NB)) { self::checkpoint(); usleep(250000); }
+            if (!$managed) while (!flock($lock, LOCK_EX | LOCK_NB)) { self::checkpoint(); usleep(250000); }
             self::checkpoint();
             $job['status'] = 'running'; $job['started_at'] = date('c');
             self::saveJob($id, $job);

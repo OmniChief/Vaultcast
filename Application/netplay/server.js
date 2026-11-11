@@ -94,6 +94,10 @@ const io = socketIo(server, {
   maxHttpBufferSize: 20e6,
 });
 
+let maintenanceQueue;
+try { maintenanceQueue = require('../src/Workers/maintenance-queue')(path.join(__dirname, '..')); }
+catch (error) { console.warn('Node maintenance queue is unavailable'); }
+
 let conversionUpload;
 try { conversionUpload = require('../src/Workers/conversion-upload')(io); }
 catch (error) { console.warn('Conversion relay uploads are unavailable'); }
@@ -175,6 +179,7 @@ app.get('/health', (_req, res) => {
     videoUploadRevision: videoUpload ? 1 : 0,
     dropUploadRevision: dropUpload ? 1 : 0,
     conversionUploadRevision: conversionUpload ? 1 : 0,
+    maintenanceQueueRevision: maintenanceQueue ? 1 : 0,
     version: 'vaultcast-lockstep-4',
     rooms: Object.keys(rooms).length,
     roomIds: Object.keys(rooms),
@@ -457,7 +462,7 @@ setInterval(async () => {
   try {
     const source = await fs.promises.readFile(__filename);
     const installed = createHash('sha256').update(source).digest('hex');
-    if (installed !== runtimeRevision && !Object.keys(rooms).length && !transcodeRunner?.active() && !downloadRunner?.active() && !videoUpload?.active() && !dropUpload?.active() && !conversionUpload?.active() && !quizWarmup?.active() && !fs.existsSync(updateMarker)) {
+    if (installed !== runtimeRevision && !Object.keys(rooms).length && !transcodeRunner?.active() && !downloadRunner?.active() && !videoUpload?.active() && !dropUpload?.active() && !conversionUpload?.active() && !quizWarmup?.active() && !maintenanceQueue?.active() && !fs.existsSync(updateMarker)) {
       process.exit(75);
     }
   } catch (error) {
