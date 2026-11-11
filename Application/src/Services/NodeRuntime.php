@@ -38,6 +38,11 @@ final class NodeRuntime
         }
     }
 
+    public static function aiUploadReady(): bool
+    {
+        return (self::health()['videoUploadRevision'] ?? 0) === 1;
+    }
+
     public static function downloadReady(): bool
     {
         return (self::health()['downloadRevision'] ?? 0) === 1;

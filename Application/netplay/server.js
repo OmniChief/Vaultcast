@@ -88,6 +88,10 @@ const io = socketIo(server, {
   maxHttpBufferSize: 20e6,
 });
 
+let videoUpload;
+try { videoUpload = require('../src/Workers/video-upload')(io); }
+catch (error) { console.warn('Node video uploads are unavailable'); }
+
 const PORT = Number(process.env.PORT || 3100);
 const HOST = process.env.HOST || '127.0.0.1';
 const LOG_FILE = process.env.NETPLAY_LOG || path.join(__dirname, 'netplay.log');
@@ -150,6 +154,7 @@ app.get('/health', (_req, res) => {
     eventsRevision: 1,
     transcodeRevision: playbackWorker() ? 1 : 0,
     downloadRevision: fileWorker() ? 2 : 0,
+    videoUploadRevision: videoUpload ? 1 : 0,
     version: 'vaultcast-lockstep-4',
     rooms: Object.keys(rooms).length,
     roomIds: Object.keys(rooms),
@@ -432,7 +437,7 @@ setInterval(async () => {
   try {
     const source = await fs.promises.readFile(__filename);
     const installed = createHash('sha256').update(source).digest('hex');
-    if (installed !== runtimeRevision && !Object.keys(rooms).length && !transcodeRunner?.active() && !downloadRunner?.active() && !fs.existsSync(updateMarker)) {
+    if (installed !== runtimeRevision && !Object.keys(rooms).length && !transcodeRunner?.active() && !downloadRunner?.active() && !videoUpload?.active() && !fs.existsSync(updateMarker)) {
       process.exit(75);
     }
   } catch (error) {

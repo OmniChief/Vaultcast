@@ -142,10 +142,19 @@ final class AIVideos {
             return ['ok'=>true,'job'=>null,'wait'=>!empty(body_json()['wait']) ? NodeEvents::issue('ai-video', true) : null];
         }
         $lease=(string)($_SERVER['HTTP_X_VAULTCAST_LEASE'] ?? '');
-        return self::locked($id,static function(&$job,$base) use($worker,$action,$lease){
+        return self::locked($id,static function(&$job,$base) use($worker,$action,$lease,$id){
             if (!$job || !in_array($job['status'],['running','completed'],true) || ($job['worker_id'] ?? '')!==$worker['id'] || ($job['worker_slot'] ?? 0)!==$worker['slot_id'] || !hash_equals($job['lease'] ?? '',$lease)) json_error('Video lease expired.',409);
             $job['updated_at']=time();
-            if ($action==='status') return ['ok'=>true,'offset'=>is_file($base.'.upload') ? filesize($base.'.upload') : 0,'completed'=>$job['status']==='completed'];
+            if ($action==='status') {
+                $result = ['ok'=>true,'offset'=>is_file($base.'.upload') ? filesize($base.'.upload') : 0,
+                    'completed'=>$job['status']==='completed'];
+                if (!$result['completed'] && !empty(body_json()['node_upload'])
+                    && rtrim(\Vaultcast\Database::basePath(), '/') === '' && NodeRuntime::aiUploadReady()) {
+                    $result['upload_ticket'] = NodeMedia::writeTicket(['purpose'=>'video-upload','id'=>$id,
+                        'worker'=>$worker['id'],'slot'=>$worker['slot_id'],'lease'=>$lease]);
+                }
+                return $result;
+            }
             if ($job['status']==='completed') return ['ok'=>true,'completed'=>true];
             if ($action==='progress') {$job['progress']=max(1,min(99,(int)(body_json()['progress'] ?? 1)));return ['ok'=>true];}
             if ($action==='fail') {$job['status']='failed';$job['error']=mb_substr((string)(body_json()['error'] ?? 'Generation failed'),0,300);return ['ok'=>true];}

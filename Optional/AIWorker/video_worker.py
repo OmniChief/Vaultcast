@@ -37,6 +37,30 @@ def run(cfg, stop):
             stop.wait(10)
 
 
+def open_upload_socket(cfg, status):
+    ticket = status.get("upload_ticket")
+    if not isinstance(ticket, str) or len(ticket) != 48:
+        return None
+    client = None
+    try:
+        import socketio
+        client = socketio.Client(reconnection=False)
+        client.connect(cfg["server"], auth={"ticket": ticket}, transports=["websocket"],
+                       namespaces=["/worker-video-upload"], socketio_path="netplay/socket.io", wait_timeout=5)
+        return client
+    except Exception:
+        close_upload_socket(client)
+        return None
+
+
+def close_upload_socket(client):
+    if client:
+        try:
+            client.disconnect()
+        except Exception:
+            pass
+
+
 @cache_use
 def generate(cfg, job, engine, stop):
     base = cfg["server"] + "/api/ai/worker/video/jobs/" + job["id"]
@@ -79,7 +103,7 @@ def generate(cfg, job, engine, stop):
             digest.update(block)
     # On transport failure the outer loop reclaims this assignment, reuses the output,
     # asks the server for its confirmed offset, and does not regenerate the clip.
-    status = worker.request(base + "/status", "POST", {}, headers)
+    status = worker.request(base + "/status", "POST", {"node_upload": True}, headers)
     if status.get("completed"):
         try:
             output.unlink(missing_ok=True)
@@ -88,22 +112,35 @@ def generate(cfg, job, engine, stop):
         engine.release_output(cfg["server"] + ":video:" + job["id"])
         return
     offset = int(status["offset"])
-    with output.open("rb") as source:
-        while offset < size:
-            stopped(stop)
-            source.seek(offset)
-            block = source.read(min(2097152, size-offset))
-            request = urllib.request.Request(base + "/chunk", block, dict(headers, **{
-                "Content-Type": "application/octet-stream", "X-Vaultcast-Offset": str(offset)}), method="POST")
-            started = time.monotonic()
-            with urllib.request.urlopen(request, timeout=120) as response:
-                result = json.loads(response.read())
-            confirmed = int(result["offset"])
-            if not 0 <= confirmed <= size or confirmed == offset:
-                raise RuntimeError("The video upload made no progress; output is retained for retry.")
-            rate = max(0, confirmed-offset) / max(0.001, time.monotonic()-started)
-            offset = confirmed
-            progress(100*offset/size, "Uploading video", phase="upload", bytes_per_second=rate, bytes_done=offset, bytes_total=size)
+    upload_socket = open_upload_socket(cfg, status)
+    try:
+        with output.open("rb") as source:
+            while offset < size:
+                stopped(stop)
+                source.seek(offset)
+                block = source.read(min(2097152, size-offset))
+                started = time.monotonic()
+                if upload_socket:
+                    try:
+                        result = upload_socket.call("chunk", (offset, block), namespace="/worker-video-upload", timeout=20)
+                        if not isinstance(result, dict) or not result.get("ok"):
+                            raise RuntimeError("Node upload unavailable")
+                    except Exception:
+                        close_upload_socket(upload_socket)
+                        upload_socket = None
+                if not upload_socket:
+                    request = urllib.request.Request(base + "/chunk", block, dict(headers, **{
+                        "Content-Type": "application/octet-stream", "X-Vaultcast-Offset": str(offset)}), method="POST")
+                    with urllib.request.urlopen(request, timeout=120) as response:
+                        result = json.loads(response.read())
+                confirmed = int(result["offset"])
+                if not 0 <= confirmed <= size or confirmed == offset:
+                    raise RuntimeError("The video upload made no progress; output is retained for retry.")
+                rate = max(0, confirmed-offset) / max(0.001, time.monotonic()-started)
+                offset = confirmed
+                progress(100*offset/size, "Uploading video", phase="upload", bytes_per_second=rate, bytes_done=offset, bytes_total=size)
+    finally:
+        close_upload_socket(upload_socket)
     try:
         worker.request(base + "/complete", "POST", {"size": size, "sha256": digest.hexdigest()}, headers, timeout=90)
     except urllib.error.HTTPError as error:
