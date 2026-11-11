@@ -18,7 +18,7 @@ const updateMarker = path.join(__dirname, '../data/runtime/maintenance.json');
 
 const app = express();
 let serveMedia;
-const mediaApiRevision = 2;
+const mediaApiRevision = 3;
 function mediaHandler() {
   if (!serveMedia) {
     try { serveMedia = require('../src/Workers/media-relay'); }

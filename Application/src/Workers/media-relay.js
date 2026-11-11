@@ -37,6 +37,7 @@ function providerResponse(ticket, url, method, signal) {
   const headers = { accept: '*/*', 'user-agent': ticket.ua, 'accept-encoding': 'identity' };
   if (ticket.ref) headers.referer = ticket.ref;
   if (ticket.range) headers.range = ticket.range;
+  if (ticket.cookies) headers.cookie = ticket.cookies;
   return new Promise((resolve, reject) => {
     const transport = url.protocol === 'https:' ? https : http;
     const request = transport.request(url, {
@@ -59,7 +60,7 @@ function rewritePlaylist(body, base, ticket) {
   function rewrite(value) {
     const target = new URL(value, base);
     if (target.origin !== base.origin || target.username || target.password) throw new Error('Playlist changes provider');
-    if (/\.(?:ts|m4s|mp4|m4a|aac|vtt|srt|key)$/i.test(target.pathname)) return target.href;
+    if (!ticket.jar.startsWith('st') && /\.(?:ts|m4s|mp4|m4a|aac|vtt|srt|key)$/i.test(target.pathname)) return target.href;
     const parts = { u: target.href, jar: ticket.jar, ua: ticket.ua };
     if (ticket.ref) parts.ref = ticket.ref;
     return '/api/live/iptv_hls?' + new URLSearchParams(parts);
@@ -135,7 +136,7 @@ async function serveMedia(request, response) {
   } catch (error) {
     if (response.destroyed) return;
     if (response.headersSent) return response.destroy();
-    if (ticket && typeof ticket.fallback === 'string' && ticket.fallback.startsWith('/api/live/iptv_hls?')) {
+    if (ticket && typeof ticket.fallback === 'string' && /^\/api\/live\/(?:iptv_hls|stalker_stream)\?/.test(ticket.fallback)) {
       return response.set('X-Accel-Redirect', ticket.fallback).end();
     }
     response.sendStatus(502);

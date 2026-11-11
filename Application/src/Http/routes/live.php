@@ -447,6 +447,7 @@ if ($__liveAction !== null) {
             // Preserve hosts discovered in nested playlists on subsequent playlist reloads.
             if (!is_file($allow) && @file_put_contents($allow,$host."\n",LOCK_EX)===false) throw new RuntimeException('Could not authorise portal playback.');
             @chmod($allow,0600);
+            if (in_array($_SERVER['REQUEST_METHOD'] ?? '', ['GET', 'HEAD'], true)) NodeMedia::handoff('stalker_stream');
             iptv_hls_proxy_request($ticketState && $ticketState['kind']!=='live' && strpos($id,'series:')===0);
         } catch (InvalidArgumentException $e) { live_bridge_deny(422,$e->getMessage()); }
           catch (RuntimeException $e) { live_bridge_deny(502,$e->getMessage()); }
