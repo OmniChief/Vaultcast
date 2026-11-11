@@ -70,6 +70,23 @@ function epg_fetch_xml($url, $maxAge = 21600) {
     if (is_file($path) && (time() - filemtime($path)) < $maxAge) {
         return array('path' => $path, 'cached' => true, 'url' => $url);
     }
+    $worker = STREAM_ROOT . '/src/Workers/epg-download.js';
+    $node = in_array($url, array_values(epg_builtin_sources()), true) && is_file($worker)
+        ? Process::nodeBinary() : null;
+    if ($node !== null) {
+        $temporary = $path . '.' . bin2hex(random_bytes(6)) . '.tmp';
+        try {
+            Process::capture([$node, $worker, $url, $temporary], 70);
+            if (!is_file($temporary) || !@rename($temporary, $path)) {
+                throw new RuntimeException('Could not download the programme guide.');
+            }
+        } finally {
+            @unlink($temporary);
+            @unlink($temporary . '.part');
+        }
+        file_put_contents($metaPath, json_encode(['url'=>$url, 'fetchedAt'=>gmdate('c'), 'bytes'=>filesize($path)]));
+        return ['path'=>$path, 'cached'=>false, 'url'=>$url];
+    }
     $body = iptv_http_get($url, 60);
     // gzip magic
     if (strlen($body) >= 2 && ord($body[0]) === 0x1f && ord($body[1]) === 0x8b) {
@@ -251,12 +268,16 @@ function epg_refresh($force = false) {
     } finally { flock($lock, LOCK_UN); fclose($lock); }
 }
 
+function epg_builtin_sources(): array {
+    return ['GB'=>'https://www.open-epg.com/files/unitedkingdom.xml.gz',
+        'GB-freeview'=>'https://raw.githubusercontent.com/dp247/Freeview-EPG/master/epg.xml',
+        'US'=>'https://www.open-epg.com/files/unitedstates1.xml.gz'];
+}
+
 function epg_refresh_locked($force) {
     $iptv = iptv_load();
     // Stalker Open EPG sources are managed automatically. Preserve any user IPTV guides.
-    $openSources=['GB'=>'https://www.open-epg.com/files/unitedkingdom.xml.gz',
-        'GB-freeview'=>'https://raw.githubusercontent.com/dp247/Freeview-EPG/master/epg.xml',
-        'US'=>'https://www.open-epg.com/files/unitedstates1.xml.gz'];
+    $openSources = epg_builtin_sources();
     $hasStalker=false;
     foreach($iptv['feeds'] as $feed) if(($feed['type']??'')==='stalker'&&!empty($feed['enabled'])){$hasStalker=true;break;}
     if(!$hasStalker)$openSources=[];
