@@ -38,6 +38,7 @@ function providerResponse(ticket, url, method, signal) {
   const headers = { accept: '*/*', 'user-agent': ticket.ua, 'accept-encoding': 'identity' };
   if (ticket.ref) headers.referer = ticket.ref;
   if (ticket.range) headers.range = ticket.range;
+  if (ticket.ifRange) headers['if-range'] = ticket.ifRange;
   if (ticket.cookies) headers.cookie = ticket.cookies;
   return new Promise((resolve, reject) => {
     const transport = url.protocol === 'https:' ? https : http;

@@ -14,9 +14,9 @@ final class NodeDownloads
         ]);
     }
 
-    public static function stalkerSegment(string $url, string $target, array $feed): bool
+    public static function stalker(string $url, string $target, array $feed, int $limit): bool
     {
-        if (is_file($target . '.part') || !NodeRuntime::downloadReady()) return false;
+        if (!NodeRuntime::downloadReady()) return false;
         $parts = parse_url($url);
         if (!$parts || !in_array($parts['scheme'] ?? '', ['http','https'], true) || isset($parts['user'])
             || isset($parts['pass']) || empty($parts['host'])) return false;
@@ -30,7 +30,7 @@ final class NodeDownloads
             return false;
         }
         return self::transfer($url, $host, $ips, [
-            'purpose'=>'download', 'target'=>$target, 'limit'=>512*1024*1024, 'type'=>'stalker',
+            'purpose'=>'download', 'target'=>$target, 'limit'=>$limit, 'type'=>'stalker',
             'cookies'=>$cookies, 'ref'=>preg_replace('#/(?:server/load|portal)\.php$#','/c/',stalker_endpoint($feed)),
             'ua'=>'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 MAG250 stbapp ver: 4 rev: 1812 Mobile Safari/533.3',
         ]);

@@ -149,7 +149,7 @@ app.get('/health', (_req, res) => {
     mediaApiRevision,
     eventsRevision: 1,
     transcodeRevision: playbackWorker() ? 1 : 0,
-    downloadRevision: fileWorker() ? 1 : 0,
+    downloadRevision: fileWorker() ? 2 : 0,
     version: 'vaultcast-lockstep-4',
     rooms: Object.keys(rooms).length,
     roomIds: Object.keys(rooms),

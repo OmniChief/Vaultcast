@@ -209,7 +209,7 @@ final class StalkerOffline {
         if($jobId!==''){$job=self::job($jobId);$job['is_hls']=true;$job['segments_total']=count($segments);$job['segments_done']=0;$job['updated']=date('c');self::save($job);}
         foreach($segments as $number=>$segment){
             $target = $dir . '/segment-' . $number;
-            if (!is_file($target) && !NodeDownloads::stalkerSegment($segment, $target, $feed)) self::fetch($segment, $target, $feed, 512*1024*1024);
+            if (!is_file($target) && !NodeDownloads::stalker($segment, $target, $feed, 512*1024*1024)) self::fetch($segment, $target, $feed, 512*1024*1024);
             if($jobId!==''){$job=self::job($jobId);$job['segments_done']=$number+1;$job['updated']=date('c');self::save($job);}}
         $local=$dir.'/offline.m3u8';file_put_contents($local,implode("\n",$out)."\n");return $local;
     }
@@ -257,7 +257,9 @@ final class StalkerOffline {
             // Start with a plain GET. Some Stalker media gateways stall when
             // the initial request includes Range: bytes=0-. Content-Length
             // still supplies progress; retries can use Range to resume partials.
-            self::fetch($url,$source,$feed,21474836480,false,false);
+            if (!is_file($source) && !NodeDownloads::stalker($url, $source, $feed, 21474836480)) {
+                self::fetch($url,$source,$feed,21474836480,false,false);
+            }
             $head=file_get_contents($source,false,null,0,16);
             $expectedDuration=0.0;
             if(strpos(ltrim((string)$head),'#EXTM3U')===0){$j['is_hls']=true;$j['stage']='Downloading stream segments';$j['updated']=date('c');self::save($j);$source=self::playlist($url,$dir,$feed,0,$id);preg_match_all('/#EXTINF:([0-9.]+)/',(string)file_get_contents($source),$durations);$expectedDuration=array_sum(array_map('floatval',$durations[1]));}
