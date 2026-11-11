@@ -47,11 +47,34 @@ final class Process {
 
     public static function windowsConversion(array $job, string $options, int $threads = 1): int {
         $arguments = array_merge(['-nostdin','-y'], Convert::threadOptions(max(1, $threads), 'copy')['input'], ['-progress',$job['progress_file'],'-nostats','-i',$job['src']], preg_split('/\s+/',trim($options)), [$job['part']]);
-        $spec = base64_encode(json_encode(['ffmpeg'=>Remux::ffmpegBin(),'arguments'=>$arguments,'log'=>$job['log'],'part'=>$job['part'],'dest'=>$job['dest'],'exit'=>$job['exit_file']]));
+        $encodedJob = json_encode(['ffmpeg'=>Remux::ffmpegBin(),'arguments'=>$arguments,'log'=>$job['log'],'part'=>$job['part'],'dest'=>$job['dest'],'exit'=>$job['exit_file']], JSON_INVALID_UTF8_SUBSTITUTE);
+        if ($encodedJob === false) return 0;
+        $spec = base64_encode($encodedJob);
+        $node = self::windowsNode();
+        $script = STREAM_ROOT . '/src/Workers/convert.js';
+        if ($node !== null && is_file($script)) {
+            $quote = static function (string $value): string { return "'" . str_replace("'", "''", $value) . "'"; };
+            $pid = self::powershell('$ErrorActionPreference="Stop"; $p=Start-Process -FilePath ' . $quote($node)
+                . ' -ArgumentList @(' . $quote('"' . $script . '"') . ',' . $quote($spec)
+                . ') -WindowStyle Hidden -PassThru; $p.Id');
+            return (int)trim((string)$pid);
+        }
+
         $worker = '$ErrorActionPreference="Stop"; $s=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("' . $spec . '")) | ConvertFrom-Json; try { $arguments=@($s.arguments | ForEach-Object {[string]$_}); & $s.ffmpeg @arguments *> $s.log; $code=$LASTEXITCODE; if ($code -eq 0) { Move-Item -LiteralPath $s.part -Destination $s.dest }; Set-Content -LiteralPath $s.exit -Value $code -Encoding ASCII } catch { Set-Content -LiteralPath $s.exit -Value 1 -Encoding ASCII }';
         $encoded = base64_encode(mb_convert_encoding($worker,'UTF-16LE','UTF-8'));
         $pid = self::powershell('$p=Start-Process powershell.exe -ArgumentList @("-NoProfile","-NonInteractive","-EncodedCommand","' . $encoded . '") -WindowStyle Hidden -PassThru; $p.Id');
         return (int)trim((string)$pid);
+    }
+
+    private static function windowsNode(): ?string {
+        $bundled = glob(STREAM_ROOT . '/data/runtime/node-*-win-*/node.exe') ?: [];
+        foreach (explode(PATH_SEPARATOR, (string)getenv('PATH')) as $directory) {
+            if ($directory !== '') $bundled[] = rtrim($directory, '/\\') . '/node.exe';
+        }
+        foreach ($bundled as $candidate) {
+            if (is_file($candidate)) return $candidate;
+        }
+        return null;
     }
 
     public static function capture(array $arguments, int $timeout): ?string {
