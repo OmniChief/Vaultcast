@@ -50,7 +50,7 @@ final class Process {
         $encodedJob = json_encode(['ffmpeg'=>Remux::ffmpegBin(),'arguments'=>$arguments,'log'=>$job['log'],'part'=>$job['part'],'dest'=>$job['dest'],'exit'=>$job['exit_file']], JSON_INVALID_UTF8_SUBSTITUTE);
         if ($encodedJob === false) return 0;
         $spec = base64_encode($encodedJob);
-        $node = self::windowsNode();
+        $node = self::nodeBinary();
         $script = STREAM_ROOT . '/src/Workers/convert.js';
         if ($node !== null && is_file($script)) {
             $quote = static function (string $value): string { return "'" . str_replace("'", "''", $value) . "'"; };
@@ -66,13 +66,17 @@ final class Process {
         return (int)trim((string)$pid);
     }
 
-    private static function windowsNode(): ?string {
-        $bundled = glob(STREAM_ROOT . '/data/runtime/node-*-win-*/node.exe') ?: [];
+    public static function nodeBinary(): ?string {
+        $windows = PHP_OS_FAMILY === 'Windows';
+        $binary = $windows ? 'node.exe' : 'node';
+        $candidates = $windows
+            ? array_merge([STREAM_DATA . '/runtime/node/node.exe'], glob(STREAM_DATA . '/runtime/node-*-win-*/node.exe') ?: [])
+            : [dirname(STREAM_ROOT) . '/node/bin/node'];
         foreach (explode(PATH_SEPARATOR, (string)getenv('PATH')) as $directory) {
-            if ($directory !== '') $bundled[] = rtrim($directory, '/\\') . '/node.exe';
+            if ($directory !== '') $candidates[] = rtrim($directory, '/\\') . '/' . $binary;
         }
-        foreach ($bundled as $candidate) {
-            if (is_file($candidate)) return $candidate;
+        foreach ($candidates as $candidate) {
+            if (is_file($candidate) && ($windows || is_executable($candidate))) return $candidate;
         }
         return null;
     }
