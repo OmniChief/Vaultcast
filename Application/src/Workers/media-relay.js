@@ -6,6 +6,9 @@ const fs = require('fs').promises;
 const path = require('path');
 const { isIP } = require('net');
 const { pipeline } = require('stream/promises');
+const { once } = require('events');
+const { createHash } = require('crypto');
+const { flock, lockFile } = require('./file-lock');
 
 const ticketDirectory = path.join(__dirname, '../../data/runtime/node-media');
 const consumedTickets = new Set();
@@ -51,7 +54,13 @@ function providerResponse(ticket, url, method, signal) {
     });
     const connectTimer = setTimeout(() => request.destroy(new Error('Provider did not respond')), 8000);
     request.setTimeout(45000, () => request.destroy(new Error('Provider stalled')));
-    request.once('error', reject);
+    request.once('error', error => {
+      const socket = request.socket;
+      if (ticket.xtream && socket && !socket.closed) {
+        socket.once('close', () => reject(error));
+        socket.destroy();
+      } else reject(error);
+    });
     request.once('close', () => clearTimeout(connectTimer));
     request.end();
   });
@@ -86,11 +95,44 @@ async function readBody(source, limit) {
   return Buffer.concat(chunks, length);
 }
 
+function xtreamPath(account) {
+  return path.join(ticketDirectory, '../xtream', account);
+}
+
+async function xtreamCurrent(base, session) {
+  // PHP updates the tiny session file in place under its exclusive lock.
+  // An empty or partial read may coincide with that write.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const state = JSON.parse(await fs.readFile(base + '.session', 'utf8'));
+      return state.id === session && state.expires > Date.now() / 1000;
+    } catch (error) {
+      if (!attempt) await new Promise(resolve => setTimeout(resolve, 25));
+    }
+  }
+  return false;
+}
+
+async function closeXtreamUpstream(upstream) {
+  if (!upstream) return;
+  const socket = upstream.socket;
+  if (!socket || socket.closed) {
+    upstream.destroy();
+    return;
+  }
+  const closed = once(socket, 'close').catch(() => {});
+  upstream.destroy();
+  socket.destroy();
+  await closed;
+}
+
 async function serveMedia(request, response) {
   let ticket;
   let upstream;
   let entered = false;
   let readingPlaylist = false;
+  let xtreamLock, xtreamWatch, xtreamBase;
+  let stopped = false;
   const abort = new AbortController();
   response.once('close', () => abort.abort());
   try {
@@ -102,6 +144,33 @@ async function serveMedia(request, response) {
     const url = new URL(ticket.url);
     if (!['http:', 'https:'].includes(url.protocol) || url.hostname !== ticket.host
       || url.username || url.password) throw new Error('Unsupported provider URL');
+    if (ticket.xtream) {
+      const { account, session } = ticket.xtream;
+      if (!flock || !/^[a-f0-9]{64}$/.test(account) || !/^[a-f0-9]{48}$/.test(session)) return response.sendStatus(403);
+      xtreamBase = xtreamPath(account);
+      xtreamLock = await fs.open(xtreamBase + '.transfer', 'a');
+      try { await lockFile(xtreamLock, 12, abort.signal); }
+      catch (error) { return response.destroyed ? undefined : response.sendStatus(409); }
+      if (!await xtreamCurrent(xtreamBase, session)) return response.sendStatus(409);
+      const jar = await fs.readFile(xtreamBase + '.cookies').catch(error => {
+        if (error.code === 'ENOENT') return null;
+        throw error;
+      });
+      if ((jar ? createHash('sha256').update(jar).digest('hex') : '') !== ticket.xtream.cookieHash) {
+        throw new Error('Xtream cookies changed while acquiring the transfer lock');
+      }
+      let checking = false;
+      xtreamWatch = setInterval(async () => {
+        if (checking) return;
+        checking = true;
+        try {
+          if (!await xtreamCurrent(xtreamBase, session)) {
+            stopped = true;
+            abort.abort();
+          }
+        } finally { checking = false; }
+      }, 500);
+    }
     upstream = await providerResponse(ticket, url, request.method, abort.signal);
     const type = upstream.headers['content-type'] || '';
     const encoding = upstream.headers['content-encoding'] || 'identity';
@@ -109,6 +178,9 @@ async function serveMedia(request, response) {
     if (![200, 206].includes(upstream.statusCode) || upstream.headers['set-cookie'] || encoding !== 'identity'
       || (!playlist && !/^(?:video\/|audio\/|application\/octet-stream(?:;|$))/i.test(type))) {
       throw new Error('Provider response requires the compatibility transport');
+    }
+    if (ticket.xtream && (playlist || !/^(?:video\/|audio\/)/i.test(type))) {
+      throw new Error('Xtream response requires the compatibility transport');
     }
     let body = null;
     if (playlist && request.method !== 'HEAD') {
@@ -120,7 +192,7 @@ async function serveMedia(request, response) {
     response.set({
       'Cache-Control': 'private, no-store',
       'Content-Type': playlist ? 'application/vnd.apple.mpegurl; charset=utf-8' : type,
-      'Access-Control-Allow-Origin': ticket.origin,
+      ...(ticket.origin ? { 'Access-Control-Allow-Origin': ticket.origin } : {}),
       'Access-Control-Expose-Headers': 'Content-Length, Content-Range, Accept-Ranges',
       'Vary': 'Origin',
       'X-Content-Type-Options': 'nosniff',
@@ -138,14 +210,27 @@ async function serveMedia(request, response) {
   } catch (error) {
     if (response.destroyed) return;
     if (response.headersSent) return response.destroy();
-    if (ticket && typeof ticket.fallback === 'string' && /^\/api\/live\/(?:iptv_hls|stalker_stream)\?/.test(ticket.fallback)) {
+    if (ticket?.xtream) {
+      clearInterval(xtreamWatch);
+      await closeXtreamUpstream(upstream);
+      upstream = null;
+      if (xtreamLock) { await xtreamLock.close(); xtreamLock = null; }
+      if (stopped || (xtreamBase && !await xtreamCurrent(xtreamBase, ticket.xtream.session))) return response.sendStatus(409);
+    }
+    if (ticket && typeof ticket.fallback === 'string' && /^\/api\/live\/(?:iptv_hls|stalker_stream|xtream_stream)\?/.test(ticket.fallback)) {
       return response.set('X-Accel-Redirect', ticket.fallback).end();
     }
     response.sendStatus(502);
   } finally {
-    if (upstream) upstream.destroy();
-    if (entered) active--;
-    if (readingPlaylist) playlists--;
+    clearInterval(xtreamWatch);
+    try {
+      if (ticket?.xtream) await closeXtreamUpstream(upstream);
+      else if (upstream) upstream.destroy();
+    } finally {
+      if (xtreamLock) await xtreamLock.close();
+      if (entered) active--;
+      if (readingPlaylist) playlists--;
+    }
   }
 }
 
@@ -221,3 +306,5 @@ module.exports.metadata = serveMetadata;
 module.exports.takeTicket = takeTicket;
 
 module.exports.providerResponse = providerResponse;
+
+module.exports.xtreamReady = Boolean(flock);

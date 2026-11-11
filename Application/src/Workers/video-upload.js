@@ -2,25 +2,11 @@
 
 const fs = require('fs');
 const { join } = require('path');
-const { spawn } = require('child_process');
+const { flock, lockFile } = require('./file-lock');
 const { takeTicket } = require('./media-relay');
 const root = join(__dirname, '../../data/ai-videos');
-const flock = process.platform === 'linux' && ['/usr/bin/flock', '/bin/flock'].find(path => fs.existsSync(path));
 const chunkLimit = 2 * 1024 * 1024;
 const uploadLimit = 64 * 1024 * 1024;
-
-function lockFile(handle) {
-  // The inherited descriptor shares the parent's open-file description. Its
-  // lock remains held by Node after flock exits, until this handle is closed.
-  return new Promise((resolve, reject) => {
-    const child = spawn(flock, ['-x', '-w', '3', '3'], { stdio: ['ignore', 'ignore', 'ignore', handle.fd] });
-    child.once('error', reject);
-    child.once('close', code => {
-      if (code === 0) resolve();
-      else reject(new Error('Video upload is busy'));
-    });
-  });
-}
 
 async function writeChunk(ticket, offset, bytes) {
   const base = join(root, ticket.id);

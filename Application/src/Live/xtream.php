@@ -62,6 +62,33 @@ function xtream_transfer_lock(array $feed,string $session) {
     }while(microtime(true)<$until);
     fclose($handle);throw new RuntimeException('Previous provider request is still closing. Please select the title again shortly.',409);
 }
+function xtream_node_stream(string $url, string $account, string $session, string $ticket): void {
+    if (isset($_GET['_php']) || !preg_match('/^[a-f0-9]{64}$/D', $ticket)
+        || !preg_match('/^nginx\b/i', (string)($_SERVER['SERVER_SOFTWARE'] ?? ''))
+        || rtrim(\Vaultcast\Database::basePath(), '/') !== '' || !NodeRuntime::xtreamRelayReady()) return;
+    $parts = parse_url($url);
+    if (!$parts || !in_array(strtolower($parts['scheme'] ?? ''), ['http','https'], true)
+        || isset($parts['user']) || isset($parts['pass']) || empty($parts['host'])
+        || !preg_match('/\.(?:ts|m4s|mp4|mkv|webm|aac|m4a)$/iD', $parts['path'] ?? '')) return;
+    $ips = stalker_public_addresses($url);
+    foreach ($ips as $ip) if (!WebFetch::publicIp($ip)) return;
+    $host = strtolower($parts['host']);
+    $cookieHash = is_file($account . '.cookies') ? @hash_file('sha256', $account . '.cookies') : '';
+    if ($cookieHash === false) return;
+    $cookies = NodeMedia::cookies($account . '.cookies', $host, $parts['path'], $parts['scheme'] === 'https');
+    if ($cookies === null) return;
+    $range = (string)($_SERVER['HTTP_RANGE'] ?? '');
+    if ($range !== '' && !preg_match('/^bytes=\d*-\d*$/D', $range)) return;
+    $token = NodeMedia::writeTicket(['purpose'=>'media','url'=>$url,'host'=>$host,'ip'=>$ips[0],
+        'ua'=>'Vaultcast/' . STREAM_VERSION,'cookies'=>$cookies,'range'=>$range,
+        'xtream'=>['account'=>basename($account),'session'=>$session,'cookieHash'=>$cookieHash],
+        'fallback'=>'/api/live/xtream_stream?ticket=' . $ticket . '&_php=1']);
+    if ($token === null) return;
+    \Vaultcast\Database::releaseForStreaming();
+    header('X-Accel-Redirect: /netplay/runtime/media/' . $token);
+    exit;
+}
+
 function xtream_http(string $url, bool $stream=false, ?callable $link=null, ?callable $current=null, ?callable $resolved=null, string $cookie=''): array {
     if (!function_exists('curl_init')) throw new RuntimeException('Xtream Codes requires PHP cURL.');
     $started=microtime(true);$lastCheck=0.0;$active=true;
@@ -212,11 +239,13 @@ function xtream_handle(string $action): void {
             xtream_session($feed,static function($state)use($session){if(($state['id']??'')!==$session||($state['expires']??0)<=time())throw new RuntimeException('Playback was stopped or replaced.',409);$state['expires']=time()+90;return $state;});json_out(['ok'=>true]);
         }
         release_request_locks();\Vaultcast\Database::releaseForStreaming();@set_time_limit(0);@ignore_user_abort(true);
+        $resolvedKey='xtream-resolved:'.hash('sha256',$session.$ticket['url']);$saved=\Vaultcast\Repository::cacheGet($resolvedKey);
+        $account=xtream_account_path($feed);
+        xtream_node_stream($saved['url']??$ticket['url'], $account, $session, (string)($input['ticket']??''));
         $lock=xtream_transfer_lock($feed,$session);
         // exit inside the streaming helper still releases the OS lock at request shutdown.
         register_shutdown_function(static function()use($lock){if(is_resource($lock)){flock($lock,LOCK_UN);fclose($lock);}});
-        $resolvedKey='xtream-resolved:'.hash('sha256',$session.$ticket['url']);$saved=\Vaultcast\Repository::cacheGet($resolvedKey);
-        $cookie=xtream_account_path($feed).'.cookies';
+        $cookie=$account.'.cookies';
         try {
             xtream_http($saved['url']??$ticket['url'],true,
                 static function($url)use($feed,$viewer,$session){return xtream_ticket($feed,(string)$viewer['id'],$url,'',$session);},

@@ -157,6 +157,7 @@ app.get('/health', (_req, res) => {
     runtimeRevision,
     mediaRelay: Boolean(mediaHandler()),
     mediaApiRevision,
+    xtreamRelayRevision: mediaHandler()?.xtreamReady ? 1 : 0,
     eventsRevision: 1,
     quizRevision: quizWarmup ? 1 : 0,
     playlistRevision: fileWorker() ? 1 : 0,
