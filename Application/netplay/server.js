@@ -17,6 +17,19 @@ const runtimeRevision = createHash('sha256').update(fs.readFileSync(__filename))
 const updateMarker = path.join(__dirname, '../data/runtime/maintenance.json');
 
 const app = express();
+let serveMedia;
+function mediaHandler() {
+  if (!serveMedia) {
+    try { serveMedia = require('../src/Workers/media-relay'); }
+    catch (error) { return null; }
+  }
+  return serveMedia;
+}
+app.get('/runtime/media/:token', (req, res) => {
+  const handle = mediaHandler();
+  if (!handle) return res.sendStatus(503);
+  return handle(req, res);
+});
 const server = http.createServer(app);
 
 app.use(cors({
@@ -94,6 +107,7 @@ app.get('/health', (_req, res) => {
     ok: true,
     service: 'vaultcast-netplay',
     runtimeRevision,
+    mediaRelay: Boolean(mediaHandler()),
     version: 'vaultcast-lockstep-4',
     rooms: Object.keys(rooms).length,
     roomIds: Object.keys(rooms),

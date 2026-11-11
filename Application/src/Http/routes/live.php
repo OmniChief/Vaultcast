@@ -600,6 +600,7 @@ try {
     // Serve proxied HLS playlists and media before setting JSON headers.
     if ($action === 'iptv_hls' && ($_SERVER['REQUEST_METHOD'] === 'GET' || $_SERVER['REQUEST_METHOD'] === 'HEAD')) {
         require_once STREAM_ROOT . '/src/Live/iptv_hls.php';
+        NodeMedia::handoff();
         iptv_hls_proxy_request();
         exit;
     }

@@ -38,6 +38,11 @@ final class NodeRuntime
         }
     }
 
+    public static function mediaReady(): bool
+    {
+        return (self::health()['mediaRelay'] ?? false) === true;
+    }
+
     private static function health(): array
     {
         $saved = json_decode((string)@file_get_contents(STREAM_DATA . '/runtime/setup.json'), true) ?: [];
