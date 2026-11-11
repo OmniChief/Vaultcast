@@ -78,6 +78,17 @@ async function saveGuide(response, target, signal) {
 }
 
 async function main() {
+  if (process.argv[2] === '--file') {
+    const source = fs.createReadStream(process.argv[3]);
+    const target = process.argv[4];
+    try {
+      await saveGuide(source, target, AbortSignal.timeout(60_000));
+    } finally {
+      source.destroy();
+      await fs.promises.unlink(target + '.part').catch(() => {});
+    }
+    return;
+  }
   const url = new URL(process.argv[2]);
   const target = process.argv[3];
   if (!['https://www.open-epg.com', 'https://raw.githubusercontent.com'].includes(url.origin)) {

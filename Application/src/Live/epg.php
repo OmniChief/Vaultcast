@@ -63,52 +63,117 @@ function epg_wanted_ids($iptvState) {
     return $wanted;
 }
 
+function epg_download_to_file(string $url, string $target): void {
+    $file = @fopen($target, 'wb');
+    if (!$file) throw new RuntimeException('Could not open the temporary guide file.');
+    $limit = 128 * 1024 * 1024;
+    try {
+        if (function_exists('curl_init')) {
+            $curl = curl_init($url);
+            $bytes = 0;
+            try {
+                curl_setopt_array($curl, [
+                    CURLOPT_FOLLOWLOCATION=>true, CURLOPT_CONNECTTIMEOUT=>8, CURLOPT_TIMEOUT=>60,
+                    CURLOPT_USERAGENT=>'Vaultcast/' . STREAM_VERSION . ' (+iptv)', CURLOPT_SSL_VERIFYPEER=>true,
+                    CURLOPT_HTTPHEADER=>['Accept: */*'],
+                    CURLOPT_WRITEFUNCTION=>static function ($handle, string $chunk) use ($file, $limit, &$bytes): int {
+                        $length = strlen($chunk);
+                        $bytes += $length;
+                        return $bytes <= $limit && fwrite($file, $chunk) === $length ? $length : 0;
+                    },
+                ]);
+                $ok = curl_exec($curl) !== false && (int)curl_getinfo($curl, CURLINFO_HTTP_CODE) < 400;
+            } finally { curl_close($curl); }
+        } else {
+            $ctx = stream_context_create(['http'=>['timeout'=>60, 'follow_location'=>1,
+                'header'=>"User-Agent: Vaultcast/" . STREAM_VERSION . "\r\nAccept: */*\r\n"],
+                'ssl'=>['verify_peer'=>true, 'verify_peer_name'=>true]]);
+            $source = @fopen($url, 'rb', false, $ctx);
+            if (!$source) throw new RuntimeException('Could not open the programme guide source.');
+            try {
+                $bytes = stream_copy_to_stream($source, $file, $limit + 1);
+                $ok = $bytes !== false && $bytes <= $limit && feof($source)
+                    && empty(stream_get_meta_data($source)['timed_out']);
+            } finally { fclose($source); }
+        }
+        if (!$ok || !$bytes || !fflush($file)) throw new RuntimeException('Could not download the programme guide within its size limit.');
+    } finally { fclose($file); }
+}
+
+function epg_inflate_file(string $source, string $target): void {
+    $inflate = function_exists('inflate_init') ? inflate_init(ZLIB_ENCODING_GZIP) : false;
+    if ($inflate === false) throw new RuntimeException('Gzip decoding is unavailable.');
+    $input = @fopen($source, 'rb');
+    $output = @fopen($target, 'wb');
+    try {
+        if (!$input || !$output) throw new RuntimeException('Could not open the guide for decompression.');
+        $bytes = 0;
+        while (!feof($input)) {
+            $chunk = fread($input, 8192);
+            if ($chunk === false || $chunk === '') break;
+            $decoded = @inflate_add($inflate, $chunk, ZLIB_SYNC_FLUSH);
+            if ($decoded === false) break;
+            $length = strlen($decoded);
+            $bytes += $length;
+            if ($bytes > 256 * 1024 * 1024 || fwrite($output, $decoded) !== $length) break;
+            if (inflate_get_status($inflate) === ZLIB_STREAM_END && fflush($output)) return;
+        }
+        throw new RuntimeException('Could not decompress the programme guide within its size limit.');
+    } finally {
+        if ($input) fclose($input);
+        if ($output) fclose($output);
+    }
+}
+
+function epg_check_xmltv(string $path): void {
+    if (!class_exists('XMLReader')) return;
+    $reader = new XMLReader();
+    if (!@$reader->open($path, null, LIBXML_NONET | LIBXML_COMPACT)) {
+        throw new RuntimeException('Could not read the downloaded programme guide.');
+    }
+    try {
+        while (@$reader->read()) {
+            if ($reader->nodeType !== XMLReader::ELEMENT) continue;
+            if ($reader->localName === 'tv') return;
+            break;
+        }
+        throw new RuntimeException('The guide source did not return XMLTV data.');
+    } finally { $reader->close(); }
+}
+
 function epg_fetch_xml($url, $maxAge = 21600) {
-    $hash = substr(sha1($url), 0, 16);
-    $path = epg_cache_dir() . '/' . $hash . '.xml';
-    $metaPath = epg_cache_dir() . '/' . $hash . '.meta.json';
+    $path = epg_cache_dir() . '/' . substr(sha1($url), 0, 16) . '.xml';
+    $metaPath = substr($path, 0, -4) . '.meta.json';
     if (is_file($path) && (time() - filemtime($path)) < $maxAge) {
-        return array('path' => $path, 'cached' => true, 'url' => $url);
+        return ['path'=>$path, 'cached'=>true, 'url'=>$url];
     }
     $worker = STREAM_ROOT . '/src/Workers/epg-download.js';
-    $node = in_array($url, array_values(epg_builtin_sources()), true) && is_file($worker)
-        ? Process::nodeBinary() : null;
-    if ($node !== null) {
-        $temporary = $path . '.' . bin2hex(random_bytes(6)) . '.tmp';
-        try {
+    $node = is_file($worker) ? Process::nodeBinary() : null;
+    $temporary = $path . '.' . bin2hex(random_bytes(6)) . '.tmp';
+    $download = $temporary . '.download';
+    try {
+        if ($node !== null && in_array($url, array_values(epg_builtin_sources()), true)) {
             Process::capture([$node, $worker, $url, $temporary], 70);
-            if (!is_file($temporary) || !@rename($temporary, $path)) {
-                throw new RuntimeException('Could not download the programme guide.');
+        } else {
+            epg_download_to_file($url, $download);
+            if (file_get_contents($download, false, null, 0, 2) === "\x1f\x8b") {
+                if ($node !== null) Process::capture([$node, $worker, '--file', $download, $temporary], 70);
+                if (!is_file($temporary)) epg_inflate_file($download, $temporary);
+            } elseif (!@rename($download, $temporary)) {
+                throw new RuntimeException('Could not stage the downloaded guide.');
             }
-        } finally {
-            @unlink($temporary);
-            @unlink($temporary . '.part');
         }
-        file_put_contents($metaPath, json_encode(['url'=>$url, 'fetchedAt'=>gmdate('c'), 'bytes'=>filesize($path)]));
-        return ['path'=>$path, 'cached'=>false, 'url'=>$url];
+        if (!is_file($temporary) || !filesize($temporary)) throw new RuntimeException('Could not download or decode the programme guide.');
+        epg_check_xmltv($temporary);
+        if (!@rename($temporary, $path)) throw new RuntimeException('Could not save the downloaded guide.');
+    } finally {
+        @unlink($download);
+        @unlink($temporary);
+        @unlink($temporary . '.part');
     }
-    $body = iptv_http_get($url, 60);
-    // gzip magic
-    if (strlen($body) >= 2 && ord($body[0]) === 0x1f && ord($body[1]) === 0x8b) {
-        if (!function_exists('gzdecode')) {
-            throw new RuntimeException('gzdecode unavailable for ' . $url);
-        }
-        $decoded = @gzdecode($body);
-        if ($decoded === false) {
-            throw new RuntimeException('Failed to gunzip EPG: ' . $url);
-        }
-        $body = $decoded;
-    } elseif (preg_match('/\.gz(\?|$)/i', $url) && function_exists('gzdecode')) {
-        $decoded = @gzdecode($body);
-        if ($decoded !== false) $body = $decoded;
-    }
-    $tmp = $path . '.' . bin2hex(random_bytes(6)) . '.tmp';
-    if (file_put_contents($tmp, $body, LOCK_EX) === false || !@rename($tmp, $path)) {
-        @unlink($tmp);
-        throw new RuntimeException('Could not save the downloaded guide.');
-    }
-    file_put_contents($metaPath, json_encode(array('url' => $url, 'fetchedAt' => gmdate('c'), 'bytes' => strlen($body))));
-    return array('path' => $path, 'cached' => false, 'url' => $url);
+    clearstatcache(true, $path);
+    file_put_contents($metaPath, json_encode(['url'=>$url, 'fetchedAt'=>gmdate('c'), 'bytes'=>filesize($path)]));
+    return ['path'=>$path, 'cached'=>false, 'url'=>$url];
 }
 
 function epg_index_xmltv($path, $wanted, $fromMs, $toMs) {
