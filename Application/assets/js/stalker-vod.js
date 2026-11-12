@@ -13,10 +13,16 @@ window.VaultcastStalkerVod=function(host,options){
   var accountFavourites=null,accountDefaults=null;
   function accountUrl(){return (window.NSApp&&window.NSApp.API?window.NSApp.API:(window.__STREAM_BASE__||'/')+'api')+'/me/stalker-vod-favourites';}
   function accountRequest(body){
-    return fetch(accountUrl(),{method:body===null?'GET':'POST',credentials:'same-origin',
+    var options={method:body===null?'GET':'POST',credentials:'same-origin',
       headers:body===null?{}:{'Content-Type':'application/json'},
       body:body===null?undefined:JSON.stringify(body)
-    }).then(function(response){if(!response.ok)throw Error('Account sync unavailable');return response.json();})
+    };
+    var nativeBase=window.__VAULTCAST_APPLICATION_BASE__;
+    var request=nativeBase?fetch(nativeBase+'/me/stalker-vod-favourites',options).then(function(response){
+      if(response.status===503&&response.headers.get('X-Vaultcast-App-Unavailable')==='1')return fetch(accountUrl(),options);
+      return response;
+    }):fetch(accountUrl(),options);
+    return request.then(function(response){if(!response.ok)throw Error('Account sync unavailable');return response.json();})
       .then(function(data){if(!data||!data.ok)throw Error('Account sync unavailable');return data;});
   }
   function localDefault(tab){

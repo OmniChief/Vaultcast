@@ -1,49 +1,39 @@
 'use strict';
 
-const { createHash, randomBytes } = require('crypto');
+const { randomBytes } = require('crypto');
 const { readFile } = require('fs').promises;
 const { join } = require('path');
 const { Worker } = require('worker_threads');
 const database = require('./database');
 
-const capabilities = [
-  'ingest_view', 'ingest_import', 'rss_search', 'downloads_request', 'fix_match',
-  'metadata_edit', 'library_remove', 'timing_edit', 'artwork_manage', 'age_ratings',
-  'offline.download', 'iptv_manage', 'radio_manage', 'drop.upload', 'pictures.upload',
-  'save_copy', 'requests.create', 'requests.manage',
-];
+const { sha, now, parse, enabled, storedBoolean, documents, publicUser } = require('./account-data');
+const mountProfiles = require('./profile');
 const cookieName = 'vaultcast_session';
-const sha = value => createHash('sha256').update(value).digest('hex');
-const now = () => Math.floor(Date.now() / 1000);
-const parse = value => typeof value === 'string' ? JSON.parse(value) : value;
-const enabled = value => Array.isArray(value) ? value.length > 0 : Boolean(value && value !== '0');
-const storedBoolean = (settings, key, fallback) =>
-  settings && Object.hasOwn(settings, key) ? enabled(settings[key]) : fallback;
-
-async function documents(pool, names) {
-  const placeholders = names.map(() => '?').join(',');
-  const [rows] = await pool.execute('SELECT name,payload FROM vaultcast_documents WHERE name IN (' + placeholders + ')', names);
-  return Object.fromEntries(rows.map(row => [row.name, parse(row.payload)]));
-}
 
 function browserToken(request) {
   const match = String(request.headers.cookie || '').match(/(?:^|;\s*)vaultcast_session=([a-f0-9]{64})(?=;|$)/);
   return match?.[1] || '';
 }
 
-async function session(pool, request) {
+async function session(pool, request, includeUser) {
   const authorization = String(request.headers.authorization || '').trim();
   const bearer = /^Bearer(?:[ \t]|$)/i.test(authorization);
   const token = bearer ? authorization.match(/^Bearer[ \t]+(vc_[a-f0-9]{64})$/i)?.[1] : browserToken(request);
   if (!token) return { authenticated: false, error: bearer ? 'Invalid API key.' : null };
+  const userColumn = includeUser ? ',u.payload AS user_payload' : '';
   const [rows] = await pool.execute(
-    'SELECT s.payload,u.id FROM vaultcast_sessions s LEFT JOIN vaultcast_users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>=?',
+    'SELECT s.payload,u.id' + userColumn + ' FROM vaultcast_sessions s LEFT JOIN vaultcast_users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>=?',
     [sha(token), now()]);
   const entry = rows[0];
   if (bearer && (!entry?.id || !enabled(parse(entry.payload)?.api_key))) {
     return { authenticated: false, error: 'API key is invalid or expired.' };
   }
-  return { authenticated: Boolean(entry), error: null };
+  return {
+    authenticated: Boolean(entry), error: null,
+    data: includeUser && entry ? parse(entry.payload) : null,
+    user: includeUser && entry?.id ? parse(entry.user_payload) : null,
+    browserToken: includeUser ? browserToken(request) : '',
+  };
 }
 
 function requestAllowed(request, settings) {
@@ -62,60 +52,18 @@ function requestAllowed(request, settings) {
   }
 }
 
-function accessState(user, time) {
-  const common = { expires_at: null, remaining: null };
-  if (user.role === 'admin') return { ...common, state: 'admin', active: true };
-  const access = user.access;
-  if (!access || typeof access !== 'object') return { ...common, state: 'unlimited', active: true, migrated: true };
-  if (access.mode === 'unlimited') return { ...common, state: 'unlimited', active: true };
-  if (access.mode === 'until' && access.until != null) {
-    const expires = Math.trunc(Number(access.until) || 0);
-    return { expires_at: expires, remaining: Math.max(0, expires - time), state: expires > time ? 'active' : 'expired', active: expires > time };
-  }
-  return { ...common, state: 'pending', active: false };
-}
-
-function publicUser(user, settings, docs, time) {
-  const role = user.role ?? 'user';
-  const defaults = {
-    'drop.upload': enabled(settings.drop?.user_role_upload),
-    'pictures.upload': storedBoolean(settings.pictures, 'user_role_upload', true),
-    'offline.download': storedBoolean(settings.offline, 'user_role', true),
-    'requests.create': storedBoolean(docs.media_requests_config, 'user_role', true),
-  };
-  const roles = docs.permission_roles ?? { curator: { permissions: {} } };
-  const allowed = key => {
-    if (role === 'admin') return true;
-    if (role === 'user') {
-      if (!Object.hasOwn(defaults, key)) return false;
-      const override = user.permissions?.[key];
-      return typeof override === 'boolean' ? override : defaults[key];
-    }
-    if (!Object.hasOwn(roles, role)) return false;
-    if (key === 'ingest_view' && allowed('ingest_import')) return true;
-    return (user.permissions?.[key] ?? roles[role]?.permissions?.[key]) === true;
-  };
-  const { password_hash, ...profile } = user;
-  return {
-    ...profile,
-    access_state: accessState(user, time),
-    capabilities: Object.fromEntries(capabilities.map(key => [key, allowed(key)])),
-    contribution_points: {
-      balance: 0, earned: 0, spent: 0, admin_added: 0, images_generated: 0, videos_converted: 0,
-      ...docs['contribution-account-' + sha(String(user.id))],
-    },
-  };
-}
-
-function verifyPassword(bcrypt, password, hash) {
+let workers = 0;
+function passwordWork(bcrypt, password, hash) {
+  if (workers >= 2) return Promise.reject(new Error('Password service busy'));
   return new Promise((resolve, reject) => {
     const worker = new Worker(join(__dirname, 'verify-password.js'), {
       workerData: { bcrypt, password, hash }, resourceLimits: { maxOldGenerationSizeMb: 16 },
     });
+    workers++;
     const timer = setTimeout(() => { void worker.terminate(); reject(new Error('Password verification timed out')); }, 8000);
-    worker.once('message', match => { clearTimeout(timer); resolve(match === true); });
+    worker.once('message', result => { clearTimeout(timer); resolve(result); });
     worker.once('error', error => { clearTimeout(timer); reject(error); });
-    worker.once('exit', () => { clearTimeout(timer); reject(new Error('Password verifier exited')); });
+    worker.once('exit', () => { workers--; clearTimeout(timer); reject(new Error('Password worker exited')); });
   });
 }
 
@@ -130,7 +78,7 @@ module.exports = function mountAccount(app, express, root) {
   function unavailable(response) {
     return emptyError(response.set('X-Vaultcast-App-Unavailable', '1'), 503, 'The Node application backend is unavailable.');
   }
-  const handle = operation => async (request, response) => {
+  const handle = (operation, includeUser = false) => async (request, response) => {
     response.set({ 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
     if (!db.ready()) return unavailable(response);
     try {
@@ -141,7 +89,7 @@ module.exports = function mountAccount(app, express, root) {
         if (request.method === 'POST' && !requestAllowed(request, settings)) {
           return emptyError(response, 403, 'Cross-site request rejected.');
         }
-        const current = await session(pool, request);
+        const current = await session(pool, request, includeUser);
         if (current.error) return emptyError(response, 401, current.error);
         return operation(request, response, pool, bcrypt, settings, current);
       });
@@ -178,7 +126,7 @@ module.exports = function mountAccount(app, express, root) {
       const hash = rows[0]?.password_hash;
       if (typeof hash !== 'string') return emptyError(response, 401, 'Invalid username or password');
       if (!/^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/.test(hash)) return unavailable(response);
-      if (!await verifyPassword(bcrypt, password, hash)) return emptyError(response, 401, 'Invalid username or password');
+      if (await passwordWork(bcrypt, password, hash) !== true) return emptyError(response, 401, 'Invalid username or password');
       user = parse(rows[0].payload);
       verifiedHash = hash;
     } finally { passwordChecks--; }
@@ -215,5 +163,9 @@ module.exports = function mountAccount(app, express, root) {
     }
     response.clearCookie(cookieName, { path: '/', httpOnly: true, sameSite: 'lax' }).json({ ok: true });
   }));
+  mountProfiles(app, route, {
+    root, handle, unavailable, passwordWork,
+    json: express.json({ limit: '1mb' }),
+  });
   return db;
 };

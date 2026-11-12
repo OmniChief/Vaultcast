@@ -998,6 +998,7 @@ function confirmDialog(message, opts){
     opts = opts || {};
     var requestUser=state.user && state.user.id;
     var headers = opts.headers || {};
+    var avatarChange = path === '/me/prefs' && opts.body && (opts.body.avatar_data || opts.body.remove_avatar);
     if (opts.body && typeof opts.body === 'object' && !(opts.body instanceof FormData)) {
       headers['Content-Type'] = 'application/json';
       opts.body = JSON.stringify(opts.body);
@@ -1011,8 +1012,8 @@ function confirmDialog(message, opts){
 
     if (opts.signal) fetchOpts.signal = opts.signal;
     var nativeBase = window.__VAULTCAST_APPLICATION_BASE__;
-    var nativeRoute = (method === 'GET' && path === '/status') ||
-      (method === 'POST' && (path === '/login' || path === '/logout'));
+    var nativeRoute = (method === 'GET' && (path === '/status' || path === '/me')) ||
+      (method === 'POST' && (path === '/login' || path === '/logout' || (path === '/me/prefs' && !avatarChange)));
     var transport = nativeBase && nativeRoute ? fetch(nativeBase + path, fetchOpts).then(function(response){
       if (response.status === 503 && response.headers.get('X-Vaultcast-App-Unavailable') === '1') {
         return fetch(API + path, fetchOpts);
