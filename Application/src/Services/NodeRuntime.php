@@ -68,6 +68,11 @@ final class NodeRuntime
         return (self::health()['xtreamRelayRevision'] ?? 0) === 1;
     }
 
+    public static function webAssetsReady(): bool
+    {
+        return (self::health()['webAssetRevision'] ?? 0) === 1;
+    }
+
     public static function playlistReady(): bool
     {
         return (self::health()['playlistRevision'] ?? 0) === 1;

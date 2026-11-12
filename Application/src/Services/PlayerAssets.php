@@ -15,17 +15,18 @@ final class PlayerAssets {
         $settings = \Vaultcast\Repository::document('settings', []);
         $installed = \Vaultcast\Repository::document(self::DOCUMENT, []);
         $local = ($settings['player_assets']['source'] ?? 'cdn') === 'local' && !empty($installed['complete']);
-        $base = \Vaultcast\Database::basePath() . 'api/player-assets/';
+        $appBase = \Vaultcast\Database::basePath();
+        $base = $appBase . 'api/player-assets/';
         return [
             'emulatorVersion' => '4.2.1',
             'emulatorData' => $local ? $base . 'emulatorjs/4.2.1/data/' : self::EMULATOR,
             'hls' => $local ? $base . 'hls/1.5.17/hls.min.js' : self::HLS,
-            'stalkerVod' => \Vaultcast\Database::basePath() . 'index.php?asset=assets/js/stalker-vod.js&v=' . substr(hash_file('sha256',dirname(__DIR__,2).'/assets/js/stalker-vod.js'),0,16),
-            'stalkerCountries' => \Vaultcast\Database::basePath() . 'index.php?asset=assets/js/stalker-countries.js&v=' . substr(hash_file('sha256',dirname(__DIR__,2).'/assets/js/stalker-countries.js'),0,16),
-            'stalkerStream' => \Vaultcast\Database::basePath() . 'index.php?asset=assets/js/stalker-stream.js&v=' . substr(hash_file('sha256',dirname(__DIR__,2).'/assets/js/stalker-stream.js'),0,16),
-            'mpegts' => \Vaultcast\Database::basePath() . 'index.php?asset=assets/js/mpegts-1-7-3.js&v=' . substr(hash_file('sha256',dirname(__DIR__,2).'/assets/js/mpegts-1-7-3.js'),0,16),
-            'stalkerAc3' => \Vaultcast\Database::basePath() . 'index.php?asset=assets/js/stalker-ac3.js&v=' . substr(hash_file('sha256',dirname(__DIR__,2).'/assets/js/stalker-ac3.js'),0,16),
-            'stalkerAc3Worker' => \Vaultcast\Database::basePath() . 'index.php?asset=assets/js/stalker-ac3-worker.js&v=' . substr(hash_file('sha256',dirname(__DIR__,2).'/assets/js/stalker-ac3-worker.js'),0,16),
+            'stalkerVod' => AssetDelivery::url($appBase, 'assets/js/stalker-vod.js', substr(hash_file('sha256',dirname(__DIR__,2).'/assets/js/stalker-vod.js'),0,16)),
+            'stalkerCountries' => AssetDelivery::url($appBase, 'assets/js/stalker-countries.js', substr(hash_file('sha256',dirname(__DIR__,2).'/assets/js/stalker-countries.js'),0,16)),
+            'stalkerStream' => AssetDelivery::url($appBase, 'assets/js/stalker-stream.js', substr(hash_file('sha256',dirname(__DIR__,2).'/assets/js/stalker-stream.js'),0,16)),
+            'mpegts' => AssetDelivery::url($appBase, 'assets/js/mpegts-1-7-3.js', substr(hash_file('sha256',dirname(__DIR__,2).'/assets/js/mpegts-1-7-3.js'),0,16)),
+            'stalkerAc3' => AssetDelivery::url($appBase, 'assets/js/stalker-ac3.js', substr(hash_file('sha256',dirname(__DIR__,2).'/assets/js/stalker-ac3.js'),0,16)),
+            'stalkerAc3Worker' => AssetDelivery::url($appBase, 'assets/js/stalker-ac3-worker.js', substr(hash_file('sha256',dirname(__DIR__,2).'/assets/js/stalker-ac3-worker.js'),0,16)),
             'source' => $local ? 'local' : 'cdn',
         ];
     }

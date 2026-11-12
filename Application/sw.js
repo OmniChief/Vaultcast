@@ -1,10 +1,12 @@
 /* Vaultcast: cache versioned static resources only. Setup, API and media stay online.
    With no connection at all, page loads get a small offline page that plays titles saved on this device
    (Downloads keep their videos in IndexedDB, not in this cache). */
-var CACHE = 'vaultcast-static-' + new URL(self.location.href).searchParams.get('v');
+var OPTIONS = new URL(self.location.href).searchParams;
+var NATIVE_ASSETS = OPTIONS.get('assets') === 'node';
+var CACHE = 'vaultcast-static-' + OPTIONS.get('v') + (NATIVE_ASSETS ? '-node' : '');
 var BASE = new URL(self.registration.scope);
-var VERSION = new URL(self.location.href).searchParams.get('v') || '';
-var OFFLINE_ASSETS = ['assets/css/app.css', 'assets/js/vc-offline.js'].map(function(path){ return BASE.pathname + 'index.php?asset=' + path + '&v=' + encodeURIComponent(VERSION); });
+var VERSION = OPTIONS.get('v') || '';
+var OFFLINE_ASSETS = ['assets/css/app.css', 'assets/js/vc-offline.js'].map(function(path){ return BASE.pathname + (NATIVE_ASSETS ? 'netplay/web-assets/' + path.slice(7) + '?v=' : path + '?v=') + encodeURIComponent(VERSION); });
 self.addEventListener('install', function(event){
   // The offline page's two files; a failure here must never block the update.
   event.waitUntil(caches.open(CACHE).then(function(cache){ return Promise.all(OFFLINE_ASSETS.map(function(u){ return cache.add(u).catch(function(){}); })); }).then(function(){ return self.skipWaiting(); }));
@@ -34,7 +36,9 @@ self.addEventListener('fetch', function(event){
   }
   var appAsset = url.pathname === BASE.pathname + 'index.php'
     && /^assets\/(?:js\/[A-Za-z0-9_-]+\.js|css\/[A-Za-z0-9_-]+\.css)$/.test(url.searchParams.get('asset') || '');
-  if (!appAsset) {
+  var nodePrefix = BASE.pathname + 'netplay/web-assets/';
+  var nodeAsset = url.pathname.indexOf(nodePrefix) === 0 && /^(?:js\/[A-Za-z0-9_-]+\.js|css\/[A-Za-z0-9_-]+\.css)$/.test(url.pathname.slice(nodePrefix.length));
+  if (!appAsset && !nodeAsset) {
     if (url.pathname.indexOf(BASE.pathname + 'assets/') !== 0) return;
     if (url.pathname.indexOf('/vendor/') >= 0) return;
     if (!/\.(?:js|css|png|svg|woff2?)$/.test(url.pathname)) return;

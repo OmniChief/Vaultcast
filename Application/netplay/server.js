@@ -17,6 +17,10 @@ const runtimeRevision = createHash('sha256').update(fs.readFileSync(__filename))
 const updateMarker = path.join(__dirname, '../data/runtime/maintenance.json');
 
 const app = express();
+let webAsset;
+try { webAsset = require('../src/Workers/web-assets'); }
+catch (error) { console.warn('Native web asset delivery is unavailable'); }
+app.get('/web-assets/*', (req, res) => webAsset ? webAsset(req, res) : res.sendStatus(503));
 let serveMedia;
 const mediaApiRevision = 4;
 function mediaHandler() {
@@ -170,6 +174,7 @@ app.get('/health', (_req, res) => {
     mediaRelay: Boolean(mediaHandler()),
     mediaApiRevision,
     metadataRelayRevision: 1,
+    webAssetRevision: webAsset ? 1 : 0,
     stalkerReadRevision: mediaHandler() ? 1 : 0,
     xtreamRelayRevision: mediaHandler()?.xtreamReady ? 1 : 0,
     eventsRevision: 1,

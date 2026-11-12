@@ -17382,7 +17382,7 @@ function viewCollectionDetail(){
   }
   function registerSW(){
     if (!('serviceWorker' in navigator)) return;
-    navigator.serviceWorker.register(BASE + 'sw.js?v=' + encodeURIComponent(window.__ASSET_VERSION__ || APP_VERSION), { scope: BASE }).then(function(reg){ try { reg.update(); } catch (e) {} }).catch(function(){});
+    navigator.serviceWorker.register(BASE + 'sw.js?v=' + encodeURIComponent(window.__ASSET_VERSION__ || APP_VERSION) + (window.__VAULTCAST_ASSET_BASE__ ? '&assets=node' : ''), { scope: BASE }).then(function(reg){ try { reg.update(); } catch (e) {} }).catch(function(){});
   }
 
   // Keyboard: / focuses search (when not typing in an input)
@@ -17416,7 +17416,7 @@ function viewCollectionDetail(){
     if (extraCss) return extraCss;
     extraCss = new Promise(function(resolve){
       var link = document.createElement('link'); link.rel = 'stylesheet';
-      link.href = BASE + 'index.php?asset=assets/css/vc-extra.css&v=' + encodeURIComponent(window.__ASSET_VERSION__ || APP_VERSION);
+      link.href = window.vaultcastAssetUrl ? window.vaultcastAssetUrl('assets/css/vc-extra.css') : BASE + 'assets/css/vc-extra.css';
       link.onload = function(){ resolve(); }; link.onerror = function(){ extraCss = null; resolve(); };
       setTimeout(resolve, 4000); // never hold a page back on a slow stylesheet
       document.head.appendChild(link);
@@ -17429,7 +17429,7 @@ function viewCollectionDetail(){
     var css = /^vc-(play|misc|games|calendar|ai)\.js$/.test(file) ? loadExtraCss() : Promise.resolve();
     moduleLoads[file] = new Promise(function(resolve, reject){
       var sm = document.createElement('script');
-      sm.src = BASE + 'index.php?asset=assets/js/' + file + '&v=' + encodeURIComponent(window.__ASSET_VERSION__ || APP_VERSION);
+      sm.src = window.vaultcastAssetUrl ? window.vaultcastAssetUrl('assets/js/' + file) : BASE + 'assets/js/' + file;
       sm.async = true;
       sm.onload = function(){ var mod = globalName ? window[globalName] : true; if (mod) { if (mod.init) mod.init(window.NSApp); resolve(mod); } else { moduleLoads[file] = null; reject(new Error('Module missing')); } };
       sm.onerror = function(){ moduleLoads[file] = null; reject(new Error('Could not load ' + file)); };
@@ -17471,7 +17471,7 @@ function viewCollectionDetail(){
     if (window.__nsMatchingLoading) return;
     window.__nsMatchingLoading = true;
     var sm = document.createElement('script');
-    sm.src = BASE + 'index.php?asset=assets/js/matching.js&v=' + (window.__ASSET_VERSION__ || APP_VERSION);
+    sm.src = window.vaultcastAssetUrl ? window.vaultcastAssetUrl('assets/js/matching.js') : BASE + 'assets/js/matching.js';
     sm.defer = true;
     sm.onload = function(){
       window.__nsMatchingLoading = false;

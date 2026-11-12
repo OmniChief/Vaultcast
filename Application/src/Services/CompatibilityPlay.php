@@ -7,7 +7,7 @@ trait CompatibilityPlay {
         return ['games'=>'Games','arcade'=>'Arcade','quiz'=>'Quiz nights','social'=>'Teams & friends','leaderboards'=>'Leaderboards','achievements'=>'Achievements'];
     }
     private static function playAsset(string $file): string {
-        return self::$base.'index.php?asset='.rawurlencode('assets/js/'.$file).'&v='.substr(hash_file('sha256',STREAM_ROOT.'/assets/js/'.$file),0,16);
+        return AssetDelivery::url(self::$base,'assets/js/'.$file,substr(hash_file('sha256',STREAM_ROOT.'/assets/js/'.$file),0,16));
     }
     private static function playConfig(array $config): string {
         return '<script>window.__VC_COMPAT_PLAY__='.json_encode($config+['base'=>self::$base,'user'=>['id'=>self::$viewer['id'],'role'=>self::$viewer['role'],'prefs'=>self::$viewer['prefs'] ?? []]],JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT).';</script><script defer src="'.self::esc(self::playAsset('compatibility-play.js')).'"></script>';
