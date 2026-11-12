@@ -151,20 +151,21 @@ function epg_fetch_xml($url, $maxAge = 21600) {
     $node = is_file($worker) ? Process::nodeBinary() : null;
     $temporary = $path . '.' . bin2hex(random_bytes(6)) . '.tmp';
     $download = $temporary . '.download';
+    $validated=false;
     try {
         if ($node !== null && in_array($url, array_values(epg_builtin_sources()), true)) {
-            Process::capture([$node, $worker, $url, $temporary], 70);
+            $validated=Process::capture([$node, $worker, $url, $temporary], 70)==="validated\n";
         } else {
             epg_download_to_file($url, $download);
             if (file_get_contents($download, false, null, 0, 2) === "\x1f\x8b") {
-                if ($node !== null) Process::capture([$node, $worker, '--file', $download, $temporary], 70);
+                if ($node !== null) $validated=Process::capture([$node, $worker, '--file', $download, $temporary], 70)==="validated\n";
                 if (!is_file($temporary)) epg_inflate_file($download, $temporary);
             } elseif (!@rename($download, $temporary)) {
                 throw new RuntimeException('Could not stage the downloaded guide.');
             }
         }
         if (!is_file($temporary) || !filesize($temporary)) throw new RuntimeException('Could not download or decode the programme guide.');
-        epg_check_xmltv($temporary);
+        if (!$validated) epg_check_xmltv($temporary);
         if (!@rename($temporary, $path)) throw new RuntimeException('Could not save the downloaded guide.');
     } finally {
         @unlink($download);
@@ -206,34 +207,19 @@ function epg_index_xmltv($path, $wanted, $fromMs, $toMs) {
  */
 function epg_build_stalker_open_index(string $path,string $country,int $fromMs,int $toMs,string $source='open-epg'): array {
     if(!in_array($country,['GB','US'],true)||!class_exists('XMLReader'))throw new RuntimeException('XMLTV parser unavailable.');
-    $reader=new XMLReader();
-    if(!@$reader->open($path,null,LIBXML_NONET|LIBXML_COMPACT))throw new RuntimeException('Cannot open downloaded XMLTV guide.');
-    $wanted=[];$names=[];$logos=[];$channelCount=0;
-    while($reader->read()){
-        if($reader->nodeType!==XMLReader::ELEMENT)continue;
-        if($reader->localName==='programme')break;
-        if($reader->localName!=='channel')continue;
-        $id=trim((string)$reader->getAttribute('id'));
-        if($id===''||strlen($id)>160||isset($wanted[$id]))continue;
-        if(++$channelCount>1000)break;
+    $rows=epg_xmltv_channel_header($path);
+    $wanted=[];$names=[];$logos=[];
+    foreach($rows as $row){
+        $id=$row['id'];
         $wanted[$id]=true;
-        $xml=$reader->readOuterXML();
-        if($xml&&function_exists('simplexml_load_string')){
-            $node=@simplexml_load_string($xml,'SimpleXMLElement',LIBXML_NONET);
-            if($node){
-                $label=trim((string)($node->{'display-name'}??''));
-                if($label!=='')$names[$id]=mb_substr($label,0,160);
-                // Only expose public HTTPS artwork, never private portal links,
-                // credentials, query tokens or arbitrary local file paths.
-                $icon=$node->icon ?? null;
-                $url=$icon ? trim((string)($icon['src']??'')) : '';
-                if(strlen($url)<=500&&preg_match('~^https://[a-z0-9.-]+(?::443)?/[a-z0-9_./%+@-]+$~iD',$url)
-                    && !preg_match('~(?:^https://(?:localhost|127\\.|10\\.|192\\.168\\.|172\\.(?:1[6-9]|2[0-9]|3[01])\\.|169\\.254\\.|[^/]*\\.local/))~i',$url))
-                    $logos[$id]=$url;
-            }
-        }
+        $label=trim($row['name']);
+        if($label!=='')$names[$id]=mb_substr($label,0,160);
+        // The guide provides only public HTTPS artwork without query parameters.
+        $url=trim($row['icon']);
+        if(strlen($url)<=500&&preg_match('~^https://[a-z0-9.-]+(?::443)?/[a-z0-9_./%+@-]+$~iD',$url)
+            && !preg_match('~(?:^https://(?:localhost|127\\.|10\\.|192\\.168\\.|172\\.(?:1[6-9]|2[0-9]|3[01])\\.|169\\.254\\.|[^/]*\\.local/))~i',$url))
+            $logos[$id]=$url;
     }
-    $reader->close();
     if(!$wanted)throw new RuntimeException('No channel IDs found in the XMLTV guide.');
     $programmes=epg_index_xmltv($path,$wanted,$fromMs,$toMs);
     $slim=[];$total=0;
@@ -412,7 +398,7 @@ function epg_refresh_locked($force) {
         $slim[$ch['id']] = $deduped;
         if (!empty($ch['tvgId'])) $slim[$ch['tvgId']] = $deduped;
     }
-    epg_build_channel_catalogue();
+    epg_build_channel_catalogue(false);
     // Re-index only as part of the normal guide refresh, not Stalker browsing.
     $stalkerOpenEpg=[];
     foreach($openSources as $country=>$url)$stalkerOpenEpg[$country]=['status'=>'download_failed','channelsWithProgrammes'=>0];
@@ -574,7 +560,47 @@ function epg_unified_guide($station, $hours = 12, $slim = false, $viewerOverride
     );
 }
 
-function epg_build_channel_catalogue() {
+function epg_xmltv_channel_header(string $path): array {
+    $worker=STREAM_ROOT.'/src/Workers/epg-channels.js';
+    $node=is_file($worker)?Process::nodeBinary():null;
+    if($node!==null){
+        $rows=json_decode((string)Process::capture([$node,$worker,'--header',$path],15),true);
+        if(is_array($rows))return $rows;
+    }
+    $reader=new XMLReader();
+    if(!@$reader->open($path,null,LIBXML_NONET|LIBXML_COMPACT))throw new RuntimeException('Cannot open downloaded XMLTV guide.');
+    $rows=[];
+    try{
+        while($reader->read()){
+            if($reader->nodeType!==XMLReader::ELEMENT)continue;
+            if($reader->localName==='programme')break;
+            if($reader->localName!=='channel')continue;
+            $id=trim((string)$reader->getAttribute('id'));
+            if($id===''||strlen($id)>160||isset($rows[$id]))continue;
+            $xml=$reader->readOuterXML();
+            $node=$xml&&function_exists('simplexml_load_string')?@simplexml_load_string($xml,'SimpleXMLElement',LIBXML_NONET):false;
+            $rows[$id]=['id'=>$id,'name'=>$node?(string)($node->{'display-name'}??''):'',
+                'icon'=>$node?(string)($node->icon['src']??''):''];
+            if(count($rows)>=1000)break;
+        }
+    }finally{$reader->close();}
+    return array_values($rows);
+}
+
+function epg_build_channel_catalogue(bool $load=true): array {
+    $dir=epg_cache_dir();
+    $target=$dir.'/channels.json';
+    $tmp=$target.'.'.bin2hex(random_bytes(4));
+    $worker=STREAM_ROOT.'/src/Workers/epg-channels.js';
+    $node=is_file($worker)?Process::nodeBinary():null;
+    if($node!==null){
+        try{
+            $ack=Process::capture([$node,$worker,'--catalogue',$dir,$tmp],25);
+            if($ack==="indexed\n" && @rename($tmp,$target)){
+                return $load?(json_decode((string)file_get_contents($target),true)??[]):[];
+            }
+        }finally{@unlink($tmp);}
+    }
     if (!class_exists('XMLReader')) throw new RuntimeException('PHP XMLReader is required to read XMLTV channels.');
     $channels=[];
     foreach (glob(epg_cache_dir().'/*.xml') ?: [] as $path) {
@@ -590,9 +616,8 @@ function epg_build_channel_catalogue() {
         }
         $reader->close();
     }
-    $target=epg_cache_dir().'/channels.json';$tmp=$target.'.'.bin2hex(random_bytes(4));
     file_put_contents($tmp,json_encode(array_values($channels),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES),LOCK_EX);rename($tmp,$target);
-    return array_values($channels);
+    return $load?array_values($channels):[];
 }
 function epg_search_channels($query) {
     $path=epg_cache_dir().'/channels.json';

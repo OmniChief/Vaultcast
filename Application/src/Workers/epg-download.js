@@ -5,6 +5,7 @@ const { get } = require('https');
 const { Readable, Transform } = require('stream');
 const { pipeline } = require('stream/promises');
 const { createGunzip } = require('zlib');
+const { validate } = require('./epg-channels');
 
 function capBytes(limit) {
   let received = 0;
@@ -74,7 +75,9 @@ async function saveGuide(response, target, signal) {
   if (head[0] === 0x1f && head[1] === 0x8b) streams.push(createGunzip());
   streams.push(capBytes(256 * mib), requireXml(), fs.createWriteStream(target + '.part', { flags: 'wx' }));
   await pipeline(...streams, { signal });
+  const validated = await validate(target + '.part').then(() => true, () => false);
   await fs.promises.rename(target + '.part', target);
+  return validated;
 }
 
 async function main() {
@@ -82,12 +85,11 @@ async function main() {
     const source = fs.createReadStream(process.argv[3]);
     const target = process.argv[4];
     try {
-      await saveGuide(source, target, AbortSignal.timeout(60_000));
+      return await saveGuide(source, target, AbortSignal.timeout(60_000));
     } finally {
       source.destroy();
       await fs.promises.unlink(target + '.part').catch(() => {});
     }
-    return;
   }
   const url = new URL(process.argv[2]);
   const target = process.argv[3];
@@ -97,11 +99,12 @@ async function main() {
   const signal = AbortSignal.timeout(60_000);
   const response = await openGuide(url, url.origin, signal);
   try {
-    await saveGuide(response, target, signal);
+    return await saveGuide(response, target, signal);
   } finally {
     response.destroy();
     await fs.promises.unlink(target + '.part').catch(() => {});
   }
 }
 
-main().catch(() => { process.exitCode = 1; });
+main().then(validated => { if (validated) process.stdout.write('validated\n'); })
+  .catch(() => { process.exitCode = 1; });
