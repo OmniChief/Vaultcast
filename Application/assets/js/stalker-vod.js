@@ -799,19 +799,23 @@ window.VaultcastStalkerVod=function(host,options){
     try{
       var cache=JSON.parse(localStorage.getItem(favouriteCacheKey())||'{}');
       if(!cache||typeof cache!=='object'||Array.isArray(cache))return {};
-      Object.values(cache).forEach(function(entry){if(entry&&entry.item)delete entry.item.poster;});
       return cache;
     }catch(e){return {};}
+  }
+  function safeCachedPoster(value){
+    if(typeof value!=='string'||value.length>2048||!/^https?:\/\/[^/?#@\s]+\/[^?#\s]+$/i.test(value))return '';
+    return value;
   }
   function cacheFavourite(favourite,item,sources){
     if(!favourite||!item||!item.name)return;
     var fields=['name','year','description','genres_str','genre','genres','director','actors','cast','age','rating_mpaa','rating_imdb','duration','time','language','audio_languages','subtitle_languages','country','kind','playable','season','episode','episodeTitle'];
     var metadata={};fields.forEach(function(field){var value=item[field];if(typeof value==='string'||typeof value==='number'||typeof value==='boolean')metadata[field]=String(value).slice(0,field==='description'?2000:300);});
+    var poster=safeCachedPoster(item.poster);if(poster)metadata.poster=poster;
     var sourceList=Array.isArray(sources)?sources:Array.isArray(item.sources)?item.sources:[];
     if(item.feed&&item.id)sourceList=sourceList.concat([item]);
     var seen={},safeSources=[];
     sourceList.forEach(function(source){if(!source||!source.feed||!source.id)return;var key=String(source.feed)+'|'+String(source.id);if(seen[key])return;seen[key]=true;var copy={id:String(source.id),feed:String(source.feed)};['connection','kind','playable','categoryId','categoryName','language'].forEach(function(field){if(source[field]!=null&&['string','number','boolean'].indexOf(typeof source[field])>=0)copy[field]=String(source[field]).slice(0,180);});safeSources.push(copy);});
-    var cache=readFavouriteCache(),id=favouriteId(favourite);cache[id]={updatedAt:Date.now(),item:metadata,sources:safeSources};
+    var cache=readFavouriteCache(),id=favouriteId(favourite);cache[id]={updatedAt:Date.now(),item:metadata,sources:safeSources,artworkChecked:true};
     var keys=Object.keys(cache);if(keys.length>200)keys.sort(function(a,b){return Number(cache[b]&&cache[b].updatedAt||0)-Number(cache[a]&&cache[a].updatedAt||0);}).slice(200).forEach(function(key){delete cache[key];});
     try{localStorage.setItem(favouriteCacheKey(),JSON.stringify(cache));}catch(e){}
   }
@@ -954,12 +958,12 @@ window.VaultcastStalkerVod=function(host,options){
       ]);
       results.appendChild(card);
       var cacheEntry=cache[favouriteId(fav)],age=cacheEntry?Math.max(0,Date.now()-Number(cacheEntry.updatedAt||0)):Infinity,cachedItem=cacheEntry&&cacheEntry.item,cachedSources=cacheEntry&&Array.isArray(cacheEntry.sources)?cacheEntry.sources.filter(function(source){return source&&options.connections.some(function(feed){return feed.enabled&&String(feed.id)===String(source.feed);})}):[];
-      var job={fav:fav,cover:cover,message:message,found:null,sources:[],ready:false,cacheEntry:cacheEntry,cacheFresh:!!(cacheEntry&&age<favouriteCacheTtl&&cachedSources.length)};
+      var job={fav:fav,cover:cover,message:message,found:null,sources:[],ready:false,cacheEntry:cacheEntry,cacheFresh:!!(cacheEntry&&cacheEntry.artworkChecked&&age<favouriteCacheTtl&&cachedSources.length)};
       if(cachedItem&&cachedItem.name){
         job.sources=cachedSources.slice();
         if(cachedSources.length)job.found={feed:cachedSources[0].feed,item:Object.assign({},cachedItem,cachedSources[0],{sources:cachedSources.slice(),_stalkerLanguage:fav.language||language,_stalkerFolder:fav.folder||''})};
         var poster=safeCachedPoster(cachedItem.poster);
-        if(poster){var cachedImage=h('img',{src:poster,alt:fav.name+' poster',loading:'lazy',referrerpolicy:'no-referrer'});cachedImage.onerror=function(){cachedImage.remove();};cover.replaceChildren(cachedImage);}
+        if(poster){var cachedImage=h('img',{src:poster,alt:fav.name+' poster',loading:'lazy',referrerpolicy:'no-referrer'});cachedImage.onerror=function(){cachedImage.remove();};cover.appendChild(cachedImage);}
         button.disabled=!job.found;
         message.textContent=job.cacheFresh?'Cached provider info · '+cachedSources.length+' connection(s) · Updated '+new Date(Number(cacheEntry.updatedAt)).toLocaleDateString():cachedSources.length?'Cached info · Refreshing provider connections…':'Cached title details · Checking enabled connections…';
       }else button.disabled=true;
@@ -998,7 +1002,8 @@ window.VaultcastStalkerVod=function(host,options){
           image.remove();
           job.message.textContent='Poster unavailable from current providers.';
         };
-        job.cover.replaceChildren(image);
+        var previousImage=job.cover.querySelector('img');if(previousImage)previousImage.remove();
+        job.cover.appendChild(image);
         job.message.textContent='Checking other connections…';
         return true;
       }
@@ -1013,7 +1018,7 @@ window.VaultcastStalkerVod=function(host,options){
         job.sources=cachedSources.slice();
         job.found={feed:cachedSources[0].feed,item:Object.assign({},cachedItem,cachedSources[0],{sources:cachedSources.slice()})};
         job.button.disabled=false;
-        usePoster(cachedItem);
+        posterFound=usePoster(cachedItem);
         finish();
         return;
       }
@@ -1361,7 +1366,18 @@ window.VaultcastStalkerVod=function(host,options){
     var selected=sources[0],label=item.local?'In local Vaultcast library':item.verificationPending?'Provider availability is being verified':item.available?'Available from providers':'No longer available from providers';
     function open(){if(!selected)return;options.open(selected.feed,Object.assign({},item,selected,{sources:sources,poster:selected.poster||item.poster}),poster);}
     var poster=h('button',{className:'stalker-vod-cover',type:'button','aria-label':(selected?'Open ':'Unavailable: ')+item.name,disabled:!selected,onClick:open},[h('span',{className:'stalker-vod-placeholder',text:item.name})]);
-    if(item.poster)poster.appendChild(h('img',{src:item.poster,alt:'',loading:'lazy',decoding:'async',referrerpolicy:'no-referrer',onError:function(e){e.target.remove();}}));
+    var urls=new Set();
+    [item].concat(sources).forEach(function(copy){
+      var candidates=[copy.poster].concat((copy.posterCandidates||[]).map(function(candidate){return candidate.url;}));
+      candidates.forEach(function(url){if(typeof url==='string'&&/^https?:\/\//i.test(url))urls.add(url);});
+    });
+    var artwork=Array.from(urls).slice(0,9);
+    if(artwork.length){
+      var image=h('img',{alt:'',loading:'lazy',decoding:'async',referrerpolicy:'no-referrer'});
+      image.onerror=function(){if(artwork.length)image.src=artwork.shift();else image.remove();};
+      image.src=artwork.shift();
+      poster.appendChild(image);
+    }
     var dot=h('span',{className:'stalker-library-dot '+(item.local?'local':item.verificationPending?'pending':item.available?'available':'unavailable'),title:label,role:'img','aria-label':label});
     var choices=h('select',{'aria-label':'Connection for '+item.name,onChange:function(e){selected=sources[Number(e.target.value)];}},sources.map(function(source,i){return h('option',{value:String(i),text:source.connection+(source.quality?' · '+source.quality:'')+' · '+((source.languages||[]).join(', ')||'Audio language unknown')});}));
     var details=h('details',{className:'stalker-library-details'},[h('summary',{text:'Details & connections'}),h('p',{text:item.description||'No description supplied by providers.'}),h('p',{className:'muted',text:'Audio: '+((item.languages||[]).join(', ')||'Unknown')+' · Audience: '+((item.audienceLanguages||[]).join(', ')||'Unknown')})]);

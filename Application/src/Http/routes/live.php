@@ -320,7 +320,8 @@ if ($__liveAction !== null) {
             if ($__liveAction==='stalker_catalogue_control') {Permissions::require('iptv_manage');json_out(StalkerCatalogues::control($body));}
             if ($__liveAction==='stalker_vod_catalogue') {
                 if(!empty($body['raw_categories_export']))Permissions::require('iptv_manage');
-                json_out(StalkerCatalogues::localArtwork(!empty($body['indexed'])?StalkerLibrary::browse($state,$body):StalkerDirect::browse($state,$body)));
+                // VOD artwork URLs are already stored with the imported metadata.
+                json_out(!empty($body['indexed'])?StalkerLibrary::browse($state,$body):StalkerDirect::browse($state,$body));
             }
             if ($__liveAction==='stalker_vod_probe') {Permissions::require('iptv_manage');json_out(StalkerDirect::probe($state,$body));}
             if ($__liveAction==='stalker_vod_fields') {Permissions::require('iptv_manage');json_out(StalkerDirect::catalogueFieldProbe($state,$body));}
@@ -372,12 +373,13 @@ if ($__liveAction !== null) {
             if ($__liveAction==='stalker_live_guide') json_out(StalkerCatalogues::localArtwork(StalkerLiveBrowse::guidePage($feed,$body)));
             if ($__liveAction==='stalker_browse') {
                 if(!empty($body['raw_categories_export']))Permissions::require('iptv_manage');
-                json_out(StalkerCatalogues::localArtwork(in_array((string)($body['kind']??'live'),['vod','series'],true)?StalkerDirect::browse(['feeds'=>[$feed]],$body):stalker_catalogue($feed,$body)));
+                if(in_array((string)($body['kind']??'live'),['vod','series'],true))json_out(StalkerDirect::browse(['feeds'=>[$feed]],$body));
+                json_out(StalkerCatalogues::localArtwork(stalker_catalogue($feed,$body)));
             }
             if ($__liveAction==='stalker_vod_detail') {
                 $item=stalker_vod_entry($feed,(string)($body['id']??''));
                 if(!$item)throw new RuntimeException('This catalogue entry has expired. Return to Stalker and refresh the catalogue.');
-                json_out(StalkerCatalogues::localArtwork(['ok'=>true,'item'=>$item['metadata']??['id'=>(string)$body['id'],'name'=>'Provider video','kind'=>'vod','playable'=>true]]));
+                json_out(['ok'=>true,'item'=>$item['metadata']??['id'=>(string)$body['id'],'name'=>'Provider video','kind'=>'vod','playable'=>true]]);
             }
             if ($__liveAction==='stalker_channel') json_out(StalkerCatalogues::localArtwork(stalker_channel_detail($feed,(string)($body['id']??''),!empty($body['refresh']),($body['guide']??'1')!=='0')));
             $kind=(string)($body['kind'] ?? 'live');$id=(string)($body['id'] ?? '');
