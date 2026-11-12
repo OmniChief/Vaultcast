@@ -482,8 +482,7 @@ final class Updater
         }
     }
 
-    /** Name of the user this PHP process runs as (for error hints); PHP 7.4-safe with fallbacks. */
-    /** Prefetch public raw files in parallel. PHP still verifies each blob against the checked tree. */
+    /** Prefetch public raw files and verify them against the checked tree as they stream to disk. */
     private static function prefetchBlobs(array $pending, string $staging, string $commit): array
     {
         $worker = self::root() . '/src/Workers/update-downloads.js';
@@ -493,28 +492,28 @@ final class Updater
         $dir = $staging . '/prefetch';
         if (!@mkdir($dir, 0700, true)) return [];
 
-        $urls = [];
+        $files = [];
         foreach ($pending as $file) {
-            $urls[] = self::RAW . '/' . $commit . '/' . implode('/', array_map('rawurlencode', explode('/', $file['path'])));
+            $url = self::RAW . '/' . $commit . '/' . implode('/', array_map('rawurlencode', explode('/', $file['path'])));
+            $files[] = ['url' => $url, 'size' => $file['size'], 'sha' => $file['sha']];
         }
-        $manifest = json_encode(['urls' => $urls, 'limit' => self::MAX_FILE_BYTES]);
+        $manifest = json_encode(['files' => $files, 'limit' => self::MAX_FILE_BYTES]);
         if ($manifest === false || @file_put_contents($dir . '/manifest.json', $manifest) !== strlen($manifest)) return [];
         Process::capture([$node, $worker, $dir], 35);
 
         $verified = [];
         foreach (array_keys($pending) as $i => $rel) {
-            $path = $dir . '/' . $i . '.blob';
+            // The worker only renames a partial to .verified after checking its digest.
+            $path = $dir . '/' . $i . '.verified';
             $size = @filesize($path);
-            if ($size === false || $size > self::MAX_FILE_BYTES) continue;
-            $hash = hash_init('sha1');
-            hash_update($hash, 'blob ' . $size . "\0");
-            if (@hash_update_file($hash, $path) && hash_equals($pending[$rel]['sha'], hash_final($hash))) {
+            if ($size === $pending[$rel]['size'] && $size <= self::MAX_FILE_BYTES && is_file($path)) {
                 $verified[$rel] = $path;
             }
         }
         return $verified;
     }
 
+    /** Name of the user this PHP process runs as (for error hints); PHP 7.4-safe with fallbacks. */
     public static function processUser(): string
     {
         if (function_exists('posix_geteuid') && function_exists('posix_getpwuid')) {
