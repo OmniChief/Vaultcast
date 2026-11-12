@@ -75,7 +75,7 @@ final class NodeRuntime
 
     public static function quizReady(): bool
     {
-        return (self::health()['quizRevision'] ?? 0) === 1;
+        return (self::health()['quizRevision'] ?? 0) === 2;
     }
 
     public static function aiUploadReady(): bool

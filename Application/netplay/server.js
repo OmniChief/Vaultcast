@@ -173,7 +173,7 @@ app.get('/health', (_req, res) => {
     stalkerReadRevision: mediaHandler() ? 1 : 0,
     xtreamRelayRevision: mediaHandler()?.xtreamReady ? 1 : 0,
     eventsRevision: 1,
-    quizRevision: quizWarmup ? 1 : 0,
+    quizRevision: quizWarmup?.ready ? 2 : 0,
     playlistRevision: fileWorker() ? 1 : 0,
     transcodeRevision: playbackWorker() ? 1 : 0,
     downloadRevision: fileWorker() ? 2 : 0,

@@ -493,21 +493,51 @@ function iptv_feed_index($feed, $forceRefresh = false) {
     }
     $raw = iptv_cache_path_feed($feed['id']);
     iptv_refresh_m3u_cache($feed['url'], $raw, 86400, $forceRefresh);
-    $sig = filemtime($raw) . ':' . filesize($raw);
-    $idx = $raw . '.index.json';
-    if (!$forceRefresh && is_file($idx)) {
-        $j = json_decode((string)file_get_contents($idx), true);
-        if (is_array($j) && ($j['sig'] ?? '') === $sig && isset($j['channels'])) return $j;
+    return iptv_playlist_index($raw,$forceRefresh);
+}
+
+function iptv_playlist_index(string $raw, bool $forceRefresh): array {
+    $path=$raw.'.index.json';
+    $read=static function(string $sig) use($path): ?array {
+        if(!is_file($path))return null;
+        $index=json_decode((string)@file_get_contents($path),true);
+        return is_array($index) && ($index['sig']??'')===$sig && isset($index['channels'],$index['epgUrls'])?$index:null;
+    };
+    $sig=filemtime($raw).':'.filesize($raw);
+    if(!$forceRefresh && ($index=$read($sig))!==null)return $index;
+
+    $lock=@fopen($path.'.lock','c');
+    if(!$lock || !flock($lock,LOCK_EX))throw new RuntimeException('Could not lock IPTV playlist index.');
+    $temporary=$path.'.'.bin2hex(random_bytes(6)).'.tmp';
+    try {
+        clearstatcache(true,$raw);
+        $sig=filemtime($raw).':'.filesize($raw);
+        if(!$forceRefresh && ($index=$read($sig))!==null)return $index;
+
+        $worker=STREAM_ROOT.'/src/Workers/playlist-index.js';
+        $node=is_file($worker)?Process::nodeBinary():null;
+        if($node!==null){
+            $ack=Process::capture([$node,$worker,$raw,$temporary,$sig],60);
+            clearstatcache(true,$raw);
+            $currentSig=filemtime($raw).':'.filesize($raw);
+            if($ack==="indexed\n" && $sig===$currentSig && @rename($temporary,$path) && ($index=$read($sig))!==null)return $index;
+            $sig=$currentSig;
+            @unlink($temporary);
+        }
+        $parsed=iptv_parse_m3u_lines(iptv_m3u_file_lines($raw));
+        foreach($parsed['channels'] as &$channel){
+            $channel['country']=iptv_channel_country($channel);
+            $channel['categories']=iptv_channel_categories($channel['group']);
+        }
+        unset($channel);
+        $index=['sig'=>$sig,'builtAt'=>gmdate('c'),'channels'=>$parsed['channels'],'epgUrls'=>$parsed['epgUrls']];
+        $payload=json_encode($index,JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE|JSON_INVALID_UTF8_SUBSTITUTE);
+        if($payload!==false && @file_put_contents($temporary,$payload,LOCK_EX)===strlen($payload))@rename($temporary,$path);
+        return $index;
+    } finally {
+        @unlink($temporary);
+        fclose($lock);
     }
-    $parsed = iptv_parse_m3u_lines(iptv_m3u_file_lines($raw));
-    foreach ($parsed['channels'] as &$ch) {
-        $ch['country'] = iptv_channel_country($ch);
-        $ch['categories'] = iptv_channel_categories($ch['group']);
-    }
-    unset($ch);
-    $out = array('sig' => $sig, 'builtAt' => gmdate('c'), 'channels' => $parsed['channels'], 'epgUrls' => $parsed['epgUrls']);
-    @file_put_contents($idx, json_encode($out, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE), LOCK_EX);
-    return $out;
 }
 
 /** Count values for browse filters (countries / categories) across rows. */
@@ -570,7 +600,7 @@ function iptv_browse($opts) {
         $source = iptv_playlist_url($kind, $key);
         $raw = iptv_cache_path($kind, $key);
         iptv_refresh_m3u_cache($source, $raw, 86400, $forceRefresh);
-        $parsed = iptv_parse_m3u_lines(iptv_m3u_file_lines($raw));
+        $parsed = iptv_playlist_index($raw,$forceRefresh);
         $cache = iptv_cache_meta($kind, $key);
         $feedId = $kind;
         $feedLabel = $kind . '/' . $key;

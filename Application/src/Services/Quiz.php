@@ -134,9 +134,9 @@ final class Quiz {
                 try {
                     if (function_exists('set_time_limit')) @set_time_limit(60);
                     $duration = (float)Arcade::query('SELECT duration FROM vaultcast_media_facts WHERE item_id=?', [$itemId])->fetchColumn();
-                    $at = $duration > 120 ? $duration * (0.25 + (crc32($itemId) % 40) / 100) : 300;
+                    $at = self::frameTime($itemId, $duration);
                     $tmp = $out . '.' . getmypid() . '.jpg';
-                    Process::capture([Remux::ffmpegBin(), '-nostdin', '-hide_banner', '-loglevel', 'error', '-ss', (string)round($at, 1), '-i', $path, '-frames:v', '1', '-vf', 'scale=960:-2', '-q:v', '5', '-y', $tmp], 20);
+                    Process::capture([Remux::ffmpegBin(), '-nostdin', '-hide_banner', '-loglevel', 'error', '-ss', (string)$at, '-i', $path, '-frames:v', '1', '-vf', 'scale=960:-2', '-q:v', '5', '-y', $tmp], 20);
                     if (is_file($tmp) && filesize($tmp) > 1000 && @rename($tmp, $out)) { @unlink($out . '.fail'); return $out; }
                     @unlink($tmp); @touch($out . '.fail');
                 } finally { flock($slot, LOCK_UN); fclose($slot); }
@@ -168,18 +168,35 @@ final class Quiz {
         }
         return null;
     }
+    private static function frameTime(string $itemId, float $duration): float {
+        return round($duration > 120 ? $duration * (0.25 + (crc32($itemId) % 40) / 100) : 300, 1);
+    }
+
     /** Prepare quiz frames away from PHP-FPM when the local relay is available. */
     private static function prewarm(array $items): void {
         $items = array_slice(array_values(array_unique(array_filter($items))), 0, 40);
         if (!$items) return;
         if (PHP_OS_FAMILY === 'Linux' && NodeRuntime::quizReady()) {
             try {
-                $php = Process::phpCli();
-                $token = $php ? NodeMedia::writeTicket(['purpose'=>'quiz-warmup','php'=>$php,
-                    'ini'=>php_ini_loaded_file() ?: '', 'items'=>$items]) : null;
+                $markers = implode(',', array_fill(0, count($items), '?'));
+                $rows = Arcade::query('SELECT i.id,i.payload,f.duration FROM vaultcast_items i
+                    LEFT JOIN vaultcast_media_facts f ON f.item_id=i.id WHERE i.id IN (' . $markers . ')', $items);
+                $frames = [];
+                foreach ($rows as $row) {
+                    $item = json_decode($row['payload'], true);
+                    if (empty($item['path'])) continue;
+                    $id = (string)$row['id'];
+                    $frames[$id] = ['id'=>$id, 'path'=>(string)$item['path'], 'at'=>self::frameTime($id, (float)$row['duration'])];
+                }
+                if (!$frames) return;
+                $ordered = [];
+                foreach ($items as $id) if (isset($frames[$id])) $ordered[] = $frames[$id];
+                $token = NodeMedia::writeTicket(['purpose'=>'quiz-warmup','frames'=>$ordered,
+                    'directory'=>STREAM_SHM . '/quiz-frames','ffmpeg'=>Remux::ffmpegBin()]);
                 if ($token !== null) {
                     $context = stream_context_create(['http'=>['timeout'=>1, 'follow_location'=>0]]);
                     $ack = @file_get_contents(NodeRuntime::loopback('/runtime/quiz-warmup/' . $token), false, $context, 0, 64);
+                    @unlink(STREAM_DATA . '/runtime/node-media/' . $token . '.json');
                     if ($ack === 'queued') return;
                 }
             } catch (Throwable $ignored) {}
