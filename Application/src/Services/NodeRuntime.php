@@ -114,10 +114,13 @@ final class NodeRuntime
 
     private static function health(): array
     {
+        static $health = null;
+        if ($health !== null) return $health;
         $context = stream_context_create(['http' => ['timeout' => 0.25, 'follow_location' => 0]]);
         $result = @file_get_contents(self::loopback('/health'), false, $context, 0, 65536);
         $health = json_decode((string)$result, true);
-        return is_array($health) ? $health : [];
+        if (!is_array($health)) $health = [];
+        return $health;
     }
 
     private static function restartLegacyRelay(): void

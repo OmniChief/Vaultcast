@@ -17,6 +17,20 @@ const metadataStarts = new Map();
 let active = 0;
 let playlists = 0;
 
+const agentOptions = { keepAlive: true, maxSockets: 12, maxTotalSockets: 24, maxFreeSockets: 1, timeout: 5000 };
+class PinnedHttpAgent extends http.Agent {
+  getName(options) {
+    return super.getName(options) + ':' + options.vaultcastPool;
+  }
+}
+class PinnedHttpsAgent extends https.Agent {
+  getName(options) {
+    return super.getName(options) + ':' + options.vaultcastPool;
+  }
+}
+const httpAgent = new PinnedHttpAgent(agentOptions);
+const httpsAgent = new PinnedHttpsAgent(agentOptions);
+
 async function takeTicket(token, purpose) {
   if (!/^[a-f0-9]{48}$/.test(token)) return null;
   const file = path.join(ticketDirectory, token + '.json');
@@ -50,9 +64,16 @@ function providerResponse(ticket, url, method, signal) {
   if (ticket.ifRange) headers['if-range'] = ticket.ifRange;
   if (ticket.cookies) headers.cookie = ticket.cookies;
   return new Promise((resolve, reject) => {
-    const transport = url.protocol === 'https:' ? https : http;
+    const secure = url.protocol === 'https:';
+    const transport = secure ? https : http;
+    // Keep account-specific transports separate, and never reuse a socket for a new pinned address.
+    const vaultcastPool = createHash('sha256').update(JSON.stringify([
+      ticket.ip, ticket.purpose, ticket.jar, ticket.stalkerScope, headers.authorization, headers.cookie,
+    ])).digest('hex');
+    const poolable = !ticket.xtream && (ticket.purpose === 'metadata' || ticket.purpose === 'media');
+    const agent = poolable ? (secure ? httpsAgent : httpAgent) : false;
     const request = transport.request(url, {
-      method, headers, signal, agent: false, family, autoSelectFamily: false,
+      method, headers, signal, agent, vaultcastPool, family, autoSelectFamily: false,
       lookup: (_host, _options, callback) => callback(null, ticket.ip, family),
     }, response => {
       clearTimeout(connectTimer);

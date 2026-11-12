@@ -55,14 +55,17 @@ final class StalkerLiveBrowse {
     public static function channels(array $feed,array $opts): array {
         $category=mb_substr((string)($opts['category']??''),0,120);
         if($category==='')throw new InvalidArgumentException('Choose a provider category.');
-        // Never permit arbitrary category IDs as a way to trigger cross-provider scans.
         $snapshot=self::snapshot($feed);
         if($snapshot===null)return ['ok'=>true,'items'=>[],'total'=>0,'hasMore'=>false,'catalogueLoading'=>true];
+        return self::channelPage($feed,$snapshot,$category,max(1,min(10000,(int)($opts['page']??1))));
+    }
+
+    private static function channelPage(array $feed,array $snapshot,string $category,int $page): array {
+        // Never permit arbitrary category IDs as a way to trigger cross-provider scans.
         $categories=$snapshot['categories'];
         $selected=null;
         foreach($categories as $candidate)if($candidate['id']===$category){$selected=$candidate;break;}
         if($selected===null)throw new InvalidArgumentException('Unknown provider category.');
-        $page=max(1,min(10000,(int)($opts['page']??1)));
         $rows=array_filter($snapshot['channels'],static function($row)use($category){return $category==='*'||(string)($row['tv_genre_id']??'')===$category;});
         $total=count($rows);$perPage=60;
         $rows=array_slice($rows,($page-1)*$perPage,$perPage);
@@ -131,6 +134,62 @@ final class StalkerLiveBrowse {
         return $name;
     }
 
+    private static function guideNameMaps(array $channels, array $programmes): array {
+        $names=[];
+        $regional=[];
+        foreach($channels as $id=>$label){
+            if(!isset($programmes[$id]))continue;
+            $name=self::epgMatchName((string)$label);
+            if($name==='')continue;
+            $names[$name][$id]=(string)$label;
+            $root=self::epgRegionalRoot($name);
+            if($root!==$name)$regional[$root][$id]=(string)$label;
+        }
+        return [$names,$regional];
+    }
+
+    /** Publish the channel lookup beside the full index, which also serves older app versions. */
+    public static function writeGuideLookup(string $path,int $updatedAt,array $channels,array $logos,array $programmes): void {
+        $target=$path.'.lookup';
+        $temporary=$target.'.'.bin2hex(random_bytes(4)).'.tmp';
+        $file=@fopen($temporary,'xb');
+        if(!$file)return;
+        $published=false;
+        try{
+            $offsets=[];
+            foreach($programmes as $id=>$entries){
+                $offsets[$id]=ftell($file);
+                $line=json_encode($entries,JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE);
+                if($line===false)return;
+                $line.="\n";
+                if(fwrite($file,$line)!==strlen($line))return;
+            }
+            $headerStart=ftell($file);
+            [$names,$regional]=self::guideNameMaps($channels,$programmes);
+            $header=json_encode(['updatedAt'=>$updatedAt,'offsets'=>$offsets,'logos'=>$logos,'names'=>$names,'regional'=>$regional]);
+            if($header===false || strlen($header)>2*1024*1024)return;
+            $trailer=$header.sprintf('%012d',$headerStart);
+            if(fwrite($file,$trailer)!==strlen($trailer) || !fflush($file))return;
+            fclose($file);
+            $published=@rename($temporary,$target);
+        }finally{
+            if(is_resource($file))fclose($file);
+            if(!$published)@unlink($temporary);
+        }
+    }
+
+    private static function readGuideLookup($file): ?array {
+        $size=fstat($file)['size']??0;
+        if($size<13 || fseek($file,-12,SEEK_END)!==0)return null;
+        $footer=fread($file,12);
+        if(!is_string($footer)||!ctype_digit($footer))return null;
+        $start=(int)$footer;
+        $length=$size-$start-12;
+        if($length<1||$length>2*1024*1024||fseek($file,$start)!==0)return null;
+        $header=json_decode((string)stream_get_contents($file,$length),true);
+        return is_array($header)&&isset($header['updatedAt'],$header['offsets'],$header['logos'],$header['names'],$header['regional'])?$header:null;
+    }
+
     public static function guidePage(array $feed,array $opts): array {
         $category=(string)($opts['category']??'');
         if(!preg_match('/^[0-9]{1,12}$/D',$category))
@@ -142,12 +201,17 @@ final class StalkerLiveBrowse {
             $indexPath=STREAM_DATA.'/live/epg_cache/stalker-open-'.$region.'.json';
             $indexRevision[$region]=is_file($indexPath)?(int)@filemtime($indexPath):0;
         }
-        $snapshot=self::snapshot($feed);
-        if($snapshot===null)return ['ok'=>true,'programmes'=>[],'available'=>false,'channelCount'=>0,'catalogueLoading'=>true];
-        $key=self::key($feed,'imported-guide:'.json_encode([$snapshot['imported']??0,$category,$page,$indexRevision]));
+        $loading=['ok'=>true,'programmes'=>[],'available'=>false,'channelCount'=>0,'catalogueLoading'=>true];
+        if(StalkerCatalogues::expired($feed))return $loading;
+        $snapshotKey=self::key($feed,'imported-live');
+        $revision=\Vaultcast\Repository::stalkerSnapshotRevision($snapshotKey);
+        if($revision===null)return $loading;
+        $key=self::key($feed,'imported-guide-v2:'.json_encode([$revision,$category,$page,$indexRevision]));
         $cached=$refresh?null:\Vaultcast\Repository::cacheGet($key);
         if($cached!==null)return $cached;
-        $visible=self::channels($feed,['category'=>$category,'page'=>$page]);
+        $snapshot=\Vaultcast\Repository::stalkerSnapshot($snapshotKey);
+        if($snapshot===null)return $loading;
+        $visible=self::channelPage($feed,$snapshot,$category,$page);
         $ids=[];
         foreach($visible['items'] as $item)$ids[(string)$item['id']]=true;
         if(!$ids)return ['ok'=>true,'programmes'=>[],'available'=>false,'channelCount'=>0];
@@ -185,33 +249,45 @@ final class StalkerLiveBrowse {
                 if(++$total>=240)break 2;
             }
         }
-        // Match only the requested country's cached Open EPG guide.
-        // Never use a US programme for a UK channel or vice versa.
+        // Only open indexes with channels from the corresponding country on this page.
+        $visibleCountries=array_fill_keys(array_map('strtoupper',array_column($visible['items'],'country')),true);
         foreach(['GB','GB-freeview','US'] as $region){
             $country=substr($region,0,2);
+            if(!isset($visibleCountries[$country]))continue;
             $indexPath=STREAM_DATA.'/live/epg_cache/stalker-open-'.strtolower($region).'.json';
             if(!is_file($indexPath)){$openEpgIndexStatus[$region]='missing';continue;}
             if(@filesize($indexPath)>16777216){$openEpgIndexStatus[$region]='oversized';continue;}
-            $raw=@file_get_contents($indexPath);
-            $open=$raw!==false?json_decode($raw,true):null;
-            if(!is_array($open)||!is_array($open['programmes']??null)){
-                $openEpgIndexStatus[$region]='invalid';continue;
+            $lookup=@fopen($indexPath.'.lookup','rb');
+            $open=$lookup?self::readGuideLookup($lookup):null;
+            if($open!==null){
+                $prefix=@file_get_contents($indexPath,false,null,0,80);
+                if(!preg_match('/^\{"schema":2,"updatedAt":(\d+),/',(string)$prefix,$revision)
+                    || (int)$revision[1] !== (int)$open['updatedAt'])$open=null;
+            }
+            if($open===null){
+                if($lookup)fclose($lookup);
+                $lookup=null;
+                $raw=@file_get_contents($indexPath);
+                $open=$raw!==false?json_decode($raw,true):null;
+                if(!is_array($open)||!is_array($open['programmes']??null)){
+                    $openEpgIndexStatus[$region]='invalid';continue;
+                }
+                unset($raw);
             }
             if((int)($open['updatedAt']??0)<=$now-86400){
+                if($lookup)fclose($lookup);
                 $openEpgIndexStatus[$region]='stale';continue;
             }
             $openEpgIndexStatus[$region]='ready';
-            // Build candidate sets rather than treating HD/SD versions of the
-            // same unregionalised service as an immediate ambiguous match.
-            $nameMap=[];$regionalMap=[];
-            foreach(($open['channels']??[]) as $xmlId=>$label){
-                if(!isset($open['programmes'][$xmlId]))continue;
-                $match=self::epgMatchName((string)$label);
-                if($match==='')continue;
-                $nameMap[$match][(string)$xmlId]=(string)$label;
-                $root=self::epgRegionalRoot($match);
-                if($root!==$match)$regionalMap[$root][(string)$xmlId]=(string)$label;
-            }
+            [$nameMap,$regionalMap]=$lookup?[$open['names'],$open['regional']]:self::guideNameMaps($open['channels']??[],$open['programmes']);
+            $programmesById=$open['programmes']??[];
+            $offsets=$open['offsets']??[];
+            $readProgrammes=static function(string $id) use($lookup,$offsets,&$programmesById): array {
+                if(isset($programmesById[$id]))return $programmesById[$id];
+                if(!$lookup || !isset($offsets[$id]) || fseek($lookup,(int)$offsets[$id])!==0)return [];
+                $entries=json_decode((string)fgets($lookup,16777217),true);
+                return $programmesById[$id]=is_array($entries)?$entries:[];
+            };
             foreach($visible['items'] as $channel){
                 if(strtoupper((string)($channel['country']??''))!==$country)continue;
                 $id=(string)($channel['id']??'');
@@ -219,7 +295,7 @@ final class StalkerLiveBrowse {
                 $sourceId=trim((string)($channel['xmltvId']??''));
                 $match=self::epgMatchName((string)($channel['name']??''));
                 $candidates=$nameMap[$match]??[];$regionalConsensus=false;
-                if(!isset($open['programmes'][$sourceId])){
+                if(!isset($offsets[$sourceId])&&!isset($programmesById[$sourceId])){
                     if(!$candidates&&isset($regionalMap[$match])){
                         $candidates=$regionalMap[$match];
                         $regionalConsensus=count($candidates)>1;
@@ -249,7 +325,7 @@ final class StalkerLiveBrowse {
                         }
                     }
                 }
-                $additional=$open['programmes'][$sourceId]??null;
+                $additional=$readProgrammes($sourceId);
                 if(!empty($regionalConsensus)&&$sourceId===''){
                     // Generic ITV1 has no single national XMLTV channel. Add only
                     // events shared by a majority of regional schedules; this fills
@@ -258,7 +334,7 @@ final class StalkerLiveBrowse {
                     $votes=[];$regionalIds=array_keys($candidates);$regionalCount=count($regionalIds);
                     foreach($regionalIds as $regionalId){
                         $seen=[];
-                        foreach($open['programmes'][$regionalId]??[] as $event){
+                        foreach($readProgrammes((string)$regionalId) as $event){
                             if(!is_array($event))continue;
                             $signature=(int)($event['start']??0).'|'.(int)($event['end']??0).'|'.mb_strtolower(trim((string)($event['title']??'')));
                             if(isset($seen[$signature]))continue;
@@ -271,7 +347,7 @@ final class StalkerLiveBrowse {
                     $additional=[];
                     foreach($votes as $vote)if($vote['count']>=$threshold)$additional[]=$vote['event'];
                 }
-                if(!is_array($additional))continue;
+                if(!$additional)continue;
                 if(!isset($programmes[$id]))$programmes[$id]=[];
                 foreach($additional as $event){
                     if(!is_array($event))continue;
@@ -300,6 +376,7 @@ final class StalkerLiveBrowse {
                     if(count($programmes[$id])>=60)break;
                 }
             }
+            if($lookup)fclose($lookup);
         }
         foreach($programmes as $id=>$entries){
             usort($entries,static function($a,$b){return $a['start']<=>$b['start'];});

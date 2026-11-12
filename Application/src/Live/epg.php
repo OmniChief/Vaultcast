@@ -251,7 +251,8 @@ function epg_build_stalker_open_index(string $path,string $country,int $fromMs,i
         if($entries){$slim[$id]=$entries;$total+=count($entries);}
     }
     if(!$slim)throw new RuntimeException('No programmes found in the current 48-hour guide window.');
-    $payload=json_encode(['schema'=>2,'updatedAt'=>time(),'channels'=>$names,'logos'=>$logos,'programmes'=>$slim],
+    $updatedAt=time();
+    $payload=json_encode(['schema'=>2,'updatedAt'=>$updatedAt,'channels'=>$names,'logos'=>$logos,'programmes'=>$slim],
         JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE);
     if($payload===false)throw new RuntimeException('Could not encode the Stalker guide index.');
     // Rich credits/posters must not make an otherwise usable guide disappear.
@@ -260,16 +261,23 @@ function epg_build_stalker_open_index(string $path,string $country,int $fromMs,i
         $total=0;
         foreach($slim as &$entries){usort($entries,static function($a,$b){return $a['start']<=>$b['start'];});$entries=array_slice($entries,0,$limit);$total+=count($entries);}
         unset($entries);
-        $payload=json_encode(['schema'=>2,'updatedAt'=>time(),'channels'=>$names,'logos'=>$logos,'programmes'=>$slim],JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE);
+        $payload=json_encode(['schema'=>2,'updatedAt'=>$updatedAt,'channels'=>$names,'logos'=>$logos,'programmes'=>$slim],JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE);
         if($payload===false)throw new RuntimeException('Could not encode the Stalker guide index.');
     }
     if(strlen($payload)>16777216)throw new RuntimeException('Stalker guide index exceeds the 16 MiB cache limit.');
     $pathOut=epg_cache_dir().'/stalker-open-'.strtolower($country).($source==='freeview'?'-freeview':'').'.json';
     $tmp=$pathOut.'.'.bin2hex(random_bytes(4)).'.tmp';
-    if(@file_put_contents($tmp,$payload,LOCK_EX)===false || !@rename($tmp,$pathOut)){
+    if(@file_put_contents($tmp,$payload,LOCK_EX)!==strlen($payload)){
         @unlink($tmp);
         throw new RuntimeException('Could not save the Stalker guide index.');
     }
+    @unlink($pathOut.'.lookup');
+    if(!@rename($tmp,$pathOut)){
+        @unlink($tmp);
+        throw new RuntimeException('Could not save the Stalker guide index.');
+    }
+    unset($payload);
+    StalkerLiveBrowse::writeGuideLookup($pathOut,$updatedAt,$names,$logos,$slim);
     return ['country'=>$country,'channelsInXmltv'=>count($wanted),
         'channelsWithProgrammes'=>count($slim),'programmes'=>$total,'updatedAt'=>time()];
 }

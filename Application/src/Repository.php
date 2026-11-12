@@ -34,6 +34,11 @@ final class Repository
         return STREAM_DATA.'/stalker-catalogue/'.substr($hash,0,2).'/'.$hash.'.json';
     }
 
+    public static function stalkerSnapshotRevision(string $key): ?array {
+        $stat=@stat(self::stalkerSnapshotFile($key));
+        return $stat===false?null:[$stat['ino'],$stat['mtime'],$stat['size']];
+    }
+
     public static function stalkerSnapshot(string $key): ?array {
         $file=self::stalkerSnapshotFile($key);
         $raw=is_file($file)?@file_get_contents($file):false;
