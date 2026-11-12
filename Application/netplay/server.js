@@ -17,6 +17,9 @@ const runtimeRevision = createHash('sha256').update(fs.readFileSync(__filename))
 const updateMarker = path.join(__dirname, '../data/runtime/maintenance.json');
 
 const app = express();
+let applicationDatabase;
+try { applicationDatabase = require('../src/NodeApp/account')(app, express, path.join(__dirname, '..')); }
+catch (error) { console.warn('Node application routes are unavailable'); }
 let webAsset;
 try { webAsset = require('../src/Workers/web-assets'); }
 catch (error) { console.warn('Native web asset delivery is unavailable'); }
@@ -175,6 +178,7 @@ app.get('/health', (_req, res) => {
     mediaApiRevision,
     metadataRelayRevision: 1,
     webAssetRevision: webAsset ? 1 : 0,
+    applicationRevision: applicationDatabase?.ready() ? 1 : 0,
     stalkerReadRevision: mediaHandler() ? 1 : 0,
     xtreamRelayRevision: mediaHandler()?.xtreamReady ? 1 : 0,
     eventsRevision: 1,

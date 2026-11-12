@@ -68,6 +68,12 @@ final class NodeRuntime
         return (self::health()['xtreamRelayRevision'] ?? 0) === 1;
     }
 
+    public static function applicationBase(string $base): string
+    {
+        if ($base !== '/' || !preg_match('/^nginx\b/i', (string)($_SERVER['SERVER_SOFTWARE'] ?? ''))) return '';
+        return (self::health()['applicationRevision'] ?? 0) === 1 ? '/netplay/application' : '';
+    }
+
     public static function webAssetsReady(): bool
     {
         return (self::health()['webAssetRevision'] ?? 0) === 1;

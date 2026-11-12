@@ -83,6 +83,7 @@ release_request_locks();
 require_once __DIR__ . '/src/Services/PlayerAssets.php';
 $shell = (string)file_get_contents(__DIR__ . '/src/Views/app.html');
 $config = '<script>window.__STREAM_BASE__=' . json_encode($base, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) . ';</script>';
+$config .= '<script>window.__VAULTCAST_APPLICATION_BASE__=' . json_encode(NodeRuntime::applicationBase($base), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) . ';</script>';
 $config .= '<script>window.__VAULTCAST_ASSET_BASE__=' . json_encode(AssetDelivery::nativeBase($base), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) . ';</script>';
 $config .= '<script>window.VaultcastDependencies=' . json_encode(PlayerAssets::manifest(), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) . ';</script>';
 $publicBase = trim((string)(\Vaultcast\Repository::document('settings', [])['public_base_url'] ?? ''));

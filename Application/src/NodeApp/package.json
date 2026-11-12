@@ -1,0 +1,9 @@
+{
+  "name": "vaultcast-application",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "bcryptjs": "3.0.3",
+    "mysql2": "https://codeload.github.com/sidorares/node-mysql2/tar.gz/7f65d9af6e2cc87fea33cce9319c11faf266363a"
+  }
+}

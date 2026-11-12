@@ -24,6 +24,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Install the Node application dependencies
+        working-directory: Application/src/NodeApp
+        run: npm ci --omit=dev --ignore-scripts --no-audit --no-fund
       - name: Check JavaScript syntax
         run: |
-          find Application/assets/js Application/netplay Application/src/Workers -type f -name '*.js' ! -path '*/node_modules/*' -print0 | xargs -0 -n1 node --check
+          find Application/assets/js Application/netplay Application/src/Workers Application/src/NodeApp -type f -name '*.js' ! -path '*/node_modules/*' -print0 | xargs -0 -n1 node --check

@@ -1010,7 +1010,16 @@ function confirmDialog(message, opts){
     function releaseRead(){var i=pageReads.indexOf(pageRead);if(i>=0)pageReads.splice(i,1);}
 
     if (opts.signal) fetchOpts.signal = opts.signal;
-    return fetch(API + path, fetchOpts).then(function(r){releaseRead();return r;},function(e){releaseRead();throw e;})
+    var nativeBase = window.__VAULTCAST_APPLICATION_BASE__;
+    var nativeRoute = (method === 'GET' && path === '/status') ||
+      (method === 'POST' && (path === '/login' || path === '/logout'));
+    var transport = nativeBase && nativeRoute ? fetch(nativeBase + path, fetchOpts).then(function(response){
+      if (response.status === 503 && response.headers.get('X-Vaultcast-App-Unavailable') === '1') {
+        return fetch(API + path, fetchOpts);
+      }
+      return response;
+    }) : fetch(API + path, fetchOpts);
+    return transport.then(function(r){releaseRead();return r;},function(e){releaseRead();throw e;})
       .then(function(r){
         return r.json().catch(function(){ return { ok:false, error:'Bad JSON' }; }).then(function(j){
           var sameUser=requestUser===(state.user && state.user.id);
