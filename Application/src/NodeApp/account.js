@@ -8,6 +8,7 @@ const database = require('./database');
 
 const { sha, now, parse, enabled, storedBoolean, documents, publicUser } = require('./account-data');
 const mountProfiles = require('./profile');
+const mountLibrary = require('./library');
 const cookieName = 'vaultcast_session';
 
 function browserToken(request) {
@@ -167,5 +168,6 @@ module.exports = function mountAccount(app, express, root) {
     root, handle, unavailable, passwordWork,
     json: express.json({ limit: '1mb' }),
   });
+  mountLibrary(app, route, { root, handle, unavailable });
   return db;
 };

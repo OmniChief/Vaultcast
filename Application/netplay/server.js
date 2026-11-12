@@ -178,7 +178,7 @@ app.get('/health', (_req, res) => {
     mediaApiRevision,
     metadataRelayRevision: 1,
     webAssetRevision: webAsset ? 1 : 0,
-    applicationRevision: applicationDatabase?.ready() ? 2 : 0,
+    applicationRevision: applicationDatabase?.ready() ? 3 : 0,
     stalkerReadRevision: mediaHandler() ? 1 : 0,
     xtreamRelayRevision: mediaHandler()?.xtreamReady ? 1 : 0,
     eventsRevision: 1,
