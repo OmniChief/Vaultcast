@@ -1,6 +1,8 @@
 'use strict';
 
 const { randomInt } = require('crypto');
+const { readFile } = require('fs').promises;
+const { join } = require('path');
 const { parse, now, enabled, documents } = require('./account-data');
 const { authorized, cached, parentalStatus } = require('./profile-policy');
 
@@ -62,7 +64,7 @@ function areaAllowed(user, area, parental) {
 }
 
 function itemArea(section) {
-  return section.type === 'roms' ? 'games' : 'library';
+  return section.type === 'roms' || section.media_kind === 'rom' ? 'games' : 'library';
 }
 
 function areaDenied(response, area) {
@@ -94,10 +96,18 @@ function reverseSlugs(registry, kind) {
   return result;
 }
 
+function mediaSignature(item) {
+  return int(item.mtime) + '|' + int(item.size);
+}
+
+function isEpisode(item) {
+  return ['tv', 'anime'].includes(item.type) || (item.show && Object.hasOwn(item, 'season'));
+}
+
 function itemCard(row, item, settings, movieSlugs, gameSlugs) {
   const video = item.media_kind === 'video';
   const rom = item.media_kind === 'rom';
-  const facts = row.sig === int(item.mtime) + '|' + int(item.size);
+  const facts = row.sig === mediaSignature(item);
   const preferred = enabled(item.directplay_path) && enabled(item.directplay_ready) && enabled(settings.convert?.prefer_directplay ?? true);
   const ext = lower(item.ext);
   const savedEpisodeTitle = ['tv', 'anime'].includes(item.type) ? fixText(item.episode_title) : '';
@@ -286,17 +296,93 @@ async function recentCards(pool, section, count, settings, registry) {
   return cards;
 }
 
+async function cachedSynopsis(root, pool, item) {
+  const empty = { summary: null, source: null, pending: false };
+  const game = item.media_kind === 'rom';
+  const film = ['movies', 'disney'].includes(item.type) || (item.media_kind === 'video' && !item.show);
+  if (!game && !film) return empty;
+
+  const [rows] = await pool.execute("SELECT payload FROM vaultcast_metadata_pins WHERE kind='movie_synopsis' AND target_id=?", [item.id]);
+  const pin = rows.length ? parse(rows[0].payload) : null;
+  if (pin && !enabled(pin.cleared) && typeof pin.summary === 'string' &&
+      (game || pin.summary || enabled(pin.manual))) {
+    return { summary: pin.summary, source: pin.provider ?? (game ? pin.source : null) ?? 'pin', pending: false };
+  }
+
+  const filename = 'movie_' + String(item.id).replace(/[^a-f0-9]/g, '') + '.json';
+  const stored = await readFile(join(root, 'data/synopsis', filename), 'utf8')
+    .then(JSON.parse).catch(error => {
+      if (error.code === 'ENOENT' || error instanceof SyntaxError) return null;
+      throw error;
+    });
+  if (!rows.length && enabled(stored?.pinned) && typeof stored.summary === 'string' && stored.summary) {
+    return { summary: stored.summary, source: stored.provider ?? (game ? stored.source : null) ?? 'pin', pending: false };
+  }
+  if (game) {
+    // Match the stored game synopsis format used by the metadata worker.
+    if (stored?.game_lookup_version !== 2) return { ...empty, pending: true };
+    const summary = String(stored.summary ?? '') || null;
+    return { summary, source: stored.source ?? null, pending: !summary && int(stored.retry_at) <= now() };
+  }
+  if (!stored || !Object.hasOwn(stored, 'summary')) return { ...empty, pending: true };
+  const summary = typeof stored.summary === 'string' ? stored.summary || null : null;
+  return { summary, source: enabled(summary) ? String(stored.source ?? '') : null, pending: false };
+}
+
 module.exports = function mountLibrary(app, prefix, { root, handle, unavailable }) {
-  const browse = operation => handle(async (request, response, pool, _bcrypt, settings, current) => {
+  const browse = (operation, includeCatalogue = true) => handle(async (request, response, pool, _bcrypt, settings, current) => {
     if (!current.user && settings.auth?.lan_guest_access !== false) return unavailable(response);
     if (!current.user && !current.authenticated) {
       return response.status(401).json({ ok: false, error: 'Sign in to continue.', code: 'login_required' });
     }
     if (!authorized(response, current)) return;
-    const docs = await documents(pool, ['catalogue']);
+    const docs = includeCatalogue ? await documents(pool, ['catalogue']) : {};
     const parental = await parentalStatus(root, pool, current, current.user, now());
     return operation(request, response, pool, settings, current.user, docs.catalogue ?? {}, parental);
   }, true);
+
+  app.get(prefix + '/items/:id([a-f0-9]+)', browse(async (request, response, pool, settings, user, _catalogue, parental) => {
+    // Explicit media probes and TV episode formatting still use the legacy handlers.
+    if (enabled(request.query.probe) || enabled(request.query.audio)) return unavailable(response);
+    const { id } = request.params;
+    const [rows] = await pool.execute(
+      'SELECT i.payload,f.sig,f.present,f.duration,f.needs_convert FROM vaultcast_items i ' +
+      'LEFT JOIN vaultcast_media_facts f ON f.item_id=i.id WHERE i.id=?', [id]);
+    if (!rows.length) {
+      if (/^[a-f0-9]{24}$/.test(id)) return unavailable(response);
+      const limited = ['library', 'live', 'games'].some(area => !areaAllowed(user, area, parental));
+      return response.status(404).json({ ok: false, error: limited ? 'Item not found' : 'Not found' });
+    }
+    const row = rows[0];
+    const item = parse(row.payload);
+    const area = itemArea(item);
+    if (!areaAllowed(user, area, parental)) return areaDenied(response, area);
+    if (isEpisode(item)) return unavailable(response);
+
+    if (!(await visibleCards(pool, [{ id: item.id, media_kind: item.media_kind }], parental)).length) {
+      return response.status(403).json({ ok: false, code: 'parental_blocked', error: 'This title isn’t available on this profile.' });
+    }
+
+    const audioKey = 'media-audio:' + id;
+    const docs = await documents(pool, ['slugs', audioKey]);
+    const card = itemCard(row, item, settings, reverseSlugs(docs.slugs, 'movie'), reverseSlugs(docs.slugs, 'game'));
+    const synopsis = request.query.synopsis === '0'
+      ? { summary: null, source: null, pending: false }
+      : await cachedSynopsis(root, pool, item);
+    const signature = mediaSignature(item);
+    const audio = docs[audioKey]?.sig === signature ? docs[audioKey].probe : null;
+    response.json({ ok: true, item: {
+      ...card,
+      synopsis: synopsis.summary,
+      synopsis_source: synopsis.source,
+      synopsis_pending: synopsis.pending,
+      file_exists: enabled(item.path) && (row.sig !== signature || enabled(row.present)),
+      path: item.path ?? '',
+      audio_tracks: audio?.audio_tracks ?? [],
+      audio_count: audio?.audio_count ?? 0,
+      multi_audio: enabled(audio?.multi_audio),
+    } });
+  }, false));
 
   app.get(prefix + '/sections', browse(async (_request, response, _pool, _settings, user, catalogue, parental) => {
     const sections = list(catalogue.sections).filter(section => section && areaAllowed(user, itemArea(section), parental))
@@ -415,7 +501,7 @@ module.exports = function mountLibrary(app, prefix, { root, handle, unavailable 
       if ((!movie && !['roms', 'music'].includes(section.type)) || (movie && Object.values(filters).some(Boolean))) return unavailable(response);
       const { rows, ...result } = await indexedItems(pool, id, query, page, per, letter);
       const items = rows.map(row => parse(row.payload));
-      if (items.some(item => !item || ['tv', 'anime'].includes(item.type) || (item.show && Object.hasOwn(item, 'season')))) return unavailable(response);
+      if (items.some(item => !item || isEpisode(item))) return unavailable(response);
       const slugs = items.length ? (await documents(pool, ['slugs'])).slugs : null;
       const movieSlugs = reverseSlugs(slugs, 'movie'), gameSlugs = reverseSlugs(slugs, 'game');
       const cards = rows.map((row, index) => itemCard(row, items[index], settings, movieSlugs, gameSlugs));
