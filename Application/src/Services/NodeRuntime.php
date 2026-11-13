@@ -71,7 +71,7 @@ final class NodeRuntime
     public static function applicationBase(string $base): string
     {
         if ($base !== '/' || !preg_match('/^nginx\b/i', (string)($_SERVER['SERVER_SOFTWARE'] ?? ''))) return '';
-        return (self::health()['applicationRevision'] ?? 0) === 6 ? '/netplay/application' : '';
+        return (self::health()['applicationRevision'] ?? 0) === 7 ? '/netplay/application' : '';
     }
 
     public static function webAssetsReady(): bool

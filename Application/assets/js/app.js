@@ -1747,9 +1747,13 @@ function confirmDialog(message, opts){
     }
 
     var src = streamPlayUrl(play.url);
+    var nativeBase = window.__VAULTCAST_APPLICATION_BASE__;
+    var useNative = nativeBase && !item._extra && typeof play.hub_cinema_guest === 'undefined' &&
+      /^\/api\/stream\/play\?t=[a-f0-9]{48}$/.test(play.url);
+    var mediaUrl = useNative ? streamPlayUrl(nativeBase + play.url.slice(API.length)) : src;
     var media;
     if (play.media_kind === 'audio') {
-      media = h('audio', { id:'player-media', controls:true, autoplay:true, preload:'auto', src: src });
+      media = h('audio', { id:'player-media', controls:true, autoplay:true, preload:'auto', src: mediaUrl });
     } else {
       media = h('video', { id:'player-media', controls:true, autoplay:play.autoplay !== false, playsinline:true, preload:play.transcode_auto_blocked?'none':'metadata' });
       media.setAttribute('webkit-playsinline', 'true');
@@ -1758,11 +1762,11 @@ function confirmDialog(message, opts){
       if (play.mime) {
         try {
           var source = document.createElement('source');
-          source.src = src; source.type = play.mime;
+          source.src = mediaUrl; source.type = play.mime;
           media.appendChild(source);
         } catch (eS) {}
       }
-      media.src = src;
+      media.src = mediaUrl;
     }
     /* resume — seek to saved progress (play.progress from /items/{id}/play, else item.progress) once metadata is ready.
        Progress saves are held until the resume seek lands so the 0:00 start can't overwrite the saved position. */
@@ -1803,8 +1807,22 @@ function confirmDialog(message, opts){
     media.addEventListener('error', function(){
       if(overlay._closing||!overlay.isConnected)return;
       if(overlay._transcodeActive||overlay._transcodePending)return;
-      /* Failed before playing: retry once with PHP delivery (nginx could not serve the file). */
       var cur = media.currentSrc || media.src || '';
+      if (useNative && (cur.indexOf(nativeBase + '/stream/play?') >= 0 || media.src === mediaUrl)) {
+        var at = media.currentTime || 0;
+        var wasPlaying = !media.paused || openPlayer._deskPlayStarted;
+        useNative = false;
+        if (at > 0) media.addEventListener('loadedmetadata', function(){
+          try { media.currentTime = at; } catch (eSeek) {}
+        }, { once:true });
+        media.src = src;
+        if (wasPlaying || play.autoplay !== false) {
+          var retry = media.play();
+          if (retry && retry.catch) retry.catch(function(){});
+        }
+        return;
+      }
+      /* Failed before playing: retry once without nginx file delivery. */
       if (!openPlayer._deskPlayStarted && !directTried && cur.indexOf('/stream/play') >= 0 && cur.indexOf('direct=1') < 0) {
         directTried = true;
         try { media.src = cur + (cur.indexOf('?') >= 0 ? '&' : '?') + 'direct=1'; if (play.autoplay !== false || openPlayer._deskPlayStarted) media.play(); } catch (eD) {}

@@ -677,3 +677,5 @@ module.exports = function mountLibrary(app, prefix, { root, handle, unavailable 
     });
   }));
 };
+
+module.exports.visibleCards = visibleCards;

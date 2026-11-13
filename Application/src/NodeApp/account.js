@@ -9,6 +9,7 @@ const database = require('./database');
 const { sha, now, parse, enabled, storedBoolean, documents, publicUser } = require('./account-data');
 const mountProfiles = require('./profile');
 const mountLibrary = require('./library');
+const mountStream = require('./stream');
 const cookieName = 'vaultcast_session';
 
 function browserToken(request) {
@@ -79,12 +80,15 @@ module.exports = function mountAccount(app, express, root) {
   function unavailable(response) {
     return emptyError(response.set('X-Vaultcast-App-Unavailable', '1'), 503, 'The Node application backend is unavailable.');
   }
+  async function updating() {
+    const marker = await readFile(join(root, 'data/runtime/maintenance.json'), 'utf8').then(JSON.parse).catch(() => null);
+    return marker && Number(marker.since) > now() - 900;
+  }
   const handle = (operation, includeUser = false) => async (request, response) => {
     response.set({ 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
     if (!db.ready()) return unavailable(response);
     try {
-      const marker = await readFile(join(root, 'data/runtime/maintenance.json'), 'utf8').then(JSON.parse).catch(() => null);
-      if (marker && Number(marker.since) > now() - 900) return emptyError(response.set('Retry-After', '30'), 503, 'Vaultcast is updating.');
+      if (await updating()) return emptyError(response.set('Retry-After', '30'), 503, 'Vaultcast is updating.');
       await db.run(async (pool, bcrypt) => {
         const settings = (await documents(pool, ['settings'])).settings ?? {};
         if (request.method === 'POST' && !requestAllowed(request, settings)) {
@@ -169,5 +173,6 @@ module.exports = function mountAccount(app, express, root) {
     json: express.json({ limit: '1mb' }),
   });
   mountLibrary(app, route, { root, handle, unavailable });
-  return db;
+  const streaming = mountStream(app, route, { db, root, readSession: session, updating });
+  return { ...db, streaming };
 };

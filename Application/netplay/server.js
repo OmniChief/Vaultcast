@@ -178,7 +178,7 @@ app.get('/health', (_req, res) => {
     mediaApiRevision,
     metadataRelayRevision: 1,
     webAssetRevision: webAsset ? 1 : 0,
-    applicationRevision: applicationDatabase?.ready() ? 6 : 0,
+    applicationRevision: applicationDatabase?.ready() ? 7 : 0,
     stalkerReadRevision: mediaHandler() ? 1 : 0,
     xtreamRelayRevision: mediaHandler()?.xtreamReady ? 1 : 0,
     eventsRevision: 1,
@@ -472,7 +472,7 @@ setInterval(async () => {
   try {
     const source = await fs.promises.readFile(__filename);
     const installed = createHash('sha256').update(source).digest('hex');
-    if (installed !== runtimeRevision && !Object.keys(rooms).length && !transcodeRunner?.active() && !downloadRunner?.active() && !videoUpload?.active() && !dropUpload?.active() && !conversionUpload?.active() && !quizWarmup?.active() && !maintenanceQueue?.active() && !fs.existsSync(updateMarker)) {
+    if (installed !== runtimeRevision && !Object.keys(rooms).length && !transcodeRunner?.active() && !downloadRunner?.active() && !videoUpload?.active() && !dropUpload?.active() && !conversionUpload?.active() && !quizWarmup?.active() && !maintenanceQueue?.active() && !applicationDatabase?.streaming() && !fs.existsSync(updateMarker)) {
       process.exit(75);
     }
   } catch (error) {
