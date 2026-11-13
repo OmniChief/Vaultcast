@@ -296,6 +296,137 @@ async function recentCards(pool, section, count, settings, registry) {
   return cards;
 }
 
+function episodeLabel(show, season, episode, name) {
+  const code = 'S' + String(season).padStart(2, '0') + 'E' + String(episode).padStart(2, '0');
+  return fixText([show, code, name].filter(Boolean).join(' — '));
+}
+
+async function showDetail(root, pool, summary, settings, parental) {
+  const key = summary.show_key;
+  const guideKey = 'tvmaze-guide:' + key;
+  const docs = await documents(pool, ['browse-index-ready', 'slugs', guideKey]);
+  if (!enabled(docs['browse-index-ready'])) return null;
+
+  const [rows] = await pool.execute(
+    'SELECT i.payload,f.sig,f.duration,f.needs_convert FROM vaultcast_browse_items b ' +
+    'JOIN vaultcast_items i ON i.id=b.item_id LEFT JOIN vaultcast_media_facts f ON f.item_id=i.id ' +
+    'WHERE b.show_key=? AND b.section_id=? AND i.section_id=b.section_id ORDER BY i.title,i.id LIMIT 5001',
+    [key, summary.section]);
+  if (rows.length > 5000) return null;
+  const showSlugs = reverseSlugs(docs.slugs, 'show');
+  const emptySlugs = new Map();
+  const available = new Map(), unnumbered = [], localMax = new Map();
+  const episodeKey = (season, episode) => season + ':' + episode;
+  for (const row of rows) {
+    const item = parse(row.payload);
+    const name = item.show || String(item.rel ?? '').replace(/\\/g, '/').split('/')[0] || item.title || '';
+    if (name !== summary.title) continue;
+    const card = itemCard(row, item, settings, emptySlugs, emptySlugs);
+    Object.assign(card, { show_key: key, show_slug: showSlugs.get(key) ?? key, available: true, status: 'available' });
+    if (card.episode_title && item.season != null && item.episode != null && item.season !== '' && item.episode !== '') {
+      card.title = episodeLabel(fixText(item.show), int(item.season), int(item.episode),
+        lower(card.episode_title) === lower(fixText(item.show)) ? null : card.episode_title);
+    }
+    if (item.season == null || item.episode == null) {
+      card.season = int(item.season);
+      unnumbered.push(card);
+      continue;
+    }
+    const season = int(item.season), episode = int(item.episode);
+    const id = episodeKey(season, episode);
+    if (!available.has(id)) available.set(id, card);
+    if (season > 0) localMax.set(season, Math.max(episode, localMax.get(season) ?? 0));
+  }
+
+  const guide = docs[guideKey];
+  const guideEpisodes = list(guide?.episodes);
+  if (guideEpisodes.length > 10000) return null;
+  const expected = new Map();
+  let source = guideEpisodes.length ? 'tvmaze' : 'local_gaps';
+  for (const entry of guideEpisodes) {
+    if (entry?.number == null) continue;
+    const season = int(entry.season), episode = int(entry.number);
+    expected.set(episodeKey(season, episode), { season, episode, name: entry.name ?? null, airdate: entry.airdate ?? null });
+  }
+  for (const [season, max] of localMax) {
+    if (max > 10000) return null;
+    for (let episode = 1; episode <= max; episode++) {
+      const id = episodeKey(season, episode);
+      if (!expected.has(id)) {
+        if (expected.size >= 10000) return null;
+        expected.set(id, { season, episode, name: null, airdate: null });
+        if (source === 'tvmaze') source = 'tvmaze+local_gaps';
+      }
+    }
+  }
+  for (const [id, card] of available) {
+    if (!expected.has(id)) expected.set(id, { season: int(card.season), episode: int(card.episode), name: null, airdate: null });
+  }
+
+  const seasons = new Map();
+  const add = card => {
+    if (!seasons.has(card.season)) seasons.set(card.season, []);
+    seasons.get(card.season).push(card);
+  };
+  for (const [id, entry] of expected) {
+    const card = available.get(id);
+    if (card) {
+      if (enabled(entry.name)) card.episode_title = entry.name;
+      if (enabled(entry.airdate)) card.airdate = entry.airdate;
+      card.season = entry.season;
+      add(card);
+      continue;
+    }
+    add({
+      id: null, show_key: key, section: summary.section, type: summary.type,
+      title: episodeLabel(summary.title, entry.season, entry.episode, entry.name), episode_title: entry.name,
+      year: summary.year ?? null, season: entry.season, episode: entry.episode, show: summary.title,
+      ext: null, size: null, mtime: null, media_kind: 'video', has_poster: false,
+      kind: 'episode', available: false, status: 'missing', airdate: entry.airdate,
+    });
+  }
+  for (const card of unnumbered) add(card);
+
+  const visible = new Set(await visibleCards(pool, [...available.values(), ...unnumbered], parental));
+  const seasonList = [...seasons].sort(([a], [b]) => a - b).map(([season, episodes]) => {
+    episodes.sort((a, b) => int(a.episode) - int(b.episode) ||
+      Buffer.compare(Buffer.from(a.title), Buffer.from(b.title)));
+    const count = episodes.filter(card => card.available).length;
+    return { season, label: season === 0 ? 'Specials' : 'Season ' + season, episode_count: episodes.length,
+      available_count: count, missing_count: episodes.length - count, has_poster: true,
+      episodes: episodes.filter(card => !card.available || visible.has(card)) };
+  });
+  const availableCount = available.size + unnumbered.length;
+  const missingCount = expected.size - available.size;
+  const total = availableCount + missingCount;
+  const [pins] = await pool.execute("SELECT payload FROM vaultcast_metadata_pins WHERE kind='show_meta' AND target_id=?", [key]);
+  let pin = pins.length ? parse(pins[0].payload) : null;
+  if (!pins.length) {
+    const legacy = await readFile(join(root, 'data/synopsis', 'show_' + key + '.meta.json'), 'utf8').then(JSON.parse).catch(() => null);
+    if (enabled(legacy?.pinned)) pin = legacy;
+  }
+  let synopsis = null;
+  if (pin && !enabled(pin.cleared)) {
+    if (enabled(pin.manual)) synopsis = String(pin.summary ?? '');
+    else if (typeof pin.summary === 'string' && pin.summary) synopsis = pin.summary;
+  }
+  if (synopsis === null) {
+    const cached = await readFile(join(root, 'data/tvmaze', 'show_' + key + '_episodes.json'), 'utf8').then(JSON.parse).catch(() => null);
+    synopsis = typeof cached?.summary === 'string' && cached.summary ? cached.summary : guideEpisodes.length ? guide.summary ?? null : null;
+  }
+  const regularCount = seasonList.filter(season => season.season > 0).length;
+  return {
+    ok: true,
+    show: { show_key: key, id: key, kind: 'show', section: summary.section, type: summary.type, title: summary.title,
+      year: summary.year ?? null, slug: showSlugs.get(key) ?? key, episode_count: total,
+      available_count: availableCount, missing_count: missingCount, season_count: regularCount || seasonList.length,
+      has_poster: true, tvmaze_id: guideEpisodes.length ? guide.id ?? null : null,
+      synopsis, genres: guideEpisodes.length ? guide.genres ?? [] : [], episode_source: source },
+    seasons: seasonList,
+    availability: { available: availableCount, missing: missingCount, total, source },
+  };
+}
+
 async function cachedSynopsis(root, pool, item) {
   const empty = { summary: null, source: null, pending: false };
   const game = item.media_kind === 'rom';
@@ -340,6 +471,21 @@ module.exports = function mountLibrary(app, prefix, { root, handle, unavailable 
     const parental = await parentalStatus(root, pool, current, current.user, now());
     return operation(request, response, pool, settings, current.user, docs.catalogue ?? {}, parental);
   }, true);
+
+  app.get(prefix + '/shows/:id([a-f0-9]+)', browse(async (request, response, pool, settings, user, _catalogue, parental) => {
+    if (!areaAllowed(user, 'library', parental)) return areaDenied(response, 'library');
+    const { id } = request.params;
+    if (!(await visibleCards(pool, [{ kind: 'show', show_key: id }], parental)).length) {
+      return response.status(403).json({ ok: false, code: 'parental_blocked', error: 'This title isn’t available on this profile.' });
+    }
+    const [rows] = await pool.execute('SELECT payload FROM vaultcast_show_summaries WHERE show_key=?', [id]);
+    const summary = rows.length ? parse(rows[0].payload) : null;
+    if (!summary || summary.show_key !== id || !summary._meta_prepared || !enabled(settings.posters?.enabled ?? true)) {
+      return unavailable(response);
+    }
+    const result = await showDetail(root, pool, summary, settings, parental);
+    return result ? response.json(result) : unavailable(response);
+  }, false));
 
   app.get(prefix + '/items/:id([a-f0-9]+)', browse(async (request, response, pool, settings, user, _catalogue, parental) => {
     // Explicit media probes and TV episode formatting still use the legacy handlers.
