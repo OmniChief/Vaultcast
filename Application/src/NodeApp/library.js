@@ -1,5 +1,6 @@
 'use strict';
 
+const { randomInt } = require('crypto');
 const { parse, now, enabled, documents } = require('./account-data');
 const { authorized, cached, parentalStatus } = require('./profile-policy');
 
@@ -35,16 +36,20 @@ function ratingOf(row) {
 
 async function visibleCards(pool, cards, parental) {
   if (!parental.restricted) return cards;
-  const targets = cards.map(card => card.kind === 'show' ? 'show:' + card.show_key
-    : card.media_kind === 'video' ? 'item:' + card.id : null);
-  const wanted = [...new Set(targets.filter(Boolean))];
+  const targets = cards.map(card => {
+    if (card.kind === 'show') return ['show:' + card.show_key];
+    if (card.media_kind !== 'video') return [];
+    const item = 'item:' + card.id;
+    return card.show_key ? ['show:' + card.show_key, item] : [item];
+  });
+  const wanted = [...new Set(targets.flat())];
   if (!wanted.length) return cards;
   const [rows] = await pool.execute('SELECT target,bucket,raw,source FROM vaultcast_content_ratings WHERE bucket>0 AND target IN (' +
     wanted.map(() => '?').join(',') + ')', wanted);
   const ratings = new Map(rows.map(row => [row.target, ratingOf(row)]));
   return cards.filter((_card, index) => {
-    if (!targets[index]) return true;
-    const bucket = ratings.get(targets[index]) || 0;
+    if (!targets[index].length) return true;
+    const bucket = targets[index].map(target => ratings.get(target)).find(Boolean) || 0;
     return bucket === 0 ? parental.settings.unrated !== 'hide' : bucket <= parental.settings.ceiling;
   });
 }
@@ -95,8 +100,12 @@ function itemCard(row, item, settings, movieSlugs, gameSlugs) {
   const facts = row.sig === int(item.mtime) + '|' + int(item.size);
   const preferred = enabled(item.directplay_path) && enabled(item.directplay_ready) && enabled(settings.convert?.prefer_directplay ?? true);
   const ext = lower(item.ext);
+  const savedEpisodeTitle = ['tv', 'anime'].includes(item.type) ? fixText(item.episode_title) : '';
+  const episodeTitle = savedEpisodeTitle &&
+    !/\b(?:1080p|720p|WEB-?DL|x264|x265|DSNP|MeM\.?GP)\b|\.(?:1080p|WEB|BluRay)/i.test(savedEpisodeTitle)
+    ? savedEpisodeTitle : null;
   return {
-    id: item.id, section: item.section, type: item.type, title: fixText(item.title), episode_title: null,
+    id: item.id, section: item.section, type: item.type, title: fixText(item.title), episode_title: episodeTitle,
     year: item.year ?? null, season: item.season ?? null, episode: item.episode ?? null,
     show: item.show ? fixText(item.show) : item.show ?? null, show_key: null, show_slug: null,
     slug: ['movies', 'disney'].includes(item.type) || (video && !item.show) ? movieSlugs.get(String(item.id)) ?? item.id : null,
@@ -202,6 +211,81 @@ async function indexedItems(pool, section, query, page, per, letter) {
     systems: systemRows.length ? Object.fromEntries(systemRows.map(row => [row.system_name, Number(row.n)])) : [] };
 }
 
+async function showcaseItems(pool, section, ids, settings, registry) {
+  if (!ids.length) return [];
+  const [rows] = await pool.execute(
+    'SELECT i.id,i.payload,f.sig,f.duration,f.needs_convert FROM vaultcast_items i LEFT JOIN vaultcast_media_facts f ON f.item_id=i.id WHERE i.section_id=? AND i.id IN (' +
+    ids.map(() => '?').join(',') + ')', [section, ...ids]);
+  const movies = reverseSlugs(registry, 'movie');
+  const games = reverseSlugs(registry, 'game');
+  const byId = new Map(rows.map(row => [row.id, itemCard(row, parse(row.payload), settings, movies, games)]));
+  return ids.map(id => byId.get(id));
+}
+
+function sample(ids, size) {
+  for (let index = 0; index < Math.min(ids.length, size); index++) {
+    const other = randomInt(index, ids.length);
+    [ids[index], ids[other]] = [ids[other], ids[index]];
+  }
+  return ids.slice(0, size);
+}
+
+async function recentCards(pool, section, count, settings, registry) {
+  // Group on the existing browse index. Resolve full episode payloads only for the selected cards.
+  const [groups] = await pool.execute(
+    "SELECT show_key,MIN(NULLIF(modified_at,0)) AS oldest,MAX(modified_at) AS newest " +
+    "FROM vaultcast_browse_items WHERE section_id=? AND show_key<>'' GROUP BY show_key HAVING MAX(modified_at)>0 LIMIT 10001", [section]);
+  if (groups.length > 10000) return null;
+  const time = now();
+  const newShows = [], episodes = [];
+  for (const group of groups) {
+    const oldest = Number(group.oldest ?? group.newest);
+    const newest = Number(group.newest);
+    if (oldest > time - 60 * 86400 && newest - oldest < 21 * 86400) newShows.push({ ...group, sort: oldest, show: true });
+    else episodes.push({ ...group, sort: newest, show: false });
+  }
+  const newestFirst = (a, b) => b.sort - a.sort || a.show_key.localeCompare(b.show_key);
+  newShows.sort(newestFirst);
+  episodes.sort(newestFirst);
+  const showCap = Math.max(4, Math.ceil(count * 0.4));
+  const picked = [...newShows.slice(0, showCap), ...episodes, ...newShows.slice(showCap)]
+    .slice(0, count).sort(newestFirst);
+  const showKeys = picked.filter(group => group.show).map(group => group.show_key);
+  const episodeGroups = picked.filter(group => !group.show);
+  const slugs = reverseSlugs(registry, 'show');
+  const shows = new Map(), latest = new Map();
+  if (showKeys.length) {
+    const [rows] = await pool.execute('SELECT show_key,payload FROM vaultcast_show_summaries WHERE section_id=? AND show_key IN (' +
+      showKeys.map(() => '?').join(',') + ')', [section, ...showKeys]);
+    for (const row of rows) {
+      const show = parse(row.payload);
+      if (!show?._meta_prepared) return null;
+      shows.set(row.show_key, showCard(show, slugs));
+    }
+  }
+  if (episodeGroups.length) {
+    const [rows] = await pool.execute(
+      'SELECT show_key,item_id FROM (SELECT show_key,item_id,ROW_NUMBER() OVER (PARTITION BY show_key ORDER BY modified_at DESC,title DESC,item_id DESC) AS position ' +
+      'FROM vaultcast_browse_items WHERE section_id=? AND show_key IN (' + episodeGroups.map(() => '?').join(',') + ')) ranked WHERE position=1',
+      [section, ...episodeGroups.map(group => group.show_key)]);
+    const cards = await showcaseItems(pool, section, rows.map(row => row.item_id), settings, registry);
+    for (const [index, row] of rows.entries()) latest.set(row.show_key, cards[index]);
+  }
+  const cards = [];
+  for (const group of picked) {
+    const card = group.show ? shows.get(group.show_key) : latest.get(group.show_key);
+    if (!card) return null;
+    if (!group.show) {
+      card.show_key = group.show_key;
+      card.show_slug = slugs.get(group.show_key) ?? group.show_key;
+      card.slug = null;
+    }
+    cards.push({ ...card, mtime: Number(group.newest),
+      showcase_kind: group.show ? 'new_show' : 'new_episode', showcase_label: group.show ? 'New show' : 'New episode' });
+  }
+  return cards;
+}
+
 module.exports = function mountLibrary(app, prefix, { root, handle, unavailable }) {
   const browse = operation => handle(async (request, response, pool, _bcrypt, settings, current) => {
     if (!current.user && settings.auth?.lan_guest_access !== false) return unavailable(response);
@@ -269,7 +353,7 @@ module.exports = function mountLibrary(app, prefix, { root, handle, unavailable 
       season: season ? Number(season[1]) : null, episode: number ? Number(number[1]) : null, item_id: item });
   }));
 
-  app.get(prefix + '/sections/:section([A-Za-z0-9_-]+)/:mode(items|shows)', browse(async (request, response, pool, settings, user, catalogue, parental) => {
+  app.get(prefix + '/sections/:section([A-Za-z0-9_-]+)/:mode(items|shows|random|recent)', browse(async (request, response, pool, settings, user, catalogue, parental) => {
     const { section: id, mode } = request.params;
     const section = list(catalogue.sections).find(entry => entry?.id === id);
     const limited = ['library', 'live', 'games'].some(area => !areaAllowed(user, area, parental));
@@ -279,6 +363,47 @@ module.exports = function mountLibrary(app, prefix, { root, handle, unavailable 
     const area = itemArea(section);
     if (!areaAllowed(user, area, parental)) return areaDenied(response, area);
     const query = request.query;
+    if (mode === 'random' || mode === 'recent') {
+      const count = Math.max(1, Math.min(40, query.n === undefined ? 16 : int(query.n)));
+      const buildCount = Math.max(count, 16);
+      const series = ['tv', 'anime'].includes(section.type);
+      const docs = await documents(pool, ['browse-index-ready', 'slugs']);
+      if (series && !enabled(docs['browse-index-ready'])) return unavailable(response);
+      let cards;
+      if (mode === 'recent') {
+        if (!series) return unavailable(response);
+        cards = await recentCards(pool, id, buildCount, settings, docs.slugs);
+      } else if (series) {
+        const [rows] = await pool.execute('SELECT show_key FROM vaultcast_show_summaries WHERE section_id=? LIMIT 10001', [id]);
+        if (rows.length > 10000) return unavailable(response);
+        const ids = sample(rows.map(row => row.show_key), buildCount);
+        if (!ids.length) cards = [];
+        else {
+          const [picked] = await pool.execute('SELECT show_key,payload FROM vaultcast_show_summaries WHERE section_id=? AND show_key IN (' +
+            ids.map(() => '?').join(',') + ')', [id, ...ids]);
+          const byKey = new Map(picked.map(row => [row.show_key, parse(row.payload)]));
+          if (ids.some(key => !byKey.get(key)?._meta_prepared)) return unavailable(response);
+          const slugs = reverseSlugs(docs.slugs, 'show');
+          cards = ids.map(key => showCard(byKey.get(key), slugs));
+        }
+      } else {
+        if (!['movies', 'disney', 'roms', 'music'].includes(section.type)) return unavailable(response);
+        const [revisions] = await pool.execute("SELECT revision FROM vaultcast_documents WHERE name='catalogue'");
+        const existing = await cached(root, 'section-sample-v1|' + id);
+        let ids;
+        if (Array.isArray(existing?.ids) && Number(existing.revision) === Number(revisions[0]?.revision ?? 0)) {
+          ids = existing.ids;
+        } else {
+          const [rows] = await pool.execute('SELECT id FROM vaultcast_items WHERE section_id=? LIMIT 100001', [id]);
+          ids = rows.map(row => row.id);
+        }
+        if (ids.length > 100000) return unavailable(response);
+        cards = await showcaseItems(pool, id, sample(ids, buildCount), settings, docs.slugs);
+      }
+      if (!cards || cards.some(card => !card)) return unavailable(response);
+      const kind = mode === 'recent' ? 'recent' : series ? 'shows' : 'items';
+      return response.json({ ok: true, kind, cached: false, items: await visibleCards(pool, cards.slice(0, count), parental) });
+    }
     const per = Math.max(1, Math.min(100, query.per === undefined ? 48 : int(query.per)));
     const page = Math.max(1, Math.min(Math.floor(Number.MAX_SAFE_INTEGER / per), int(query.page)));
     const letter = queryText(query.letter).toUpperCase();

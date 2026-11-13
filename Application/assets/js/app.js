@@ -1012,7 +1012,7 @@ function confirmDialog(message, opts){
 
     if (opts.signal) fetchOpts.signal = opts.signal;
     var nativeBase = window.__VAULTCAST_APPLICATION_BASE__;
-    var nativeBrowse = path.indexOf('/resolve?') === 0 || /^\/sections(?:$|\/[A-Za-z0-9_-]+\/(?:items|shows)(?:\?|$))/.test(path);
+    var nativeBrowse = path.indexOf('/resolve?') === 0 || /^\/sections(?:$|\/[A-Za-z0-9_-]+\/(?:items|shows|random|recent)(?:\?|$))/.test(path);
     var nativeRoute = (method === 'GET' && (path === '/status' || path === '/me' || nativeBrowse)) ||
       (method === 'POST' && (path === '/login' || path === '/logout' || (path === '/me/prefs' && !avatarChange)));
     var transport = nativeBase && nativeRoute ? fetch(nativeBase + path, fetchOpts).then(function(response){
