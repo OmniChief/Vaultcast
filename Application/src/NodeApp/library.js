@@ -1,6 +1,6 @@
 'use strict';
 
-const { randomInt } = require('crypto');
+const { createHash, randomInt } = require('crypto');
 const { readFile } = require('fs').promises;
 const { join } = require('path');
 const { parse, now, enabled, documents } = require('./account-data');
@@ -56,9 +56,18 @@ async function visibleCards(pool, cards, parental) {
   });
 }
 
+async function playbackVisible(pool, item, parental) {
+  if (!parental.restricted || item.media_kind !== 'video') return true;
+  let showKey = typeof item.show_key === 'string' && enabled(item.show_key) ? item.show_key : '';
+  if (!showKey && ['tv', 'anime'].includes(item.type) && String(item.show ?? '') !== '' && item.section != null) {
+    showKey = createHash('sha1').update(String(item.section) + '|' + item.show).digest('hex').slice(0, 16);
+  }
+  return (await visibleCards(pool, [{ id: item.id, media_kind: item.media_kind, show_key: showKey }], parental)).length > 0;
+}
+
 function areaAllowed(user, area, parental) {
   if (user.role === 'admin') return true;
-  if (parental.restricted && ((area === 'live' && !parental.settings.live) ||
+  if (parental?.restricted && ((area === 'live' && !parental.settings.live) ||
       (area === 'games' && !parental.settings.play))) return false;
   return !user.areas || typeof user.areas !== 'object' || enabled(user.areas[area]);
 }
@@ -678,4 +687,4 @@ module.exports = function mountLibrary(app, prefix, { root, handle, unavailable 
   }));
 };
 
-module.exports.visibleCards = visibleCards;
+Object.assign(module.exports, { areaAllowed, areaDenied, itemArea, mediaSignature, playbackVisible });

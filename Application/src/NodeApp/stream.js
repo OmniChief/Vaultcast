@@ -1,20 +1,15 @@
 'use strict';
 
 const { constants } = require('fs');
-const { open, realpath, stat } = require('fs').promises;
-const { createHash } = require('crypto');
-const { extname, isAbsolute, relative, sep } = require('path');
+const { open, stat } = require('fs').promises;
+const { extname, isAbsolute } = require('path');
 const { pipeline } = require('stream/promises');
 const { documents, enabled, now, parse, sha } = require('./account-data');
 const { authorized, cached, parentalStatus } = require('./profile-policy');
-const { visibleCards } = require('./library');
+const { areaAllowed, areaDenied, playbackVisible } = require('./library');
+const { libraryFile, mimeFor, tokenLifetime } = require('./playback');
+const { subtitles, readSubtitle } = require('./subtitles');
 
-const mime = new Map(Object.entries({
-  mp4: 'video/mp4', m4v: 'video/mp4', webm: 'video/webm', ogg: 'video/ogg',
-  mkv: 'video/x-matroska', avi: 'video/x-msvideo', mov: 'video/quicktime',
-  mp3: 'audio/mpeg', flac: 'audio/flac', aac: 'audio/aac', m4a: 'audio/mp4',
-  wav: 'audio/wav', opus: 'audio/opus',
-}));
 
 function mediaRange(header, size) {
   const match = header.trim().match(/^bytes=(\d*)-(\d*)$/);
@@ -24,7 +19,7 @@ function mediaRange(header, size) {
   return start <= end ? { start, end } : null;
 }
 
-async function authorizePlayback(pool, root, request, response, readSession, token) {
+async function authorizePlayback(pool, root, request, response, readSession, token, refresh = true) {
   let session;
   if (/^Bearer(?:[ \t]|$)/i.test(String(request.headers.authorization ?? '').trim())) {
     session = await readSession(pool, request, true);
@@ -53,8 +48,8 @@ async function authorizePlayback(pool, root, request, response, readSession, tok
   }
   const user = parse(owners[0].payload);
   if (!authorized(response, { user })) return null;
-  if (user.role !== 'admin' && user.areas && typeof user.areas === 'object' && !enabled(user.areas.library)) {
-    response.status(403).json({ ok: false, code: 'area_denied', area: 'library', error: 'Your account does not have access to Library.' });
+  if (!areaAllowed(user, 'library')) {
+    areaDenied(response, 'library');
     return null;
   }
 
@@ -73,10 +68,7 @@ async function authorizePlayback(pool, root, request, response, readSession, tok
         if (unlock?.user_id === ownerId && Number(unlock.until) > time) parental.restricted = false;
       }
     }
-    const showKey = typeof item.show_key === 'string' && item.show_key && item.show_key !== '0' ? item.show_key :
-      (['tv', 'anime'].includes(item.type) && String(item.show ?? '') && item.section != null
-      ? createHash('sha1').update(String(item.section ?? '') + '|' + item.show).digest('hex').slice(0, 16) : null);
-    if (!(await visibleCards(pool, [{ id: item.id, media_kind: item.media_kind, show_key: showKey }], parental)).length) {
+    if (!await playbackVisible(pool, item, parental)) {
       response.status(403).json({ ok: false, code: 'parental_blocked', error: 'This title isn’t available on this profile.' });
       return null;
     }
@@ -86,14 +78,14 @@ async function authorizePlayback(pool, root, request, response, readSession, tok
   const section = Object.values(settings.sections ?? {}).find(entry => entry?.id === item.section);
   if (typeof section?.path !== 'string' || !isAbsolute(section.path)) return null;
 
-  const ttl = Math.max(3600, Math.min(86400, Math.trunc(Number(settings.streaming?.token_ttl_seconds ?? 28800)) || 3600));
-  if (Number(rows[0].expires_at) - time < ttl / 2) {
+  const ttl = tokenLifetime(settings);
+  if (refresh && Number(rows[0].expires_at) - time < ttl / 2) {
     await pool.execute(
       "UPDATE vaultcast_playback_tokens SET expires_at=?,payload=JSON_SET(payload,'$.expires',?) " +
       'WHERE token_hash=? AND expires_at=? AND expires_at>?',
       [time + ttl, time + ttl, hash, rows[0].expires_at, time]);
   }
-  return { file: playback.path, folder: section.path, accel: enabled(settings.streaming?.nginx_accel) };
+  return { file: playback.path, folder: section.path, kind: playback.media_kind, captionSource: playback.caption_source, accel: enabled(settings.streaming?.nginx_accel) };
 }
 
 module.exports = function mountStream(app, prefix, { db, root, readSession, updating }) {
@@ -117,10 +109,9 @@ module.exports = function mountStream(app, prefix, { db, root, readSession, upda
       if (response.headersSent || response.destroyed) return;
       if (media?.expired) return response.status(403).type('text').send('Expired');
       if (!media) return fallback();
-      const [resolved, folder] = await Promise.all([realpath(media.file), realpath(media.folder)]);
-      const child = relative(folder, resolved);
-      if (!child || child === '..' || child.startsWith('..' + sep) || isAbsolute(child)) return fallback();
-      const type = mime.get(extname(resolved).slice(1).toLowerCase()) ?? 'application/octet-stream';
+      const resolved = await libraryFile(media.file, media.folder);
+      if (!resolved) return fallback();
+      const type = mimeFor(extname(resolved).slice(1).toLowerCase());
       const head = request.method === 'HEAD';
       if (!head && media.accel && !enabled(request.query.direct) && process.platform === 'linux') {
         if (!(await stat(resolved)).isFile()) return fallback();
@@ -161,6 +152,33 @@ module.exports = function mountStream(app, prefix, { db, root, readSession, upda
       else return fallback();
     } finally {
       if (file) await file.close().catch(() => {});
+    }
+  });
+  app.get(prefix + '/stream/subtitles/:token([a-f0-9]{48})/:id([a-f0-9]{64}).vtt', async (request, response) => {
+    const { token, id } = request.params;
+    const fallback = () => response.status(307).location('/api/stream/subtitles/' + token + '/' + id + '.vtt').end();
+    response.set({ 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' });
+    try {
+      if (await updating()) return response.set('Retry-After', '30').sendStatus(503);
+      if (!db.ready() || request.headers.origin) return fallback();
+      const media = await db.run(pool => authorizePlayback(pool, root, request, response, readSession, token, false));
+      if (response.headersSent || response.destroyed) return;
+      if (media?.expired || (media && media.kind !== 'video')) {
+        return response.status(403).json({ ok: false, error: 'Playback token expired.' });
+      }
+      if (!media || !await libraryFile(media.file, media.folder)) return fallback();
+      if (media.captionSource && media.captionSource !== media.file && !await libraryFile(media.captionSource, media.folder)) {
+        return fallback();
+      }
+      const track = (await subtitles(root, media.file, media.captionSource)).get(id);
+      if (!track) return fallback();
+      const body = await readSubtitle(track);
+      if (body === null) return fallback();
+      response.set({ 'Content-Type': 'text/vtt; charset=utf-8', 'Cache-Control': 'private, max-age=300',
+        'Content-Length': String(Buffer.byteLength(body)) });
+      return response.end(request.method === 'HEAD' ? undefined : body);
+    } catch (error) {
+      if (!response.headersSent && !response.destroyed) return fallback();
     }
   });
   return () => transfers > 0;

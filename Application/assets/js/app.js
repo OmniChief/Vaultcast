@@ -468,6 +468,11 @@
         element.addEventListener('load',refresh);
         element.addEventListener('error',function(){
           if (!overlay.isConnected) return;
+          var nativeBase = window.__VAULTCAST_APPLICATION_BASE__;
+          if (nativeBase && element.getAttribute('src').indexOf(nativeBase + '/stream/subtitles/') >= 0) {
+            element.src = element.src.replace(nativeBase + '/stream/subtitles/', API + '/stream/subtitles/');
+            return;
+          }
           element.remove(); refresh(); toast('Could not load '+track.label,{kind:'bad'});
         });
         media.appendChild(element);
@@ -1015,7 +1020,8 @@ function confirmDialog(message, opts){
     var nativeBrowse = path.indexOf('/resolve?') === 0 || /^\/sections(?:$|\/[A-Za-z0-9_-]+\/(?:items|shows|random|recent)(?:\?|$))/.test(path);
     var nativeDetail = /^\/(?:items|shows)\/[a-f0-9]+(?:\?|$)/.test(path);
     var nativeRoute = (method === 'GET' && (path === '/status' || path === '/me' || nativeBrowse || nativeDetail)) ||
-      (method === 'POST' && (path === '/login' || path === '/logout' || (path === '/me/prefs' && !avatarChange)));
+      (method === 'POST' && (path === '/login' || path === '/logout' || (path === '/me/prefs' && !avatarChange) ||
+        /^\/items\/[a-f0-9]{16}\/play$/.test(path)));
     var transport = nativeBase && nativeRoute ? fetch(nativeBase + path, fetchOpts).then(function(response){
       if (response.status === 503 && response.headers.get('X-Vaultcast-App-Unavailable') === '1') {
         return fetch(API + path, fetchOpts);

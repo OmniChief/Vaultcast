@@ -10,6 +10,7 @@ const { sha, now, parse, enabled, storedBoolean, documents, publicUser } = requi
 const mountProfiles = require('./profile');
 const mountLibrary = require('./library');
 const mountStream = require('./stream');
+const mountPlayback = require('./playback');
 const cookieName = 'vaultcast_session';
 
 function browserToken(request) {
@@ -89,7 +90,7 @@ module.exports = function mountAccount(app, express, root) {
     if (!db.ready()) return unavailable(response);
     try {
       if (await updating()) return emptyError(response.set('Retry-After', '30'), 503, 'Vaultcast is updating.');
-      await db.run(async (pool, bcrypt) => {
+      const finish = await db.run(async (pool, bcrypt) => {
         const settings = (await documents(pool, ['settings'])).settings ?? {};
         if (request.method === 'POST' && !requestAllowed(request, settings)) {
           return emptyError(response, 403, 'Cross-site request rejected.');
@@ -98,9 +99,10 @@ module.exports = function mountAccount(app, express, root) {
         if (current.error) return emptyError(response, 401, current.error);
         return operation(request, response, pool, bcrypt, settings, current);
       });
+      if (typeof finish === 'function') await finish();
     } catch (error) {
       if (response.headersSent || response.destroyed) return;
-      if (response.locals.mutationStarted) return emptyError(response, 503, 'The account request could not be completed.');
+      if (response.locals.mutationStarted) return emptyError(response, 503, 'The request could not be completed.');
       return unavailable(response);
     }
   };
@@ -173,6 +175,7 @@ module.exports = function mountAccount(app, express, root) {
     json: express.json({ limit: '1mb' }),
   });
   mountLibrary(app, route, { root, handle, unavailable });
+  mountPlayback(app, route, { root, db, handle, json, unavailable });
   const streaming = mountStream(app, route, { db, root, readSession: session, updating });
   return { ...db, streaming };
 };
