@@ -14,6 +14,21 @@ const path = require('path');
 const { createHash } = require('crypto');
 
 const runtimeRevision = createHash('sha256').update(fs.readFileSync(__filename)).digest('hex');
+// Node's require() cache keeps migrated routes/workers in memory. A built-in
+// update can replace those modules without changing this entry point.
+function sourceFingerprint() {
+  const hash = createHash('sha256');
+  hash.update(fs.readFileSync(__filename));
+  for (const dir of ['../src/NodeApp', '../src/Workers']) {
+    const folder = path.join(__dirname, dir);
+    for (const name of fs.readdirSync(folder).filter(name => name.endsWith('.js')).sort()) {
+      hash.update(dir + '/' + name + '\\0');
+      hash.update(fs.readFileSync(path.join(folder, name)));
+    }
+  }
+  return hash.digest('hex');
+}
+const loadedSourceFingerprint = sourceFingerprint();
 const updateMarker = path.join(__dirname, '../data/runtime/maintenance.json');
 
 const app = express();
@@ -470,9 +485,8 @@ io.on('connection', (socket) => {
 setInterval(async () => {
   if (Object.keys(rooms).length || fs.existsSync(updateMarker)) return;
   try {
-    const source = await fs.promises.readFile(__filename);
-    const installed = createHash('sha256').update(source).digest('hex');
-    if (installed !== runtimeRevision && !Object.keys(rooms).length && !transcodeRunner?.active() && !downloadRunner?.active() && !videoUpload?.active() && !dropUpload?.active() && !conversionUpload?.active() && !quizWarmup?.active() && !maintenanceQueue?.active() && !applicationDatabase?.streaming() && !fs.existsSync(updateMarker)) {
+    const installed = sourceFingerprint();
+    if (installed !== loadedSourceFingerprint && !Object.keys(rooms).length && !transcodeRunner?.active() && !downloadRunner?.active() && !videoUpload?.active() && !dropUpload?.active() && !conversionUpload?.active() && !quizWarmup?.active() && !maintenanceQueue?.active() && !applicationDatabase?.streaming() && !fs.existsSync(updateMarker)) {
       process.exit(75);
     }
   } catch (error) {
