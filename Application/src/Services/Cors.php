@@ -44,6 +44,21 @@ final class Cors {
         $publicParts=parse_url($publicBase);
         $publicOrigin=is_array($publicParts)&&isset($publicParts['scheme'],$publicParts['host'])?self::origin($publicParts['scheme'].'://'.$publicParts['host'].(isset($publicParts['port'])?':'.$publicParts['port']:'')):null;
         $same=$origin!==null&&($origin===$requestOrigin||$origin===$publicOrigin);
+        // Reverse proxies may replace HTTP_HOST with an internal upstream address
+        // and remove HTTPS. Compare the browser Origin with the forwarded public
+        // authority as well, without relying on Sec-Fetch-Site browser support.
+        // Reject ambiguous/malformed forwarded values (including proxy chains).
+        if(!$same&&$origin!==null){
+            $forwardedHost=trim((string)($server['HTTP_X_FORWARDED_HOST']??''));
+            $forwardedProto=strtolower(trim((string)($server['HTTP_X_FORWARDED_PROTO']??$scheme)));
+            $forwardedPort=trim((string)($server['HTTP_X_FORWARDED_PORT']??''));
+            if($forwardedHost!==''&&!preg_match('/[\\s,\\/\\\\@?#]/',$forwardedHost)&&in_array($forwardedProto,['http','https'],true)){
+                if($forwardedPort!==''&&ctype_digit($forwardedPort)&&!preg_match('/:[0-9]+$/',$forwardedHost)){
+                    $forwardedHost.=':'.$forwardedPort;
+                }
+                $same=self::origin($forwardedProto.'://'.$forwardedHost)===$origin;
+            }
+        }
         // Fetch Metadata is set by the browser against the URL it actually requested.
         // Behind TLS termination or a reverse proxy, HTTP_HOST/HTTPS can describe
         // the upstream hop instead of the public origin used by a mobile browser.
