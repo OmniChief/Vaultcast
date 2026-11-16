@@ -95,7 +95,9 @@ final class Cors {
         if($p['status']===204){http_response_code(204);exit;}
         if($p['status']){
             http_response_code($p['status']);header('Content-Type: application/json');header('Cache-Control: no-store');
-            echo json_encode(['ok'=>false,'error'=>$p['status']===401?'A mobile API key is required for this app origin.':'Cross-site request rejected.']);exit;
+            $route=preg_replace('/[a-f0-9]{16,}/i','{id}',request_path());
+            $error=$p['status']===401?'A mobile API key is required for this app origin.':'Cross-site request rejected. [PHP '.strtoupper((string)($_SERVER['REQUEST_METHOD']??'GET')).' '.substr((string)$route,0,140).']';
+            echo json_encode(['ok'=>false,'error'=>$error]);exit;
         }
     }
 
