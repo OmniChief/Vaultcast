@@ -44,10 +44,11 @@ final class Cors {
         $publicParts=parse_url($publicBase);
         $publicOrigin=is_array($publicParts)&&isset($publicParts['scheme'],$publicParts['host'])?self::origin($publicParts['scheme'].'://'.$publicParts['host'].(isset($publicParts['port'])?':'.$publicParts['port']:'')):null;
         $same=$origin!==null&&($origin===$requestOrigin||$origin===$publicOrigin);
-        // Browser-generated same-origin metadata also covers TLS terminated at a proxy.
-        if(!$same&&$origin!==null&&($server['HTTP_SEC_FETCH_SITE']??'')==='same-origin'){
-            $p=parse_url($origin);$host=self::origin(($p['scheme']??'http').'://'.($server['HTTP_HOST']??''));$same=$host===$origin;
-        }
+        // Fetch Metadata is set by the browser against the URL it actually requested.
+        // Behind TLS termination or a reverse proxy, HTTP_HOST/HTTPS can describe
+        // the upstream hop instead of the public origin used by a mobile browser.
+        // Do not derive a second origin from that internal authority.
+        if(!$same&&$origin!==null&&($server['HTTP_SEC_FETCH_SITE']??'')==='same-origin')$same=true;
 
         $explicit=$api&&!$same&&$origin!==null&&in_array($origin,$allowed,true);
         $headers=[];
