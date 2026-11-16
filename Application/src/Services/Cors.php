@@ -52,7 +52,7 @@ final class Cors {
             $forwardedHost=trim((string)($server['HTTP_X_FORWARDED_HOST']??''));
             $forwardedProto=strtolower(trim((string)($server['HTTP_X_FORWARDED_PROTO']??$scheme)));
             $forwardedPort=trim((string)($server['HTTP_X_FORWARDED_PORT']??''));
-            if($forwardedHost!==''&&!preg_match('/[\\s,\\/\\\\@?#]/',$forwardedHost)&&in_array($forwardedProto,['http','https'],true)){
+            if($forwardedHost!==''&&!preg_match('/[^A-Za-z0-9.:\\[\\]-]/',$forwardedHost)&&in_array($forwardedProto,['http','https'],true)){
                 if($forwardedPort!==''&&ctype_digit($forwardedPort)&&!preg_match('/:[0-9]+$/',$forwardedHost)){
                     $forwardedHost.=':'.$forwardedPort;
                 }
