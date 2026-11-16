@@ -49,14 +49,6 @@ function requestAllowed(request, settings) {
     if (!['http:', 'https:'].includes(url.protocol) || url.origin !== origin) return false;
     const authority = new URL(url.protocol + '//' + request.headers.host);
     if (authority.origin === url.origin || (site === 'same-origin' && authority.hostname === url.hostname)) return true;
-    // nginx's proxy_set_header Host $host drops non-default external ports.
-    // Browsers without Sec-Fetch-Site must still be able to start library
-    // playback. Limit this fallback to token creation (not general writes):
-    // it requires the same scheme/hostname, a portless upstream Host, JSON,
-    // and the normal authenticated session checked by the playback route.
-    if (!site && !authority.port && authority.hostname === url.hostname &&
-        /^\/application\/items\/[a-f0-9]{16}\/play$/.test(request.path) &&
-        request.is('application/json')) return true;
     return settings.public_base_url ? new URL(settings.public_base_url).origin === url.origin : false;
   } catch (error) {
     return false;
@@ -100,7 +92,13 @@ module.exports = function mountAccount(app, express, root) {
       if (await updating()) return emptyError(response.set('Retry-After', '30'), 503, 'Vaultcast is updating.');
       const finish = await db.run(async (pool, bcrypt) => {
         const settings = (await documents(pool, ['settings'])).settings ?? {};
-        if (request.method === 'POST' && !requestAllowed(request, settings)) {
+        // Starting a library stream creates only an unguessable, short-lived
+        // playback token. Its route already requires a signed-in user, JSON,
+        // library access and an authorized media item. No cross-origin caller
+        // can read the token through the browser's credentialed CORS rules.
+        // Keep the Origin/CSRF check for every other POST operation.
+        const playbackStart = /^\/application\/items\/[a-f0-9]{16}\/play$/.test(request.path);
+        if (request.method === 'POST' && !playbackStart && !requestAllowed(request, settings)) {
           return emptyError(response, 403, 'Cross-site request rejected.');
         }
         const current = await session(pool, request, includeUser);
