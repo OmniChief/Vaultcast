@@ -99,7 +99,9 @@ module.exports = function mountAccount(app, express, root) {
         // Keep the Origin/CSRF check for every other POST operation.
         const playbackStart = /^\/application\/items\/[a-f0-9]{16}\/play$/.test(request.path);
         if (request.method === 'POST' && !playbackStart && !requestAllowed(request, settings)) {
-          return emptyError(response, 403, 'Cross-site request rejected.');
+          // A route template contains no query strings, tokens or real item IDs.
+          return emptyError(response, 403, 'Cross-site request rejected. [Node ' +
+            request.method + ' ' + String(request.route?.path || '/application').slice(0, 140) + ']');
         }
         const current = await session(pool, request, includeUser);
         if (current.error) return emptyError(response, 401, current.error);
