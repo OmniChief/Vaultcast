@@ -49,6 +49,14 @@ function requestAllowed(request, settings) {
     if (!['http:', 'https:'].includes(url.protocol) || url.origin !== origin) return false;
     const authority = new URL(url.protocol + '//' + request.headers.host);
     if (authority.origin === url.origin || (site === 'same-origin' && authority.hostname === url.hostname)) return true;
+    // nginx's proxy_set_header Host $host drops non-default external ports.
+    // Browsers without Sec-Fetch-Site must still be able to start library
+    // playback. Limit this fallback to token creation (not general writes):
+    // it requires the same scheme/hostname, a portless upstream Host, JSON,
+    // and the normal authenticated session checked by the playback route.
+    if (!site && !authority.port && authority.hostname === url.hostname &&
+        /^\/application\/items\/[a-f0-9]{16}\/play$/.test(request.path) &&
+        request.is('application/json')) return true;
     return settings.public_base_url ? new URL(settings.public_base_url).origin === url.origin : false;
   } catch (error) {
     return false;
