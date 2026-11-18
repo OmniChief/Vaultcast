@@ -2,9 +2,10 @@
 
 const { readFile, stat } = require('fs').promises;
 const { join } = require('path');
+const { listOffline, sendOffline, validId, ready } = require('./stalker-offline');
 const { areaAllowed } = require('./library');
 const { authorized, parentalStatus } = require('./profile-policy');
-const { documents, enabled, now, publicUser, sha } = require('./account-data');
+const { documents, enabled, now, parse, publicUser, sha } = require('./account-data');
 
 const kinds = ['live', 'vod', 'series'];
 const secretFields = ['mac', 'username', 'password', 'serial', 'deviceId', 'deviceId2'];
@@ -56,7 +57,7 @@ module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavai
     return fresh(legacy);
   }
 
-  app.get(prefix + '/live/:action(stalker|stalker_catalogue_status|stalker_update_status)',
+  app.get(prefix + '/live/:action(stalker|stalker_catalogue_status|stalker_update_status|stalker_offline|stalker_offline_file)',
     handle(async (request, response, pool, _bcrypt, settings, current) => {
       const { action } = request.params;
       if (enabled(settings.features_explicit?.live) && Object.hasOwn(settings.features ?? {}, 'live') &&
@@ -72,6 +73,25 @@ module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavai
       }
       if (parental.restricted) {
         return response.status(403).json({ ok: false, error: 'Provider catalogues are unavailable for restricted profiles.' });
+      }
+      if (action === 'stalker_offline' || action === 'stalker_offline_file') {
+        const { capabilities } = publicUser(user, settings, await documents(pool, ['permission_roles']), now());
+        const denied = permission => response.status(403).json({ ok: false, error: 'This action requires the ' + permission + ' permission.' });
+        if (!capabilities.ingest_view) return denied('ingest_view');
+        if (!areaAllowed(user, 'library', parental)) {
+          return response.status(403).json({ ok: false, error: 'Library access is required for offline downloads.' });
+        }
+        if (action === 'stalker_offline') return response.json({ ok: true, items: await listOffline(pool, root) });
+        if (!capabilities.downloads_request) return denied('downloads_request');
+        const id = request.query.id;
+        if (!validId(id)) return response.status(422).json({ ok: false, error: 'Invalid offline download.' });
+        const key = 'stalker-offline:' + id;
+        const [rows] = await pool.execute('SELECT payload FROM vaultcast_documents WHERE name=?', [key]);
+        const job = rows.length ? parse(rows[0].payload) : null;
+        if (!job) return response.status(502).json({ ok: false, error: 'Offline download not found.' });
+        if (job.id !== id || !ready(job.status)) return response.status(502).json({ ok: false,
+          error: 'The video is not ready to download. Open Downloads to see its status.' });
+        return () => sendOffline(request, response, root, job);
       }
       if (action !== 'stalker') {
         const docs = await documents(pool, ['permission_roles']);

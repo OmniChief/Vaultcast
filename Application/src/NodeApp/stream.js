@@ -257,3 +257,5 @@ module.exports = function mountStream(app, prefix, { db, root, readSession, upda
     });
   return () => transfers > 0;
 };
+
+module.exports.mediaRange = mediaRange;

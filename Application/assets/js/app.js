@@ -5755,11 +5755,15 @@ try {
   /* Live backend is reached through /media/api/live/<action> (api/live_bridge.php):
      public HTTPS 404s any *.php under /media/live/, LAN :9999 works either way. */
   var LIVE_API = BASE + 'api/live/';
+  function stalkerOfflineFileUrl(id){
+    var nativeBase = window.__VAULTCAST_APPLICATION_BASE__;
+    return (nativeBase ? nativeBase + '/live/' : LIVE_API) + 'stalker_offline_file?id=' + encodeURIComponent(id);
+  }
   function liveApi(action, params){
     var suffix = action + (params ? '?' + String(params).replace(/^&/, '') : '');
     var options = { credentials:'same-origin', cache:'no-store' };
     var nativeBase = window.__VAULTCAST_APPLICATION_BASE__;
-    var native = nativeBase && ['stalker', 'stalker_catalogue_status', 'stalker_update_status'].indexOf(action) >= 0;
+    var native = nativeBase && ['stalker', 'stalker_catalogue_status', 'stalker_update_status', 'stalker_offline'].indexOf(action) >= 0;
     var request = native ? fetch(nativeBase + '/live/' + suffix, options).then(function(r){
       if (r.status === 503 && r.headers.get('X-Vaultcast-App-Unavailable') === '1') return fetch(LIVE_API + suffix, options);
       return r;
@@ -6222,7 +6226,7 @@ try {
         if(job.status==='ready'||job.status==='imported'){
           button.disabled=false;status.replaceChildren();
           if(destination==='browser'){
-            var link=h('a',{className:'btn',href:LIVE_API+'stalker_offline_file?id='+encodeURIComponent(id),download:'',text:'Save video to device'});
+            var link=h('a',{className:'btn',href:stalkerOfflineFileUrl(id),download:'',text:'Save video to device'});
             status.append('Your video is ready. ',link);link.click();
           }else status.append('Download complete. ',h('button',{className:'btn',text:'Open ingest inbox',onClick:function(){openSettings('ingest');}}));
           return;
@@ -6638,7 +6642,7 @@ try {
         var statusLine=h('p',{text:item.status,'data-offline-status':item.id,'data-offline-state':item.status});
         host.appendChild(h('div',{className:'settings-card','data-offline-job':item.id},[h('h3',{text:stalkerOfflineTitle(item)}),seriesDetails?h('p',{className:'muted',text:seriesDetails}):null,statusLine,h('p',{className:'muted',text:details,'data-offline-details':item.id}),offlineProgress(item),item.error?h('p',{className:'bad',text:item.error}):null,
         ['queued','downloading'].indexOf(item.status)>=0&&can('downloads_request')?h('button',{className:'btn ghost',text:'Cancel download',onClick:function(){stalkerPost('stalker_cancel',{id:item.id}).then(function(){showStalkerOffline(host);}).catch(function(error){toast(error.message,{kind:'bad'});});}}):null,item.status==='ready'&&item.destination!=='browser'&&can('ingest_import')?h('button',{className:'btn',text:'Match and add to library',onClick:function(){openSettings('ingest');}}):null,
-        item.status==='ready'&&can('downloads_request')?h('a',{className:'btn',href:LIVE_API+'stalker_offline_file?id='+encodeURIComponent(item.id),download:'',text:'Save video to device'}):null,
+        item.status==='ready'&&can('downloads_request')?h('a',{className:'btn',href:stalkerOfflineFileUrl(item.id),download:'',text:'Save video to device'}):null,
         !item.delete_requested&&['failed','cancelled'].indexOf(item.status)>=0&&can('downloads_request')?h('button',{className:'btn',text:'Retry interrupted download',onClick:function(e){var b=e.currentTarget;b.disabled=true;stalkerPost('stalker_retry',{id:item.id}).then(function(){showStalkerOffline(host);}).catch(function(error){toast(error.message,{kind:'bad'});}).finally(function(){b.disabled=false;});}}):null,
         admin&&!['queued','downloading'].includes(item.status)?h('button',{className:'btn danger',text:item.delete_requested?'Finish deleting':'Delete download',onClick:function(e){if(!item.delete_requested&&!confirm('Delete “'+item.name+'” and its saved files?'))return;var b=e.currentTarget;b.disabled=true;stalkerPost('stalker_delete',{id:item.id}).then(function(){showStalkerOffline(host);}).catch(function(error){toast(error.message,{kind:'bad'});}).finally(function(){b.disabled=false;});}}):null]));});
       if(!(result.items||[]).length)host.appendChild(h('p',{className:'muted',text:'No provider videos have been downloaded yet.'}));
