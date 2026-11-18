@@ -607,6 +607,44 @@ module.exports = function mountLibrary(app, prefix, { root, handle, unavailable 
     return operation(request, response, pool, settings, current.user, docs.catalogue ?? {}, parental);
   }, true);
 
+  app.get(prefix + '/featured/synopsis', browse(async (request, response, pool, _settings, user, _catalogue, parental) => {
+    if (!areaAllowed(user, 'library', parental)) {
+      return response.status(403).json({ ok: false, error: 'Library access required' });
+    }
+    const validId = value => typeof value === 'string' && /^[a-f0-9]{8,64}$/.test(value) && !/[^a-f0-9]/.test(value);
+    let show = validId(request.query.show) ? request.query.show : null;
+    let item = null;
+    if (validId(request.query.item)) {
+      const [rows] = await pool.execute('SELECT payload FROM vaultcast_items WHERE id=?', [request.query.item]);
+      item = rows.length ? parse(rows[0].payload) : null;
+    }
+    const blocked = () => response.status(403).json({ ok: false, code: 'parental_blocked',
+      error: 'This title isn’t available on this profile.' });
+    if (item && !await playbackVisible(pool, item, parental)) return blocked();
+    if (!show && item && itemArea(item) === 'library' && enabled(item.show)) {
+      show = createHash('sha1').update(String(item.section) + '|' + item.show).digest('hex').slice(0, 16);
+    }
+    let synopsis = null;
+    if (show) {
+      if (!(await visibleCards(pool, [{ kind: 'show', show_key: show }], parental)).length) return blocked();
+      const [rows] = await pool.execute("SELECT payload FROM vaultcast_metadata_pins WHERE kind='show_meta' AND target_id=?", [show]);
+      const pin = rows.length ? parse(rows[0].payload) : null;
+      if (pin && !enabled(pin.cleared) && (enabled(pin.manual) || typeof pin.summary === 'string' && pin.summary !== '')) {
+        synopsis = String(pin.summary ?? '');
+      } else {
+        const guide = await readFile(join(root, 'data/tvmaze', 'show_' + show + '_episodes.json'), 'utf8')
+          .then(JSON.parse).catch(error => {
+            if (error.code === 'ENOENT' || error instanceof SyntaxError) return null;
+            throw error;
+          });
+        if (typeof guide?.summary === 'string' && guide.summary) synopsis = guide.summary;
+      }
+    } else if (item && itemArea(item) === 'library') {
+      synopsis = (await cachedSynopsis(root, pool, item)).summary;
+    }
+    return response.json({ ok: true, synopsis });
+  }, false));
+
   let recentHomeLibrary;
   app.get(prefix + '/home', browse(async (_request, response, pool, _settings, user, _catalogue, parental) => {
     const [revisions] = await pool.execute(
