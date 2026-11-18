@@ -1,7 +1,7 @@
 'use strict';
 
 const { constants } = require('fs');
-const { lstat, open, readdir, readFile, realpath, stat } = require('fs').promises;
+const { lstat, mkdir, open, readdir, readFile, realpath, rmdir, stat, unlink } = require('fs').promises;
 const { join } = require('path');
 const { pipeline } = require('stream/promises');
 const { flock, lockFile } = require('../Workers/file-lock');
@@ -128,4 +128,96 @@ async function sendOffline(request, response, root, job) {
   }
 }
 
-module.exports = { listOffline, sendOffline, validId, ready };
+
+async function lockedFile(path) {
+  return open(path, constants.O_CREAT | constants.O_RDWR | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0), 0o600);
+}
+
+async function marker(path) {
+  const file = await lockedFile(path);
+  try {
+    if (!(await file.stat()).isFile()) throw new Error('Invalid download marker');
+    await file.writeFile('1');
+  } finally {
+    await file.close();
+  }
+}
+
+async function removeIfPresent(path) {
+  try { await unlink(path); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+}
+
+async function controlOffline(pool, root, id, action) {
+  const directory = join(await realpath(join(root, 'data')), 'stalker-offline');
+  const key = 'stalker-offline:' + id;
+  const [rows] = await pool.execute('SELECT payload FROM vaultcast_documents WHERE name=?', [key]);
+  if (!rows.length) return { error: 'Offline download not found.' };
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  if (await realpath(directory) !== directory) throw new Error('Invalid offline storage');
+  const folder = join(directory, id);
+  const deleted = join(directory, id + '.delete');
+
+  let lock;
+  if (action === 'stalker_delete') lock = await lockedFile(join(directory, id + '.lock'));
+  let connection, usable = true;
+  try {
+    const locked = lock && (await lock.stat()).isFile() && await lockFile(lock, 0).then(() => true, () => false);
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+    const [records] = await connection.execute('SELECT payload FROM vaultcast_documents WHERE name=? FOR UPDATE', [key]);
+    const job = records.length ? parse(records[0].payload) : null;
+    if (job?.id !== id) {
+      await connection.rollback();
+      return { error: 'Offline download not found.' };
+    }
+    const stop = async error => {
+      await connection.rollback();
+      return { error };
+    };
+    if (action === 'stalker_cancel') {
+      if (ready(job.status)) return await stop('This download is already complete.');
+      await mkdir(folder, { recursive: true, mode: 0o700 });
+      if (await realpath(folder) !== folder) throw new Error('Invalid offline download folder');
+      await marker(join(folder, 'cancel'));
+      const cancelled = { ...job, status: 'cancelled', stage: 'Cancellation requested', updated: new Date().toISOString() };
+      delete cancelled.job_pid;
+      await connection.execute('UPDATE vaultcast_documents SET payload=?,revision=revision+1 WHERE name=?',
+        [JSON.stringify(cancelled), key]);
+    } else {
+      if (active(job.status)) return await stop('Cancel the active download first, then delete it after it stops.');
+      if (!locked && job.status !== 'cancelled') {
+        return await stop('The download is still stopping. Wait a few seconds, then delete it again.');
+      }
+      await marker(deleted);
+      if (locked) {
+        const info = await lstat(folder).catch(error => {
+          if (error.code === 'ENOENT') return null;
+          throw error;
+        });
+        if (info) {
+          if (!info.isDirectory() || await realpath(folder) !== folder) throw new Error('Invalid offline download folder');
+          for (const entry of await readdir(folder, { withFileTypes: true })) {
+            if (entry.isFile() || entry.isSymbolicLink()) await removeIfPresent(join(folder, entry.name));
+          }
+          await rmdir(folder);
+        }
+      }
+      await connection.execute('DELETE FROM vaultcast_documents WHERE name=?', [key]);
+    }
+    await connection.commit();
+    if (locked) await removeIfPresent(deleted).catch(() => {});
+    return { ok: true };
+  } catch (error) {
+    if (connection) {
+      try { await connection.rollback(); }
+      catch (rollbackError) { usable = false; connection.destroy(); }
+    }
+    throw error;
+  } finally {
+    if (connection && usable) connection.release();
+    if (lock) await lock.close();
+  }
+}
+
+module.exports = { listOffline, sendOffline, validId, ready, controlOffline };

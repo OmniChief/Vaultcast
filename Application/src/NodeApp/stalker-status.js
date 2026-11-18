@@ -2,7 +2,7 @@
 
 const { readFile, stat } = require('fs').promises;
 const { join } = require('path');
-const { listOffline, sendOffline, validId, ready } = require('./stalker-offline');
+const { listOffline, sendOffline, validId, ready, controlOffline } = require('./stalker-offline');
 const { areaAllowed } = require('./library');
 const { authorized, parentalStatus } = require('./profile-policy');
 const { documents, enabled, now, parse, publicUser, sha } = require('./account-data');
@@ -43,7 +43,7 @@ function savedFeeds(state) {
   return state.feeds.filter(feed => feed.type === 'stalker');
 }
 
-module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavailable }) {
+module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavailable, json }) {
   const version = readFile(join(root, 'VERSION'), 'utf8').then(text => text.trim()).catch(() => '');
   const runtime = join(root, 'data/runtime');
   const fresh = async name => {
@@ -57,8 +57,7 @@ module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavai
     return fresh(legacy);
   }
 
-  app.get(prefix + '/live/:action(stalker|stalker_catalogue_status|stalker_update_status|stalker_offline|stalker_offline_file)',
-    handle(async (request, response, pool, _bcrypt, settings, current) => {
+  const operation = handle(async (request, response, pool, _bcrypt, settings, current) => {
       const { action } = request.params;
       if (enabled(settings.features_explicit?.live) && Object.hasOwn(settings.features ?? {}, 'live') &&
           !enabled(settings.features.live)) {
@@ -74,7 +73,7 @@ module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavai
       if (parental.restricted) {
         return response.status(403).json({ ok: false, error: 'Provider catalogues are unavailable for restricted profiles.' });
       }
-      if (action === 'stalker_offline' || action === 'stalker_offline_file') {
+      if (['stalker_offline', 'stalker_offline_file', 'stalker_cancel', 'stalker_delete'].includes(action)) {
         const { capabilities } = publicUser(user, settings, await documents(pool, ['permission_roles']), now());
         const denied = permission => response.status(403).json({ ok: false, error: 'This action requires the ' + permission + ' permission.' });
         if (!capabilities.ingest_view) return denied('ingest_view');
@@ -82,9 +81,16 @@ module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavai
           return response.status(403).json({ ok: false, error: 'Library access is required for offline downloads.' });
         }
         if (action === 'stalker_offline') return response.json({ ok: true, items: await listOffline(pool, root) });
-        if (!capabilities.downloads_request) return denied('downloads_request');
-        const id = request.query.id;
+        if (action === 'stalker_delete') {
+          if (user.role !== 'admin') return response.status(403).json({ ok: false, error: 'Administrator access required.' });
+        } else if (!capabilities.downloads_request) return denied('downloads_request');
+        const id = request.method === 'POST' ? request.body?.id : request.query.id;
         if (!validId(id)) return response.status(422).json({ ok: false, error: 'Invalid offline download.' });
+        if (request.method === 'POST') {
+          response.locals.mutationStarted = true;
+          const result = await controlOffline(pool, root, id, action);
+          return result.error ? response.status(502).json({ ok: false, error: result.error }) : response.json(result);
+        }
         const key = 'stalker-offline:' + id;
         const [rows] = await pool.execute('SELECT payload FROM vaultcast_documents WHERE name=?', [key]);
         const job = rows.length ? parse(rows[0].payload) : null;
@@ -188,5 +194,10 @@ module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavai
         }
       }
       return response.json({ ok: true, sources, reset: docs[resetKey] ?? { state: 'idle' }, worker });
-    }, true));
+    }, true);
+  app.get(prefix + '/live/:action(stalker|stalker_catalogue_status|stalker_update_status|stalker_offline|stalker_offline_file)', operation);
+  app.post(prefix + '/live/:action(stalker_cancel|stalker_delete)', (request, response, next) => {
+    if (!request.is('application/json')) return unavailable(response);
+    json(request, response, error => error ? unavailable(response) : next());
+  }, operation);
 };

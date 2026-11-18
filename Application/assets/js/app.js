@@ -5835,13 +5835,20 @@ try {
     }
   }
   function liveApiPost(action, body){
-    return fetch(LIVE_API + action, {
+    var options = {
       method: 'POST',
       credentials: 'same-origin',
       cache: 'no-store',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body || {})
-    }).then(function(r){
+    };
+    var nativeBase = window.__VAULTCAST_APPLICATION_BASE__;
+    var native = nativeBase && (action === 'stalker_cancel' || action === 'stalker_delete');
+    var request = native ? fetch(nativeBase + '/live/' + action, options).then(function(r){
+      if (r.status === 503 && r.headers.get('X-Vaultcast-App-Unavailable') === '1') return fetch(LIVE_API + action, options);
+      return r;
+    }) : fetch(LIVE_API + action, options);
+    return request.then(function(r){
       return r.json().then(function(j){
         if (r.ok && j && j.ok !== false && action !== 'iptv_probe' && action !== 'radio_save' && action !== 'stalker_play' && action.indexOf('xtream_') !== 0) invalidateLiveData(false);
         return { ok: r.ok, status: r.status, body: j };
