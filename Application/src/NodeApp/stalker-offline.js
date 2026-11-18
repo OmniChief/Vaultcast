@@ -7,6 +7,11 @@ const { pipeline } = require('stream/promises');
 const { flock, lockFile } = require('../Workers/file-lock');
 const { enabled, now, parse } = require('./account-data');
 const { mediaRange } = require('./stream');
+const { randomBytes } = require('crypto');
+const { itemEntry } = require('./stalker-provider');
+const { cached } = require('./profile-policy');
+const { sha } = require('./account-data');
+const { getJob, jobLock, ownedDirectory } = require('../Workers/stalker-download');
 
 const active = status => ['queued', 'downloading'].includes(status);
 const ready = status => ['ready', 'imported'].includes(status);
@@ -14,6 +19,8 @@ const validId = id => typeof id === 'string' && id.length === 24 && /^[a-f0-9]{2
 const int = value => Number.isFinite(Number(value)) ? Math.trunc(Number(value)) : 0;
 
 async function refreshStopped(pool, directory, row, time) {
+  // Node owns the persistent queue and resumes it when the service restarts.
+  if (row.status === 'queued' || row.engine === 'node') return row;
   const updated = Date.parse(row.updated ?? row.created ?? '');
   if (!Number.isFinite(updated) || time - updated / 1000 <= 90 || !flock) return row;
   const lock = await open(join(directory, row.id + '.lock'),
@@ -220,4 +227,91 @@ async function controlOffline(pool, root, id, action) {
   }
 }
 
-module.exports = { listOffline, sendOffline, validId, ready, controlOffline };
+async function retryOffline(pool, root, id) {
+  const directory = await ownedDirectory(join(await realpath(join(root, 'data')), 'stalker-offline'));
+  const queue = await jobLock(join(directory, 'queue.lock'));
+  if (!queue) return { error: 'The download queue is busy. Try again shortly.' };
+  try { return await queueJob(pool, root, directory, id); }
+  finally { await queue.close(); }
+}
+
+async function queueJob(pool, root, directory, id, replacement) {
+  const lock = await jobLock(join(directory, id + '.lock'));
+  if (!lock) return { error: 'This download is still running.' };
+  let connection, usable = true;
+  try {
+    if (await lstat(join(directory, id + '.delete')).catch(() => null)) return { error: 'This download is being deleted.' };
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+    const job = await getJob(connection, id, true);
+    if (!job || job.id !== id) { await connection.rollback(); return { error: 'Offline download not found.' }; }
+    if (ready(job.status)) { await connection.rollback(); return { error: 'This download is already complete.' }; }
+    const [rows] = await connection.execute("SELECT payload FROM vaultcast_documents WHERE name LIKE 'stalker-offline:%'");
+    if (!active(job.status) && rows.filter(row => active(parse(row.payload)?.status)).length >= 20) {
+      await connection.rollback(); return { error: 'The download queue is full. Wait for a download to finish.' };
+    }
+    const folder = await ownedDirectory(join(directory, id));
+    await removeIfPresent(join(folder, 'cancel'));
+    const queued = { ...job, ...replacement, status: 'queued', engine: 'node', stage: 'Queued for download', updated: new Date().toISOString() };
+    delete queued.error; delete queued.job_pid;
+    await connection.execute('UPDATE vaultcast_documents SET payload=?,revision=revision+1 WHERE name=?', [JSON.stringify(queued), 'stalker-offline:' + id]);
+    await connection.commit();
+    return { ok: true, id, status: 'queued' };
+  } catch (error) {
+    if (connection) {
+      try { await connection.rollback(); } catch (rollback) { usable = false; connection.destroy(); }
+    }
+    throw error;
+  } finally { if (connection && usable) connection.release(); await lock.close(); }
+}
+
+async function enqueueOffline(pool, root, feed, body, viewer) {
+  if (typeof body.id !== 'string' || !body.id || body.id.length > 512 || /[\x00-\x1f]/.test(body.id)) return { error: 'Invalid provider title.' };
+  const item = await itemEntry(pool, root, feed, body.id);
+  if (!item?.cmd) return { error: 'Refresh the provider catalogue and select the title again.' };
+  const clean = (value, limit) => Array.from(String(value ?? '').replace(/<[^>]*>/g, '').replace(/[\x00-\x1f\x7f]/g, ' ').trim()).slice(0, limit).join('');
+  if (!item.showName && typeof body.showName === 'string') item.showName = clean(body.showName, 200);
+  let name = clean(item.name || item.metadata?.name || body.name || 'Provider video', 250);
+  if (item.showName && item.season != null && item.episode != null && Number.isFinite(Number(item.season)) && Number.isFinite(Number(item.episode))) {
+    name = clean(item.showName + ' S' + String(Math.trunc(Number(item.season))).padStart(2, '0') + 'E' + String(Math.trunc(Number(item.episode))).padStart(2, '0'), 250);
+  }
+  const replacement = { item, name, connection: feed.name, destination: body.destination === 'browser' ? 'browser' : 'library' };
+  if (typeof body.playback_ticket === 'string' && /^[a-f0-9]{32}$/.test(body.playback_ticket)) {
+    const ticket = await cached(root, 'stalker_play_ticket_' + sha(body.playback_ticket));
+    if (ticket?.viewer === String(viewer) && ticket.feed === feed.id && ticket.id === body.id && ticket.kind !== 'live') {
+      replacement.playback_ticket = body.playback_ticket;
+      replacement.playback_viewer = String(viewer);
+    }
+  }
+  const directory = await ownedDirectory(join(await realpath(join(root, 'data')), 'stalker-offline'));
+  const queue = await jobLock(join(directory, 'queue.lock'));
+  if (!queue) return { error: 'The download queue is busy. Try again shortly.' };
+  try {
+    const [rows] = await pool.execute("SELECT payload FROM vaultcast_documents WHERE name LIKE 'stalker-offline:%'");
+    const jobs = rows.map(row => parse(row.payload));
+    const existing = jobs.find(job => validId(job?.id) && job.feed === feed.id && job.item_id === body.id && job.status !== 'imported');
+    if (existing) {
+      if (existing.destination === 'library') replacement.destination = 'library';
+      if (['downloading','ready'].includes(existing.status)) {
+        // Promotion to a library import is safe while the transfer is in progress.
+        if (replacement.destination === 'library' && existing.destination !== 'library') {
+          await pool.execute("UPDATE vaultcast_documents SET payload=JSON_SET(payload,'$.destination','library'),revision=revision+1 WHERE name=?",
+            ['stalker-offline:' + existing.id]);
+        }
+        return { ok: true, id: existing.id, status: existing.status };
+      }
+      const result = await queueJob(pool, root, directory, existing.id, replacement);
+      if (existing.status === 'queued' && result.error === 'This download is still running.') return { ok: true, id: existing.id, status: 'queued' };
+      return result;
+    }
+    if (jobs.filter(job => active(job?.status)).length >= 20) return { error: 'The download queue is full. Wait for a download to finish.' };
+    const id = randomBytes(12).toString('hex');
+    await ownedDirectory(join(directory, id));
+    const job = { ...replacement, id, feed: feed.id, item_id: body.id, owner: String(viewer), engine: 'node',
+      status: 'queued', stage: 'Queued for download', bytes: 0, created: new Date().toISOString(), updated: new Date().toISOString() };
+    await pool.execute('INSERT INTO vaultcast_documents(name,payload,revision) VALUES (?,?,1)', ['stalker-offline:' + id, JSON.stringify(job)]);
+    return { ok: true, id, status: 'queued' };
+  } finally { await queue.close(); }
+}
+
+module.exports = { listOffline, sendOffline, validId, ready, controlOffline, enqueueOffline, retryOffline };

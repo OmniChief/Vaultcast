@@ -76,6 +76,7 @@ function passwordWork(bcrypt, password, hash) {
 
 module.exports = function mountAccount(app, express, root) {
   const db = database(root);
+  const downloads = require('../Workers/stalker-download').start(db, root);
   const route = '/application';
   const version = readFile(join(root, 'VERSION'), 'utf8').then(text => text.trim()).catch(() => '');
   let passwordChecks = 0;
@@ -189,7 +190,7 @@ module.exports = function mountAccount(app, express, root) {
   mountBrowserAssets(app, route, { root, handle, unavailable });
   mountLibrary(app, route, { root, handle, unavailable });
   mountEpisodeSegments(app, route, { root, handle, json, unavailable });
-  mountStalkerStatus(app, route, { root, handle, unavailable, json });
+  mountStalkerStatus(app, route, { root, handle, unavailable, json, downloads });
   mountProgress(app, route, { handle, json, unavailable, root });
   mountPlayback(app, route, { root, db, handle, json, unavailable });
   const streaming = mountStream(app, route, { db, root, readSession: session, updating, express, unavailable });

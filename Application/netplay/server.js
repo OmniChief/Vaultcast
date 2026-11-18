@@ -515,7 +515,7 @@ setInterval(async () => {
   checkingInstalledSource = true;
   try {
     const installed = await installedSourceFingerprint();
-    if (installed !== loadedSourceFingerprint && !Object.keys(rooms).length && !transcodeRunner?.active() && !downloadRunner?.active() && !videoUpload?.active() && !dropUpload?.active() && !conversionUpload?.active() && !quizWarmup?.active() && !maintenanceQueue?.active() && !applicationDatabase?.streaming() && !fs.existsSync(updateMarker)) {
+    if (installed !== loadedSourceFingerprint && !Object.keys(rooms).length && !transcodeRunner?.active() && !downloadRunner?.active() && !require('../src/Workers/stalker-download').active() && !videoUpload?.active() && !dropUpload?.active() && !conversionUpload?.active() && !quizWarmup?.active() && !maintenanceQueue?.active() && !applicationDatabase?.streaming() && !fs.existsSync(updateMarker)) {
       process.exit(75);
     }
   } catch (error) {
