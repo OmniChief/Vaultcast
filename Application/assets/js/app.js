@@ -974,9 +974,17 @@ function confirmDialog(message, opts){
       actions ? h('div', { className:'row-actions', style:'justify-content:center' }, actions) : null
     ].filter(Boolean));
   }
-  /** Playback progress: never await. Prefer sendBeacon so a busy php-cgi cannot stall the UI. */
+  /** Playback progress: never block the player while saving. */
   function postProgress(itemId, position, duration){
     var body = JSON.stringify({ item_id: itemId, position: position || 0, duration: duration || 0 });
+    var nativeBase = window.__VAULTCAST_APPLICATION_BASE__;
+    var options = { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: body, keepalive: true };
+    if (nativeBase) {
+      fetch(nativeBase + '/progress', options).then(function(response){
+        if (response.status === 503 && response.headers.get('X-Vaultcast-App-Unavailable') === '1') return fetch(API + '/progress', options);
+      }).catch(function(){});
+      return;
+    }
     try {
       if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
         var blob = new Blob([body], { type: 'application/json' });
@@ -984,7 +992,7 @@ function confirmDialog(message, opts){
       }
     } catch (eB) {}
     try {
-      fetch(API + '/progress', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: body, keepalive: true }).catch(function(){});
+      fetch(API + '/progress', options).catch(function(){});
     } catch (eF) {}
   }
   var navigationCache = window.createRequestCache();
