@@ -3,7 +3,7 @@
 const { createHash, randomInt } = require('crypto');
 const { readFile, stat } = require('fs').promises;
 const { join } = require('path');
-const { parse, now, enabled, documents } = require('./account-data');
+const { parse, now, enabled, documents, publicUser } = require('./account-data');
 const { authorized, cached, parentalStatus } = require('./profile-policy');
 
 const list = value => value && typeof value === 'object' ? Object.values(value) : [];
@@ -596,6 +596,7 @@ async function continueWatching(pool, settings, userId, registry, limit) {
 }
 
 module.exports = function mountLibrary(app, prefix, { root, handle, unavailable }) {
+  const appVersion = readFile(join(root, 'VERSION'), 'utf8').then(value => value.trim()).catch(() => '');
   const browse = (operation, includeCatalogue = true) => handle(async (request, response, pool, _bcrypt, settings, current) => {
     if (!current.user && settings.auth?.lan_guest_access !== false) return unavailable(response);
     if (!current.user && !current.authenticated) {
@@ -644,6 +645,113 @@ module.exports = function mountLibrary(app, prefix, { root, handle, unavailable 
     }
     return response.json({ ok: true, synopsis });
   }, false));
+
+  app.get(prefix + '/search', browse(async (request, response, pool, settings, user, catalogue, parental) => {
+    if (['q', 'suggest', 'area', 'limit', 'page'].some(key =>
+      request.query[key] !== undefined && typeof request.query[key] !== 'string')) return unavailable(response);
+    const query = Array.from(queryText(request.query.q)).slice(0, 200).join('');
+    const suggest = enabled(request.query.suggest);
+    const limit = suggest ? 5 : Math.max(1, Math.min(100, int(request.query.limit ?? 40)));
+    const page = suggest ? 1 : Math.max(1, Math.min(1000, int(request.query.page ?? 1)));
+    const sections = list(catalogue.sections).filter(section => {
+      const area = section.type === 'roms' ? 'games' : 'library';
+      return (request.query.area !== 'games' || area === 'games') &&
+        (request.query.area !== 'library' || area === 'library') && areaAllowed(user, area, parental);
+    }).map(section => String(section.id));
+
+    let cards = [], total = 0, hasMore = false;
+    const names = ['browse-index-ready', 'slugs'];
+    if (!suggest) names.push('permission_roles');
+    const docs = await documents(pool, names);
+    if (query && sections.length) {
+      if (!enabled(docs['browse-index-ready'])) return unavailable(response);
+      const scope = 'b.section_id IN (' + sections.map(() => '?').join(',') + ')';
+      const starts = query.replace(/[!%_]/g, character => '!' + character) + '%';
+      const contains = '%' + starts;
+      const shows = "SELECT b.show_key AS id,'show' AS kind,b.title,b.section_id AS section,b.type,'show' AS media_kind," +
+        "'' AS system_name,CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(b.payload,'$.year')),'null') AS SIGNED) AS year," +
+        "CASE WHEN b.title=? THEN 100 WHEN b.title LIKE ? ESCAPE '!' THEN 80 ELSE 50 END AS score," +
+        "'show' AS match_kind,b.show_key AS parent_key FROM vaultcast_show_summaries b WHERE " + scope +
+        " AND b.title LIKE ? ESCAPE '!'";
+      const items = "SELECT b.item_id AS id,'item' AS kind,b.title,b.section_id AS section,b.type,b.media_kind,b.system_name,b.year," +
+        "CASE WHEN b.show_key<>'' THEN 30 WHEN b.title=? THEN 95 WHEN b.title LIKE ? ESCAPE '!' THEN 75 ELSE 45 END AS score," +
+        "CASE WHEN b.show_key<>'' THEN 'episode' ELSE 'item' END AS match_kind,b.show_key AS parent_key " +
+        'FROM vaultcast_browse_items b WHERE ' + scope +
+        " AND ((b.show_key='' AND (b.title LIKE ? ESCAPE '!' OR b.search_path LIKE ? ESCAPE '!'))" +
+        " OR (b.show_key<>'' AND b.show_name NOT LIKE ? ESCAPE '!' AND b.title LIKE ? ESCAPE '!'))";
+      const ranked = '(' + shows + ' UNION ALL ' + items + ') ranked';
+      const args = [query, starts, ...sections, contains, query, starts, ...sections, contains, contains, contains, contains];
+      const [hits] = await pool.execute('SELECT * FROM ' + ranked + ' ORDER BY score DESC,title,id LIMIT ? OFFSET ?',
+        [...args, limit + 1, (page - 1) * limit]);
+      hasMore = hits.length > limit;
+      hits.length = Math.min(hits.length, limit);
+      if (suggest) {
+        const suggestions = hits.map(hit => ({
+          id: hit.id, kind: hit.kind, title: hit.title, section: hit.section, type: hit.type,
+          media_kind: hit.media_kind, year: hit.year, system: hit.system_name,
+          ...(hit.parent_key ? { show_key: hit.parent_key } : {}),
+        }));
+        cards = (await visibleCards(pool, suggestions, parental)).map(card => {
+          if (card.kind === 'show') return card;
+          const { show_key, ...suggestion } = card;
+          return suggestion;
+        });
+      } else {
+        const [[count]] = await pool.execute('SELECT COUNT(*) AS total FROM ' + ranked, args);
+        total = Number(count.total);
+        const movieSlugs = reverseSlugs(docs.slugs, 'movie'), gameSlugs = reverseSlugs(docs.slugs, 'game');
+        const showSlugs = reverseSlugs(docs.slugs, 'show');
+        const byId = new Map();
+        for (const [kind, sql] of [
+          ['show', 'SELECT show_key AS id,payload FROM vaultcast_show_summaries WHERE show_key IN '],
+          ['item', 'SELECT i.id,i.payload,f.sig,f.duration,f.needs_convert FROM vaultcast_items i ' +
+            'LEFT JOIN vaultcast_media_facts f ON f.item_id=i.id WHERE i.id IN '],
+        ]) {
+          const ids = hits.filter(hit => hit.kind === kind).map(hit => hit.id);
+          if (!ids.length) continue;
+          const [rows] = await pool.execute(sql + '(' + ids.map(() => '?').join(',') + ')', ids);
+          for (const row of rows) {
+            const raw = parse(row.payload);
+            if (kind === 'show' && !raw?._meta_prepared) return unavailable(response);
+            if (raw) byId.set(kind + ':' + row.id, kind === 'show' ? showCard(raw, showSlugs) :
+              itemCard(row, raw, settings, movieSlugs, gameSlugs));
+          }
+        }
+        for (const hit of hits) {
+          const card = byId.get(hit.kind + ':' + hit.id);
+          if (!card) continue;
+          if (hit.kind === 'item' && hit.parent_key) {
+            card.show_key = hit.parent_key;
+            card.show_slug = showSlugs.get(hit.parent_key) ?? hit.parent_key;
+            if (card.episode_title && card.season != null && card.episode != null) {
+              card.title = episodeLabel(card.show, int(card.season), int(card.episode),
+                lower(card.episode_title) === lower(card.show) ? null : card.episode_title);
+            }
+          }
+          cards.push({ ...card, match: hit.match_kind, score: Number(hit.score) });
+        }
+        cards = await visibleCards(pool, cards, parental);
+      }
+    }
+    if (suggest) return response.json({ ok: true, catalogue: cards, query });
+
+    const acquisition = settings.acquisition ?? {};
+    const allowed = publicUser(user, settings, docs, now()).capabilities.rss_search;
+    const strings = values => list(values).filter(value => ['string', 'number', 'boolean'].includes(typeof value))
+      .map(value => value === true ? '1' : value === false ? '' : String(value)).filter(enabled);
+    const filters = allowed ? {
+      min_seeds: int(acquisition.min_seeds ?? 1),
+      preferred_qualities: strings(acquisition.preferred_qualities && typeof acquisition.preferred_qualities === 'object'
+        ? acquisition.preferred_qualities : ['1080p', '720p']),
+      language_filters: strings(acquisition.language_filters),
+      rss_fallback_search: enabled(acquisition.rss_fallback_search),
+      min_interval_seconds: int(acquisition.min_interval_seconds ?? 120),
+      max_per_hour: int(acquisition.max_per_hour ?? 20),
+    } : [];
+    return response.json({ ok: true, query, catalogue: cards, count: cards.length, total, page, has_more: hasMore,
+      weak: total === 0 || (total < 3 && (cards[0]?.score ?? 0) < 80),
+      rss_fallback_enabled: allowed && filters.rss_fallback_search, filters, version: await appVersion });
+  }));
 
   let recentHomeLibrary;
   app.get(prefix + '/home', browse(async (_request, response, pool, _settings, user, _catalogue, parental) => {
