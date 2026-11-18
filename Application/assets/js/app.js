@@ -5756,8 +5756,15 @@ try {
      public HTTPS 404s any *.php under /media/live/, LAN :9999 works either way. */
   var LIVE_API = BASE + 'api/live/';
   function liveApi(action, params){
-    return fetch(LIVE_API + action + (params ? '?' + String(params).replace(/^&/, '') : ''), { credentials:'same-origin', cache:'no-store' })
-      .then(function(r){
+    var suffix = action + (params ? '?' + String(params).replace(/^&/, '') : '');
+    var options = { credentials:'same-origin', cache:'no-store' };
+    var nativeBase = window.__VAULTCAST_APPLICATION_BASE__;
+    var native = nativeBase && ['stalker', 'stalker_catalogue_status', 'stalker_update_status'].indexOf(action) >= 0;
+    var request = native ? fetch(nativeBase + '/live/' + suffix, options).then(function(r){
+      if (r.status === 503 && r.headers.get('X-Vaultcast-App-Unavailable') === '1') return fetch(LIVE_API + suffix, options);
+      return r;
+    }) : fetch(LIVE_API + suffix, options);
+    return request.then(function(r){
         if (!r.ok) throw new Error('Live API HTTP ' + r.status);
         return r.json();
       });

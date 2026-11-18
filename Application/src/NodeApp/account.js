@@ -11,6 +11,7 @@ const mountProfiles = require('./profile');
 const mountLibrary = require('./library');
 const mountStream = require('./stream');
 const mountPlayback = require('./playback');
+const mountStalkerStatus = require('./stalker-status');
 const mountEpisodeSegments = require('./episode-segments');
 const mountProgress = require('./progress');
 const mountBrowserAssets = require('./browser-assets');
@@ -188,6 +189,7 @@ module.exports = function mountAccount(app, express, root) {
   mountBrowserAssets(app, route, { root, handle, unavailable });
   mountLibrary(app, route, { root, handle, unavailable });
   mountEpisodeSegments(app, route, { root, handle, json, unavailable });
+  mountStalkerStatus(app, route, { root, handle, unavailable });
   mountProgress(app, route, { handle, json, unavailable, root });
   mountPlayback(app, route, { root, db, handle, json, unavailable });
   const streaming = mountStream(app, route, { db, root, readSession: session, updating, express, unavailable });
