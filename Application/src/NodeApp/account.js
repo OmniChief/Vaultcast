@@ -184,6 +184,6 @@ module.exports = function mountAccount(app, express, root) {
   });
   mountLibrary(app, route, { root, handle, unavailable });
   mountPlayback(app, route, { root, db, handle, json, unavailable });
-  const streaming = mountStream(app, route, { db, root, readSession: session, updating });
+  const streaming = mountStream(app, route, { db, root, readSession: session, updating, express, unavailable });
   return { ...db, streaming };
 };

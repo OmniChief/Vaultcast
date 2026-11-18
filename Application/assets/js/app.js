@@ -531,9 +531,16 @@
       if (!f) { status.textContent = 'Choose a subtitle file first.'; return; }
       if (f.size > 2097152) { status.textContent = 'Subtitle files can be at most 2 MB.'; return; }
       send.disabled = true; status.textContent = 'Uploading…';
-      fetch(BASE + 'api/stream/subtitles/' + play.token + '/upload?lang=' + encodeURIComponent(lang.value), {
+      var uploadPath = '/stream/subtitles/' + play.token + '/upload?lang=' + encodeURIComponent(lang.value);
+      var uploadOptions = {
         method:'POST', credentials:'same-origin', cache:'no-store', headers:{ 'Content-Type':'application/octet-stream' }, body:f
-      }).then(function(r){ return r.json().catch(function(){ return { ok:false, error:'Upload failed (HTTP ' + r.status + ')' }; }); }).then(function(res){
+      };
+      var nativeBase = window.__VAULTCAST_APPLICATION_BASE__;
+      var upload = nativeBase ? fetch(nativeBase + uploadPath, uploadOptions).then(function(r){
+        if (r.status === 503 && r.headers.get('X-Vaultcast-App-Unavailable') === '1') return fetch(API + uploadPath, uploadOptions);
+        return r;
+      }) : fetch(API + uploadPath, uploadOptions);
+      upload.then(function(r){ return r.json().catch(function(){ return { ok:false, error:'Upload failed (HTTP ' + r.status + ')' }; }); }).then(function(res){
         send.disabled = false;
         if (!res || !res.ok) { status.textContent = (res && res.error) || 'Upload failed'; return; }
         toast('Subtitles added', { kind:'ok' });
@@ -1019,7 +1026,7 @@ function confirmDialog(message, opts){
     var nativeBase = window.__VAULTCAST_APPLICATION_BASE__;
     var nativeBrowse = path.indexOf('/resolve?') === 0 || /^\/sections(?:$|\/[A-Za-z0-9_-]+\/(?:items|shows|random|recent)(?:\?|$))/.test(path);
     var nativeDetail = /^\/(?:items|shows)\/[a-f0-9]+(?:\?|$)/.test(path);
-    var nativeRoute = (method === 'GET' && (path === '/status' || path === '/me' || nativeBrowse || nativeDetail)) ||
+    var nativeRoute = (method === 'GET' && (path === '/status' || path === '/me' || nativeBrowse || nativeDetail || /^\/items\/[a-f0-9]{16}\/next(?:\?|$)/.test(path))) ||
       (method === 'POST' && (path === '/login' || path === '/logout' || (path === '/me/prefs' && !avatarChange) ||
         /^\/items\/[a-f0-9]{16}\/play$/.test(path)));
     var transport = nativeBase && nativeRoute ? fetch(nativeBase + path, fetchOpts).then(function(response){

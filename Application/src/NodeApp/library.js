@@ -1,7 +1,7 @@
 'use strict';
 
 const { createHash, randomInt } = require('crypto');
-const { readFile } = require('fs').promises;
+const { readFile, stat } = require('fs').promises;
 const { join } = require('path');
 const { parse, now, enabled, documents } = require('./account-data');
 const { authorized, cached, parentalStatus } = require('./profile-policy');
@@ -480,6 +480,90 @@ module.exports = function mountLibrary(app, prefix, { root, handle, unavailable 
     const parental = await parentalStatus(root, pool, current, current.user, now());
     return operation(request, response, pool, settings, current.user, docs.catalogue ?? {}, parental);
   }, true);
+
+  app.get(prefix + '/items/:id([a-f0-9]{16})/next', browse(async (request, response, pool, settings, user, _catalogue, parental) => {
+    const { id } = request.params;
+    const [sourceRows] = await pool.execute('SELECT payload FROM vaultcast_items WHERE id=?', [id]);
+    const item = sourceRows.length ? parse(sourceRows[0].payload) : null;
+    if (!item) {
+      const limited = ['library', 'live', 'games'].some(area => !areaAllowed(user, area, parental));
+      return limited ? response.status(404).json({ ok: false, error: 'Item not found' }) : response.json({ ok: true, item: null });
+    }
+    if (!areaAllowed(user, itemArea(item), parental)) return areaDenied(response, itemArea(item));
+    if (!await playbackVisible(pool, item, parental)) {
+      return response.status(403).json({ ok: false, code: 'parental_blocked', error: 'This title isn’t available on this profile.' });
+    }
+    if (itemArea(item) !== 'library' || item.media_kind !== 'video') return response.json({ ok: true, item: null });
+    if (request.query.collection != null && typeof request.query.collection !== 'string') return unavailable(response);
+    const collection = request.query.collection || '';
+    const docs = await documents(pool, collection ? ['slugs', 'collections'] : ['slugs', 'browse-index-ready']);
+    let rows;
+    if (collection) {
+      const selected = list(docs.collections).find(entry => entry?.id === collection);
+      if (!selected) return response.json({ ok: true, item: null });
+      const parts = list(selected.parts);
+      const index = parts.findIndex(part => String(part?.item_id ?? '') === id);
+      if (index < 0) return response.json({ ok: true, item: null });
+      const ids = parts.slice(index + 1).map(part => part?.item_id).filter(candidate => typeof candidate === 'string' && candidate !== id);
+      if (ids.length > 5000) return unavailable(response);
+      const owned = new Map();
+      for (let offset = 0; offset < ids.length; offset += 500) {
+        const batch = ids.slice(offset, offset + 500);
+        const [found] = await pool.execute(
+          'SELECT i.id,i.payload,f.sig,f.duration,f.needs_convert FROM vaultcast_items i ' +
+          'LEFT JOIN vaultcast_media_facts f ON f.item_id=i.id WHERE i.id IN (' + batch.map(() => '?').join(',') + ')', batch);
+        for (const row of found) owned.set(row.id, row);
+      }
+      rows = ids.map(candidate => owned.get(candidate)).filter(Boolean);
+    } else {
+      if (!enabled(item.show) || item.season == null || item.episode == null) return response.json({ ok: true, item: null });
+      const season = int(item.season), episode = int(item.episode);
+      if (enabled(docs['browse-index-ready'])) {
+        const key = createHash('sha1').update(String(item.section) + '|' + item.show).digest('hex').slice(0, 16);
+        [rows] = await pool.execute(
+          'SELECT i.payload,f.sig,f.duration,f.needs_convert FROM vaultcast_browse_items b JOIN vaultcast_items i ON i.id=b.item_id ' +
+          'LEFT JOIN vaultcast_media_facts f ON f.item_id=i.id WHERE b.show_key=? AND b.media_kind=? ' +
+          'AND (b.season>? OR (b.season=? AND b.episode>?)) ORDER BY b.season,b.episode,b.item_id LIMIT 32',
+          [key, 'video', season, season, episode]);
+      } else {
+        const seasonSql = "CAST(JSON_UNQUOTE(JSON_EXTRACT(i.payload,'$.season')) AS UNSIGNED)";
+        const episodeSql = "CAST(JSON_UNQUOTE(JSON_EXTRACT(i.payload,'$.episode')) AS UNSIGNED)";
+        [rows] = await pool.execute(
+          'SELECT i.payload,f.sig,f.duration,f.needs_convert FROM vaultcast_items i ' +
+          'LEFT JOIN vaultcast_media_facts f ON f.item_id=i.id WHERE i.section_id=? AND i.show_title=? AND (' +
+          seasonSql + '>? OR (' + seasonSql + '=? AND ' + episodeSql + '>?)) ORDER BY ' + seasonSql + ',' + episodeSql + ',i.id LIMIT 32',
+          [item.section, item.show, season, season, episode]);
+      }
+    }
+    const movieSlugs = reverseSlugs(docs.slugs, 'movie'), showSlugs = reverseSlugs(docs.slugs, 'show');
+    const candidates = [], emptySlugs = new Map();
+    for (const row of rows) {
+      const next = parse(row.payload);
+      if (next.media_kind !== 'video' || itemArea(next) !== 'library' || (collection && enabled(next.show))) continue;
+      const card = itemCard(row, next, settings, movieSlugs, emptySlugs);
+      if (['tv', 'anime'].includes(next.type) && enabled(next.show)) {
+        card.show_key = createHash('sha1').update(String(next.section) + '|' + next.show).digest('hex').slice(0, 16);
+        card.show_slug = showSlugs.get(card.show_key) ?? card.show_key;
+      }
+      if (card.episode_title && next.season != null && next.episode != null && next.season !== '' && next.episode !== '') {
+        card.title = episodeLabel(fixText(next.show), int(next.season), int(next.episode),
+          lower(card.episode_title) === lower(fixText(next.show)) ? null : card.episode_title);
+      }
+      candidates.push({ card, path: next.path });
+    }
+    const visible = new Set((await visibleCards(pool, candidates.map(candidate => candidate.card), parental)).map(card => card.id));
+    return async () => {
+      for (const candidate of candidates) {
+        if (!visible.has(candidate.card.id) || typeof candidate.path !== 'string') continue;
+        const info = await stat(candidate.path).catch(error => {
+          if (['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM'].includes(error.code)) return null;
+          throw error;
+        });
+        if (info?.isFile()) return response.json({ ok: true, item: candidate.card });
+      }
+      return response.json({ ok: true, item: null });
+    };
+  }, false));
 
   app.get(prefix + '/shows/:id([a-f0-9]+)', browse(async (request, response, pool, settings, user, _catalogue, parental) => {
     if (!areaAllowed(user, 'library', parental)) return areaDenied(response, 'library');

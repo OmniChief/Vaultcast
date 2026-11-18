@@ -29,6 +29,20 @@ function sourceFingerprint() {
   return hash.digest('hex');
 }
 const loadedSourceFingerprint = sourceFingerprint();
+
+async function installedSourceFingerprint() {
+  const hash = createHash('sha256');
+  hash.update(await fs.promises.readFile(__filename));
+  for (const dir of ['../src/NodeApp', '../src/Workers']) {
+    const folder = path.join(__dirname, dir);
+    const names = (await fs.promises.readdir(folder)).filter(name => name.endsWith('.js')).sort();
+    for (const name of names) {
+      hash.update(dir + '/' + name + '\\0');
+      hash.update(await fs.promises.readFile(path.join(folder, name)));
+    }
+  }
+  return hash.digest('hex');
+}
 const updateMarker = path.join(__dirname, '../data/runtime/maintenance.json');
 
 const app = express();
@@ -193,7 +207,7 @@ app.get('/health', (_req, res) => {
     mediaApiRevision,
     metadataRelayRevision: 1,
     webAssetRevision: webAsset ? 1 : 0,
-    applicationRevision: applicationDatabase?.ready() ? 8 : 0,
+    applicationRevision: applicationDatabase?.ready() ? 9 : 0,
     stalkerReadRevision: mediaHandler() ? 1 : 0,
     xtreamRelayRevision: mediaHandler()?.xtreamReady ? 1 : 0,
     eventsRevision: 1,
@@ -482,15 +496,19 @@ io.on('connection', (socket) => {
 
 // The updater swaps files atomically. Let active rooms finish before the
 // service manager restarts this process with the new entry point.
+let checkingInstalledSource = false;
 setInterval(async () => {
-  if (Object.keys(rooms).length || fs.existsSync(updateMarker)) return;
+  if (checkingInstalledSource || Object.keys(rooms).length || fs.existsSync(updateMarker)) return;
+  checkingInstalledSource = true;
   try {
-    const installed = sourceFingerprint();
+    const installed = await installedSourceFingerprint();
     if (installed !== loadedSourceFingerprint && !Object.keys(rooms).length && !transcodeRunner?.active() && !downloadRunner?.active() && !videoUpload?.active() && !dropUpload?.active() && !conversionUpload?.active() && !quizWarmup?.active() && !maintenanceQueue?.active() && !applicationDatabase?.streaming() && !fs.existsSync(updateMarker)) {
       process.exit(75);
     }
   } catch (error) {
     // The current process can keep serving while the application files are unavailable.
+  } finally {
+    checkingInstalledSource = false;
   }
 }, 30_000).unref();
 

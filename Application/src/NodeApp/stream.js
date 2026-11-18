@@ -8,7 +8,7 @@ const { documents, enabled, now, parse, sha } = require('./account-data');
 const { authorized, cached, parentalStatus } = require('./profile-policy');
 const { areaAllowed, areaDenied, playbackVisible } = require('./library');
 const { libraryFile, mimeFor, tokenLifetime } = require('./playback');
-const { subtitles, readSubtitle } = require('./subtitles');
+const { maxBytes, subtitles, readSubtitle, decodeSubtitle, subtitleFormat, toVtt, saveSubtitle } = require('./subtitles');
 
 
 function mediaRange(header, size) {
@@ -85,10 +85,10 @@ async function authorizePlayback(pool, root, request, response, readSession, tok
       'WHERE token_hash=? AND expires_at=? AND expires_at>?',
       [time + ttl, time + ttl, hash, rows[0].expires_at, time]);
   }
-  return { file: playback.path, folder: section.path, kind: playback.media_kind, captionSource: playback.caption_source, accel: enabled(settings.streaming?.nginx_accel) };
+  return { file: playback.path, folder: section.path, kind: playback.media_kind, owner: ownerId, captionSource: playback.caption_source, accel: enabled(settings.streaming?.nginx_accel) };
 }
 
-module.exports = function mountStream(app, prefix, { db, root, readSession, updating }) {
+module.exports = function mountStream(app, prefix, { db, root, readSession, updating, express, unavailable }) {
   let transfers = 0;
   app.get(prefix + '/stream/play', async (request, response) => {
     const token = request.query.t;
@@ -181,5 +181,79 @@ module.exports = function mountStream(app, prefix, { db, root, readSession, upda
       if (!response.headersSent && !response.destroyed) return fallback();
     }
   });
+  const rawSubtitle = express.raw({ type: () => true, limit: maxBytes, inflate: false });
+  app.post(prefix + '/stream/subtitles/:token([a-f0-9]{48})/upload',
+    (request, response, next) => rawSubtitle(request, response, error => {
+      if (!error) return next();
+      const status = error.type === 'entity.too.large' ? 413 : 400;
+      return response.status(status).json({ ok: false, error: status === 413
+        ? 'Subtitle files can be at most 2 MB.' : 'Could not read the subtitle upload.' });
+    }),
+    async (request, response) => {
+      response.set({ 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
+      let changed = false;
+      transfers++;
+      try {
+        if (await updating()) return response.set('Retry-After', '30').sendStatus(503);
+        if (!db.ready()) return unavailable(response);
+        const media = await db.run(async pool => {
+          const current = await readSession(pool, request, true);
+          if (current.error) {
+            response.status(401).json({ ok: false, error: current.error });
+            return null;
+          }
+          if (!authorized(response, current)) return null;
+          const { settings = {} } = await documents(pool, ['settings']);
+          const playback = await authorizePlayback(pool, root, request, response, readSession, request.params.token, false);
+          if (response.headersSent) return null;
+          if (playback?.expired || (playback && playback.kind !== 'video')) {
+            response.status(403).json({ ok: false, error: 'Playback token expired.' });
+            return null;
+          }
+          if (!playback) return null;
+          if (current.user.id !== playback.owner && current.user.role !== 'admin') {
+            response.status(403).json({ ok: false, error: 'Forbidden' });
+            return null;
+          }
+          if (current.user.role !== 'admin' && !enabled(settings.opensubtitles?.allow_users)) {
+            response.status(403).json({ ok: false, error: 'Only administrators can add subtitles.' });
+            return null;
+          }
+          // The secret playback token and owner check authorize this mutation even
+          // when a reverse proxy has replaced the public Origin authority.
+          return playback;
+        });
+        if (response.headersSent || response.destroyed) return;
+        if (!media || !await libraryFile(media.file, media.folder)) return unavailable(response);
+        const raw = request.body;
+        if (!Buffer.isBuffer(raw) || raw.length === 0) return response.status(422).json({ ok: false, error: 'The file is empty.' });
+        const language = typeof request.query.lang === 'string' ? request.query.lang.trim().toLowerCase() : '';
+        if (!/^[a-z]{2,3}(-[a-z]{2})?$/.test(language)) {
+          return response.status(422).json({ ok: false, error: 'Choose the subtitle language.' });
+        }
+        const text = decodeSubtitle(raw);
+        const format = subtitleFormat(text);
+        if (!format) return response.status(422).json({ ok: false, error: 'This does not look like an SRT, WebVTT or ASS/SSA subtitle file.' });
+        let body;
+        try { body = toVtt(text, format); }
+        catch (error) { return response.status(422).json({ ok: false, error: error.message }); }
+        if (!body || !body.includes('-->')) return response.status(422).json({ ok: false, error: 'The file contains no subtitle cues.' });
+        if (Buffer.byteLength(body) > maxBytes) return response.status(422).json({ ok: false, error: 'Converted subtitles exceed the 2 MB limit.' });
+        if (response.destroyed) return;
+        if (!await saveSubtitle(root, media.file, body, language, () => { changed = true; })) {
+          return response.status(422).json({ ok: false, error: 'Could not save the subtitle on the server.' });
+        }
+        const tracks = await subtitles(root, media.file);
+        return response.json({ ok: true, format, subtitles: [...tracks.values()].map(({ id, label, language }) => ({
+          id, label, language, url: '/netplay' + prefix + '/stream/subtitles/' + request.params.token + '/' + id + '.vtt',
+        })) });
+      } catch (error) {
+        if (response.destroyed || response.headersSent) return;
+        if (changed) return response.status(503).json({ ok: false, error: 'Could not finish loading the saved subtitles. Reopen the player to reload them.' });
+        return unavailable(response);
+      } finally {
+        transfers--;
+      }
+    });
   return () => transfers > 0;
 };
