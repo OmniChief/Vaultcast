@@ -39,7 +39,22 @@
       .then(function(response){return response.ok?response.json():null;})
       .then(function(runtime){
         if(!runtime||runtime.version!==window.__STREAM_VERSION__)return;
-        if(runtime.application===true)window.__VAULTCAST_APPLICATION_BASE__=base+'netplay/application';
+        if(runtime.application===true){
+          var application=base+'netplay/application';
+          window.__VAULTCAST_APPLICATION_BASE__=application;
+          var manifest=document.getElementById('vaultcast-manifest');
+          if(manifest)manifest.href=application+'/manifest';
+          var dependencies=window.VaultcastDependencies;
+          if(dependencies&&dependencies.source==='local'){
+            var playerAssets=base+'api/player-assets/';
+            ['emulatorData','hls'].forEach(function(key){
+              var url=dependencies[key];
+              if(typeof url==='string'&&url.indexOf(playerAssets)===0){
+                dependencies[key]=application+'/player-assets/'+url.slice(playerAssets.length);
+              }
+            });
+          }
+        }
         if(runtime.assets===true)window.__VAULTCAST_ASSET_BASE__=base+'netplay/web-assets/';
       })
       .catch(function(){})

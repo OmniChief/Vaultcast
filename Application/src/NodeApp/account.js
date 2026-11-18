@@ -11,6 +11,7 @@ const mountProfiles = require('./profile');
 const mountLibrary = require('./library');
 const mountStream = require('./stream');
 const mountPlayback = require('./playback');
+const mountBrowserAssets = require('./browser-assets');
 const cookieName = 'vaultcast_session';
 
 function browserToken(request) {
@@ -182,6 +183,7 @@ module.exports = function mountAccount(app, express, root) {
     root, handle, unavailable, passwordWork,
     json: express.json({ limit: '1mb' }),
   });
+  mountBrowserAssets(app, route, { root, handle, unavailable });
   mountLibrary(app, route, { root, handle, unavailable });
   mountPlayback(app, route, { root, db, handle, json, unavailable });
   const streaming = mountStream(app, route, { db, root, readSession: session, updating, express, unavailable });
