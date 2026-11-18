@@ -595,6 +595,25 @@ async function continueWatching(pool, settings, userId, registry, limit) {
   return null;
 }
 
+function unindexedSearchSource(sections) {
+  const series = sections.filter(section => ['tv', 'anime'].includes(section.type)).map(section => section.id);
+  const placeholders = rows => rows.map(() => '?').join(',');
+  const mappings = sections.map(() => 'WHEN ? THEN ?').join(' ');
+  const seriesScope = series.length ? 'i.section_id IN (' + placeholders(series) + ')' : '0=1';
+  const path = "COALESCE(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(i.payload,'$.rel')),'null'),'')";
+  const show = "COALESCE(NULLIF(i.show_title,''),NULLIF(SUBSTRING_INDEX(REPLACE(" + path + ",CHAR(92),'/'),'/',1),''),i.title)";
+  const sql = 'WITH search_items AS (SELECT i.id AS item_id,i.section_id,i.media_kind,i.title,i.system_name,' +
+    "COALESCE(NULLIF(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(i.payload,'$.type')),'null'),''),CASE i.section_id " +
+    mappings + " ELSE '' END) AS type," + path + ' AS search_path,' +
+    "CASE WHEN " + seriesScope + " THEN LEFT(SHA1(CONCAT(i.section_id,'|'," + show + ")),16) ELSE '' END AS show_key," +
+    "CASE WHEN " + seriesScope + " THEN " + show + " ELSE '' END AS show_name," +
+    "CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(i.payload,'$.year')),'null') AS SIGNED) AS year," +
+    "CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(i.payload,'$.season')),'null') AS SIGNED) AS season " +
+    'FROM vaultcast_items i WHERE i.section_id IN (' + placeholders(sections) + ')) ';
+  return { sql, args: [...sections.flatMap(section => [section.id, section.type ?? '']), ...series, ...series,
+    ...sections.map(section => section.id)] };
+}
+
 module.exports = function mountLibrary(app, prefix, { root, handle, unavailable }) {
   const appVersion = readFile(join(root, 'VERSION'), 'utf8').then(value => value.trim()).catch(() => '');
   const browse = (operation, includeCatalogue = true) => handle(async (request, response, pool, _bcrypt, settings, current) => {
@@ -657,31 +676,39 @@ module.exports = function mountLibrary(app, prefix, { root, handle, unavailable 
       const area = section.type === 'roms' ? 'games' : 'library';
       return (request.query.area !== 'games' || area === 'games') &&
         (request.query.area !== 'library' || area === 'library') && areaAllowed(user, area, parental);
-    }).map(section => String(section.id));
+    });
 
     let cards = [], total = 0, hasMore = false;
     const names = ['browse-index-ready', 'slugs'];
     if (!suggest) names.push('permission_roles');
     const docs = await documents(pool, names);
     if (query && sections.length) {
-      if (!enabled(docs['browse-index-ready'])) return unavailable(response);
-      const scope = 'b.section_id IN (' + sections.map(() => '?').join(',') + ')';
+      const indexed = enabled(docs['browse-index-ready']);
+      const { sql: cte, args: sourceArgs } = indexed ? { sql: '', args: [] } : unindexedSearchSource(sections);
+      const source = indexed ? 'vaultcast_browse_items' : 'search_items';
+      const ids = indexed ? sections.map(section => String(section.id)) : [];
+      const scope = indexed ? 'b.section_id IN (' + ids.map(() => '?').join(',') + ') AND ' : '';
       const starts = query.replace(/[!%_]/g, character => '!' + character) + '%';
       const contains = '%' + starts;
-      const shows = "SELECT b.show_key AS id,'show' AS kind,b.title,b.section_id AS section,b.type,'show' AS media_kind," +
+      const shows = indexed ? "SELECT b.show_key AS id,'show' AS kind,b.title,b.section_id AS section,b.type,'show' AS media_kind," +
         "'' AS system_name,CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(b.payload,'$.year')),'null') AS SIGNED) AS year," +
         "CASE WHEN b.title=? THEN 100 WHEN b.title LIKE ? ESCAPE '!' THEN 80 ELSE 50 END AS score," +
         "'show' AS match_kind,b.show_key AS parent_key FROM vaultcast_show_summaries b WHERE " + scope +
-        " AND b.title LIKE ? ESCAPE '!'";
+        "b.title LIKE ? ESCAPE '!'" :
+        "SELECT b.show_key AS id,'show' AS kind,MIN(b.show_name) AS title,MIN(b.section_id) AS section,MIN(b.type) AS type," +
+        "'show' AS media_kind,'' AS system_name,MIN(b.year) AS year," +
+        "CASE WHEN MIN(b.show_name)=? THEN 100 WHEN MIN(b.show_name) LIKE ? ESCAPE '!' THEN 80 ELSE 50 END AS score," +
+        "'show' AS match_kind,b.show_key AS parent_key FROM search_items b WHERE b.show_key<>'' " +
+        "AND b.show_name LIKE ? ESCAPE '!' GROUP BY b.show_key";
       const items = "SELECT b.item_id AS id,'item' AS kind,b.title,b.section_id AS section,b.type,b.media_kind,b.system_name,b.year," +
         "CASE WHEN b.show_key<>'' THEN 30 WHEN b.title=? THEN 95 WHEN b.title LIKE ? ESCAPE '!' THEN 75 ELSE 45 END AS score," +
         "CASE WHEN b.show_key<>'' THEN 'episode' ELSE 'item' END AS match_kind,b.show_key AS parent_key " +
-        'FROM vaultcast_browse_items b WHERE ' + scope +
-        " AND ((b.show_key='' AND (b.title LIKE ? ESCAPE '!' OR b.search_path LIKE ? ESCAPE '!'))" +
+        'FROM ' + source + ' b WHERE ' + scope +
+        "((b.show_key='' AND (b.title LIKE ? ESCAPE '!' OR b.search_path LIKE ? ESCAPE '!'))" +
         " OR (b.show_key<>'' AND b.show_name NOT LIKE ? ESCAPE '!' AND b.title LIKE ? ESCAPE '!'))";
       const ranked = '(' + shows + ' UNION ALL ' + items + ') ranked';
-      const args = [query, starts, ...sections, contains, query, starts, ...sections, contains, contains, contains, contains];
-      const [hits] = await pool.execute('SELECT * FROM ' + ranked + ' ORDER BY score DESC,title,id LIMIT ? OFFSET ?',
+      const args = [...sourceArgs, query, starts, ...ids, contains, query, starts, ...ids, contains, contains, contains, contains];
+      const [hits] = await pool.execute(cte + 'SELECT * FROM ' + ranked + ' ORDER BY score DESC,title,id LIMIT ? OFFSET ?',
         [...args, limit + 1, (page - 1) * limit]);
       hasMore = hits.length > limit;
       hits.length = Math.min(hits.length, limit);
@@ -697,7 +724,7 @@ module.exports = function mountLibrary(app, prefix, { root, handle, unavailable 
           return suggestion;
         });
       } else {
-        const [[count]] = await pool.execute('SELECT COUNT(*) AS total FROM ' + ranked, args);
+        const [[count]] = await pool.execute(cte + 'SELECT COUNT(*) AS total FROM ' + ranked, args);
         total = Number(count.total);
         const movieSlugs = reverseSlugs(docs.slugs, 'movie'), gameSlugs = reverseSlugs(docs.slugs, 'game');
         const showSlugs = reverseSlugs(docs.slugs, 'show');
@@ -709,10 +736,21 @@ module.exports = function mountLibrary(app, prefix, { root, handle, unavailable 
         ]) {
           const ids = hits.filter(hit => hit.kind === kind).map(hit => hit.id);
           if (!ids.length) continue;
-          const [rows] = await pool.execute(sql + '(' + ids.map(() => '?').join(',') + ')', ids);
+          const placeholders = '(' + ids.map(() => '?').join(',') + ')';
+          if (kind === 'show' && !indexed) {
+            const [rows] = await pool.execute(cte + 'SELECT show_key,MIN(section_id) AS section,MIN(type) AS type,' +
+              'MIN(show_name) AS title,MIN(year) AS year,COUNT(*) AS available_count,COUNT(DISTINCT season) AS season_count ' +
+              'FROM search_items WHERE show_key IN ' + placeholders + ' GROUP BY show_key', [...sourceArgs, ...ids]);
+            for (const row of rows) {
+              byId.set('show:' + row.show_key, showCard({ ...row, year: Number(row.year) || null,
+                available_count: Number(row.available_count), episode_count: Number(row.available_count),
+                season_count: Number(row.season_count), has_poster: true }, showSlugs));
+            }
+            continue;
+          }
+          const [rows] = await pool.execute(sql + placeholders, ids);
           for (const row of rows) {
             const raw = parse(row.payload);
-            if (kind === 'show' && !raw?._meta_prepared) return unavailable(response);
             if (raw) byId.set(kind + ':' + row.id, kind === 'show' ? showCard(raw, showSlugs) :
               itemCard(row, raw, settings, movieSlugs, gameSlugs));
           }
