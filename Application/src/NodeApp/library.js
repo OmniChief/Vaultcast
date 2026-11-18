@@ -249,6 +249,39 @@ function sample(ids, size) {
   return ids.slice(0, size);
 }
 
+async function randomSectionCards(root, pool, section, count, settings, docs) {
+  const id = section.id;
+  let cards;
+  if (['tv', 'anime'].includes(section.type)) {
+    const [rows] = await pool.execute('SELECT show_key FROM vaultcast_show_summaries WHERE section_id=? LIMIT 10001', [id]);
+    if (rows.length > 10000) return null;
+    const ids = sample(rows.map(row => row.show_key), count);
+    if (!ids.length) cards = [];
+    else {
+      const [picked] = await pool.execute('SELECT show_key,payload FROM vaultcast_show_summaries WHERE section_id=? AND show_key IN (' +
+        ids.map(() => '?').join(',') + ')', [id, ...ids]);
+      const byKey = new Map(picked.map(row => [row.show_key, parse(row.payload)]));
+      if (ids.some(key => !byKey.get(key)?._meta_prepared)) return null;
+      const slugs = reverseSlugs(docs.slugs, 'show');
+      cards = ids.map(key => showCard(byKey.get(key), slugs));
+    }
+  } else {
+    if (!['movies', 'disney', 'roms', 'music'].includes(section.type)) return null;
+    const [revisions] = await pool.execute("SELECT revision FROM vaultcast_documents WHERE name='catalogue'");
+    const existing = await cached(root, 'section-sample-v1|' + id);
+    let ids;
+    if (Array.isArray(existing?.ids) && Number(existing.revision) === Number(revisions[0]?.revision ?? 0)) {
+      ids = existing.ids;
+    } else {
+      const [rows] = await pool.execute('SELECT id FROM vaultcast_items WHERE section_id=? LIMIT 100001', [id]);
+      ids = rows.map(row => row.id);
+    }
+    if (ids.length > 100000) return null;
+    cards = await showcaseItems(pool, id, sample(ids, count), settings, docs.slugs);
+  }
+  return cards && !cards.some(card => !card) ? cards : null;
+}
+
 async function recentCards(pool, section, count, settings, registry) {
   // Group on the existing browse index. Resolve full episode payloads only for the selected cards.
   const [groups] = await pool.execute(
@@ -469,6 +502,99 @@ async function cachedSynopsis(root, pool, item) {
   return { summary, source: enabled(summary) ? String(stored.source ?? '') : null, pending: false };
 }
 
+const compareEpisodePath = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
+const episodeGroup = item => createHash('sha1').update(String(item.section ?? '') + '|' +
+  (item.show || String(item.rel ?? '').replace(/\\/g, '/').split('/')[0] || item.title || 'Unknown'))
+  .digest('hex').slice(0, 16);
+
+function progressFinished(progress, episode) {
+  if (enabled(progress.watched)) return true;
+  const position = Number(progress.position ?? 0), duration = Number(progress.duration ?? 0);
+  return duration > 0 && (position / duration > 0.92 || duration - position < Math.min(episode ? 180 : 600, duration * 0.25));
+}
+
+async function continueWatching(pool, settings, userId, registry, limit) {
+  if (!limit) return [];
+  const movies = reverseSlugs(registry, 'movie'), games = reverseSlugs(registry, 'game'), shows = reverseSlugs(registry, 'show');
+  const card = (row, item) => {
+    const result = itemCard(row, item, settings, movies, games);
+    if (item.show && ['tv', 'anime'].includes(item.type)) {
+      result.show_key = episodeGroup(item);
+      result.show_slug = shows.get(result.show_key) ?? result.show_key;
+      if (result.episode_title && item.season != null && item.episode != null) {
+        result.title = episodeLabel(fixText(item.show), int(item.season), int(item.episode),
+          lower(result.episode_title) === lower(fixText(item.show)) ? null : result.episode_title);
+      }
+    }
+    return result;
+  };
+  const output = [], seen = new Set();
+  let cursor;
+  for (let page = 0; page < 20; page++) {
+    const [rows] = await pool.execute(
+      'SELECT p.item_id,p.updated_at,p.payload AS progress,i.payload,f.sig,f.duration,f.needs_convert ' +
+      'FROM vaultcast_progress p JOIN vaultcast_items i ON i.id=p.item_id ' +
+      'LEFT JOIN vaultcast_media_facts f ON f.item_id=i.id WHERE p.user_id=? AND LENGTH(p.payload)<=1048576 ' +
+      (cursor ? 'AND (p.updated_at<? OR (p.updated_at=? AND p.item_id<?)) ' : '') +
+      'ORDER BY p.updated_at DESC,p.item_id DESC LIMIT 100',
+      cursor ? [userId, cursor.updated_at, cursor.updated_at, cursor.item_id] : [userId]);
+    for (const row of rows) {
+      const item = parse(row.payload), progress = parse(row.progress);
+      if (!item || !progress || typeof progress !== 'object') continue;
+      const episode = ['tv', 'anime'].includes(item.type) || Boolean(item.show && item.season != null);
+      const watched = progressFinished(progress, episode);
+      if ((!episode && watched) || (!watched && Number(progress.position ?? 0) < 5)) continue;
+      const group = episode ? episodeGroup(item) : '';
+      if (episode && seen.has(group)) continue;
+      if (episode) seen.add(group);
+      if (watched) {
+        const [episodes] = await pool.execute(
+          'SELECT i.payload,f.sig,f.duration,f.needs_convert,p.payload AS progress FROM vaultcast_items i ' +
+          'LEFT JOIN vaultcast_media_facts f ON f.item_id=i.id LEFT JOIN vaultcast_progress p ' +
+          'ON p.item_id=i.id AND p.user_id=? AND LENGTH(p.payload)<=1048576 ' +
+          "WHERE i.section_id=? AND i.show_title=? AND i.media_kind='video' LIMIT 2001",
+          [userId, item.section ?? '', item.show ?? '']);
+        if (episodes.length > 2000) return null;
+        const ordered = episodes.map(record => ({ record, item: parse(record.payload) }))
+          .filter(entry => entry.item && isEpisode(entry.item) && episodeGroup(entry.item) === group)
+          .sort((a, b) => int(a.item.season) - int(b.item.season) ||
+            (a.item.episode == null ? Number.MAX_SAFE_INTEGER : int(a.item.episode)) -
+            (b.item.episode == null ? Number.MAX_SAFE_INTEGER : int(b.item.episode)) ||
+            compareEpisodePath.compare(a.item.rel ?? '', b.item.rel ?? ''));
+        const at = ordered.findIndex(entry => entry.item.id === item.id);
+        if (at < 0) continue;
+        const signature = entry => entry.season == null || entry.episode == null ? null : int(entry.season) + 'x' + int(entry.episode);
+        const current = signature(item);
+        let checked = 0;
+        for (let index = at + 1; index < ordered.length && checked < 50;) {
+          let candidate = ordered[index++];
+          const next = signature(candidate.item);
+          if (next !== null && next === current) continue;
+          checked++;
+          if (next !== null) {
+            while (index < ordered.length && signature(ordered[index].item) === next) {
+              const alternative = ordered[index++];
+              if (card(candidate.record, candidate.item).needs_convert && !card(alternative.record, alternative.item).needs_convert) candidate = alternative;
+            }
+          }
+          const saved = parse(candidate.record.progress);
+          if (saved && progressFinished(saved, true)) continue;
+          const resume = saved && Number(saved.position ?? 0) >= 5 ? saved : null;
+          output.push({ ...card(candidate.record, candidate.item), progress: resume,
+            cw_state: resume ? 'resume' : 'next', cw_group: group, cw_after: item.id });
+          break;
+        }
+      } else {
+        output.push({ ...card(row, item), progress, cw_state: 'resume', ...(episode ? { cw_group: group } : {}) });
+      }
+      if (output.length >= limit) return output;
+    }
+    if (rows.length < 100) return output;
+    cursor = rows[rows.length - 1];
+  }
+  return null;
+}
+
 module.exports = function mountLibrary(app, prefix, { root, handle, unavailable }) {
   const browse = (operation, includeCatalogue = true) => handle(async (request, response, pool, _bcrypt, settings, current) => {
     if (!current.user && settings.auth?.lan_guest_access !== false) return unavailable(response);
@@ -480,6 +606,60 @@ module.exports = function mountLibrary(app, prefix, { root, handle, unavailable 
     const parental = await parentalStatus(root, pool, current, current.user, now());
     return operation(request, response, pool, settings, current.user, docs.catalogue ?? {}, parental);
   }, true);
+
+  let recentHomeLibrary;
+  app.get(prefix + '/home', browse(async (_request, response, pool, _settings, user, _catalogue, parental) => {
+    const [revisions] = await pool.execute(
+      "SELECT name,revision,CASE WHEN name IN ('catalogue','settings') THEN payload END AS payload " +
+      "FROM vaultcast_documents WHERE name IN ('catalogue','settings','browse_epoch','show-summaries')");
+    const catalogue = parse(revisions.find(row => row.name === 'catalogue')?.payload) ?? {};
+    const settings = parse(revisions.find(row => row.name === 'settings')?.payload) ?? {};
+    const revisionsByName = new Map(revisions.map(row => [row.name, row.revision]));
+    const revision = ['catalogue', 'settings', 'browse_epoch', 'show-summaries'].map(name => revisionsByName.get(name) ?? 0).join('|');
+    let home = await cached(root, 'home-library-v2');
+    if (!home?.home || home.revision !== revision) home = recentHomeLibrary?.revision === revision ? recentHomeLibrary : null;
+    const docs = await documents(pool, ['slugs', 'browse-index-ready']);
+    if (!home) {
+      const sections = [];
+      const count = Math.max(1, Math.min(100, int(settings.home?.random_per_section ?? 10)));
+      for (const section of list(catalogue.sections)) {
+        const series = ['tv', 'anime'].includes(section.type);
+        if (series && !enabled(docs['browse-index-ready'])) return unavailable(response);
+        const items = await randomSectionCards(root, pool, section, count, settings, docs);
+        if (!items || (series && !items.length && Number(section.count) > 0)) return unavailable(response);
+        sections.push({ id: section.id, label: section.label, type: section.type,
+          count: series ? section.show_count ?? items.length : section.count,
+          item_count: section.count, show_count: section.show_count ?? null, items });
+      }
+      const features = { downloads: false, server_tools: false, ...settings.features };
+      if (!enabled(settings.features_explicit?.live) || !Object.hasOwn(features, 'live')) features.live = true;
+      if (!enabled(settings.features_explicit?.downloads)) {
+        const managed = await readFile(join(root, 'data/runtime/transmission.ini'), 'utf8').catch(() => '');
+        const config = managed.match(/^\[transmission\][^\S\r\n]*\r?\n([^[]*)/m)?.[1] ?? '';
+        if (/^port\s*=\s*"?[1-9]\d*/m.test(config) && /^username\s*=\s*"?[^"\s]/m.test(config)) features.downloads = true;
+      }
+      home = recentHomeLibrary = { revision, home: { ok: true, app_name: settings.app_name ?? 'Vaultcast',
+        features, scanned_at: catalogue.scanned_at ?? null, item_count: catalogue.item_count ?? 0, sections } };
+    }
+    const limit = Math.max(0, Math.min(100, int(settings.home?.continue_watching_limit ?? 20)));
+    const progress = await continueWatching(pool, settings, user.id, docs.slugs, limit);
+    if (!progress) return unavailable(response);
+    const areas = Object.fromEntries(['library', 'live', 'games'].map(area => [area, areaAllowed(user, area, parental)]));
+    const sections = [];
+    for (const section of list(home.home.sections)) {
+      if (areas[itemArea(section)]) sections.push({ ...section, items: await visibleCards(pool, list(section.items), parental) });
+    }
+    const artworkKinds = ['home','collections','cinema','watchlist','favourites','calendar','arrivals','friends','history','stats'];
+    const custom = await Promise.all(artworkKinds.map(kind =>
+      stat(join(root, 'data/site', kind + '-poster.img')).then(info => info.isFile(), () => false)));
+    return response.json({ ...home.home, areas, sections,
+      features: { ...home.home.features, ...(!areas.live ? { live: false } : {}) },
+      item_count: areas.library && areas.games ? home.home.item_count :
+        sections.reduce((total, section) => total + int(section.item_count ?? section.count), 0),
+      continue_watching: await visibleCards(pool, progress.filter(item => areas[itemArea(item)]), parental),
+      site_artwork_custom: artworkKinds.filter((_kind, index) => custom[index]),
+    });
+  }, false));
 
   app.get(prefix + '/items/:id([a-f0-9]{16})/next', browse(async (request, response, pool, settings, user, _catalogue, parental) => {
     const { id } = request.params;
@@ -698,32 +878,8 @@ module.exports = function mountLibrary(app, prefix, { root, handle, unavailable 
       if (mode === 'recent') {
         if (!series) return unavailable(response);
         cards = await recentCards(pool, id, buildCount, settings, docs.slugs);
-      } else if (series) {
-        const [rows] = await pool.execute('SELECT show_key FROM vaultcast_show_summaries WHERE section_id=? LIMIT 10001', [id]);
-        if (rows.length > 10000) return unavailable(response);
-        const ids = sample(rows.map(row => row.show_key), buildCount);
-        if (!ids.length) cards = [];
-        else {
-          const [picked] = await pool.execute('SELECT show_key,payload FROM vaultcast_show_summaries WHERE section_id=? AND show_key IN (' +
-            ids.map(() => '?').join(',') + ')', [id, ...ids]);
-          const byKey = new Map(picked.map(row => [row.show_key, parse(row.payload)]));
-          if (ids.some(key => !byKey.get(key)?._meta_prepared)) return unavailable(response);
-          const slugs = reverseSlugs(docs.slugs, 'show');
-          cards = ids.map(key => showCard(byKey.get(key), slugs));
-        }
       } else {
-        if (!['movies', 'disney', 'roms', 'music'].includes(section.type)) return unavailable(response);
-        const [revisions] = await pool.execute("SELECT revision FROM vaultcast_documents WHERE name='catalogue'");
-        const existing = await cached(root, 'section-sample-v1|' + id);
-        let ids;
-        if (Array.isArray(existing?.ids) && Number(existing.revision) === Number(revisions[0]?.revision ?? 0)) {
-          ids = existing.ids;
-        } else {
-          const [rows] = await pool.execute('SELECT id FROM vaultcast_items WHERE section_id=? LIMIT 100001', [id]);
-          ids = rows.map(row => row.id);
-        }
-        if (ids.length > 100000) return unavailable(response);
-        cards = await showcaseItems(pool, id, sample(ids, buildCount), settings, docs.slugs);
+        cards = await randomSectionCards(root, pool, section, buildCount, settings, docs);
       }
       if (!cards || cards.some(card => !card)) return unavailable(response);
       const kind = mode === 'recent' ? 'recent' : series ? 'shows' : 'items';
