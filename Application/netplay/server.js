@@ -19,6 +19,7 @@ const runtimeRevision = createHash('sha256').update(fs.readFileSync(__filename))
 function sourceFingerprint() {
   const hash = createHash('sha256');
   hash.update(fs.readFileSync(__filename));
+  hash.update(fs.readFileSync(path.join(__dirname, '../VERSION')));
   for (const dir of ['../src/NodeApp', '../src/Workers']) {
     const folder = path.join(__dirname, dir);
     for (const name of fs.readdirSync(folder).filter(name => name.endsWith('.js')).sort()) {
@@ -29,10 +30,12 @@ function sourceFingerprint() {
   return hash.digest('hex');
 }
 const loadedSourceFingerprint = sourceFingerprint();
+const applicationVersion = fs.readFileSync(path.join(__dirname, '../VERSION'), 'utf8').trim();
 
 async function installedSourceFingerprint() {
   const hash = createHash('sha256');
   hash.update(await fs.promises.readFile(__filename));
+  hash.update(await fs.promises.readFile(path.join(__dirname, '../VERSION')));
   for (const dir of ['../src/NodeApp', '../src/Workers']) {
     const folder = path.join(__dirname, dir);
     const names = (await fs.promises.readdir(folder)).filter(name => name.endsWith('.js')).sort();
@@ -198,6 +201,17 @@ app.get('/', (_req, res) => {
   res.type('text').send('Vaultcast EmulatorJS netplay OK\n');
 });
 
+// Browser-facing discovery exposes only the build and available services.
+app.get('/application/runtime', (_req, res) => {
+  res.set('Cache-Control', 'no-store');
+  if (fs.existsSync(updateMarker)) return res.sendStatus(503);
+  return res.json({
+    version: applicationVersion,
+    application: applicationDatabase?.ready() === true,
+    assets: Boolean(webAsset),
+  });
+});
+
 app.get('/health', (_req, res) => {
   res.json({
     ok: true,
@@ -207,7 +221,6 @@ app.get('/health', (_req, res) => {
     mediaApiRevision,
     metadataRelayRevision: 1,
     webAssetRevision: webAsset ? 1 : 0,
-    applicationRevision: applicationDatabase?.ready() ? 9 : 0,
     stalkerReadRevision: mediaHandler() ? 1 : 0,
     xtreamRelayRevision: mediaHandler()?.xtreamReady ? 1 : 0,
     eventsRevision: 1,
