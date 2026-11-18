@@ -17,6 +17,21 @@ server {
     location ~* \.(sql|md|log|sh|ps1|cmd|yaml|yml|lock|bak)$ { deny all; }
 
     location = /index.html { return 302 /; }
+    location = / {
+        error_page 404 502 503 504 = @vaultcast_php_page;
+        proxy_intercept_errors on;
+        if ($request_method !~ ^(GET|HEAD)$) { return 404; }
+        if ($args != "") { return 404; }
+        if ($cookie_vaultcast_browser_mode = on) { return 404; }
+        proxy_set_header Host $host;
+        proxy_pass http://127.0.0.1:3100/application/shell;
+    }
+    location @vaultcast_php_page {
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME $document_root/index.php;
+        fastcgi_param SCRIPT_NAME /index.php;
+        fastcgi_pass unix:/run/php/php7.4-fpm.sock;
+    }
     location / { try_files $uri $uri/ /index.php; }
     location = /index.php {
         include fastcgi_params;
