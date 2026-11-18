@@ -5,6 +5,7 @@ const { join } = require('path');
 const { lockFile } = require('../Workers/file-lock');
 const { documents, enabled, now, sha } = require('./account-data');
 const { authorized } = require('./profile-policy');
+const watchAchievements = require('./watch-achievements');
 
 const previousViews = "GREATEST(COALESCE(JSON_EXTRACT(payload,'$.viewings'),0), " +
   "CASE WHEN COALESCE(JSON_EXTRACT(payload,'$.watched'),0)=1 OR " +
@@ -61,16 +62,24 @@ module.exports = function mountProgress(app, prefix, { handle, json, unavailable
     const fraction = duration > 0 ? Math.max(0, position) / duration : 0;
     const finished = Number(duration > 0 && fraction > 0.92);
     const armed = Number(duration > 0 && fraction < 0.1);
-    if (finished && duration > 60) {
-      const { 'achievement-settings': achievements } = await documents(pool, ['achievement-settings']);
-      if (!achievements || !Object.hasOwn(achievements, 'enabled') || enabled(achievements.enabled)) return unavailable(response);
-    }
     const time = now();
     response.locals.mutationStarted = true;
     await pool.execute(save, [current.user.id, itemId, time, JSON.stringify({
       position, duration, updated_at: time, viewings: finished, viewing_armed: armed,
     }), finished, finished, armed]);
     await refreshHome(root, pool, current.user.id, time).catch(() => {});
+    if (finished && duration > 60) {
+      try {
+        const { 'achievement-settings': achievements } = await documents(pool, ['achievement-settings']);
+        if (!achievements || !Object.hasOwn(achievements, 'enabled') || enabled(achievements.enabled)) {
+          const count = await watchAchievements(root, pool, current.user, itemId, duration, time);
+          if (count && current.data?.user_id === current.user.id) response.set('X-Vaultcast-Achievement', String(count));
+        }
+      } catch (error) {
+        // Progress is already saved. A later completion tick can retry the achievement transaction.
+        console.warn('Vaultcast could not record playback achievements:', error.code ?? error.name);
+      }
+    }
     return response.status(204).end();
   }, true));
 };
