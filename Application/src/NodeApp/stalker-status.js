@@ -43,7 +43,7 @@ function savedFeeds(state) {
   return state.feeds.filter(feed => feed.type === 'stalker');
 }
 
-module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavailable, json, downloads }) {
+module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavailable, json, downloads, stalker }) {
   const version = readFile(join(root, 'VERSION'), 'utf8').then(text => text.trim()).catch(() => '');
   const runtime = join(root, 'data/runtime');
   const fresh = async name => {
@@ -124,6 +124,20 @@ module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavai
           return response.status(403).json({ ok: false, error: 'This action requires the iptv_manage permission.' });
         }
       }
+      if (['stalker_updates','stalker_catalogue_control'].includes(action)) {
+        response.locals.mutationStarted=true;
+        return async () => {
+          try {
+            if(action==='stalker_updates')return response.json(await stalker.updates(request.body??{},user.id));
+            await stalker.catalogueControl(request.body??{});
+            request.params.action='stalker_catalogue_status';
+            return operation(request,response);
+          } catch(error) {
+            if(response.headersSent||response.destroyed)return;
+            return response.status(error.userError?422:502).json({ok:false,error:error.userError?error.message:'The Stalker operation could not be completed. Existing checkpoints and settings were retained.'});
+          }
+        };
+      }
       if (action === 'stalker_update_status') {
         const { 'stalker-update-settings': saved = {} } = await documents(pool, ['stalker-update-settings']);
         const worker = await workerRunning('updates', 'stalker-updates.heartbeat');
@@ -150,8 +164,8 @@ module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavai
       }
 
       const worker = await workerRunning('catalogue', 'stalker-library.heartbeat');
-      // In mixed installations the old status route can relaunch a stalled worker.
-      if (!worker && await stat(join(runtime, 'stalker-library.enabled')).catch(() => null)) return unavailable(response);
+      // A status request can wake the native scheduler after a service restart.
+      if (!worker && await stat(join(runtime, 'stalker-library.enabled')).catch(() => null)) stalker.wake();
       const active = worker ? await readFile(join(runtime, 'stalker-library.active'), 'utf8').then(JSON.parse).catch(() => null) : null;
       const summary = enabled(request.query.summary);
       const activeFeeds = new Map(feeds.filter(feed => feed.enabled == null || enabled(feed.enabled)).map(feed => [feed.id, feed]));
@@ -215,7 +229,7 @@ module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavai
       return response.json({ ok: true, sources, reset: docs[resetKey] ?? { state: 'idle' }, worker });
     }, true);
   app.get(prefix + '/live/:action(stalker|stalker_catalogue_status|stalker_update_status|stalker_offline|stalker_offline_file)', operation);
-  app.post(prefix + '/live/:action(stalker_cancel|stalker_delete|stalker_download|stalker_retry)', (request, response, next) => {
+  app.post(prefix + '/live/:action(stalker_cancel|stalker_delete|stalker_download|stalker_retry|stalker_updates|stalker_catalogue_control)', (request, response, next) => {
     if (!request.is('application/json')) return unavailable(response);
     json(request, response, error => error ? unavailable(response) : next());
   }, operation);

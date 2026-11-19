@@ -5843,7 +5843,7 @@ try {
       body: JSON.stringify(body || {})
     };
     var nativeBase = window.__VAULTCAST_APPLICATION_BASE__;
-    var native = nativeBase && ['stalker_cancel', 'stalker_delete', 'stalker_download', 'stalker_retry'].indexOf(action) >= 0;
+    var native = nativeBase && ['stalker_cancel', 'stalker_delete', 'stalker_download', 'stalker_retry', 'stalker_updates', 'stalker_catalogue_control'].indexOf(action) >= 0;
     var request = native ? fetch(nativeBase + '/live/' + action, options).then(function(r){
       if (r.status === 503 && r.headers.get('X-Vaultcast-App-Unavailable') === '1') return fetch(LIVE_API + action, options);
       return r;

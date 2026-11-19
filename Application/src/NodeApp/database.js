@@ -70,6 +70,7 @@ module.exports = function applicationDatabase(root) {
   if (flock) setInterval(initialize, 10000).unref();
   return {
     ready: () => ready,
+    services: () => packages,
     async run(operation) {
       if (!ready) throw new Error('Node application database unavailable');
       return withLock(async () => {

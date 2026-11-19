@@ -16,7 +16,7 @@ module.exports = async function dependencies(root) {
   const marker = join(path, '.ready');
   const load = createRequire(join(path, 'package.json'));
   function installed() {
-    return { mysql: load('mysql2/promise'), bcrypt: load.resolve('bcryptjs') };
+    return { mysql: load('mysql2/promise'), bcrypt: load.resolve('bcryptjs'), html: load('parse5'), decode: load('entities').decodeHTML };
   }
   if (await fs.stat(marker).catch(() => null)) {
     try { return installed(); } catch (error) { /* Restore incomplete dependency storage. */ }

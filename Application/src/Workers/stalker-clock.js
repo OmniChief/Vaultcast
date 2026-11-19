@@ -2,91 +2,193 @@
 
 const fs = require('fs').promises;
 const { join } = require('path');
-const { spawn } = require('child_process');
+const { jobLock } = require('./stalker-download');
+const { now } = require('../NodeApp/account-data');
+const { doc, q, enabled } = require('../NodeApp/stalker-store');
 
-module.exports = function startStalkerWorkers(root) {
-  if (process.platform !== 'linux') return;
-  const runtime = join(root, 'data/runtime');
-  const versionFile = join(root, 'VERSION');
+module.exports = function startStalkerWorkers(root, db) {
+  const runtime = join(root, 'data/runtime'),
+    versionFile = join(root, 'VERSION');
   const workers = [
-    { name: 'catalogue', enabled: 'stalker-library.enabled', next: 0, delay: 30000 },
-    { name: 'updates', enabled: 'stalker-updates.enabled-v2', next: 0, delay: 60000, changed: 0 },
+    {
+      name: 'catalogue',
+      flag: 'stalker-library.enabled',
+      lock: 'stalker-library.worker.lock',
+      delay: 30000,
+      next: 0,
+    },
+    {
+      name: 'updates',
+      flag: 'stalker-updates.enabled-v2',
+      lock: 'stalker-updates.worker.lock',
+      delay: 60000,
+      next: 0,
+    },
   ];
-  let running = false;
-  let revision;
-  let first = 0;
-
+  let engines,
+    revision,
+    running = false,
+    first = 0,
+    operations = 0;
+  let flagsInitialized = false;
+  const loadedVersion = fs
+    .readFile(versionFile, 'utf8')
+    .then((value) => value.trim())
+    .catch(() => null);
+  const guarded = {
+    ...db,
+    run: (operation) =>
+      db.run(async (...args) => {
+        if ((await fs.readFile(versionFile, 'utf8')).trim() !== (await loadedVersion))
+          throw new Error('Stalker worker is waiting for the updated service.');
+        return operation(...args);
+      }),
+  };
+  const ensure = () =>
+    (engines ??= {
+      catalogue: require('./stalker-catalogue')(guarded, root),
+      updates: require('../NodeApp/stalker-updates')(guarded, root),
+    });
+  async function heartbeats(version) {
+    for (const worker of workers) {
+      const path = join(runtime, 'node-stalker-' + worker.name + '.heartbeat');
+      if (await fs.stat(join(runtime, worker.flag)).catch(() => null))
+        await fs.writeFile(path, version, { mode: 0o600 });
+      else await fs.unlink(path).catch(() => {});
+    }
+  }
   async function tick() {
-    if (running) return;
+    if (running || process.platform !== 'linux' || !db?.ready()) return;
     running = true;
     try {
       const version = (await fs.readFile(versionFile, 'utf8')).trim();
       if (revision && revision !== version) return;
       revision = version;
-      if (await fs.stat(join(runtime, 'maintenance.json')).catch(() => null)) return;
-      const settings = JSON.parse(await fs.readFile(join(runtime, 'node-stalker.json'), 'utf8'));
-      if (settings.version !== version || typeof settings.php !== 'string' || !settings.php.startsWith('/')) return;
-      const now = Date.now();
+      const maintenance = await fs
+        .readFile(join(runtime, 'maintenance.json'), 'utf8')
+        .then(JSON.parse)
+        .catch(() => null);
+      if (Number(maintenance?.since) > now() - 900) return;
+      ensure();
+      await fs.mkdir(runtime, { recursive: true, mode: 0o700 });
+      if (!flagsInitialized) {
+        const state = await guarded.run(async (pool) => ({
+          settings: await doc(pool, 'stalker-update-settings'),
+          jobs: await q(
+            pool,
+            "SELECT 1 FROM vaultcast_stalker_jobs WHERE status IN ('queued','running','partial','waiting') LIMIT 1",
+          ),
+        }));
+        const updatesFlag = join(runtime, 'stalker-updates.enabled-v2');
+        if (state.settings.url && !enabled(state.settings.paused)) {
+          if (!(await fs.stat(updatesFlag).catch(() => null)))
+            await fs.writeFile(updatesFlag, '1', { mode: 0o600 });
+        } else await fs.unlink(updatesFlag).catch(() => {});
+        await fs.unlink(join(runtime, 'stalker-updates.enabled')).catch(() => {});
+        const catalogueFlag = join(runtime, 'stalker-library.enabled');
+        if (state.jobs.length && !(await fs.stat(catalogueFlag).catch(() => null)))
+          await fs.writeFile(catalogueFlag, '1', { mode: 0o600 });
+        flagsInitialized = true;
+      }
+      await heartbeats(version);
+      const start = first;
       for (let index = 0; index < workers.length; index++) {
-        const slot = (first + index) % workers.length;
-        const worker = workers[slot];
-        const enabled = await fs.stat(join(runtime, worker.enabled)).catch(() => null);
-        if (!enabled) {
+        const slot = (start + index) % workers.length,
+          worker = workers[slot],
+          heartbeat = join(runtime, 'node-stalker-' + worker.name + '.heartbeat');
+        const flag = await fs.stat(join(runtime, worker.flag)).catch(() => null);
+        if (!flag) {
           worker.next = 0;
+          await fs.unlink(heartbeat).catch(() => {});
           continue;
         }
-        if (worker.name === 'updates' && worker.changed !== enabled.mtimeMs) {
-          worker.changed = enabled.mtimeMs;
+        // Publishing ownership makes the legacy loop exit before its lock is claimed.
+        await fs.writeFile(heartbeat, version, { mode: 0o600 });
+        if (worker.changed !== flag.mtimeMs) {
+          worker.changed = flag.mtimeMs;
           worker.next = 0;
         }
-        if (worker.next > now) {
-          if (worker.ready) await fs.writeFile(join(runtime, 'node-stalker-' + worker.name + '.heartbeat'), version);
-          continue;
-        }
+        if (worker.next > Date.now()) continue;
         first = (slot + 1) % workers.length;
+        const lock = await jobLock(join(runtime, worker.lock));
+        if (!lock) {
+          worker.next = Date.now() + 3000;
+          continue;
+        }
+        const controller = new AbortController();
+        let checking = false,
+          pending = Promise.resolve();
+        const timer = setTimeout(
+          () => controller.abort(new Error('Stalker worker slice timed out.')),
+          120000,
+        );
+        const pulse = setInterval(() => {
+          if (checking) return;
+          checking = true;
+          pending = (async () => {
+            const maintenance = await fs
+              .readFile(join(runtime, 'maintenance.json'), 'utf8')
+              .then(JSON.parse)
+              .catch(() => null);
+            if (
+              Number(maintenance?.since) > now() - 900 ||
+              (await fs.readFile(versionFile, 'utf8')).trim() !== version
+            )
+              controller.abort(new Error('Stalker worker paused for the application update.'));
+            else await heartbeats(version);
+          })()
+            .catch((error) => controller.abort(error))
+            .finally(() => {
+              checking = false;
+            });
+        }, 15000);
         try {
-          const result = await runSlice(root, settings, worker.name);
-          worker.ready = true;
+          const result = await engines[worker.name].tick(controller.signal);
           worker.next = Date.now() + (worker.name === 'catalogue' && result.busy ? 1000 : worker.delay);
-          if (worker.name === 'updates' && result.nextCheck > 0) {
-            worker.next = Math.max(worker.next, result.nextCheck * 1000);
-          }
-          await fs.writeFile(join(runtime, 'node-stalker-' + worker.name + '.heartbeat'), version);
         } catch (error) {
-          worker.ready = false;
           worker.next = Date.now() + worker.delay;
+        } finally {
+          clearTimeout(timer);
+          clearInterval(pulse);
+          await pending;
+          await lock.close();
         }
         return;
       }
     } catch (error) {
-      // The app may not have enabled or configured Stalker yet.
+      /* Bootstrap and database availability are retried automatically. */
     } finally {
       running = false;
     }
   }
-
   setInterval(tick, 3000).unref();
-};
-
-function runSlice(root, settings, name) {
-  const args = settings.ini ? ['-c', settings.ini] : [];
-  args.push(join(root, 'src/Console.php'), 'stalker-' + name + '-slice');
-  return new Promise((resolve, reject) => {
-    const child = spawn(settings.php, args, { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
-    let output = '';
-    child.stdout.setEncoding('utf8');
-    child.stdout.on('data', chunk => {
-      if (output.length < 16384) output += chunk;
-    });
-    child.once('error', reject);
-    child.once('close', code => {
+  return {
+    active: () => running || operations > 0,
+    wake: () => {
+      for (const worker of workers) worker.next = 0;
+      void tick();
+    },
+    async updates(body, owner) {
+      operations++;
       try {
-        const result = JSON.parse(output);
-        if (code !== 0 || !result.ok) throw new Error('Stalker slice failed');
-        resolve(result);
-      } catch (error) {
-        reject(error);
+        const result = await ensure().updates.operation(body, owner);
+        for (const worker of workers) worker.next = 0;
+        void tick();
+        return result;
+      } finally {
+        operations--;
       }
-    });
-  });
-}
+    },
+    async catalogueControl(body) {
+      operations++;
+      try {
+        const result = await ensure().catalogue.control(body);
+        for (const worker of workers) worker.next = 0;
+        void tick();
+        return result;
+      } finally {
+        operations--;
+      }
+    },
+  };
+};

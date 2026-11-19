@@ -1,0 +1,1058 @@
+'use strict';
+
+const { join } = require('path');
+const { writeFile, unlink } = require('fs').promises;
+const { randomInt } = require('crypto');
+const { now, sha, enabled } = require('../NodeApp/account-data');
+const { cached } = require('../NodeApp/profile-policy');
+const { configHash, phpJson } = require('../NodeApp/stalker-provider');
+const store = require('../NodeApp/stalker-store');
+const {
+  q,
+  doc,
+  save,
+  pending,
+  take,
+  snapshot,
+  saveSnapshot,
+  liveKey,
+  episodeKey,
+  transaction,
+  locked,
+  provider,
+  notify,
+  queue,
+  selected,
+  folderSelected,
+} = store;
+const libraryWriter = require('../NodeApp/stalker-library-write');
+
+function groups(response) {
+  const rows = response?.data ?? response;
+  if (
+    !rows ||
+    typeof rows !== 'object' ||
+    enabled(response.error) ||
+    response.success === false ||
+    response.status === false
+  )
+    throw new Error('Invalid provider folder response.');
+  const result = new Map();
+  for (const row of Object.values(rows)) {
+    if (!row || row.id == null || typeof row.id === 'object') throw new Error('Invalid provider folder.');
+    const id = String(row.id);
+    if (!/^(?:[a-zA-Z0-9_-]{1,120}|\*)$/.test(id)) throw new Error('Unsupported provider folder ID.');
+    const value = row.title ?? row.name ?? id;
+    result.set(
+      id,
+      typeof value === 'object'
+        ? id
+        : take(
+            String(value)
+              .replace(/<[^>]*>/g, '')
+              .trim(),
+            500,
+          ),
+    );
+  }
+  if (!result.has('*')) result.set('*', 'All');
+  return result;
+}
+function page(response) {
+  if (
+    !response ||
+    enabled(response.error) ||
+    response.success === false ||
+    response.status === false ||
+    !response.data ||
+    typeof response.data !== 'object'
+  )
+    throw new Error('Invalid provider page response.');
+  const rows = Object.values(response.data),
+    ids = new Set();
+  for (const row of rows) {
+    if (
+      !row ||
+      row.id == null ||
+      typeof row.id === 'object' ||
+      !String(row.id) ||
+      Buffer.byteLength(String(row.id)) > 120
+    )
+      throw new Error('Invalid provider item.');
+    const id = String(row.id);
+    if (ids.has(id)) throw new Error('Repeated IDs in provider page.');
+    ids.add(id);
+  }
+  let total = null;
+  if (Object.hasOwn(response, 'total_items')) {
+    if (!/^\d{1,12}$/.test(String(response.total_items ?? ''))) throw new Error('Invalid provider total.');
+    total = Number(response.total_items);
+  }
+  return { rows, total };
+}
+const key = (job) => [job.feed_id, job.kind, job.generation];
+const scope = (job) => [job.feed_id, job.kind];
+const namesToCountries = {
+  'UNITED KINGDOM': 'GB',
+  'GREAT BRITAIN': 'GB',
+  BRITAIN: 'GB',
+  ENGLAND: 'GB',
+  SCOTLAND: 'GB',
+  WALES: 'GB',
+  'UNITED STATES': 'US',
+  AMERICAN: 'US',
+  CANADA: 'CA',
+  AUSTRALIA: 'AU',
+  'NEW ZEALAND': 'NZ',
+  IRELAND: 'IE',
+  FRANCE: 'FR',
+  GERMANY: 'DE',
+  SPAIN: 'ES',
+  ITALY: 'IT',
+  PORTUGAL: 'PT',
+  NETHERLANDS: 'NL',
+  BELGIUM: 'BE',
+  SWITZERLAND: 'CH',
+  AUSTRIA: 'AT',
+  POLAND: 'PL',
+  TURKEY: 'TR',
+  GREECE: 'GR',
+  INDIA: 'IN',
+  JAPAN: 'JP',
+  BRAZIL: 'BR',
+  MEXICO: 'MX',
+  ALGERIA: 'DZ',
+  BAHRAIN: 'BH',
+  ARGENTINA: 'AR',
+};
+const countryAliases = {
+  UK: 'GB',
+  EN: 'GB',
+  ENG: 'GB',
+  USA: 'US',
+  NA: 'US',
+  UAE: 'AE',
+  GER: 'DE',
+  DEU: 'DE',
+  FRA: 'FR',
+  JPN: 'JP',
+  CAN: 'CA',
+  AUS: 'AU',
+  NZL: 'NZ',
+  IRL: 'IE',
+  NLD: 'NL',
+  ESP: 'ES',
+  ITA: 'IT',
+  POR: 'PT',
+  TUR: 'TR',
+  IND: 'IN',
+  BRA: 'BR',
+  POL: 'PL',
+};
+const countries = new Set(
+  'AF AX AL DZ AS AD AO AI AQ AG AR AM AW AU AT AZ BS BH BD BB BY BE BZ BJ BM BT BO BQ BA BW BV BR IO BN BG BF BI CV KH CM CA KY CF TD CL CN CX CC CO KM CK CR HR CU CW CY CZ CI CD DK DJ DM DO EC EG SV GQ ER EE SZ ET FK FO FM FJ FI FR GF PF TF GA GM GE DE GH GI GR GL GD GP GU GT GG GN GW GY HT HM VA HN HK HU IS IN ID IR IQ IE IM IL IT JM JP JE JO KZ KE KI KW KG LA LV LB LS LR LY LI LT LU MO MG MW MY MV ML MT MH MQ MR MU YT MX MD MC MN ME MS MA MZ MM NA NR NP NL NC NZ NI NE NG NU NF KP MK MP NO OM PK PW PA PG PY PE PH PN PL PT PR QA CG RO RU RW RE BL SH KN LC MF PM VC WS SM ST SA SN RS SC SL SG SX SK SI SB SO ZA GS KR SS ES LK PS SD SR SJ SE CH SY TW TJ TZ TH TL TG TK TO TT TN TM TC TV TR UG UA AE GB UM US UY UZ VU VE VN VG VI WF EH YE ZM ZW'.split(
+    ' ',
+  ),
+);
+function country(text) {
+  const flag = /[\u{1f1e6}-\u{1f1ff}]{2}/u.exec(text);
+  if (flag) {
+    const code = Array.from(flag[0])
+      .map((char) => String.fromCharCode(65 + char.codePointAt(0) - 0x1f1e6))
+      .join('');
+    if (countries.has(code)) return code;
+  }
+  if (/^\s*(?:UNITED KINGDOM|GREAT BRITAIN|BRITAIN|ENGLAND|SCOTLAND|WALES)\b/i.test(text)) return 'GB';
+  if (/^\s*(?:UNITED STATES(?: OF AMERICA)?|AMERICAN)\b/i.test(text)) return 'US';
+  for (const [name, code] of Object.entries(namesToCountries))
+    if (code !== 'GB' && name !== 'UNITED STATES' && name !== 'AMERICAN')
+      if (new RegExp('(?<![\\p{L}])' + name + '(?![\\p{L}])', 'iu').test(text)) return code;
+  const clean = text.replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]/gu, '');
+  const matches = [
+    ...clean.matchAll(
+      /[\[（(]\s*([A-Z]{2,3})\s*[\]）)]|[|┃│¦]\s*([A-Z]{2,3})\s*[|┃│¦]|(?:^|[|┃│¦/])\s*([A-Z]{2,3})(?=\s*(?:[|┃│¦:._\-\s]|$))/giu,
+    ),
+  ];
+  for (const match of matches) {
+    let code = (match[1] || match[2] || match[3]).toUpperCase();
+    if (code === 'AR') continue;
+    code = countryAliases[code] ?? code;
+    if (countries.has(code)) return code;
+  }
+  return 'ZZ';
+}
+function genre(text) {
+  const normal = text.replace(/[^\p{L}\p{N}]+/gu, ' ').toUpperCase();
+  if (/(?:^|\s)GENERAL(?:\s|$)/u.test(normal)) return 'General';
+  if (/(?:^|\s)ENTERTAINMENT(?:\s|$)/u.test(normal)) return 'Entertainment';
+  for (const [name, pattern] of Object.entries({
+    Adult: 'adult|xxx|porn',
+    Sports:
+      'sports?|espn|racing|football|soccer|cricket|golf|tennis|sky sports|tnt sports|bein|dazn|ufc|boxing|epl|efl|uefa|formula 1|f1 tv|ppv',
+    News: 'news|bbc parliament|cnn|al jazeera|euronews|politics',
+    Documentary:
+      'documentar(?:y|ies)|national geographic|nat geo|history|animal planet|wildlife|discovery channel',
+    Kids: 'kids?|children|cartoon|nickelodeon|cbeebies|cbbc|disney junior|baby',
+    Movies: 'movies?|cinema|films?|sky cinema|film4|on demand|vod',
+    Music: 'music|mtv|vevo|radio|concert',
+    Shopping: 'shopping|qvc|teleshopping',
+    Religious: 'religio(?:n|us)|faith|christian|islam|church|worship',
+    Education: 'education(?:al)?|learning',
+    Lifestyle: 'lifestyle|cooking|food|travel|home|garden',
+    General: 'general|freeview|terrestrial|bbc one|bbc two|itv1|channel 4|channel 5|24/7',
+    Entertainment: 'entertainment|drama|comedy|series|variety|sky max|sky mix',
+  }))
+    if (new RegExp('\\b(?:' + pattern + ')\\b', 'iu').test(text)) return name;
+  return 'Other';
+}
+
+module.exports = function catalogueWorker(db, root) {
+  const library = libraryWriter(db.services().decode);
+  let current = null,
+    lastMaintenance = 0,
+    lastFilters = 0;
+  async function commit(job, operation) {
+    return db.run((pool) =>
+      transaction(pool, async (connection) => {
+        if (!(await locked(connection, job))) return false;
+        await operation(connection);
+        return true;
+      }),
+    );
+  }
+  async function deleteStaged(connection, job, rows) {
+    if (rows.length)
+      await q(
+        connection,
+        'DELETE FROM vaultcast_stalker_staging WHERE feed_id=? AND kind=? AND generation=? AND item_id IN (' +
+          rows.map(() => '?').join(',') +
+          ')',
+        [...key(job), ...rows.map((row) => row.item_id)],
+      );
+  }
+  async function step(feed, job, client) {
+    let folder;
+    try {
+      const state = await db.run(async (pool) => {
+        await q(
+          pool,
+          "INSERT IGNORE INTO vaultcast_stalker_folders(feed_id,kind,generation,folder_id,title) VALUES(?,?,?,'','Folder discovery')",
+          key(job),
+        );
+        const staged = await q(
+          pool,
+          'SELECT item_id,category,payload FROM vaultcast_stalker_staging WHERE feed_id=? AND kind=? AND generation=? ORDER BY item_id LIMIT 50',
+          key(job),
+        );
+        return {
+          staged,
+          folder: staged.length
+            ? null
+            : (
+                await q(
+                  pool,
+                  "SELECT * FROM vaultcast_stalker_folders WHERE feed_id=? AND kind=? AND generation=? AND status NOT IN ('complete','skipped') ORDER BY folder_id='*',folder_id LIMIT 1",
+                  key(job),
+                )
+              )[0],
+        };
+      });
+      if (state.staged.length) {
+        await commit(job, async (connection) => {
+          await library.publish(connection, feed, job.kind, job.generation, state.staged);
+          await deleteStaged(connection, job, state.staged);
+          await q(
+            connection,
+            "UPDATE vaultcast_stalker_jobs SET status='partial',last_hash='publish',error='',next_run=? WHERE feed_id=? AND kind=?",
+            [now(), ...scope(job)],
+          );
+        });
+        return;
+      }
+      folder = state.folder;
+      if (folder) {
+        if (Number(folder.next_run) > now()) return;
+        if (folder.folder_id === '') {
+          const discovered = groups(await client.call(job.kind, 'get_categories'));
+          await commit(job, async (connection) => {
+            const selection = await selected(connection, feed.id, job.kind);
+            for (const [id, title] of discovered)
+              await q(
+                connection,
+                'INSERT IGNORE INTO vaultcast_stalker_folders(feed_id,kind,generation,folder_id,title,status) VALUES(?,?,?,?,?,?)',
+                [...key(job), id, title, folderSelected(selection, id) ? 'pending' : 'skipped'],
+              );
+            await q(
+              connection,
+              "UPDATE vaultcast_stalker_folders SET status='complete',last_success=?,error='',failures=0 WHERE feed_id=? AND kind=? AND generation=? AND folder_id=''",
+              [now(), ...key(job)],
+            );
+            await q(
+              connection,
+              "UPDATE vaultcast_stalker_jobs SET status='running',last_hash='scan',processed=0,error='',next_run=? WHERE feed_id=? AND kind=?",
+              [now(), ...scope(job)],
+            );
+          });
+          return;
+        }
+        if (Number(folder.next_page) > 10000) throw new Error('Folder page safety limit reached.');
+        const result = page(
+          await client.ordered(
+            job.kind,
+            { sortby: 'name', category: folder.folder_id, search: '' },
+            Number(folder.next_page),
+            page,
+          ),
+        );
+        const rows = result.rows;
+        let total = result.total;
+        if (
+          folder.total != null &&
+          total != null &&
+          Number(folder.total) !== total &&
+          !(!rows.length && total === 0)
+        )
+          throw new Error('Provider folder total changed during enumeration. Refresh this connection.');
+        total =
+          !rows.length && folder.total != null
+            ? Number(folder.total)
+            : (total ?? (folder.total == null ? null : Number(folder.total)));
+        const processed = Number(folder.processed) + rows.length;
+        if (!rows.length && total != null && processed < total)
+          throw new Error('Provider stopped before the advertised folder total.');
+        if (!rows.length && processed === 0 && total !== 0)
+          throw new Error('Empty folder without an explicit zero total; absence is unverified.');
+        await commit(job, async (connection) => {
+          let added = 0;
+          for (let offset = 0; offset < rows.length; offset += 100) {
+            const batch = rows.slice(offset, offset + 100);
+            const result = await q(
+              connection,
+              'INSERT IGNORE INTO vaultcast_stalker_folder_items(feed_id,kind,generation,folder_id,item_id) VALUES ' +
+                batch.map(() => '(?,?,?,?,?)').join(','),
+              batch.flatMap((row) => [...key(job), folder.folder_id, String(row.id)]),
+            );
+            if (result.affectedRows !== batch.length)
+              throw new Error('Overlapping provider folder pages; completeness is unverified.');
+            for (const row of batch) {
+              const value = row.category_name ?? row.category_title ?? folder.title,
+                category =
+                  typeof value === 'object'
+                    ? folder.title
+                    : take(
+                        String(value)
+                          .replace(/<[^>]*>/g, '')
+                          .trim(),
+                        500,
+                      );
+              added += (
+                await q(
+                  connection,
+                  'INSERT IGNORE INTO vaultcast_stalker_staging(feed_id,kind,generation,item_id,category,payload) VALUES(?,?,?,?,?,?)',
+                  [...key(job), String(row.id), category, JSON.stringify(row)],
+                )
+              ).affectedRows;
+            }
+          }
+          await q(
+            connection,
+            "UPDATE vaultcast_stalker_folders SET status=?,next_page=next_page+1,processed=?,total=?,last_success=?,error='',failures=0,next_run=0 WHERE feed_id=? AND kind=? AND generation=? AND folder_id=?",
+            [rows.length ? 'partial' : 'complete', processed, total, now(), ...key(job), folder.folder_id],
+          );
+          await q(
+            connection,
+            "UPDATE vaultcast_stalker_jobs SET status='partial',processed=processed+?,next_run=?,error='' WHERE feed_id=? AND kind=?",
+            [added, now(), ...scope(job)],
+          );
+        });
+        return;
+      }
+      if (job.kind === 'series' && (await episodes(feed, job, client))) return;
+      let completed = false;
+      await commit(job, async (connection) => {
+        const staged = await q(
+          connection,
+          'SELECT item_id,category,payload FROM vaultcast_stalker_staging WHERE feed_id=? AND kind=? AND generation=? ORDER BY item_id LIMIT 50',
+          key(job),
+        );
+        if (staged.length) {
+          await library.publish(connection, feed, job.kind, job.generation, staged);
+          await deleteStaged(connection, job, staged);
+          await q(
+            connection,
+            "UPDATE vaultcast_stalker_jobs SET status='partial',last_hash='publish',next_page=1,error='',next_run=? WHERE feed_id=? AND kind=?",
+            [now(), ...scope(job)],
+          );
+        } else if (
+          (await selected(connection, feed.id, job.kind)).mode === 'include' ||
+          (await library.reconcile(connection, job))
+        ) {
+          await q(
+            connection,
+            "UPDATE vaultcast_stalker_jobs SET status='complete',last_hash=?,error='',next_run=0 WHERE feed_id=? AND kind=?",
+            [job.kind === 'series' ? 'episodes_complete' : 'complete', ...scope(job)],
+          );
+          completed = true;
+        }
+      });
+      if (completed) await db.run((pool) => library.filters(pool, root, job.kind));
+    } catch (error) {
+      if (client.signal?.aborted) return;
+      await commit(job, async (connection) => {
+        const failures = folder ? Number(folder.failures) + 1 : Math.max(1, Number(job.next_page));
+        const retryAt =
+            error.retryAt ?? now() + Math.min(3600, 60 * 2 ** Math.min(6, failures - 1)) + randomInt(31),
+          failed = !error.retryAt && (error.authentication || failures >= 8);
+        let message = error.retryAt
+          ? 'HTTP 429; connection requests paused. Checkpoint retained.'
+          : error.authentication
+            ? 'Authentication rejected; check this connection.'
+            : 'Folder/page could not be verified. Checkpoint retained; refresh this connection if provider contents changed.';
+        if (error.status >= 400 && error.status <= 599 && !error.retryAt)
+          message = 'Provider HTTP ' + error.status + '; checkpoint retained.';
+        if (
+          /^(?:Invalid provider (?:folder response|folder|page response|item|total)|Unsupported provider folder ID|Repeated IDs in provider page|Folder page safety limit reached|Provider folder total changed during enumeration\. Refresh this connection|Provider stopped before the advertised folder total|Empty folder without an explicit zero total; absence is unverified|Overlapping provider folder pages; completeness is unverified)\.$/.test(
+            error.message,
+          )
+        )
+          message = error.message;
+        if (folder)
+          await q(
+            connection,
+            'UPDATE vaultcast_stalker_folders SET status=?,error=?,failures=?,next_run=? WHERE feed_id=? AND kind=? AND generation=? AND folder_id=?',
+            [
+              failed ? 'failed' : 'waiting',
+              message,
+              error.retryAt ? Number(folder.failures) : failures,
+              retryAt,
+              ...key(job),
+              folder.folder_id,
+            ],
+          );
+        await q(
+          connection,
+          'UPDATE vaultcast_stalker_jobs SET status=?,error=?,next_run=?,next_page=? WHERE feed_id=? AND kind=?',
+          [
+            failed ? 'failed' : 'waiting',
+            message,
+            retryAt,
+            error.retryAt ? Number(job.next_page) : failures + 1,
+            ...scope(job),
+          ],
+        );
+        if (error.retryAt)
+          await q(
+            connection,
+            "UPDATE vaultcast_stalker_jobs SET next_run=GREATEST(next_run,?) WHERE feed_id=? AND config=? AND status IN ('queued','running','partial','waiting')",
+            [retryAt, job.feed_id, job.config],
+          );
+      });
+    }
+  }
+
+  async function episodes(feed, job, client) {
+    const documentKey = 'stalker-episode-import-' + sha(job.feed_id);
+    let cursor = await db.run((pool) => doc(pool, documentKey));
+    if (cursor.generation !== job.generation)
+      cursor = {
+        generation: job.generation,
+        after: '',
+        parent: '',
+        page: 1,
+        root: '',
+        children: [],
+        visited: [],
+      };
+    let parent = cursor.parent;
+    if (!parent) {
+      const rows = await db.run((pool) =>
+        q(
+          pool,
+          "SELECT item_id FROM vaultcast_stalker_offers WHERE feed_id=? AND kind='series' AND item_id>? AND generation=? AND available=1 ORDER BY item_id LIMIT 1",
+          [job.feed_id, cursor.after, job.generation],
+        ),
+      );
+      if (!rows.length) return false;
+      parent = rows[0].item_id;
+      cursor.root = parent;
+      cursor.children = [];
+      cursor.visited = [String(parent)];
+    }
+    if (Number(cursor.page) > 10000) throw new Error('Episode page safety limit reached.');
+    const pageKey = episodeKey(feed, 'page:' + phpJson([String(parent), Number(cursor.page)]));
+    let result = await snapshot(root, pageKey),
+      entries = [];
+    if (result?.episodeGeneration !== job.generation) {
+      const response = await client.ordered(
+        'series',
+        { sortby: 'name', category: '*', search: '', movie_id: parent },
+        Number(cursor.page),
+        page,
+      );
+      const rows = page(response).rows,
+        signature = sha(phpJson(rows.map((row) => row.id)));
+      if (rows.length && Number(cursor.page) > 1) {
+        const previous = await snapshot(
+          root,
+          episodeKey(feed, 'page:' + phpJson([String(parent), Number(cursor.page) - 1])),
+        );
+        if (previous?.episodeGeneration === job.generation && previous.pageSignature === signature)
+          throw new Error('Provider repeated an episode page.');
+      }
+      const items = [];
+      const remember = (id, cmd, episode, item) =>
+        entries.push([
+          episodeKey(feed, 'item:' + id),
+          { cmd, series: episode, metadata: item, episodeGeneration: job.generation, root: cursor.root },
+        ]);
+      for (const row of rows) {
+        const id = String(row.id),
+          meta = library.seriesMetadata(feed, row),
+          cmd = typeof row.cmd === 'object' ? '' : String(row.cmd ?? ''),
+          numbers = Array.isArray(row.series) ? row.series : [];
+        if (parent && numbers.length && cmd) {
+          for (const raw of numbers.slice(0, 200)) {
+            if (raw == null || typeof raw === 'object') continue;
+            const number = String(raw),
+              publicId = 'series:' + id + ':' + number;
+            const item = {
+              ...meta,
+              id: publicId,
+              kind: 'vod',
+              playable: true,
+              feed: feed.id,
+              connection: feed.name,
+              name: meta.name + ' · Episode ' + number,
+              episode: number,
+              episodeTitle: '',
+              seasonId: id,
+            };
+            const season = row.season_number ?? row.season;
+            if (/^\d+$/.test(String(season ?? ''))) item.season = Number(season);
+            item.seasonName = item.season != null ? 'Season ' + item.season : 'Season unknown';
+            remember(publicId, cmd, number, item);
+            items.push(item);
+          }
+          continue;
+        }
+        const playable = Boolean(cmd && !enabled(row.is_series) && !numbers.length && parent),
+          publicId = playable ? 'series:' + id : id;
+        const item = {
+          ...meta,
+          id: publicId,
+          kind: 'series',
+          playable,
+          feed: feed.id,
+          connection: feed.name,
+          hasChildren: !playable && enabled(row.is_series),
+          ...library.descriptive(row),
+        };
+        if (playable) remember(publicId, cmd, String(row.series_number ?? ''), item);
+        items.push(item);
+      }
+      const reportedTotal = Number(response.total_items ?? 0),
+        reportedSize = Number(response.max_page_items ?? 0),
+        perPage = reportedSize > 0 ? reportedSize : Math.max(1, rows.length);
+      const hasMore =
+        reportedTotal > 0
+          ? Number(cursor.page) * perPage < reportedTotal
+          : rows.length > 0 && (reportedSize <= 0 || rows.length >= reportedSize);
+      result = {
+        items,
+        total: reportedTotal > 0 ? reportedTotal : null,
+        hasMore,
+        episodeGeneration: job.generation,
+        pageSignature: signature,
+        root: cursor.root,
+      };
+    }
+    for (const item of result.items) {
+      const id = String(item.id);
+      if (item.hasChildren && !cursor.visited.includes(id)) {
+        cursor.visited.push(id);
+        cursor.children.push(id);
+      }
+    }
+    if (cursor.visited.length > 1000) throw new Error('Series folder safety limit reached.');
+    await commit(job, async (connection) => {
+      for (const [key, value] of entries) await saveSnapshot(root, key, value);
+      await saveSnapshot(root, pageKey, result);
+      if (result.hasMore) {
+        cursor.parent = parent;
+        cursor.page = Number(cursor.page) + 1;
+      } else {
+        cursor.parent = cursor.children.shift() ?? '';
+        cursor.page = 1;
+        if (!cursor.parent) cursor.after = cursor.root;
+      }
+      await save(connection, documentKey, cursor);
+      await q(
+        connection,
+        "UPDATE vaultcast_stalker_jobs SET status='partial',last_hash='episodes',next_page=1,next_run=?,error='' WHERE feed_id=? AND kind='series'",
+        [now(), job.feed_id],
+      );
+    });
+    return true;
+  }
+
+  async function live(feed, job, client) {
+    try {
+      const response = await client.call('itv', 'get_genres'),
+        rows = Object.values(response.data ?? response),
+        categories = [];
+      for (const row of rows) {
+        if (
+          !row ||
+          row.id == null ||
+          typeof row.id === 'object' ||
+          !String(row.id) ||
+          Buffer.byteLength(String(row.id)) > 120
+        )
+          continue;
+        const name = take(row.title ?? row.name ?? row.id, 160);
+        categories.push({ id: String(row.id), name, country: country(name), genre: genre(name) });
+        if (categories.length >= 1000) break;
+      }
+      const bulk = await client.call('itv', 'get_all_channels'),
+        raw = bulk.data ?? bulk;
+      if (
+        !raw ||
+        typeof raw !== 'object' ||
+        Object.keys(raw).length > 50000 ||
+        Number(bulk.total_items ?? 0) > Object.keys(raw).length
+      )
+        throw new Error('Provider returned an incomplete or oversized Live TV list.');
+      const members = new Map();
+      for (const row of Object.values(raw))
+        if (row && row.id != null && typeof row.id !== 'object' && enabled(row.cmd))
+          members.set(String(row.id), row);
+      if (!members.size) throw new Error('Provider returned no playable Live TV channels.');
+      const order = [...members.keys()].sort(
+        (a, b) =>
+          Number(members.get(a).number ?? 0) - Number(members.get(b).number ?? 0) ||
+          (a < b ? -1 : a > b ? 1 : 0),
+      );
+      const channels = new Proxy(Object.fromEntries(members), { ownKeys: () => order });
+      let guide = {};
+      try {
+        const result = await client.call('itv', 'get_epg_info', { period: 48 });
+        if (result && typeof (result.data ?? result) === 'object') guide = result.data ?? result;
+      } catch (error) {
+        if (error.retryAt || client.signal?.aborted) throw error;
+      }
+      await commit(job, async (connection) => {
+        await saveSnapshot(root, liveKey(feed, 'imported-live'), {
+          categories,
+          channels,
+          guide,
+          imported: now(),
+        });
+        await q(
+          connection,
+          "UPDATE vaultcast_stalker_jobs SET status='complete',processed=?,error='',next_run=0 WHERE feed_id=? AND kind='live'",
+          [members.size, feed.id],
+        );
+      });
+    } catch (error) {
+      if (client.signal?.aborted) return;
+      await commit(job, async (connection) => {
+        if (error.retryAt)
+          await q(
+            connection,
+            "UPDATE vaultcast_stalker_jobs SET status='waiting',next_run=GREATEST(next_run,?),error=? WHERE feed_id=? AND config=? AND status IN ('queued','running','partial','waiting')",
+            [
+              error.retryAt,
+              'Provider rate limited requests. Import will resume after the cooldown.',
+              feed.id,
+              job.config,
+            ],
+          );
+        else
+          await q(
+            connection,
+            "UPDATE vaultcast_stalker_jobs SET status='failed',error=?,next_run=0 WHERE feed_id=? AND kind='live'",
+            ['Live TV could not be imported. Check the provider and retry.', feed.id],
+          );
+      });
+    }
+  }
+
+  async function maintenance(_feeds, jobs) {
+    await db.run(async (pool) => {
+      for (const job of jobs)
+        await transaction(pool, async (connection) => {
+          const current = (
+            await q(
+              connection,
+              'SELECT generation,config,status FROM vaultcast_stalker_jobs WHERE feed_id=? AND kind=? FOR UPDATE',
+              scope(job),
+            )
+          )[0];
+          if (current?.generation !== job.generation || current.config !== job.config) return;
+          const state = await doc(connection, 'live_iptv');
+          const feed = state.feeds?.find(
+            (feed) => feed.id === job.feed_id && feed.type === 'stalker' && enabled(feed.enabled),
+          );
+          const account = feed ? await doc(connection, 'stalker-account-' + configHash(feed)) : {};
+          if (feed && configHash(feed) !== job.config) {
+            await q(
+              connection,
+              "UPDATE vaultcast_stalker_jobs SET status='scan_required',next_run=0 WHERE feed_id=? AND kind=?",
+              scope(job),
+            );
+          } else if (!feed || (account.expires && Number(account.expires) <= now())) {
+            const expired = Boolean(feed);
+            if (expired && current.status !== 'expired') await notify(connection, feed, true);
+            const records = await q(
+              connection,
+              'SELECT item_id,catalogue_id FROM vaultcast_stalker_offers WHERE feed_id=? AND kind=? AND available=1 LIMIT 100',
+              scope(job),
+            );
+            const changed = new Set();
+            for (const row of records) {
+              await q(
+                connection,
+                'UPDATE vaultcast_stalker_offers SET available=0 WHERE feed_id=? AND kind=? AND item_id=?',
+                [...scope(job), row.item_id],
+              );
+              changed.add(row.catalogue_id);
+            }
+            for (const id of changed) await library.aggregate(connection, id);
+            await q(
+              connection,
+              'UPDATE vaultcast_stalker_jobs SET status=?,next_run=0 WHERE feed_id=? AND kind=?',
+              [expired ? 'expired' : 'removed', ...scope(job)],
+            );
+          }
+          for (const table of [
+            'vaultcast_stalker_staging',
+            'vaultcast_stalker_folder_items',
+            'vaultcast_stalker_folders',
+          ]) {
+            const removed = !feed;
+            await q(
+              connection,
+              'DELETE FROM ' +
+                table +
+                ' WHERE feed_id=? AND kind=?' +
+                (removed ? '' : ' AND generation<>?') +
+                ' LIMIT 100',
+              removed ? scope(job) : key(job),
+            );
+          }
+        });
+      await library.refreshLocal(pool);
+      const expired = await q(
+        pool,
+        "SELECT c.id FROM vaultcast_stalker_library c WHERE c.available=0 AND c.unavailable_since<=? AND NOT EXISTS(SELECT 1 FROM vaultcast_stalker_offers s JOIN vaultcast_stalker_jobs j ON j.feed_id=s.feed_id AND j.kind=s.kind WHERE s.catalogue_id=c.id AND j.status NOT IN ('complete','removed','expired')) LIMIT 100",
+        [now() - 15 * 86400],
+      );
+      for (const { id } of expired)
+        await transaction(pool, async (connection) => {
+          const row = (
+            await q(
+              connection,
+              'SELECT available,unavailable_since FROM vaultcast_stalker_library WHERE id=? FOR UPDATE',
+              [id],
+            )
+          )[0];
+          if (
+            row &&
+            !Number(row.available) &&
+            row.unavailable_since != null &&
+            Number(row.unavailable_since) <= now() - 15 * 86400
+          ) {
+            for (const table of [
+              'vaultcast_stalker_offers',
+              'vaultcast_stalker_facets',
+              'vaultcast_stalker_aliases',
+            ])
+              await q(connection, 'DELETE FROM ' + table + ' WHERE catalogue_id=?', [id]);
+            await q(connection, 'DELETE FROM vaultcast_stalker_library WHERE id=?', [id]);
+          }
+        });
+    });
+  }
+  async function tick(signal) {
+    const initial = await db.run(async (pool) => ({
+      state: await doc(pool, 'live_iptv'),
+      reset: await doc(pool, 'stalker-catalogue-reset', { state: 'idle' }),
+      jobs: await q(pool, 'SELECT * FROM vaultcast_stalker_jobs'),
+    }));
+    const feeds = new Map(
+      (initial.state.feeds ?? [])
+        .filter((feed) => feed.type === 'stalker' && enabled(feed.enabled))
+        .map((feed) => [feed.id, feed]),
+    );
+    if (initial.reset.state === 'purging') {
+      current = null;
+      await unlink(join(root, 'data/runtime/stalker-library.active')).catch(() => {});
+      const tables = [
+          'vaultcast_stalker_staging',
+          'vaultcast_stalker_folder_items',
+          'vaultcast_stalker_folders',
+          'vaultcast_stalker_offers',
+          'vaultcast_stalker_facets',
+          'vaultcast_stalker_aliases',
+          'vaultcast_stalker_library',
+        ],
+        index = Math.max(0, Math.trunc(Number(initial.reset.table) || 0));
+      await db.run((pool) =>
+        transaction(pool, async (connection) => {
+          const reset = await doc(connection, 'stalker-catalogue-reset');
+          if (reset.state !== 'purging' || Number(reset.table ?? 0) !== index) return;
+          if (index < tables.length) {
+            if (!(await q(connection, 'DELETE FROM ' + tables[index] + ' LIMIT 500')).affectedRows)
+              await save(connection, 'stalker-catalogue-reset', { ...reset, table: index + 1 });
+          } else {
+            await q(connection, "DELETE FROM vaultcast_stalker_jobs WHERE kind IN ('vod','series')");
+            for (const feed of feeds.values())
+              for (const kind of ['vod', 'series']) await queue(connection, root, feed, kind, true);
+            await save(connection, 'stalker-catalogue-reset', { state: 'complete', finished: now() });
+          }
+        }),
+      );
+      return { busy: true };
+    }
+    if (now() - lastMaintenance >= 15) {
+      await maintenance(feeds, initial.jobs);
+      lastMaintenance = now();
+    }
+    const jobs = await db.run((pool) =>
+      q(
+        pool,
+        "SELECT * FROM vaultcast_stalker_jobs WHERE status IN ('queued','running','partial','waiting') AND next_run<=? ORDER BY next_run,feed_id,kind",
+        [now()],
+      ),
+    );
+    const job = current
+      ? (jobs.find(
+          (job) => job.feed_id === current[0] && job.kind === current[1] && job.generation === current[2],
+        ) ??
+        jobs.find((job) => job.feed_id === current[0]) ??
+        jobs[0])
+      : jobs[0];
+    if (!job) {
+      if (current) {
+        current = null;
+        await unlink(join(root, 'data/runtime/stalker-library.active')).catch(() => {});
+      }
+      if (now() - lastFilters > 30) {
+        await db.run(async (pool) => {
+          for (const kind of ['vod', 'series'])
+            if (!(await cached(root, 'stalker_library_filters_v3_' + kind)))
+              await library.filters(pool, root, kind);
+        });
+        lastFilters = now();
+      }
+      return { busy: false };
+    }
+    const feed = feeds.get(job.feed_id);
+    if (!feed || configHash(feed) !== job.config) return { busy: true };
+    current = key(job);
+    await writeFile(join(root, 'data/runtime/stalker-library.active'), JSON.stringify(current), {
+      mode: 0o600,
+    });
+    const cooldown = await cached(root, 'stalker_cooldown_' + sha(phpJson([feed.url, feed.mac])));
+    if (Number(cooldown?.until) > now()) {
+      await commit(job, (connection) =>
+        q(
+          connection,
+          "UPDATE vaultcast_stalker_jobs SET next_run=GREATEST(next_run,?),status='waiting',error=? WHERE feed_id=? AND config=? AND status IN ('queued','running','partial','waiting')",
+          [
+            Number(cooldown.until),
+            'Provider rate limited requests. Import will resume after the cooldown.',
+            feed.id,
+            job.config,
+          ],
+        ),
+      );
+      return { busy: true };
+    }
+    const client = await provider(root, feed, signal),
+      accountKey = 'stalker-account-' + configHash(feed);
+    let account = await db.run((pool) => doc(pool, accountKey, null));
+    if (account == null) {
+      try {
+        account = await client.accountExpiry();
+      } catch (error) {
+        if (error.retryAt) {
+          await commit(job, (connection) =>
+            q(
+              connection,
+              "UPDATE vaultcast_stalker_jobs SET status='waiting',next_run=?,error=? WHERE feed_id=? AND kind=?",
+              [error.retryAt, 'Provider rate limited requests. Checkpoint retained.', ...scope(job)],
+            ),
+          );
+          return { busy: true };
+        }
+        throw error;
+      }
+      await db.run(async (pool) => {
+        if ((await doc(pool, accountKey, null)) == null) await save(pool, accountKey, account);
+      });
+    }
+    if (account.expires && Number(account.expires) <= now()) {
+      await commit(job, async (connection) => {
+        await notify(connection, feed, true);
+        await q(
+          connection,
+          "UPDATE vaultcast_stalker_jobs SET status='expired',next_run=0 WHERE feed_id=? AND config=?",
+          [feed.id, job.config],
+        );
+      });
+      return { busy: true };
+    }
+    if (job.kind === 'live') await live(feed, job, client);
+    else await step(feed, job, client);
+    return { busy: true };
+  }
+  async function control(body) {
+    const operation = String(body.operation ?? 'load'),
+      kind = String(body.kind ?? 'all'),
+      feedId = String(body.feed ?? '');
+    const bad = (message) => Object.assign(new Error(message), { userError: true });
+    if (!['load', 'refresh', 'pause', 'folders', 'discover', 'reset_rebuild'].includes(operation))
+      throw bad('Unknown catalogue operation.');
+    if (!['all', 'live', 'vod', 'series'].includes(kind))
+      throw bad('Choose Live TV, Movies, Series, or all.');
+    const initial = await db.run(async (pool) => ({
+      state: await doc(pool, 'live_iptv'),
+      reset: await doc(pool, 'stalker-catalogue-reset', { state: 'idle' }),
+    }));
+    if (initial.reset.state === 'purging')
+      throw bad('Catalogue reset is in progress. Wait for it to finish.');
+    let discovered;
+    if (operation === 'discover') {
+      const feed = initial.state.feeds?.find(
+        (feed) => feed.type === 'stalker' && feed.id === feedId && enabled(feed.enabled),
+      );
+      if (!feed || !['vod', 'series'].includes(kind))
+        throw bad('Choose one enabled connection and Movies or Series to discover folders.');
+      const jobs = await db.run((pool) =>
+        q(pool, 'SELECT status FROM vaultcast_stalker_jobs WHERE feed_id=? AND kind=?', [feedId, kind]),
+      );
+      if (pending(jobs[0]?.status))
+        throw bad('Pause the current catalogue scan before rediscovering provider folders.');
+      const client = await provider(root, feed, AbortSignal.timeout(120000));
+      discovered = groups(await client.call(kind, 'get_categories'));
+    }
+    await db.run((pool) =>
+      transaction(pool, async (connection) => {
+        await q(
+          connection,
+          "SELECT name FROM vaultcast_documents WHERE name IN ('live_iptv','stalker-catalogue-reset','stalker-catalogue-folder-selection') ORDER BY name FOR UPDATE",
+        );
+        if ((await doc(connection, 'stalker-catalogue-reset')).state === 'purging')
+          throw bad('Catalogue reset is in progress. Wait for it to finish.');
+        const state = await doc(connection, 'live_iptv'),
+          feeds = (state.feeds ?? []).filter((feed) => feed.type === 'stalker' && enabled(feed.enabled));
+        if (operation === 'reset_rebuild') {
+          if (feedId || kind !== 'all' || body.confirmation !== 'RESET STALKER CATALOGUE')
+            throw bad('Confirm a full Stalker Movies and Series reset.');
+          await q(
+            connection,
+            "UPDATE vaultcast_stalker_jobs SET status='paused',next_run=0 WHERE kind IN ('vod','series')",
+          );
+          await save(connection, 'stalker-catalogue-reset', { state: 'purging', table: 0, started: now() });
+          return;
+        }
+        const chosen = feeds.filter((feed) => !feedId || feed.id === feedId);
+        if (feedId && !chosen.length) throw bad('Unknown or disabled Stalker connection.');
+        if (['folders', 'discover'].includes(operation)) {
+          if (!feedId || !['vod', 'series'].includes(kind))
+            throw bad('Choose one connection and Movies or Series.');
+          const feed = chosen[0];
+          if (operation === 'discover') {
+            const old = initial.state.feeds.find((feed) => feed.id === feedId);
+            if (configHash(old) !== configHash(feed))
+              throw bad('The connection changed. Discover its folders again.');
+            const jobs = await q(
+              connection,
+              'SELECT status FROM vaultcast_stalker_jobs WHERE feed_id=? AND kind=? FOR UPDATE',
+              [feedId, kind],
+            );
+            if (pending(jobs[0]?.status))
+              throw bad('Pause the current catalogue scan before rediscovering provider folders.');
+            await queue(connection, root, feed, kind, true);
+            const job = (
+                await q(
+                  connection,
+                  'SELECT generation FROM vaultcast_stalker_jobs WHERE feed_id=? AND kind=?',
+                  [feedId, kind],
+                )
+              )[0],
+              selection = await selected(connection, feedId, kind);
+            await q(
+              connection,
+              "INSERT INTO vaultcast_stalker_folders(feed_id,kind,generation,folder_id,title,status,last_success) VALUES(?,?,?,'','Folder discovery','complete',?)",
+              [feedId, kind, job.generation, now()],
+            );
+            for (const [id, title] of discovered)
+              await q(
+                connection,
+                'INSERT INTO vaultcast_stalker_folders(feed_id,kind,generation,folder_id,title,status,last_success) VALUES(?,?,?,?,?,?,NULL)',
+                [
+                  feedId,
+                  kind,
+                  job.generation,
+                  id,
+                  title,
+                  folderSelected(selection, id) ? 'pending' : 'skipped',
+                ],
+              );
+            await q(
+              connection,
+              "UPDATE vaultcast_stalker_jobs SET status='paused',last_hash='discovered',error='',next_run=? WHERE feed_id=? AND kind=?",
+              [now(), feedId, kind],
+            );
+            return;
+          }
+          if (
+            !['all', 'include'].includes(body.mode) ||
+            !Array.isArray(body.folders) ||
+            body.folders.length > 500
+          )
+            throw bad('Invalid folder selection.');
+          const ids = body.mode === 'all' ? [] : [...new Set(body.folders)],
+            allowed = new Set(
+              (
+                await q(
+                  connection,
+                  "SELECT DISTINCT folder_id FROM vaultcast_stalker_folders WHERE feed_id=? AND kind=? AND folder_id NOT IN ('','*')",
+                  [feedId, kind],
+                )
+              ).map((row) => row.folder_id),
+            );
+          if (ids.some((id) => typeof id !== 'string' || !allowed.has(id)))
+            throw bad('Unknown provider folder. Reload the catalogue folder list.');
+          const saved = await doc(connection, 'stalker-catalogue-folder-selection', { sources: {} });
+          if (!saved.sources || Array.isArray(saved.sources)) saved.sources = {};
+          saved.sources[feedId + '/' + kind] = { mode: body.mode, ids };
+          await save(connection, 'stalker-catalogue-folder-selection', saved);
+          await queue(connection, root, feed, kind, true);
+          return;
+        }
+        for (const feed of chosen)
+          for (const type of kind === 'all' ? ['live', 'vod', 'series'] : [kind]) {
+            await q(
+              connection,
+              'SELECT status FROM vaultcast_stalker_jobs WHERE feed_id=? AND kind=? FOR UPDATE',
+              [feed.id, type],
+            );
+            if (operation === 'pause')
+              await q(
+                connection,
+                "UPDATE vaultcast_stalker_jobs SET status='paused' WHERE feed_id=? AND kind=?",
+                [feed.id, type],
+              );
+            else await queue(connection, root, feed, type, operation === 'refresh');
+          }
+      }),
+    );
+    await writeFile(join(root, 'data/runtime/stalker-library.enabled'), '1', { mode: 0o600 });
+    return { ok: true };
+  }
+  return { tick, control };
+};
+module.exports.groups = groups;
