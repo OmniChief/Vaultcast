@@ -191,7 +191,7 @@ module.exports = function mountAccount(app, express, root) {
   mountBrowserAssets(app, route, { root, handle, unavailable });
   mountLibrary(app, route, { root, handle, unavailable });
   mountEpisodeSegments(app, route, { root, handle, json, unavailable });
-  mountStalkerStatus(app, route, { root, handle, unavailable, json: express.json({ limit: '256kb' }), downloads, stalker });
+  mountStalkerStatus(app, route, { root, handle, unavailable, json: express.json({ limit: '256kb' }), downloads, stalker, services: db.services });
   mountProgress(app, route, { handle, json, unavailable, root });
   mountPlayback(app, route, { root, db, handle, json, unavailable });
   const streaming = mountStream(app, route, { db, root, readSession: session, updating, express, unavailable });

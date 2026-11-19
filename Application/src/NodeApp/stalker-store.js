@@ -19,6 +19,39 @@ const take = (value, length) =>
   Array.from(String(value ?? ''))
     .slice(0, length)
     .join('');
+const bound = (value, min, max) => Math.min(max, Math.max(min, parseInt(value, 10) || 0));
+
+function groups(response) {
+  const rows = response?.data ?? response;
+  if (
+    !rows ||
+    typeof rows !== 'object' ||
+    enabled(response.error) ||
+    response.success === false ||
+    response.status === false
+  )
+    throw new Error('Invalid provider folder response.');
+  const result = new Map();
+  for (const row of Object.values(rows)) {
+    if (!row || row.id == null || typeof row.id === 'object') throw new Error('Invalid provider folder.');
+    const id = String(row.id);
+    if (!/^(?:[a-zA-Z0-9_-]{1,120}|\*)$/.test(id)) throw new Error('Unsupported provider folder ID.');
+    const value = row.title ?? row.name ?? id;
+    result.set(
+      id,
+      typeof value === 'object'
+        ? id
+        : take(
+            String(value)
+              .replace(/<[^>]*>/g, '')
+              .trim(),
+            500,
+          ),
+    );
+  }
+  if (!result.has('*')) result.set('*', 'All');
+  return result;
+}
 const snapshotPath = (root, key) => {
   const hash = sha(key);
   return join(root, 'data/stalker-catalogue', hash.slice(0, 2), hash + '.json');
@@ -168,7 +201,10 @@ module.exports = {
   save,
   pending,
   take,
+  bound,
+  groups,
   snapshot,
+  snapshotPath,
   saveSnapshot,
   liveKey,
   episodeKey,

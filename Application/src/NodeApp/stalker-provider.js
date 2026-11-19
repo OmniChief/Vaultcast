@@ -129,37 +129,50 @@ async function snapshot(root, key) {
     .catch(() => null);
 }
 
-async function itemEntry(pool, root, feed, id) {
+async function usableEpisode(pool, feed, config, episode) {
+  if (episode?.episodeGeneration == null) return false;
+  const [jobs] = await pool.execute(
+    "SELECT generation,status FROM vaultcast_stalker_jobs WHERE feed_id=? AND kind='series' AND config=? AND status NOT IN ('removed','expired','scan_required')",
+    [feed.id, config],
+  );
+  const job = jobs[0];
+  if (!job) return false;
+  if (episode.episodeGeneration === job.generation) return true;
+  if (episode.root == null) return false;
+  const [offers] = await pool.execute(
+    "SELECT 1 FROM vaultcast_stalker_offers WHERE feed_id=? AND kind='series' AND item_id=? AND config=? AND available=1" +
+      (job.status === 'complete' ? ' AND generation=?' : '') +
+      ' LIMIT 1',
+    [
+      feed.id,
+      String(episode.root),
+      config,
+      ...(job.status === 'complete' ? [episode.episodeGeneration] : []),
+    ],
+  );
+  return offers.length > 0;
+}
+
+async function directItem(pool, root, feed, id) {
+  if (id.startsWith('series:')) {
+    const config = configHash(feed);
+    const episode = await snapshot(root, 'episodes:' + config + ':item:' + id);
+    if (await usableEpisode(pool, feed, config, episode)) return episode;
+  }
+  return cached(root, 'stalker_direct_v2_' + sha(phpJson([feed, 'item:' + id])));
+}
+
+async function itemEntry(pool, root, feed, id, legacyMetadata) {
   const config = configHash(feed);
   const [accounts] = await pool.execute('SELECT payload FROM vaultcast_documents WHERE name=?', [
     'stalker-account-' + config,
   ]);
   const expiry = accounts.length ? parse(accounts[0].payload)?.expires : null;
-  if (expiry && Number(expiry) <= now()) return null;
-  if (id.startsWith('series:')) {
-    const episode = await snapshot(root, 'episodes:' + config + ':item:' + id);
-    const [jobs] = await pool.execute(
-      "SELECT generation,status FROM vaultcast_stalker_jobs WHERE feed_id=? AND kind='series' AND config=? AND status NOT IN ('removed','expired','scan_required')",
-      [feed.id, config],
-    );
-    const job = jobs[0];
-    if (job && episode?.episodeGeneration) {
-      if (episode.episodeGeneration === job.generation) return episode;
-      if (episode.root != null) {
-        const [offers] = await pool.execute(
-          "SELECT 1 FROM vaultcast_stalker_offers WHERE feed_id=? AND kind='series' AND item_id=? AND config=? AND available=1" +
-            (job.status === 'complete' ? ' AND generation=?' : '') +
-            ' LIMIT 1',
-          [
-            feed.id,
-            String(episode.root),
-            config,
-            ...(job.status === 'complete' ? [episode.episodeGeneration] : []),
-          ],
-        );
-        if (offers.length) return episode;
-      }
-    }
+  if (enabled(expiry) && Number(expiry) <= now()) return null;
+  const series = id.startsWith('series:');
+  if (series) {
+    const item = await directItem(pool, root, feed, id);
+    if (item) return item;
   }
   const match = /^(vod|series):([^:]+)$/.exec(id);
   if (match) {
@@ -169,8 +182,10 @@ async function itemEntry(pool, root, feed, id) {
     );
     if (rows[0]?.playback) return parse(rows[0].playback);
   }
-  const direct = await cached(root, 'stalker_direct_v2_' + sha(phpJson([feed, 'item:' + id])));
-  if (direct) return direct;
+  if (!series) {
+    const item = await directItem(pool, root, feed, id);
+    if (item) return item;
+  }
   const [records] = await pool.execute('SELECT payload FROM vaultcast_documents WHERE name=?', [
     'stalker-catalogues',
   ]);
@@ -181,24 +196,27 @@ async function itemEntry(pool, root, feed, id) {
   const cachedItem = await cached(root, 'stalker_item_v2_' + sha(phpJson([feed, id, generation])));
   if (cachedItem) return cachedItem;
   const legacy = /^(vod|series):([^:]+)(?::(.+))?$/.exec(id);
-  if (!legacy) return null;
+  const kind = legacy?.[1] ?? 'vod';
+  const itemId = legacy?.[2] ?? id;
   const [titles] = await pool.execute(
-    'SELECT payload FROM vaultcast_stalker_titles WHERE fingerprint=? AND kind=? AND item_id=? ORDER BY playable DESC,parent_id LIMIT 1',
-    [generation, legacy[1], legacy[2]],
+    'SELECT parent_id,payload FROM vaultcast_stalker_titles WHERE fingerprint=? AND kind=? AND item_id=? ORDER BY playable DESC,parent_id LIMIT 1',
+    [generation, kind, itemId],
   );
   if (!titles.length) return null;
   const stored = parse(titles[0].payload);
   return {
     cmd: String(stored.row?.cmd ?? ''),
-    series: legacy[3] ?? String(stored.row?.series_number ?? ''),
-    metadata: {
-      ...stored.facets,
-      id,
-      kind: legacy[1],
-      feed: feed.id,
-      connection: feed.name,
-      category: stored.category,
-    },
+    series: legacy?.[3] ?? String(stored.row?.series_number ?? ''),
+    metadata: legacyMetadata
+      ? await legacyMetadata(stored, kind, legacy?.[3], titles[0].parent_id, generation)
+      : {
+          ...stored.facets,
+          id,
+          kind,
+          feed: feed.id,
+          connection: feed.name,
+          category: stored.category,
+        },
   };
 }
 
@@ -679,6 +697,8 @@ class StalkerProvider {
 module.exports = {
   StalkerProvider,
   itemEntry,
+  directItem,
+  usableEpisode,
   configHash,
   phpJson,
   atomicJson,

@@ -5,19 +5,17 @@ const { join } = require('path');
 const { listOffline, sendOffline, validId, ready, controlOffline, enqueueOffline, retryOffline } = require('./stalker-offline');
 const { areaAllowed } = require('./library');
 const { authorized, parentalStatus } = require('./profile-policy');
-const { documents, enabled, now, parse, publicUser, sha } = require('./account-data');
+const { documents, enabled, now, parse, publicUser } = require('./account-data');
 
+const { configHash } = require('./stalker-provider');
+const { indexed, direct, categoryExport, detail } = require('./stalker-browse');
+const { guidePage } = require('./stalker-guide');
+const { channelDetail, channelPage, liveSnapshot, byCountry } = require('./stalker-live-browse');
+
+const browseActions = ['stalker_vod_catalogue','stalker_vod_detail','stalker_browse','stalker_countries','stalker_live_categories','stalker_live_channels','stalker_live_guide','stalker_channel'];
 const kinds = ['live', 'vod', 'series'];
 const secretFields = ['mac', 'username', 'password', 'serial', 'deviceId', 'deviceId2'];
 const complete = status => ['complete', 'skipped'].includes(status);
-
-function configHash(feed) {
-  // Match PHP's json_encode and the field order produced by iptv_normalize_feed.
-  const identity = Object.fromEntries([...secretFields, 'id', 'url'].map(key => [key, feed[key] ?? '']));
-  const json = JSON.stringify(identity).replace(/\//g, '\\/').replace(/[\u0080-\uffff]/g,
-    value => '\\u' + value.charCodeAt(0).toString(16).padStart(4, '0'));
-  return sha(json);
-}
 
 function savedFeeds(state) {
   if (!state) return [];
@@ -40,10 +38,117 @@ function savedFeeds(state) {
       return null;
     }
   }
-  return state.feeds.filter(feed => feed.type === 'stalker');
+  // Legacy cache fingerprints use the field order and defaults of iptv_normalize_feed.
+  return state.feeds.filter(feed => feed.type === 'stalker').map(feed => ({
+    type: 'stalker', ...Object.fromEntries(secretFields.map(key => [key,feed[key]])),
+    id: feed.id, name: feed.name, url: feed.url,
+    enabled: feed.enabled == null || enabled(feed.enabled), preinstalled: enabled(feed.preinstalled),
+  }));
 }
 
-module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavailable, json, downloads, stalker }) {
+async function viewerCatalogue(
+  request,
+  response,
+  pool,
+  root,
+  feeds,
+  expired,
+  rawExport,
+  libraryAllowed,
+  decode,
+) {
+  const { action } = request.params;
+  const opts = request.query;
+  const active = feeds.filter((feed) => enabled(feed.enabled));
+  const fail = (status, error) => response.status(status).json({ ok: false, error });
+  if (action === 'stalker_vod_catalogue' && enabled(opts.indexed)) {
+    return response.json(
+      await indexed(
+        pool,
+        root,
+        active.filter((feed) => !expired(feed.id)),
+        opts,
+        libraryAllowed,
+        decode,
+      ),
+    );
+  }
+  const feed =
+    active.find((feed) => feed.id === opts.feed) ??
+    (action === 'stalker_vod_catalogue' && !opts.feed ? active[0] : null);
+  if (action === 'stalker_vod_catalogue' && !active.length) {
+    return response.json({
+      ok: true,
+      items: [],
+      total: 0,
+      hasMore: false,
+      facets: { category: [] },
+      connections: [],
+      shared: false,
+    });
+  }
+  if (action !== 'stalker_countries' && !feed) return fail(422, 'Select an enabled Stalker connection.');
+  const kind = opts.kind ?? (action === 'stalker_browse' ? 'live' : 'vod');
+  if (action === 'stalker_channel')
+    return response.json(await channelDetail(pool, root, feed, opts, expired(feed.id)));
+  if (action === 'stalker_vod_detail') {
+    const id = String(opts.id ?? '');
+    const item = await detail(pool, root, feed, id, decode);
+    if (!item)
+      return fail(502, 'This catalogue entry has expired. Return to Stalker and refresh the catalogue.');
+    return response.json({ ok: true, item });
+  }
+  if (
+    action === 'stalker_countries' ||
+    (action === 'stalker_browse' && kind === 'live') ||
+    action === 'stalker_live_categories' ||
+    action === 'stalker_live_channels' ||
+    action === 'stalker_live_guide'
+  ) {
+    // Snapshot processing needs neither a database connection nor the update lock.
+    return async () => {
+      try {
+        if (action === 'stalker_countries' || action === 'stalker_browse') {
+          return response.json(
+            await byCountry(root, action === 'stalker_countries' ? active : [feed], expired, opts),
+          );
+        }
+        if (action === 'stalker_live_guide')
+          return response.json(await guidePage(root, feed, opts, expired(feed.id), decode));
+        const data = expired(feed.id) ? null : await liveSnapshot(root, feed);
+        return response.json(
+          action === 'stalker_live_channels'
+            ? channelPage(data, feed, opts)
+            : { ok: true, categories: data?.categories ?? [], catalogueLoading: !data },
+        );
+      } catch (error) {
+        if ([422, 502].includes(error.status)) return fail(error.status, error.message);
+        throw error;
+      }
+    };
+  }
+  if (!['vod', 'series'].includes(kind)) return fail(422, 'Choose Movies or Series.');
+  if (rawExport)
+    return async () => {
+      try {
+        return response.json(await categoryExport(root, feed, kind));
+      } catch {
+        return fail(502, 'Could not read categories from this provider.');
+      }
+    };
+  if (expired(feed.id))
+    return response.json({
+      ok: true,
+      items: [],
+      total: 0,
+      hasMore: false,
+      categories: [],
+      catalogueLoading: false,
+    });
+  return response.json(await direct(pool, root, feed, kind, opts));
+}
+
+module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavailable, json, downloads, stalker, services }) {
   const version = readFile(join(root, 'VERSION'), 'utf8').then(text => text.trim()).catch(() => '');
   const runtime = join(root, 'data/runtime');
   const fresh = async name => {
@@ -118,7 +223,9 @@ module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavai
           error: 'The video is not ready to download. Open Downloads to see its status.' });
         return () => sendOffline(request, response, root, job);
       }
-      if (action !== 'stalker') {
+      const browsing = browseActions.includes(action);
+      const rawExport = ['stalker_vod_catalogue','stalker_browse'].includes(action) && enabled(request.query.raw_categories_export);
+      if ((!browsing && action !== 'stalker') || rawExport) {
         const docs = await documents(pool, ['permission_roles']);
         if (!publicUser(user, settings, docs, now()).capabilities.iptv_manage) {
           return response.status(403).json({ ok: false, error: 'This action requires the iptv_manage permission.' });
@@ -162,6 +269,9 @@ module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavai
           configured: true, expired: expired(feed.id),
         })) });
       }
+
+      if (browsing) return viewerCatalogue(request, response, pool, root, feeds, expired, rawExport,
+        areaAllowed(user,'library',parental), services().decode);
 
       const worker = await workerRunning('catalogue', 'stalker-library.heartbeat');
       // A status request can wake the native scheduler after a service restart.
@@ -228,7 +338,7 @@ module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavai
       }
       return response.json({ ok: true, sources, reset: docs[resetKey] ?? { state: 'idle' }, worker });
     }, true);
-  app.get(prefix + '/live/:action(stalker|stalker_catalogue_status|stalker_update_status|stalker_offline|stalker_offline_file)', operation);
+  app.get(prefix + '/live/:action(stalker|stalker_catalogue_status|stalker_update_status|stalker_offline|stalker_offline_file|' + browseActions.join('|') + ')', operation);
   app.post(prefix + '/live/:action(stalker_cancel|stalker_delete|stalker_download|stalker_retry|stalker_updates|stalker_catalogue_control)', (request, response, next) => {
     if (!request.is('application/json')) return unavailable(response);
     json(request, response, error => error ? unavailable(response) : next());

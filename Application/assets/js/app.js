@@ -5763,7 +5763,9 @@ try {
     var suffix = action + (params ? '?' + String(params).replace(/^&/, '') : '');
     var options = { credentials:'same-origin', cache:'no-store' };
     var nativeBase = window.__VAULTCAST_APPLICATION_BASE__;
-    var native = nativeBase && ['stalker', 'stalker_catalogue_status', 'stalker_update_status', 'stalker_offline'].indexOf(action) >= 0;
+    var native = nativeBase && ['stalker', 'stalker_catalogue_status', 'stalker_update_status', 'stalker_offline',
+      'stalker_vod_catalogue', 'stalker_vod_detail', 'stalker_browse', 'stalker_countries',
+      'stalker_live_categories', 'stalker_live_channels', 'stalker_live_guide', 'stalker_channel'].indexOf(action) >= 0;
     var request = native ? fetch(nativeBase + '/live/' + suffix, options).then(function(r){
       if (r.status === 503 && r.headers.get('X-Vaultcast-App-Unavailable') === '1') return fetch(LIVE_API + suffix, options);
       return r;
