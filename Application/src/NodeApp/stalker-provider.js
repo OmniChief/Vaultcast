@@ -376,7 +376,21 @@ class StalkerProvider {
     }
   }
 
-  async response(value, { signal, range, ifRange, metadata = false, token = '', attempt = 0 } = {}) {
+  async response(
+    value,
+    {
+      signal,
+      range,
+      ifRange,
+      metadata = false,
+      token = '',
+      attempt = 0,
+      method = 'GET',
+      userAgent = ua,
+      referer,
+      accept,
+    } = {},
+  ) {
     signal = this.signal ? (signal ? AbortSignal.any([signal, this.signal]) : this.signal) : signal;
     signal?.throwIfAborted();
     const url = mediaUrl(value);
@@ -385,9 +399,11 @@ class StalkerProvider {
     const response = await providerResponse(
       {
         ip: ips[attempt % ips.length],
-        purpose: metadata ? 'metadata' : 'download',
-        ua,
-        ref: this.endpoint.replace(/\/(?:server\/load|portal)\.php$/, '/c/'),
+        purpose: metadata ? 'metadata' : this.mediaCookies ? 'media' : 'download',
+        jar: this.mediaCookies ? this.cookiePath : undefined,
+        ua: userAgent,
+        accept,
+        ref: referer ?? this.endpoint.replace(/\/(?:server\/load|portal)\.php$/, '/c/'),
         cookies: this.cookieHeader(url, metadata),
         range,
         ifRange,
@@ -400,11 +416,13 @@ class StalkerProvider {
           : undefined,
       },
       url,
-      'GET',
+      method,
       signal,
     );
     try {
-      await this.acceptCookies(url, response.headers);
+      if (this.mediaCookies) {
+        if (response.headers['set-cookie']?.length) await this.mediaCookies(url, response.headers);
+      } else await this.acceptCookies(url, response.headers);
     } catch (error) {
       response.destroy();
       throw error;
@@ -609,7 +627,8 @@ class StalkerProvider {
   }
 
   async accountExpiry() {
-    const responses = [];
+    const responses = [],
+      sources = [];
     for (const [type, action, params] of [
       ['account_info', 'get_main_info', {}],
       [
@@ -634,6 +653,7 @@ class StalkerProvider {
     ]) {
       try {
         responses.push(await this.call(type, action, params));
+        sources.push(type + '/' + action);
       } catch (error) {
         if (error.retryAt || this.signal?.aborted) throw error;
       }
@@ -668,29 +688,66 @@ class StalkerProvider {
               (key.toLowerCase() === 'phone' && !/[./-]|[a-z]{3,}|\s\d{4}\b/i.test(raw))
             )
               continue;
-            let timestamp = /^\d+$/.test(raw)
+            const numeric = /^\d+$/.test(raw);
+            // MAG billing dates often use day.month.year, which Date.parse can interpret as month first.
+            const european = /^(\d{1,2})\.(\d{1,2})\.(\d{4})(.*)$/.exec(raw);
+            const normal = european
+              ? european[3] +
+                '-' +
+                european[2].padStart(2, '0') +
+                '-' +
+                european[1].padStart(2, '0') +
+                european[4]
+              : raw;
+            const dateOnly = /^\d{4}-\d\d-\d\d$/.test(normal);
+            const timestamp = numeric
               ? Number(raw) / (Number(raw) > 1e12 ? 1000 : 1)
-              : Date.parse(raw) / 1000;
-            if (!Number.isFinite(timestamp)) {
-              const date = /^(\d{1,2})\.(\d{1,2})\.(\d{4})(.*)$/.exec(raw);
-              if (date)
-                timestamp =
-                  Date.parse(
-                    date[3] + '-' + date[2].padStart(2, '0') + '-' + date[1].padStart(2, '0') + date[4],
-                  ) / 1000;
-            }
-            if (timestamp >= 946684800 && timestamp <= 4102444800)
+              : Date.parse(dateOnly ? normal + 'T00:00:00' : normal) / 1000;
+            if (timestamp >= 946684800 && timestamp <= 4102444800) {
+              const clock = /(?:T|\s)(\d{1,2}):(\d{2})/.exec(raw);
+              const utc = numeric || /(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw);
+              const instant = new Date(Math.floor(timestamp) * 1000);
+              const iso = instant.toISOString();
+              const date = utc
+                ? iso.slice(0, 10)
+                : [
+                    instant.getFullYear(),
+                    String(instant.getMonth() + 1).padStart(2, '0'),
+                    String(instant.getDate()).padStart(2, '0'),
+                  ].join('-');
+              const time =
+                numeric || clock
+                  ? utc
+                    ? iso.slice(11, 16)
+                    : clock[1].padStart(2, '0') + ':' + clock[2]
+                  : null;
               return {
-                expires:
-                  Math.floor(timestamp) +
-                  (/^\d+$/.test(raw) || /(?:T|\s)\d{1,2}:\d{2}/.test(raw) ? 0 : 86400),
+                date,
+                time,
+                timeZone: time ? (utc ? 'UTC' : 'provider time') : null,
+                expires: time
+                  ? Math.floor(timestamp)
+                  : Math.floor(
+                      new Date(instant.getFullYear(), instant.getMonth(), instant.getDate() + 1).getTime() /
+                        1000,
+                    ),
+                status: 'found',
+                sources,
               };
+            }
           }
           if (depth < 3 && value && typeof value === 'object') pending.push([value, depth + 1]);
         }
       }
     }
-    return { expires: null };
+    return {
+      expires: null,
+      date: null,
+      time: null,
+      timeZone: null,
+      status: sources.length ? 'not_exposed' : 'account_requests_failed',
+      sources,
+    };
   }
 }
 

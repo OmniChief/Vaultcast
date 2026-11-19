@@ -12,6 +12,20 @@ const { indexed, direct, categoryExport, detail } = require('./stalker-browse');
 const { guidePage } = require('./stalker-guide');
 const { channelDetail, channelPage, liveSnapshot, byCountry } = require('./stalker-live-browse');
 
+const playback = require('./stalker-playback');
+const connections = require('./stalker-connections');
+const { diagnostics } = require('./stalker-diagnostics');
+const { provider } = require('./stalker-store');
+const diagnosticActions = ['stalker_epg_fields','stalker_live_fields','stalker_vod_fields','stalker_vod_probe'];
+const playbackActions = ['stalker_play','stalker_stream','stalker_check_media'];
+
+function legacyStream(request,response) {
+  const params = new URLSearchParams();
+  for (const key of ['feed','channel','ticket','playback','format'])
+    if (typeof request.query[key] === 'string') params.set(key,request.query[key]);
+  return response.redirect(307,'/api/live/stalker_stream?'+params);
+}
+
 const browseActions = ['stalker_vod_catalogue','stalker_vod_detail','stalker_browse','stalker_countries','stalker_live_categories','stalker_live_channels','stalker_live_guide','stalker_channel'];
 const kinds = ['live', 'vod', 'series'];
 const secretFields = ['mac', 'username', 'password', 'serial', 'deviceId', 'deviceId2'];
@@ -148,7 +162,7 @@ async function viewerCatalogue(
   return response.json(await direct(pool, root, feed, kind, opts));
 }
 
-module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavailable, json, downloads, stalker, services }) {
+module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavailable, json, downloads, stalker, services, ready:databaseReady }) {
   const version = readFile(join(root, 'VERSION'), 'utf8').then(text => text.trim()).catch(() => '');
   const runtime = join(root, 'data/runtime');
   const fresh = async name => {
@@ -162,6 +176,113 @@ module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavai
     return fresh(legacy);
   }
 
+  let providerRequests = 0;
+  function network(response, operation) {
+    return async () => {
+      if (response.destroyed) return;
+      const controller = new AbortController(),
+        stop = () => controller.abort();
+      response.once('close', stop);
+      providerRequests++;
+      try {
+        return await operation(AbortSignal.any([controller.signal, AbortSignal.timeout(120000)]));
+      } catch (error) {
+        if (response.destroyed) return;
+        if (response.headersSent) return response.destroy();
+        if (error.retryAt) response.set('Retry-After', String(Math.max(1, error.retryAt - now())));
+        const status = error.userError ? 422 : error.expose ? error.status : error.retryAt ? 429 : 502;
+        return response
+          .status(status)
+          .type('application/json')
+          .json({
+            ok: false,
+            error:
+              error.userError || error.expose
+                ? error.message
+                : error.authentication
+                  ? 'The provider rejected the saved device or account.'
+                  : error.retryAt
+                    ? 'The provider has rate limited requests.'
+                    : 'The provider request could not be completed.',
+          });
+      } finally {
+        response.removeListener('close', stop);
+        providerRequests--;
+      }
+    };
+  }
+  async function feedOperation(request, response, pool, settings, user, feeds, live_iptv) {
+    const { action } = request.params,
+      opts = request.method === 'POST' ? (request.body ?? {}) : request.query;
+    const feed = feeds.find((f) => f.id === (action === 'stalker_manage' ? opts.id : opts.feed));
+    const fail = (status, error) => response.status(status).json({ ok: false, error });
+    if (!feed || (action !== 'stalker_manage' && !feed.enabled))
+      return fail(action === 'stalker_stream' ? 404 : 422, 'Select a saved Stalker connection.');
+    response.locals.mutationStarted = true;
+    if (action === 'stalker_manage')
+      return network(response, async (signal) =>
+        response.json(await connections.check(await provider(root, feed, signal))),
+      );
+    const accountKey = 'stalker-account-' + configHash(feed);
+    const expiry = (await documents(pool, [accountKey]))[accountKey]?.expires;
+    const expired = enabled(expiry) && Number(expiry) <= now();
+    if (diagnosticActions.includes(action))
+      return network(response, async (signal) =>
+        response.json(
+          await diagnostics(
+            root,
+            feed,
+            await provider(root, feed, signal),
+            action,
+            opts,
+            services().decode,
+            expired,
+          ),
+        ),
+      );
+    if (expired) return fail(410, 'This provider subscription has expired.');
+    const streaming = action === 'stalker_stream';
+    const id = streaming ? opts.channel : opts.id,
+      kind = streaming ? 'live' : (opts.kind ?? 'live');
+    if (typeof id !== 'string' || !id || !['live', 'series', 'vod'].includes(kind))
+      return fail(422, 'Select a valid catalogue entry.');
+    if (streaming && opts.ticket != null) {
+      const state = await playback.authorizedTicket(root, feed, id, opts.ticket, user.id);
+      if (!state) return fail(403, 'Playback selection expired. Select the title again.');
+      if (!state.childKey && opts.resource == null) return legacyStream(request, response);
+      return network(response, () => playback.serve(root, feed, state, request, response));
+    }
+    if (streaming) {
+      if (opts.resource != null) return fail(403, 'Invalid playback resource.');
+      const channelUrl =
+        '/api/live/stalker_stream?feed=' +
+        encodeURIComponent(feed.id) +
+        '&channel=' +
+        encodeURIComponent(id).replace(/[!'()*]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase()) +
+        '&format=.m3u8';
+      const saved = live_iptv?.channels?.some(
+        (channel) => (channel.enabled == null || enabled(channel.enabled)) && channel.url === channelUrl,
+      );
+      if (
+        !saved &&
+        !publicUser(user, settings, await documents(pool, ['permission_roles']), now()).capabilities
+          .iptv_manage
+      )
+        return fail(403, 'This action requires the iptv_manage permission.');
+    }
+    const item = await playback.entry(pool, root, feed, id, kind);
+    if (!item?.cmd)
+      return fail(422, 'This catalogue entry is unavailable. Refresh the catalogue and select it again.');
+    return network(response, async (signal) => {
+      if (action === 'stalker_check_media')
+        return response.json(
+          await playback.checkMedia(root, feed, id, kind, item, opts.profile ?? 'stb', signal),
+        );
+      const result = await playback.issue(root, feed, id, kind, item, user.id, signal);
+      if (streaming) return response.redirect(307, result.source.url);
+      return response.json(result);
+    });
+  }
   const operation = handle(async (request, response, pool, _bcrypt, settings, current) => {
       const { action } = request.params;
       if (enabled(settings.features_explicit?.live) && Object.hasOwn(settings.features ?? {}, 'live') &&
@@ -178,6 +299,7 @@ module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavai
       if (parental.restricted) {
         return response.status(403).json({ ok: false, error: 'Provider catalogues are unavailable for restricted profiles.' });
       }
+      if (action === 'stalker_art') return response.status(404).json({ ok:false, error:'No locally saved artwork is available.' });
       if (['stalker_offline', 'stalker_offline_file', 'stalker_cancel', 'stalker_delete', 'stalker_download', 'stalker_retry'].includes(action)) {
         const { capabilities } = publicUser(user, settings, await documents(pool, ['permission_roles']), now());
         const denied = permission => response.status(403).json({ ok: false, error: 'This action requires the ' + permission + ' permission.' });
@@ -225,7 +347,7 @@ module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavai
       }
       const browsing = browseActions.includes(action);
       const rawExport = ['stalker_vod_catalogue','stalker_browse'].includes(action) && enabled(request.query.raw_categories_export);
-      if ((!browsing && action !== 'stalker') || rawExport) {
+      if ((!browsing && action !== 'stalker' && !playbackActions.includes(action)) || rawExport) {
         const docs = await documents(pool, ['permission_roles']);
         if (!publicUser(user, settings, docs, now()).capabilities.iptv_manage) {
           return response.status(403).json({ ok: false, error: 'This action requires the iptv_manage permission.' });
@@ -253,9 +375,20 @@ module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavai
           message: saved?.message ?? 'Add your provider update page to discover its connections.', worker } });
       }
 
+      if (action === 'stalker_manage' && request.body?.operation !== 'check') {
+        response.locals.mutationStarted = true;
+        try {
+          return response.json(await connections.manage(pool, request.body ?? {}));
+        } catch (error) {
+          if (!error.userError) throw error;
+          return response.status(422).json({ ok: false, error: error.message });
+        }
+      }
       const { live_iptv } = await documents(pool, ['live_iptv']);
       const feeds = savedFeeds(live_iptv);
       if (!feeds) return unavailable(response);
+      if (playbackActions.includes(action) || diagnosticActions.includes(action) || action === 'stalker_manage')
+        return feedOperation(request, response, pool, settings, user, feeds, live_iptv);
       const keys = new Map(feeds.map(feed => [feed.id, configHash(feed)]));
       const accounts = feeds.length ? await documents(pool, [...keys.values()].map(key => 'stalker-account-' + key)) : {};
       const expired = id => {
@@ -338,9 +471,16 @@ module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavai
       }
       return response.json({ ok: true, sources, reset: docs[resetKey] ?? { state: 'idle' }, worker });
     }, true);
-  app.get(prefix + '/live/:action(stalker|stalker_catalogue_status|stalker_update_status|stalker_offline|stalker_offline_file|' + browseActions.join('|') + ')', operation);
-  app.post(prefix + '/live/:action(stalker_cancel|stalker_delete|stalker_download|stalker_retry|stalker_updates|stalker_catalogue_control)', (request, response, next) => {
+  app.get(prefix + '/live/:action(stalker|stalker_catalogue_status|stalker_update_status|stalker_offline|stalker_offline_file|stalker_art|' + browseActions.concat(diagnosticActions).join('|') + ')', operation);
+  app.get(prefix + '/live/:action(stalker_stream)', (request,response) => {
+    // The compatibility endpoint applies the installation's external-player CORS policy.
+    if (request.query.resource==null && (!databaseReady() || request.headers['sec-fetch-site']==='cross-site'))
+      return legacyStream(request,response);
+    return operation(request,response);
+  });
+  app.post(prefix + '/live/:action(stalker_cancel|stalker_delete|stalker_download|stalker_retry|stalker_updates|stalker_catalogue_control|stalker_manage|stalker_play|stalker_check_media)', (request, response, next) => {
     if (!request.is('application/json')) return unavailable(response);
     json(request, response, error => error ? unavailable(response) : next());
   }, operation);
+  return () => providerRequests > 0;
 };

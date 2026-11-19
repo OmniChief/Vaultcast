@@ -53,7 +53,7 @@ function providerResponse(ticket, url, method, signal) {
   const family = isIP(ticket.ip);
   const urlIp = isIP(url.hostname);
   if (!family || (urlIp && url.hostname !== ticket.ip)) throw new Error('Invalid pinned address');
-  const headers = { accept: '*/*', 'user-agent': ticket.ua, 'accept-encoding': 'identity' };
+  const headers = { accept: ticket.accept ?? '*/*', 'user-agent': ticket.ua, 'accept-encoding': 'identity' };
   if (ticket.purpose === 'metadata' && ticket.headers && !Array.isArray(ticket.headers)) {
     for (const key of ['accept', 'authorization', 'user-agent', 'x-user-agent']) {
       if (typeof ticket.headers[key] === 'string') headers[key] = ticket.headers[key];

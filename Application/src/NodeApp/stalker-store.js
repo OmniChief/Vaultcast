@@ -21,6 +21,38 @@ const take = (value, length) =>
     .join('');
 const bound = (value, min, max) => Math.min(max, Math.max(min, parseInt(value, 10) || 0));
 
+function page(response) {
+  if (
+    !response ||
+    enabled(response.error) ||
+    response.success === false ||
+    response.status === false ||
+    !response.data ||
+    typeof response.data !== 'object'
+  )
+    throw new Error('Invalid provider page response.');
+  const rows = Object.values(response.data),
+    ids = new Set();
+  for (const row of rows) {
+    if (
+      !row ||
+      row.id == null ||
+      typeof row.id === 'object' ||
+      !String(row.id) ||
+      Buffer.byteLength(String(row.id)) > 120
+    )
+      throw new Error('Invalid provider item.');
+    const id = String(row.id);
+    if (ids.has(id)) throw new Error('Repeated IDs in provider page.');
+    ids.add(id);
+  }
+  let total = null;
+  if (Object.hasOwn(response, 'total_items')) {
+    if (!/^\d{1,12}$/.test(String(response.total_items ?? ''))) throw new Error('Invalid provider total.');
+    total = Number(response.total_items);
+  }
+  return { rows, total };
+}
 function groups(response) {
   const rows = response?.data ?? response;
   if (
@@ -203,6 +235,7 @@ module.exports = {
   take,
   bound,
   groups,
+  page,
   snapshot,
   snapshotPath,
   saveSnapshot,

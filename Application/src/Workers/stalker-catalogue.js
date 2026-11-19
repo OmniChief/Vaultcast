@@ -25,42 +25,11 @@ const {
   selected,
   folderSelected,
   groups,
+  page,
 } = store;
 const { country, genre } = require('../NodeApp/stalker-taxonomy');
 const libraryWriter = require('../NodeApp/stalker-library-write');
 
-function page(response) {
-  if (
-    !response ||
-    enabled(response.error) ||
-    response.success === false ||
-    response.status === false ||
-    !response.data ||
-    typeof response.data !== 'object'
-  )
-    throw new Error('Invalid provider page response.');
-  const rows = Object.values(response.data),
-    ids = new Set();
-  for (const row of rows) {
-    if (
-      !row ||
-      row.id == null ||
-      typeof row.id === 'object' ||
-      !String(row.id) ||
-      Buffer.byteLength(String(row.id)) > 120
-    )
-      throw new Error('Invalid provider item.');
-    const id = String(row.id);
-    if (ids.has(id)) throw new Error('Repeated IDs in provider page.');
-    ids.add(id);
-  }
-  let total = null;
-  if (Object.hasOwn(response, 'total_items')) {
-    if (!/^\d{1,12}$/.test(String(response.total_items ?? ''))) throw new Error('Invalid provider total.');
-    total = Number(response.total_items);
-  }
-  return { rows, total };
-}
 const key = (job) => [job.feed_id, job.kind, job.generation];
 const scope = (job) => [job.feed_id, job.kind];
 module.exports = function catalogueWorker(db, root) {

@@ -5765,7 +5765,7 @@ try {
     var nativeBase = window.__VAULTCAST_APPLICATION_BASE__;
     var native = nativeBase && ['stalker', 'stalker_catalogue_status', 'stalker_update_status', 'stalker_offline',
       'stalker_vod_catalogue', 'stalker_vod_detail', 'stalker_browse', 'stalker_countries',
-      'stalker_live_categories', 'stalker_live_channels', 'stalker_live_guide', 'stalker_channel'].indexOf(action) >= 0;
+      'stalker_live_categories', 'stalker_live_channels', 'stalker_live_guide', 'stalker_channel', 'stalker_live_fields', 'stalker_epg_fields', 'stalker_vod_fields', 'stalker_vod_probe', 'stalker_art'].indexOf(action) >= 0;
     var request = native ? fetch(nativeBase + '/live/' + suffix, options).then(function(r){
       if (r.status === 503 && r.headers.get('X-Vaultcast-App-Unavailable') === '1') return fetch(LIVE_API + suffix, options);
       return r;
@@ -5845,7 +5845,7 @@ try {
       body: JSON.stringify(body || {})
     };
     var nativeBase = window.__VAULTCAST_APPLICATION_BASE__;
-    var native = nativeBase && ['stalker_cancel', 'stalker_delete', 'stalker_download', 'stalker_retry', 'stalker_updates', 'stalker_catalogue_control'].indexOf(action) >= 0;
+    var native = nativeBase && ['stalker_cancel', 'stalker_delete', 'stalker_download', 'stalker_retry', 'stalker_updates', 'stalker_catalogue_control', 'stalker_manage', 'stalker_play', 'stalker_check_media'].indexOf(action) >= 0;
     var request = native ? fetch(nativeBase + '/live/' + action, options).then(function(r){
       if (r.status === 503 && r.headers.get('X-Vaultcast-App-Unavailable') === '1') return fetch(LIVE_API + action, options);
       return r;
@@ -6679,7 +6679,7 @@ try {
   function stalkerUpdateSettings(host,connections){
     var card=h('section',{className:'settings-card stack'}),status=h('p',{role:'status',className:'muted'}),url=h('input',{type:'url',placeholder:'Provider update-page URL (leave blank to keep saved URL)',autocomplete:'off'}),paused=h('input',{type:'checkbox'}),discovered=h('div',{className:'stack'});
     function error(e){status.className='bad';status.textContent=e.message;}
-    function refresh(){liveApi('stalker_update_status').then(function(result){if(!card.isConnected)return;if(!result||!result.ok)throw new Error(result&&result.error||'Could not read update status.');var s=result.status;paused.checked=!!s.paused;status.className='muted';status.textContent=s.message+(s.last_check?' Last checked: '+new Date(s.last_check*1000).toLocaleString()+'.':'')+(s.next_check&&!s.paused?' Next check: '+new Date(s.next_check*1000).toLocaleString()+'.':'')+(s.configured&&!s.paused&&!s.worker?' Background worker is not currently reporting; check the PHP worker settings if this persists.':'');}).catch(error);}
+    function refresh(){liveApi('stalker_update_status').then(function(result){if(!card.isConnected)return;if(!result||!result.ok)throw new Error(result&&result.error||'Could not read update status.');var s=result.status;paused.checked=!!s.paused;status.className='muted';status.textContent=s.message+(s.last_check?' Last checked: '+new Date(s.last_check*1000).toLocaleString()+'.':'')+(s.next_check&&!s.paused?' Next check: '+new Date(s.next_check*1000).toLocaleString()+'.':'')+(s.configured&&!s.paused&&!s.worker?' The provider update worker has not reported recently.':'');}).catch(error);}
     card.appendChild(h('h3',{text:'Check for updated feeds'}));
     card.appendChild(h('p',{className:'muted',text:'Find connection details in your provider’s text, input boxes and copy fields. Accept suggested pairs or choose which URL field belongs with each MAC field. Save those selections to follow future changes on the same page.'}));
     card.appendChild(h('label',{className:'stack'},['Provider update page',url]));card.appendChild(h('label',{},[paused,' Pause daily checks']));
@@ -7569,7 +7569,9 @@ try {
   }
   function attachIptvStream(video,source,options){
     var current=options.current||function(){return true;},url=source.url;
-    var portalStream=url.indexOf('/api/live/stalker_stream?')!==-1,xtreamStream=url.indexOf('/api/live/xtream_stream?')!==-1;
+    var nativeBase=window.__VAULTCAST_APPLICATION_BASE__;
+    if(nativeBase && url.indexOf(LIVE_API+'stalker_stream?')===0) url=nativeBase+'/live/'+url.slice(LIVE_API.length);
+    var portalStream=url.indexOf('/api/live/stalker_stream?')!==-1 || (nativeBase && url.indexOf(nativeBase+'/live/stalker_stream?')===0),xtreamStream=url.indexOf('/api/live/xtream_stream?')!==-1;
     if(portalStream&&(source.kind==='live'||url.indexOf('ticket=')===-1)){
       if(!window._vaultcastStalkerStreamLoading)window._vaultcastStalkerStreamLoading=new Promise(function(resolve,reject){
         if(window.attachStalkerStream){resolve();return;}

@@ -25,7 +25,7 @@
 
   // Sniff and consume one request: a temporary link must not be probed, then reopened.
   window.attachStalkerStream = function (video, url, options, loadHls) {
-    var controller = new AbortController(), reader, inner, audio, stopped = false, blob;
+    var controller = new AbortController(), reader, inner, audio, stopped = false;
     var timer = setTimeout(function () { controller.abort(); }, 45000);
     function current() { return !stopped && options.current(); }
     function destroy() {
@@ -36,7 +36,6 @@
       // Errors may be emitted from inside the parser's own call stack. Defer
       // disposal so it can finish without accessing an already-cleared emitter.
       if (inner) { var previous = inner; inner = null; setTimeout(function () { previous.destroy(); }, 0); }
-      if (blob) URL.revokeObjectURL(blob);
       video.removeEventListener('canplay', play);
     }
     function play() { if (current()) options.play(); }
@@ -131,11 +130,12 @@
         });
         inner.loadSource(url); inner.attachMedia(video);
       } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-        blob = URL.createObjectURL(new Blob([manifest], { type: 'application/vnd.apple.mpegurl' }));
-        video.src = blob; play();
+        // Native HLS reloads the ticketed manifest and resolves its child playlists against this URL.
+        video.src = url; play();
       } else throw new Error('This browser cannot play HLS streams.');
     }
     return fetch(url, { credentials: 'same-origin', cache: 'no-store', signal: controller.signal }).then(async function (response) {
+      if (response.url && new URL(response.url).origin === location.origin) url = response.url;
       if (!response.ok) throw new Error('Live stream request failed: HTTP ' + response.status + (response.headers.get('X-Vaultcast-Error-Origin') === 'provider' ? ' from provider.' : '.'));
       if (!response.body || !response.body.getReader) throw new Error('This browser does not support streaming responses.');
       reader = response.body.getReader();
