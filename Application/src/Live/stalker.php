@@ -277,7 +277,10 @@ function stalker_resolve(array $feed, string $id): string {
 }
 
 /** Provider guide rows, keyed by the same stable IDs as the saved lineup. */
-function stalker_guide(array $feed): array {
+function stalker_guide(array $feed,?array $ids=null): array {
+    $programmes=StalkerLiveBrowse::lineupGuide($feed,$ids);
+    if($programmes!==null)return $programmes;
+    $wanted=$ids===null?null:array_fill_keys($ids,true);
     $data = StalkerLiveBrowse::snapshot($feed)['guide']??[];
     $out = [];
     foreach ($data as $channelId=>$rows) {
@@ -290,6 +293,7 @@ function stalker_guide(array $feed): array {
             $end = is_numeric($end) ? (int)$end : strtotime((string)$end);
             if (!$start || !$end || $end<=$start) continue;
             $id = 'stalker-'.substr(hash('sha256',$feed['id'].':'.($row['ch_id'] ?? $channelId)),0,20);
+            if($wanted!==null&&!isset($wanted[$id]))continue;
             $out[$id][] = ['startUnix'=>$start*1000,'endUnix'=>$end*1000,'title'=>(string)($row['name'] ?? $row['title'] ?? ''),'subtitle'=>(string)($row['descr'] ?? ''),'kind'=>'epg'];
         }
     }
@@ -537,9 +541,9 @@ function stalker_channel_detail(array $feed,string $id,bool $refresh=false,bool 
     $guideError='';$programs=$includeGuide?($presentation['programs']??[]):[];
     if($includeGuide&&(!$programs||$refresh))try{
         $key='stalker_channel_epg_'.hash('sha256',json_encode($feed));$guide=$refresh?null:\Vaultcast\Repository::cacheGet($key);
-        if($guide===null)$guide=stalker_guide($feed);
-        if(!empty($guide['__unavailable']))$guideError='The provider programme guide is currently unavailable.';
         $stableId='stalker-'.substr(hash('sha256',$feed['id'].':'.$id),0,20);
+        if($guide===null)$guide=stalker_guide($feed,[$stableId]);
+        if(!empty($guide['__unavailable']))$guideError='The provider programme guide is currently unavailable.';
         foreach($guide[$stableId]??[] as $event){
             $overlap=false;foreach($programs as $known)if($event['startUnix']<$known['endUnix']&&$event['endUnix']>$known['startUnix']){$overlap=true;break;}
             if(!$overlap)$programs[]=$event;

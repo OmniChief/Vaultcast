@@ -40,8 +40,9 @@ async function parentalStatus(root, pool, current, user, time) {
   settings.ceiling_label = ratings[settings.ceiling - 1].label;
 
   let unlocked = 0;
-  if (current.browserToken) {
-    const entry = await cached(root, 'parental-unlock:' + sha(current.browserToken), time);
+  const unlockKey = current.delegatedHash ?? (current.browserToken && sha(current.browserToken));
+  if (unlockKey) {
+    const entry = await cached(root, 'parental-unlock:' + unlockKey, time);
     if (entry?.user_id === user.id) unlocked = Math.max(0, Math.trunc(Number(entry.until) || 0) - time);
   }
   return {

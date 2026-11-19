@@ -8,11 +8,15 @@ const { dirname, join } = require('path');
 const { promisify } = require('util');
 const run = promisify(execFile);
 
-module.exports = async function dependencies(root) {
+async function runtimeFiles(root) {
   const manifest = await fs.readFile(join(__dirname, 'package.json'));
   const lock = await fs.readFile(join(__dirname, 'package-lock.json'));
   const id = createHash('sha256').update(manifest).update(lock).digest('hex').slice(0, 24);
-  const path = join(root, 'data/runtime', 'node-app-' + id);
+  return { path: join(root, 'data/runtime', 'node-app-' + id), id, manifest, lock };
+}
+
+module.exports = async function dependencies(root) {
+  const { path, id, manifest, lock } = await runtimeFiles(root);
   const marker = join(path, '.ready');
   const load = createRequire(join(path, 'package.json'));
   function installed() {
@@ -34,4 +38,9 @@ module.exports = async function dependencies(root) {
   const result = installed();
   await fs.writeFile(marker, id, { mode: 0o600 });
   return result;
+};
+
+module.exports.htmlDecoder = async function htmlDecoder(root) {
+  const { path } = await runtimeFiles(root);
+  return createRequire(join(path, 'package.json'))('entities').decodeHTML;
 };

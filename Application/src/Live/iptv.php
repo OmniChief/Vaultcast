@@ -1057,24 +1057,30 @@ function iptv_probe_url($url, $timeout = 8) {
         'finalUrl' => $portal ? $displayUrl : $finalUrl,
     );
 
-    $state = iptv_status_load();
     $key = iptv_status_key($displayUrl);
-    $state['entries'][$key] = array(
-        'ok' => $entry['ok'],
-        'code' => $entry['code'],
-        'ms' => $entry['ms'],
-        'method' => $entry['method'],
-        'error' => $entry['error'],
-        'checkedAt' => $entry['checkedAt'],
-        'url' => $displayUrl,
-    );
-    if (count($state['entries']) > 5000) {
-        uasort($state['entries'], function ($a, $b) {
-            return strcmp(isset($a['checkedAt']) ? $a['checkedAt'] : '', isset($b['checkedAt']) ? $b['checkedAt'] : '');
-        });
-        $state['entries'] = array_slice($state['entries'], -4000, null, true);
-    }
-    iptv_status_save($state);
+    if (is_file(iptv_status_file())) iptv_status_load(); // Import existing health entries before the first write.
+    \Vaultcast\Database::transaction(static function($pdo) use ($key,$displayUrl,$entry) {
+        $pdo->exec("INSERT INTO vaultcast_documents(name,payload) VALUES ('live_iptv_status','{}') ON DUPLICATE KEY UPDATE name=VALUES(name)");
+        $raw=$pdo->query("SELECT payload FROM vaultcast_documents WHERE name='live_iptv_status' FOR UPDATE")->fetchColumn();
+        $state=json_decode($raw,true);
+        if(!is_array($state)||!is_array($state['entries']??null))$state=['version'=>1,'entries'=>[]];
+        $state['entries'][$key] = array(
+            'ok' => $entry['ok'],
+            'code' => $entry['code'],
+            'ms' => $entry['ms'],
+            'method' => $entry['method'],
+            'error' => $entry['error'],
+            'checkedAt' => $entry['checkedAt'],
+            'url' => $displayUrl,
+        );
+        if (count($state['entries']) > 5000) {
+            uasort($state['entries'], function ($a, $b) {
+                return strcmp(isset($a['checkedAt']) ? $a['checkedAt'] : '', isset($b['checkedAt']) ? $b['checkedAt'] : '');
+            });
+            $state['entries'] = array_slice($state['entries'], -4000, null, true);
+        }
+        iptv_status_save($state);
+    });
     $entry['key'] = $key;
     $entry['status'] = $ok ? 'ok' : 'bad';
     return $entry;

@@ -130,6 +130,22 @@ async function lookupReader(path, prefix) {
   }
 }
 
+function guideNameMaps(channels, programmes, decode) {
+  const names = Object.create(null),
+    regional = Object.create(null);
+  for (const [id, channel] of Object.entries(channels)) {
+    if (!Object.hasOwn(programmes, id)) continue;
+    const name = matchName(channel, decode);
+    if (!name) continue;
+    (names[name] ??= Object.create(null))[id] = channel;
+    if (/^itv1\s+/.test(name)) {
+      const root = name.endsWith(' +1') ? 'itv1 +1' : 'itv1';
+      if (root !== name) (regional[root] ??= Object.create(null))[id] = channel;
+    }
+  }
+  return { names, regional };
+}
+
 async function readIndex(path, decode) {
   const file = await open(path, 'r').catch(() => null);
   if (!file) return { status: 'missing' };
@@ -140,18 +156,7 @@ async function readIndex(path, decode) {
     if (lookup) return lookup;
     const data = JSON.parse(await bytes(file, size, 0));
     if (!data.programmes || typeof data.programmes !== 'object') return { status: 'invalid' };
-    const names = Object.create(null),
-      regional = Object.create(null);
-    for (const [id, channel] of Object.entries(data.channels ?? {})) {
-      if (!Object.hasOwn(data.programmes, id)) continue;
-      const name = matchName(channel, decode);
-      if (!name) continue;
-      (names[name] ??= Object.create(null))[id] = channel;
-      if (/^itv1\s+/.test(name)) {
-        const root = name.endsWith(' +1') ? 'itv1 +1' : 'itv1';
-        if (root !== name) (regional[root] ??= Object.create(null))[id] = channel;
-      }
-    }
+    const { names, regional } = guideNameMaps(data.channels ?? {}, data.programmes, decode);
     return {
       updatedAt: data.updatedAt,
       names,
@@ -402,4 +407,4 @@ async function guidePage(root, feed, opts, expired, decode) {
   await cache(root, cacheKey, result, 180);
   return result;
 }
-module.exports = { guidePage };
+module.exports = { guidePage, guideNameMaps };

@@ -101,5 +101,6 @@ async function main() {
   process.stdout.write('indexed\n');
 }
 
+module.exports.scanHeader = scanHeader;
 module.exports.validate = path => scanHeader(path, () => {}, true);
 if (require.main === module) main().catch(() => { process.exitCode = 1; });

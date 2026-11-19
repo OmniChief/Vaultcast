@@ -35,9 +35,9 @@ const flag = (value) =>
       ? false
       : null;
 
-async function entry(pool, root, feed, id, kind) {
+async function entry(pool, root, feed, id, kind, imported) {
   if (kind !== 'live') return itemEntry(pool, root, feed, id);
-  const channels = (await liveSnapshot(root, feed))?.channels;
+  const channels = (imported === undefined ? await liveSnapshot(root, feed) : imported)?.channels;
   let row = channels && Object.hasOwn(channels, id) ? channels[id] : null;
   if (!row) {
     const source = (await doc(pool, 'stalker-catalogues')).sources?.[feed.id + '/live'];
@@ -90,7 +90,7 @@ async function resolve(client, kind, id, item) {
   return { url: url.href, linkMode: 'create_link' };
 }
 
-async function issue(root, feed, id, kind, item, viewer, signal) {
+async function issue(root, feed, id, kind, item, viewer, signal, compatibility = false) {
   const client = await provider(root, feed, signal);
   const { url } = await resolve(client, kind, id, item);
   const ticket = randomBytes(16).toString('hex');
@@ -107,7 +107,10 @@ async function issue(root, feed, id, kind, item, viewer, signal) {
   };
   await cache(root, ticketKey(ticket), state, lifetime);
   const query = new URLSearchParams({ feed: feed.id, channel: id, ticket });
-  if (kind === 'live' || /\.m3u8(?:[?#]|$)/i.test(url)) query.set('format', '.m3u8');
+  const hls = kind === 'live'
+    ? !compatibility || /\.m3u8$/i.test(new URL(url).pathname)
+    : /\.m3u8(?:[?#]|$)/i.test(url);
+  if (hls) query.set('format', '.m3u8');
   return { ok: true, source: { kind, url: playbackPath + '?' + query } };
 }
 
@@ -205,6 +208,36 @@ async function follow(client, start, options, limit = 8) {
   }
   throw problem(502, 'The provider redirected too many times.');
 }
+async function probe(root, feed, id, item, signal) {
+  const client = await provider(root, feed, signal);
+  const { url } = await resolve(client, 'live', id, item);
+  client.cookiePath = null;
+  let method = 'HEAD', code = 0;
+  const started = Date.now();
+  const deadline = AbortSignal.timeout(8000);
+  try {
+    let result = await follow(client, url, { method, signal: deadline });
+    code = result.res.statusCode;
+    result.res.destroy();
+    if (code === 405 || code === 501) {
+      method = 'GET';
+      code = 0;
+      result = await follow(client, url, { method, range: 'bytes=0-1023', signal: deadline });
+      code = result.res.statusCode;
+      try {
+        // Some streams ignore ranges and continue indefinitely. Stop after the first data chunk.
+        for await (const chunk of result.res) if (chunk.length) break;
+      } finally {
+        result.res.destroy();
+      }
+    }
+    return { ok: code >= 200 && code < 400, code, ms: Date.now() - started, method, error: null };
+  } catch {
+    signal.throwIfAborted();
+    return { ok: false, code, ms: Date.now() - started, method, error: 'Stream check failed.' };
+  }
+}
+
 const browserAgent =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 async function checkMedia(root, feed, id, kind, item, profile, signal) {
@@ -431,4 +464,4 @@ async function serve(root, feed, state, request, response) {
   }
 }
 
-module.exports = { entry, issue, serve, checkMedia, authorizedTicket };
+module.exports = { entry, issue, serve, checkMedia, probe, authorizedTicket };

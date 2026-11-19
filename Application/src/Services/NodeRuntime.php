@@ -38,6 +38,11 @@ final class NodeRuntime
         }
     }
 
+    public static function stalkerCompatibilityReady(): bool
+    {
+        return (self::health()['stalkerCompatibilityVersion'] ?? '') === STREAM_VERSION;
+    }
+
     public static function stalkerReadReady(): bool
     {
         return (self::health()['stalkerReadRevision'] ?? 0) === 1;

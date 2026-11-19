@@ -22,15 +22,15 @@ function browserToken(request) {
   return match?.[1] || '';
 }
 
-async function session(pool, request, includeUser) {
+async function session(pool, request, includeUser, delegatedHash) {
   const authorization = String(request.headers.authorization || '').trim();
   const bearer = /^Bearer(?:[ \t]|$)/i.test(authorization);
   const token = bearer ? authorization.match(/^Bearer[ \t]+(vc_[a-f0-9]{64})$/i)?.[1] : browserToken(request);
-  if (!token) return { authenticated: false, error: bearer ? 'Invalid API key.' : null };
+  if (!token && !delegatedHash) return { authenticated: false, error: bearer ? 'Invalid API key.' : null };
   const userColumn = includeUser ? ',u.payload AS user_payload' : '';
   const [rows] = await pool.execute(
     'SELECT s.payload,u.id' + userColumn + ' FROM vaultcast_sessions s LEFT JOIN vaultcast_users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>=?',
-    [sha(token), now()]);
+    [delegatedHash ?? sha(token), now()]);
   const entry = rows[0];
   if (bearer && (!entry?.id || !enabled(parse(entry.payload)?.api_key))) {
     return { authenticated: false, error: 'API key is invalid or expired.' };
@@ -39,7 +39,8 @@ async function session(pool, request, includeUser) {
     authenticated: Boolean(entry), error: null,
     data: includeUser && entry ? parse(entry.payload) : null,
     user: includeUser && entry?.id ? parse(entry.user_payload) : null,
-    browserToken: includeUser ? browserToken(request) : '',
+    browserToken: includeUser && !delegatedHash ? browserToken(request) : '',
+    delegatedHash,
   };
 }
 
@@ -109,7 +110,7 @@ module.exports = function mountAccount(app, express, root) {
           return emptyError(response, 403, 'Cross-site request rejected. [Node ' +
             request.method + ' ' + String(request.route?.path || '/application').slice(0, 140) + ']');
         }
-        const current = await session(pool, request, includeUser);
+        const current = await session(pool, request, includeUser, response.locals.stalkerSessionHash);
         if (current.error) return emptyError(response, 401, current.error);
         return operation(request, response, pool, bcrypt, settings, current);
       });
@@ -191,7 +192,7 @@ module.exports = function mountAccount(app, express, root) {
   mountBrowserAssets(app, route, { root, handle, unavailable });
   mountLibrary(app, route, { root, handle, unavailable });
   mountEpisodeSegments(app, route, { root, handle, json, unavailable });
-  const stalkerRequests = mountStalkerStatus(app, route, { root, handle, unavailable, json: express.json({ limit: '256kb' }), downloads, stalker, services: db.services, ready: db.ready });
+  const stalkerRequests = mountStalkerStatus(app, route, { root, handle, unavailable, json: express.json({ limit: '256kb' }), downloads, stalker, services: db.services, run: db.run, ready: db.ready });
   mountProgress(app, route, { handle, json, unavailable, root });
   mountPlayback(app, route, { root, db, handle, json, unavailable });
   const streaming = mountStream(app, route, { db, root, readSession: session, updating, express, unavailable });

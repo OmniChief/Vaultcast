@@ -29,7 +29,7 @@ final class Repository
         return self::cacheDir() . '/' . substr($h, 0, 2) . '/' . $h . '.json';
     }
 
-    private static function stalkerSnapshotFile(string $key): string {
+    public static function stalkerSnapshotFile(string $key): string {
         $hash=hash('sha256',$key);
         return STREAM_DATA.'/stalker-catalogue/'.substr($hash,0,2).'/'.$hash.'.json';
     }

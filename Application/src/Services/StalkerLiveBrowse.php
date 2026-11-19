@@ -18,6 +18,22 @@ final class StalkerLiveBrowse {
         if(StalkerCatalogues::expired($feed))return null;
         return \Vaultcast\Repository::stalkerSnapshot(self::key($feed,'imported-live'));
     }
+    public static function lineupGuide(array $feed,?array $ids): ?array {
+        if(StalkerCatalogues::expired($feed))return [];
+        $snapshot=\Vaultcast\Repository::stalkerSnapshotFile(self::key($feed,'imported-live'));
+        if(!is_file($snapshot))return [];
+        $node=Process::nodeBinary();
+        if($node===null||!function_exists('proc_open'))return null;
+        $exchange=tempnam(STREAM_SHM,'lineup_');
+        if($exchange===false)return null;
+        try{
+            if(file_put_contents($exchange,json_encode($ids))===false)return null;
+            $worker=STREAM_ROOT.'/src/NodeApp/stalker-lineup-guide.js';
+            if(Process::capture([$node,$worker,$snapshot,$feed['id'],$exchange,date_default_timezone_get()],30)!=="indexed\n")return null;
+            $result=json_decode((string)file_get_contents($exchange),true);
+            return is_array($result)?$result:null;
+        }finally{@unlink($exchange);}
+    }
     public static function fetchSnapshot(array $feed): array {
         $result=stalker_call($feed,'get_genres',[],'itv');
         $rows=$result['data']??$result;

@@ -1019,6 +1019,7 @@ function confirmDialog(message, opts){
     var requestUser=state.user && state.user.id;
     var headers = opts.headers || {};
     var timing = /^\/items\/[a-f0-9]{8,64}\/segments(?:\?|$)/.test(path);
+    var stalkerPreview = path === '/live/iptv_preview' && isStalkerLineupUrl(opts.body && opts.body.url);
     var avatarChange = path === '/me/prefs' && opts.body && (opts.body.avatar_data || opts.body.remove_avatar);
     if (opts.body && typeof opts.body === 'object' && !(opts.body instanceof FormData)) {
       headers['Content-Type'] = 'application/json';
@@ -1036,7 +1037,7 @@ function confirmDialog(message, opts){
     var nativeBrowse = /^\/search(?:\?|$)/.test(path) || path.indexOf('/featured/synopsis?') === 0 || path === '/featured/synopsis' || path.indexOf('/resolve?') === 0 || /^\/sections(?:$|\/[A-Za-z0-9_-]+\/(?:items|shows|random|recent)(?:\?|$))/.test(path);
     var nativeDetail = /^\/(?:items|shows)\/[a-f0-9]+(?:\?|$)/.test(path);
     var nativeRoute = (method === 'GET' && (path === '/status' || path === '/me' || path === '/home' || timing || nativeBrowse || nativeDetail || /^\/items\/[a-f0-9]{16}\/next(?:\?|$)/.test(path))) ||
-      (method === 'POST' && (path === '/login' || path === '/logout' || (path === '/me/prefs' && !avatarChange) || timing ||
+      (method === 'POST' && (stalkerPreview || path === '/login' || path === '/logout' || (path === '/me/prefs' && !avatarChange) || timing ||
         /^\/items\/[a-f0-9]{16}\/play$/.test(path)));
     var transport = nativeBase && nativeRoute ? fetch(nativeBase + path, fetchOpts).then(function(response){
       if (response.status === 503 && response.headers.get('X-Vaultcast-App-Unavailable') === '1') {
@@ -2361,7 +2362,7 @@ function confirmDialog(message, opts){
     var sequence=++iptvPreviewSequence,owner=state.user&&state.user.id;button.disabled=true;
     api('/live/iptv_preview',{method:'POST',body:{url:channel.url,userAgent:channel.userAgent||'',referrer:channel.referrer||''}}).then(function(result){
       if(!result.ok)throw new Error(result.error||'Could not open stream preview');
-      function revoke(){api('/live/iptv_preview',{method:'POST',body:{action:'stop',jar:result.jar}}).catch(function(){});}
+      function revoke(){if(result.jar)api('/live/iptv_preview',{method:'POST',body:{action:'stop',jar:result.jar}}).catch(function(){});}
       if(sequence!==iptvPreviewSequence||owner!==(state.user&&state.user.id)||!button.isConnected){revoke();return;}
       closePlayer();stopRadio();
       var overlay=h('div',{id:'player-overlay',className:'player-overlay player-simple player-inline'}),video=h('video',{id:'player-media',controls:true,autoplay:true,playsinline:true,preload:'auto'}),status=h('p',{className:'iptv-preview-status',role:'status',text:'Connecting to preview…'}),stream=null,alive=true,fatalError=false,playAttempt=0,volumeButton=null,phase='connecting';
@@ -5836,6 +5837,9 @@ try {
       ensureLiveData(true).then(function(){ if (state.view === 'live') paintLive(); }).catch(function(){});
     }
   }
+  function isStalkerLineupUrl(url) {
+    return typeof url === 'string' && url.indexOf(LIVE_API + 'stalker_stream?feed=') === 0;
+  }
   function liveApiPost(action, body){
     var options = {
       method: 'POST',
@@ -5846,6 +5850,9 @@ try {
     };
     var nativeBase = window.__VAULTCAST_APPLICATION_BASE__;
     var native = nativeBase && ['stalker_cancel', 'stalker_delete', 'stalker_download', 'stalker_retry', 'stalker_updates', 'stalker_catalogue_control', 'stalker_manage', 'stalker_play', 'stalker_check_media'].indexOf(action) >= 0;
+    if (action === 'iptv_probe' && nativeBase && Array.isArray(body.channels)) {
+      native = body.channels.length > 0 && body.channels.every(function(item){ return isStalkerLineupUrl(item && item.url); });
+    }
     var request = native ? fetch(nativeBase + '/live/' + action, options).then(function(r){
       if (r.status === 503 && r.headers.get('X-Vaultcast-App-Unavailable') === '1') return fetch(LIVE_API + action, options);
       return r;
@@ -16690,7 +16697,7 @@ function viewCollectionDetail(){
                 }}), ' On'
               ])]),
               h('td', { className: 'row-actions' }, [
-                f.type==='stalker'?h('button',{className:'btn ghost',type:'button',text:'Check connection',onClick:function(ev){var button=ev.currentTarget;button.disabled=true;liveApiPost('iptv_save',{portalAction:'check',feedId:f.id}).then(function(result){if(!result.ok||!result.body||!result.body.ok)throw new Error(result.body&&result.body.error||'Connection failed');liveSetMsg('Connected to '+(f.name||f.id)+' — '+(result.body.channelCount==null?'channel count unavailable':result.body.channelCount+(result.body.countEstimated?' channels returned (total unavailable)':' live channels reported'))+'.',false);}).catch(function(error){liveSetMsg(error.message||'Connection failed.',true);}).finally(function(){button.disabled=false;});}}):null,
+                f.type==='stalker'?h('button',{className:'btn ghost',type:'button',text:'Check connection',onClick:function(ev){var button=ev.currentTarget;button.disabled=true;liveApiPost('stalker_manage',{operation:'check',id:f.id}).then(function(result){if(!result.ok||!result.body||!result.body.ok)throw new Error(result.body&&result.body.error||'Connection failed');liveSetMsg('Connected to '+(f.name||f.id)+' — '+(result.body.channelCount==null?'channel count unavailable':result.body.channelCount+(result.body.countEstimated?' channels returned (total unavailable)':' live channels reported'))+'.',false);}).catch(function(error){liveSetMsg(error.message||'Connection failed.',true);}).finally(function(){button.disabled=false;});}}):null,
                 h('button', { className: 'btn ghost', type: 'button', text: 'Edit', onClick: function(){ liveSet.feedEditId = f.id; paintLiveIptv(host); }}),
                 h('button', { className: 'btn ghost', type: 'button', text: 'Remove', onClick: function(){
                   if (!confirm('Remove feed ' + (f.name||f.id) + '?' + (f.preinstalled ? ' It will not be added back automatically; you can re-add it any time with its URL.' : ''))) return;
@@ -16928,7 +16935,17 @@ function viewCollectionDetail(){
       if (!items.length) { liveSetMsg('Select one or more channels to Check (max 25).', true); return; }
       if (items.length > 25) items = items.slice(0, 25);
       liveSetMsg('Probing ' + items.length + ' stream' + (items.length === 1 ? '' : 's') + '…');
-      liveApiPost('iptv_probe', { channels: items }).then(function(res){
+      var portal = items.filter(function(item){ return isStalkerLineupUrl(item.url); });
+      var mixed = window.__VAULTCAST_APPLICATION_BASE__ && portal.length && portal.length !== items.length;
+      var first = liveApiPost('iptv_probe', { channels: mixed ? portal : items });
+      var request = mixed ? first.then(function(result){
+        if (!result.ok || !result.body || !result.body.ok) return result;
+        return liveApiPost('iptv_probe', { channels: items.filter(function(item){ return !isStalkerLineupUrl(item.url); }) }).then(function(other){
+          if (other.ok && other.body && other.body.ok) other.body.results = result.body.results.concat(other.body.results);
+          return other;
+        });
+      }) : first;
+      request.then(function(res){
         if (!res.ok || !res.body || !res.body.ok) { liveSetMsg((res.body && res.body.error) || 'Probe failed', true); return; }
         applyProbeResults(res.body.results || []);
         var okN = (res.body.results || []).filter(function(r){ return r.ok; }).length;

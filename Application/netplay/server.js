@@ -217,6 +217,7 @@ app.get('/health', (_req, res) => {
     ok: true,
     service: 'vaultcast-netplay',
     runtimeRevision,
+    stalkerCompatibilityVersion: applicationDatabase?.ready() ? applicationVersion : null,
     mediaRelay: Boolean(mediaHandler()),
     mediaApiRevision,
     metadataRelayRevision: 1,

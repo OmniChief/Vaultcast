@@ -206,7 +206,26 @@ function epg_index_xmltv($path, $wanted, $fromMs, $toMs) {
  * Never guess regional variants and never replace an existing index on failure.
  */
 function epg_build_stalker_open_index(string $path,string $country,int $fromMs,int $toMs,string $source='open-epg'): array {
-    if(!in_array($country,['GB','US'],true)||!class_exists('XMLReader'))throw new RuntimeException('XMLTV parser unavailable.');
+    if(!in_array($country,['GB','US'],true))throw new RuntimeException('Unknown XMLTV guide region.');
+    $region=$country.($source==='freeview'?'-freeview':'');
+    $pathOut=epg_cache_dir().'/stalker-open-'.strtolower($region).'.json';
+    $node=Process::nodeBinary();
+    if($node!==null&&function_exists('proc_open')){
+        $tmp=$pathOut.'.'.bin2hex(random_bytes(6)).'.tmp';
+        try{
+            $ack=Process::capture([$node,STREAM_ROOT.'/src/Workers/stalker-open-epg.js',$path,$tmp,$region,(string)$fromMs,(string)$toMs],90);
+            if($ack!=='compatibility'){
+                $stats=json_decode((string)$ack,true);
+                if(empty($stats['channelsWithProgrammes'])||!is_file($tmp))throw new RuntimeException('Could not index the downloaded XMLTV guide.');
+                // A reader can always reconstruct the lookup from the complete index.
+                @unlink($pathOut.'.lookup');
+                if(!@rename($tmp,$pathOut))throw new RuntimeException('Could not publish the Stalker guide index.');
+                if(is_file($tmp.'.lookup'))@rename($tmp.'.lookup',$pathOut.'.lookup');
+                return $stats;
+            }
+        }finally{@unlink($tmp);@unlink($tmp.'.lookup');}
+    }
+    if(!class_exists('XMLReader'))throw new RuntimeException('XMLTV parser unavailable.');
     $rows=epg_xmltv_channel_header($path);
     $wanted=[];$names=[];$logos=[];
     foreach($rows as $row){
@@ -251,7 +270,6 @@ function epg_build_stalker_open_index(string $path,string $country,int $fromMs,i
         if($payload===false)throw new RuntimeException('Could not encode the Stalker guide index.');
     }
     if(strlen($payload)>16777216)throw new RuntimeException('Stalker guide index exceeds the 16 MiB cache limit.');
-    $pathOut=epg_cache_dir().'/stalker-open-'.strtolower($country).($source==='freeview'?'-freeview':'').'.json';
     $tmp=$pathOut.'.'.bin2hex(random_bytes(4)).'.tmp';
     if(@file_put_contents($tmp,$payload,LOCK_EX)!==strlen($payload)){
         @unlink($tmp);
@@ -341,7 +359,7 @@ function epg_refresh_locked($force) {
     foreach($iptv['feeds'] as $feed) if(($feed['type']??'')==='stalker'&&!empty($feed['enabled'])){$hasStalker=true;break;}
     if(!$hasStalker)$openSources=[];
     $urls = array_values(array_unique(array_merge($iptv['epgUrls'],array_values($openSources))));
-    if ($urls && !class_exists('XMLReader')) throw new RuntimeException('PHP XMLReader is required to import XMLTV programme guides.');
+    if (array_diff($urls,array_values($openSources)) && !class_exists('XMLReader')) throw new RuntimeException('PHP XMLReader is required to import XMLTV programme guides.');
     $wanted = epg_wanted_ids($iptv);
     $fetched = array();
     $errors = array();
@@ -372,12 +390,22 @@ function epg_refresh_locked($force) {
     $slim = array();
     $portalPrograms = [];
     $failedPortalFeeds = [];
+    $lineupByFeed=[];
+    foreach($iptv['channels'] as $channel){
+        if(!empty($channel['epgId']))continue;
+        $connection=$channel['sourceFeedId']??'';
+        if($connection===''){
+            $url=(string)($channel['url']??'');
+            parse_str((string)parse_url($url,PHP_URL_QUERY),$params);
+            if(is_string($params['feed']??null)&&is_string($params['channel']??null)&&$url===stalker_channel_url($params['feed'],$params['channel']))$connection=$params['feed'];
+        }
+        if(is_string($connection)&&$connection!==''&&isset($channel['id']))$lineupByFeed[$connection][]=(string)$channel['id'];
+    }
     foreach ($iptv['feeds'] as $feed) {
         if (($feed['type'] ?? '') !== 'stalker' || empty($feed['enabled'])) continue;
-        $selected = false;
-        foreach ($iptv['channels'] as $channel) if (($channel['sourceFeedId'] ?? '') === $feed['id']) { $selected = true; break; }
+        $selected=$lineupByFeed[$feed['id']]??[];
         if (!$selected) continue;
-        try { $portalPrograms = array_merge($portalPrograms, stalker_guide($feed)); }
+        try { $portalPrograms = array_merge($portalPrograms, stalker_guide($feed,$selected)); }
         catch (RuntimeException $e) { $errors[] = ['url'=>$feed['url'],'error'=>$e->getMessage()];$failedPortalFeeds[$feed['id']]=true; }
     }
     $previousPortalGuide = $failedPortalFeeds ? epg_load_iptv_index() : [];

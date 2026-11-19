@@ -6,6 +6,8 @@ const { country, countries, genre } = require('./stalker-taxonomy');
 const { cached } = require('./profile-policy');
 const { configHash, phpJson } = require('./stalker-provider');
 
+const { stableId, lineupGuide } = require('./stalker-lineup-guide');
+
 const groups = [
   'General',
   'Entertainment',
@@ -197,34 +199,10 @@ async function channelDetail(pool, root, feed, opts, expired) {
   if (includeGuide && (!programs.length || enabled(opts.refresh))) {
     const key = 'stalker_channel_epg_' + sha(phpJson(feed));
     const saved = enabled(opts.refresh) ? null : await cached(root, key);
-    const events = [];
-    if (saved) {
-      if (saved.__unavailable) guideError = 'The provider programme guide is currently unavailable.';
-      const stableId = 'stalker-' + sha(feed.id + ':' + id).slice(0, 20);
-      for (const event of saved[stableId] ?? []) events.push(event);
-    } else {
-      const guide = (await imported())?.guide ?? {};
-      for (const [channel, rows] of Object.entries(guide)) {
-        for (const row of Object.values(rows ?? {})) {
-          if (!row || String(row.ch_id ?? channel) !== id) continue;
-          const toMillis = (v) =>
-            v != null && String(v).trim() && Number.isFinite(Number(v))
-              ? Math.trunc(Number(v)) * 1000
-              : Date.parse(String(v));
-          const startUnix = toMillis(row.start_timestamp ?? row.time),
-            endUnix = toMillis(row.stop_timestamp ?? row.time_to);
-          if (!Number.isFinite(startUnix) || !Number.isFinite(endUnix) || !startUnix || endUnix <= startUnix)
-            continue;
-          events.push({
-            startUnix,
-            endUnix,
-            title: String(row.name ?? row.title ?? ''),
-            subtitle: String(row.descr ?? ''),
-            kind: 'epg',
-          });
-        }
-      }
-    }
+    const keyId = stableId(feed.id, id);
+    if (saved?.__unavailable) guideError = 'The provider programme guide is currently unavailable.';
+    const source = saved ?? lineupGuide((await imported())?.guide, feed.id, new Set([keyId]));
+    const events = source[keyId] ?? [];
     for (const event of events) {
       if (!programs.some((known) => event.startUnix < known.endUnix && event.endUnix > known.startUnix))
         programs.push(Object.hasOwn(event, 'poster') ? { ...event, poster: '' } : event);
