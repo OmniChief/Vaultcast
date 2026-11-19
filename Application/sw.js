@@ -31,7 +31,12 @@ self.addEventListener('fetch', function(event){
   if (event.request.method !== 'GET' || url.origin !== BASE.origin) return;
   // Page loads: always the network (pages are personal and never cached); the offline page only when it fails.
   if (event.request.mode === 'navigate' && url.pathname.indexOf(BASE.pathname) === 0 && url.pathname.indexOf(BASE.pathname + 'api/') !== 0) {
-    event.respondWith(fetch(event.request).catch(offlinePage));
+    var page = url.pathname.slice(BASE.pathname.length);
+    var viewing = /^(?:library|movies|tvshows)(?:\/|$)|^live\/(?:stalker(?:-vod)?|xtream)(?:\/|$)/.test(page);
+    var navigation = viewing && url.searchParams.get('compat') !== 'on'
+      ? fetch(BASE.pathname + 'netplay/watch/' + page + url.search, { credentials:'same-origin', cache:'no-store' })
+      : fetch(event.request);
+    event.respondWith(navigation.catch(offlinePage));
     return;
   }
   var appAsset = url.pathname === BASE.pathname + 'index.php'

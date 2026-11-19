@@ -2,6 +2,7 @@
   'use strict';
   var BASE = window.__STREAM_BASE__ || '/';
   var API = BASE + 'api';
+  var viewingApi = BASE + 'netplay/application';
   var tvSelectPicker = /(?:\bLG\b|LGE|Tizen|Web0S|WebOS|SMART-TV|SmartTV|Android TV|Google TV|AFT[A-Z0-9]*|Roku|Viera|HbbTV|NetCast|BRAVIA|Hisense|Philips)/i.test(navigator.userAgent || '');
   if(tvSelectPicker)document.documentElement.classList.add('tv-poster-device');
   var _navSilent = false;
@@ -468,11 +469,6 @@
         element.addEventListener('load',refresh);
         element.addEventListener('error',function(){
           if (!overlay.isConnected) return;
-          var nativeBase = window.__VAULTCAST_APPLICATION_BASE__;
-          if (nativeBase && element.getAttribute('src').indexOf(nativeBase + '/stream/subtitles/') >= 0) {
-            element.src = element.src.replace(nativeBase + '/stream/subtitles/', API + '/stream/subtitles/');
-            return;
-          }
           element.remove(); refresh(); toast('Could not load '+track.label,{kind:'bad'});
         });
         media.appendChild(element);
@@ -535,11 +531,7 @@
       var uploadOptions = {
         method:'POST', credentials:'same-origin', cache:'no-store', headers:{ 'Content-Type':'application/octet-stream' }, body:f
       };
-      var nativeBase = window.__VAULTCAST_APPLICATION_BASE__;
-      var upload = nativeBase ? fetch(nativeBase + uploadPath, uploadOptions).then(function(r){
-        if (r.status === 503 && r.headers.get('X-Vaultcast-App-Unavailable') === '1') return fetch(API + uploadPath, uploadOptions);
-        return r;
-      }) : fetch(API + uploadPath, uploadOptions);
+      var upload = fetch(viewingApi + uploadPath, uploadOptions);
       upload.then(function(r){ return r.json().catch(function(){ return { ok:false, error:'Upload failed (HTTP ' + r.status + ')' }; }); }).then(function(res){
         send.disabled = false;
         if (!res || !res.ok) { status.textContent = (res && res.error) || 'Upload failed'; return; }
@@ -977,23 +969,8 @@ function confirmDialog(message, opts){
   /** Playback progress: never block the player while saving. */
   function postProgress(itemId, position, duration){
     var body = JSON.stringify({ item_id: itemId, position: position || 0, duration: duration || 0 });
-    var nativeBase = window.__VAULTCAST_APPLICATION_BASE__;
-    var options = { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: body, keepalive: true };
-    if (nativeBase) {
-      fetch(nativeBase + '/progress', options).then(function(response){
-        if (response.status === 503 && response.headers.get('X-Vaultcast-App-Unavailable') === '1') return fetch(API + '/progress', options);
-      }).catch(function(){});
-      return;
-    }
-    try {
-      if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
-        var blob = new Blob([body], { type: 'application/json' });
-        if (navigator.sendBeacon(API + '/progress', blob)) return;
-      }
-    } catch (eB) {}
-    try {
-      fetch(API + '/progress', options).catch(function(){});
-    } catch (eF) {}
+    fetch(viewingApi + '/progress', { method: 'POST', credentials: 'same-origin', keepalive: true,
+      headers: { 'Content-Type': 'application/json' }, body: body }).catch(function(){});
   }
   var navigationCache = window.createRequestCache();
   var pageReads=[], pageReadKey=null;
@@ -1041,7 +1018,12 @@ function confirmDialog(message, opts){
     var nativeRoute = nativeAchievements || (method === 'GET' && (path === '/status' || path === '/me' || path === '/home' || timing || nativeBrowse || nativeDetail || /^\/items\/[a-f0-9]{16}\/next(?:\?|$)/.test(path))) ||
       (method === 'POST' && (stalkerPreview || path === '/login' || path === '/logout' || (path === '/me/prefs' && !avatarChange) || timing ||
         /^\/items\/[a-f0-9]{16}\/play$/.test(path)));
-    var transport = nativeBase && nativeRoute ? fetch(nativeBase + path, fetchOpts).then(function(response){
+    var watchPage = inViewingPage();
+    var viewingRoute = (watchPage && (nativeBrowse || nativeDetail || timing || ['/status','/me','/login','/logout','/home'].indexOf(path) >= 0)) || /^\/items\/[a-f0-9]{16}\/(?:probe|transcode|next)(?:\?|$)/.test(path) ||
+      (method === 'POST' && opts.libraryPlayback && /^\/items\/[a-f0-9]{16}\/play$/.test(path)) ||
+      (method === 'GET' && /^\/items\/[a-f0-9]{16}(?:\?|$)/.test(path));
+    delete fetchOpts.libraryPlayback;
+    var transport = viewingRoute ? fetch(viewingApi + path, fetchOpts) : nativeBase && nativeRoute ? fetch(nativeBase + path, fetchOpts).then(function(response){
       if (response.status === 503 && response.headers.get('X-Vaultcast-App-Unavailable') === '1') {
         return fetch(API + path, fetchOpts);
       }
@@ -1121,19 +1103,20 @@ function confirmDialog(message, opts){
     return _supportsWebP;
   }
   function posterServerUrl(cacheId, kind, fetchRemote, variant){
+    var backend = inViewingPage() && /^[a-f0-9]{16}(?:-s\d+)?$/.test(cacheId) ? viewingApi : API;
     var q = fetchRemote ? '?fetch=1' : '?fetch=0';
     variant = variant || 'full';
     q += '&variant=' + encodeURIComponent(variant);
     q += supportsWebP() ? '&webp=1' : '&webp=0';
     q += '&art=' + posterRevision;
-    if (kind === 'show') return API + '/shows/' + cacheId + '/poster' + q;
+    if (kind === 'show') return backend + '/shows/' + cacheId + '/poster' + q;
     if (kind === 'season') {
       // cacheId = showKey + '-s' + season
       var m = String(cacheId || '').match(/^([a-f0-9]+)-s(\d+)$/i);
-      if (m) return API + '/shows/' + m[1] + '/seasons/' + m[2] + '/poster' + q;
-      return API + '/shows/' + cacheId + '/poster' + q;
+      if (m) return backend + '/shows/' + m[1] + '/seasons/' + m[2] + '/poster' + q;
+      return backend + '/shows/' + cacheId + '/poster' + q;
     }
-    return API + '/items/' + cacheId + '/poster' + q;
+    return backend + '/items/' + cacheId + '/poster' + q;
   }
   function isShowItem(item){
     return !!(item && (item.kind === 'show' || item.media_kind === 'show'));
@@ -1638,7 +1621,7 @@ function confirmDialog(message, opts){
     var body = {};
     var pref = opts.audio != null ? opts.audio : getAudioPref(item.id);
     if (pref != null && !isNaN(pref)) body.audio = pref;
-    api('/items/'+item.id+'/play', { method:'POST', body: body }).then(function(j){
+    api('/items/'+item.id+'/play', { method:'POST', libraryPlayback:item.media_kind!=='rom' && item.type!=='roms', body: body }).then(function(j){
       if (requestId !== _playRequestId || (pageHost && !pageHost.isConnected)) return;
       if (!j.ok) {
         showRetry();
@@ -1772,10 +1755,8 @@ function confirmDialog(message, opts){
     }
 
     var src = streamPlayUrl(play.url);
-    var nativeBase = window.__VAULTCAST_APPLICATION_BASE__;
-    var useNative = nativeBase && !item._extra && typeof play.hub_cinema_guest === 'undefined' &&
-      /^\/api\/stream\/play\?t=[a-f0-9]{48}$/.test(play.url);
-    var mediaUrl = useNative ? streamPlayUrl(nativeBase + play.url.slice(API.length)) : src;
+    var mediaUrl = !item._extra && typeof play.hub_cinema_guest === 'undefined' && /^\/api\/stream\/play\?t=[a-f0-9]{48}$/.test(play.url)
+      ? streamPlayUrl(viewingApi + play.url.slice(API.length)) : src;
     var media;
     if (play.media_kind === 'audio') {
       media = h('audio', { id:'player-media', controls:true, autoplay:true, preload:'auto', src: mediaUrl });
@@ -1833,20 +1814,6 @@ function confirmDialog(message, opts){
       if(overlay._closing||!overlay.isConnected)return;
       if(overlay._transcodeActive||overlay._transcodePending)return;
       var cur = media.currentSrc || media.src || '';
-      if (useNative && (cur.indexOf(nativeBase + '/stream/play?') >= 0 || media.src === mediaUrl)) {
-        var at = media.currentTime || 0;
-        var wasPlaying = !media.paused || openPlayer._deskPlayStarted;
-        useNative = false;
-        if (at > 0) media.addEventListener('loadedmetadata', function(){
-          try { media.currentTime = at; } catch (eSeek) {}
-        }, { once:true });
-        media.src = src;
-        if (wasPlaying || play.autoplay !== false) {
-          var retry = media.play();
-          if (retry && retry.catch) retry.catch(function(){});
-        }
-        return;
-      }
       /* Failed before playing: retry once without nginx file delivery. */
       if (!openPlayer._deskPlayStarted && !directTried && cur.indexOf('/stream/play') >= 0 && cur.indexOf('direct=1') < 0) {
         directTried = true;
@@ -1862,7 +1829,7 @@ function confirmDialog(message, opts){
         openPlayer._deskRecoverTries = (openPlayer._deskRecoverTries||0) + 1;
         var t = media.currentTime || 0;
         toast('Reconnecting stream…');
-        api('/items/'+item.id+'/play', { method:'POST', body: {} }).then(function(nj){
+        api('/items/'+item.id+'/play', { method:'POST', libraryPlayback:item.media_kind!=='rom' && item.type!=='roms', body: {} }).then(function(nj){
           if(overlay._closing||!overlay.isConnected)return;
           var nsrc = (nj && nj.ok && nj.url) ? streamPlayUrl(nj.url) : src;
           if (directTried && nsrc && nsrc.indexOf('direct=1') < 0) nsrc += (nsrc.indexOf('?') >= 0 ? '&' : '?') + 'direct=1';
@@ -1926,7 +1893,7 @@ function confirmDialog(message, opts){
           var next=result.item;
           if(miniVideo&&miniVideo.overlay===overlay){
             var owner=miniVideo.owner,body={},audio=getAudioPref(next.id);if(audio!=null&&!isNaN(audio))body.audio=audio;
-            return api('/items/'+encodeURIComponent(next.id)+'/play',{method:'POST',body:body}).then(function(nextPlay){
+            return api('/items/'+encodeURIComponent(next.id)+'/play',{method:'POST',libraryPlayback:true,body:body}).then(function(nextPlay){
               if(!miniVideo||miniVideo.overlay!==overlay||owner!==(state.user&&state.user.id)||!autoNext.checked||!media.ended)return;
               if(!nextPlay.ok)throw new Error(nextPlay.error||'Could not start the next title');
               nextPlay.autoplay=true;nextPlay.from_start=true;if(play.sequence_collection)nextPlay.sequence_collection=play.sequence_collection;
@@ -4925,9 +4892,18 @@ try {
       collectionId: state.collectionId, searchQuery: state.searchQuery, settingsSection: state.settingsSection, adminTab: state.adminTab, aiTab:state.aiTab,
       sectionLetter:state.sectionLetter, collectionsLetter:state.collectionsLetter, hubTab:state.hubTab, cinemaId:state.cinemaId, requestsTab:state.requestsTab });
   }
-  function navUrl(extra){ return BASE + routePath(extra); }
+  function viewingPath(path){
+    var watch = /^(?:library|movies|tvshows)(?:\/|$)|^live\/(?:stalker(?:-vod)?|xtream)(?:\/|$)/.test(path.split('?')[0]);
+    var signingIn = /^(?:login|welcome)$/.test(path) && location.pathname.indexOf(BASE+'netplay/watch/') === 0;
+    return watch || signingIn ? 'netplay/watch/' + path : path;
+  }
+  function inViewingPage(){
+    return location.pathname.indexOf(BASE + 'netplay/watch/') === 0 || !!window.__VAULTCAST_VIEWER__ &&
+      /^(?:library|movies|tvshows|live|welcome|login)(?:\/|$)/.test(R.relative(location.pathname, BASE));
+  }
+  function navUrl(extra){ return BASE + viewingPath(routePath(extra)); }
   function shareUrl(path){
-    return R.absolute(path != null ? path : routePath(), { publicBase: window.__PUBLIC_BASE_URL__ || '', origin: location.protocol + '//' + location.host, base: BASE });
+    return R.absolute(viewingPath(path != null ? path : routePath()), { publicBase: window.__PUBLIC_BASE_URL__ || '', origin: location.protocol + '//' + location.host, base: BASE });
   }
   /* Old "#/vod/..." style links: rewrite to the clean path once, keeping the history entry. */
   function upgradeLegacyHash(){
@@ -5759,23 +5735,18 @@ try {
      public HTTPS 404s any *.php under /media/live/, LAN :9999 works either way. */
   var LIVE_API = BASE + 'api/live/';
   function stalkerOfflineFileUrl(id){
-    var nativeBase = window.__VAULTCAST_APPLICATION_BASE__;
-    return (nativeBase ? nativeBase + '/live/' : LIVE_API) + 'stalker_offline_file?id=' + encodeURIComponent(id);
+    return viewingApi + '/live/stalker_offline_file?id=' + encodeURIComponent(id);
   }
   function liveApi(action, params){
     var suffix = action + (params ? '?' + String(params).replace(/^&/, '') : '');
     var options = { credentials:'same-origin', cache:'no-store' };
-    var nativeBase = window.__VAULTCAST_APPLICATION_BASE__;
-    var native = nativeBase && ['stalker', 'stalker_catalogue_status', 'stalker_update_status', 'stalker_offline',
-      'stalker_vod_catalogue', 'stalker_vod_detail', 'stalker_browse', 'stalker_countries',
-      'stalker_live_categories', 'stalker_live_channels', 'stalker_live_guide', 'stalker_channel', 'stalker_live_fields', 'stalker_epg_fields', 'stalker_vod_fields', 'stalker_vod_probe', 'stalker_art'].indexOf(action) >= 0;
-    var request = native ? fetch(nativeBase + '/live/' + suffix, options).then(function(r){
-      if (r.status === 503 && r.headers.get('X-Vaultcast-App-Unavailable') === '1') return fetch(LIVE_API + suffix, options);
-      return r;
-    }) : fetch(LIVE_API + suffix, options);
+    var provider = ['xtream_connections','xtream_categories','xtream_browse','xtream_guide','stalker','stalker_catalogue_status',
+      'stalker_update_status','stalker_offline','stalker_vod_catalogue','stalker_vod_detail','stalker_browse','stalker_countries',
+      'stalker_live_categories','stalker_live_channels','stalker_live_guide','stalker_channel','stalker_live_fields',
+      'stalker_epg_fields','stalker_vod_fields','stalker_vod_probe','stalker_art'].indexOf(action) >= 0;
+    var request = fetch((provider ? viewingApi + '/live/' : LIVE_API) + suffix, options);
     return request.then(function(r){
-        if (!r.ok) throw new Error('Live API HTTP ' + r.status);
-        return r.json();
+        return r.json().then(function(data){ if (!r.ok) throw new Error(data.error || 'Live API HTTP ' + r.status); return data; });
       });
   }
   function liveUrl(u){
@@ -5851,11 +5822,13 @@ try {
       body: JSON.stringify(body || {})
     };
     var nativeBase = window.__VAULTCAST_APPLICATION_BASE__;
-    var native = nativeBase && ['stalker_cancel', 'stalker_delete', 'stalker_download', 'stalker_retry', 'stalker_updates', 'stalker_catalogue_control', 'stalker_manage', 'stalker_play', 'stalker_check_media'].indexOf(action) >= 0;
+    var native = false;
     if (action === 'iptv_probe' && nativeBase && Array.isArray(body.channels)) {
       native = body.channels.length > 0 && body.channels.every(function(item){ return isStalkerLineupUrl(item && item.url); });
     }
-    var request = native ? fetch(nativeBase + '/live/' + action, options).then(function(r){
+    var viewerAction = ['stalker_cancel','stalker_delete','stalker_download','stalker_retry','stalker_updates','stalker_catalogue_control','stalker_manage','stalker_play','stalker_check_media'].indexOf(action) >= 0 ||
+      ['xtream_manage','xtream_play','xtream_heartbeat','xtream_stop'].indexOf(action) >= 0;
+    var request = viewerAction ? fetch(viewingApi + '/live/' + action, options) : native ? fetch(nativeBase + '/live/' + action, options).then(function(r){
       if (r.status === 503 && r.headers.get('X-Vaultcast-App-Unavailable') === '1') return fetch(LIVE_API + action, options);
       return r;
     }) : fetch(LIVE_API + action, options);
@@ -6296,7 +6269,7 @@ try {
   // never invokes library-only transcode, conversion or progress endpoints.
   function startStalkerLibraryPlayer(host,source,item,context){
     closePlayer();stopRadio();
-    var key='stalker-vod:'+context.id,alive=true,stream=null,xtream=String(source.url||'').indexOf('/api/live/xtream_stream?')!==-1,heartbeat=null,heartbeatBusy=false;
+    var key='stalker-vod:'+context.id,alive=true,stream=null,xtream=String(source.url||'').indexOf('/live/xtream_stream?')!==-1,heartbeat=null,heartbeatBusy=false;
     var video=h('video',{id:'player-media',controls:true,autoplay:true,playsinline:true,preload:'metadata'});
     video.setAttribute('webkit-playsinline','true');
     var frame=h('div',{id:'player-overlay',className:'player-overlay player-simple player-inline stalker-library-player'},[video]);
@@ -7163,7 +7136,7 @@ try {
   function stopXtreamSource(source){
     var match=String(source&&source.url||'').match(/[?&]ticket=([a-f0-9]+)(?:&|$)/);
     if(!match)return Promise.resolve();
-    return fetch(LIVE_API+'xtream_stop',{method:'POST',credentials:'same-origin',keepalive:true,headers:{'Content-Type':'application/json'},body:JSON.stringify({ticket:match[1]})}).catch(function(){});
+    return fetch(viewingApi+'/live/xtream_stop',{method:'POST',credentials:'same-origin',keepalive:true,headers:{'Content-Type':'application/json'},body:JSON.stringify({ticket:match[1]})}).catch(function(){});
   }
   function paintXtreamPage(root){
     var xtreamClient=liveUid('xtream')+liveUid('client'),playQueue=Promise.resolve();
@@ -7580,7 +7553,7 @@ try {
     var current=options.current||function(){return true;},url=source.url;
     var nativeBase=window.__VAULTCAST_APPLICATION_BASE__;
     if(nativeBase && url.indexOf(LIVE_API+'stalker_stream?')===0) url=nativeBase+'/live/'+url.slice(LIVE_API.length);
-    var portalStream=url.indexOf('/api/live/stalker_stream?')!==-1 || (nativeBase && url.indexOf(nativeBase+'/live/stalker_stream?')===0),xtreamStream=url.indexOf('/api/live/xtream_stream?')!==-1;
+    var portalStream=url.indexOf('/live/stalker_stream?')!==-1,xtreamStream=url.indexOf('/live/xtream_stream?')!==-1;
     if(portalStream&&(source.kind==='live'||url.indexOf('ticket=')===-1)){
       if(!window._vaultcastStalkerStreamLoading)window._vaultcastStalkerStreamLoading=new Promise(function(resolve,reject){
         if(window.attachStalkerStream){resolve();return;}
@@ -7592,7 +7565,7 @@ try {
     }
     // Keep normal viewing and browse previews on exactly the same playback path.
     if(!/\.m3u8(?:[?#]|$)/i.test(url)){video.src=url;options.play();if(options.note)options.note('Non-HLS stream: browser DirectPlay attempted.');return Promise.resolve();}
-    var proxy=url.indexOf('/api/live/xtream_stream?')!==-1?url:portalStream?url+'&playback='+encodeURIComponent(liveUid('st')):LIVE_API+'iptv_hls?u='+encodeURIComponent(url)+'&jar='+encodeURIComponent(options.jar||hlsJar());
+    var proxy=xtreamStream?url:portalStream?url+'&playback='+encodeURIComponent(liveUid('st')):LIVE_API+'iptv_hls?u='+encodeURIComponent(url)+'&jar='+encodeURIComponent(options.jar||hlsJar());
     if(source.userAgent)proxy+='&ua='+encodeURIComponent(source.userAgent);
     if(source.referrer)proxy+='&ref='+encodeURIComponent(source.referrer);
     function nativeFallback(message){if(!current())return;if(video.canPlayType('application/vnd.apple.mpegurl')){video.src=proxy;options.play();}else options.error(message);}
@@ -8318,7 +8291,7 @@ try {
       e.stopPropagation();if(button.disabled)return;
       function copy(chosen){
         button.disabled=true;
-        api('/items/'+encodeURIComponent(chosen.id)+'/play',{method:'POST',body:{external:true}}).then(function(j){
+        api('/items/'+encodeURIComponent(chosen.id)+'/play',{method:'POST',libraryPlayback:true,body:{external:true}}).then(function(j){
           if(!j.ok||!j.url)throw new Error(j.error||'Could not create VLC link');
           var url=new URL(j.url,window.location.href).href;
           return copyText(url).then(function(){toast('VLC link copied. Open Media → Open Network Stream (Ctrl+N), paste and play. Links expire when unused; copy a fresh one if needed.',{ms:8000});},function(){
@@ -17108,7 +17081,7 @@ function viewCollectionDetail(){
   function rememberReturnPath(){
     upgradeLegacyHash();
     var rel = R.relative(location.pathname, BASE);
-    if (rel !== '' && rel !== 'welcome' && rel !== 'login') state._returnHash = BASE + rel + (location.search || '');
+    if (rel !== '' && rel !== 'welcome' && rel !== 'login') state._returnHash = BASE + viewingPath(rel) + (location.search || '');
   }
   function showWelcome(){
     if(radioState&&radioState.station)stopRadio();
@@ -17116,7 +17089,7 @@ function viewCollectionDetail(){
     rememberReturnPath();
     state.view = 'welcome';
     _navSilent = true;
-    try { history.replaceState({}, '', BASE + 'welcome'); } catch (e) {}
+    try { history.replaceState({}, '', BASE + viewingPath('welcome')); } catch (e) {}
     render();
     _navSilent = false;
   }
@@ -17642,9 +17615,9 @@ function viewCollectionDetail(){
   // One non-blocking check per app load; the server enforces one global
   // five-minute cooldown across all viewers before reading the queue.
   meP.then(function(me){
-    if (!me || !me.ok || !me.user || state._guest) return;
+    if (!me || !me.ok || !me.user || state._guest || inViewingPage()) return;
     api('/downloads/tick', { method:'POST', body:{} }).catch(function(){ /* Acquisition is optional. */ });
   });
-  meP.then(function(){ startConvertNotifPoll(); });
+  meP.then(function(){ if (!inViewingPage()) startConvertNotifPoll(); });
   registerSW();
 })();

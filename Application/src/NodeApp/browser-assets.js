@@ -18,9 +18,9 @@ const escapeHtml = value => String(value).replace(/[&<>"']/g, character =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
 const inlineJson = value => JSON.stringify(value).replace(/</g, '\\u003c');
 
-function shellConfig(settings, installed) {
+function shellConfig(settings, installed, base) {
   const local = settings.player_assets?.source === 'local' && enabled(installed?.complete);
-  const player = '/netplay/application/player-assets/';
+  const player = base + 'netplay/application/player-assets/';
   const dependencies = {
     source: local ? 'local' : 'cdn',
     emulatorVersion: '4.2.1',
@@ -30,10 +30,11 @@ function shellConfig(settings, installed) {
   for (const [key, name] of Object.entries({
     stalkerVod: 'stalker-vod', stalkerCountries: 'stalker-countries', stalkerStream: 'stalker-stream',
     mpegts: 'mpegts-1-7-3', stalkerAc3: 'stalker-ac3', stalkerAc3Worker: 'stalker-ac3-worker',
-  })) dependencies[key] = '/assets/js/' + name + '.js';
+  })) dependencies[key] = base + 'assets/js/' + name + '.js';
   const publicBase = String(settings.public_base_url ?? '').trim();
   return {
-    __STREAM_BASE__: '/',
+    __STREAM_BASE__: base,
+    __VAULTCAST_APPLICATION_BASE__: base + 'netplay/application',
     __SITE_NAME__: String(settings.app_name ?? 'Vaultcast'),
     __PUBLIC_BASE_URL__: /^https?:\/\//i.test(publicBase) ? publicBase.replace(/\/+$/, '') + '/' : '',
     VaultcastDependencies: dependencies,
@@ -43,22 +44,24 @@ function shellConfig(settings, installed) {
 function mountBrowserAssets(app, prefix, { root, handle, unavailable }) {
   const shell = readFile(join(root, 'src/Views/app.html'), 'utf8').catch(() => null);
   const version = readFile(join(root, 'VERSION'), 'utf8').then(value => value.trim()).catch(() => '');
-  app.get(prefix + '/shell', handle(async (_request, response, pool, _bcrypt, settings, current) => {
-    if (!current.user) return response.sendStatus(404);
+  app.get([prefix + '/shell', '/watch/*'], handle(async (_request, response, pool, _bcrypt, settings, current) => {
     const [template, build] = await Promise.all([shell, version]);
     if (!template || !/^\d+\.\d+\.\d+$/.test(build)) return unavailable(response);
     const { [installation]: installed } = await documents(pool, [installation]);
-    const config = shellConfig(settings, installed);
+    const config = shellConfig(settings, installed, response.locals.base);
+    config.__VAULTCAST_VIEWER__ = _request.path.startsWith('/watch/');
+    if (!current.user && _request.path === prefix + '/shell' && settings.auth?.lan_guest_access !== false) return response.sendStatus(404);
+    if (!current.user) config.__STREAM_STARTUP__ = { me: { ok: true, authenticated: false, user: null, guest_browsing: false } };
     const cacheKey = createHash('sha256').update(build).digest('hex').slice(0, 16);
     for (const key of ['stalkerVod', 'stalkerCountries', 'stalkerStream', 'mpegts', 'stalkerAc3', 'stalkerAc3Worker']) {
       config.VaultcastDependencies[key] += '?v=' + cacheKey;
     }
     const fields = {
-      '{{BASE_HREF}}': '/',
+      '{{BASE_HREF}}': response.locals.base,
       '{{SITE_NAME}}': escapeHtml(config.__SITE_NAME__),
       '{{VERSION}}': build,
       '{{ASSET_VERSION}}': cacheKey,
-      '{{ASSET_BOOTSTRAP}}': '/assets/js/browser-bootstrap.js?v=' + cacheKey,
+      '{{ASSET_BOOTSTRAP}}': response.locals.base + 'assets/js/browser-bootstrap.js?v=' + cacheKey,
       '<!-- VAULTCAST_CONFIG -->': '<script>Object.assign(window,' + inlineJson(config) + ');</script>',
       '<!-- VAULTCAST_PAGE -->': '',
     };
@@ -74,8 +77,8 @@ function mountBrowserAssets(app, prefix, { root, handle, unavailable }) {
     if (!template) return unavailable(response);
     const name = String(settings.app_name ?? 'Vaultcast');
     response.type('application/manifest+json').send(JSON.stringify({
-      ...template, name, short_name: Array.from(name).slice(0, 24).join(''), start_url: '/', scope: '/',
-      icons: (template.icons ?? []).map(icon => ({ ...icon, src: '/' + icon.src.replace(/^\/?/, '') })),
+      ...template, name, short_name: Array.from(name).slice(0, 24).join(''), start_url: response.locals.base, scope: response.locals.base,
+      icons: (template.icons ?? []).map(icon => ({ ...icon, src: response.locals.base + icon.src.replace(/^\/?/, '') })),
     }));
   }));
 

@@ -7,6 +7,8 @@ const { pipeline } = require('stream/promises');
 const { documents, enabled, now, parse, sha } = require('./account-data');
 const { authorized, cached, parentalStatus } = require('./profile-policy');
 const { areaAllowed, areaDenied, playbackVisible } = require('./library');
+const { remux } = require('./media-probe');
+const { serveConversion } = require('./conversion-playback');
 const { libraryFile, mimeFor, tokenLifetime } = require('./playback');
 const { maxBytes, subtitles, readSubtitle, decodeSubtitle, subtitleFormat, toVtt, saveSubtitle } = require('./subtitles');
 
@@ -60,7 +62,8 @@ async function authorizePlayback(pool, root, request, response, readSession, tok
       typeof playback.path !== 'string' || !isAbsolute(playback.path)) return null;
   if (user.role !== 'admin' && item.media_kind === 'video') {
     const parental = await parentalStatus(root, pool, {}, user, time);
-    if (parental.restricted && request.headers.cookie) {
+    if (parental.restricted && request.headers.cookie && request.headers['sec-fetch-site'] !== 'cross-site' &&
+        (!request.headers.origin || request.headers['sec-fetch-site'] === 'same-origin')) {
       session ??= await readSession(pool, request, true);
       if (session.data?.user_id === ownerId && session.browserToken) {
         // Only the token owner’s authenticated device can use its temporary unlock.
@@ -85,10 +88,10 @@ async function authorizePlayback(pool, root, request, response, readSession, tok
       'WHERE token_hash=? AND expires_at=? AND expires_at>?',
       [time + ttl, time + ttl, hash, rows[0].expires_at, time]);
   }
-  return { file: playback.path, folder: section.path, kind: playback.media_kind, owner: ownerId, captionSource: playback.caption_source, accel: enabled(settings.streaming?.nginx_accel) };
+  return { file: playback.path, folder: section.path, settings, itemId: playback.item_id, kind: playback.media_kind, owner: ownerId, captionSource: playback.caption_source, accel: enabled(settings.streaming?.nginx_accel) };
 }
 
-module.exports = function mountStream(app, prefix, { db, root, readSession, updating, express, unavailable }) {
+module.exports = function mountStream(app, prefix, { db, root, readSession, updating, express, unavailable, requestAllowed }) {
   let transfers = 0;
   app.get(prefix + '/stream/play', async (request, response) => {
     const token = request.query.t;
@@ -99,29 +102,27 @@ module.exports = function mountStream(app, prefix, { db, root, readSession, upda
       'Referrer-Policy': 'no-referrer',
     });
     if (typeof token !== 'string' || token.length !== 48 || !/^[a-f0-9]{48}$/.test(token)) return response.status(403).type('text').send('Forbidden');
-    const fallback = () => response.status(307)
-      .location('/api/stream/play?t=' + token + (enabled(request.query.direct) ? '&direct=1' : '')).end();
     let file;
     try {
       if (await updating()) return response.set('Retry-After', '30').sendStatus(503);
-      if (!db.ready() || request.headers.origin) return fallback();
+      if (!db.ready()) return response.sendStatus(503);
       const media = await db.run(pool => authorizePlayback(pool, root, request, response, readSession, token));
       if (response.headersSent || response.destroyed) return;
       if (media?.expired) return response.status(403).type('text').send('Expired');
-      if (!media) return fallback();
+      if (!media) return response.sendStatus(403);
       const resolved = await libraryFile(media.file, media.folder);
-      if (!resolved) return fallback();
+      if (!resolved) return response.sendStatus(404);
       const type = mimeFor(extname(resolved).slice(1).toLowerCase());
       const head = request.method === 'HEAD';
       if (!head && media.accel && !enabled(request.query.direct) && process.platform === 'linux') {
-        if (!(await stat(resolved)).isFile()) return fallback();
+        if (!(await stat(resolved)).isFile()) return response.sendStatus(404);
         const uri = resolved.split('/').map(encodeURIComponent).join('/');
         return response.set({ 'Content-Type': type, 'Accept-Ranges': 'bytes', 'X-Accel-Redirect': '/_vaultcast_media' + uri }).end();
       }
 
       file = await open(resolved, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0) | (constants.O_NOFOLLOW ?? 0));
       const info = await file.stat();
-      if (!info.isFile() || !Number.isSafeInteger(info.size)) return fallback();
+      if (!info.isFile() || !Number.isSafeInteger(info.size)) return response.sendStatus(404);
       const size = info.size;
       response.set({ 'Content-Type': type, 'Accept-Ranges': 'bytes' });
       if (head || !request.headers.range) response.set('Content-Length', String(size));
@@ -149,36 +150,59 @@ module.exports = function mountStream(app, prefix, { db, root, readSession, upda
     } catch (error) {
       if (response.destroyed) return;
       if (response.headersSent) response.destroy();
-      else return fallback();
+      else return response.sendStatus(error.code === 'ENOENT' ? 404 : 503);
     } finally {
       if (file) await file.close().catch(() => {});
     }
   });
+  const processing = async (request, response) => {
+    response.set({ 'Cache-Control': 'private, no-store', 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff' });
+    const token = request.query.t;
+    if (typeof token !== 'string' || !/^[a-f0-9]{48}$/.test(token)) return response.sendStatus(403);
+    transfers++;
+    try {
+      if (await updating() || !db.ready()) return response.sendStatus(503);
+      const media = await db.run(pool => authorizePlayback(pool, root, request, response, readSession, token));
+      if (response.headersSent || response.destroyed) return;
+      if (!media || media.kind !== 'video') return response.sendStatus(403);
+      if (request.method === 'POST' && !requestAllowed(request, media.settings)) return response.sendStatus(403);
+      if (request.path.endsWith('/transcode')) return await serveConversion(root, media, request, response, db.base());
+      const file = await libraryFile(media.file, media.folder);
+      if (!file) return response.sendStatus(404);
+      await remux(root, file, media.settings, request, response, token);
+    } catch (error) {
+      if (response.destroyed) return;
+      if (response.headersSent) return response.destroy();
+      return response.sendStatus(error.code === 'ENOENT' ? 404 : error.status ?? 503);
+    } finally { transfers--; }
+  };
+  app.get(prefix + '/stream/remux', processing);
+  app.get(prefix + '/stream/transcode', processing);
+  app.post(prefix + '/stream/transcode', processing);
   app.get(prefix + '/stream/subtitles/:token([a-f0-9]{48})/:id([a-f0-9]{64}).vtt', async (request, response) => {
     const { token, id } = request.params;
-    const fallback = () => response.status(307).location('/api/stream/subtitles/' + token + '/' + id + '.vtt').end();
     response.set({ 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' });
     try {
       if (await updating()) return response.set('Retry-After', '30').sendStatus(503);
-      if (!db.ready() || request.headers.origin) return fallback();
+      if (!db.ready()) return response.sendStatus(503);
       const media = await db.run(pool => authorizePlayback(pool, root, request, response, readSession, token, false));
       if (response.headersSent || response.destroyed) return;
       if (media?.expired || (media && media.kind !== 'video')) {
         return response.status(403).json({ ok: false, error: 'Playback token expired.' });
       }
-      if (!media || !await libraryFile(media.file, media.folder)) return fallback();
+      if (!media || !await libraryFile(media.file, media.folder)) return response.sendStatus(404);
       if (media.captionSource && media.captionSource !== media.file && !await libraryFile(media.captionSource, media.folder)) {
-        return fallback();
+        return response.sendStatus(404);
       }
       const track = (await subtitles(root, media.file, media.captionSource)).get(id);
-      if (!track) return fallback();
+      if (!track) return response.sendStatus(404);
       const body = await readSubtitle(track);
-      if (body === null) return fallback();
+      if (body === null) return response.sendStatus(404);
       response.set({ 'Content-Type': 'text/vtt; charset=utf-8', 'Cache-Control': 'private, max-age=300',
         'Content-Length': String(Buffer.byteLength(body)) });
       return response.end(request.method === 'HEAD' ? undefined : body);
     } catch (error) {
-      if (!response.headersSent && !response.destroyed) return fallback();
+      if (!response.headersSent && !response.destroyed) return response.sendStatus(404);
     }
   });
   const rawSubtitle = express.raw({ type: () => true, limit: maxBytes, inflate: false });
@@ -245,7 +269,7 @@ module.exports = function mountStream(app, prefix, { db, root, readSession, upda
         }
         const tracks = await subtitles(root, media.file);
         return response.json({ ok: true, format, subtitles: [...tracks.values()].map(({ id, label, language }) => ({
-          id, label, language, url: '/netplay' + prefix + '/stream/subtitles/' + request.params.token + '/' + id + '.vtt',
+          id, label, language, url: db.base() + 'netplay' + prefix + '/stream/subtitles/' + request.params.token + '/' + id + '.vtt',
         })) });
       } catch (error) {
         if (response.destroyed || response.headersSent) return;

@@ -8,7 +8,7 @@ const { tmpdir } = require('os');
 const { Transform } = require('stream');
 const { pipeline } = require('stream/promises');
 const { setTimeout: delay } = require('timers/promises');
-const { flock, lockFile } = require('./file-lock');
+const { locksAvailable, lockFile } = require('./file-lock');
 const { documents, enabled, parse, sha, now } = require('../NodeApp/account-data');
 const { StalkerProvider, atomicJson, phpJson, configHash } = require('../NodeApp/stalker-provider');
 const { cached } = require('../NodeApp/profile-policy');
@@ -191,7 +191,7 @@ async function tool(program, args, signal, timeout, log) {
   const timer = setTimeout(() => controller.abort(new Error('Video preparation timed out. Downloaded media was preserved.')), timeout);
   try {
     return await new Promise((resolve, reject) => {
-      const child = spawn(program, args, { stdio: ['ignore', file ? 'ignore' : 'pipe', file ? file.fd : 'ignore'], signal: combined });
+      const child = spawn(program, args, { windowsHide: true, stdio: ['ignore', file ? 'ignore' : 'pipe', file ? file.fd : 'ignore'], signal: combined });
       let output = '', failure;
       child.stdout?.on('data', chunk => { if (output.length + chunk.length <= 4 * 1024 * 1024) output += chunk; else child.kill('SIGKILL'); });
       child.once('error', error => { failure = error; });
@@ -334,7 +334,7 @@ function start(db, root) {
   let ticking = false;
   const version = readFile(join(root, 'VERSION'), 'utf8').then(value => value.trim()).catch(() => null);
   async function tick() {
-    if (ticking || !flock || !db.ready()) return;
+    if (ticking || !locksAvailable() || !db.ready()) return;
     ticking = true;
     let own, bandwidth, directory, id;
     try {

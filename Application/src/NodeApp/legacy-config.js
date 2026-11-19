@@ -66,10 +66,11 @@ module.exports = async function installationConfig(root) {
   const config = readLiteral((await readFile(path, 'utf8')).replace(/^\uFEFF/, ''));
   const db = config?.database;
   const port = Number(db?.port);
+  const base = String(config.base_path ?? '/').replace(/\/?$/, '/');
   if (!db || typeof db.host !== 'string' || !db.host || /[;\x00-\x1f]/.test(db.host) ||
       typeof db.name !== 'string' || !/^[a-z0-9_]{1,64}$/i.test(db.name) ||
       !Number.isInteger(port) || port < 1 || port > 65535 ||
       typeof db.user !== 'string' || typeof db.password !== 'string' ||
-      (config.base_path ?? '/') !== '/') throw new Error('Unsupported database configuration');
-  return { host: db.host, database: db.name, user: db.user, password: db.password, port };
+      !/^\/(?:[\w~-][\w.~-]*\/)*$/.test(base)) throw new Error('Unsupported database configuration');
+  return { host: db.host, database: db.name, user: db.user, password: db.password, port, base };
 };

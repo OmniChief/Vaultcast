@@ -62,6 +62,7 @@
     var head = parts[0] || '';
     var params = {};
     q.split('&').forEach(function(kv){ if (!kv) return; var i = kv.indexOf('='); params[dec(i < 0 ? kv : kv.slice(0, i))] = dec(i < 0 ? '' : kv.slice(i + 1).replace(/\+/g, ' ')); });
+    if (path === 'netplay/application/shell') return { view:'library' };
     if (head === '') return { view:'home' };
     /* Unified inbox; the old Home → Inbox and Settings → Inbox addresses land here too. */
     if (head === 'inbox') return { view:'inbox', inboxPane: parts[1] === 'private' ? 'mail' : null };
@@ -132,7 +133,7 @@
     pathname = String(pathname || '/');
     if (pathname.indexOf(base) === 0) pathname = pathname.slice(base.length);
     else if (pathname + '/' === base) pathname = '';
-    return pathname.replace(/^\/+/, '').replace(/^index\.php\/?/, '');
+    return pathname.replace(/^\/+/, '').replace(/^netplay\/watch\//, '').replace(/^index\.php\/?/, '');
   }
 
   /** Absolute share link: optional public base URL, else the page's own protocol, host and port. */

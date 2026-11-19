@@ -4,7 +4,7 @@ const { constants } = require('fs');
 const { lstat, mkdir, open, readdir, readFile, realpath, rmdir, stat, unlink } = require('fs').promises;
 const { join } = require('path');
 const { pipeline } = require('stream/promises');
-const { flock, lockFile } = require('../Workers/file-lock');
+const { locksAvailable, lockFile } = require('../Workers/file-lock');
 const { enabled, now, parse } = require('./account-data');
 const { mediaRange } = require('./stream');
 const { randomBytes } = require('crypto');
@@ -22,7 +22,7 @@ async function refreshStopped(pool, directory, row, time) {
   // Node owns the persistent queue and resumes it when the service restarts.
   if (row.status === 'queued' || row.engine === 'node') return row;
   const updated = Date.parse(row.updated ?? row.created ?? '');
-  if (!Number.isFinite(updated) || time - updated / 1000 <= 90 || !flock) return row;
+  if (!Number.isFinite(updated) || time - updated / 1000 <= 90 || !locksAvailable()) return row;
   const lock = await open(join(directory, row.id + '.lock'),
     constants.O_CREAT | constants.O_RDWR | (constants.O_NOFOLLOW ?? 0), 0o600).catch(() => null);
   if (!lock) return row;

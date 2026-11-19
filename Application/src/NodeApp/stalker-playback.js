@@ -1,6 +1,6 @@
 'use strict';
 
-const { randomBytes, createCipheriv, createDecipheriv } = require('crypto');
+const { randomBytes, createHmac } = require('crypto');
 const { mkdir } = require('fs').promises;
 const { join } = require('path');
 const { tmpdir } = require('os');
@@ -20,6 +20,9 @@ const {
   publicAddresses,
 } = require('./stalker-provider');
 
+const { playlist, resourceUrl } = require('./provider-playlist');
+
+const legacyResourceSecret = randomBytes(32);
 const playbackPath = '/netplay/application/live/stalker_stream';
 const selections = new Map(),
   cookieWrites = new Map();
@@ -117,12 +120,9 @@ async function issue(root, feed, id, kind, item, viewer, signal, compatibility =
 async function authorizedTicket(root, feed, id, ticket, viewer) {
   if (typeof ticket !== 'string' || !/^[0-9a-f]{32}$/.test(ticket)) return null;
   const state = await cached(root, ticketKey(ticket));
-  return state?.viewer === String(viewer) &&
-    state.feed === feed.id &&
-    state.id === id &&
-    state.fingerprint === fingerprint(feed)
-    ? state
-    : null;
+  if (state?.viewer !== String(viewer) || state.feed !== feed.id || state.id !== id || state.fingerprint !== fingerprint(feed)) return null;
+  if (!state.childKey) state.childKey = createHmac('sha256', legacyResourceSecret).update(ticket).digest('hex');
+  return state;
 }
 
 async function playbackSession(root, feed, state, playback, signal) {
@@ -145,57 +145,6 @@ async function playbackSession(root, feed, state, playback, signal) {
   const pending = initialise().finally(() => selections.delete(key));
   selections.set(key, pending);
   return pending;
-}
-
-function resourceToken(value, key, playback) {
-  const iv = randomBytes(12),
-    cipher = createCipheriv('aes-256-gcm', Buffer.from(key, 'hex'), iv);
-  cipher.setAAD(Buffer.from(playback));
-  const body = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
-  return Buffer.concat([iv, cipher.getAuthTag(), body]).toString('base64url');
-}
-function resourceUrl(token, key, playback) {
-  try {
-    if (typeof token !== 'string' || token.length > 12000 || !/^[\w-]+$/.test(token)) throw new Error();
-    const bytes = Buffer.from(token, 'base64url');
-    const cipher = createDecipheriv('aes-256-gcm', Buffer.from(key, 'hex'), bytes.subarray(0, 12));
-    cipher.setAAD(Buffer.from(playback));
-    cipher.setAuthTag(bytes.subarray(12, 28));
-    return mediaUrl(Buffer.concat([cipher.update(bytes.subarray(28)), cipher.final()]).toString()).href;
-  } catch {
-    throw problem(403, 'Invalid playback resource.');
-  }
-}
-
-function playlist(body, base, params, key, playback) {
-  if (!body.trimStart().startsWith('#EXTM3U'))
-    throw problem(502, 'The provider returned an invalid playlist.');
-  const references = new Map();
-  function child(value) {
-    if (references.has(value)) return references.get(value);
-    const target = mediaUrl(new URL(value, base).href);
-    if (Buffer.byteLength(target.href) > 8192) throw problem(502, 'Provider resource URL exceeds the limit.');
-    const query = new URLSearchParams(params);
-    query.set('resource', resourceToken(target.href, key, playback));
-    const path=playbackPath+'?'+query;
-    references.set(value,path);
-    return path;
-  }
-  const output = [];
-  let length = 0;
-  for (const line of body.split(/\r?\n/)) {
-    const value = line.trim();
-    const rewritten = !value
-      ? line
-      : value.startsWith('#')
-        ? line.replace(/\bURI="([^"]+)"/gi, (_all, uri) => 'URI="' + child(uri) + '"')
-        : child(value);
-    length += Buffer.byteLength(rewritten) + 1;
-    if (length > 20 * 1024 * 1024 || output.length >= 100000)
-      throw problem(502, 'Provider playlist exceeds the size limit.');
-    output.push(rewritten);
-  }
-  return output.join('\n');
 }
 
 async function follow(client, start, options, limit = 8) {

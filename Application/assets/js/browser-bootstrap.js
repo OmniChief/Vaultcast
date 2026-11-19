@@ -12,7 +12,7 @@
     if(!window.fetch||!window.URL||!window.Map||!window.Set||!window.AbortController)reasons.push('browser APIs');
     if(!window.Element||!window.Element.prototype||!window.Element.prototype.replaceChildren||!window.Element.prototype.closest)reasons.push('DOM');
     if(!Array.prototype.forEach||!Array.prototype.map||!Array.prototype.filter||!Array.prototype.indexOf||!String.prototype.trim||!Date.now||!window.JSON||!window.XMLHttpRequest||!document.addEventListener)reasons.push('JavaScript APIs');
-    var reduced=preference==='on'||(preference!=='off'&&reasons.length>0);
+    var reduced=!window.__VAULTCAST_APPLICATION_BASE__&&(preference==='on'||(preference!=='off'&&reasons.length>0));
     window.VaultcastCompatibility={active:reduced,preference:preference,reasons:reasons};
     if(reduced){
       var query=location.search||'';

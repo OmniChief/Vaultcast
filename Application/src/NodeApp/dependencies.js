@@ -20,7 +20,8 @@ module.exports = async function dependencies(root) {
   const marker = join(path, '.ready');
   const load = createRequire(join(path, 'package.json'));
   function installed() {
-    return { mysql: load('mysql2/promise'), bcrypt: load.resolve('bcryptjs'), html: load('parse5'), decode: load('entities').decodeHTML };
+    return { mysql: load('mysql2/promise'), bcrypt: load.resolve('bcryptjs'), html: load('parse5'), decode: load('entities').decodeHTML,
+      fileLocks: process.platform === 'win32' ? load('fs-native-extensions') : null };
   }
   if (await fs.stat(marker).catch(() => null)) {
     try { return installed(); } catch (error) { /* Restore incomplete dependency storage. */ }
@@ -29,8 +30,8 @@ module.exports = async function dependencies(root) {
   await fs.mkdir(path, { recursive: true, mode: 0o700 });
   await fs.writeFile(join(path, 'package.json'), manifest);
   await fs.writeFile(join(path, 'package-lock.json'), lock);
-  const cli = join(dirname(process.execPath), '../lib/node_modules/npm/bin/npm-cli.js');
-  const npmArgs = ['ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund',
+  const cli = join(dirname(process.execPath), process.platform === 'win32' ? 'node_modules/npm/bin/npm-cli.js' : '../lib/node_modules/npm/bin/npm-cli.js');
+  const npmArgs = ['ci', '--omit=dev', ...(process.platform === 'win32' ? [] : ['--omit=optional']), '--ignore-scripts', '--no-audit', '--no-fund',
     '--fetch-retries=1', '--fetch-timeout=30000', '--cache', join(root, 'data/runtime/node-app-npm-cache')];
   const bundled = await fs.stat(cli).catch(() => null);
   await run(bundled?.isFile() ? process.execPath : 'npm', bundled?.isFile() ? [cli, ...npmArgs] : npmArgs,

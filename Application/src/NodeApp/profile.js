@@ -1,6 +1,7 @@
 'use strict';
 
 const { sha, now, parse, enabled, storedBoolean, documents, accessState, publicUser } = require('./account-data');
+const { visibleCards } = require('./library');
 const { parentalStatus, containsMediaCard, authorized } = require('./profile-policy');
 
 const isObject = value => value !== null && typeof value === 'object';
@@ -10,6 +11,43 @@ const trim = value => value.replace(/^[ \t\n\r\0\v]+|[ \t\n\r\0\v]+$/g, '');
 const chars = (value, max) => Array.from(value).slice(0, max).join('');
 const text = value => typeof value === 'string' || typeof value === 'number' ? String(value) : value === true ? '1' : '';
 const clamp = (value, low, high) => Math.max(low, Math.min(high, Math.trunc(Number(value) || 0)));
+
+async function filterProfileCards(pool, profile, parental) {
+  const cards = new Map();
+  function collect(value) {
+    if (!isObject(value)) return;
+    if (value.id != null && has(value, 'title') && (value.media_kind != null || ['item','show','season'].includes(value.kind))) {
+      const show = value.kind === 'show' || value.kind === 'season' || value.media_kind === 'show';
+      cards.set(value, show ? { kind: 'show', show_key: value.show_key ?? value.id } : { ...value, media_kind: value.media_kind ?? 'video' });
+    }
+    for (const child of Object.values(value)) collect(child);
+  }
+  collect(profile);
+  const permitted = new Set();
+  const values = [...cards.values()];
+  for (let offset = 0; offset < values.length; offset += 256) {
+    const batch = values.slice(offset, offset + 256), videos = batch.filter(card => card.kind !== 'show' && card.media_kind === 'video');
+    const missing = new Set();
+    if (videos.length) {
+      const [rows] = await pool.execute("SELECT id,LEFT(SHA1(CONCAT(section_id,'|',show_title)),16) AS show_key, show_title " +
+        'FROM vaultcast_items WHERE id IN (' + videos.map(() => '?').join(',') + ')', videos.map(card => card.id));
+      const indexed = new Map(rows.map(row => [row.id, row]));
+      for (const video of videos) {
+        const item = indexed.get(video.id);
+        if (!item) missing.add(video);
+        else video.show_key = item.show_title ? item.show_key : null;
+      }
+    }
+    for (const card of await visibleCards(pool, batch.filter(card => !missing.has(card)), parental)) permitted.add(card);
+  }
+  function keep(value) { return !cards.has(value) || permitted.has(cards.get(value)); }
+  function filter(value) {
+    if (Array.isArray(value)) return value.filter(keep).map(filter);
+    if (!isObject(value)) return value;
+    return Object.fromEntries(Object.entries(value).filter(([,child]) => keep(child)).map(([key,child]) => [key,filter(child)]));
+  }
+  return filter(profile);
+}
 
 async function updateUser(pool, id, apply) {
   const conn = await pool.getConnection();
@@ -127,9 +165,9 @@ module.exports = function mountProfiles(app, prefix, { root, handle, unavailable
     const names = [...profileDocs(user), offlineDoc, 'achievement-settings'];
     if (admin) names.push('convert_requests');
     const docs = await documents(pool, names);
-    const profile = publicUser({ ...user, _session: current.data }, settings, docs, time);
+    let profile = publicUser({ ...user, _session: current.data }, settings, docs, time);
     profile.parental = await parentalStatus(root, pool, current, user, time);
-    if (profile.parental.restricted && containsMediaCard(profile)) return unavailable(response);
+    if (profile.parental.restricted && containsMediaCard(profile)) profile = await filterProfileCards(pool, profile, profile.parental);
     const library = admin || !isObject(user.areas) || enabled(user.areas.library);
     const signedIn = Boolean(user.id) && user.role !== 'guest';
     const offline = enabled(settings.features?.offline);

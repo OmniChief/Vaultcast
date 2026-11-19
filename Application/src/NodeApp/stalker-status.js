@@ -21,13 +21,6 @@ const { provider } = require('./stalker-store');
 const diagnosticActions = ['stalker_epg_fields','stalker_live_fields','stalker_vod_fields','stalker_vod_probe'];
 const playbackActions = ['stalker_play','stalker_stream','stalker_check_media'];
 
-function legacyStream(request,response) {
-  const params = new URLSearchParams();
-  for (const key of ['feed','channel','ticket','playback','format'])
-    if (typeof request.query[key] === 'string') params.set(key,request.query[key]);
-  return response.redirect(307,'/api/live/stalker_stream?'+params);
-}
-
 const browseActions = ['stalker_vod_catalogue','stalker_vod_detail','stalker_browse','stalker_countries','stalker_live_categories','stalker_live_channels','stalker_live_guide','stalker_channel'];
 const kinds = ['live', 'vod', 'series'];
 const secretFields = ['mac', 'username', 'password', 'serial', 'deviceId', 'deviceId2'];
@@ -35,27 +28,31 @@ const complete = status => ['complete', 'skipped'].includes(status);
 
 function savedFeeds(state) {
   if (!state) return [];
-  if (!Array.isArray(state.feeds)) return null;
-  const ids = new Set();
-  for (const feed of state.feeds) {
-    if (!feed || typeof feed.id !== 'string' || !/^[\w.-]+$/.test(feed.id) || ids.has(feed.id)) return null;
+  if (state.feeds == null) return [];
+  if (typeof state.feeds !== 'object') return null;
+  const feeds = [], ids = new Set();
+  for (const [key, raw] of Object.entries(state.feeds)) {
+    if (raw?.type !== 'stalker') continue;
+    const feed = { ...raw, id: raw.id || key, url: String(raw.url ?? '').trim(), mac: String(raw.mac ?? '').trim().toUpperCase() };
+    try { feed.name = String(raw.name ?? '').trim() || new URL(feed.url).hostname; } catch { continue; }
+    for (const field of secretFields.slice(1)) feed[field] ??= '';
+
+    if (typeof feed.id !== 'string' || !/^[\w.-]+$/.test(feed.id) || ids.has(feed.id)) return null;
     ids.add(feed.id);
-    if (feed.type !== 'stalker') continue;
-    if (typeof feed.name !== 'string' || !feed.name || feed.name !== feed.name.trim() ||
-        typeof feed.url !== 'string' || !/^https?:\/\//i.test(feed.url) || feed.url !== feed.url.trim() ||
-        typeof feed.mac !== 'string' || !/^(?:[A-F0-9]{2}:){5}[A-F0-9]{2}$/.test(feed.mac) ||
+    if (!/^https?:\/\//i.test(feed.url) || !/^(?:[A-F0-9]{2}:){5}[A-F0-9]{2}$/.test(feed.mac) ||
         secretFields.slice(1).some(key => typeof feed[key] !== 'string' || Buffer.byteLength(feed[key]) > 512 || /[\r\n\0]/.test(feed[key]))) {
       return null;
     }
     try {
       const url = new URL(feed.url);
       if (url.username || url.password || /[?#\r\n]/.test(feed.url)) return null;
+      feeds.push(feed);
     } catch (error) {
       return null;
     }
   }
   // Legacy cache fingerprints use the field order and defaults of iptv_normalize_feed.
-  return state.feeds.filter(feed => feed.type === 'stalker').map(feed => ({
+  return feeds.map(feed => ({
     type: 'stalker', ...Object.fromEntries(secretFields.map(key => [key,feed[key]])),
     id: feed.id, name: feed.name, url: feed.url,
     enabled: feed.enabled == null || enabled(feed.enabled), preinstalled: enabled(feed.preinstalled),
@@ -164,7 +161,7 @@ async function viewerCatalogue(
   return response.json(await direct(pool, root, feed, kind, opts));
 }
 
-module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavailable, json, downloads, stalker, services, run, ready:databaseReady }) {
+module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavailable, json, downloads, stalker, services, run }) {
   const version = readFile(join(root, 'VERSION'), 'utf8').then(text => text.trim()).catch(() => '');
   const runtime = join(root, 'data/runtime');
   const fresh = async name => {
@@ -173,7 +170,7 @@ module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavai
   };
   async function workerRunning(name, legacy) {
     const marker = 'node-stalker-' + name + '.heartbeat';
-    if (process.platform === 'linux' && await fresh(marker) &&
+    if (await fresh(marker) &&
         (await readFile(join(runtime, marker), 'utf8').catch(() => '')).trim() === await version) return true;
     return fresh(legacy);
   }
@@ -251,7 +248,6 @@ module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavai
     if (streaming && opts.ticket != null) {
       const state = await playback.authorizedTicket(root, feed, id, opts.ticket, user.id);
       if (!state) return fail(403, 'Playback selection expired. Select the title again.');
-      if (!state.childKey && opts.resource == null) return legacyStream(request, response);
       return network(response, () => playback.serve(root, feed, state, request, response));
     }
     if (streaming) {
@@ -276,6 +272,7 @@ module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavai
           await playback.checkMedia(root, feed, id, kind, item, opts.profile ?? 'stb', signal),
         );
       const result = await playback.issue(root, feed, id, kind, item, user.id, signal, Boolean(response.locals.stalkerSessionHash));
+      result.source.url = response.locals.base.slice(0, -1) + result.source.url;
       if (streaming) return response.redirect(307, result.source.url);
       return response.json(result);
     });
@@ -503,9 +500,7 @@ module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavai
   });
   app.get(prefix + '/live/:action(stalker|stalker_catalogue_status|stalker_update_status|stalker_offline|stalker_offline_file|stalker_art|' + browseActions.concat(diagnosticActions).join('|') + ')', operation);
   app.get(prefix + '/live/:action(stalker_stream)', (request,response) => {
-    // The compatibility endpoint applies the installation's external-player CORS policy.
-    if (request.query.resource==null && (!databaseReady() || request.headers['sec-fetch-site']==='cross-site'))
-      return legacyStream(request,response);
+    if (request.headers['sec-fetch-site'] === 'cross-site') return response.sendStatus(403);
     return operation(request,response);
   });
   app.post(prefix + '/live/:action(stalker_cancel|stalker_delete|stalker_download|stalker_retry|stalker_updates|stalker_catalogue_control|stalker_manage|stalker_play|stalker_check_media|iptv_preview|iptv_probe)', (request, response, next) => {

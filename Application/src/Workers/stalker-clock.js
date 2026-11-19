@@ -2,6 +2,7 @@
 
 const fs = require('fs').promises;
 const { join } = require('path');
+const { locksAvailable } = require('./file-lock');
 const { jobLock } = require('./stalker-download');
 const { now } = require('../NodeApp/account-data');
 const { doc, q, enabled } = require('../NodeApp/stalker-store');
@@ -58,7 +59,7 @@ module.exports = function startStalkerWorkers(root, db) {
     }
   }
   async function tick() {
-    if (running || process.platform !== 'linux' || !db?.ready()) return;
+    if (running || !locksAvailable() || !db?.ready()) return;
     running = true;
     try {
       const version = (await fs.readFile(versionFile, 'utf8')).trim();

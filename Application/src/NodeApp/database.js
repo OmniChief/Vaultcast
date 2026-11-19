@@ -2,7 +2,7 @@
 
 const { open } = require('fs').promises;
 const { join } = require('path');
-const { flock, lockFile } = require('../Workers/file-lock');
+const { flock, lockFile, configureWindowsLocks } = require('../Workers/file-lock');
 const installationConfig = require('./legacy-config');
 const installDependencies = require('./dependencies');
 
@@ -27,22 +27,22 @@ module.exports = function applicationDatabase(root) {
     }
   }
 
-  function poolFor(config) {
+  function poolFor({ base, ...config }) {
     const identity = JSON.stringify(config);
-    if (current?.identity === identity) return current.pool;
+    if (current?.identity === identity) { current.base = base; return current.pool; }
     const previous = current;
     const pool = packages.mysql.createPool({
       ...config, host: config.host === 'localhost' ? '127.0.0.1' : config.host,
       charset: 'utf8mb4', connectionLimit: 2, maxIdle: 1, idleTimeout: 60000,
       waitForConnections: true, queueLimit: 4, connectTimeout: 5000, flags: '-LOCAL_FILES',
     });
-    current = { identity, pool };
+    current = { identity, pool, base };
     if (previous) previous.pool.end().catch(() => {});
     return pool;
   }
 
   async function initialize() {
-    if (!flock || initializing || ready) return;
+    if ((!flock && process.platform !== 'win32') || initializing || ready) return;
     initializing = true;
     try {
       const config = await installationConfig(root);
@@ -50,6 +50,7 @@ module.exports = function applicationDatabase(root) {
         if (Date.now() < dependencyRetry) return;
         dependencyRetry = Date.now() + 300000;
         packages = await installDependencies(root);
+        if (process.platform === 'win32') configureWindowsLocks(packages.fileLocks);
       }
       await withLock(async () => {
         const pool = poolFor(config);
@@ -67,9 +68,10 @@ module.exports = function applicationDatabase(root) {
   }
 
   void initialize();
-  if (flock) setInterval(initialize, 10000).unref();
+  if (flock || process.platform === 'win32') setInterval(initialize, 10000).unref();
   return {
     ready: () => ready,
+    base: () => current?.base ?? '/',
     services: () => packages,
     async run(operation) {
       if (!ready) throw new Error('Node application database unavailable');

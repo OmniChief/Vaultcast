@@ -1,9 +1,12 @@
 'use strict';
 
 const { randomBytes, randomInt } = require('crypto');
-const { realpath, stat } = require('fs').promises;
-const { extname, isAbsolute, relative, sep } = require('path');
-const { documents, enabled, now, parse, sha } = require('./account-data');
+const { stat } = require('fs').promises;
+const { extname, isAbsolute } = require('path');
+const { documents, enabled, now, parse, sha, publicUser } = require('./account-data');
+const { probe, compatibleAudio, libraryFile } = require('./media-probe');
+const mountConversions = require('./library-conversions');
+const { activeConversion } = require('./conversion-playback');
 const { areaAllowed, areaDenied, itemArea, mediaSignature, playbackVisible } = require('./library');
 const { authorized, parentalStatus } = require('./profile-policy');
 const { subtitles } = require('./subtitles');
@@ -22,13 +25,6 @@ function mimeFor(extension) {
 
 function tokenLifetime(settings) {
   return Math.max(3600, Math.min(86400, Math.trunc(Number(settings.streaming?.token_ttl_seconds ?? 28800)) || 3600));
-}
-
-async function libraryFile(file, folder) {
-  if (typeof file !== 'string' || !isAbsolute(file)) return null;
-  const [resolved, directory] = await Promise.all([realpath(file), realpath(folder)]);
-  const child = relative(directory, resolved);
-  return child && child !== '..' && !child.startsWith('..' + sep) && !isAbsolute(child) ? resolved : null;
 }
 
 async function isFile(path) {
@@ -50,6 +46,22 @@ function conversionStatus(queue, id) {
 }
 
 module.exports = function mountPlayback(app, prefix, { root, db, handle, json, unavailable }) {
+  app.get(prefix + '/items/:id([a-f0-9]{16})/probe', handle(async (request, response, pool, _bcrypt, settings, current) => {
+    if (!authorized(response, current)) return;
+    const [rows] = await pool.execute('SELECT payload FROM vaultcast_items WHERE id=?', [request.params.id]);
+    if (!rows.length) return response.status(404).json({ ok: false, error: 'Not found' });
+    const item = parse(rows[0].payload);
+    const parental = await parentalStatus(root, pool, current, current.user, now());
+    if (!areaAllowed(current.user, itemArea(item), parental)) return areaDenied(response, itemArea(item));
+    if (!await playbackVisible(pool, item, parental)) return response.status(403).json({ ok: false, code: 'parental_blocked', error: 'This title isn’t available on this profile.' });
+    const section = Object.values(settings.sections ?? {}).find(entry => entry?.id === item.section);
+    return async () => {
+      const path = enabled(settings.convert?.prefer_directplay ?? true) && enabled(item.directplay_ready) &&
+        item.directplay_path && await isFile(item.directplay_path) ? item.directplay_path : item.path;
+      const file = section?.path && path && await isFile(path) ? await libraryFile(path, section.path) : null;
+      response.json({ ...await probe(root, file, settings), item_id: item.id, title: item.title ?? '' });
+    };
+  }, true));
   app.post(prefix + '/items/:id([a-f0-9]{16})/play', (request, response, next) => {
     if (!request.is('application/json')) return unavailable(response);
     json(request, response, error => error ? unavailable(response) : next());
@@ -62,13 +74,13 @@ module.exports = function mountPlayback(app, prefix, { root, db, handle, json, u
     const user = current.user;
     const body = request.body;
     if (!body || Object.keys(body).some(key => !['audio', 'external', 'original', 'probe'].includes(key)) ||
-        Object.keys(request.query).length || enabled(body.probe) || request.headers.authorization ||
+        Object.keys(request.query).length ||
         (body.audio != null && typeof body.audio !== 'number' && typeof body.audio !== 'string')) return unavailable(response);
 
     const { id } = request.params;
     const external = enabled(body.external);
     const [rows] = await pool.execute(
-      'SELECT i.payload,f.sig,f.duration,p.payload AS progress FROM vaultcast_items i ' +
+      'SELECT i.payload,f.sig,f.duration,f.video_codec,f.audio_codec,p.payload AS progress FROM vaultcast_items i ' +
       'LEFT JOIN vaultcast_media_facts f ON f.item_id=i.id ' +
       'LEFT JOIN vaultcast_progress p ON p.item_id=i.id AND p.user_id=? AND LENGTH(p.payload)<=1048576 ' +
       'WHERE i.id=?', [user.id, id]);
@@ -86,8 +98,16 @@ module.exports = function mountPlayback(app, prefix, { root, db, handle, json, u
     const video = item.media_kind === 'video';
     const remuxAllowed = settings.streaming?.directplay_only === false && settings.streaming.allow_remux !== false;
     const transcodeAllowed = settings.streaming?.directplay_only === false && enabled(settings.transcoding?.enabled);
-    if (!external && video && ['movies', 'disney', 'tv', 'anime'].includes(item.type) &&
-        (remuxAllowed || transcodeAllowed)) return unavailable(response);
+    const eligible = video && ['movies', 'disney', 'tv', 'anime'].includes(item.type);
+    const transcode = eligible && transcodeAllowed;
+    const canSave = !external && transcode && !item.directplay_path && !/\.directplay\.[^.]+$/i.test(item.path) &&
+      enabled(settings.transcoding?.allow_save ?? true) &&
+      publicUser(user, settings, await documents(pool, ['permission_roles']), now()).capabilities.save_copy;
+    const facts = row.sig === mediaSignature(item);
+    const vc = facts ? String(row.video_codec || '').toLowerCase() : '';
+    const ac = facts ? String(row.audio_codec || '').toLowerCase() : '';
+    const hint = { mode: !facts ? 'both' : vc === 'h264' || vc.startsWith('avc') ? 'audio' :
+      !ac || ac.startsWith('aac') || compatibleAudio(ac) ? 'video' : 'both', video_codec: vc || null, audio_codec: ac || null };
     const section = Object.values(settings.sections ?? {}).find(entry => entry?.id === item.section);
     if (typeof section?.path !== 'string' || !isAbsolute(section.path)) return unavailable(response);
 
@@ -108,6 +128,8 @@ module.exports = function mountPlayback(app, prefix, { root, db, handle, json, u
       }
 
       const tracks = !external && video ? await subtitles(root, path, captionSource) : new Map();
+      const inspected = !external && enabled(body.probe) ? await probe(root, path, settings) : null;
+      const active = !external && transcode ? await activeConversion(root, id, user.id, response.locals.base) : null;
       if (response.destroyed) return;
       const token = randomBytes(24).toString('hex');
       const expires = now() + tokenLifetime(settings);
@@ -124,8 +146,8 @@ module.exports = function mountPlayback(app, prefix, { root, db, handle, json, u
         return conversionStatus(convert_queue, id);
       });
 
-      const url = '/api/stream/play?t=' + token;
-      if (external) return response.json({ ok: true, url: '/netplay' + prefix + '/stream/play?t=' + token + '&direct=1' });
+      const url = response.locals.base + 'netplay' + prefix + '/stream/play?t=' + token;
+      if (external) return response.json({ ok: true, url: url + '&direct=1' });
       const saved = parse(row.progress);
       const position = Number(saved?.position) || 0;
       const length = Number(saved?.duration) || 0;
@@ -136,25 +158,27 @@ module.exports = function mountPlayback(app, prefix, { root, db, handle, json, u
       const subtitleUpload = user.role === 'admin' || enabled(settings.opensubtitles?.allow_users);
       return response.json({
         ok: true, token, url, media_kind: item.media_kind, ext, title: item.title,
-        transcode_allowed: false, transcode_auto_blocked: conversion.blocked, transcode_mode: 'manual',
-        playback_hint: null, active_conversion: null, transcode_save_allowed: false, save_copy_default: null,
+        transcode_allowed: transcode, transcode_auto_blocked: conversion.blocked, transcode_mode: 'manual',
+        playback_hint: !canSave && eligible && (remuxAllowed || transcode) ? hint : null, active_conversion: active,
+        transcode_save_allowed: canSave, save_copy_default: canSave ? hint : null,
         prepared_copy: Boolean(useCopy), library_conversion: conversion.active,
         progress, resume_position: progress?.position ?? 0,
         emu_core: item.emu_core ?? null, bios_url: null, bios_required: false, bios_missing: false, bios_hint: null, rom_sidecars: [],
-        mime: mimeFor(ext), audio_tracks: [], audio_count: 0, directplay_audio_select: false,
+        mime: mimeFor(ext), audio_tracks: inspected?.audio_tracks ?? [], audio_count: inspected?.audio_count ?? 0, directplay_audio_select: inspected?.multi_audio ?? false,
         preferred_audio: body.audio == null || body.audio === '' ? null : Math.trunc(Number(body.audio) || 0),
         subtitles: [...tracks.values()].map(({ id, label, language }) => ({ id, label, language,
-          url: '/netplay' + prefix + '/stream/subtitles/' + token + '/' + id + '.vtt' })),
+          url: response.locals.base + 'netplay' + prefix + '/stream/subtitles/' + token + '/' + id + '.vtt' })),
         subtitle_search: video && subtitleUpload && Boolean(String(settings.opensubtitles?.api_key ?? '').trim()),
         subtitle_upload: video && subtitleUpload,
-        remux_url: video ? '/api/stream/remux?t=' + token : null, remux_allowed: remuxAllowed,
+        remux_url: video ? response.locals.base + 'netplay' + prefix + '/stream/remux?t=' + token : null, remux_allowed: remuxAllowed,
         duration: duration > 0 || !video ? (item.duration == null ? null : duration)
           : (row.sig === mediaSignature(item) && Number(row.duration) > 0 ? Number(row.duration) : null),
-        video_codec: null, needs_convert_hint: convertExtensions.has(String(ext ?? '').toLowerCase()),
-        audio_note: null, file_missing: false, extra: false,
+        video_codec: inspected?.video_codec ?? null, needs_convert_hint: convertExtensions.has(String(ext ?? '').toLowerCase()),
+        audio_note: inspected?.multi_audio ? 'Multiple audio tracks available.' : null, file_missing: false, extra: false,
       });
     };
   }, true));
+  return mountConversions(app, prefix, { root, db, handle, json });
 };
 
 module.exports.libraryFile = libraryFile;

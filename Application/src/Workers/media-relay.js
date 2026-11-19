@@ -356,3 +356,5 @@ module.exports.takeTicket = takeTicket;
 module.exports.providerResponse = providerResponse;
 
 module.exports.xtreamReady = Boolean(flock);
+module.exports.xtreamCurrent = xtreamCurrent;
+module.exports.closeXtreamUpstream = closeXtreamUpstream;

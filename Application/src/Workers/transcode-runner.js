@@ -45,8 +45,8 @@ async function run(ticket, response) {
   const log = await fs.open(join(directory, 'ffmpeg.log'), 'a');
   try {
     await checkDisk(directory, job);
-    if (response.destroyed) throw new Error('Playback worker disconnected.');
-    const child = spawn(program, args, { stdio: ['ignore', 'pipe', log.fd] });
+    if (response?.destroyed) throw new Error('Playback worker disconnected.');
+    const child = spawn(program, args, { windowsHide: true, stdio: ['ignore', 'pipe', log.fd] });
     if (child.pid) {
       try { setPriority(child.pid, 10); } catch (error) {}
     }
@@ -60,7 +60,7 @@ async function run(ticket, response) {
       if (!closed) child.kill('SIGKILL');
     };
     const disconnected = () => stop('Playback worker disconnected.');
-    response.once('close', disconnected);
+    response?.once('close', disconnected);
     const lines = createInterface({ input: child.stdout });
     lines.on('line', line => {
       const result = /^out_time_ms=(\d+)$/.exec(line);
@@ -93,7 +93,7 @@ async function run(ticket, response) {
         }
       })().catch(error => stop(error.message)).finally(() => { updatingNow = false; });
     }, 1000);
-    const heartbeat = setInterval(() => response.write(' '), 15000);
+    const heartbeat = response && setInterval(() => response.write(' '), 15000);
     try {
       const exitCode = await new Promise(resolve => {
         child.once('error', () => resolve(-1));
@@ -106,7 +106,7 @@ async function run(ticket, response) {
     } finally {
       clearInterval(monitor);
       clearInterval(heartbeat);
-      response.removeListener('close', disconnected);
+      response?.removeListener('close', disconnected);
       lines.close();
     }
   } finally {
@@ -133,3 +133,5 @@ module.exports = async function transcode(request, response) {
 };
 
 module.exports.active = () => active > 0;
+
+module.exports.run = run;

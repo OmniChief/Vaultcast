@@ -12,6 +12,7 @@ const mountLibrary = require('./library');
 const mountStream = require('./stream');
 const mountPlayback = require('./playback');
 const mountStalkerStatus = require('./stalker-status');
+const mountXtream = require('./xtream');
 const mountEpisodeSegments = require('./episode-segments');
 const mountProgress = require('./progress');
 const mountAchievements = require('./achievements');
@@ -111,6 +112,7 @@ module.exports = function mountAccount(app, express, root) {
           return emptyError(response, 403, 'Cross-site request rejected. [Node ' +
             request.method + ' ' + String(request.route?.path || '/application').slice(0, 140) + ']');
         }
+        response.locals.base = db.base();
         const current = await session(pool, request, includeUser, response.locals.stalkerSessionHash);
         if (current.error) return emptyError(response, 401, current.error);
         return operation(request, response, pool, bcrypt, settings, current);
@@ -193,10 +195,11 @@ module.exports = function mountAccount(app, express, root) {
   mountBrowserAssets(app, route, { root, handle, unavailable });
   mountLibrary(app, route, { root, handle, unavailable });
   mountEpisodeSegments(app, route, { root, handle, json, unavailable });
-  const stalkerRequests = mountStalkerStatus(app, route, { root, handle, unavailable, json: express.json({ limit: '256kb' }), downloads, stalker, services: db.services, run: db.run, ready: db.ready });
+  const stalkerRequests = mountStalkerStatus(app, route, { root, handle, unavailable, json: express.json({ limit: '256kb' }), downloads, stalker, services: db.services, run: db.run });
+  const xtreamActive = mountXtream(app, route, { root, handle, json });
   mountProgress(app, route, { handle, json, unavailable, root });
   mountAchievements(app, route, { root, handle, json });
-  mountPlayback(app, route, { root, db, handle, json, unavailable });
-  const streaming = mountStream(app, route, { db, root, readSession: session, updating, express, unavailable });
-  return { ...db, streaming, stalkerActive: () => stalker.active() || stalkerRequests() };
+  const converting = mountPlayback(app, route, { root, db, handle, json, unavailable });
+  const streaming = mountStream(app, route, { db, root, readSession: session, updating, express, unavailable, requestAllowed });
+  return { ...db, streaming: () => streaming() || xtreamActive() || converting(), stalkerActive: () => stalker.active() || stalkerRequests() };
 };
