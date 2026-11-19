@@ -1036,7 +1036,9 @@ function confirmDialog(message, opts){
     var nativeBase = window.__VAULTCAST_APPLICATION_BASE__;
     var nativeBrowse = /^\/search(?:\?|$)/.test(path) || path.indexOf('/featured/synopsis?') === 0 || path === '/featured/synopsis' || path.indexOf('/resolve?') === 0 || /^\/sections(?:$|\/[A-Za-z0-9_-]+\/(?:items|shows|random|recent)(?:\?|$))/.test(path);
     var nativeDetail = /^\/(?:items|shows)\/[a-f0-9]+(?:\?|$)/.test(path);
-    var nativeRoute = (method === 'GET' && (path === '/status' || path === '/me' || path === '/home' || timing || nativeBrowse || nativeDetail || /^\/items\/[a-f0-9]{16}\/next(?:\?|$)/.test(path))) ||
+    var nativeAchievements = method === 'GET' ? /^\/achievements(?:\/pending)?(?:\?|$)/.test(path) :
+      method === 'POST' && /^\/achievements\/(?:toasted|showcase|tick)$/.test(path);
+    var nativeRoute = nativeAchievements || (method === 'GET' && (path === '/status' || path === '/me' || path === '/home' || timing || nativeBrowse || nativeDetail || /^\/items\/[a-f0-9]{16}\/next(?:\?|$)/.test(path))) ||
       (method === 'POST' && (stalkerPreview || path === '/login' || path === '/logout' || (path === '/me/prefs' && !avatarChange) || timing ||
         /^\/items\/[a-f0-9]{16}\/play$/.test(path)));
     var transport = nativeBase && nativeRoute ? fetch(nativeBase + path, fetchOpts).then(function(response){

@@ -1,6 +1,7 @@
 'use strict';
 
-const { readFile } = require('fs').promises;
+const { randomBytes } = require('crypto');
+const { mkdir, readFile, rename, unlink, writeFile } = require('fs').promises;
 const { join } = require('path');
 const { sha, now, parse, enabled, accessState } = require('./account-data');
 
@@ -15,6 +16,20 @@ async function cached(root, key, time = now()) {
     .then(JSON.parse).catch(() => null);
   if (entry?.e == null || (Number(entry.e) !== 0 && Number(entry.e) <= time)) return null;
   return entry.v ?? null;
+}
+
+async function cacheResult(root, key, value, ttl) {
+  const hash = sha(key);
+  const directory = join(root, 'data/cache/kv', hash.slice(0, 2));
+  const target = join(directory, hash + '.json');
+  const temporary = target + '.' + randomBytes(8).toString('hex') + '.tmp';
+  try {
+    await mkdir(directory, { recursive: true, mode: 0o775 });
+    await writeFile(temporary, JSON.stringify({ e: now() + ttl, v: value }), { flag: 'wx', mode: 0o664 });
+    await rename(temporary, target);
+  } catch (error) {
+    await unlink(temporary).catch(() => {});
+  }
 }
 
 const parentalDefaults = { enabled: false, kid: false, ceiling: 5, unrated: 'allow', live: true, play: true, social: true, self_manage: false };
@@ -74,4 +89,4 @@ function authorized(response, current) {
   return false;
 }
 
-module.exports = { cached, parentalStatus, containsMediaCard, authorized };
+module.exports = { cached, cacheResult, parentalStatus, containsMediaCard, authorized };

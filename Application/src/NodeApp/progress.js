@@ -5,7 +5,7 @@ const { join } = require('path');
 const { lockFile } = require('../Workers/file-lock');
 const { documents, enabled, now, sha } = require('./account-data');
 const { authorized } = require('./profile-policy');
-const watchAchievements = require('./watch-achievements');
+const { watchAchievements } = require('./watch-achievements');
 
 const previousViews = "GREATEST(COALESCE(JSON_EXTRACT(payload,'$.viewings'),0), " +
   "CASE WHEN COALESCE(JSON_EXTRACT(payload,'$.watched'),0)=1 OR " +

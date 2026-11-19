@@ -6,7 +6,7 @@ const { tmpdir } = require('os');
 const { now, sha, parse, documents, enabled, publicUser } = require('./account-data');
 const { configHash, phpJson, atomicJson, StalkerProvider } = require('./stalker-provider');
 
-const q = async (pool, sql, args = []) => (await pool.execute(sql, args))[0];
+const { q, transaction } = require('./queries');
 const doc = async (pool, name, fallback = {}) => (await documents(pool, [name]))[name] ?? fallback;
 const save = (pool, name, value) =>
   q(
@@ -102,26 +102,6 @@ const cache = (root, key, value, ttl) => {
     v: value,
   });
 };
-async function transaction(pool, operation) {
-  const connection = await pool.getConnection();
-  let usable = true;
-  try {
-    await connection.beginTransaction();
-    const value = await operation(connection);
-    await connection.commit();
-    return value;
-  } catch (error) {
-    try {
-      await connection.rollback();
-    } catch (failure) {
-      usable = false;
-      connection.destroy();
-    }
-    throw error;
-  } finally {
-    if (usable) connection.release();
-  }
-}
 async function locked(pool, job) {
   const rows = await q(
     pool,

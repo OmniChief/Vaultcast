@@ -1,24 +1,9 @@
 'use strict';
 
-const { randomBytes } = require('crypto');
-const { mkdir, readFile, rename, unlink, writeFile } = require('fs').promises;
+const { readFile } = require('fs').promises;
 const { join } = require('path');
-const { cached } = require('./profile-policy');
-const { enabled, now, sha } = require('./account-data');
-
-async function cacheResult(root, key, value, ttl) {
-  const hash = sha(key);
-  const directory = join(root, 'data/cache/kv', hash.slice(0, 2));
-  const target = join(directory, hash + '.json');
-  const temporary = target + '.' + randomBytes(8).toString('hex') + '.tmp';
-  try {
-    await mkdir(directory, { recursive: true, mode: 0o775 });
-    await writeFile(temporary, JSON.stringify({ e: now() + ttl, v: value }), { flag: 'wx', mode: 0o664 });
-    await rename(temporary, target);
-  } catch (error) {
-    await unlink(temporary).catch(() => {});
-  }
-}
+const { cached, cacheResult } = require('./profile-policy');
+const { enabled, sha } = require('./account-data');
 
 async function providerJson(url) {
   let status = 0;
