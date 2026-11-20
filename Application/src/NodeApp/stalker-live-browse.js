@@ -1,7 +1,7 @@
 'use strict';
 
 const { enabled, sha, parse } = require('./account-data');
-const { take, snapshot, liveKey, q, doc, bound } = require('./stalker-store');
+const { take, snapshot, liveKey, q, doc, bound, cache, provider, page: providerRows } = require('./stalker-store');
 const { country, countries, genre } = require('./stalker-taxonomy');
 const { cached } = require('./profile-policy');
 const { configHash, phpJson } = require('./stalker-provider');
@@ -57,20 +57,16 @@ function validChannel(row) {
   );
 }
 
-function channelPage(data, feed, opts) {
-  const category = take(opts.category, 120);
-  if (!category) throw error('Choose a provider category.');
-  if (!data) return { ok: true, items: [], total: 0, hasMore: false, catalogueLoading: true };
-  const selected = data.categories.find((row) => row.id === category);
-  if (!selected) throw error('Unknown provider category.');
-  const rows = channels(data).filter((row) => category === '*' || String(row.tv_genre_id ?? '') === category);
-  const page = bound(opts.page, 1, 10000),
-    items = [];
-  for (const row of rows.slice((page - 1) * 60, page * 60)) {
-    if (!validChannel(row)) continue;
+function playable(row) {
+  return validChannel(row) && !/[#═━☰]{3,}/u.test(take(row.name ?? row.id, 300));
+}
+
+function present(rows, feed, selected, category, page, total, hasMore) {
+  const items = [];
+  for (const row of rows) {
+    if (!playable(row)) continue;
     const id = String(row.id),
       name = take(row.name ?? id, 300);
-    if (/[#═━☰]{3,}/u.test(name)) continue;
     let xmltvId = String(row.xmltv_id ?? '').trim();
     if (Buffer.byteLength(xmltvId) > 160 || /[\/\\?&=\x00-\x1f]|https?:/i.test(xmltvId)) xmltvId = '';
     const number = /^\+?[1-9]\d*$/.test(String(row.number ?? '').trim()) ? Number(row.number) : 0;
@@ -82,6 +78,8 @@ function channelPage(data, feed, opts) {
       feed: feed.id,
       connection: feed.name,
       kind: 'live',
+      category,
+      page,
       country: code === 'ZZ' ? selected.country : code,
       number: number >= 1 && number <= 1000000 ? number : null,
       xmltvId,
@@ -94,7 +92,95 @@ function channelPage(data, feed, opts) {
       logoUrl: '',
     });
   }
-  return { ok: true, items, page, total: rows.length, hasMore: page * 60 < rows.length };
+  return { ok: true, items, page, total, hasMore };
+}
+
+function channelPage(data, feed, opts) {
+  const category = take(opts.category, 120);
+  if (!category) throw error('Choose a provider category.');
+  if (!data) return { ok: true, items: [], total: 0, hasMore: false, catalogueLoading: true };
+  const selected = data.categories.find((row) => row.id === category);
+  if (!selected) throw error('Unknown provider category.');
+  const rows = channels(data).filter(
+    (row) => playable(row) && (category === '*' || String(row.tv_genre_id ?? '') === category),
+  );
+  const page = bound(opts.page, 1, 10000);
+  return present(rows.slice((page - 1) * 60, page * 60), feed, selected, category, page,
+    rows.length, page * 60 < rows.length);
+}
+
+// A full get_all_channels response is not supported by every Stalker portal. The
+// importer may therefore have no snapshot even though individual pages work.
+// Use short-lived, feed-scoped provider pages without exposing stream commands.
+async function liveCategories(root, feed, signal, refresh = false) {
+  const key = liveKey(feed, 'live-categories:v1');
+  const saved = refresh ? null : await cached(root, key);
+  if (Array.isArray(saved)) return saved;
+  const client = await provider(root, feed, signal);
+  const response = await client.call('itv', 'get_genres');
+  if (!response || typeof response !== 'object' || enabled(response.error) ||
+      response.success === false || response.status === false)
+    throw new Error('Invalid Live TV categories.');
+  const rows = response.data ?? response;
+  if (!rows || typeof rows !== 'object') throw new Error('Invalid Live TV categories.');
+  const categories = [];
+  const seen = new Set();
+  for (const row of Object.values(rows)) {
+    if (!row || row.id == null || typeof row.id === 'object') continue;
+    const id = String(row.id);
+    if (!id || Buffer.byteLength(id) > 120 || /[\x00-\x1f\x7f]/.test(id) || seen.has(id)) continue;
+    seen.add(id);
+    const name = take(String(row.title ?? row.name ?? id).replace(/<[^>]*>/g, '').trim(), 160);
+    categories.push({ id, name, country: country(name), genre: genre(name) });
+    if (categories.length >= 1000) break;
+  }
+  if (!categories.length) categories.push({ id: '*', name: 'All channels', country: 'ZZ', genre: 'General' });
+  await cache(root, key, categories, 600);
+  return categories;
+}
+
+async function liveProviderPage(root, feed, opts, signal) {
+  const category = take(opts.category, 120),
+    number = bound(opts.page, 1, 10000);
+  if (!category) throw error('Choose a provider category.');
+  const categories = await liveCategories(root, feed, signal, enabled(opts.refresh));
+  const selected = categories.find((row) => row.id === category);
+  if (!selected) throw error('Unknown provider category.');
+  const key = liveKey(feed, 'live-page:v1:' + category + ':' + number),
+    sizeKey = liveKey(feed, 'live-page-size:v1:' + category);
+  let saved = opts.refresh ? null : await cached(root, key);
+  if (!saved) {
+    const client = await provider(root, feed, signal);
+    const response = await client.ordered(
+      'itv', { sortby: 'number', genre: category, search: '', fav: 0 }, number, providerRows,
+    );
+    const result = providerRows(response);
+    saved = { rows: result.rows, total: result.total };
+    await cache(root, key, saved, 600);
+    if (number === 1 && result.rows.length) await cache(root, sizeKey, result.rows.length, 600);
+  }
+  const size = number === 1 ? saved.rows.length : await cached(root, sizeKey);
+  const hasMore = saved.rows.length > 0 &&
+    (saved.total == null || !size || number * size < saved.total);
+  return { rows: saved.rows, selected, category, page: number, total: saved.total, hasMore };
+}
+
+async function channelPageFromProvider(root, feed, opts, signal) {
+  const data = await liveProviderPage(root, feed, opts, signal);
+  return present(data.rows, feed, data.selected, data.category, data.page,
+    data.total, data.hasMore);
+}
+
+async function livePageEntry(root, feed, opts, id, signal) {
+  const data = await liveProviderPage(root, feed, opts, signal);
+  const row = data.rows.find((item) => playable(item) && String(item.id) === id);
+  const linkFlag = (value) => /^(?:1|on|yes|true)$/i.test(String(value ?? '').trim())
+    ? true : /^(?:0|off|no|false|)$/i.test(String(value ?? '').trim()) ? false : null;
+  return row?.cmd ? {
+    cmd: String(row.cmd),
+    use_http_tmp_link: linkFlag(row.use_http_tmp_link),
+    use_load_balancing: linkFlag(row.use_load_balancing),
+  } : null;
 }
 
 async function byCountry(root, feeds, expired, opts) {
@@ -224,4 +310,4 @@ async function channelDetail(pool, root, feed, opts, expired) {
     guideError,
   };
 }
-module.exports = { channelPage, channelDetail, byCountry, liveSnapshot };
+module.exports = { channelPage, channelPageFromProvider, liveCategories, livePageEntry, channelDetail, byCountry, liveSnapshot };

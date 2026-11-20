@@ -10,7 +10,7 @@ const { documents, enabled, now, parse, publicUser } = require('./account-data')
 const { configHash } = require('./stalker-provider');
 const { indexed, direct, categoryExport, detail } = require('./stalker-browse');
 const { guidePage } = require('./stalker-guide');
-const { channelDetail, channelPage, liveSnapshot, byCountry } = require('./stalker-live-browse');
+const { channelDetail, channelPage, channelPageFromProvider, liveCategories, livePageEntry, liveSnapshot, byCountry } = require('./stalker-live-browse');
 
 const { takeTicket } = require('../Workers/media-relay');
 const playback = require('./stalker-playback');
@@ -69,6 +69,7 @@ async function viewerCatalogue(
   rawExport,
   libraryAllowed,
   decode,
+  network,
 ) {
   const { action } = request.params;
   const opts = request.query;
@@ -119,7 +120,7 @@ async function viewerCatalogue(
     action === 'stalker_live_guide'
   ) {
     // Snapshot processing needs neither a database connection nor the update lock.
-    return async () => {
+    return network(response, async (signal) => {
       try {
         if (action === 'stalker_countries' || action === 'stalker_browse') {
           return response.json(
@@ -129,6 +130,16 @@ async function viewerCatalogue(
         if (action === 'stalker_live_guide')
           return response.json(await guidePage(root, feed, opts, expired(feed.id), decode));
         const data = expired(feed.id) ? null : await liveSnapshot(root, feed);
+        if ((!data || enabled(opts.refresh)) && !expired(feed.id)) {
+          try {
+            if (action === 'stalker_live_categories')
+              return response.json({ ok: true, categories: await liveCategories(root, feed, signal, enabled(opts.refresh)), catalogueLoading: false });
+            return response.json(await channelPageFromProvider(root, feed, opts, signal));
+          } catch (error) {
+            // An explicit refresh must not hide an otherwise usable saved list.
+            if (!data) throw error;
+          }
+        }
         return response.json(
           action === 'stalker_live_channels'
             ? channelPage(data, feed, opts)
@@ -138,7 +149,7 @@ async function viewerCatalogue(
         if ([422, 502].includes(error.status)) return fail(error.status, error.message);
         throw error;
       }
-    };
+    }, 60000);
   }
   if (!['vod', 'series'].includes(kind)) return fail(422, 'Choose Movies or Series.');
   if (rawExport)
@@ -264,14 +275,20 @@ module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavai
         return fail(403, 'This action requires the iptv_manage permission.');
     }
     const item = await playback.entry(pool, root, feed, id, kind);
-    if (!item?.cmd)
+    const hinted = kind === 'live' && typeof opts.category === 'string' &&
+      opts.category.length > 0 && opts.category.length <= 120 &&
+      /^\d{1,5}$/.test(String(opts.page ?? '')) && Number(opts.page) >= 1 && Number(opts.page) <= 10000;
+    if (!item?.cmd && !hinted)
       return fail(422, 'This catalogue entry is unavailable. Refresh the catalogue and select it again.');
     return network(response, async (signal) => {
+      const selected = item?.cmd ? item : await livePageEntry(root, feed, opts, id, signal);
+      if (!selected?.cmd)
+        return fail(422, 'This channel is no longer on its provider page. Refresh Live TV and select it again.');
       if (action === 'stalker_check_media')
         return response.json(
-          await playback.checkMedia(root, feed, id, kind, item, opts.profile ?? 'stb', signal),
+          await playback.checkMedia(root, feed, id, kind, selected, opts.profile ?? 'stb', signal),
         );
-      const result = await playback.issue(root, feed, id, kind, item, user.id, signal, Boolean(response.locals.stalkerSessionHash));
+      const result = await playback.issue(root, feed, id, kind, selected, user.id, signal, Boolean(response.locals.stalkerSessionHash));
       result.source.url = response.locals.base.slice(0, -1) + result.source.url;
       if (streaming) return response.redirect(307, result.source.url);
       return response.json(result);
@@ -418,7 +435,7 @@ module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavai
       }
 
       if (browsing) return viewerCatalogue(request, response, pool, root, feeds, expired, rawExport,
-        areaAllowed(user,'library',parental), services().decode);
+        areaAllowed(user,'library',parental), services().decode, network);
 
       const worker = await workerRunning('catalogue', 'stalker-library.heartbeat');
       // A status request can wake the native scheduler after a service restart.
