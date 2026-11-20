@@ -376,7 +376,15 @@ module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavai
             return operation(request,response);
           } catch(error) {
             if(response.headersSent||response.destroyed)return;
-            return response.status(error.userError?422:502).json({ok:false,error:error.userError?error.message:'The Stalker operation could not be completed. Existing checkpoints and settings were retained.'});
+            if(error.userError)return response.status(422).json({ok:false,error:error.message});
+            // Report a stable database error code without exposing SQL, MACs,
+            // portal credentials or other private provider information.
+            const code=typeof error.code==='string'&&/^[A-Z][A-Z0-9_]{2,63}$/.test(error.code)?error.code:'';
+            const savingFolders=action==='stalker_catalogue_control'&&request.body?.operation==='folders';
+            console.warn('Node Stalker operation failed', {operation:String(request.body?.operation||action).slice(0,40),code:code||'unknown'});
+            return response.status(502).json({ok:false,error:savingFolders
+              ?'Could not confirm the provider folder save'+(code?' ('+code+')':'')+'. Refresh the folder list before retrying.'
+              :'The Stalker operation could not be completed'+(code?' ('+code+')':'')+'. Existing checkpoints and settings were retained.'});
           }
         };
       }

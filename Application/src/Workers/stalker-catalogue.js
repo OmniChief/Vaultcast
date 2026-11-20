@@ -892,16 +892,19 @@ module.exports = function catalogueWorker(db, root) {
             body.folders.length > 5000
           )
             throw bad('Invalid folder selection.');
-          const ids = body.mode === 'all' ? [] : [...new Set(body.folders)],
-            allowed = new Set(
-              (
-                await q(
-                  connection,
-                  "SELECT DISTINCT folder_id FROM vaultcast_stalker_folders WHERE feed_id=? AND kind=? AND folder_id NOT IN ('','*')",
-                  [feedId, kind],
-                )
-              ).map((row) => row.folder_id),
-            );
+          const ids = body.mode === 'all' ? [] : [...new Set(body.folders)];
+          const previousJob = (
+            await q(connection, 'SELECT config,generation,status,last_hash FROM vaultcast_stalker_jobs WHERE feed_id=? AND kind=? FOR UPDATE', [feedId, kind])
+          )[0];
+          const currentFolders = previousJob ? await q(connection,
+            "SELECT folder_id FROM vaultcast_stalker_folders WHERE feed_id=? AND kind=? AND generation=? AND folder_id NOT IN ('','*')",
+            [feedId, kind, previousJob.generation]) : [];
+          // Prefer the current generation. Older installations may still have
+          // a queued generation with no rows after an earlier selection edit.
+          const knownFolders = currentFolders.length ? currentFolders : await q(connection,
+            "SELECT DISTINCT folder_id FROM vaultcast_stalker_folders WHERE feed_id=? AND kind=? AND folder_id NOT IN ('','*')",
+            [feedId, kind]);
+          const allowed = new Set(knownFolders.map((row) => row.folder_id));
           if (ids.some((id) => typeof id !== 'string' || !allowed.has(id)))
             throw bad('Unknown provider folder. Reload the catalogue folder list.');
           const saved = await doc(connection, 'stalker-catalogue-folder-selection', { sources: {} });
@@ -909,9 +912,6 @@ module.exports = function catalogueWorker(db, root) {
           const previous = saved.sources[feedId + '/' + kind];
           const previousIds = previous?.mode === 'include'
             ? Object.values(previous.ids ?? {}).filter((id) => typeof id === 'string') : [];
-          const previousJob = (
-            await q(connection, 'SELECT config,generation,status,last_hash FROM vaultcast_stalker_jobs WHERE feed_id=? AND kind=? FOR UPDATE', [feedId, kind])
-          )[0];
           const unchanged = previous && previousJob && previousJob.last_hash !== 'discovered' &&
             (previous.mode === 'include' ? 'include' : 'all') === body.mode &&
             previousIds.length === ids.length && ids.every((id) => previousIds.includes(id));
@@ -925,29 +925,32 @@ module.exports = function catalogueWorker(db, root) {
           // so an edit doesn't make the UI appear to forget its selection or
           // require another provider request before scanning can resume.
           if (previousJob?.config === configHash(feed)) {
-            const discovered = await q(connection,
-              "SELECT 1 FROM vaultcast_stalker_folders WHERE feed_id=? AND kind=? AND generation=? AND folder_id<>'' LIMIT 1",
-              [feedId, kind, previousJob.generation]);
-            if (!discovered.length) return;
+            const readFolders = (after) => q(connection,
+              "SELECT folder_id,title FROM vaultcast_stalker_folders WHERE feed_id=? AND kind=? AND generation=? AND folder_id>? ORDER BY folder_id LIMIT 100",
+              [feedId, kind, previousJob.generation, after]);
+            let folders = await readFolders('');
+            if (!folders.length) return;
             const next = (
               await q(connection, 'SELECT generation FROM vaultcast_stalker_jobs WHERE feed_id=? AND kind=?', [feedId, kind])
             )[0];
             await q(connection,
-              `INSERT INTO vaultcast_stalker_folders(feed_id,kind,generation,folder_id,title,status,last_success)
-               SELECT feed_id,kind,?,folder_id,title,
-                 CASE WHEN folder_id='' THEN 'complete' WHEN ?='all' THEN 'pending' ELSE 'skipped' END,
-                 CASE WHEN folder_id='' THEN ? ELSE NULL END
-               FROM vaultcast_stalker_folders
-               WHERE feed_id=? AND kind=? AND generation=?`,
-              [next.generation, body.mode, now(), feedId, kind, previousJob.generation]);
-            if (body.mode === 'include') {
-              for (let offset = 0; offset < ids.length; offset += 250) {
-                const batch = ids.slice(offset, offset + 250);
-                await q(connection,
-                  `UPDATE vaultcast_stalker_folders SET status='pending'
-                   WHERE feed_id=? AND kind=? AND generation=? AND folder_id IN (${batch.map(() => '?').join(',')})`,
-                  [feedId, kind, next.generation, ...batch]);
-              }
+              "INSERT INTO vaultcast_stalker_folders(feed_id,kind,generation,folder_id,title,status,last_success) VALUES(?,?,?,'','Folder discovery','complete',?)",
+              [feedId, kind, next.generation, now()]);
+            const included = new Set(ids);
+            // MariaDB 10.3 on the NAS must not read from the table being
+            // inserted into in the same INSERT ... SELECT statement. Keep
+            // both the reads and the writes bounded for low-memory devices.
+            while (folders.length) {
+              const values = folders.map((folder) => [
+                feedId, kind, next.generation, folder.folder_id, folder.title,
+                body.mode === 'all' || (folder.folder_id !== '*' && included.has(folder.folder_id))
+                  ? 'pending' : 'skipped',
+              ]);
+              await q(connection,
+                'INSERT INTO vaultcast_stalker_folders(feed_id,kind,generation,folder_id,title,status) VALUES ' +
+                  values.map(() => '(?,?,?,?,?,?)').join(','), values.flat());
+              const cursor = folders[folders.length - 1].folder_id;
+              folders = folders.length < 100 ? [] : await readFolders(cursor);
             }
           }
           return;
