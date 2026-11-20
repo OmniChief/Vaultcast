@@ -889,7 +889,7 @@ module.exports = function catalogueWorker(db, root) {
           if (
             !['all', 'include'].includes(body.mode) ||
             !Array.isArray(body.folders) ||
-            body.folders.length > 500
+            body.folders.length > 5000
           )
             throw bad('Invalid folder selection.');
           const ids = body.mode === 'all' ? [] : [...new Set(body.folders)],
@@ -906,9 +906,50 @@ module.exports = function catalogueWorker(db, root) {
             throw bad('Unknown provider folder. Reload the catalogue folder list.');
           const saved = await doc(connection, 'stalker-catalogue-folder-selection', { sources: {} });
           if (!saved.sources || Array.isArray(saved.sources)) saved.sources = {};
+          const previous = saved.sources[feedId + '/' + kind];
+          const previousIds = previous?.mode === 'include'
+            ? Object.values(previous.ids ?? {}).filter((id) => typeof id === 'string') : [];
+          const previousJob = (
+            await q(connection, 'SELECT config,generation,status,last_hash FROM vaultcast_stalker_jobs WHERE feed_id=? AND kind=? FOR UPDATE', [feedId, kind])
+          )[0];
+          const unchanged = previous && previousJob && previousJob.last_hash !== 'discovered' &&
+            (previous.mode === 'include' ? 'include' : 'all') === body.mode &&
+            previousIds.length === ids.length && ids.every((id) => previousIds.includes(id));
           saved.sources[feedId + '/' + kind] = { mode: body.mode, ids };
           await save(connection, 'stalker-catalogue-folder-selection', saved);
+          // Saving an unchanged selection must not discard a running scan.
+          if (unchanged) return;
           await queue(connection, root, feed, kind, true);
+          // The generation change fences in-flight worker pages. Keep the
+          // discovered folder names immediately available in the new generation
+          // so an edit doesn't make the UI appear to forget its selection or
+          // require another provider request before scanning can resume.
+          if (previousJob?.config === configHash(feed)) {
+            const discovered = await q(connection,
+              "SELECT 1 FROM vaultcast_stalker_folders WHERE feed_id=? AND kind=? AND generation=? AND folder_id<>'' LIMIT 1",
+              [feedId, kind, previousJob.generation]);
+            if (!discovered.length) return;
+            const next = (
+              await q(connection, 'SELECT generation FROM vaultcast_stalker_jobs WHERE feed_id=? AND kind=?', [feedId, kind])
+            )[0];
+            await q(connection,
+              `INSERT INTO vaultcast_stalker_folders(feed_id,kind,generation,folder_id,title,status,last_success)
+               SELECT feed_id,kind,?,folder_id,title,
+                 CASE WHEN folder_id='' THEN 'complete' WHEN ?='all' THEN 'pending' ELSE 'skipped' END,
+                 CASE WHEN folder_id='' THEN ? ELSE NULL END
+               FROM vaultcast_stalker_folders
+               WHERE feed_id=? AND kind=? AND generation=?`,
+              [next.generation, body.mode, now(), feedId, kind, previousJob.generation]);
+            if (body.mode === 'include') {
+              for (let offset = 0; offset < ids.length; offset += 250) {
+                const batch = ids.slice(offset, offset + 250);
+                await q(connection,
+                  `UPDATE vaultcast_stalker_folders SET status='pending'
+                   WHERE feed_id=? AND kind=? AND generation=? AND folder_id IN (${batch.map(() => '?').join(',')})`,
+                  [feedId, kind, next.generation, ...batch]);
+              }
+            }
+          }
           return;
         }
         for (const feed of chosen)
