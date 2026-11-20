@@ -202,6 +202,46 @@ final class CompatibilityBrowser {
         if($view==='live')return self::live($id,$page,$query);
         throw new RuntimeException('Page not found.');
     }
+    private static function stalkerRequest(string $action,array $selection): ?array {
+        $session=$_COOKIE[Auth::COOKIE]??'';
+        if(!empty($_SERVER['HTTP_AUTHORIZATION'])||!self::$signed||!is_string($session)
+            ||!preg_match('/^[a-f0-9]{64}$/D',$session)||!NodeRuntime::stalkerCompatibilityReady())return null;
+        if($action==='stalker_play'&&(self::$base!=='/'||!preg_match('/^nginx\b/i',(string)($_SERVER['SERVER_SOFTWARE']??''))))return null;
+        $token=NodeMedia::writeTicket(['purpose'=>'stalker-compat','action'=>$action,'selection'=>$selection,
+            'viewer'=>(string)self::$viewer['id'],'sessionHash'=>hash('sha256',$session)]);
+        if($token===null)return null;
+        try{
+            $context=stream_context_create(['http'=>['timeout'=>$action==='stalker_play'?100:15,
+                'ignore_errors'=>true,'follow_location'=>0,'header'=>'Connection: close']]);
+            $body=@file_get_contents(NodeRuntime::loopback('/application/compat/stalker/'.$token),false,$context,0,4194305);
+            if(in_array('x-vaultcast-app-unavailable: 1',array_map('strtolower',$http_response_header??[]),true))return null;
+            $data=is_string($body)&&strlen($body)<=4194304?json_decode($body,true):null;
+            if(empty($data['ok']))throw new RuntimeException('The selected Stalker request could not be completed.');
+            return $data;
+        }finally{@unlink(STREAM_DATA.'/runtime/node-media/'.$token.'.json');}
+    }
+    private static function stalkerTitles(array $feed,array $options): array {
+        return self::stalkerRequest('stalker_vod_catalogue',$options) ?? StalkerDirect::browse(['feeds'=>[$feed]],$options);
+    }
+    private static function stalkerSource(array $feed,string $id,string $kind): array {
+        $native=self::stalkerRequest('stalker_play',['feed'=>$feed['id'],'id'=>$id,'kind'=>$kind]);
+        if($native!==null){
+            $url=$native['source']['url']??'';
+            if(!is_string($url)||strpos($url,'/netplay/application/live/stalker_stream?')!==0)throw new RuntimeException('Invalid playback selection.');
+            parse_str((string)parse_url($url,PHP_URL_QUERY),$params);
+            return [$url,($params['format']??'')==='.m3u8'];
+        }
+        $url=$kind==='live'?stalker_resolve($feed,$id):stalker_vod_resolve($feed,$id);
+        $ticket=bin2hex(random_bytes(16));
+        \Vaultcast\Repository::cachePut('stalker_play_ticket_'.hash('sha256',$ticket),[
+            'viewer'=>(string)self::$viewer['id'],'feed'=>$feed['id'],'fingerprint'=>hash('sha256',json_encode($feed)),
+            'kind'=>$kind,'id'=>$id,'url'=>$url,'created'=>time(),'item'=>$kind==='live'?null:stalker_vod_entry($feed,$id)
+        ],21600);
+        $hls=(bool)preg_match('/\.m3u8(?:[?#]|$)/i',$kind==='live'?(string)parse_url($url,PHP_URL_PATH):$url);
+        $params=['feed'=>$feed['id'],'channel'=>$id,'ticket'=>$ticket];
+        if($hls)$params['format']='.m3u8';
+        return [self::$base.'api/live/stalker_stream?'.http_build_query($params,'','&',PHP_QUERY_RFC3986),$hls];
+    }
     /** Samsung-safe Stalker country browsing across all enabled connections. */
     private static function stalker(int $page): string {
         self::allow('live');
@@ -267,7 +307,8 @@ final class CompatibilityBrowser {
         // JavaScript, or upfront live channel scan is required.
         foreach($feeds as $feed){
             try{
-                $categories=StalkerLiveBrowse::categories($feed)['categories'];
+                $data=self::stalkerRequest('stalker_live_categories',['feed'=>$feed['id']]) ?? StalkerLiveBrowse::categories($feed);
+                $categories=$data['categories'];
                 foreach($categories as $folder){
                     $folder['feed']=$feed['id'];$folder['connection']=$feed['name'];
                     $folder['name']=$cleanLabel((string)$folder['name']);
@@ -337,7 +378,8 @@ final class CompatibilityBrowser {
             $feed=null;foreach($feeds as $candidate)if((string)$candidate['id']===(string)$source['feed']){$feed=$candidate;break;}
             if(!$feed)continue;
             try{
-                $data=StalkerLiveBrowse::channels($feed,['category'=>$source['id'],'page'=>$page]);
+                $options=['feed'=>$feed['id'],'category'=>$source['id'],'page'=>$page];
+                $data=self::stalkerRequest('stalker_live_channels',$options) ?? StalkerLiveBrowse::channels($feed,$options);
                 $more=$more||!empty($data['hasMore']);
                 foreach($data['items']??[] as $item)$channels[]=$item;
             }catch(Throwable $e){$failures[]=$source['connection'].' · '. $source['name'];}
@@ -395,19 +437,7 @@ final class CompatibilityBrowser {
             try{
                 $feed=null;foreach($feeds as $candidate)if((string)$candidate['id']===$selectedFeed){$feed=$candidate;break;}
                 if(!$feed)throw new RuntimeException('Connection unavailable.');
-                $ticket=bin2hex(random_bytes(16));$url=stalker_resolve($feed,(string)$item['id']);
-                \Vaultcast\Repository::cachePut('stalker_play_ticket_'.hash('sha256',$ticket),[
-                    'viewer'=>(string)self::$viewer['id'],'feed'=>$feed['id'],
-                    'fingerprint'=>hash('sha256',json_encode($feed)),
-                    'kind'=>'live','id'=>(string)$item['id'],'url'=>$url,'created'=>time(),'item'=>null
-                ],21600);
-                // Do not force HLS: some portals return continuous MPEG-TS or
-                // a regular media file, which legacy Tizen may handle natively.
-                $hls=(bool)preg_match('/\\.m3u8(?:[?#]|$)/i',(string)parse_url($url,PHP_URL_PATH));
-                $stream=self::$base.'api/live/stalker_stream?'.http_build_query([
-                    'feed'=>$feed['id'],'channel'=>$item['id'],'ticket'=>$ticket
-                ],'','&',PHP_QUERY_RFC3986);
-                if($hls)$stream.='&format=.m3u8';
+                [$stream,$hls]=self::stalkerSource($feed,(string)$item['id'],'live');
                 if($hls)$html.='<p class="compat-note">This provider supplied an HLS playlist. Older Tizen browsers may not support HLS; Vaultcast cannot change the provider format without transcoding.</p>';
                 $html.=self::player($stream,false,[],['hls'=>$hls]);
             }catch(Throwable $e){$html.='<p class="compat-note">Playback unavailable. Try another connection or retry the channel.</p>';}
@@ -457,7 +487,7 @@ final class CompatibilityBrowser {
             $feed=$feedById[$selectedFeed]??null;
             if(!$feed)return '<p>This series connection is no longer available.</p>'.self::link('Back to Series',$base+['lang'=>$lang]);
             $html.=self::link('Back to Series',$base+['lang'=>$lang]).'<h3>Seasons and episodes</h3>';
-            try{$data=StalkerDirect::browse(['feeds'=>[$feed]],['kind'=>'series','feed'=>$feed['id'],'parent'=>$parent,'page'=>$page]);}
+            try{$data=self::stalkerTitles($feed,['kind'=>'series','feed'=>$feed['id'],'parent'=>$parent,'page'=>$page]);}
             catch(Throwable $e){return $html.'<p>Could not retrieve the current episodes.</p>';}
             $items=$data['items']??[];
             usort($items,static function($a,$b){
@@ -482,7 +512,7 @@ final class CompatibilityBrowser {
         $folders=[];$errors=[];
         foreach($feeds as $feed){
             try{
-                $data=StalkerDirect::browse(['feeds'=>[$feed]],['kind'=>$kind,'feed'=>$feed['id'],'categories_only'=>1]);
+                $data=self::stalkerTitles($feed,['kind'=>$kind,'feed'=>$feed['id'],'categories_only'=>1]);
                 foreach($data['categories']??[] as $category){
                     $folders[]=['feed'=>$feed['id'],'connection'=>$feed['name'],'id'=>(string)$category['id'],
                         'name'=>$name((string)$category['name']),'language'=>$language((string)$category['name'])];
@@ -531,7 +561,7 @@ final class CompatibilityBrowser {
             $feed=$feedById[$src['feed']]??null;
             if(!$feed)continue;
             try{
-                $data=StalkerDirect::browse(['feeds'=>[$feed]],[
+                $data=self::stalkerTitles($feed,[
                     'kind'=>$kind,'feed'=>$feed['id'],'category'=>$src['id'],'q'=>$query,'page'=>$page
                 ]);
                 $more=$more||!empty($data['hasMore']);
@@ -584,19 +614,7 @@ final class CompatibilityBrowser {
     /** Playback remains ticket-scoped and uses the existing Samsung-safe player. */
     private static function stalkerOnDemandPlayer(array $feed,array $item): string {
         try{
-            $id=(string)$item['id'];$url=stalker_vod_resolve($feed,$id);
-            $ticket=bin2hex(random_bytes(16));
-            \Vaultcast\Repository::cachePut('stalker_play_ticket_'.hash('sha256',$ticket),[
-                'viewer'=>(string)self::$viewer['id'],'feed'=>$feed['id'],
-                'fingerprint'=>hash('sha256',json_encode($feed)),
-                'kind'=>(string)($item['kind']??'vod'),'id'=>$id,'url'=>$url,'created'=>time(),
-                'item'=>stalker_vod_entry($feed,$id)
-            ],21600);
-            $stream=self::$base.'api/live/stalker_stream?'.http_build_query([
-                'feed'=>$feed['id'],'channel'=>$id,'ticket'=>$ticket
-            ],'','&',PHP_QUERY_RFC3986);
-            $hls=(bool)preg_match('/\.m3u8(?:[?#]|$)/i',$url);
-            if($hls)$stream.='&format=.m3u8';
+            [$stream,$hls]=self::stalkerSource($feed,(string)$item['id'],(string)($item['kind']??'vod'));
             return '<h3>'.self::esc($item['name']??'Provider video').'</h3>'.self::player($stream,false,[],['hls'=>$hls]);
         }catch(Throwable $e){
             return '<p class="compat-note">Provider video unavailable. Try another connection or return to the catalogue.</p>';
@@ -628,8 +646,21 @@ final class CompatibilityBrowser {
             if(($channel['kind'] ?? '')==='iptv'){
                 $src=null;foreach(iptv_lineup_channels() as $entry)if($entry['id']===$channel['iptvId'])$src=$entry;
                 if(!$src||empty($src['url']))throw new RuntimeException('IPTV source unavailable.');$url=$src['url'];
-                if(preg_match('/[.]m3u8(?:[?]|$)/i',$url)){$url=self::$base.'api/live/iptv_hls?'.http_build_query(['u'=>$url,'jar'=>bin2hex(random_bytes(8))]+(!empty($src['userAgent'])?['ua'=>$src['userAgent']]:[])+(!empty($src['referrer'])?['ref'=>$src['referrer']]:[]),'','&',PHP_QUERY_RFC3986);}
-                $html.=self::player($url,false,[],['hls'=>(bool)preg_match('/[.]m3u8(?:[?]|$)/i',$src['url'])]);
+                parse_str((string)parse_url($url,PHP_URL_QUERY),$params);
+                $isStalker=is_string($params['feed']??null)&&is_string($params['channel']??null)
+                    &&$url===stalker_channel_url($params['feed'],$params['channel']);
+                if($isStalker){
+                    $feed=iptv_feed_by_id(iptv_load(),$params['feed']);
+                    if(!$feed||($feed['type']??'')!=='stalker'||empty($feed['enabled']))throw new RuntimeException('Portal source unavailable.');
+                    // The stream endpoint applies the saved-lineup access policy on older installs.
+                    if(!Parental::filtering()){
+                        $native=self::stalkerRequest('stalker_play',['feed'=>$feed['id'],'id'=>$params['channel'],'kind'=>'live']);
+                        if($native!==null)$url=$native['source']['url'];
+                    }
+                }elseif(preg_match('/[.]m3u8(?:[?]|$)/i',$url)){
+                    $url=self::$base.'api/live/iptv_hls?'.http_build_query(['u'=>$url,'jar'=>bin2hex(random_bytes(8))]+(!empty($src['userAgent'])?['ua'=>$src['userAgent']]:[])+(!empty($src['referrer'])?['ref'=>$src['referrer']]:[]),'','&',PHP_QUERY_RFC3986);
+                }
+                $html.=self::player($url,false,[],['hls'=>(bool)preg_match('/[.]m3u8(?:[?]|$)/i',$isStalker?$url:$src['url'])]);
             }else{
                 $now=(int)round(microtime(true)*1000);$block=relay_air_block($station,$id,$now);
                 if(!empty($block['url'])){$url=$block['url'];if(preg_match('#(?:^|/)api[.]php[?]action=([a-z_]+)&?(.*)$#',$url,$m))$url=self::$base.'api/live/'.$m[1].(!empty($m[2])?'?'.$m[2]:'');if(!preg_match('#^(?:https?://|/)#i',$url))$url=self::$base.'live/'.$url;
@@ -738,8 +769,8 @@ final class CompatibilityBrowser {
             if($at!==false)$body=substr_replace($body,'<div class="compat-heading compat-section-heading">'.self::artwork($view),$at,strlen($heading));
         }
         $body=str_replace(['<section ','</section>'],['<div ','</div>'],$body);
-        $css=(string)file_get_contents(STREAM_ROOT.'/assets/css/compatibility.css');$scriptVersion=substr(hash_file('sha256',STREAM_ROOT.'/assets/js/compatibility.js'),0,16);release_request_locks();
+        $cssVersion=substr(hash_file('sha256',STREAM_ROOT.'/assets/css/compatibility.css'),0,16);$scriptVersion=substr(hash_file('sha256',STREAM_ROOT.'/assets/js/compatibility.js'),0,16);release_request_locks();
         header('Content-Type: text/html; charset=utf-8');
-        echo '<!DOCTYPE html><html lang="en"><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'.self::esc($site).'</title><style>'.$css.'</style></head><body class="'.self::esc('compat-'.self::$theme.' ').(self::preference('home_compact',false)?'compat-compact':'').'"><a class="compat-skip" href="#compat-content">Skip to content</a>'.$nav.'<div id="compat-shell"><div id="compat-content" role="main">'.$body.'</div><div class="compat-footer"><span>Compatibility mode · '.self::esc(STREAM_VERSION).'</span><a href="'.self::esc($base.'?compat=auto').'">Automatic detection</a><a href="'.self::esc($base.'?compat=off').'">Full interface</a></div></div><script>window.__VC_COMPAT_BASE__='.json_encode($base,JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT).';</script><script src="'.self::esc($base.'index.php?asset=assets/js/compatibility.js&v='.$scriptVersion).'"></script></body></html>';
+        echo '<!DOCTYPE html><html lang="en"><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'.self::esc($site).'</title><link rel="stylesheet" href="'.self::esc(AssetDelivery::url($base,'assets/css/compatibility.css',$cssVersion)).'"></head><body class="'.self::esc('compat-'.self::$theme.' ').(self::preference('home_compact',false)?'compat-compact':'').'"><a class="compat-skip" href="#compat-content">Skip to content</a>'.$nav.'<div id="compat-shell"><div id="compat-content" role="main">'.$body.'</div><div class="compat-footer"><span>Compatibility mode · '.self::esc(STREAM_VERSION).'</span><a href="'.self::esc($base.'?compat=auto').'">Automatic detection</a><a href="'.self::esc($base.'?compat=off').'">Full interface</a></div></div><script>window.__VC_COMPAT_BASE__='.json_encode($base,JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT).';</script><script src="'.self::esc(AssetDelivery::url($base,'assets/js/compatibility.js',$scriptVersion)).'"></script></body></html>';
     }
 }

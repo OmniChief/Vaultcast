@@ -491,19 +491,61 @@ class ConsoleProgress:
 
 class ChunkUploader:
     """Keep one connection open across bounded, individually acknowledged chunks."""
-    def __init__(self, url, headers):
+    def __init__(self, url, headers, relay_url=None, get_grant=None):
         self.url = url
         self.target = urllib.parse.urlsplit(url)
         self.headers = headers
         self.connection = None
         self.last_timing = None
+        self.relay_url = relay_url
+        self.get_grant = get_grant
+        self.relay = None
+        self.relay_until = 0
 
     def close(self):
+        if self.relay:
+            try: self.relay.disconnect()
+            except Exception: pass
+        self.relay = None
         if self.connection:
             self.connection.close()
         self.connection = None
 
+    def relay_chunk(self, chunk, offset, on_sent):
+        if not self.get_grant:
+            return False
+        if not self.relay or time.monotonic() >= self.relay_until:
+            self.close()
+            try:
+                import socketio
+                ticket = self.get_grant().get("upload_ticket")
+                if not isinstance(ticket, str) or len(ticket) != 48:
+                    self.get_grant = None
+                    return False
+                self.relay = socketio.Client(reconnection=False)
+                self.relay.connect(self.relay_url, auth={"ticket":ticket}, transports=["websocket"],
+                                   namespaces=["/conversion-upload"], socketio_path="netplay/socket.io", wait_timeout=5)
+                self.relay_until = time.monotonic() + 40
+            except Exception:
+                self.close()
+                self.get_grant = None
+                return False
+        started = time.monotonic()
+        try:
+            ack = self.relay.call("chunk", (offset, chunk), namespace="/conversion-upload", timeout=30)
+            if not isinstance(ack, dict) or not ack.get("ok") or ack.get("received") != offset + len(chunk):
+                raise OSError("Conversion relay could not confirm the chunk.")
+        except Exception as error:
+            self.close()
+            self.get_grant = None
+            raise OSError("Conversion relay interrupted; checking the saved offset.") from error
+        self.last_timing = {"send": 0, "response": time.monotonic() - started, "server": "Node relay"}
+        on_sent(offset + len(chunk))
+        return True
+
     def send(self, chunk, offset, on_sent):
+        if self.relay_chunk(chunk, offset, on_sent):
+            return
         started = time.monotonic()
         if self.connection is None:
             constructor = http.client.HTTPSConnection if self.target.scheme == "https" else http.client.HTTPConnection
@@ -1238,7 +1280,10 @@ def run_encoding(cfg, job, request):
                     raise RuntimeError("Invalid server upload offset.")
                 transferred(sent, size, 90, 9)
                 chunk_size = max(262144, min(4194304, int(job.get("upload_chunk_bytes", 1048576))))
-                uploader = ChunkUploader(base + "/chunk", headers)
+                def get_grant():
+                    return request(base + "/status", "POST", {"node_upload":True}, headers, timeout=15)
+
+                uploader = ChunkUploader(base + "/chunk", headers, cfg["server"], get_grant)
                 try:
                     if not remote.get("uploaded"):
                         recovered = upload_file(output, size, sent, chunk_size, uploader, get_status,

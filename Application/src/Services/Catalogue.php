@@ -492,7 +492,6 @@ class Catalogue {
 
         $items = [];
         $sectionMeta = [];
-        $idCounter = 0;
 
         foreach ($sections as $sec) {
             if (empty($sec['enabled'])) continue;
@@ -509,7 +508,7 @@ class Catalogue {
             }
             $exclude = $sec['exclude_paths'] ?? [];
             $type = $sec['type'] ?? 'movies';
-            $found = self::scanPath($path, $type, $sec['id'], $videoExt, $audioExt, $romExt, $maxDepth, $exclude, $idCounter);
+            $found = self::scanPath($path, $type, $sec['id'], $videoExt, $audioExt, $romExt, $maxDepth, $exclude);
             foreach ($found as $it) {
                 $items[$it['id']] = $it;
             }
@@ -550,7 +549,7 @@ class Catalogue {
         $savedMeta=\Vaultcast\Repository::document('catalogue',[]);
         $cat['item_count']=$savedMeta['item_count'] ?? $cat['item_count'];
         $sectionMeta=$savedMeta['sections'] ?? $sectionMeta;
-        Store::invalidate('catalogue'); self::invalidateDerivedCaches();
+        Store::invalidate('catalogue');
         return [
             'ok' => true,
             'scanned_at' => $cat['scanned_at'],
@@ -567,8 +566,7 @@ class Catalogue {
         array $audioExt,
         array $romExt,
         int $maxDepth,
-        array $exclude,
-        int &$idCounter
+        array $exclude
     ): array {
         $out = [];
         $rootReal = \Vaultcast\Paths::real($root);
@@ -580,10 +578,17 @@ class Catalogue {
             if ($r) $excludeReals[] = $r;
         }
 
-        $iterator = new RecursiveIteratorIterator(
-            new RecursiveDirectoryIterator($rootReal, FilesystemIterator::SKIP_DOTS),
-            RecursiveIteratorIterator::SELF_FIRST
-        );
+        $directory = new RecursiveDirectoryIterator($rootReal, FilesystemIterator::SKIP_DOTS);
+        if ($excludeReals) {
+            $directory = new RecursiveCallbackFilterIterator($directory, static function (SplFileInfo $entry) use ($excludeReals): bool {
+                $path = str_replace('\\', '/', $entry->getPathname());
+                foreach ($excludeReals as $excluded) {
+                    if ($path === $excluded || strpos($path, rtrim($excluded, '/') . '/') === 0) return false;
+                }
+                return true;
+            });
+        }
+        $iterator = new RecursiveIteratorIterator($directory, RecursiveIteratorIterator::SELF_FIRST);
         $iterator->setMaxDepth($maxDepth);
 
         $allowed = $type === 'music' ? $audioExt : $videoExt;
@@ -593,17 +598,12 @@ class Catalogue {
             $allowed = $romExt;
         }
 
+        $artwork = [];
         foreach ($iterator as $file) {
             Maintenance::checkpoint();
             /** @var SplFileInfo $file */
             if (!$file->isFile()) continue;
             $full = str_replace('\\', '/', $file->getPathname());
-            $skip = false;
-            foreach ($excludeReals as $ex) {
-                if ($full === $ex || strpos($full, rtrim($ex, '/') . '/') === 0) { $skip = true; break; }
-            }
-            if ($skip) continue;
-
             $ext = strtolower($file->getExtension());
             if (!in_array($ext, $allowed, true)) continue;
             // EmulatorJS only needs the .bin for PS1 — ignore sibling .cue (Mega Drive also uses .bin).
@@ -614,10 +614,7 @@ class Catalogue {
 
             $rel = substr($full, strlen($rootReal) + 1);
             $rel = str_replace('\\', '/', $rel);
-            $idCounter++;
-            $id = substr(sha1($sectionId . '|' . $rel), 0, 16);
-
-            $item = self::buildItem($full, $rel, $rootReal, $sectionId, $type, $videoExt, $audioExt, (int)$file->getSize(), (int)$file->getMTime());
+            $item = self::buildItem($full, $rel, $rootReal, $sectionId, $type, $videoExt, $audioExt, (int)$file->getSize(), (int)$file->getMTime(), $artwork);
             $out[] = $item;
         }
         return $out;
@@ -628,7 +625,7 @@ class Catalogue {
      * one catalogue item from a file (shared by rescan, single-file ingest and re-parse).
      * Applies saved metadata overrides (Matching) last so manual / matched labels survive rescans.
      */
-    public static function buildItem(string $full, string $rel, string $rootReal, string $sectionId, string $type, array $videoExt, array $audioExt, ?int $size = null, ?int $mtime = null): array {
+    public static function buildItem(string $full, string $rel, string $rootReal, string $sectionId, string $type, array $videoExt, array $audioExt, ?int $size = null, ?int $mtime = null, ?array &$artwork = null): array {
         $ext = strtolower(pathinfo($full, PATHINFO_EXTENSION));
         $id = substr(sha1($sectionId . '|' . $rel), 0, 16);
         if(self::$directPlayProfiles===null)self::$directPlayProfiles=Store::get('directplay_profiles',[]);
@@ -676,24 +673,26 @@ class Catalogue {
             $item['system'] = self::guessSystemFolder($rel);
         }
         if(!empty($profile['original_removed']) && !empty($profile['source']))$item['caption_source']=$profile['source'];
-        $poster = self::findPoster(dirname($full), $full);
-        if (!$poster && ($type === 'tv' || $type === 'anime') && !empty($title['show'])) {
-            $parts = explode('/', $rel);
-            $showRoot = $rootReal . '/' . $parts[0];
-            $poster = self::findPoster($showRoot);
-            if ($poster) $item['show_poster'] = $poster;
-        }
-        if ($poster) $item['poster'] = $poster;
+        if ($artwork !== null && count($artwork) >= 2048) $artwork = [];
+        $poster = self::findPoster(dirname($full), $full, $artwork);
         if (($type === 'tv' || $type === 'anime') && !empty($title['show'])) {
-            $parts = explode('/', $rel);
-            $showRoot = $rootReal . '/' . $parts[0];
-            $sp = self::findPoster($showRoot);
-            if ($sp) $item['show_poster'] = $sp;
+            $showRoot = $rootReal . '/' . explode('/', $rel, 2)[0];
+            $showPoster = self::findPoster($showRoot, null, $artwork);
+            if ($showPoster) $item['show_poster'] = $showPoster;
+            $poster = $poster ?: $showPoster;
             if ($title['season'] !== null && class_exists('Posters')) {
-                $ssp = Posters::findLocalSeasonArt($showRoot, (int)$title['season']);
-                if ($ssp) $item['season_poster'] = $ssp;
+                $season = (int)$title['season'];
+                $key = 'season:' . $season . ':' . $showRoot;
+                if ($artwork !== null && array_key_exists($key, $artwork)) {
+                    $seasonPoster = $artwork[$key];
+                } else {
+                    $seasonPoster = Posters::findLocalSeasonArt($showRoot, $season);
+                    if ($artwork !== null) $artwork[$key] = $seasonPoster;
+                }
+                if ($seasonPoster) $item['season_poster'] = $seasonPoster;
             }
         }
+        if ($poster) $item['poster'] = $poster;
         if (class_exists('Matching')) {
             $item = Matching::applyOverride($item);
         }
@@ -1003,11 +1002,22 @@ class Catalogue {
         return $raw;
     }
 
-    private static function findPoster(string $dir, ?string $mediaPath = null): ?string {
-        foreach (['poster.jpg','poster.png','folder.jpg','cover.jpg','cover.png','Poster.jpg'] as $name) {
-            $p = $dir . '/' . $name;
-            if (is_file($p)) return $p;
+    private static function findPoster(string $dir, ?string $mediaPath = null, ?array &$artwork = null): ?string {
+        $key = 'folder:' . $dir;
+        if ($artwork !== null && array_key_exists($key, $artwork)) {
+            $folderPoster = $artwork[$key];
+        } else {
+            $folderPoster = null;
+            foreach (['poster.jpg','poster.png','folder.jpg','cover.jpg','cover.png','Poster.jpg'] as $name) {
+                $path = $dir . '/' . $name;
+                if (is_file($path)) {
+                    $folderPoster = $path;
+                    break;
+                }
+            }
+            if ($artwork !== null) $artwork[$key] = $folderPoster;
         }
+        if ($folderPoster !== null) return $folderPoster;
         if ($mediaPath !== null) {
             $stem = pathinfo($mediaPath, PATHINFO_FILENAME);
             foreach (['jpg','jpeg','png','webp'] as $ext) {
@@ -2300,6 +2310,7 @@ class Catalogue {
         $audioExt = array_map('strtolower', $scan['audio_extensions'] ?? ['mp3','flac','aac']);
         $rootReals = [];
         $built = [];
+        $artwork = [];
         foreach (array_values($files) as $i => $f) {
             $built[$i] = null;
             $fullPath = (string)($f[0] ?? ''); $sectionId = (string)($f[1] ?? '');
@@ -2311,7 +2322,7 @@ class Catalogue {
             if ($rootReal === false || $fullReal === false || !is_file($fullReal)) continue;
             if (strpos($fullReal, $rootReal . '/') !== 0 && $fullReal !== $rootReal) continue;
             $rel = str_replace('\\', '/', substr($fullReal, strlen($rootReal) + 1));
-            $built[$i] = self::buildItem($fullReal, $rel, $rootReal, $sectionId, $section['type'] ?? 'movies', $videoExt, $audioExt);
+            $built[$i] = self::buildItem($fullReal, $rel, $rootReal, $sectionId, $section['type'] ?? 'movies', $videoExt, $audioExt, null, null, $artwork);
         }
         if (!array_filter($built)) return $built;
 

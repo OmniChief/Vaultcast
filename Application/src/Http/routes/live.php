@@ -320,7 +320,8 @@ if ($__liveAction !== null) {
             if ($__liveAction==='stalker_catalogue_control') {Permissions::require('iptv_manage');json_out(StalkerCatalogues::control($body));}
             if ($__liveAction==='stalker_vod_catalogue') {
                 if(!empty($body['raw_categories_export']))Permissions::require('iptv_manage');
-                json_out(StalkerCatalogues::localArtwork(!empty($body['indexed'])?StalkerLibrary::browse($state,$body):StalkerDirect::browse($state,$body)));
+                // VOD artwork URLs are already stored with the imported metadata.
+                json_out(!empty($body['indexed'])?StalkerLibrary::browse($state,$body):StalkerDirect::browse($state,$body));
             }
             if ($__liveAction==='stalker_vod_probe') {Permissions::require('iptv_manage');json_out(StalkerDirect::probe($state,$body));}
             if ($__liveAction==='stalker_vod_fields') {Permissions::require('iptv_manage');json_out(StalkerDirect::catalogueFieldProbe($state,$body));}
@@ -372,12 +373,13 @@ if ($__liveAction !== null) {
             if ($__liveAction==='stalker_live_guide') json_out(StalkerCatalogues::localArtwork(StalkerLiveBrowse::guidePage($feed,$body)));
             if ($__liveAction==='stalker_browse') {
                 if(!empty($body['raw_categories_export']))Permissions::require('iptv_manage');
-                json_out(StalkerCatalogues::localArtwork(in_array((string)($body['kind']??'live'),['vod','series'],true)?StalkerDirect::browse(['feeds'=>[$feed]],$body):stalker_catalogue($feed,$body)));
+                if(in_array((string)($body['kind']??'live'),['vod','series'],true))json_out(StalkerDirect::browse(['feeds'=>[$feed]],$body));
+                json_out(StalkerCatalogues::localArtwork(stalker_catalogue($feed,$body)));
             }
             if ($__liveAction==='stalker_vod_detail') {
                 $item=stalker_vod_entry($feed,(string)($body['id']??''));
                 if(!$item)throw new RuntimeException('This catalogue entry has expired. Return to Stalker and refresh the catalogue.');
-                json_out(StalkerCatalogues::localArtwork(['ok'=>true,'item'=>$item['metadata']??['id'=>(string)$body['id'],'name'=>'Provider video','kind'=>'vod','playable'=>true]]));
+                json_out(['ok'=>true,'item'=>$item['metadata']??['id'=>(string)$body['id'],'name'=>'Provider video','kind'=>'vod','playable'=>true]]);
             }
             if ($__liveAction==='stalker_channel') json_out(StalkerCatalogues::localArtwork(stalker_channel_detail($feed,(string)($body['id']??''),!empty($body['refresh']),($body['guide']??'1')!=='0')));
             $kind=(string)($body['kind'] ?? 'live');$id=(string)($body['id'] ?? '');
@@ -385,10 +387,13 @@ if ($__liveAction !== null) {
             if($__liveAction==='stalker_check_media')json_out(stalker_check_media($feed,$id,$kind,(string)($body['profile']??'stb')));
             // Resolve playback links once, before issuing the viewer-scoped ticket.
             // The media request reuses this link while it is fresh.
-            $url=$kind==='live'?stalker_resolve($feed,$id):stalker_vod_resolve($feed,$id);
+            $started=microtime(true);
+            $item=$kind==='live'?null:stalker_vod_entry($feed,$id);
+            $url=$kind==='live'?stalker_resolve($feed,$id):stalker_vod_resolve($feed,$id,$item);
+            if(class_exists('RequestTiming',false))RequestTiming::add('stalker_link',$started);
             $ticket=bin2hex(random_bytes(16));
             $key='stalker_play_ticket_'.hash('sha256',$ticket);
-            \Vaultcast\Repository::cachePut($key,['viewer'=>(string)$viewer['id'],'feed'=>$feed['id'],'fingerprint'=>hash('sha256',json_encode($feed)),'kind'=>$kind,'id'=>$id,'url'=>$url,'created'=>time(),'item'=>$kind==='live'?null:stalker_vod_entry($feed,$id)],21600);
+            \Vaultcast\Repository::cachePut($key,['viewer'=>(string)$viewer['id'],'feed'=>$feed['id'],'fingerprint'=>hash('sha256',json_encode($feed)),'kind'=>$kind,'id'=>$id,'url'=>$url,'created'=>time(),'item'=>$item],21600);
             $source=rtrim(\Vaultcast\Database::basePath(),'/').'/api/live/stalker_stream?feed='.rawurlencode($feed['id']).'&channel='.rawurlencode($id).'&ticket='.$ticket;
             if ($kind==='live' || preg_match('/\.m3u8(?:[?#]|$)/i',$url)) $source.='&format=.m3u8';
             json_out(['ok'=>true,'source'=>['url'=>$source,'kind'=>$kind]]);
@@ -416,9 +421,14 @@ if ($__liveAction !== null) {
                 $ticketState=\Vaultcast\Repository::cacheGet('stalker_play_ticket_'.hash('sha256',(string)$_GET['ticket']));
                 if (!$ticketState || $ticketState['viewer']!==(string)$portalViewer['id'] || $ticketState['feed']!==$feed['id'] || $ticketState['id']!==$id || $ticketState['fingerprint']!==hash('sha256',json_encode($feed))) live_bridge_deny(403,'Playback selection expired. Select the title again.');
             }
-            $saved = false;
-            foreach (iptv_lineup_channels() as $channel) if ($channel['url'] === stalker_channel_url($feed['id'], $id)) { $saved = true; break; }
-            if (!$saved && !$ticketState) Permissions::require('iptv_manage');
+            if (!$ticketState) {
+                $saved = false;
+                $lineupUrl = stalker_channel_url($feed['id'], $id);
+                foreach (iptv_lineup_channels() as $channel) {
+                    if ($channel['url'] === $lineupUrl) { $saved = true; break; }
+                }
+                if (!$saved) Permissions::require('iptv_manage');
+            }
             $playback = (string)($_GET['playback'] ?? $_GET['ticket'] ?? bin2hex(random_bytes(16)));
             if (!preg_match('/^[a-zA-Z0-9_-]{1,80}$/D',$playback)) live_bridge_deny(422,'Invalid playback session.');
             $playbackKey = 'stalker_playback_v3_'.hash('sha256',json_encode([$portalViewer['id'],$feed,$id,$playback]));
@@ -447,6 +457,7 @@ if ($__liveAction !== null) {
             // Preserve hosts discovered in nested playlists on subsequent playlist reloads.
             if (!is_file($allow) && @file_put_contents($allow,$host."\n",LOCK_EX)===false) throw new RuntimeException('Could not authorise portal playback.');
             @chmod($allow,0600);
+            if (in_array($_SERVER['REQUEST_METHOD'] ?? '', ['GET', 'HEAD'], true)) NodeMedia::handoff('stalker_stream');
             iptv_hls_proxy_request($ticketState && $ticketState['kind']!=='live' && strpos($id,'series:')===0);
         } catch (InvalidArgumentException $e) { live_bridge_deny(422,$e->getMessage()); }
           catch (RuntimeException $e) { live_bridge_deny(502,$e->getMessage()); }
@@ -600,6 +611,7 @@ try {
     // Serve proxied HLS playlists and media before setting JSON headers.
     if ($action === 'iptv_hls' && ($_SERVER['REQUEST_METHOD'] === 'GET' || $_SERVER['REQUEST_METHOD'] === 'HEAD')) {
         require_once STREAM_ROOT . '/src/Live/iptv_hls.php';
+        NodeMedia::handoff();
         iptv_hls_proxy_request();
         exit;
     }

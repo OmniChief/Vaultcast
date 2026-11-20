@@ -48,8 +48,8 @@
     options.forEach(function(o){ wrap.appendChild(h('button', { type:'button', className:'vc-seg-btn' + (o[0] === value ? ' active' : ''), 'aria-pressed':String(o[0] === value), text:o[1], onClick:function(){ onChange(o[0]); } })); });
     return wrap;
   }
-  function stopAll(){ if (current && current.destroy) current.destroy(); current = null; if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; } }
-  var current = null, pollTimer = null;
+  function stopAll(){ stopQuizWait(); if (current && current.destroy) current.destroy(); current = null; if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; } }
+  var current = null, pollTimer = null, quizWait = null;
 
   // ------------------------------------------------------------------ friends picker (challenge / chess)
   function pickFriend(title, onPick){
@@ -610,21 +610,46 @@
     return el;
   }
   function joinUrl(code){ var base = A.BASE || '/'; return location.origin + base + 'play/quiz/' + code; }
+  function stopQuizWait(){
+    if (!quizWait) return;
+    var abort = quizWait;
+    quizWait = null;
+    abort.abort();
+  }
+  function followQuiz(j, poll) {
+    var fallback = document.hidden ? 4000 : 1000;
+    if (!j.events || !window.AbortController || !/^\/netplay\/runtime\/events\/[a-f0-9]{48}$/.test(j.events)) {
+      pollTimer = setTimeout(poll, fallback);
+      return;
+    }
+    var abort = new AbortController(), until = Number(j.next_poll_at) || 0;
+    quizWait = abort;
+    var deadline = setTimeout(function(){ abort.abort(); }, until ? Math.min(13000, Math.max(100, (until - j.now) * 1000)) : 13000);
+    fetch(j.events, {cache:'no-store', signal:abort.signal}).then(function(response){
+      if (!response.ok) throw new Error('Quiz event unavailable');
+      return response.json();
+    }).then(function(){
+      if (quizWait === abort) { quizWait = null; poll(); }
+    }).catch(function(){
+      if (quizWait === abort) { quizWait = null; pollTimer = setTimeout(poll, abort.signal.aborted ? 0 : fallback); }
+    }).finally(function(){ clearTimeout(deadline); });
+  }
   function quizHost(host, code){
     var token = store('vaultcast-quiz-host:' + code);
     var screen = h('div', { className:'vc-quiz-screen' }), bar = h('div', { className:'vc-quiz-hostbar' });
     host.appendChild(h('div', { className:'vc-quiz-host' }, [screen, bar]));
-    var st = null, v = 0, offset = 0, lastKey = '', busy = false, options = null, seen = {}, tickTimer = 0;
+    var st = null, v = 0, offset = 0, lastKey = '', busy = false, options = null, seen = {}, tickTimer = 0, eventRetry = 0;
     function act(action, extra){ if (busy) return Promise.resolve(); busy = true; return call('/play/quiz/rooms/' + code + '/host', { method:'POST', body:Object.assign({ action:action, host_token:token }, extra || {}) }).then(function(j){ busy = false; apply(j); }).catch(function(e){ busy = false; err(e); }); }
     function poll(){
-      clearTimeout(pollTimer);
       if (!screen.isConnected) return;
-      api('/play/quiz/rooms/' + code + '?v=' + v + '&host_token=' + encodeURIComponent(token || '')).then(function(j){
+      clearTimeout(pollTimer); stopQuizWait();
+      api('/play/quiz/rooms/' + code + '?v=' + v + '&host_token=' + encodeURIComponent(token || '') + (Date.now() >= eventRetry ? '&events=1' : '')).then(function(j){
         if (!screen.isConnected) return;
         if (!j.ok) { screen.replaceChildren(empty('Room closed', j.error || 'This quiz room is no longer open.', [btn('Back to Quiz', function(){ store('vaultcast-quiz-host:' + code, null); go('quiz'); }, 'primary')])); bar.replaceChildren(); return; }
         host.classList.remove('vc-offline');
         if (!j.same) apply(j); else offset = j.now - Date.now() / 1000;
-        pollTimer = setTimeout(poll, document.hidden ? 4000 : 1000);
+        if (!j.events && Date.now() >= eventRetry) eventRetry = Date.now() + 30000;
+        followQuiz(j, poll);
       }).catch(function(){ host.classList.add('vc-offline'); pollTimer = setTimeout(poll, 3000); });
     }
     function apply(j){
@@ -718,7 +743,7 @@
   }
   function quizPlayer(host, code){
     var box = h('div', { className:'vc-quiz-phone' }); host.appendChild(box);
-    var cred = store('vaultcast-quiz-player:' + code), v = 0, st = null, lastKey = '', sending = false, offset = 0, fails = 0;
+    var cred = store('vaultcast-quiz-player:' + code), v = 0, st = null, lastKey = '', sending = false, offset = 0, fails = 0, eventRetry = 0;
     var banner = h('p', { className:'vc-offline-banner', role:'status', hidden:true, text:'Connection lost. Reconnecting…' });
     function offline(on){ banner.hidden = !on; if (on && !banner.isConnected) box.prepend(banner); }
     // Coming back to the tab (or the network) reconnects at once instead of waiting for the next slow poll.
@@ -734,13 +759,15 @@
       call('/play/quiz/rooms/' + code + '/join', { method:'POST', body:Object.assign({ name:name }, team != null ? { team:team } : {}, cred ? { player:cred.player, player_token:cred.token } : {}) }).then(function(j){ cred = { player:j.player, token:j.player_token }; store('vaultcast-quiz-player:' + code, cred); apply(j); poll(); }).catch(function(e){ if (!st) joinForm((e && e.error) || ''); else err(e); });
     }
     function poll(){
-      clearTimeout(pollTimer); if (!box.isConnected) return;
-      api('/play/quiz/rooms/' + code + '?v=' + v + q()).then(function(j){
+      if (!box.isConnected) return;
+      clearTimeout(pollTimer); stopQuizWait();
+      api('/play/quiz/rooms/' + code + '?v=' + v + q() + (Date.now() >= eventRetry ? '&events=1' : '')).then(function(j){
         if (!box.isConnected) return;
         if (!j.ok) { box.replaceChildren(empty('Room not open', j.error || '', [btn('Back', function(){ go('quiz'); }, 'primary')])); return; }
         fails = 0; offline(false);
         if (!j.same) apply(j); else offset = j.now - Date.now() / 1000;
-        pollTimer = setTimeout(poll, document.hidden ? 4000 : 1000);
+        if (!j.events && Date.now() >= eventRetry) eventRetry = Date.now() + 30000;
+        followQuiz(j, poll);
       }).catch(function(){ fails++; offline(true); pollTimer = setTimeout(poll, Math.min(10000, 1500 * fails)); });
     }
     function apply(j){

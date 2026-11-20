@@ -430,16 +430,25 @@ final class Updater
             //    disk outside data/updates changes unless all of them verify.
             $staging = self::workDir() . '/staging-' . bin2hex(random_bytes(4));
             $write = [];
+            $pending = [];
             foreach (array_merge($l['changed'], $l['added']) as $rel) {
                 if (!isset($files[$rel]) || !self::allowed($rel)) throw new RuntimeException('Refusing to write ' . $rel . ' (not on the allowlist).');
-                $body = self::fetchBlob($files[$rel], $why, $branch);
+                $pending[$rel] = $files[$rel];
+            }
+            $prefetched = self::prefetchBlobs($pending, $staging, $head['commit']);
+            foreach ($pending as $rel => $file) {
+                $dst = $staging . '/' . $rel;
+                if (!is_dir(dirname($dst)) && !@mkdir(dirname($dst), 0770, true)) throw new RuntimeException('Cannot create the staging folder.');
+                if (isset($prefetched[$rel]) && @rename($prefetched[$rel], $dst)) {
+                    $write[$rel] = $dst;
+                    continue;
+                }
+                $body = self::fetchBlob($file, $why, $branch);
                 if ($body === null) {
                     throw new RuntimeException($why === 'mismatch'
                         ? 'Integrity check failed for ' . $rel . ': the download does not match the blob SHA in the GitHub tree. Nothing was changed.'
                         : 'Could not download ' . $rel . (self::$lastStatus ? ' (HTTP ' . self::$lastStatus . ')' : '') . '. Nothing was changed.');
                 }
-                $dst = $staging . '/' . $rel;
-                if (!is_dir(dirname($dst)) && !@mkdir(dirname($dst), 0770, true)) throw new RuntimeException('Cannot create the staging folder.');
                 if (@file_put_contents($dst, $body) !== strlen($body)) throw new RuntimeException('Cannot write the staging copy of ' . $rel . ' (disk full?). Nothing was changed.');
                 $write[$rel] = $dst;
             }
@@ -471,6 +480,37 @@ final class Updater
             flock($lock, LOCK_UN);
             fclose($lock);
         }
+    }
+
+    /** Prefetch public raw files and verify them against the checked tree as they stream to disk. */
+    private static function prefetchBlobs(array $pending, string $staging, string $commit): array
+    {
+        $worker = self::root() . '/src/Workers/update-downloads.js';
+        if (count($pending) < 4 || !is_file($worker) || !preg_match('/^[0-9a-f]{40}$/D', $commit)) return [];
+        $node = Process::nodeBinary();
+        if ($node === null) return [];
+        $dir = $staging . '/prefetch';
+        if (!@mkdir($dir, 0700, true)) return [];
+
+        $files = [];
+        foreach ($pending as $file) {
+            $url = self::RAW . '/' . $commit . '/' . implode('/', array_map('rawurlencode', explode('/', $file['path'])));
+            $files[] = ['url' => $url, 'size' => $file['size'], 'sha' => $file['sha']];
+        }
+        $manifest = json_encode(['files' => $files, 'limit' => self::MAX_FILE_BYTES]);
+        if ($manifest === false || @file_put_contents($dir . '/manifest.json', $manifest) !== strlen($manifest)) return [];
+        Process::capture([$node, $worker, $dir], 35);
+
+        $verified = [];
+        foreach (array_keys($pending) as $i => $rel) {
+            // The worker only renames a partial to .verified after checking its digest.
+            $path = $dir . '/' . $i . '.verified';
+            $size = @filesize($path);
+            if ($size === $pending[$rel]['size'] && $size <= self::MAX_FILE_BYTES && is_file($path)) {
+                $verified[$rel] = $path;
+            }
+        }
+        return $verified;
     }
 
     /** Name of the user this PHP process runs as (for error hints); PHP 7.4-safe with fallbacks. */

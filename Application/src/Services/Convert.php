@@ -25,7 +25,7 @@ class Convert {
     }
 
     public static function saveQueue(array $q): bool {
-        return Store::set('convert_queue', $q);
+        return NodeConversionUpload::saveQueue($q);
     }
 
     public static function defaults(): array {
@@ -1689,7 +1689,7 @@ class Convert {
         } finally { self::releaseUploadLock($fileLock); }
     }
 
-    private static function externalStatus(array $worker, string $id, string $lease): array {
+    private static function externalStatus(array $worker, string $id, string $lease, bool $relay = false): array {
         $fileLock=self::uploadLock($id);
         try {
             Store::invalidate('convert_queue'); $q=self::queue(); $i=self::findJob($q,$id);
@@ -1699,13 +1699,24 @@ class Convert {
             }
             $i=self::externalJob($q,$worker,$id,$lease); $part=(string)$q[$i]['part'];
             clearstatcache(true,$part);
-            return ['ok'=>true,'completed'=>false,'uploaded'=>false,'received'=>is_file($part) ? (int)filesize($part) : 0];
+            $result = ['ok'=>true,'completed'=>false,'uploaded'=>false,'received'=>is_file($part) ? (int)filesize($part) : 0];
+            if ($relay && rtrim(\Vaultcast\Database::basePath(), '/') === '' && NodeRuntime::conversionUploadReady()) {
+                $queueLock = self::editQueueLock();
+                try {
+                    $fresh = self::queue();
+                    $current = self::externalJob($fresh, $worker, $id, $lease);
+                    $result['upload_ticket'] = NodeConversionUpload::issue($fresh[$current]);
+                } finally {
+                    self::unlockQueue($queueLock);
+                }
+            }
+            return $result;
         } finally { self::releaseUploadLock($fileLock); }
     }
 
     public static function externalUpdate(array $worker, string $id, string $lease, string $action, array $body=[]): array {
         if ($action==='chunk') return self::externalChunk($worker,$id,$lease);
-        if ($action==='status') return self::externalStatus($worker,$id,$lease);
+        if ($action==='status') return self::externalStatus($worker,$id,$lease,!empty($body['node_upload']));
         $fileLock=in_array($action,['complete','fail'],true) ? self::uploadLock($id) : null;
         $lock=null;
         try {

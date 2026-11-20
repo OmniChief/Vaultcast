@@ -5,18 +5,8 @@ declare(strict_types=1);
 final class Process {
     public static function startPhpWorker(string $command,string $id): int {
         if(!function_exists('proc_open'))throw new RuntimeException('PHP proc_open is disabled. Enable it for the web PHP service to start playback workers.');
-        $configured=trim(trim((string)(Store::settings()['tools']['php_cli'] ?? '')), "\"'");
-        $binary=PHP_OS_FAMILY==='Windows'?'php.exe':'php';
-        $candidates=[$configured,dirname(PHP_BINARY).'/'.$binary,PHP_BINDIR.'/'.$binary];
-        foreach(explode(PATH_SEPARATOR,(string)getenv('PATH')) as $dir)if($dir!=='')$candidates[]=rtrim($dir,'/\\').'/'.$binary;
-        $php='';
-        foreach(array_unique($candidates) as $candidate){
-            if($candidate===''||!is_file($candidate)||(PHP_OS_FAMILY!=='Windows'&&!is_executable($candidate)))continue;
-            // A CGI/FPM binary cannot run Console.php, even when it exists on disk.
-            $sapi=self::capture([$candidate,'-r','echo PHP_SAPI;'],5);
-            if(trim((string)$sapi)==='cli'){$php=$candidate;break;}
-        }
-        if($php==='')throw new RuntimeException('No usable PHP CLI executable was found. Set the full path to php'.(PHP_OS_FAMILY==='Windows'?'.exe':'').' in Advanced settings (not php-cgi or php-fpm).');
+        $php = self::phpCli();
+        if ($php === null) throw new RuntimeException('No usable PHP CLI executable was found. Set the full path to the PHP CLI in Advanced settings.');
         $args=[];if(php_ini_loaded_file())array_push($args,'-c',php_ini_loaded_file());
         array_push($args,STREAM_ROOT.'/src/Console.php',$command,$id);
         if(PHP_OS_FAMILY==='Windows') {
@@ -30,6 +20,21 @@ final class Process {
         if((int)$pid<=0)throw new RuntimeException('Could not launch the PHP playback worker. Check process permissions'.(PHP_OS_FAMILY==='Windows'?' and that powershell.exe is available to the PHP service.':'.'));
         return (int)$pid;
     }
+    public static function phpCli(): ?string {
+        $configured=trim(trim((string)(Store::settings()['tools']['php_cli'] ?? '')), "\"'");
+        $binary=PHP_OS_FAMILY==='Windows'?'php.exe':'php';
+        $candidates=[$configured,dirname(PHP_BINARY).'/'.$binary,PHP_BINDIR.'/'.$binary];
+        foreach(explode(PATH_SEPARATOR,(string)getenv('PATH')) as $dir)if($dir!=='')$candidates[]=rtrim($dir,'/\\').'/'.$binary;
+        $php='';
+        foreach(array_unique($candidates) as $candidate){
+            if($candidate===''||!is_file($candidate)||(PHP_OS_FAMILY!=='Windows'&&!is_executable($candidate)))continue;
+            // A CGI/FPM binary cannot run Console.php, even when it exists on disk.
+            $sapi=self::capture([$candidate,'-r','echo PHP_SAPI;'],5);
+            if(trim((string)$sapi)==='cli'){$php=$candidate;break;}
+        }
+        return $php !== '' ? $php : null;
+    }
+
     public static function terminatePhpWorker(int $pid,string $command,string $id): bool {
         if($pid<2||!preg_match('/^[a-z0-9-]{1,40}$/D',$command)||!preg_match('/^[a-f0-9]{24}$/D',$id))return false;
         if(PHP_OS_FAMILY==='Windows'){
@@ -47,11 +52,38 @@ final class Process {
 
     public static function windowsConversion(array $job, string $options, int $threads = 1): int {
         $arguments = array_merge(['-nostdin','-y'], Convert::threadOptions(max(1, $threads), 'copy')['input'], ['-progress',$job['progress_file'],'-nostats','-i',$job['src']], preg_split('/\s+/',trim($options)), [$job['part']]);
-        $spec = base64_encode(json_encode(['ffmpeg'=>Remux::ffmpegBin(),'arguments'=>$arguments,'log'=>$job['log'],'part'=>$job['part'],'dest'=>$job['dest'],'exit'=>$job['exit_file']]));
+        $encodedJob = json_encode(['ffmpeg'=>Remux::ffmpegBin(),'arguments'=>$arguments,'log'=>$job['log'],'part'=>$job['part'],'dest'=>$job['dest'],'exit'=>$job['exit_file']], JSON_INVALID_UTF8_SUBSTITUTE);
+        if ($encodedJob === false) return 0;
+        $spec = base64_encode($encodedJob);
+        $node = self::nodeBinary();
+        $script = STREAM_ROOT . '/src/Workers/convert.js';
+        if ($node !== null && is_file($script)) {
+            $quote = static function (string $value): string { return "'" . str_replace("'", "''", $value) . "'"; };
+            $pid = self::powershell('$ErrorActionPreference="Stop"; $p=Start-Process -FilePath ' . $quote($node)
+                . ' -ArgumentList @(' . $quote('"' . $script . '"') . ',' . $quote($spec)
+                . ') -WindowStyle Hidden -PassThru; $p.Id');
+            return (int)trim((string)$pid);
+        }
+
         $worker = '$ErrorActionPreference="Stop"; $s=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("' . $spec . '")) | ConvertFrom-Json; try { $arguments=@($s.arguments | ForEach-Object {[string]$_}); & $s.ffmpeg @arguments *> $s.log; $code=$LASTEXITCODE; if ($code -eq 0) { Move-Item -LiteralPath $s.part -Destination $s.dest }; Set-Content -LiteralPath $s.exit -Value $code -Encoding ASCII } catch { Set-Content -LiteralPath $s.exit -Value 1 -Encoding ASCII }';
         $encoded = base64_encode(mb_convert_encoding($worker,'UTF-16LE','UTF-8'));
         $pid = self::powershell('$p=Start-Process powershell.exe -ArgumentList @("-NoProfile","-NonInteractive","-EncodedCommand","' . $encoded . '") -WindowStyle Hidden -PassThru; $p.Id');
         return (int)trim((string)$pid);
+    }
+
+    public static function nodeBinary(): ?string {
+        $windows = PHP_OS_FAMILY === 'Windows';
+        $binary = $windows ? 'node.exe' : 'node';
+        $candidates = $windows
+            ? array_merge([STREAM_DATA . '/runtime/node/node.exe'], glob(STREAM_DATA . '/runtime/node-*-win-*/node.exe') ?: [])
+            : [dirname(STREAM_ROOT) . '/node/bin/node'];
+        foreach (explode(PATH_SEPARATOR, (string)getenv('PATH')) as $directory) {
+            if ($directory !== '') $candidates[] = rtrim($directory, '/\\') . '/' . $binary;
+        }
+        foreach ($candidates as $candidate) {
+            if (is_file($candidate) && ($windows || is_executable($candidate))) return $candidate;
+        }
+        return null;
     }
 
     public static function capture(array $arguments, int $timeout): ?string {

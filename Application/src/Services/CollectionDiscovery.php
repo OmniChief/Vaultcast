@@ -267,15 +267,20 @@ final class CollectionDiscovery {
         $headers[] = 'User-Agent: Vaultcast/' . (defined('STREAM_VERSION') ? STREAM_VERSION : '1') . ' (collections; self-hosted media server)';
         $headers[] = 'Accept: application/json';
         if (self::$http) return (self::$http)($url, $headers);
+        $started = microtime(true);
+        $node = NodeProvider::publicJson($url, $headers, 15, (int)round($minGap * 1000));
+        if ($node !== null && ($node[0] < 300 || $node[0] >= 400)) return [$node[0], $node[2], $node[1]];
+        $timeout = 15 - (int)floor(microtime(true) - $started);
+        if ($timeout < 1) return [0, '', []];
         if (!function_exists('curl_init')) {
-            $ctx = stream_context_create(['http' => ['timeout' => 15, 'header' => implode("\r\n", $headers), 'ignore_errors' => true]]);
+            $ctx = stream_context_create(['http' => ['timeout' => $timeout, 'header' => implode("\r\n", $headers), 'ignore_errors' => true]]);
             $body = @file_get_contents($url, false, $ctx);
             $status = 0;
             foreach ($http_response_header ?? [] as $l) if (preg_match('#^HTTP/\S+\s+(\d{3})#', $l, $m)) $status = (int)$m[1];
             return [$status, (string)$body, []];
         }
         $ch = curl_init($url);
-        curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_CONNECTTIMEOUT => 6, CURLOPT_TIMEOUT => 15, CURLOPT_HTTPHEADER => $headers, CURLOPT_FOLLOWLOCATION => true]);
+        curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_CONNECTTIMEOUT => min(6, $timeout), CURLOPT_TIMEOUT => $timeout, CURLOPT_HTTPHEADER => $headers, CURLOPT_FOLLOWLOCATION => true]);
         $body = curl_exec($ch);
         $status = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);

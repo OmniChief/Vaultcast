@@ -15,17 +15,18 @@ final class PlayerAssets {
         $settings = \Vaultcast\Repository::document('settings', []);
         $installed = \Vaultcast\Repository::document(self::DOCUMENT, []);
         $local = ($settings['player_assets']['source'] ?? 'cdn') === 'local' && !empty($installed['complete']);
-        $base = \Vaultcast\Database::basePath() . 'api/player-assets/';
+        $appBase = \Vaultcast\Database::basePath();
+        $base = $appBase . 'api/player-assets/';
         return [
             'emulatorVersion' => '4.2.1',
             'emulatorData' => $local ? $base . 'emulatorjs/4.2.1/data/' : self::EMULATOR,
             'hls' => $local ? $base . 'hls/1.5.17/hls.min.js' : self::HLS,
-            'stalkerVod' => \Vaultcast\Database::basePath() . 'index.php?asset=assets/js/stalker-vod.js&v=' . substr(hash_file('sha256',dirname(__DIR__,2).'/assets/js/stalker-vod.js'),0,16),
-            'stalkerCountries' => \Vaultcast\Database::basePath() . 'index.php?asset=assets/js/stalker-countries.js&v=' . substr(hash_file('sha256',dirname(__DIR__,2).'/assets/js/stalker-countries.js'),0,16),
-            'stalkerStream' => \Vaultcast\Database::basePath() . 'index.php?asset=assets/js/stalker-stream.js&v=' . substr(hash_file('sha256',dirname(__DIR__,2).'/assets/js/stalker-stream.js'),0,16),
-            'mpegts' => \Vaultcast\Database::basePath() . 'index.php?asset=assets/js/mpegts-1-7-3.js&v=' . substr(hash_file('sha256',dirname(__DIR__,2).'/assets/js/mpegts-1-7-3.js'),0,16),
-            'stalkerAc3' => \Vaultcast\Database::basePath() . 'index.php?asset=assets/js/stalker-ac3.js&v=' . substr(hash_file('sha256',dirname(__DIR__,2).'/assets/js/stalker-ac3.js'),0,16),
-            'stalkerAc3Worker' => \Vaultcast\Database::basePath() . 'index.php?asset=assets/js/stalker-ac3-worker.js&v=' . substr(hash_file('sha256',dirname(__DIR__,2).'/assets/js/stalker-ac3-worker.js'),0,16),
+            'stalkerVod' => AssetDelivery::url($appBase, 'assets/js/stalker-vod.js', substr(hash_file('sha256',dirname(__DIR__,2).'/assets/js/stalker-vod.js'),0,16)),
+            'stalkerCountries' => AssetDelivery::url($appBase, 'assets/js/stalker-countries.js', substr(hash_file('sha256',dirname(__DIR__,2).'/assets/js/stalker-countries.js'),0,16)),
+            'stalkerStream' => AssetDelivery::url($appBase, 'assets/js/stalker-stream.js', substr(hash_file('sha256',dirname(__DIR__,2).'/assets/js/stalker-stream.js'),0,16)),
+            'mpegts' => AssetDelivery::url($appBase, 'assets/js/mpegts-1-7-3.js', substr(hash_file('sha256',dirname(__DIR__,2).'/assets/js/mpegts-1-7-3.js'),0,16)),
+            'stalkerAc3' => AssetDelivery::url($appBase, 'assets/js/stalker-ac3.js', substr(hash_file('sha256',dirname(__DIR__,2).'/assets/js/stalker-ac3.js'),0,16)),
+            'stalkerAc3Worker' => AssetDelivery::url($appBase, 'assets/js/stalker-ac3-worker.js', substr(hash_file('sha256',dirname(__DIR__,2).'/assets/js/stalker-ac3-worker.js'),0,16)),
             'source' => $local ? 'local' : 'cdn',
         ];
     }
@@ -97,21 +98,28 @@ final class PlayerAssets {
                 $target = $dir . '/' . $entry['path'];
                 if (!is_dir(dirname($target)) && !mkdir(dirname($target), 0770, true)) throw new RuntimeException('Cannot create player directory.');
                 $temporary = $target . '.part';
-                $stream = fopen($temporary, 'wb');
-                if (!$stream) throw new RuntimeException('Cannot write player file.');
-                $curl = curl_init($entry['url']);
-                $written = 0;
-                curl_setopt_array($curl, [CURLOPT_CONNECTTIMEOUT=>10, CURLOPT_TIMEOUT=>120,
-                    CURLOPT_FOLLOWLOCATION=>false, CURLOPT_PROTOCOLS=>CURLPROTO_HTTPS,
-                    CURLOPT_WRITEFUNCTION=>function ($handle, string $chunk) use ($stream, &$written) {
-                        $written += strlen($chunk);
-                        if ($written > 128 * 1024 * 1024) return 0;
-                        return fwrite($stream, $chunk);
-                    }]);
-                $ok = curl_exec($curl);
-                $http = curl_getinfo($curl, CURLINFO_HTTP_CODE);
-                curl_close($curl);
-                fclose($stream);
+                $node = NodeDownloads::playerAsset($entry['url'], $temporary);
+                if ($node) {
+                    $written = (int)filesize($temporary);
+                    $ok = true;
+                    $http = 200;
+                } else {
+                    $stream = fopen($temporary, 'wb');
+                    if (!$stream) throw new RuntimeException('Cannot write player file.');
+                    $curl = curl_init($entry['url']);
+                    $written = 0;
+                    curl_setopt_array($curl, [CURLOPT_CONNECTTIMEOUT=>10, CURLOPT_TIMEOUT=>120,
+                        CURLOPT_FOLLOWLOCATION=>false, CURLOPT_PROTOCOLS=>CURLPROTO_HTTPS,
+                        CURLOPT_WRITEFUNCTION=>function ($handle, string $chunk) use ($stream, &$written) {
+                            $written += strlen($chunk);
+                            if ($written > 128 * 1024 * 1024) return 0;
+                            return fwrite($stream, $chunk);
+                        }]);
+                    $ok = curl_exec($curl);
+                    $http = curl_getinfo($curl, CURLINFO_HTTP_CODE);
+                    curl_close($curl);
+                    fclose($stream);
+                }
                 $prefix = (string)file_get_contents($temporary, false, null, 0, 256);
                 if (!$ok || $http !== 200 || !$written || ($entry['size'] > 0 && $written !== $entry['size']) || preg_match('/^\s*<(?:!doctype html|html)/i', $prefix)) {
                     @unlink($temporary);

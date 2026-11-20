@@ -16,10 +16,20 @@ require __DIR__ . '/bootstrap.php';
 try {
     set_time_limit(0);
     switch ($command) {
+        case 'quiz-warmup':
+            if (function_exists('proc_nice')) @proc_nice(10);
+            $items = json_decode((string)($argv[2] ?? '[]'), true);
+            $result = Quiz::warmFrames(is_array($items) ? $items : []);
+            break;
+        case 'stalker-catalogue-slice': $result=StalkerCatalogues::run(true); break;
+        case 'stalker-updates-slice': $result=StalkerUpdates::run(true); break;
         case 'stalker-catalogue': $result=StalkerCatalogues::run(); break;
         case 'stalker-download': $result=StalkerOffline::run($argv[2] ?? ''); break;
         case 'stalker-updates': $result=StalkerUpdates::run(); break;
         case 'transcode': $result=Transcode::run($argv[2] ?? ''); break;
+        case 'maintenance-relay':
+            $result = Maintenance::run($argv[2] ?? '', true);
+            exit(!empty($result['busy']) ? 75 : 76);
         case 'maintenance':
             $result = Maintenance::run($argv[2] ?? '');
             break;

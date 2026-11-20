@@ -134,9 +134,9 @@ final class Quiz {
                 try {
                     if (function_exists('set_time_limit')) @set_time_limit(60);
                     $duration = (float)Arcade::query('SELECT duration FROM vaultcast_media_facts WHERE item_id=?', [$itemId])->fetchColumn();
-                    $at = $duration > 120 ? $duration * (0.25 + (crc32($itemId) % 40) / 100) : 300;
+                    $at = self::frameTime($itemId, $duration);
                     $tmp = $out . '.' . getmypid() . '.jpg';
-                    Process::capture([Remux::ffmpegBin(), '-nostdin', '-hide_banner', '-loglevel', 'error', '-ss', (string)round($at, 1), '-i', $path, '-frames:v', '1', '-vf', 'scale=960:-2', '-q:v', '5', '-y', $tmp], 20);
+                    Process::capture([Remux::ffmpegBin(), '-nostdin', '-hide_banner', '-loglevel', 'error', '-ss', (string)$at, '-i', $path, '-frames:v', '1', '-vf', 'scale=960:-2', '-q:v', '5', '-y', $tmp], 20);
                     if (is_file($tmp) && filesize($tmp) > 1000 && @rename($tmp, $out)) { @unlink($out . '.fail'); return $out; }
                     @unlink($tmp); @touch($out . '.fail');
                 } finally { flock($slot, LOCK_UN); fclose($slot); }
@@ -168,15 +168,58 @@ final class Quiz {
         }
         return null;
     }
-    /** After the response is sent (PHP-FPM), extract the frames a quiz will need so questions never wait on ffmpeg. */
+    private static function frameTime(string $itemId, float $duration): float {
+        return round($duration > 120 ? $duration * (0.25 + (crc32($itemId) % 40) / 100) : 300, 1);
+    }
+
+    /** Prepare quiz frames away from PHP-FPM when the local relay is available. */
     private static function prewarm(array $items): void {
-        $items = array_values(array_unique(array_filter($items))); if (!$items || !function_exists('fastcgi_finish_request')) return;
-        register_shutdown_function(function () use ($items) {
-            @fastcgi_finish_request(); ignore_user_abort(true); if (function_exists('set_time_limit')) @set_time_limit(150);
-            $until = time() + 120;
-            foreach (array_slice($items, 0, 40) as $id) { if (time() > $until) break; try { self::frame((string)$id, true); } catch (Throwable $e) {} }
+        $items = array_slice(array_values(array_unique(array_filter($items))), 0, 40);
+        if (!$items) return;
+        if (PHP_OS_FAMILY === 'Linux' && NodeRuntime::quizReady()) {
+            try {
+                $markers = implode(',', array_fill(0, count($items), '?'));
+                $rows = Arcade::query('SELECT i.id,i.payload,f.duration FROM vaultcast_items i
+                    LEFT JOIN vaultcast_media_facts f ON f.item_id=i.id WHERE i.id IN (' . $markers . ')', $items);
+                $frames = [];
+                foreach ($rows as $row) {
+                    $item = json_decode($row['payload'], true);
+                    if (empty($item['path'])) continue;
+                    $id = (string)$row['id'];
+                    $frames[$id] = ['id'=>$id, 'path'=>(string)$item['path'], 'at'=>self::frameTime($id, (float)$row['duration'])];
+                }
+                if (!$frames) return;
+                $ordered = [];
+                foreach ($items as $id) if (isset($frames[$id])) $ordered[] = $frames[$id];
+                $token = NodeMedia::writeTicket(['purpose'=>'quiz-warmup','frames'=>$ordered,
+                    'directory'=>STREAM_SHM . '/quiz-frames','ffmpeg'=>Remux::ffmpegBin()]);
+                if ($token !== null) {
+                    $context = stream_context_create(['http'=>['timeout'=>1, 'follow_location'=>0]]);
+                    $ack = @file_get_contents(NodeRuntime::loopback('/runtime/quiz-warmup/' . $token), false, $context, 0, 64);
+                    @unlink(STREAM_DATA . '/runtime/node-media/' . $token . '.json');
+                    if ($ack === 'queued') return;
+                }
+            } catch (Throwable $ignored) {}
+        }
+        if (!function_exists('fastcgi_finish_request')) return;
+        register_shutdown_function(static function () use ($items) {
+            @fastcgi_finish_request();
+            ignore_user_abort(true);
+            self::warmFrames($items);
         });
     }
+
+    public static function warmFrames(array $items): array {
+        if (function_exists('set_time_limit')) @set_time_limit(150);
+        $until = time() + 120;
+        foreach (array_slice($items, 0, 40) as $id) {
+            if (time() > $until) break;
+            if (!is_string($id) || $id === '') continue;
+            try { self::frame($id, true); } catch (Throwable $ignored) {}
+        }
+        return ['ok'=>true];
+    }
+
     private static function sendImage(?string $file): void {
         if (!$file) { http_response_code(404); exit; }
         $type = @mime_content_type($file) ?: 'image/jpeg';
@@ -240,7 +283,7 @@ final class Quiz {
         $dir = STREAM_SHM . '/quiz-pulse'; if (!is_dir($dir)) @mkdir($dir, 0775, true);
         $f = self::pulseFile((string)$r['code']); $tmp = $f . '.' . getmypid();
         $data = ['v' => (int)$r['version'], 'status' => (string)$r['status'], 'ends_at' => (int)($r['ends_at'] ?? 0), 'reveal_at' => (int)($r['reveal_at'] ?? 0), 'intro_at' => (int)($r['intro_at'] ?? 0), 'scores_at' => (int)($r['scores_at'] ?? 0), 'auto' => !empty($r['settings']['auto'])];
-        if (@file_put_contents($tmp, json_encode($data)) !== false) @rename($tmp, $f);
+        if (@file_put_contents($tmp, json_encode($data)) !== false && @rename($tmp, $f)) NodeEvents::signal('quiz-' . strtolower((string)$r['code']));
     }
     /** True when a poll at version $v can be answered "same" from the pulse file alone. */
     private static function quiet(string $code, int $v): bool {
@@ -410,7 +453,7 @@ final class Quiz {
     }
     public static function state(array $user, string $code, array $q): array {
         $code = self::code($code);
-        if (self::quiet($code, (int)($q['v'] ?? 0))) return ['ok' => true, 'same' => true, 'version' => (int)$q['v'], 'now' => microtime(true)];
+        if (empty($q['events']) && self::quiet($code, (int)($q['v'] ?? 0))) return ['ok' => true, 'same' => true, 'version' => (int)$q['v'], 'now' => microtime(true)];
         $r = self::room($code);
         $host = self::isHost($r, $user, (string)($q['host_token'] ?? ''));
         $pid = self::playerFor($r, $user, (string)($q['player'] ?? ''), (string)($q['player_token'] ?? ''));
@@ -422,8 +465,20 @@ final class Quiz {
                 if ($host && $r['settings']['auto'] && $r['status'] === 'scores') return self::advance(array_merge($r, ['status' => 'next']));
                 return $r;
             });
-        } elseif ((int)($q['v'] ?? 0) === (int)$r['version']) return ['ok' => true, 'same' => true, 'version' => (int)$r['version'], 'now' => microtime(true)];
-        return self::view($r, $user, $host, $pid);
+        }
+        $view = (int)($q['v'] ?? 0) === (int)$r['version']
+            ? ['ok'=>true, 'same'=>true, 'version'=>(int)$r['version'], 'now'=>microtime(true)]
+            : self::view($r, $user, $host, $pid);
+        if (!empty($q['events']) && ($host || ($pid !== null && empty($r['players'][$pid]['kicked']) && empty($r['players'][$pid]['left'])))) {
+            $view['events'] = NodeEvents::issue('quiz-' . strtolower($code), true);
+            if ($r['status'] === 'question') $view['next_poll_at'] = (int)$r['ends_at'];
+            elseif ($host && !empty($r['settings']['auto'])) {
+                if ($r['status'] === 'reveal') $view['next_poll_at'] = (int)$r['reveal_at'] + self::REVEAL_SECONDS;
+                if ($r['status'] === 'intro') $view['next_poll_at'] = (int)$r['intro_at'] + 5;
+                if ($r['status'] === 'scores') $view['next_poll_at'] = (int)$r['scores_at'] + 10;
+            }
+        }
+        return $view;
     }
     /** 1-based place among players still in the room (standings are sorted by score); never false or 0. */
     private static function rankIn(array $players, string $pid): int {

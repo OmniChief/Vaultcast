@@ -529,7 +529,7 @@ foreach ($id in $ownedServiceIds) {
 New-Item -ItemType Directory -Path $installRoot -Force | Out-Null
 # Copy application files only. Updates never replace saved data or configuration.
 if ($sourceRoot.TrimEnd('\') -ne $installRoot) {
-    foreach ($entry in @('index.php','router.php','.htaccess','manifest.json','sw.js','VERSION','assets','src','deploy')) {
+    foreach ($entry in @('index.php','.htaccess','manifest.json','sw.js','VERSION','assets','src','deploy')) {
         Copy-Item -LiteralPath (Join-Path $sourceRoot $entry) -Destination $installRoot -Recurse -Force
     }
     New-Item -ItemType Directory -Path (Join-Path $installRoot 'netplay') -Force | Out-Null
@@ -629,7 +629,7 @@ Prepare-Database
 $nginxDir=Split-Path $nginxExe -Parent
 Grant-ServiceWrite (Join-Path $nginxDir 'logs')
 $rootForNginx=$installRoot.Replace('\','/')
-$config=Get-Content -LiteralPath 'deploy/nginx.conf.example' -Raw
+$config=Get-Content -LiteralPath (Join-Path $sourceRoot 'deploy/nginx.conf.example') -Raw
 $config=$config.Replace('listen 80;',"listen $($listenAddress):$webPort;").Replace('server_name vaultcast.local;','server_name _;').Replace('root /srv/vaultcast;',"root ""$rootForNginx"";").Replace('unix:/run/php/php7.4-fpm.sock','vaultcast_php').Replace('127.0.0.1:3100',"127.0.0.1:$netplayPort")
 $mediaLocation = '    location ~ "^/_vaultcast_media/([A-Za-z]):/(.*)$" {' + "`n" + '        internal; alias $1:/$2; sendfile on;' + "`n    }"
 $mediaLocation += "`n" + '    location ~ "^/_vaultcast_unc/([^/]+)/([^/]+)/(.*)$" {' + "`n" + '        internal; alias //$1/$2/$3; sendfile on;' + "`n    }"
@@ -641,7 +641,19 @@ $temporaryPaths = ''
 foreach ($kind in @('client_body','proxy','fastcgi','uwsgi','scgi')) {
     $temporaryPaths += "$($kind)_temp_path ""$tempPath/$kind"";`n"
 }
-Save-Text (Join-Path $nginxDir 'conf/vaultcast.conf') "daemon off;`nevents { worker_connections 512; }`nhttp { include mime.types; default_type application/octet-stream;`n$temporaryPaths`n$config`n}`n"
+$liveConfig = Join-Path $nginxDir 'conf/vaultcast.conf'
+$candidateConfig = Join-Path $nginxDir 'conf/vaultcast.next.conf'
+$nginxPrefix = $nginxDir.Replace('\','/') + '/'
+try {
+    Save-Text $candidateConfig "daemon off;`nevents { worker_connections 512; }`nhttp { include mime.types; default_type application/octet-stream;`n$temporaryPaths`n$config`n}`n"
+    if ((Invoke-Native $nginxExe @('-p',$nginxPrefix,'-c','conf/vaultcast.next.conf','-t')) -ne 0) {
+        throw 'nginx rejected the generated Vaultcast configuration.'
+    }
+    if ([IO.File]::Exists($liveConfig)) { [IO.File]::Replace($candidateConfig,$liveConfig,$liveConfig+'.previous') }
+    else { [IO.File]::Move($candidateConfig,$liveConfig) }
+} finally {
+    if ([IO.File]::Exists($candidateConfig)) { [IO.File]::Delete($candidateConfig) }
+}
 Show-SetupStage 7 'Installing multiplayer dependencies and Windows services'
 Push-Location netplay
 try {

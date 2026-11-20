@@ -1,0 +1,285 @@
+'use strict';
+
+const { constants } = require('fs');
+const { open, stat } = require('fs').promises;
+const { extname, isAbsolute } = require('path');
+const { pipeline } = require('stream/promises');
+const { documents, enabled, now, parse, sha } = require('./account-data');
+const { authorized, cached, parentalStatus } = require('./profile-policy');
+const { areaAllowed, areaDenied, playbackVisible } = require('./library');
+const { remux, libraryCaptionSource } = require('./media-probe');
+const { serveConversion } = require('./conversion-playback');
+const { libraryFile, mimeFor, tokenLifetime } = require('./playback');
+const { maxBytes, subtitles, readSubtitle, decodeSubtitle, subtitleFormat, toVtt, saveSubtitle } = require('./subtitles');
+
+
+function mediaRange(header, size) {
+  const match = header.trim().match(/^bytes=(\d*)-(\d*)$/);
+  if (!match || (!match[1] && !match[2]) || !size) return null;
+  const start = match[1] ? Number(match[1]) : Math.max(0, size - Number(match[2]));
+  const end = match[1] && match[2] ? Math.min(size - 1, Number(match[2])) : size - 1;
+  return start <= end ? { start, end } : null;
+}
+
+async function authorizePlayback(pool, root, request, response, readSession, token, refresh = true) {
+  let session;
+  if (/^Bearer(?:[ \t]|$)/i.test(String(request.headers.authorization ?? '').trim())) {
+    session = await readSession(pool, request, true);
+    if (session.error) {
+      response.status(401).json({ ok: false, error: session.error });
+      return null;
+    }
+  }
+  const time = now();
+  const hash = sha(token);
+  const [rows] = await pool.execute(
+    'SELECT expires_at,payload FROM vaultcast_playback_tokens WHERE token_hash=? AND expires_at>?',
+    [hash, time]);
+  if (!rows.length) return { expired: true };
+  const playback = parse(rows[0].payload);
+  const ownerId = playback.user_id;
+  if (typeof ownerId !== 'string' || ['', 'public', 'live'].includes(ownerId) || playback.area !== 'library' ||
+      !['video', 'audio'].includes(playback.media_kind) || typeof playback.item_id !== 'string' || !/^[a-f0-9]{16}$/.test(playback.item_id)) {
+    return null;
+  }
+
+  const [owners] = await pool.execute('SELECT payload FROM vaultcast_users WHERE id=?', [ownerId]);
+  if (!owners.length) {
+    response.status(403).json({ ok: false, error: 'This account no longer exists.', code: 'access_denied' });
+    return null;
+  }
+  const user = parse(owners[0].payload);
+  if (!authorized(response, { user })) return null;
+  if (!areaAllowed(user, 'library')) {
+    areaDenied(response, 'library');
+    return null;
+  }
+
+  const [items] = await pool.execute('SELECT payload FROM vaultcast_items WHERE id=?', [playback.item_id]);
+  if (!items.length) return null;
+  const item = parse(items[0].payload);
+  if (item.media_kind !== playback.media_kind || ![item.path, item.directplay_path].includes(playback.path) ||
+      typeof playback.path !== 'string' || !isAbsolute(playback.path)) return null;
+  if (user.role !== 'admin' && item.media_kind === 'video') {
+    const parental = await parentalStatus(root, pool, {}, user, time);
+    if (parental.restricted && request.headers.cookie && request.headers['sec-fetch-site'] !== 'cross-site' &&
+        (!request.headers.origin || request.headers['sec-fetch-site'] === 'same-origin')) {
+      session ??= await readSession(pool, request, true);
+      if (session.data?.user_id === ownerId && session.browserToken) {
+        // Only the token owner’s authenticated device can use its temporary unlock.
+        const unlock = await cached(root, 'parental-unlock:' + sha(session.browserToken), time);
+        if (unlock?.user_id === ownerId && Number(unlock.until) > time) parental.restricted = false;
+      }
+    }
+    if (!await playbackVisible(pool, item, parental)) {
+      response.status(403).json({ ok: false, code: 'parental_blocked', error: 'This title isn’t available on this profile.' });
+      return null;
+    }
+  }
+
+  const { settings = {} } = await documents(pool, ['settings']);
+  const section = Object.values(settings.sections ?? {}).find(entry => entry?.id === item.section);
+  if (typeof section?.path !== 'string' || !isAbsolute(section.path)) return null;
+
+  const ttl = tokenLifetime(settings);
+  if (refresh && Number(rows[0].expires_at) - time < ttl / 2) {
+    await pool.execute(
+      "UPDATE vaultcast_playback_tokens SET expires_at=?,payload=JSON_SET(payload,'$.expires',?) " +
+      'WHERE token_hash=? AND expires_at=? AND expires_at>?',
+      [time + ttl, time + ttl, hash, rows[0].expires_at, time]);
+  }
+  return { file: playback.path, folder: section.path, settings, itemId: playback.item_id, kind: playback.media_kind, owner: ownerId, captionSource: playback.caption_source, accel: enabled(settings.streaming?.nginx_accel) };
+}
+
+module.exports = function mountStream(app, prefix, { db, root, readSession, updating, express, unavailable, requestAllowed }) {
+  let transfers = 0;
+  app.get(prefix + '/stream/play', async (request, response) => {
+    const token = request.query.t;
+    response.set({
+      'Cache-Control': 'private, no-store',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Expose-Headers': 'Content-Type, Content-Length, Content-Range, Accept-Ranges',
+      'Referrer-Policy': 'no-referrer',
+    });
+    if (typeof token !== 'string' || token.length !== 48 || !/^[a-f0-9]{48}$/.test(token)) return response.status(403).type('text').send('Forbidden');
+    let file;
+    try {
+      if (await updating()) return response.set('Retry-After', '30').sendStatus(503);
+      if (!db.ready()) return response.sendStatus(503);
+      const media = await db.run(pool => authorizePlayback(pool, root, request, response, readSession, token));
+      if (response.headersSent || response.destroyed) return;
+      if (media?.expired) return response.status(403).type('text').send('Expired');
+      if (!media) return response.sendStatus(403);
+      const resolved = await libraryFile(media.file, media.folder);
+      if (!resolved) return response.sendStatus(404);
+      const type = mimeFor(extname(resolved).slice(1).toLowerCase());
+      const head = request.method === 'HEAD';
+      if (!response.locals.directHttp && !head && media.accel && !enabled(request.query.direct) && process.platform === 'linux') {
+        if (!(await stat(resolved)).isFile()) return response.sendStatus(404);
+        const uri = resolved.split('/').map(encodeURIComponent).join('/');
+        return response.set({ 'Content-Type': type, 'Accept-Ranges': 'bytes', 'X-Accel-Redirect': '/_vaultcast_media' + uri }).end();
+      }
+
+      file = await open(resolved, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0) | (constants.O_NOFOLLOW ?? 0));
+      const info = await file.stat();
+      if (!info.isFile() || !Number.isSafeInteger(info.size)) return response.sendStatus(404);
+      const size = info.size;
+      response.set({ 'Content-Type': type, 'Accept-Ranges': 'bytes' });
+      if (head || !request.headers.range) response.set('Content-Length', String(size));
+      if (head) return response.end();
+      let range;
+      if (request.headers.range) {
+        range = mediaRange(request.headers.range, size);
+        if (!range) return response.status(416).set('Content-Range', 'bytes */' + size).end();
+        const { start, end } = range;
+        response.status(206).set({
+          'Content-Range': 'bytes ' + start + '-' + end + '/' + size,
+          'Content-Length': String(end - start + 1),
+        });
+      }
+      if (!size) return response.end();
+      if (!response.destroyed) {
+        response.set('X-Accel-Buffering', 'no');
+        transfers++;
+        try {
+          await pipeline(file.createReadStream({ ...range, autoClose: false }), response);
+        } finally {
+          transfers--;
+        }
+      }
+    } catch (error) {
+      if (response.destroyed) return;
+      if (response.headersSent) response.destroy();
+      else return response.sendStatus(error.code === 'ENOENT' ? 404 : 503);
+    } finally {
+      if (file) await file.close().catch(() => {});
+    }
+  });
+  const processing = async (request, response) => {
+    response.set({ 'Cache-Control': 'private, no-store', 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff' });
+    const token = request.query.t;
+    if (typeof token !== 'string' || !/^[a-f0-9]{48}$/.test(token)) return response.sendStatus(403);
+    transfers++;
+    try {
+      if (await updating() || !db.ready()) return response.sendStatus(503);
+      const media = await db.run(pool => authorizePlayback(pool, root, request, response, readSession, token));
+      if (response.headersSent || response.destroyed) return;
+      if (!media || media.kind !== 'video') return response.sendStatus(403);
+      if (request.method === 'POST' && !requestAllowed(request, media.settings)) return response.sendStatus(403);
+      if (request.path.endsWith('/transcode')) return await serveConversion(root, media, request, response, db.base());
+      const file = await libraryFile(media.file, media.folder);
+      if (!file) return response.sendStatus(404);
+      await remux(root, file, media.settings, request, response, token);
+    } catch (error) {
+      if (response.destroyed) return;
+      if (response.headersSent) return response.destroy();
+      return response.sendStatus(error.code === 'ENOENT' ? 404 : error.status ?? 503);
+    } finally { transfers--; }
+  };
+  app.get(prefix + '/stream/remux', processing);
+  app.get(prefix + '/stream/transcode', processing);
+  app.post(prefix + '/stream/transcode', processing);
+  app.get(prefix + '/stream/subtitles/:token([a-f0-9]{48})/:id([a-f0-9]{64}).vtt', async (request, response) => {
+    const { token, id } = request.params;
+    response.set({ 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' });
+    try {
+      if (await updating()) return response.set('Retry-After', '30').sendStatus(503);
+      if (!db.ready()) return response.sendStatus(503);
+      const media = await db.run(pool => authorizePlayback(pool, root, request, response, readSession, token, false));
+      if (response.headersSent || response.destroyed) return;
+      if (media?.expired || (media && media.kind !== 'video')) {
+        return response.status(403).json({ ok: false, error: 'Playback token expired.' });
+      }
+      if (!media || !await libraryFile(media.file, media.folder)) return response.sendStatus(404);
+      if (media.captionSource && media.captionSource !== media.file && !await libraryCaptionSource(media.captionSource, media.folder)) {
+        return response.sendStatus(404);
+      }
+      const track = (await subtitles(root, media.file, media.captionSource)).get(id);
+      if (!track) return response.sendStatus(404);
+      const body = await readSubtitle(track);
+      if (body === null) return response.sendStatus(404);
+      response.set({ 'Content-Type': 'text/vtt; charset=utf-8', 'Cache-Control': 'private, max-age=300',
+        'Content-Length': String(Buffer.byteLength(body)) });
+      return response.end(request.method === 'HEAD' ? undefined : body);
+    } catch (error) {
+      if (!response.headersSent && !response.destroyed) return response.sendStatus(404);
+    }
+  });
+  const rawSubtitle = express.raw({ type: () => true, limit: maxBytes, inflate: false });
+  app.post(prefix + '/stream/subtitles/:token([a-f0-9]{48})/upload',
+    (request, response, next) => rawSubtitle(request, response, error => {
+      if (!error) return next();
+      const status = error.type === 'entity.too.large' ? 413 : 400;
+      return response.status(status).json({ ok: false, error: status === 413
+        ? 'Subtitle files can be at most 2 MB.' : 'Could not read the subtitle upload.' });
+    }),
+    async (request, response) => {
+      response.set({ 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
+      let changed = false;
+      transfers++;
+      try {
+        if (await updating()) return response.set('Retry-After', '30').sendStatus(503);
+        if (!db.ready()) return unavailable(response);
+        const media = await db.run(async pool => {
+          const current = await readSession(pool, request, true);
+          if (current.error) {
+            response.status(401).json({ ok: false, error: current.error });
+            return null;
+          }
+          if (!authorized(response, current)) return null;
+          const { settings = {} } = await documents(pool, ['settings']);
+          const playback = await authorizePlayback(pool, root, request, response, readSession, request.params.token, false);
+          if (response.headersSent) return null;
+          if (playback?.expired || (playback && playback.kind !== 'video')) {
+            response.status(403).json({ ok: false, error: 'Playback token expired.' });
+            return null;
+          }
+          if (!playback) return null;
+          if (current.user.id !== playback.owner && current.user.role !== 'admin') {
+            response.status(403).json({ ok: false, error: 'Forbidden' });
+            return null;
+          }
+          if (current.user.role !== 'admin' && !enabled(settings.opensubtitles?.allow_users)) {
+            response.status(403).json({ ok: false, error: 'Only administrators can add subtitles.' });
+            return null;
+          }
+          // The secret playback token and owner check authorize this mutation even
+          // when a reverse proxy has replaced the public Origin authority.
+          return playback;
+        });
+        if (response.headersSent || response.destroyed) return;
+        if (!media || !await libraryFile(media.file, media.folder)) return unavailable(response);
+        const raw = request.body;
+        if (!Buffer.isBuffer(raw) || raw.length === 0) return response.status(422).json({ ok: false, error: 'The file is empty.' });
+        const language = typeof request.query.lang === 'string' ? request.query.lang.trim().toLowerCase() : '';
+        if (!/^[a-z]{2,3}(-[a-z]{2})?$/.test(language)) {
+          return response.status(422).json({ ok: false, error: 'Choose the subtitle language.' });
+        }
+        const text = decodeSubtitle(raw);
+        const format = subtitleFormat(text);
+        if (!format) return response.status(422).json({ ok: false, error: 'This does not look like an SRT, WebVTT or ASS/SSA subtitle file.' });
+        let body;
+        try { body = toVtt(text, format); }
+        catch (error) { return response.status(422).json({ ok: false, error: error.message }); }
+        if (!body || !body.includes('-->')) return response.status(422).json({ ok: false, error: 'The file contains no subtitle cues.' });
+        if (Buffer.byteLength(body) > maxBytes) return response.status(422).json({ ok: false, error: 'Converted subtitles exceed the 2 MB limit.' });
+        if (response.destroyed) return;
+        if (!await saveSubtitle(root, media.file, body, language, () => { changed = true; })) {
+          return response.status(422).json({ ok: false, error: 'Could not save the subtitle on the server.' });
+        }
+        const tracks = await subtitles(root, media.file);
+        return response.json({ ok: true, format, subtitles: [...tracks.values()].map(({ id, label, language }) => ({
+          id, label, language, url: db.base() + 'netplay' + prefix + '/stream/subtitles/' + request.params.token + '/' + id + '.vtt',
+        })) });
+      } catch (error) {
+        if (response.destroyed || response.headersSent) return;
+        if (changed) return response.status(503).json({ ok: false, error: 'Could not finish loading the saved subtitles. Reopen the player to reload them.' });
+        return unavailable(response);
+      } finally {
+        transfers--;
+      }
+    });
+  return () => transfers > 0;
+};
+
+module.exports.mediaRange = mediaRange;

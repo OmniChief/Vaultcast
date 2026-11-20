@@ -175,13 +175,24 @@ for program in nginx php mariadb; do command -v "$program" >/dev/null || { echo 
 php -r 'exit(PHP_VERSION_ID >= 70400 ? 0 : 1);' || { echo 'PHP 7.4 or newer is required.'; exit 1; }
 multiplayer=true
 if [[ "${VAULTCAST_SKIP_MULTIPLAYER:-}" =~ ^(1|y|yes|true)$ ]]; then multiplayer=false; else ensure_node; fi
-# Rerun on an existing installation: only complete the multiplayer relay and the Transmission
-# connection; never touch the database, site or application files.
-existing_site="$(ls /etc/nginx/sites-available/vaultcast-* 2>/dev/null | head -n 1 || true)"
+# Prefer the enabled site. Never guess between multiple installed instances.
+shopt -s nullglob
+existing_sites=(/etc/nginx/sites-enabled/vaultcast-*)
+if (( ${#existing_sites[@]} == 0 )); then existing_sites=(/etc/nginx/sites-available/vaultcast-*); fi
+existing_site=''
+if (( ${#existing_sites[@]} == 1 )); then
+    existing_site=${existing_sites[0]}
+elif (( ${#existing_sites[@]} > 1 )); then
+    for candidate in "${existing_sites[@]}"; do
+        if [[ ${candidate##*/} == "vaultcast-${VAULTCAST_PORT:-}" ]]; then existing_site=$candidate; break; fi
+    done
+    [[ -n "$existing_site" ]] || { echo 'Multiple Vaultcast sites found. Set VAULTCAST_PORT to select the installation.' >&2; exit 1; }
+fi
 if [[ -n "$existing_site" ]]; then
     existing_root="$(awk '$1 == "root" {gsub(";", "", $2); print $2; exit}' "$existing_site")"
     echo "Existing installation found at $existing_root ($existing_site); first-time setup is skipped."
     if $multiplayer && [[ -d "$existing_root" ]]; then setup_relay "$existing_root"; echo 'Multiplayer relay is installed and running on 127.0.0.1:3100.'; fi
+    as_root bash deploy/update-nginx.sh --site "$existing_site"
     [[ -d "$existing_root" ]] && as_root cp ../LICENSE ../NOTICE "$existing_root/"
     [[ -d "$existing_root" ]] && configure_transmission "$existing_root"
     exit 0
@@ -205,7 +216,7 @@ site="/etc/nginx/sites-available/vaultcast-$web_port"
 as_root systemctl enable --now mariadb nginx
 [[ -z "$(as_root mariadb -N -B -e "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='$db_name'")" ]] || { echo 'That database already exists; choose another name.'; exit 1; }
 as_root mkdir -p "$destination"
-for entry in index.php router.php .htaccess manifest.json sw.js VERSION assets src deploy; do as_root cp -R -- "$entry" "$destination/"; done
+for entry in index.php .htaccess manifest.json sw.js VERSION assets src deploy; do as_root cp -R -- "$entry" "$destination/"; done
 # Vaultcast's licence and third-party notice. Distribution packages bring their own
 # licences (/usr/share/doc/<package>/copyright); the relay's npm packages keep theirs in node_modules.
 as_root cp ../LICENSE ../NOTICE "$destination/"

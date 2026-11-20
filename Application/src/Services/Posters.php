@@ -1422,6 +1422,14 @@ class Posters {
             if ($left <= 0.05) return null;
             $timeout = max(1, min($timeout, (int)ceil($left)));
         }
+        if (!$binary) {
+            $started = microtime(true);
+            $node = NodeProvider::publicJson($url, array_merge(['Accept: application/json,image/*,*/*',
+                'User-Agent: Vaultcast/' . STREAM_VERSION . ' (+posters)'], $headers), $timeout, 250);
+            if ($node !== null && ($node[0] < 300 || $node[0] >= 400)) return $node[0] < 400 ? $node[2] : null;
+            $timeout -= (int)floor(microtime(true) - $started);
+            if ($timeout < 1 || self::remoteBudgetExpired()) return null;
+        }
         if (function_exists('curl_init')) {
             $ch = curl_init($url);
             curl_setopt_array($ch, [

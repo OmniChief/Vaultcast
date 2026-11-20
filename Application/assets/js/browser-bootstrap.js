@@ -12,7 +12,7 @@
     if(!window.fetch||!window.URL||!window.Map||!window.Set||!window.AbortController)reasons.push('browser APIs');
     if(!window.Element||!window.Element.prototype||!window.Element.prototype.replaceChildren||!window.Element.prototype.closest)reasons.push('DOM');
     if(!Array.prototype.forEach||!Array.prototype.map||!Array.prototype.filter||!Array.prototype.indexOf||!String.prototype.trim||!Date.now||!window.JSON||!window.XMLHttpRequest||!document.addEventListener)reasons.push('JavaScript APIs');
-    var reduced=preference==='on'||(preference!=='off'&&reasons.length>0);
+    var reduced=!window.__VAULTCAST_APPLICATION_BASE__&&(preference==='on'||(preference!=='off'&&reasons.length>0));
     window.VaultcastCompatibility={active:reduced,preference:preference,reasons:reasons};
     if(reduced){
       var query=location.search||'';
@@ -20,12 +20,45 @@
       if(!/(?:^|[?&])compat=on(?:&|$)/.test(query))query+=(query?'&':'?')+'compat=on';
       location.replace(location.pathname+query+'&detected=1');return;
     }
-    function asset(path){return base+'index.php?asset='+path+'&v='+encodeURIComponent(version);}
+    function asset(path){
+      var nativeBase=window.__VAULTCAST_ASSET_BASE__;
+      return (nativeBase?nativeBase+path.slice(7)+'?v=':base+path+'?v=')+encodeURIComponent(version);
+    }
+    window.vaultcastAssetUrl=asset;
     function style(path){var link=document.createElement('link');link.rel='stylesheet';link.href=asset(path);document.getElementsByTagName('head')[0].appendChild(link);}
     function failure(){var panel=document.createElement('p'),link=document.createElement('a');panel.style.cssText='padding:20px;background:#111;color:white;font:18px sans-serif';link.href=base+'?compat=on';link.appendChild(document.createTextNode('Open compatibility mode'));panel.appendChild(document.createTextNode('The interface could not load. '));panel.appendChild(link);document.body.appendChild(panel);}
-    style('assets/css/app.css');style('assets/css/home-hub.css');
-    var files=['routes.js','netplay_sync.js','request-cache.js','chat.js','home-hub.js','home-extras.js','live-search.js','theme-play.js','app.js'];
-    for(var i=0;i<files.length;i++){var script=document.createElement('script');script.async=false;script.src=asset('assets/js/'+files[i]);script.onerror=failure;document.getElementsByTagName('head')[0].appendChild(script);}
+    function loadInterface(){
+      style('assets/css/app.css');style('assets/css/home-hub.css');
+      var files=['routes.js','netplay_sync.js','request-cache.js','chat.js','home-hub.js','home-extras.js','live-search.js','theme-play.js','app.js'];
+      for(var i=0;i<files.length;i++){var script=document.createElement('script');script.async=false;script.src=asset('assets/js/'+files[i]);script.onerror=failure;document.getElementsByTagName('head')[0].appendChild(script);}
+    }
+
+    if(base!=='/'||!window.fetch||!window.AbortController){loadInterface();return;}
+    var controller=new AbortController(),timer=setTimeout(function(){controller.abort();},800);
+    fetch(base+'netplay/application/runtime',{cache:'no-store',credentials:'same-origin',signal:controller.signal,redirect:'error'})
+      .then(function(response){return response.ok?response.json():null;})
+      .then(function(runtime){
+        if(!runtime||runtime.version!==window.__STREAM_VERSION__)return;
+        if(runtime.application===true){
+          var application=base+'netplay/application';
+          window.__VAULTCAST_APPLICATION_BASE__=application;
+          var manifest=document.getElementById('vaultcast-manifest');
+          if(manifest)manifest.href=application+'/manifest';
+          var dependencies=window.VaultcastDependencies;
+          if(dependencies&&dependencies.source==='local'){
+            var playerAssets=base+'api/player-assets/';
+            ['emulatorData','hls'].forEach(function(key){
+              var url=dependencies[key];
+              if(typeof url==='string'&&url.indexOf(playerAssets)===0){
+                dependencies[key]=application+'/player-assets/'+url.slice(playerAssets.length);
+              }
+            });
+          }
+        }
+        if(runtime.assets===true)window.__VAULTCAST_ASSET_BASE__=base+'netplay/web-assets/';
+      })
+      .catch(function(){})
+      .then(function(){clearTimeout(timer);loadInterface();});
   }
   start();
 })();

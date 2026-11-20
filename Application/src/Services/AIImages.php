@@ -309,6 +309,7 @@ final class AIImages
             }
             if (count($jobs) > 2000) $jobs = array_values(array_filter($jobs, static function ($j) { return in_array($j['status'] ?? '', ['queued', 'running'], true) || (int)($j['created_at'] ?? 0) > time() - 86400 * 7; }));
         });
+        NodeEvents::signal('ai-images');
         return ['ok' => true, 'job_ids' => $ids];
     }
     public static function cancel(array $user, string $id): array {
@@ -477,7 +478,7 @@ final class AIImages
                 }
                 return null;
             });
-            json_out(['ok' => true, 'job' => $job ? array_intersect_key($job, array_flip(['id','model_id','model_name','model_hash','prompt','negative_prompt','width','height','steps','cfg_scale','scheduler','seed','hidiffusion','hidiffusion_raunet','hidiffusion_window_attn','hidiffusion_t1_ratio','hidiffusion_t2_ratio','fp32','tiled','seamless_x','seamless_y'])) : null]);
+            json_out(['ok' => true, 'job' => $job ? array_intersect_key($job, array_flip(['id','model_id','model_name','model_hash','prompt','negative_prompt','width','height','steps','cfg_scale','scheduler','seed','hidiffusion','hidiffusion_raunet','hidiffusion_window_attn','hidiffusion_t1_ratio','hidiffusion_t2_ratio','fp32','tiled','seamless_x','seamless_y'])) : null, 'wait' => !$job && !empty($body['wait']) ? NodeEvents::issue('ai-images', true) : null]);
         }
         if ($action === 'progress' && $method === 'POST') {
             $pct = max(1, min(99, (int)(body_json()['progress'] ?? 1)));

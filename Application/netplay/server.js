@@ -11,9 +11,110 @@ const socketIo = require('socket.io');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
+const { createHash } = require('crypto');
+const standalone = process.argv.includes('--standalone');
+
+const runtimeRevision = createHash('sha256').update(fs.readFileSync(__filename)).digest('hex');
+// Node's require() cache keeps migrated routes/workers in memory. A built-in
+// update can replace those modules without changing this entry point.
+function sourceFingerprint() {
+  const hash = createHash('sha256');
+  hash.update(fs.readFileSync(__filename));
+  hash.update(fs.readFileSync(path.join(__dirname, '../VERSION')));
+  for (const dir of ['../src/NodeApp', '../src/Workers']) {
+    const folder = path.join(__dirname, dir);
+    for (const name of fs.readdirSync(folder).filter(name => name.endsWith('.js')).sort()) {
+      hash.update(dir + '/' + name + '\\0');
+      hash.update(fs.readFileSync(path.join(folder, name)));
+    }
+  }
+  return hash.digest('hex');
+}
+const loadedSourceFingerprint = sourceFingerprint();
+const applicationVersion = fs.readFileSync(path.join(__dirname, '../VERSION'), 'utf8').trim();
+
+async function installedSourceFingerprint() {
+  const hash = createHash('sha256');
+  hash.update(await fs.promises.readFile(__filename));
+  hash.update(await fs.promises.readFile(path.join(__dirname, '../VERSION')));
+  for (const dir of ['../src/NodeApp', '../src/Workers']) {
+    const folder = path.join(__dirname, dir);
+    const names = (await fs.promises.readdir(folder)).filter(name => name.endsWith('.js')).sort();
+    for (const name of names) {
+      hash.update(dir + '/' + name + '\\0');
+      hash.update(await fs.promises.readFile(path.join(folder, name)));
+    }
+  }
+  return hash.digest('hex');
+}
+const updateMarker = path.join(__dirname, '../data/runtime/maintenance.json');
 
 const app = express();
-const server = http.createServer(app);
+let applicationDatabase;
+try { applicationDatabase = require('../src/NodeApp/account')(app, express, path.join(__dirname, '..')); }
+catch (error) { console.warn('Node application routes are unavailable'); }
+let webAsset;
+try { webAsset = require('../src/Workers/web-assets'); }
+catch (error) { console.warn('Native web asset delivery is unavailable'); }
+app.get('/web-assets/*', (req, res) => webAsset ? webAsset(req, res) : res.sendStatus(503));
+let serveMedia;
+const mediaApiRevision = 4;
+function mediaHandler() {
+  if (!serveMedia) {
+    try { serveMedia = require('../src/Workers/media-relay'); }
+    catch (error) { return null; }
+  }
+  return serveMedia;
+}
+app.get('/runtime/media/:token', (req, res) => {
+  const handle = mediaHandler();
+  if (!handle) return res.sendStatus(503);
+  return handle(req, res);
+});
+app.get('/runtime/provider/:token', (req, res) => {
+  const handle = mediaHandler();
+  if (!handle || !handle.metadata) return res.sendStatus(503);
+  return handle.metadata(req, res);
+});
+app.get('/runtime/events/:token', (req, res) => {
+  try { return require('../src/Workers/events')(req, res); }
+  catch (error) { return res.sendStatus(503); }
+});
+let quizWarmup;
+if (process.platform === 'linux') {
+  try { quizWarmup = require('../src/Workers/quiz-warmup'); }
+  catch (error) { console.warn('Quiz warmup worker is unavailable'); }
+}
+app.get('/runtime/quiz-warmup/:token', (req, res) => quizWarmup ? quizWarmup(req, res) : res.sendStatus(503));
+let transcodeRunner;
+function playbackWorker() {
+  if (process.platform !== 'linux' || !fs.promises.statfs) return null;
+  if (!transcodeRunner) {
+    try { transcodeRunner = require('../src/Workers/transcode-runner'); }
+    catch (error) { return null; }
+  }
+  return transcodeRunner;
+}
+app.get('/runtime/transcode/:token', (req, res) => {
+  const runner = playbackWorker();
+  if (!runner) return res.sendStatus(503);
+  return runner(req, res);
+});
+let downloadRunner;
+function fileWorker() {
+  if (process.platform !== 'linux' || !fs.promises.statfs) return null;
+  if (!downloadRunner) {
+    try { downloadRunner = require('../src/Workers/download-runner'); }
+    catch (error) { return null; }
+  }
+  return downloadRunner;
+}
+app.get('/runtime/download/:token', (req, res) => {
+  const runner = fileWorker();
+  if (!runner) return res.json({ ok: false });
+  return runner(req, res);
+});
+const server = standalone ? http.createServer() : http.createServer(app);
 
 app.use(cors({
   origin: '*',
@@ -22,19 +123,35 @@ app.use(cors({
   credentials: false,
 }));
 
-const io = socketIo(server, {
+const socketOptions = {
   cors: {
     origin: '*',
     methods: ['GET', 'POST'],
     credentials: false,
   },
-  path: '/socket.io',
   // savestate transfer on guest join can exceed default 1MB buffer
   maxHttpBufferSize: 20e6,
-});
+};
+const io = standalone ? socketIo(socketOptions) : socketIo(server, socketOptions);
 
-const PORT = Number(process.env.PORT || 3100);
-const HOST = process.env.HOST || '127.0.0.1';
+let maintenanceQueue;
+try { if (!standalone) maintenanceQueue = require('../src/Workers/maintenance-queue')(path.join(__dirname, '..'), applicationDatabase); }
+catch (error) { console.warn('Node maintenance queue is unavailable'); }
+
+let conversionUpload;
+try { conversionUpload = require('../src/Workers/conversion-upload')(io); }
+catch (error) { console.warn('Conversion relay uploads are unavailable'); }
+
+let dropUpload;
+try { dropUpload = require('../src/Workers/drop-upload')(io); }
+catch (error) { console.warn('Drop relay uploads are unavailable'); }
+
+let videoUpload;
+try { videoUpload = require('../src/Workers/video-upload')(io); }
+catch (error) { console.warn('Node video uploads are unavailable'); }
+
+const PORT = Number(process.env.PORT || (standalone ? 8080 : 3100));
+const HOST = standalone ? '127.0.0.1' : process.env.HOST || '127.0.0.1';
 const LOG_FILE = process.env.NETPLAY_LOG || path.join(__dirname, 'netplay.log');
 let rooms = Object.create(null);
 
@@ -85,10 +202,38 @@ app.get('/', (_req, res) => {
   res.type('text').send('Vaultcast EmulatorJS netplay OK\n');
 });
 
+// Browser-facing discovery exposes only the build and available services.
+app.get('/application/runtime', (_req, res) => {
+  res.set('Cache-Control', 'no-store');
+  if (fs.existsSync(updateMarker)) return res.sendStatus(503);
+  return res.json({
+    version: applicationVersion,
+    application: applicationDatabase?.ready() === true,
+    assets: Boolean(webAsset),
+  });
+});
+
 app.get('/health', (_req, res) => {
   res.json({
     ok: true,
     service: 'vaultcast-netplay',
+    runtimeRevision,
+    stalkerCompatibilityVersion: applicationDatabase?.ready() ? applicationVersion : null,
+    mediaRelay: Boolean(mediaHandler()),
+    mediaApiRevision,
+    metadataRelayRevision: 1,
+    webAssetRevision: webAsset ? 1 : 0,
+    stalkerReadRevision: mediaHandler() ? 1 : 0,
+    xtreamRelayRevision: mediaHandler()?.xtreamReady ? 1 : 0,
+    eventsRevision: 1,
+    quizRevision: quizWarmup?.ready ? 2 : 0,
+    playlistRevision: fileWorker() ? 1 : 0,
+    transcodeRevision: playbackWorker() ? 1 : 0,
+    downloadRevision: fileWorker() ? 2 : 0,
+    videoUploadRevision: videoUpload ? 1 : 0,
+    dropUploadRevision: dropUpload ? 1 : 0,
+    conversionUploadRevision: conversionUpload ? 1 : 0,
+    maintenanceQueueRevision: maintenanceQueue ? 1 : 0,
     version: 'vaultcast-lockstep-4',
     rooms: Object.keys(rooms).length,
     roomIds: Object.keys(rooms),
@@ -364,7 +509,39 @@ io.on('connection', (socket) => {
   });
 });
 
-server.listen(PORT, HOST, () => {
-  npLog('listen', { host: HOST, port: PORT, logFile: LOG_FILE, version: 'vaultcast-lockstep-4' });
-  console.log(`vaultcast-netplay listening on http://${HOST}:${PORT}`);
+// The updater swaps files atomically. Let active rooms finish before the
+// service manager restarts this process with the new entry point.
+let checkingInstalledSource = false;
+setInterval(async () => {
+  if (checkingInstalledSource || Object.keys(rooms).length || fs.existsSync(updateMarker)) return;
+  checkingInstalledSource = true;
+  try {
+    const installed = await installedSourceFingerprint();
+    if (installed !== loadedSourceFingerprint && !Object.keys(rooms).length && !transcodeRunner?.active() && !downloadRunner?.active() && !require('../src/Workers/stalker-download').active() && !applicationDatabase?.stalkerActive?.() && !videoUpload?.active() && !dropUpload?.active() && !conversionUpload?.active() && !quizWarmup?.active() && !maintenanceQueue?.active() && !applicationDatabase?.streaming() && !fs.existsSync(updateMarker)) {
+      process.exit(75);
+    }
+  } catch (error) {
+    // The current process can keep serving while the application files are unavailable.
+  } finally {
+    checkingInstalledSource = false;
+  }
+}, 30_000).unref();
+
+async function listen() {
+  let base = '/';
+  if (standalone) {
+    const root = path.join(__dirname, '..');
+    ({ base } = await require('../src/NodeApp/legacy-config')(root));
+    server.on('request', require('../src/NodeApp/site-router')(express, app, root, base));
+    io.path(base + 'netplay/socket.io');
+    io.attach(server);
+  }
+  server.listen(PORT, HOST, () => {
+    npLog('listen', { host: HOST, port: PORT, logFile: LOG_FILE, version: 'vaultcast-lockstep-4' });
+    console.log(`Vaultcast listening on http://${HOST}:${PORT}${base}`);
+  });
+}
+listen().catch(() => {
+  console.error('Cannot start Vaultcast. Check the installation database configuration and base path.');
+  process.exit(1);
 });

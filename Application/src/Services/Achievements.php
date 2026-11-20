@@ -27,92 +27,14 @@ final class Achievements
     const NOT_WATCHING = ['music', 'roms', 'games', 'audiobooks', 'podcasts', 'photos'];
 
     /** id => [category, tier, icon, name, description, counter, goal, secret] */
-    const LIST = [
-        // Watching
-        'first-film'      => ['watching', 'bronze', '🎬', 'Opening night', 'Finish your first film', 'films', 1, false],
-        'films-10'        => ['watching', 'bronze', '🍿', 'Film buff', 'Finish 10 films', 'films', 10, false],
-        'films-50'        => ['watching', 'silver', '🎞️', 'Cinephile', 'Finish 50 films', 'films', 50, false],
-        'films-100'       => ['watching', 'gold', '🏛️', 'Film scholar', 'Finish 100 films', 'films', 100, false],
-        'films-500'       => ['watching', 'platinum', '📽️', 'Projectionist', 'Finish 500 films', 'films', 500, false],
-        'first-episode'   => ['watching', 'bronze', '📺', 'Pilot', 'Finish your first episode', 'episodes', 1, false],
-        'episodes-100'    => ['watching', 'silver', '🛋️', 'Box-set regular', 'Finish 100 episodes', 'episodes', 100, false],
-        'episodes-1000'   => ['watching', 'gold', '🗓️', 'Seasoned viewer', 'Finish 1,000 episodes', 'episodes', 1000, false],
-        'hours-10'        => ['watching', 'bronze', '⏳', 'Comfy chair', 'Watch 10 hours of films and episodes', 'watch_seconds', 36000, false],
-        'hours-100'       => ['watching', 'silver', '🪑', 'Couch commander', 'Watch 100 hours of films and episodes', 'watch_seconds', 360000, false],
-        'hours-500'       => ['watching', 'gold', '🏃', 'Marathoner', 'Watch 500 hours of films and episodes', 'watch_seconds', 1800000, false],
-        'hours-1000'      => ['watching', 'platinum', '👑', 'Living room legend', 'Watch 1,000 hours of films and episodes', 'watch_seconds', 3600000, false],
-        'weekend-binge'   => ['watching', 'silver', '🍕', 'Weekend binge', 'Watch every episode of a season over one weekend', 'binge', 1, false],
-        'finale'          => ['watching', 'silver', '🏁', 'Finale', 'Finish every episode of a series', 'series', 1, false],
-        'series-10'       => ['watching', 'gold', '🗂️', 'Completionist', 'Finish every episode of 10 series', 'series', 10, false],
-        'decades-5'       => ['watching', 'silver', '🕰️', 'Time traveller', 'Finish films from 5 different decades', 'decades', 5, false],
-        'decades-8'       => ['watching', 'gold', '📜', 'Through the ages', 'Finish films from 8 different decades', 'decades', 8, false],
-        'genres-10'       => ['watching', 'silver', '🧭', 'Genre explorer', 'Finish films from 10 different genres', 'genres', 10, false],
-        'genres-20'       => ['watching', 'gold', '🗺️', 'Genre globetrotter', 'Finish films from 20 different genres', 'genres', 20, false],
-        'night-owl'       => ['watching', 'bronze', '🦉', 'Night owl', 'Finish a film between midnight and 5 am', 'night', 1, true],
-        'triple-bill'     => ['watching', 'silver', '🎟️', 'Triple bill', 'Finish three films in one day', 'triple', 1, true],
-        // Live TV
-        'live-1h'         => ['live', 'bronze', '📡', 'Tuned in', 'Watch an hour of Live TV', 'live_seconds', 3600, false],
-        'live-24h'        => ['live', 'silver', '📻', 'Channel surfer', 'Watch 24 hours of Live TV', 'live_seconds', 86400, false],
-        'live-100h'       => ['live', 'gold', '🗼', 'Broadcast royalty', 'Watch 100 hours of Live TV', 'live_seconds', 360000, false],
-        'relay'           => ['live', 'bronze', '📼', 'Relay runner', 'Watch a PseudoTV Relay channel for 10 minutes', 'relay_seconds', 600, false],
-        'relay-10h'       => ['live', 'silver', '🔁', 'Always on air', 'Watch 10 hours of PseudoTV Relay channels', 'relay_seconds', 36000, false],
-        // Play
-        'first-game'      => ['play', 'bronze', '🎮', 'First steps', 'Finish your first game', 'games', 1, false],
-        'regular'         => ['play', 'bronze', '🕹️', 'Regular', 'Play 25 games', 'games', 25, false],
-        'devoted'         => ['play', 'silver', '💎', 'Devoted', 'Play 250 games', 'games', 250, false],
-        'arcade-addict'   => ['play', 'gold', '🎰', 'Arcade addict', 'Play 1,000 games', 'games', 1000, false],
-        'centurion'       => ['play', 'bronze', '💯', 'Centurion', 'Earn 100 points', 'points', 100, false],
-        'high-roller'     => ['play', 'silver', '🏆', 'High roller', 'Earn 2,500 points', 'points', 2500, false],
-        'jackpot'         => ['play', 'gold', '💰', 'Jackpot', 'Earn 10,000 points', 'points', 10000, false],
-        'hall-of-fame'    => ['play', 'platinum', '🌟', 'Hall of fame', 'Earn 50,000 points', 'points', 50000, false],
-        'line-clearer'    => ['play', 'silver', '🧱', 'Line clearer', 'Score 20,000 in Stackfall', 'best_blocks', 20000, false],
-        'skyscraper'      => ['play', 'gold', '🏗️', 'Skyscraper', 'Score 100,000 in Stackfall', 'best_blocks', 100000, false],
-        'long-snake'      => ['play', 'silver', '🐍', 'Long snake', 'Score 500 in Neon Snake', 'best_snake', 500, false],
-        'serpent'         => ['play', 'gold', '🐉', 'Serpent supreme', 'Score 2,000 in Neon Snake', 'best_snake', 2000, false],
-        'brick-master'    => ['play', 'silver', '🧨', 'Brick master', 'Score 5,000 in Brickbreak', 'best_breakout', 5000, false],
-        'wrecking-ball'   => ['play', 'gold', '💥', 'Wrecking ball', 'Score 25,000 in Brickbreak', 'best_breakout', 25000, false],
-        'tile-2048'       => ['play', 'gold', '🧩', '2048!', 'Reach the 2048 tile', 'tile', 2048, false],
-        'tile-4096'       => ['play', 'platinum', '🧠', 'Beyond 2048', 'Reach the 4096 tile', 'tile', 4096, true],
-        'all-rounder'     => ['play', 'silver', '🌈', 'All-rounder', 'Score in every arcade game', 'run_games', 4, false],
-        'word-first'      => ['play', 'bronze', '✏️', 'Word up', 'Solve your first Daily Five', 'word_wins', 1, false],
-        'wordsmith'       => ['play', 'silver', '🔤', 'Wordsmith', 'Solve Daily Five in three guesses or fewer', 'word_quality', 4, false],
-        'mind-reader'     => ['play', 'platinum', '🎯', 'Mind reader', 'Solve Daily Five with your very first guess', 'word_quality', 6, true],
-        'streak'          => ['play', 'silver', '🔥', 'On a roll', 'Solve Daily Five seven days in a row', 'word_streak', 7, false],
-        'streak-30'       => ['play', 'gold', '☄️', 'Unstoppable', 'Solve Daily Five 30 days in a row', 'word_streak', 30, false],
-        'grandmaster'     => ['play', 'bronze', '♛', 'Checkmate!', 'Win a chess game against a friend', 'chess_wins', 1, false],
-        'chess-club'      => ['play', 'silver', '♜', 'Chess club', 'Win 10 chess games against friends', 'chess_wins', 10, false],
-        'blitz'           => ['play', 'gold', '⚡', 'Blitz', 'Checkmate a friend in under 20 moves', 'chess_quick', 1, false],
-        'beat-machine'    => ['play', 'silver', '🤖', 'Beat the machine', 'Beat the level 3 chess computer', 'chess_ai', 3, false],
-        'quiz-champ'      => ['play', 'silver', '🧠', 'Quiz champion', 'Win a quiz night', 'quiz_wins', 1, false],
-        'quiz-legend'     => ['play', 'gold', '🎓', 'Quiz legend', 'Win 10 quiz nights', 'quiz_wins', 10, false],
-        'daily-quiz'      => ['play', 'bronze', '📅', 'Daily quizzer', 'Finish a daily quiz', 'quiz_daily', 1, false],
-        'quiz-habit'      => ['play', 'silver', '🗞️', 'Quiz habit', 'Finish 30 daily quizzes', 'quiz_daily', 30, false],
-        'team-player'     => ['play', 'bronze', '🤝', 'Team player', 'Join or found a team', 'team', 1, false],
-        'squad-goals'     => ['play', 'silver', '🛡️', 'Squad goals', 'Be in a team with five or more players', 'team_size', 5, false],
-        'retro'           => ['play', 'bronze', '👾', 'Retro gamer', 'Start a game from the Games library', 'emu_sessions', 1, false],
-        'save-state'      => ['play', 'silver', '💾', 'Save state', 'Play 50 sessions from the Games library', 'emu_sessions', 50, false],
-        // Social
-        'first-friend'    => ['social', 'bronze', '👋', 'Say hello', 'Make your first friend on the server', 'friends', 1, false],
-        'social'          => ['social', 'silver', '🦋', 'Social butterfly', 'Have five friends on the server', 'friends', 5, false],
-        'life-of-party'   => ['social', 'gold', '🎉', 'Life of the party', 'Have 15 friends on the server', 'friends', 15, false],
-        'watch-party'     => ['social', 'bronze', '🎥', 'Watch party', 'Join a Watch together session', 'cinema', 1, false],
-        'front-row'       => ['social', 'silver', '🎪', 'Front row regular', 'Join 10 Watch together sessions', 'cinema', 10, false],
-        'critic'          => ['social', 'bronze', '✍️', 'Critic', 'Write your first review', 'reviews', 1, false],
-        'reviewer'        => ['social', 'silver', '📝', 'Reviewer', 'Review 10 titles', 'reviews', 10, false],
-        'top-critic'      => ['social', 'gold', '🖋️', 'Top critic', 'Review 50 titles', 'reviews', 50, false],
-        // Library
-        'wish-granted'    => ['library', 'bronze', '📬', 'Wish granted', 'One of your requests arrived in the library', 'requests', 1, false],
-        'curator'         => ['library', 'silver', '📚', 'Curator', '10 of your requests arrived in the library', 'requests', 10, false],
-        'archivist'       => ['library', 'gold', '🗄️', 'Archivist', '50 of your requests arrived in the library', 'requests', 50, false],
-        // Board and Ambient
-        'pin-it'          => ['fun', 'bronze', '📌', 'Pin it', 'Add a widget to your Board', 'widgets', 1, false],
-        'board-architect' => ['fun', 'silver', '🧷', 'Board architect', 'Have 12 widgets across your boards', 'widgets', 12, false],
-        'many-boards'     => ['fun', 'silver', '🪟', 'Many boards', 'Make three boards', 'boards', 3, false],
-        'mood-lighting'   => ['fun', 'bronze', '🌙', 'Mood lighting', 'Start Ambient mode', 'ambient', 1, false],
-        'zen'             => ['fun', 'silver', '🧘', 'Zen', 'Spend an hour in Ambient mode', 'ambient_seconds', 3600, false],
-        'screensaver'     => ['fun', 'gold', '🌌', 'Screensaver', 'Spend 10 hours in Ambient mode', 'ambient_seconds', 36000, true],
-        'overachiever'    => ['fun', 'platinum', '🏅', 'Overachiever', 'Earn 40 achievements', 'earned', 40, false],
-    ];
+    private static function definitions(): array
+    {
+        static $definitions = null;
+        if ($definitions === null) {
+            $definitions = json_decode((string)file_get_contents(dirname(__DIR__) . '/NodeApp/achievement-definitions.json'), true, 512, JSON_THROW_ON_ERROR);
+        }
+        return $definitions;
+    }
     /** How a counter is shown in progress text. */
     const UNITS = ['watch_seconds' => 'hours', 'live_seconds' => 'hours', 'relay_seconds' => 'minutes', 'ambient_seconds' => 'minutes'];
 
@@ -145,7 +67,7 @@ final class Achievements
             $earned = (int)self::q('SELECT COUNT(*) FROM vaultcast_achievements')->fetchColumn();
             $people = (int)self::q('SELECT COUNT(DISTINCT user_id) FROM vaultcast_achievements')->fetchColumn();
         } catch (Throwable $e) {}
-        return ['ok' => true, 'settings' => self::settings(), 'total' => count(self::LIST), 'earned' => $earned, 'people' => $people];
+        return ['ok' => true, 'settings' => self::settings(), 'total' => count(self::definitions()), 'earned' => $earned, 'people' => $people];
     }
     public static function saveSettings(array $body): array
     {
@@ -268,7 +190,7 @@ final class Achievements
         $new = [];
         for ($pass = 0; $pass < 2; $pass++) {
             $c = self::counters($uid); $have = self::earned($uid); $c['earned'] = count($have);
-            foreach (self::LIST as $id => $a) {
+            foreach (self::definitions() as $id => $a) {
                 if (isset($have[$id]) || ($c[$a[5]] ?? 0) < $a[6]) continue;
                 $now = time();
                 if (self::q('INSERT IGNORE INTO vaultcast_achievements (user_id,ach_id,earned_at,toasted,showcase) VALUES (?,?,?,?,0)', [$uid, $id, $now, $quiet ? 1 : 0])->rowCount() > 0) {
@@ -285,7 +207,7 @@ final class Achievements
     private static function announce(string $uid, array $ids): void
     {
         foreach ($ids as $id) {
-            $a = self::LIST[$id];
+            $a = self::definitions()[$id];
             Inbox::add($uid, 'achievement', $a[1], 'ach:' . $id, null, 'Achievement unlocked: ' . $a[3], $a[4] . ' · ' . self::TIERS[$a[1]], ['kind' => 'path', 'path' => 'play/achievements'], ['achievement' => $id, 'icon' => $a[2], 'tier' => $a[1]]);
         }
         // The person's own request: tell the app straight away so the toast does not wait for the next poll.
@@ -589,7 +511,7 @@ final class Achievements
     }
     private static function publicRow(string $id, ?array $earned, array $counters, array $rarity, bool $reveal): array
     {
-        $a = self::LIST[$id]; $value = min((int)($counters[$a[5]] ?? 0), $a[6]);
+        $a = self::definitions()[$id]; $value = min((int)($counters[$a[5]] ?? 0), $a[6]);
         $hidden = $a[7] && !$earned && !$reveal;
         $unit = self::UNITS[$a[5]] ?? '';
         $fmt = function (int $n) use ($unit): string {
@@ -614,19 +536,19 @@ final class Achievements
         $counters = self::counters($uid); $earned = self::earned($uid); $rarity = self::rarity();
         $counters['earned'] = count($earned);
         $rows = []; $points = 0; $byTier = array_fill_keys(array_keys(self::TIERS), 0);
-        foreach (array_keys(self::LIST) as $id) {
+        foreach (array_keys(self::definitions()) as $id) {
             $row = self::publicRow($id, $earned[$id] ?? null, $counters, $rarity, false);
             if ($row['earned']) $byTier[$row['tier']]++;
             $rows[] = $row;
         }
         return ['ok' => true, 'enabled' => true, 'achievements' => $rows, 'categories' => self::CATEGORIES, 'tiers' => self::TIERS,
-            'summary' => ['earned' => count($earned), 'total' => count(self::LIST), 'tiers' => $byTier, 'people' => (int)$rarity['people']],
+            'summary' => ['earned' => count($earned), 'total' => count(self::definitions()), 'tiers' => $byTier, 'people' => (int)$rarity['people']],
             'showcase' => self::showcaseIds($uid), 'social' => self::socialAllowed($user), 'showcase_max' => self::SHOWCASE_MAX];
     }
     private static function showcaseIds(string $uid): array
     {
         $picked = [];
-        foreach (self::earned($uid) as $id => $e) if ($e['showcase'] > 0 && isset(self::LIST[$id])) $picked[$id] = $e['showcase'];
+        foreach (self::earned($uid) as $id => $e) if ($e['showcase'] > 0 && isset(self::definitions()[$id])) $picked[$id] = $e['showcase'];
         asort($picked);
         return array_slice(array_keys($picked), 0, self::SHOWCASE_MAX);
     }
@@ -638,7 +560,7 @@ final class Achievements
         $uid = (string)$user['id']; $have = self::earned($uid);
         $ids = [];
         foreach (array_slice((array)($body['ids'] ?? []), 0, 10) as $id) {
-            if (!is_string($id) || !isset(self::LIST[$id])) continue;
+            if (!is_string($id) || !isset(self::definitions()[$id])) continue;
             if (!isset($have[$id])) throw new DomainException('You can only show achievements you have earned.');
             if (!in_array($id, $ids, true)) $ids[] = $id;
         }
@@ -655,14 +577,14 @@ final class Achievements
     {
         if (!self::enabled() || !self::signedIn($target) || !self::socialAllowed($target)) return [];
         $uid = (string)$target['id']; $earned = self::earned($uid); $out = [];
-        foreach (self::showcaseIds($uid) as $id) { $a = self::LIST[$id]; $out[] = ['id' => $id, 'name' => $a[3], 'detail' => $a[4], 'icon' => $a[2], 'tier' => $a[1], 'tier_label' => self::TIERS[$a[1]], 'earned_at' => (int)$earned[$id]['earned_at']]; }
+        foreach (self::showcaseIds($uid) as $id) { $a = self::definitions()[$id]; $out[] = ['id' => $id, 'name' => $a[3], 'detail' => $a[4], 'icon' => $a[2], 'tier' => $a[1], 'tier_label' => self::TIERS[$a[1]], 'earned_at' => (int)$earned[$id]['earned_at']]; }
         return $out;
     }
     /** Badges for Play profiles, in the shape the profile view already understands. Secret ones only once earned. */
     public static function profileBadges(array $target): array
     {
         $uid = (string)$target['id']; self::ensureBackfilled($uid); $earned = self::earned($uid); $out = [];
-        foreach (self::LIST as $id => $a) {
+        foreach (self::definitions() as $id => $a) {
             if ($a[7] && !isset($earned[$id])) continue;
             $out[] = ['id' => $id, 'name' => $a[3], 'detail' => $a[4], 'icon' => $a[2], 'tier' => $a[1], 'category' => $a[0], 'earned' => isset($earned[$id])];
         }
@@ -674,7 +596,7 @@ final class Achievements
         if (!self::signedIn($user) || !self::enabled()) return ['ok' => true, 'items' => []];
         $out = [];
         foreach (self::q('SELECT ach_id, earned_at FROM vaultcast_achievements WHERE user_id=? AND toasted=0 ORDER BY earned_at LIMIT 10', [(string)$user['id']]) as $r) {
-            $id = (string)$r['ach_id']; if (!isset(self::LIST[$id])) continue; $a = self::LIST[$id];
+            $id = (string)$r['ach_id']; if (!isset(self::definitions()[$id])) continue; $a = self::definitions()[$id];
             $out[] = ['id' => $id, 'name' => $a[3], 'description' => $a[4], 'icon' => $a[2], 'tier' => $a[1], 'tier_label' => self::TIERS[$a[1]], 'earned_at' => (int)$r['earned_at']];
         }
         return ['ok' => true, 'items' => $out];
@@ -682,7 +604,7 @@ final class Achievements
     public static function toasted(array $user, array $body): array
     {
         if (!self::signedIn($user)) throw new DomainException('Sign in first.');
-        $ids = array_values(array_filter(array_slice((array)($body['ids'] ?? []), 0, 20), function ($id) { return is_string($id) && isset(self::LIST[$id]); }));
+        $ids = array_values(array_filter(array_slice((array)($body['ids'] ?? []), 0, 20), function ($id) { return is_string($id) && isset(self::definitions()[$id]); }));
         if ($ids) self::q('UPDATE vaultcast_achievements SET toasted=1 WHERE user_id=? AND ach_id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')', array_merge([(string)$user['id']], $ids));
         return ['ok' => true];
     }

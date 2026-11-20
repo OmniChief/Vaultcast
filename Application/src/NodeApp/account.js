@@ -1,0 +1,222 @@
+'use strict';
+
+const { randomBytes } = require('crypto');
+const { readFile } = require('fs').promises;
+const { join } = require('path');
+const { Worker } = require('worker_threads');
+const database = require('./database');
+
+const { sha, now, parse, enabled, storedBoolean, documents, publicUser } = require('./account-data');
+const mountProfiles = require('./profile');
+const mountLibrary = require('./library');
+const mountLibraryIndex = require('./library-index');
+const mountStream = require('./stream');
+const mountPlayback = require('./playback');
+const mountStalkerStatus = require('./stalker-status');
+const mountXtream = require('./xtream');
+const mountEpisodeSegments = require('./episode-segments');
+const mountSegmentWarmup = require('./segment-warmup');
+const mountProgress = require('./progress');
+const mountAchievements = require('./achievements');
+const mountBrowserAssets = require('./browser-assets');
+const cookieName = 'vaultcast_session';
+
+function browserToken(request) {
+  const match = String(request.headers.cookie || '').match(/(?:^|;\s*)vaultcast_session=([a-f0-9]{64})(?=;|$)/);
+  return match?.[1] || '';
+}
+
+async function session(pool, request, includeUser, delegatedHash) {
+  const authorization = String(request.headers.authorization || '').trim();
+  const bearer = /^Bearer(?:[ \t]|$)/i.test(authorization);
+  const token = bearer ? authorization.match(/^Bearer[ \t]+(vc_[a-f0-9]{64})$/i)?.[1] : browserToken(request);
+  if (!token && !delegatedHash) return { authenticated: false, error: bearer ? 'Invalid API key.' : null };
+  const userColumn = includeUser ? ',u.payload AS user_payload' : '';
+  const [rows] = await pool.execute(
+    'SELECT s.payload,u.id' + userColumn + ' FROM vaultcast_sessions s LEFT JOIN vaultcast_users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>=?',
+    [delegatedHash ?? sha(token), now()]);
+  const entry = rows[0];
+  if (bearer && (!entry?.id || !enabled(parse(entry.payload)?.api_key))) {
+    return { authenticated: false, error: 'API key is invalid or expired.' };
+  }
+  return {
+    authenticated: Boolean(entry), error: null,
+    data: includeUser && entry ? parse(entry.payload) : null,
+    user: includeUser && entry?.id ? parse(entry.user_payload) : null,
+    browserToken: includeUser && !delegatedHash ? browserToken(request) : '',
+    delegatedHash,
+  };
+}
+
+function requestAllowed(request, settings) {
+  const site = request.headers['sec-fetch-site'];
+  if (site === 'cross-site') return false;
+  const origin = request.headers.origin;
+  if (!origin) return true;
+  try {
+    const url = new URL(origin);
+    if (!['http:', 'https:'].includes(url.protocol) || url.origin !== origin) return false;
+    // Fetch Metadata describes the browser's actual request origin, whereas nginx
+    // and other reverse proxies can remove the public port or rewrite Host.
+    // A browser cannot forge Sec-Fetch-Site, so a same-origin request is safe
+    // even when the internal authority no longer matches the public address.
+    if (site === 'same-origin') return true;
+    const authority = new URL(url.protocol + '//' + request.headers.host);
+    if (authority.origin === url.origin) return true;
+    // Older browsers do not send Fetch Metadata. The application's custom
+    // request header requires CORS preflight on a different origin, which this
+    // Node service deliberately does not permit. It handles proxies that drop
+    // an external :port without allowing cross-origin form-based CSRF.
+    if (!site && request.headers['x-vaultcast-request'] === 'same-origin' &&
+        authority.hostname === url.hostname) return true;
+    return settings.public_base_url ? new URL(settings.public_base_url).origin === url.origin : false;
+  } catch (error) {
+    return false;
+  }
+}
+
+let workers = 0;
+function passwordWork(bcrypt, password, hash) {
+  if (workers >= 2) return Promise.reject(new Error('Password service busy'));
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(join(__dirname, 'verify-password.js'), {
+      workerData: { bcrypt, password, hash }, resourceLimits: { maxOldGenerationSizeMb: 16 },
+    });
+    workers++;
+    const timer = setTimeout(() => { void worker.terminate(); reject(new Error('Password verification timed out')); }, 8000);
+    worker.once('message', result => { clearTimeout(timer); resolve(result); });
+    worker.once('error', error => { clearTimeout(timer); reject(error); });
+    worker.once('exit', () => { workers--; clearTimeout(timer); reject(new Error('Password worker exited')); });
+  });
+}
+
+module.exports = function mountAccount(app, express, root) {
+  const db = database(root);
+  const downloads = require('../Workers/stalker-download').start(db, root);
+  const stalker = require('../Workers/stalker-clock')(root, db);
+  const route = '/application';
+  const version = readFile(join(root, 'VERSION'), 'utf8').then(text => text.trim()).catch(() => '');
+  let passwordChecks = 0;
+  let lastPrune = 0;
+  const json = express.json({ limit: '16kb' });
+  const emptyError = (response, code, error) => response.status(code).json({ ok: false, error });
+  function unavailable(response) {
+    return emptyError(response.set('X-Vaultcast-App-Unavailable', '1'), 503, 'The Node application backend is unavailable.');
+  }
+  async function updating() {
+    const marker = await readFile(join(root, 'data/runtime/maintenance.json'), 'utf8').then(JSON.parse).catch(() => null);
+    return marker && Number(marker.since) > now() - 900;
+  }
+  const handle = (operation, includeUser = false) => async (request, response) => {
+    response.set({ 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
+    if (!db.ready()) return unavailable(response);
+    try {
+      if (await updating()) return emptyError(response.set('Retry-After', '30'), 503, 'Vaultcast is updating.');
+      const finish = await db.run(async (pool, bcrypt) => {
+        const settings = (await documents(pool, ['settings'])).settings ?? {};
+        // Starting a library stream creates only an unguessable, short-lived
+        // playback token. Its route already requires a signed-in user, JSON,
+        // library access and an authorized media item. No cross-origin caller
+        // can read the token through the browser's credentialed CORS rules.
+        // Keep the Origin/CSRF check for every other POST operation.
+        const playbackStart = /^\/application\/items\/[a-f0-9]{16}\/play$/.test(request.path);
+        if (request.method === 'POST' && !playbackStart && !requestAllowed(request, settings)) {
+          // A route template contains no query strings, tokens or real item IDs.
+          return emptyError(response, 403, 'Cross-site request rejected. [Node ' +
+            request.method + ' ' + String(request.route?.path || '/application').slice(0, 140) + ']');
+        }
+        response.locals.base = db.base();
+        const current = await session(pool, request, includeUser, response.locals.stalkerSessionHash);
+        if (current.error) return emptyError(response, 401, current.error);
+        return operation(request, response, pool, bcrypt, settings, current);
+      });
+      if (typeof finish === 'function') await finish();
+    } catch (error) {
+      if (response.headersSent || response.destroyed) return;
+      if (response.locals.mutationStarted) return emptyError(response, 503, 'The request could not be completed.');
+      return unavailable(response);
+    }
+  };
+
+  app.get(route + '/status', handle(async (_request, response, _pool, _bcrypt, settings, current) => {
+    response.json({
+      ok: true, app: settings.app_name ?? 'Vaultcast', version: await version,
+      authenticated: current.authenticated, base: '/', public: true,
+      drop_anonymous: storedBoolean(settings.drop, 'enabled', true) && enabled(settings.drop?.anonymous),
+    });
+  }));
+
+  app.post(route + '/login', (request, response, next) => {
+    if (!request.is('application/json')) return emptyError(response, 415, 'Expected a JSON request.');
+    json(request, response, error => error ? emptyError(response, 400, 'Invalid JSON request.') : next());
+  }, handle(async (request, response, pool, bcrypt, settings) => {
+    const { username, password } = request.body ?? {};
+    if (typeof username !== 'string' || typeof password !== 'string' || Buffer.byteLength(username) > 255 ||
+        Buffer.byteLength(password) > 4096 || password.includes('\0')) {
+      return emptyError(response, 401, 'Invalid username or password');
+    }
+    if (passwordChecks >= 2) return emptyError(response, 429, 'Too many sign-in requests. Try again shortly.');
+    passwordChecks++;
+    let user;
+    let verifiedHash;
+    try {
+      const [rows] = await pool.execute('SELECT payload,password_hash FROM vaultcast_users WHERE username=?', [username.trim()]);
+      const hash = rows[0]?.password_hash;
+      if (typeof hash !== 'string') return emptyError(response, 401, 'Invalid username or password');
+      if (!/^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/.test(hash)) return unavailable(response);
+      if (await passwordWork(bcrypt, password, hash) !== true) return emptyError(response, 401, 'Invalid username or password');
+      user = parse(rows[0].payload);
+      verifiedHash = hash;
+    } finally { passwordChecks--; }
+    const token = randomBytes(32).toString('hex');
+    const time = now();
+    const configuredTtl = Number(settings.auth?.session_ttl_seconds ?? 604800);
+    const ttl = Number.isSafeInteger(configuredTtl) && Math.abs(configuredTtl) <= 3153600000 ? configuredTtl : 604800;
+    const data = {
+      user_id: user.id, username: user.username, role: user.role ?? 'user',
+      created_at: time, expires_at: time + ttl, ip: request.socket.remoteAddress ?? '0.0.0.0',
+    };
+    const docs = await documents(pool, ['permission_roles', 'media_requests_config', 'contribution-account-' + sha(String(user.id))]);
+    const profile = publicUser(user, settings, docs, time);
+    // Reject a credential changed or account deleted between lookup and session creation.
+    response.locals.mutationStarted = true;
+    const [inserted] = await pool.execute(
+      'INSERT INTO vaultcast_sessions (token_hash,user_id,expires_at,payload) SELECT ?,id,?,? FROM vaultcast_users WHERE id=? AND BINARY password_hash=?',
+      [sha(token), data.expires_at, JSON.stringify(data), user.id, verifiedHash]);
+    if (!inserted.affectedRows) return emptyError(response, 401, 'Invalid username or password');
+    if (time - lastPrune >= 300) {
+      lastPrune = time;
+      await pool.execute('DELETE FROM vaultcast_sessions WHERE expires_at<? LIMIT 1000', [time]).catch(() => {});
+    }
+    const secure = request.secure || request.headers['x-forwarded-proto'] === 'https' || String(request.headers.origin || '').startsWith('https://');
+    response.cookie(cookieName, token, { expires: new Date(data.expires_at * 1000), path: '/', secure, httpOnly: true, sameSite: 'lax' });
+    response.json({ ok: true, token, user: profile });
+  }));
+
+  app.post(route + '/logout', handle(async (request, response, pool) => {
+    const token = browserToken(request);
+    if (token) {
+      response.locals.mutationStarted = true;
+      await pool.execute('DELETE FROM vaultcast_sessions WHERE token_hash=?', [sha(token)]);
+    }
+    response.clearCookie(cookieName, { path: '/', httpOnly: true, sameSite: 'lax' }).json({ ok: true });
+  }));
+  mountProfiles(app, route, {
+    root, handle, unavailable, passwordWork,
+    json: express.json({ limit: '1mb' }),
+  });
+  mountBrowserAssets(app, route, { root, handle, unavailable });
+  mountLibrary(app, route, { root, handle, unavailable });
+  const preparingLibrary = mountLibraryIndex(app, route, { root, db, handle, updating });
+  mountEpisodeSegments(app, route, { root, db, handle, json, unavailable });
+  const preparingSegments = mountSegmentWarmup(app, route, { root, db, handle, json, updating });
+  const stalkerRequests = mountStalkerStatus(app, route, { root, handle, unavailable, json: express.json({ limit: '256kb' }), downloads, stalker, services: db.services, run: db.run });
+  const xtreamActive = mountXtream(app, route, { root, handle, json, services: db.services });
+  mountProgress(app, route, { handle, json, unavailable, root });
+  mountAchievements(app, route, { root, handle, json });
+  const converting = mountPlayback(app, route, { root, db, handle, json, unavailable });
+  const streaming = mountStream(app, route, { db, root, readSession: session, updating, express, unavailable, requestAllowed });
+  return { ...db, adoptTimingJob: preparingSegments.adopt,
+    streaming: () => streaming() || xtreamActive() || converting() || preparingLibrary() || preparingSegments.active(),
+    stalkerActive: () => stalker.active() || stalkerRequests() };
+};

@@ -121,7 +121,7 @@ window.VaultcastStalkerCountries=function(host,options){
   }
   function credits(p){if(!p)return '';return [p.cast&&plain(p.cast)?'Cast: '+plain(p.cast):'',p.director&&plain(p.director)?'Director: '+plain(p.director):'',p.presenter&&plain(p.presenter)?'Presented by '+plain(p.presenter):''].filter(Boolean).join(' · ');}
   function playerGuide(item){var events=programmes(item);if(!events.length)return null;return {logo:item.sources.map(function(s){return s.logoUrl||guideLogos[s.feed+'|'+s.id];}).filter(Boolean)[0]||'',programs:events.map(function(p){return Object.assign({},p,{startUnix:p.start*1000,endUnix:p.end*1000,subtitle:p.description||'',kind:'epg'});})};}
-  function sequence(items){return items.map(function(item){return {feed:item.feed,id:String(item.id),name:item.name,_guide:playerGuide(item),sources:item.sources.map(function(s){return {feed:s.feed,id:String(s.id),name:s.name,connection:s.connection,kind:'live',quality:s.quality,qualityRank:s.qualityRank};})};});}
+  function sequence(items){return items.map(function(item){return {feed:item.feed,id:String(item.id),name:item.name,_guide:playerGuide(item),sources:item.sources.map(function(s){return {feed:s.feed,id:String(s.id),name:s.name,connection:s.connection,kind:'live',quality:s.quality,qualityRank:s.qualityRank,category:s.category,page:s.page};})};});}
   function play(item,button,source){var first=source||item.sources[0],ordered=[first].concat(item.sources.filter(function(s){return s.feed!==first.feed||String(s.id)!==String(first.id);}));options.play(first.feed,Object.assign({},item,{feed:first.feed,id:first.id,sources:ordered,_guide:playerGuide(item),_channelSequence:sequence(visibleChannels())}),button);}
   function favouriteId(item){return country+'|'+key(item);}
   function favourite(item){return favourites.indexOf(favouriteId(item))>=0;}
@@ -188,7 +188,7 @@ window.VaultcastStalkerCountries=function(host,options){
     snapshot();serial++;loading=false;guideBusy=false;genre=value;search='';chosen='';
     var sources=sourcesFor(genre);selected={sources:sources,country:country,genre:genre};
     var saved=cache.get(country+'|'+genre)||{};channels=saved.channels||[];sourcePages=saved.sourcePages||{};pageInventory=saved.pageInventory||[];guideByChannel=saved.guideByChannel||{};guideLogos=saved.guideLogos||{};guideFetched=saved.guideFetched||{};guideFetchedAt=saved.guideFetchedAt||{};search=saved.search||'';chosen=saved.chosen||'';
-    remember();shell();paint();if(!sources.length){status.textContent='No saved provider folders available for this genre in '+name(country)+'. Choose another genre or country, or ask an administrator to import Live TV.';return;}
+    remember();shell();paint();if(!sources.length){status.textContent=failures.length?failures.join(' · '):'No Live TV provider folders available for this genre in '+name(country)+'. Choose another genre or country, or refresh the provider list.';return;}
     if(!channels.length)loadChannels();else requestGuide();
   }
   function refreshEpg(){

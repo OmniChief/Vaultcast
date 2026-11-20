@@ -2,6 +2,7 @@
   'use strict';
   var BASE = window.__STREAM_BASE__ || '/';
   var API = BASE + 'api';
+  var viewingApi = BASE + 'netplay/application';
   var tvSelectPicker = /(?:\bLG\b|LGE|Tizen|Web0S|WebOS|SMART-TV|SmartTV|Android TV|Google TV|AFT[A-Z0-9]*|Roku|Viera|HbbTV|NetCast|BRAVIA|Hisense|Philips)/i.test(navigator.userAgent || '');
   if(tvSelectPicker)document.documentElement.classList.add('tv-poster-device');
   var _navSilent = false;
@@ -526,9 +527,12 @@
       if (!f) { status.textContent = 'Choose a subtitle file first.'; return; }
       if (f.size > 2097152) { status.textContent = 'Subtitle files can be at most 2 MB.'; return; }
       send.disabled = true; status.textContent = 'Uploading…';
-      fetch(BASE + 'api/stream/subtitles/' + play.token + '/upload?lang=' + encodeURIComponent(lang.value), {
+      var uploadPath = '/stream/subtitles/' + play.token + '/upload?lang=' + encodeURIComponent(lang.value);
+      var uploadOptions = {
         method:'POST', credentials:'same-origin', cache:'no-store', headers:{ 'Content-Type':'application/octet-stream' }, body:f
-      }).then(function(r){ return r.json().catch(function(){ return { ok:false, error:'Upload failed (HTTP ' + r.status + ')' }; }); }).then(function(res){
+      };
+      var upload = fetch(viewingApi + uploadPath, uploadOptions);
+      upload.then(function(r){ return r.json().catch(function(){ return { ok:false, error:'Upload failed (HTTP ' + r.status + ')' }; }); }).then(function(res){
         send.disabled = false;
         if (!res || !res.ok) { status.textContent = (res && res.error) || 'Upload failed'; return; }
         toast('Subtitles added', { kind:'ok' });
@@ -962,18 +966,11 @@ function confirmDialog(message, opts){
       actions ? h('div', { className:'row-actions', style:'justify-content:center' }, actions) : null
     ].filter(Boolean));
   }
-  /** Playback progress: never await. Prefer sendBeacon so a busy php-cgi cannot stall the UI. */
+  /** Playback progress: never block the player while saving. */
   function postProgress(itemId, position, duration){
     var body = JSON.stringify({ item_id: itemId, position: position || 0, duration: duration || 0 });
-    try {
-      if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
-        var blob = new Blob([body], { type: 'application/json' });
-        if (navigator.sendBeacon(API + '/progress', blob)) return;
-      }
-    } catch (eB) {}
-    try {
-      fetch(API + '/progress', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: body, keepalive: true }).catch(function(){});
-    } catch (eF) {}
+    fetch(viewingApi + '/progress', { method: 'POST', credentials: 'same-origin', keepalive: true,
+      headers: { 'Content-Type': 'application/json', 'X-Vaultcast-Request': 'same-origin' }, body: body }).catch(function(){});
   }
   var navigationCache = window.createRequestCache();
   var pageReads=[], pageReadKey=null;
@@ -998,6 +995,10 @@ function confirmDialog(message, opts){
     opts = opts || {};
     var requestUser=state.user && state.user.id;
     var headers = opts.headers || {};
+    if (String(opts.method || 'GET').toUpperCase() !== 'GET') headers['X-Vaultcast-Request'] = 'same-origin';
+    var timing = /^\/items\/[a-f0-9]{8,64}\/segments(?:\?|$)/.test(path);
+    var stalkerPreview = path === '/live/iptv_preview' && isStalkerLineupUrl(opts.body && opts.body.url);
+    var avatarChange = path === '/me/prefs' && opts.body && (opts.body.avatar_data || opts.body.remove_avatar);
     if (opts.body && typeof opts.body === 'object' && !(opts.body instanceof FormData)) {
       headers['Content-Type'] = 'application/json';
       opts.body = JSON.stringify(opts.body);
@@ -1010,7 +1011,27 @@ function confirmDialog(message, opts){
     function releaseRead(){var i=pageReads.indexOf(pageRead);if(i>=0)pageReads.splice(i,1);}
 
     if (opts.signal) fetchOpts.signal = opts.signal;
-    return fetch(API + path, fetchOpts).then(function(r){releaseRead();return r;},function(e){releaseRead();throw e;})
+    var nativeBase = window.__VAULTCAST_APPLICATION_BASE__;
+    var nativeBrowse = /^\/search(?:\?|$)/.test(path) || path.indexOf('/featured/synopsis?') === 0 || path === '/featured/synopsis' || path.indexOf('/resolve?') === 0 || /^\/sections(?:$|\/[A-Za-z0-9_-]+\/(?:items|shows|random|recent)(?:\?|$))/.test(path);
+    var nativeDetail = /^\/(?:items|shows)\/[a-f0-9]+(?:\?|$)/.test(path);
+    var nativeAchievements = method === 'GET' ? /^\/achievements(?:\/pending)?(?:\?|$)/.test(path) :
+      method === 'POST' && /^\/achievements\/(?:toasted|showcase|tick)$/.test(path);
+    var nativeRoute = nativeAchievements || (method === 'GET' && (path === '/status' || path === '/me' || path === '/home' || timing || nativeBrowse || nativeDetail || /^\/items\/[a-f0-9]{16}\/next(?:\?|$)/.test(path))) ||
+      (method === 'POST' && (stalkerPreview || path === '/login' || path === '/logout' || (path === '/me/prefs' && !avatarChange) || timing ||
+        /^\/items\/[a-f0-9]{16}\/play$/.test(path)));
+    var watchPage = inViewingPage();
+    var viewingRoute = path === '/admin/library-index' || path === '/admin/segment-warmup' || (timing && (watchPage || state.user)) ||
+      (watchPage && (nativeBrowse || nativeDetail || ['/status','/me','/login','/logout','/home'].indexOf(path) >= 0)) || /^\/items\/[a-f0-9]{16}\/(?:probe|transcode|next)(?:\?|$)/.test(path) ||
+      (method === 'POST' && opts.libraryPlayback && /^\/items\/[a-f0-9]{16}\/play$/.test(path)) ||
+      (method === 'GET' && /^\/items\/[a-f0-9]{16}(?:\?|$)/.test(path));
+    delete fetchOpts.libraryPlayback;
+    var transport = viewingRoute ? fetch(viewingApi + path, fetchOpts) : nativeBase && nativeRoute ? fetch(nativeBase + path, fetchOpts).then(function(response){
+      if (response.status === 503 && response.headers.get('X-Vaultcast-App-Unavailable') === '1') {
+        return fetch(API + path, fetchOpts);
+      }
+      return response;
+    }) : fetch(API + path, fetchOpts);
+    return transport.then(function(r){releaseRead();return r;},function(e){releaseRead();throw e;})
       .then(function(r){
         return r.json().catch(function(){ return { ok:false, error:'Bad JSON' }; }).then(function(j){
           var sameUser=requestUser===(state.user && state.user.id);
@@ -1084,19 +1105,20 @@ function confirmDialog(message, opts){
     return _supportsWebP;
   }
   function posterServerUrl(cacheId, kind, fetchRemote, variant){
+    var backend = inViewingPage() && /^[a-f0-9]{16}(?:-s\d+)?$/.test(cacheId) ? viewingApi : API;
     var q = fetchRemote ? '?fetch=1' : '?fetch=0';
     variant = variant || 'full';
     q += '&variant=' + encodeURIComponent(variant);
     q += supportsWebP() ? '&webp=1' : '&webp=0';
     q += '&art=' + posterRevision;
-    if (kind === 'show') return API + '/shows/' + cacheId + '/poster' + q;
+    if (kind === 'show') return backend + '/shows/' + cacheId + '/poster' + q;
     if (kind === 'season') {
       // cacheId = showKey + '-s' + season
       var m = String(cacheId || '').match(/^([a-f0-9]+)-s(\d+)$/i);
-      if (m) return API + '/shows/' + m[1] + '/seasons/' + m[2] + '/poster' + q;
-      return API + '/shows/' + cacheId + '/poster' + q;
+      if (m) return backend + '/shows/' + m[1] + '/seasons/' + m[2] + '/poster' + q;
+      return backend + '/shows/' + cacheId + '/poster' + q;
     }
-    return API + '/items/' + cacheId + '/poster' + q;
+    return backend + '/items/' + cacheId + '/poster' + q;
   }
   function isShowItem(item){
     return !!(item && (item.kind === 'show' || item.media_kind === 'show'));
@@ -1601,7 +1623,7 @@ function confirmDialog(message, opts){
     var body = {};
     var pref = opts.audio != null ? opts.audio : getAudioPref(item.id);
     if (pref != null && !isNaN(pref)) body.audio = pref;
-    api('/items/'+item.id+'/play', { method:'POST', body: body }).then(function(j){
+    api('/items/'+item.id+'/play', { method:'POST', libraryPlayback:item.media_kind!=='rom' && item.type!=='roms', body: body }).then(function(j){
       if (requestId !== _playRequestId || (pageHost && !pageHost.isConnected)) return;
       if (!j.ok) {
         showRetry();
@@ -1735,9 +1757,11 @@ function confirmDialog(message, opts){
     }
 
     var src = streamPlayUrl(play.url);
+    var mediaUrl = !item._extra && typeof play.hub_cinema_guest === 'undefined' && /^\/api\/stream\/play\?t=[a-f0-9]{48}$/.test(play.url)
+      ? streamPlayUrl(viewingApi + play.url.slice(API.length)) : src;
     var media;
     if (play.media_kind === 'audio') {
-      media = h('audio', { id:'player-media', controls:true, autoplay:true, preload:'auto', src: src });
+      media = h('audio', { id:'player-media', controls:true, autoplay:true, preload:'auto', src: mediaUrl });
     } else {
       media = h('video', { id:'player-media', controls:true, autoplay:play.autoplay !== false, playsinline:true, preload:play.transcode_auto_blocked?'none':'metadata' });
       media.setAttribute('webkit-playsinline', 'true');
@@ -1746,11 +1770,11 @@ function confirmDialog(message, opts){
       if (play.mime) {
         try {
           var source = document.createElement('source');
-          source.src = src; source.type = play.mime;
+          source.src = mediaUrl; source.type = play.mime;
           media.appendChild(source);
         } catch (eS) {}
       }
-      media.src = src;
+      media.src = mediaUrl;
     }
     /* resume — seek to saved progress (play.progress from /items/{id}/play, else item.progress) once metadata is ready.
        Progress saves are held until the resume seek lands so the 0:00 start can't overwrite the saved position. */
@@ -1791,8 +1815,8 @@ function confirmDialog(message, opts){
     media.addEventListener('error', function(){
       if(overlay._closing||!overlay.isConnected)return;
       if(overlay._transcodeActive||overlay._transcodePending)return;
-      /* Failed before playing: retry once with PHP delivery (nginx could not serve the file). */
       var cur = media.currentSrc || media.src || '';
+      /* Failed before playing: retry once without nginx file delivery. */
       if (!openPlayer._deskPlayStarted && !directTried && cur.indexOf('/stream/play') >= 0 && cur.indexOf('direct=1') < 0) {
         directTried = true;
         try { media.src = cur + (cur.indexOf('?') >= 0 ? '&' : '?') + 'direct=1'; if (play.autoplay !== false || openPlayer._deskPlayStarted) media.play(); } catch (eD) {}
@@ -1807,7 +1831,7 @@ function confirmDialog(message, opts){
         openPlayer._deskRecoverTries = (openPlayer._deskRecoverTries||0) + 1;
         var t = media.currentTime || 0;
         toast('Reconnecting stream…');
-        api('/items/'+item.id+'/play', { method:'POST', body: {} }).then(function(nj){
+        api('/items/'+item.id+'/play', { method:'POST', libraryPlayback:item.media_kind!=='rom' && item.type!=='roms', body: {} }).then(function(nj){
           if(overlay._closing||!overlay.isConnected)return;
           var nsrc = (nj && nj.ok && nj.url) ? streamPlayUrl(nj.url) : src;
           if (directTried && nsrc && nsrc.indexOf('direct=1') < 0) nsrc += (nsrc.indexOf('?') >= 0 ? '&' : '?') + 'direct=1';
@@ -1871,7 +1895,7 @@ function confirmDialog(message, opts){
           var next=result.item;
           if(miniVideo&&miniVideo.overlay===overlay){
             var owner=miniVideo.owner,body={},audio=getAudioPref(next.id);if(audio!=null&&!isNaN(audio))body.audio=audio;
-            return api('/items/'+encodeURIComponent(next.id)+'/play',{method:'POST',body:body}).then(function(nextPlay){
+            return api('/items/'+encodeURIComponent(next.id)+'/play',{method:'POST',libraryPlayback:true,body:body}).then(function(nextPlay){
               if(!miniVideo||miniVideo.overlay!==overlay||owner!==(state.user&&state.user.id)||!autoNext.checked||!media.ended)return;
               if(!nextPlay.ok)throw new Error(nextPlay.error||'Could not start the next title');
               nextPlay.autoplay=true;nextPlay.from_start=true;if(play.sequence_collection)nextPlay.sequence_collection=play.sequence_collection;
@@ -2309,7 +2333,7 @@ function confirmDialog(message, opts){
     var sequence=++iptvPreviewSequence,owner=state.user&&state.user.id;button.disabled=true;
     api('/live/iptv_preview',{method:'POST',body:{url:channel.url,userAgent:channel.userAgent||'',referrer:channel.referrer||''}}).then(function(result){
       if(!result.ok)throw new Error(result.error||'Could not open stream preview');
-      function revoke(){api('/live/iptv_preview',{method:'POST',body:{action:'stop',jar:result.jar}}).catch(function(){});}
+      function revoke(){if(result.jar)api('/live/iptv_preview',{method:'POST',body:{action:'stop',jar:result.jar}}).catch(function(){});}
       if(sequence!==iptvPreviewSequence||owner!==(state.user&&state.user.id)||!button.isConnected){revoke();return;}
       closePlayer();stopRadio();
       var overlay=h('div',{id:'player-overlay',className:'player-overlay player-simple player-inline'}),video=h('video',{id:'player-media',controls:true,autoplay:true,playsinline:true,preload:'auto'}),status=h('p',{className:'iptv-preview-status',role:'status',text:'Connecting to preview…'}),stream=null,alive=true,fatalError=false,playAttempt=0,volumeButton=null,phase='connecting';
@@ -2715,8 +2739,12 @@ function confirmDialog(message, opts){
   }
   function lobbyStopPoll(){
     if (state.lobby && state.lobby.pollTimer) {
-      try { clearInterval(state.lobby.pollTimer); } catch (e) {}
+      clearTimeout(state.lobby.pollTimer);
       state.lobby.pollTimer = null;
+    }
+    if (state.lobby && state.lobby.pollAbort) {
+      state.lobby.pollAbort.abort();
+      state.lobby.pollAbort = null;
     }
   }
   function lobbyEndHostSession(){
@@ -3984,12 +4012,12 @@ function confirmDialog(message, opts){
     if (state.view !== 'play') navigate('play');
     else render();
   }
-  function fetchLobbySessions(){
+  function fetchLobbySessions(watch){
     state.lobby.loading = true;
-    return api('/lobby/sessions').then(function(j){
+    return api('/lobby/sessions' + (watch ? '?events=1' : '')).then(function(j){
       state.lobby.loading = false;
       state.lobby.sessions = (j && j.sessions) || [];
-      return state.lobby.sessions;
+      return watch ? j : state.lobby.sessions;
     }).catch(function(e){
       state.lobby.loading = false;
       throw e;
@@ -4340,20 +4368,36 @@ function confirmDialog(message, opts){
     wrap.appendChild(h('div', { className:'lobby-footnote muted' }, [
       h('p', { text:'Keep the host game open while others join. Each guest controls their assigned player using their normal Player 1 controls. Everyone needs the same game, emulator core and core settings. If the host leaves, start a new session from Lobby.' })
     ]));
-    fetchLobbySessions().then(paintLobbySessions).catch(function(e){
-      var list = wrap.querySelector('#lobby-session-list');
-      if (list) {
-        list.innerHTML = '';
-        list.appendChild(emptyState('Lobby unavailable', friendlyMessage(e), [
-          h('button', { className:'btn', type:'button', text:'Retry', onClick: function(){ fetchLobbySessions().then(paintLobbySessions); } })
-        ]));
-      }
-    });
-    state.lobby.pollTimer = setInterval(function(){
-      if (state.playTab !== 'lobby' || state.view !== 'play') { lobbyStopPoll(); return; }
-      if(document.hidden||state.lobby.loading)return;
-      fetchLobbySessions().then(paintLobbySessions).catch(function(){});
-    }, 5000);
+    function schedule(delay) {
+      if (state.playTab === 'lobby' && state.view === 'play') state.lobby.pollTimer = setTimeout(follow, delay);
+    }
+    function follow(){
+      if (!wrap.isConnected || state.playTab !== 'lobby' || state.view !== 'play') return;
+      if (document.hidden || state.lobby.loading) { schedule(5000); return; }
+      fetchLobbySessions(true).then(function(result){
+        if (!wrap.isConnected) return;
+        paintLobbySessions();
+        if (!result || !window.AbortController || !/^\/netplay\/runtime\/events\/[a-f0-9]{48}$/.test(result.events || '')) { schedule(5000); return; }
+        var abort = new AbortController();
+        state.lobby.pollAbort = abort;
+        fetch(result.events, {cache:'no-store', signal:abort.signal}).then(function(response){
+          if (!response.ok) throw new Error('Lobby update unavailable');
+          return response.json();
+        }).then(function(){ if (wrap.isConnected) schedule(0); }).catch(function(){
+          if (!abort.signal.aborted && wrap.isConnected) schedule(5000);
+        }).finally(function(){ if (state.lobby.pollAbort === abort) state.lobby.pollAbort = null; });
+      }).catch(function(e){
+        if (!wrap.isConnected) return;
+        var list = wrap.querySelector('#lobby-session-list');
+        if (list && !state.lobby.sessions.length) {
+          list.replaceChildren(emptyState('Lobby unavailable', friendlyMessage(e), [
+            h('button', { className:'btn', type:'button', text:'Retry', onClick: refresh })
+          ]));
+        }
+        schedule(5000);
+      });
+    }
+    schedule(0);
     return shell(wrap);
   }
 
@@ -4850,9 +4894,18 @@ try {
       collectionId: state.collectionId, searchQuery: state.searchQuery, settingsSection: state.settingsSection, adminTab: state.adminTab, aiTab:state.aiTab,
       sectionLetter:state.sectionLetter, collectionsLetter:state.collectionsLetter, hubTab:state.hubTab, cinemaId:state.cinemaId, requestsTab:state.requestsTab });
   }
-  function navUrl(extra){ return BASE + routePath(extra); }
+  function viewingPath(path){
+    var watch = /^(?:library|movies|tvshows)(?:\/|$)|^live\/(?:stalker(?:-vod)?|xtream)(?:\/|$)|^settings\/live-xtream\/?$/.test(path.split('?')[0]);
+    var signingIn = /^(?:login|welcome)$/.test(path) && location.pathname.indexOf(BASE+'netplay/watch/') === 0;
+    return watch || signingIn ? 'netplay/watch/' + path : path;
+  }
+  function inViewingPage(){
+    return location.pathname.indexOf(BASE + 'netplay/watch/') === 0 || !!window.__VAULTCAST_VIEWER__ &&
+      /^(?:library|movies|tvshows|live|welcome|login)(?:\/|$)|^settings\/live-xtream\/?$/.test(R.relative(location.pathname, BASE));
+  }
+  function navUrl(extra){ return BASE + viewingPath(routePath(extra)); }
   function shareUrl(path){
-    return R.absolute(path != null ? path : routePath(), { publicBase: window.__PUBLIC_BASE_URL__ || '', origin: location.protocol + '//' + location.host, base: BASE });
+    return R.absolute(viewingPath(path != null ? path : routePath()), { publicBase: window.__PUBLIC_BASE_URL__ || '', origin: location.protocol + '//' + location.host, base: BASE });
   }
   /* Old "#/vod/..." style links: rewrite to the clean path once, keeping the history entry. */
   function upgradeLegacyHash(){
@@ -5574,10 +5627,60 @@ try {
     return bb;
   }
 
+  function libraryIndexPanel(){
+    var panel = h('section', {className:'row', hidden:true});
+    var message = h('p', {className:'muted', role:'status'});
+    var button = h('button', {className:'btn', type:'button', text:'Prepare library index', onClick:function(){ update(true); }});
+    panel.appendChild(h('div', {className:'row-head'}, [h('h2', {text:'Library search and show listings'}), button]));
+    panel.appendChild(message);
+    function update(start){
+      if (!panel.isConnected) return;
+      button.disabled = true;
+      api('/admin/library-index', start ? {method:'POST', body:{}} : {}).then(function(result){
+        if (!panel.isConnected) return;
+        if (!result.ok) throw new Error(result.error || 'Could not read the library index status.');
+        if (result.ready) {
+          if (state.home) state.home.browse_index_ready = true;
+          if (!panel.hidden) {
+            navigationCache.clear();
+            toast('Library search and show listings are ready.');
+            api('/home').then(function(home){
+              if (home.ok && panel.isConnected) { state.home = home; render(); }
+            }).catch(function(){});
+          }
+          panel.hidden = true;
+          return;
+        }
+        panel.hidden = false;
+        var working = result.phase === 'items' || result.phase === 'shows';
+        button.hidden = working;
+        button.disabled = working;
+        if (working) {
+          message.textContent = 'Preparing listings · ' + result.items + ' titles · ' + result.shows + ' shows';
+          setTimeout(function(){ update(false); }, 2000);
+        } else {
+          button.textContent = result.phase === 'failed' ? 'Retry preparation' : 'Prepare library index';
+          message.textContent = result.phase === 'failed' ? 'Preparation stopped. Retry to resume from the last saved batch.' :
+            'Build the search and show index from titles already in your library.';
+        }
+      }).catch(function(error){
+        if (!panel.isConnected) return;
+        panel.hidden = false;
+        message.textContent = error.message;
+        button.hidden = false;
+        button.disabled = false;
+      });
+    }
+    setTimeout(function(){ update(false); }, 0);
+    return panel;
+  }
+
   function viewHome(){
     var home = state.home || { continue_watching:[], sections:[] };
     var libraryHero=billboardEl(home);libraryHero.classList.add('library-hero');standardBillboard(libraryHero,librarySummary(home));libraryHero.appendChild(heroArt('library'));
     var parts = [ libraryHero ];
+    if (state.user && state.user.role === 'admin' && home.browse_index_ready !== true && (home.sections || []).length)
+      parts.push(libraryIndexPanel());
     var cw = cwOnePerShow(home.continue_watching);
     if (cw.length) parts.push(rowEl('Continue watching', cw.map(function(it){ return cardEl(it, it.progress); }), { meta: String(cw.length) }));
     /* Smart collections pinned to Home (filled in after the page draws). */
@@ -5683,11 +5786,19 @@ try {
   /* Live backend is reached through /media/api/live/<action> (api/live_bridge.php):
      public HTTPS 404s any *.php under /media/live/, LAN :9999 works either way. */
   var LIVE_API = BASE + 'api/live/';
+  function stalkerOfflineFileUrl(id){
+    return viewingApi + '/live/stalker_offline_file?id=' + encodeURIComponent(id);
+  }
   function liveApi(action, params){
-    return fetch(LIVE_API + action + (params ? '?' + String(params).replace(/^&/, '') : ''), { credentials:'same-origin', cache:'no-store' })
-      .then(function(r){
-        if (!r.ok) throw new Error('Live API HTTP ' + r.status);
-        return r.json();
+    var suffix = action + (params ? '?' + String(params).replace(/^&/, '') : '');
+    var options = { credentials:'same-origin', cache:'no-store' };
+    var provider = ['xtream_connections','xtream_categories','xtream_browse','xtream_guide','xtream_import_status','stalker','stalker_catalogue_status',
+      'stalker_update_status','stalker_offline','stalker_vod_catalogue','stalker_vod_detail','stalker_browse','stalker_countries',
+      'stalker_live_categories','stalker_live_channels','stalker_live_guide','stalker_channel','stalker_live_fields',
+      'stalker_epg_fields','stalker_vod_fields','stalker_vod_probe','stalker_art'].indexOf(action) >= 0;
+    var request = fetch((provider ? viewingApi + '/live/' : LIVE_API) + suffix, options);
+    return request.then(function(r){
+        return r.json().then(function(data){ if (!r.ok) throw new Error(data.error || 'Live API HTTP ' + r.status); return data; });
       });
   }
   function liveUrl(u){
@@ -5751,14 +5862,29 @@ try {
       ensureLiveData(true).then(function(){ if (state.view === 'live') paintLive(); }).catch(function(){});
     }
   }
+  function isStalkerLineupUrl(url) {
+    return typeof url === 'string' && url.indexOf(LIVE_API + 'stalker_stream?feed=') === 0;
+  }
   function liveApiPost(action, body){
-    return fetch(LIVE_API + action, {
+    var options = {
       method: 'POST',
       credentials: 'same-origin',
       cache: 'no-store',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-Vaultcast-Request': 'same-origin' },
       body: JSON.stringify(body || {})
-    }).then(function(r){
+    };
+    var nativeBase = window.__VAULTCAST_APPLICATION_BASE__;
+    var native = false;
+    if (action === 'iptv_probe' && nativeBase && Array.isArray(body.channels)) {
+      native = body.channels.length > 0 && body.channels.every(function(item){ return isStalkerLineupUrl(item && item.url); });
+    }
+    var viewerAction = ['stalker_cancel','stalker_delete','stalker_download','stalker_retry','stalker_updates','stalker_catalogue_control','stalker_manage','stalker_play','stalker_check_media'].indexOf(action) >= 0 ||
+      ['xtream_manage','xtream_play','xtream_heartbeat','xtream_stop','xtream_import'].indexOf(action) >= 0;
+    var request = viewerAction ? fetch(viewingApi + '/live/' + action, options) : native ? fetch(nativeBase + '/live/' + action, options).then(function(r){
+      if (r.status === 503 && r.headers.get('X-Vaultcast-App-Unavailable') === '1') return fetch(LIVE_API + action, options);
+      return r;
+    }) : fetch(LIVE_API + action, options);
+    return request.then(function(r){
       return r.json().then(function(j){
         if (r.ok && j && j.ok !== false && action !== 'iptv_probe' && action !== 'radio_save' && action !== 'stalker_play' && action.indexOf('xtream_') !== 0) invalidateLiveData(false);
         return { ok: r.ok, status: r.status, body: j };
@@ -6143,7 +6269,7 @@ try {
         if(job.status==='ready'||job.status==='imported'){
           button.disabled=false;status.replaceChildren();
           if(destination==='browser'){
-            var link=h('a',{className:'btn',href:LIVE_API+'stalker_offline_file?id='+encodeURIComponent(id),download:'',text:'Save video to device'});
+            var link=h('a',{className:'btn',href:stalkerOfflineFileUrl(id),download:'',text:'Save video to device'});
             status.append('Your video is ready. ',link);link.click();
           }else status.append('Download complete. ',h('button',{className:'btn',text:'Open ingest inbox',onClick:function(){openSettings('ingest');}}));
           return;
@@ -6177,7 +6303,7 @@ try {
     if(String(id).indexOf('stalker:')===0){var parts=String(id).split(':');return 'live/stalker/'+encodeURIComponent(parts[1])+'/'+encodeURIComponent(parts.slice(2).join(':'));}
     return 'live/'+encodeURIComponent(id);
   }
-  function stalkerCheckButton(feed,id,kind,status){return h('button',{className:'btn ghost',text:'Check playback',onClick:function(e){var button=e.currentTarget,profile=kind==='live'?'stb':'browser';button.disabled=true;status.textContent='Checking the provider media response…';stalkerPost('stalker_check_media',{feed:feed,id:id,kind:kind,profile:profile}).then(function(r){if(!status.isConnected)return;var result='Playback check ('+(profile==='browser'?'browser':'Stalker')+' profile): GET · HTTP '+r.http+' · '+r.type+' · '+r.format+(r.allow?' · Allowed methods: '+r.allow:'')+(r.timedOutOrFailed?' · Request incomplete/timed out':'');if(Number(r.http)===458)result+=' · The provider returned an HTML rejection page, not playable media. Try another source if available.';status.textContent=result;}).catch(function(error){if(status.isConnected)status.textContent=error.message;}).finally(function(){button.disabled=false;});}});}
+  function stalkerCheckButton(feed,id,kind,status,source){return h('button',{className:'btn ghost',text:'Check playback',onClick:function(e){var button=e.currentTarget,profile=kind==='live'?'stb':'browser',hint=typeof source==='function'?source():source;button.disabled=true;status.textContent='Checking the provider media response…';stalkerPost('stalker_check_media',Object.assign({feed:feed,id:id,kind:kind,profile:profile},hint&&hint.category&&hint.page?{category:hint.category,page:hint.page}:{})).then(function(r){if(!status.isConnected)return;var result='Playback check ('+(profile==='browser'?'browser':'Stalker')+' profile): GET · HTTP '+r.http+' · '+r.type+' · '+r.format+(r.allow?' · Allowed methods: '+r.allow:'')+(r.timedOutOrFailed?' · Request incomplete/timed out':'');if(Number(r.http)===458)result+=' · The provider returned an HTML rejection page, not playable media. Try another source if available.';status.textContent=result;}).catch(function(error){if(status.isConnected)status.textContent=error.message;}).finally(function(){button.disabled=false;});}});}
   function startStalkerSimple(host,source,status,current,onPlaying){
     closePlayer();stopRadio();
     var alive=true,stream=null,video=h('video',{id:'player-media',controls:true,autoplay:true,muted:true,playsinline:true,preload:'auto'}),frame=h('div',{id:'player-overlay',className:'player-inline stalker-vod-inline'},[video]);
@@ -6195,7 +6321,7 @@ try {
   // never invokes library-only transcode, conversion or progress endpoints.
   function startStalkerLibraryPlayer(host,source,item,context){
     closePlayer();stopRadio();
-    var key='stalker-vod:'+context.id,alive=true,stream=null,xtream=String(source.url||'').indexOf('/api/live/xtream_stream?')!==-1,heartbeat=null,heartbeatBusy=false;
+    var key='stalker-vod:'+context.id,alive=true,stream=null,xtream=String(source.url||'').indexOf('/live/xtream_stream?')!==-1,heartbeat=null,heartbeatBusy=false,transportFallback=false;
     var video=h('video',{id:'player-media',controls:true,autoplay:true,playsinline:true,preload:'metadata'});
     video.setAttribute('webkit-playsinline','true');
     var frame=h('div',{id:'player-overlay',className:'player-overlay player-simple player-inline stalker-library-player'},[video]);
@@ -6232,7 +6358,7 @@ try {
       if(!alive)return;alive=false;
       if(heartbeat)clearInterval(heartbeat);heartbeat=null;
       window.removeEventListener('pagehide',cleanupProvider);
-      if(stream){try{stream.stopLoad();stream.destroy();}catch(ignore){}stream=null;}
+      if(stream){try{if(stream.stopLoad)stream.stopLoad();}catch(ignore){}try{stream.destroy();}catch(ignore2){}stream=null;}
       try{video.pause();video.removeAttribute('src');video.load();}catch(ignore2){}
       if(xtream)stopXtreamSource(source);
     }
@@ -6249,14 +6375,27 @@ try {
       },15000);
     }
     video.addEventListener('playing',function(){if(alive&&context.onPlaying)context.onPlaying();});
-    video.addEventListener('error',function(){if(alive){if(xtream)cleanupProvider();playbackFailed('The provider video could not be played by this browser.');}});
     video.addEventListener('ended',function(){if(!alive)return;if(xtream)cleanupProvider();if(context.onEnded&&(!autoNext||autoNext.checked))context.onEnded();});
-    attachIptvStream(video,source,{
+    var streamOptions={
       current:function(){return alive&&!frame._closing&&frame.isConnected;},
       play:play,
       stream:function(value){stream=value;refreshTracks(value);if(value&&value.on){var events=(window.Hls&&window.Hls.Events)||value.Events||{},names=['AUDIO_TRACKS_UPDATED','AUDIO_TRACK_SWITCHED','SUBTITLE_TRACKS_UPDATED','SUBTITLE_TRACK_SWITCH'],fallback=['hlsAudioTracksUpdated','hlsAudioTrackSwitched','hlsSubtitleTracksUpdated','hlsSubtitleTrackSwitch'];names.forEach(function(name,index){var event=events[name]||fallback[index];value.on(event,function(){refreshTracks(value);});});}},
       error:function(message){if(alive){if(xtream)cleanupProvider();playbackFailed(message);}}
+    };
+    video.addEventListener('error',function(){
+      if(!alive)return;
+      // A provider may serve MPEG-TS or HLS behind an extensionless VOD URL.
+      // Try the existing single-request transport once when native DirectPlay fails.
+      if(!xtream&&!transportFallback&&source.transport!=='mpegts'&&!/\.m3u8(?:[?#]|$)/i.test(source.url)){
+        transportFallback=true;
+        try{video.pause();video.removeAttribute('src');video.load();}catch(ignore){}
+        attachIptvStream(video,Object.assign({},source,{transport:'detect'}),streamOptions);
+        return;
+      }
+      if(xtream)cleanupProvider();
+      playbackFailed('The provider video could not be decoded by this browser. Try another source or download the video.');
     });
+    attachIptvStream(video,source,streamOptions);
     video.addEventListener('loadedmetadata',function(){if(!stream)refreshTracks(null);});
     host.scrollIntoView({block:'nearest',behavior:'smooth'});
   }
@@ -6459,17 +6598,18 @@ try {
     function refreshGuide(force){if(force!==true&&liveHint.guide)return Promise.resolve({ok:true,channel:context.channels[0]});return liveApi('stalker_channel','feed='+encodeURIComponent(feed)+'&id='+encodeURIComponent(channelId)+(force===true?'&refresh=1':'')).then(function(result){if(!current())return;if(!result||!result.ok)throw new Error(result&&result.error||'Could not load this channel.');context.channels=[result.channel];context.guideMessage=result.guideError||'';if(context.updateChannel)context.updateChannel();if(!context.playError)status.textContent=result.guideError||(result.channel.programs.length?'':'No programme listings were supplied for this channel.');return result;});}
     function simple(){
       if(!context)return;attempt++;context.simpleTried=true;
-      var source=can('iptv_manage')?{kind:'live',url:LIVE_API+'stalker_stream?feed='+encodeURIComponent(feed)+'&channel='+encodeURIComponent(channelId)+'&format=.m3u8'}:context.sources[id];
+      var source=context.sources[id]||(can('iptv_manage')?{kind:'live',url:LIVE_API+'stalker_stream?feed='+encodeURIComponent(feed)+'&channel='+encodeURIComponent(channelId)+'&format=.m3u8'+(liveSource&&liveSource.category&&liveSource.page?'&category='+encodeURIComponent(liveSource.category)+'&page='+encodeURIComponent(liveSource.page):'')}:null);
       if(!source){status.textContent='Select Watch channel first to authorise playback.';return;}
       startStalkerSimple(player,source,status,current,context.onPlaying);
     }
     function play(){
       failed=false;playing=false;if(!context||!context.channels.length)return;var mine=++attempt;closePlayer();stopRadio();context.playError=false;context.simpleTried=false;status.className='muted';status.textContent='Connecting…';
-      stalkerPost('stalker_play',{feed:feed,kind:'live',id:channelId}).then(function(result){if(!current()||mine!==attempt)return;context.sources[id]=result.source;startLivePlayer(id,player,context);status.textContent=context.guideMessage||(context.channels[0].programs.length?'':'No programme listings were supplied for this channel.');}).catch(function(error){if(current()&&mine===attempt){context.playError=true;failover(error.message);}});
+      stalkerPost('stalker_play',Object.assign({feed:feed,kind:'live',id:channelId},liveSource&&liveSource.category&&liveSource.page?{category:liveSource.category,page:liveSource.page}:{})).then(function(result){if(!current()||mine!==attempt)return;context.sources[id]=result.source;startLivePlayer(id,player,context);status.textContent=context.guideMessage||(context.channels[0].programs.length?'':'No programme listings were supplied for this channel.');}).catch(function(error){if(current()&&mine===attempt){context.playError=true;failover(error.message);}});
     }
-    wrap.appendChild(h('div',{className:'row-actions live-channel-back'},[h('button',{className:'btn',text:'← Back to Stalker',onClick:function(){attempt++;failed=true;closePlayer();goLiveTab('stalker');}}),h('button',{className:'btn',text:'Watch channel',onClick:play}),h('button',{className:'btn ghost',text:'Use simple player',onClick:simple}),stalkerCheckButton(feed,channelId,'live',status),h('button',{className:'btn ghost',text:'Stop playback',onClick:function(){attempt++;failed=true;closePlayer();status.textContent='Playback stopped.';}}),h('button',{className:'btn ghost',text:'Refresh guide',onClick:function(){refreshGuide(true).then(function(){if(current())paintChannelInformation(context.channels[0]);}).catch(function(error){status.textContent=error.message;});}})]));
+    wrap.appendChild(h('div',{className:'row-actions live-channel-back'},[h('button',{className:'btn',text:'← Back to Stalker',onClick:function(){attempt++;failed=true;closePlayer();goLiveTab('stalker');}}),h('button',{className:'btn',text:'Watch channel',onClick:play}),h('button',{className:'btn ghost',text:'Use simple player',onClick:simple}),stalkerCheckButton(feed,channelId,'live',status,function(){return liveSource;}),h('button',{className:'btn ghost',text:'Stop playback',onClick:function(){attempt++;failed=true;closePlayer();status.textContent='Playback stopped.';}}),h('button',{className:'btn ghost',text:'Refresh guide',onClick:function(){refreshGuide(true).then(function(){if(current())paintChannelInformation(context.channels[0]);}).catch(function(error){status.textContent=error.message;});}})]));
     var liveHint=state._stalkerChannelHint&&state._stalkerChannelHint.id===id?state._stalkerChannelHint:{};
     var liveCopies=Array.isArray(liveHint.sources)?liveHint.sources.filter(function(src){return src&&src.feed&&src.id;}):[];
+    var liveSource=liveCopies.find(function(src){return String(src.feed)===String(feed)&&String(src.id)===String(channelId);});
     var tried=Array.isArray(liveHint.tried)?liveHint.tried.slice():[];
     var sequence=Array.isArray(liveHint.sequence)?liveHint.sequence:[];
     function zapStalker(direction){
@@ -6559,7 +6699,7 @@ try {
         var statusLine=h('p',{text:item.status,'data-offline-status':item.id,'data-offline-state':item.status});
         host.appendChild(h('div',{className:'settings-card','data-offline-job':item.id},[h('h3',{text:stalkerOfflineTitle(item)}),seriesDetails?h('p',{className:'muted',text:seriesDetails}):null,statusLine,h('p',{className:'muted',text:details,'data-offline-details':item.id}),offlineProgress(item),item.error?h('p',{className:'bad',text:item.error}):null,
         ['queued','downloading'].indexOf(item.status)>=0&&can('downloads_request')?h('button',{className:'btn ghost',text:'Cancel download',onClick:function(){stalkerPost('stalker_cancel',{id:item.id}).then(function(){showStalkerOffline(host);}).catch(function(error){toast(error.message,{kind:'bad'});});}}):null,item.status==='ready'&&item.destination!=='browser'&&can('ingest_import')?h('button',{className:'btn',text:'Match and add to library',onClick:function(){openSettings('ingest');}}):null,
-        item.status==='ready'&&can('downloads_request')?h('a',{className:'btn',href:LIVE_API+'stalker_offline_file?id='+encodeURIComponent(item.id),download:'',text:'Save video to device'}):null,
+        item.status==='ready'&&can('downloads_request')?h('a',{className:'btn',href:stalkerOfflineFileUrl(item.id),download:'',text:'Save video to device'}):null,
         !item.delete_requested&&['failed','cancelled'].indexOf(item.status)>=0&&can('downloads_request')?h('button',{className:'btn',text:'Retry interrupted download',onClick:function(e){var b=e.currentTarget;b.disabled=true;stalkerPost('stalker_retry',{id:item.id}).then(function(){showStalkerOffline(host);}).catch(function(error){toast(error.message,{kind:'bad'});}).finally(function(){b.disabled=false;});}}):null,
         admin&&!['queued','downloading'].includes(item.status)?h('button',{className:'btn danger',text:item.delete_requested?'Finish deleting':'Delete download',onClick:function(e){if(!item.delete_requested&&!confirm('Delete “'+item.name+'” and its saved files?'))return;var b=e.currentTarget;b.disabled=true;stalkerPost('stalker_delete',{id:item.id}).then(function(){showStalkerOffline(host);}).catch(function(error){toast(error.message,{kind:'bad'});}).finally(function(){b.disabled=false;});}}):null]));});
       if(!(result.items||[]).length)host.appendChild(h('p',{className:'muted',text:'No provider videos have been downloaded yet.'}));
@@ -6587,7 +6727,7 @@ try {
   function stalkerUpdateSettings(host,connections){
     var card=h('section',{className:'settings-card stack'}),status=h('p',{role:'status',className:'muted'}),url=h('input',{type:'url',placeholder:'Provider update-page URL (leave blank to keep saved URL)',autocomplete:'off'}),paused=h('input',{type:'checkbox'}),discovered=h('div',{className:'stack'});
     function error(e){status.className='bad';status.textContent=e.message;}
-    function refresh(){liveApi('stalker_update_status').then(function(result){if(!card.isConnected)return;if(!result||!result.ok)throw new Error(result&&result.error||'Could not read update status.');var s=result.status;paused.checked=!!s.paused;status.className='muted';status.textContent=s.message+(s.last_check?' Last checked: '+new Date(s.last_check*1000).toLocaleString()+'.':'')+(s.next_check&&!s.paused?' Next check: '+new Date(s.next_check*1000).toLocaleString()+'.':'')+(s.configured&&!s.paused&&!s.worker?' Background worker is not currently reporting; check the PHP worker settings if this persists.':'');}).catch(error);}
+    function refresh(){liveApi('stalker_update_status').then(function(result){if(!card.isConnected)return;if(!result||!result.ok)throw new Error(result&&result.error||'Could not read update status.');var s=result.status;paused.checked=!!s.paused;status.className='muted';status.textContent=s.message+(s.last_check?' Last checked: '+new Date(s.last_check*1000).toLocaleString()+'.':'')+(s.next_check&&!s.paused?' Next check: '+new Date(s.next_check*1000).toLocaleString()+'.':'')+(s.configured&&!s.paused&&!s.worker?' The provider update worker has not reported recently.':'');}).catch(error);}
     card.appendChild(h('h3',{text:'Check for updated feeds'}));
     card.appendChild(h('p',{className:'muted',text:'Find connection details in your provider’s text, input boxes and copy fields. Accept suggested pairs or choose which URL field belongs with each MAC field. Save those selections to follow future changes on the same page.'}));
     card.appendChild(h('label',{className:'stack'},['Provider update page',url]));card.appendChild(h('label',{},[paused,' Pause daily checks']));
@@ -6900,14 +7040,14 @@ try {
       h('div',{className:'row-actions'},[all,none,save])
     ]);
     host.appendChild(card);
-    var sources=[],previous={},draft=null,draftKey='',timer=null,busy=false,openGroups={};
+    var sources=[],previous={},draft=null,draftKey='',timer=null,busy=false,dirty=false,refreshEpoch=0,openGroups={};
     function key(){return feed.value+'/'+kind.value;}
     function draw(){
       if(!card.isConnected)return;
       var k=key(),source=sources.find(function(s){return s.feed_id===feed.value&&s.kind===kind.value;});
       if(source&&source.folders&&source.folders.length)previous[k]=source.folders;
       var folders=(source&&source.folders&&source.folders.length?source.folders:previous[k]||[]).filter(function(f){return f.folder_id&&f.folder_id!=='*';});
-      if(draftKey!==k){draftKey=k;draft=null;}
+      if(draftKey!==k){draftKey=k;draft=null;dirty=false;}
       if(!draft)draft={mode:source&&source.folderMode==='include'?'include':'all',ids:new Set(source&&source.folderIds||[])};
       list.replaceChildren();
       var ready=!!source&&(folders.length>0||(source.folders||[]).some(function(f){return f.folder_id==='*';}));
@@ -6944,6 +7084,7 @@ try {
         entries.forEach(function(folder){
           var check=h('input',{type:'checkbox',checked:selected(folder)});
           check.onchange=function(){
+            dirty=true;
             if(draft.mode==='all'){
               draft.mode='include';
               draft.ids=new Set(folders.map(function(f){return f.folder_id;}));
@@ -6960,38 +7101,52 @@ try {
     }
     function refresh(){
       if(!card.isConnected)return;
+      if(busy){clearTimeout(timer);timer=setTimeout(refresh,3000);return;}
+      var epoch=refreshEpoch;
       liveApi('stalker_catalogue_status').then(function(data){
-        if(!card.isConnected)return;sources=data.sources||[];draw();
+        if(!card.isConnected||epoch!==refreshEpoch)return;sources=data.sources||[];
+        // Status polling must not rebuild checkboxes while an unsaved edit is
+        // in progress. The current draft remains authoritative until Save.
+        if(!dirty&&!busy)draw();
         clearTimeout(timer);
         if(sources.some(function(s){return ['queued','running','partial','waiting'].includes(s.status);}))timer=setTimeout(refresh,3000);
       }).catch(function(error){if(card.isConnected)info.textContent=error.message;});
     }
-    feed.onchange=kind.onchange=function(){draft=null;draftKey='';draw();};
+    feed.onchange=kind.onchange=function(){draft=null;draftKey='';dirty=false;draw();};
     discover.onclick=function(){
       if(busy||!feed.value)return;
       busy=true;discover.disabled=true;info.textContent='Fetching provider folder names…';
       stalkerPost('stalker_catalogue_control',{operation:'discover',feed:feed.value,kind:kind.value}).then(function(data){
-        sources=data.sources||[];draft=null;draftKey='';draw();
+        sources=data.sources||[];draft=null;draftKey='';dirty=false;draw();
       }).catch(function(error){info.className='bad';info.textContent=error.message;})
         .finally(function(){busy=false;discover.disabled=false;});
     };
     all.onclick=function(){
-      if(!draft)return;draft.mode='all';draft.ids.clear();
+      if(!draft)return;dirty=true;draft.mode='all';draft.ids.clear();
       list.querySelectorAll('input[type="checkbox"]').forEach(function(c){c.checked=true;});
       info.textContent='All provider folders selected, including provider-wide All · Save to apply.';
     };
     none.onclick=function(){
-      if(!draft)return;draft.mode='include';draft.ids.clear();
+      if(!draft)return;dirty=true;draft.mode='include';draft.ids.clear();
       list.querySelectorAll('input[type="checkbox"]').forEach(function(c){c.checked=false;});
       info.textContent='All provider folders will be skipped · Save to apply.';
     };
     save.onclick=function(){
       if(!draft||busy)return;
-      busy=true;save.disabled=true;info.textContent='Saving folder selection…';
-      stalkerPost('stalker_catalogue_control',{operation:'folders',feed:feed.value,kind:kind.value,mode:draft.mode,folders:Array.from(draft.ids)}).then(function(data){
-        sources=data.sources||[];draft=null;draw();refresh();
+      var chosenFeed=feed.value,chosenKind=kind.value,mode=draft.mode,ids=Array.from(draft.ids),confirmed=false;
+      busy=true;refreshEpoch++;save.disabled=true;feed.disabled=kind.disabled=true;info.className='muted';info.textContent='Saving folder selection…';
+      stalkerPost('stalker_catalogue_control',{operation:'folders',feed:chosenFeed,kind:chosenKind,mode:mode,folders:ids}).then(function(data){
+        var source=(data.sources||[]).find(function(s){return s.feed_id===chosenFeed&&s.kind===chosenKind;});
+        var persisted=new Set(source&&source.folderIds||[]);
+        if(!source||source.folderMode!==mode||(mode==='include'&&(persisted.size!==ids.length||ids.some(function(id){return !persisted.has(id);}))))
+          throw new Error('The provider folder selection could not be verified. Please try saving again.');
+        sources=data.sources||[];draft=null;dirty=false;confirmed=true;
       }).catch(function(error){info.className='bad';info.textContent=error.message;})
-        .finally(function(){busy=false;save.disabled=false;});
+        .finally(function(){
+          busy=false;feed.disabled=kind.disabled=false;
+          if(confirmed){draw();info.className='muted';info.textContent='Selection saved and verified · '+(mode==='all'?'all provider folders':ids.length+' named folders')+'.';clearTimeout(timer);timer=setTimeout(refresh,3000);}
+          else save.disabled=false;
+        });
     };
     refresh();
   }
@@ -7062,7 +7217,7 @@ try {
   function stopXtreamSource(source){
     var match=String(source&&source.url||'').match(/[?&]ticket=([a-f0-9]+)(?:&|$)/);
     if(!match)return Promise.resolve();
-    return fetch(LIVE_API+'xtream_stop',{method:'POST',credentials:'same-origin',keepalive:true,headers:{'Content-Type':'application/json'},body:JSON.stringify({ticket:match[1]})}).catch(function(){});
+    return fetch(viewingApi+'/live/xtream_stop',{method:'POST',credentials:'same-origin',keepalive:true,headers:{'Content-Type':'application/json','X-Vaultcast-Request':'same-origin'},body:JSON.stringify({ticket:match[1]})}).catch(function(){});
   }
   function paintXtreamPage(root){
     var xtreamClient=liveUid('xtream')+liveUid('client'),playQueue=Promise.resolve();
@@ -7070,6 +7225,37 @@ try {
     var previous=h('button',{className:'btn',text:'Previous',onClick:function(){page--;load();}}),next=h('button',{className:'btn',text:'Next',onClick:function(){page++;load();}}),back=h('button',{className:'btn',text:'Back to series',hidden:true,onClick:function(){series='';back.hidden=true;page=1;load();}});
     function fail(error){if(root.isConnected){status.className='bad';status.textContent=error.message;}}
     function parameters(){return {feed:feed.value,kind:kind.value,category:category.value,series:series,q:query.value,page:page};}
+    function playItem(item, selection){
+      var play=++playSerial;
+      var request=Object.assign({},selection,{id:item.id,client:xtreamClient,sequence:play});
+      function current(){return root.isConnected && play===playSerial;}
+      closePlayer();
+      player.replaceChildren();
+      guide.replaceChildren();
+      status.textContent='Connecting…';
+      playQueue=playQueue.catch(function(){}).then(function(){
+        if(!current())return;
+        return stalkerPost('xtream_play',request).then(function(data){
+          if(!current())return stopXtreamSource(data.source);
+          startStalkerLibraryPlayer(player,data.source,data.item||item,{
+            id:'xtream:'+request.feed+':'+request.kind+':'+item.id,
+            nextEpisode:data.nextEpisode,
+            onEnded:function(){
+              if(data.nextEpisode && current() && series===selection.series)playItem(data.nextEpisode,selection);
+            },
+            onError:function(message){if(current())fail(new Error(message));},
+            onPlaying:function(){if(current())status.textContent=item.name;}
+          });
+        });
+      }).catch(function(error){if(current())fail(error);});
+      if(request.kind!=='live')return;
+      liveApi('xtream_guide',new URLSearchParams({feed:request.feed,id:item.id})).then(function(data){
+        if(!current())return;
+        guide.replaceChildren(h('h3',{text:'Programme guide'}));
+        (data.programmes||[]).forEach(function(p){guide.appendChild(h('p',{text:p.start+' · '+p.title}));});
+        if(!(data.programmes||[]).length)guide.appendChild(h('p',{text:'No programme information supplied.'}));
+      }).catch(function(){if(current())guide.replaceChildren(h('p',{text:'Programme guide unavailable.'}));});
+    }
     function load(refresh){
       var mine=++serial;status.className='muted';status.textContent='Loading…';results.replaceChildren();previous.disabled=true;next.disabled=true;
       var params=parameters();if(refresh)params.refresh='1';
@@ -7077,15 +7263,7 @@ try {
         if(!root.isConnected||mine!==serial)return;status.textContent=data.total?data.total+' titles · Page '+page:'No titles found.';previous.disabled=page<=1;next.disabled=page*60>=data.total;
         (data.items||[]).forEach(function(item){results.appendChild(h('button',{className:'btn',text:(series?'S'+item.season+' E'+item.episode+' · ':'')+item.name,onClick:function(){
           if(kind.value==='series'&&!series){series=item.id;page=1;query.value='';back.hidden=false;load();return;}
-          var request=parameters(),play=++playSerial;request.id=item.id;request.client=xtreamClient;request.sequence=play;closePlayer();player.replaceChildren();status.textContent='Connecting…';
-          playQueue=playQueue.catch(function(){}).then(function(){
-            if(!root.isConnected||play!==playSerial)return;
-            return stalkerPost('xtream_play',request).then(function(data){
-              if(!root.isConnected||play!==playSerial)return stopXtreamSource(data.source);
-              startStalkerLibraryPlayer(player,data.source,item,{id:'xtream:'+request.feed+':'+item.id,onError:function(message){fail(new Error(message));},onPlaying:function(){status.textContent=item.name;}});
-            });
-          }).catch(function(error){if(play===playSerial)fail(error);});
-          guide.replaceChildren();if(kind.value==='live')liveApi('xtream_guide',new URLSearchParams({feed:request.feed,id:item.id})).then(function(data){if(!root.isConnected||play!==playSerial)return;guide.replaceChildren(h('h3',{text:'Programme guide'}));(data.programmes||[]).forEach(function(p){guide.appendChild(h('p',{text:p.start+' · '+p.title}));});if(!(data.programmes||[]).length)guide.appendChild(h('p',{text:'No programme information supplied.'}));}).catch(function(){if(play===playSerial)guide.replaceChildren(h('p',{text:'Programme guide unavailable.'}));});
+          playItem(item,parameters());
         }}));});
       }).catch(function(error){if(mine===serial)fail(error);});
     }
@@ -7477,19 +7655,21 @@ try {
   }
   function attachIptvStream(video,source,options){
     var current=options.current||function(){return true;},url=source.url;
-    var portalStream=url.indexOf('/api/live/stalker_stream?')!==-1,xtreamStream=url.indexOf('/api/live/xtream_stream?')!==-1;
-    if(portalStream&&(source.kind==='live'||url.indexOf('ticket=')===-1)){
+    var nativeBase=window.__VAULTCAST_APPLICATION_BASE__;
+    if(nativeBase && url.indexOf(LIVE_API+'stalker_stream?')===0) url=nativeBase+'/live/'+url.slice(LIVE_API.length);
+    var portalStream=url.indexOf('/live/stalker_stream?')!==-1,xtreamStream=url.indexOf('/live/xtream_stream?')!==-1;
+    if(portalStream&&(source.kind==='live'||url.indexOf('ticket=')===-1||source.transport==='mpegts'||source.transport==='detect')){
       if(!window._vaultcastStalkerStreamLoading)window._vaultcastStalkerStreamLoading=new Promise(function(resolve,reject){
         if(window.attachStalkerStream){resolve();return;}
         var script=document.createElement('script');script.src=window.VaultcastDependencies.stalkerStream;
         script.onload=function(){window.attachStalkerStream?resolve():reject(new Error('Live transport unavailable.'));};
         script.onerror=function(){window._vaultcastStalkerStreamLoading=null;script.remove();reject(new Error('Could not load live transport.'));};document.head.appendChild(script);
       });
-      return window._vaultcastStalkerStreamLoading.then(function(){if(current())return window.attachStalkerStream(video,url+'&playback='+encodeURIComponent(liveUid('st')),Object.assign({},options,{current:current,fragmentLoader:iptvFragmentLoader}),loadHls);}).catch(function(error){if(current())options.error(error.message);});
+      return window._vaultcastStalkerStreamLoading.then(function(){if(current())return window.attachStalkerStream(video,url+'&playback='+encodeURIComponent(liveUid('st')),Object.assign({},options,{current:current,onDemand:source.kind!=='live',fragmentLoader:iptvFragmentLoader}),loadHls);}).catch(function(error){if(current())options.error(error.message);});
     }
     // Keep normal viewing and browse previews on exactly the same playback path.
     if(!/\.m3u8(?:[?#]|$)/i.test(url)){video.src=url;options.play();if(options.note)options.note('Non-HLS stream: browser DirectPlay attempted.');return Promise.resolve();}
-    var proxy=url.indexOf('/api/live/xtream_stream?')!==-1?url:portalStream?url+'&playback='+encodeURIComponent(liveUid('st')):LIVE_API+'iptv_hls?u='+encodeURIComponent(url)+'&jar='+encodeURIComponent(options.jar||hlsJar());
+    var proxy=xtreamStream?url:portalStream?url+'&playback='+encodeURIComponent(liveUid('st')):LIVE_API+'iptv_hls?u='+encodeURIComponent(url)+'&jar='+encodeURIComponent(options.jar||hlsJar());
     if(source.userAgent)proxy+='&ua='+encodeURIComponent(source.userAgent);
     if(source.referrer)proxy+='&ref='+encodeURIComponent(source.referrer);
     function nativeFallback(message){if(!current())return;if(video.canPlayType('application/vnd.apple.mpegurl')){video.src=proxy;options.play();}else options.error(message);}
@@ -8215,7 +8395,7 @@ try {
       e.stopPropagation();if(button.disabled)return;
       function copy(chosen){
         button.disabled=true;
-        api('/items/'+encodeURIComponent(chosen.id)+'/play',{method:'POST',body:{external:true}}).then(function(j){
+        api('/items/'+encodeURIComponent(chosen.id)+'/play',{method:'POST',libraryPlayback:true,body:{external:true}}).then(function(j){
           if(!j.ok||!j.url)throw new Error(j.error||'Could not create VLC link');
           var url=new URL(j.url,window.location.href).href;
           return copyText(url).then(function(){toast('VLC link copied. Open Media → Open Network Stream (Ctrl+N), paste and play. Links expire when unused; copy a fresh one if needed.',{ms:8000});},function(){
@@ -9613,7 +9793,16 @@ try {
     var showStalker=!!(state.home&&state.home.features&&state.home.features.live&&can('iptv_manage'));
     info[stalkerTask]=['Live','Save Live TV, Movies, Series and episodes from enabled Stalker connections for local browsing.'];
     var filter='All',busy=false,timer=null,sequence=0,lastData=null,refreshPending=false;
-    function requestAction(url,body,button){button.disabled=true;return api(url,{method:'POST',body:body}).then(function(j){if(!j.ok)throw new Error(j.error||'Task request failed');if(host.isConnected)refresh();}).catch(function(e){toast(e.message,{kind:'bad'});if(button.isConnected)button.disabled=false;});}
+    function requestAction(url,body,button){
+      if(url==='/admin/maintenance' && body.task==='segments'){
+        url='/admin/segment-warmup';body={operation:'start'};
+      }
+      button.disabled=true;
+      return api(url,{method:'POST',body:body}).then(function(j){
+        if(!j.ok)throw new Error(j.error||'Task request failed');
+        if(host.isConnected)refresh();
+      }).catch(function(e){toast(e.message,{kind:'bad'});if(button.isConnected)button.disabled=false;});
+    }
     function requestStalker(operation,button,source){
       button.disabled=true;
       stalkerPost('stalker_catalogue_control',{operation:operation,feed:source?source.feed_id:'',kind:source?source.kind:'all'})
@@ -9626,7 +9815,11 @@ try {
     }
     function loadTasks(){
       var stalker=showStalker?liveApi('stalker_catalogue_status','summary=1').catch(function(){return null;}):Promise.resolve(null);
-      return Promise.all([api('/admin/maintenance'),stalker]).then(function(results){
+      var tasks=window.__VAULTCAST_STANDALONE__ ? api('/admin/segment-warmup').then(function(result){
+        if(!result.ok)return result;
+        return {ok:true,tasks:{segments:'Match TV / anime intros and credits, and movie credits'},jobs:result.job?[result.job]:[],details:{}};
+      }) : api('/admin/maintenance');
+      return Promise.all([tasks,stalker]).then(function(results){
         var data=results[0];
         if(!data.ok||!showStalker)return data;
         var status=results[1],sources=status&&status.ok?status.sources||[]:[];
@@ -9695,7 +9888,10 @@ try {
           if(job.task===stalkerTask){
             if(active)row.appendChild(h('button',{className:'btn',type:'button',text:'Pause task',onClick:function(e){requestStalker('pause',e.currentTarget,job.source);}}));
             else if(['failed','paused'].includes(job.status))row.appendChild(h('button',{className:'btn',type:'button',text:'Resume task',onClick:function(e){requestStalker('load',e.currentTarget,job.source);}}));
-          }else if(active)row.appendChild(h('button',{className:'btn',text:'Cancel task',onClick:function(e){requestAction('/admin/maintenance/cancel',{id:job.id},e.currentTarget);}}));
+          }else if(active)row.appendChild(h('button',{className:'btn',text:'Cancel task',onClick:function(e){
+            if(job.task==='segments' && job.runner==='node')requestAction('/admin/segment-warmup',{operation:'cancel',id:job.id},e.currentTarget);
+            else requestAction('/admin/maintenance/cancel',{id:job.id},e.currentTarget);
+          }}));
           else if(job.status==='failed'&&j.tasks[job.task])row.appendChild(h('button',{className:'btn',text:'Run again',onClick:function(e){requestAction('/admin/maintenance',{task:job.task},e.currentTarget);}}));
           host.appendChild(row);
         });
@@ -16596,7 +16792,7 @@ function viewCollectionDetail(){
                 }}), ' On'
               ])]),
               h('td', { className: 'row-actions' }, [
-                f.type==='stalker'?h('button',{className:'btn ghost',type:'button',text:'Check connection',onClick:function(ev){var button=ev.currentTarget;button.disabled=true;liveApiPost('iptv_save',{portalAction:'check',feedId:f.id}).then(function(result){if(!result.ok||!result.body||!result.body.ok)throw new Error(result.body&&result.body.error||'Connection failed');liveSetMsg('Connected to '+(f.name||f.id)+' — '+(result.body.channelCount==null?'channel count unavailable':result.body.channelCount+(result.body.countEstimated?' channels returned (total unavailable)':' live channels reported'))+'.',false);}).catch(function(error){liveSetMsg(error.message||'Connection failed.',true);}).finally(function(){button.disabled=false;});}}):null,
+                f.type==='stalker'?h('button',{className:'btn ghost',type:'button',text:'Check connection',onClick:function(ev){var button=ev.currentTarget;button.disabled=true;liveApiPost('stalker_manage',{operation:'check',id:f.id}).then(function(result){if(!result.ok||!result.body||!result.body.ok)throw new Error(result.body&&result.body.error||'Connection failed');liveSetMsg('Connected to '+(f.name||f.id)+' — '+(result.body.channelCount==null?'channel count unavailable':result.body.channelCount+(result.body.countEstimated?' channels returned (total unavailable)':' live channels reported'))+'.',false);}).catch(function(error){liveSetMsg(error.message||'Connection failed.',true);}).finally(function(){button.disabled=false;});}}):null,
                 h('button', { className: 'btn ghost', type: 'button', text: 'Edit', onClick: function(){ liveSet.feedEditId = f.id; paintLiveIptv(host); }}),
                 h('button', { className: 'btn ghost', type: 'button', text: 'Remove', onClick: function(){
                   if (!confirm('Remove feed ' + (f.name||f.id) + '?' + (f.preinstalled ? ' It will not be added back automatically; you can re-add it any time with its URL.' : ''))) return;
@@ -16834,7 +17030,17 @@ function viewCollectionDetail(){
       if (!items.length) { liveSetMsg('Select one or more channels to Check (max 25).', true); return; }
       if (items.length > 25) items = items.slice(0, 25);
       liveSetMsg('Probing ' + items.length + ' stream' + (items.length === 1 ? '' : 's') + '…');
-      liveApiPost('iptv_probe', { channels: items }).then(function(res){
+      var portal = items.filter(function(item){ return isStalkerLineupUrl(item.url); });
+      var mixed = window.__VAULTCAST_APPLICATION_BASE__ && portal.length && portal.length !== items.length;
+      var first = liveApiPost('iptv_probe', { channels: mixed ? portal : items });
+      var request = mixed ? first.then(function(result){
+        if (!result.ok || !result.body || !result.body.ok) return result;
+        return liveApiPost('iptv_probe', { channels: items.filter(function(item){ return !isStalkerLineupUrl(item.url); }) }).then(function(other){
+          if (other.ok && other.body && other.body.ok) other.body.results = result.body.results.concat(other.body.results);
+          return other;
+        });
+      }) : first;
+      request.then(function(res){
         if (!res.ok || !res.body || !res.body.ok) { liveSetMsg((res.body && res.body.error) || 'Probe failed', true); return; }
         applyProbeResults(res.body.results || []);
         var okN = (res.body.results || []).filter(function(r){ return r.ok; }).length;
@@ -16995,7 +17201,7 @@ function viewCollectionDetail(){
   function rememberReturnPath(){
     upgradeLegacyHash();
     var rel = R.relative(location.pathname, BASE);
-    if (rel !== '' && rel !== 'welcome' && rel !== 'login') state._returnHash = BASE + rel + (location.search || '');
+    if (rel !== '' && rel !== 'welcome' && rel !== 'login') state._returnHash = BASE + viewingPath(rel) + (location.search || '');
   }
   function showWelcome(){
     if(radioState&&radioState.station)stopRadio();
@@ -17003,7 +17209,7 @@ function viewCollectionDetail(){
     rememberReturnPath();
     state.view = 'welcome';
     _navSilent = true;
-    try { history.replaceState({}, '', BASE + 'welcome'); } catch (e) {}
+    try { history.replaceState({}, '', BASE + viewingPath('welcome')); } catch (e) {}
     render();
     _navSilent = false;
   }
@@ -17362,7 +17568,7 @@ function viewCollectionDetail(){
   }
   function registerSW(){
     if (!('serviceWorker' in navigator)) return;
-    navigator.serviceWorker.register(BASE + 'sw.js?v=' + encodeURIComponent(window.__ASSET_VERSION__ || APP_VERSION), { scope: BASE }).then(function(reg){ try { reg.update(); } catch (e) {} }).catch(function(){});
+    navigator.serviceWorker.register(BASE + 'sw.js?v=' + encodeURIComponent(window.__ASSET_VERSION__ || APP_VERSION) + (window.__VAULTCAST_ASSET_BASE__ ? '&assets=node' : ''), { scope: BASE }).then(function(reg){ try { reg.update(); } catch (e) {} }).catch(function(){});
   }
 
   // Keyboard: / focuses search (when not typing in an input)
@@ -17396,7 +17602,7 @@ function viewCollectionDetail(){
     if (extraCss) return extraCss;
     extraCss = new Promise(function(resolve){
       var link = document.createElement('link'); link.rel = 'stylesheet';
-      link.href = BASE + 'index.php?asset=assets/css/vc-extra.css&v=' + encodeURIComponent(window.__ASSET_VERSION__ || APP_VERSION);
+      link.href = window.vaultcastAssetUrl ? window.vaultcastAssetUrl('assets/css/vc-extra.css') : BASE + 'assets/css/vc-extra.css';
       link.onload = function(){ resolve(); }; link.onerror = function(){ extraCss = null; resolve(); };
       setTimeout(resolve, 4000); // never hold a page back on a slow stylesheet
       document.head.appendChild(link);
@@ -17409,7 +17615,7 @@ function viewCollectionDetail(){
     var css = /^vc-(play|misc|games|calendar|ai)\.js$/.test(file) ? loadExtraCss() : Promise.resolve();
     moduleLoads[file] = new Promise(function(resolve, reject){
       var sm = document.createElement('script');
-      sm.src = BASE + 'index.php?asset=assets/js/' + file + '&v=' + encodeURIComponent(window.__ASSET_VERSION__ || APP_VERSION);
+      sm.src = window.vaultcastAssetUrl ? window.vaultcastAssetUrl('assets/js/' + file) : BASE + 'assets/js/' + file;
       sm.async = true;
       sm.onload = function(){ var mod = globalName ? window[globalName] : true; if (mod) { if (mod.init) mod.init(window.NSApp); resolve(mod); } else { moduleLoads[file] = null; reject(new Error('Module missing')); } };
       sm.onerror = function(){ moduleLoads[file] = null; reject(new Error('Could not load ' + file)); };
@@ -17451,7 +17657,7 @@ function viewCollectionDetail(){
     if (window.__nsMatchingLoading) return;
     window.__nsMatchingLoading = true;
     var sm = document.createElement('script');
-    sm.src = BASE + 'index.php?asset=assets/js/matching.js&v=' + (window.__ASSET_VERSION__ || APP_VERSION);
+    sm.src = window.vaultcastAssetUrl ? window.vaultcastAssetUrl('assets/js/matching.js') : BASE + 'assets/js/matching.js';
     sm.defer = true;
     sm.onload = function(){
       window.__nsMatchingLoading = false;
@@ -17529,9 +17735,9 @@ function viewCollectionDetail(){
   // One non-blocking check per app load; the server enforces one global
   // five-minute cooldown across all viewers before reading the queue.
   meP.then(function(me){
-    if (!me || !me.ok || !me.user || state._guest) return;
+    if (!me || !me.ok || !me.user || state._guest || inViewingPage()) return;
     api('/downloads/tick', { method:'POST', body:{} }).catch(function(){ /* Acquisition is optional. */ });
   });
-  meP.then(function(){ startConvertNotifPoll(); });
+  meP.then(function(){ if (!inViewingPage()) startConvertNotifPoll(); });
   registerSW();
 })();

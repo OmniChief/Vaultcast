@@ -54,7 +54,7 @@ final class StalkerCatalogueScan {
                 self::db()->beginTransaction();
                 if(!self::locked($job)){self::db()->rollBack();return;}
                 StalkerLibrary::publish($feed,$job['kind'],$job['generation'],$pending);
-                foreach($pending as $item)self::q('DELETE FROM vaultcast_stalker_staging WHERE feed_id=? AND kind=? AND generation=? AND item_id=?',array_merge($key,[$item['item_id']]));
+                self::deleteStaged($key,$pending);
                 self::q("UPDATE vaultcast_stalker_jobs SET status='partial',last_hash='publish',error='',next_run=? WHERE feed_id=? AND kind=?",[time(),$job['feed_id'],$job['kind']]);
                 self::db()->commit();
                 return;
@@ -87,14 +87,7 @@ final class StalkerCatalogueScan {
                 if(!$rows&&($total!==null&&$count<$total))throw new RuntimeException('Provider stopped before the advertised folder total.');
                 if(!$rows&&$count===0&&$total!==0)throw new RuntimeException('Empty folder without an explicit zero total; absence is unverified.');
                 self::db()->beginTransaction();if(!self::locked($job)){self::db()->rollBack();return;}
-                $added=0;
-                foreach($rows as $row){
-                    if(!self::q('INSERT IGNORE INTO vaultcast_stalker_folder_items(feed_id,kind,generation,folder_id,item_id) VALUES(?,?,?,?,?)',array_merge($key,[$folder['folder_id'],(string)$row['id']]))->rowCount())throw new RuntimeException('Overlapping provider folder pages; completeness is unverified.');
-                    $category=$row['category_name']??$row['category_title']??$folder['title'];
-                    $category=is_scalar($category)?mb_substr(trim(strip_tags((string)$category)),0,500):$folder['title'];
-                    // A provider item can legitimately occur in several folders. Stage once.
-                    $added+=self::q('INSERT IGNORE INTO vaultcast_stalker_staging(feed_id,kind,generation,item_id,category,payload) VALUES(?,?,?,?,?,?)',array_merge($key,[(string)$row['id'],$category,json_encode($row,JSON_UNESCAPED_UNICODE|JSON_INVALID_UTF8_SUBSTITUTE)]))->rowCount();
-                }
+                $added=self::stagePage($key,$folder,$rows);
                 self::q('UPDATE vaultcast_stalker_folders SET status=?,next_page=next_page+1,processed=?,total=?,last_success=?,error=\'\',failures=0,next_run=0 WHERE feed_id=? AND kind=? AND generation=? AND folder_id=?',array_merge([$rows?'partial':'complete',$count,$total,time()],$key,[$folder['folder_id']]));
                 self::q("UPDATE vaultcast_stalker_jobs SET status='partial',processed=processed+?,next_run=?,error='' WHERE feed_id=? AND kind=?",[$added,time(),$job['feed_id'],$job['kind']]);
                 self::db()->commit();return;
@@ -107,7 +100,7 @@ final class StalkerCatalogueScan {
             $rows=self::q('SELECT item_id,category,payload FROM vaultcast_stalker_staging WHERE feed_id=? AND kind=? AND generation=? ORDER BY item_id LIMIT 50',$key)->fetchAll();
             if($rows){
                 StalkerLibrary::publish($feed,$job['kind'],$job['generation'],$rows);
-                foreach($rows as $row)self::q('DELETE FROM vaultcast_stalker_staging WHERE feed_id=? AND kind=? AND generation=? AND item_id=?',array_merge($key,[$row['item_id']]));
+                self::deleteStaged($key,$rows);
                 self::q("UPDATE vaultcast_stalker_jobs SET status='partial',last_hash='publish',next_page=1,error='',next_run=? WHERE feed_id=? AND kind=?",[time(),$job['feed_id'],$job['kind']]);
             }elseif(StalkerCatalogues::folderSelection($feed['id'],$job['kind'])['mode']==='include'||StalkerLibrary::reconcile($job)){
                 // A filtered scan cannot prove missing titles are gone: excluded
@@ -151,6 +144,42 @@ final class StalkerCatalogueScan {
             }catch(Throwable $failure){if(self::db()->inTransaction())self::db()->rollBack();throw $failure;}
         }
     }
+    private static function stagePage(array $key,array $folder,array $rows): int {
+        $added=0;
+        $args=[];
+        $bytes=0;
+        $flush=static function() use (&$args,&$added,&$bytes): void {
+            if(!$args)return;
+            $values=implode(',',array_fill(0,intdiv(count($args),6),'(?,?,?,?,?,?)'));
+            $added+=self::q('INSERT IGNORE INTO vaultcast_stalker_staging(feed_id,kind,generation,item_id,category,payload) VALUES '.$values,$args)->rowCount();
+            $args=[];
+            $bytes=0;
+        };
+        foreach(array_chunk($rows,100) as $chunk){
+            $members=[];
+            foreach($chunk as $row)array_push($members,...array_merge($key,[$folder['folder_id'],(string)$row['id']]));
+            $values=implode(',',array_fill(0,count($chunk),'(?,?,?,?,?)'));
+            if(self::q('INSERT IGNORE INTO vaultcast_stalker_folder_items(feed_id,kind,generation,folder_id,item_id) VALUES '.$values,$members)->rowCount()!==count($chunk)){
+                throw new RuntimeException('Overlapping provider folder pages; completeness is unverified.');
+            }
+            foreach($chunk as $row){
+                $category=$row['category_name']??$row['category_title']??$folder['title'];
+                $category=is_scalar($category)?mb_substr(trim(strip_tags((string)$category)),0,500):$folder['title'];
+                $payload=json_encode($row,JSON_UNESCAPED_UNICODE|JSON_INVALID_UTF8_SUBSTITUTE);
+                if($args && (count($args)>=600 || $bytes+strlen($payload)>512*1024))$flush();
+                array_push($args,...array_merge($key,[(string)$row['id'],$category,$payload]));
+                $bytes+=strlen($payload);
+            }
+        }
+        $flush();
+        return $added;
+    }
+
+    private static function deleteStaged(array $key,array $rows): void {
+        $ids=array_column($rows,'item_id');
+        self::q('DELETE FROM vaultcast_stalker_staging WHERE feed_id=? AND kind=? AND generation=? AND item_id IN ('.implode(',',array_fill(0,count($ids),'?')).')',array_merge($key,$ids));
+    }
+
     private static function importNextEpisodePage(array $feed,array $job): bool {
         $key='stalker-episode-import-'.hash('sha256',$job['feed_id']);
         $cursor=\Vaultcast\Repository::document($key,[]);

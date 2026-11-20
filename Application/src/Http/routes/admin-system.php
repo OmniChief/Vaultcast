@@ -13,7 +13,9 @@ if ($path === '/admin/maintenance/cancel' && $method === 'POST') json_out(Mainte
 
 if (preg_match('#^/admin/maintenance/([0-9]{14}-[a-f0-9]{12})$#', $path, $match) && $method === 'GET') {
     $job = \Vaultcast\Repository::document('maintenance-job:' . $match[1]);
-    json_out(['ok' => (bool)$job, 'job' => $job]);
+    $events = $job && !empty($_GET['events']) && in_array($job['status'] ?? '', ['queued', 'running'], true)
+        ? NodeEvents::issue('maintenance-' . $match[1], true) : null;
+    json_out(['ok' => (bool)$job, 'job' => $job, 'events' => $events]);
 }
 
 // ---- System admin (): resources / services / processes / reboot ----

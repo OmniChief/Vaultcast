@@ -110,7 +110,7 @@ final class Chat
         $out['messages']=array_reverse($messages);return $out;
     }
     public static function change(array $user,string $id,array $body): array {
-        return \Vaultcast\Database::transaction(static function() use ($user,$id,$body){
+        $result = \Vaultcast\Database::transaction(static function() use ($user,$id,$body){
             self::query('SELECT id FROM vaultcast_chat_rooms WHERE id=? FOR UPDATE',[$id]);
             if (($body['action'] ?? '')==='send') self::query('SELECT name FROM vaultcast_documents WHERE name=? FOR UPDATE',['home-hub:'.$user['id']]);
             $r=self::room($id,$user);$action=$body['action'] ?? '';
@@ -161,6 +161,9 @@ final class Chat
             } else throw new DomainException('Unknown conversation action.');
             self::query('UPDATE vaultcast_chat_rooms SET revision=revision+1 WHERE id=?',[$id]);return ['ok'=>true];
         });
+        $action = $body['action'] ?? '';
+        if ($action !== 'mute' && ($action !== 'pulse' || !empty($body['typing']))) NodeEvents::signal('chat-' . $id);
+        return $result;
     }
     private static function filePath(string $id): string {
         if (!preg_match('/^[a-f0-9]{32}$/D',$id)) throw new DomainException('Invalid attachment.');

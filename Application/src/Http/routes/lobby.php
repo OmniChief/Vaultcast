@@ -38,7 +38,8 @@ if (preg_match('#^/lobby/sessions/([a-f0-9]{16})$#', $path, $m) && $method === '
 }
 if ($path === '/lobby/sessions' && $method === 'GET') {
     header('Cache-Control: no-store');
-    json_out(['ok' => true, 'sessions' => Lobby::listOpen((string)(Profiles::lobbyIdentity()['user_id'] ?? '')), 'heartbeat_seconds' => Lobby::HEARTBEAT_SECONDS]);
+    json_out(['ok' => true, 'sessions' => Lobby::listOpen((string)(Profiles::lobbyIdentity()['user_id'] ?? '')), 'heartbeat_seconds' => Lobby::HEARTBEAT_SECONDS,
+        'events' => !empty($_GET['events']) ? NodeEvents::issue('lobby-public', true) : null]);
 }
 
 if ($path === '/lobby/sessions' && $method === 'POST') {
@@ -59,6 +60,7 @@ if ($path === '/lobby/sessions' && $method === 'POST') {
     $max = isset($body['max_players']) ? (int)$body['max_players'] : null;
     $res = Lobby::create($item, $hostName, $hostKey, $max, Profiles::lobbyIdentity(), is_array($body['runtime'] ?? null) ? $body['runtime'] : [], (string)($body['visibility'] ?? 'public'));
     if (empty($res['ok'])) json_error($res['error'] ?? 'Could not create session', 400);
+    if (($res['session']['visibility'] ?? 'public') === 'public') NodeEvents::signal('lobby-public');
     json_out($res);
 }
 
@@ -66,7 +68,10 @@ if (preg_match('#^/lobby/sessions/([a-f0-9]{16})$#', $path, $m) && $method === '
     $body = body_json();
     $hostKey = (string)($body['host_key'] ?? ($_SERVER['HTTP_X_LOBBY_HOST_KEY'] ?? ''));
     if ($hostKey === '') json_error('host_key required');
-    json_out(Lobby::end($m[1], $hostKey));
+    $public = (Lobby::get($m[1])['visibility'] ?? 'private') === 'public';
+    $res = Lobby::end($m[1], $hostKey);
+    if ($public && !empty($res['ended'])) NodeEvents::signal('lobby-public');
+    json_out($res);
 }
 
 if (preg_match('#^/lobby/sessions/([a-f0-9]{16})/heartbeat$#', $path, $m) && $method === 'POST') {
@@ -87,13 +92,16 @@ if (preg_match('#^/lobby/sessions/([a-f0-9]{16})/join$#', $path, $m) && $method 
     }
     $res = Lobby::join($m[1], $name, Profiles::lobbyIdentity());
     if (empty($res['ok'])) json_error($res['error'] ?? 'join failed', 400);
+    if (($res['session']['visibility'] ?? 'private') === 'public') NodeEvents::signal('lobby-public');
     json_out($res);
 }
 
 if (preg_match('#^/lobby/sessions/([a-f0-9]{16})/leave$#', $path, $m) && $method === 'POST') {
     $body = body_json();
     $slot = (int)($body['player_slot'] ?? 0);
-    json_out(Lobby::leave($m[1], $slot));
+    $res = Lobby::leave($m[1], $slot);
+    if (($res['session']['visibility'] ?? 'private') === 'public') NodeEvents::signal('lobby-public');
+    json_out($res);
 }
 
 if ($path === '/lobby/multiplayer' && $method === 'GET') {

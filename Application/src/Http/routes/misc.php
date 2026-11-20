@@ -72,6 +72,8 @@ try {
         if ($path === '/drop/state' && $method === 'GET') json_out(Drop::state($user));
         if ($path === '/drop/text' && $method === 'POST') json_out(Drop::createText($user, body_json()));
         if ($path === '/drop/upload' && $method === 'POST') json_out(Drop::init($user, body_json()));
+    if ($method === 'POST' && preg_match('#^/drop/upload/([a-f0-9]{32})/node$#D', $path, $m)) json_out(Drop::nodeUpload($user, $m[1]));
+    if ($method === 'POST' && preg_match('#^/drop/upload/([a-f0-9]{32})/finish$#D', $path, $m)) json_out(Drop::finishNodeUpload($user, $m[1]));
         if (preg_match('#^/drop/upload/([a-f0-9]{32})$#D', $path, $m) && $method === 'GET') json_out(Drop::resume($user, $m[1]));
         if (preg_match('#^/drop/upload/([a-f0-9]{32})$#D', $path, $m) && ($method === 'POST' || $method === 'PUT')) {
             $r = Drop::chunk($user, $m[1], (int)($_GET['offset'] ?? -1));

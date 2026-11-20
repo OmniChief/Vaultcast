@@ -43,7 +43,10 @@ final class Maintenance
         }
         if (!is_file($php)) throw new RuntimeException('Configure the PHP CLI path in Settings before starting maintenance.');
         if ($payload !== null) \Vaultcast\Repository::putDocument($task . '-request:' . $id, $payload);
-        \Vaultcast\Repository::putDocument('maintenance-job:' . $id, $job);
+        self::saveJob($id, $job);
+        if ($task !== 'acquisition-tick' && PHP_OS_FAMILY === 'Linux' && NodeRuntime::maintenanceQueueReady() && self::enqueue($id, $php)) {
+            return ['ok'=>true, 'job'=>$job];
+        }
         $log = STREAM_DATA . '/maintenance.log';
         if (PHP_OS_FAMILY === 'Windows') {
             $quote = function ($value) { return "'" . str_replace("'", "''", $value) . "'"; };
@@ -56,10 +59,25 @@ final class Maintenance
         }
         if (!(int)$result) {
             $job['status'] = 'failed'; $job['error'] = 'Could not start the PHP maintenance worker.';
-            \Vaultcast\Repository::putDocument('maintenance-job:' . $id, $job);
+            self::saveJob($id, $job);
             throw new RuntimeException($job['error']);
         }
         return ['ok' => true, 'job' => $job];
+    }
+
+    private static function enqueue(string $id, string $php): bool
+    {
+        $php = realpath($php);
+        if ($php === false || !is_executable($php)) return false;
+        $dir = STREAM_DATA . '/runtime/maintenance-queue';
+        if (!is_dir($dir) && !@mkdir($dir, 0700, true) && !is_dir($dir)) return false;
+        $path = $dir . '/' . $id . '.json';
+        $temporary = $path . '.part';
+        $data = json_encode(['php'=>$php, 'ini'=>php_ini_loaded_file() ?: '', 'created'=>microtime(true)]);
+        if ($data !== false && @file_put_contents($temporary, $data, LOCK_EX) === strlen($data)
+            && @rename($temporary, $path)) return true;
+        @unlink($temporary);
+        return false;
     }
 
     public static function cancel(string $id): array
@@ -69,6 +87,12 @@ final class Maintenance
         return ['ok' => true, 'message' => 'Cancellation requested. The current file or database transaction will finish first.'];
     }
 
+    private static function saveJob(string $id, array $job): void
+    {
+        \Vaultcast\Repository::putDocument('maintenance-job:' . $id, $job);
+        NodeEvents::signal('maintenance-' . $id);
+    }
+
     public static function checkpoint(): void
     {
         if (!self::$active || microtime(true) - self::$checked < 0.5) return;
@@ -76,7 +100,7 @@ final class Maintenance
         if (\Vaultcast\Repository::document('maintenance-cancel:' . self::$active, false)) throw new RuntimeException('Cancelled by administrator.');
     }
 
-    public static function run(string $id): array
+    public static function run(string $id, bool $managed = false): array
     {
         if (PHP_SAPI !== 'cli' || !preg_match('/^\d{14}-[a-f0-9]{12}$/D', $id)) throw new RuntimeException('Invalid maintenance worker.');
         // Children (including probes and artwork encoders) inherit the lower CPU priority.
@@ -87,10 +111,24 @@ final class Maintenance
                 Process::capture([$ionice,'-c','3','-p',(string)getmypid()],2);break;
             }
         }
-        $job = \Vaultcast\Repository::document('maintenance-job:' . $id);
-        if (!$job || $job['status'] !== 'queued') throw new RuntimeException('Task is no longer queued.');
         $lock = fopen(STREAM_DATA . '/maintenance.lock', 'c');
         if (!$lock) throw new RuntimeException('Cannot open maintenance lock.');
+        if ($managed && !flock($lock, LOCK_EX | LOCK_NB)) {
+            fclose($lock);
+            return ['ok'=>true, 'busy'=>true];
+        }
+        $job = \Vaultcast\Repository::document('maintenance-job:' . $id);
+        if (!$job || $job['status'] !== 'queued') {
+            if ($managed && ($job['status'] ?? '') === 'running') {
+                $job['status'] = 'failed';
+                $job['error'] = 'The maintenance worker stopped before reporting completion.';
+                $job['finished_at'] = date('c');
+                self::saveJob($id, $job);
+            }
+            fclose($lock);
+            if ($managed) return ['ok'=>true, 'already_handled'=>true];
+            throw new RuntimeException('Task is no longer queued.');
+        }
         self::$active = $id;
         register_shutdown_function(function () use ($id) {
             if (self::$active !== $id) return;
@@ -99,7 +137,7 @@ final class Maintenance
                 $interrupted['status'] = 'failed';
                 $interrupted['error'] = 'The maintenance worker stopped unexpectedly. Check the PHP server log.';
                 $interrupted['finished_at'] = date('c');
-                \Vaultcast\Repository::putDocument('maintenance-job:' . $id, $interrupted);
+                self::saveJob($id, $interrupted);
             } catch (Throwable $ignored) {}
         });
         try {
@@ -110,10 +148,10 @@ final class Maintenance
                 $job['status'] = 'complete';
                 return ['ok' => true, 'job' => $job];
             }
-            while (!flock($lock, LOCK_EX | LOCK_NB)) { self::checkpoint(); usleep(250000); }
+            if (!$managed) while (!flock($lock, LOCK_EX | LOCK_NB)) { self::checkpoint(); usleep(250000); }
             self::checkpoint();
             $job['status'] = 'running'; $job['started_at'] = date('c');
-            \Vaultcast\Repository::putDocument('maintenance-job:' . $id, $job);
+            self::saveJob($id, $job);
             switch ($job['task']) {
                 case 'versions': $job['result']=Convert::mergeExistingCopies(); break;
                 case 'browse': BrowseIndex::warm(); $job['result']=['ok'=>true]; break;
@@ -130,7 +168,7 @@ final class Maintenance
                         if ($done !== $total && microtime(true) - $lastProgress < 1) return;
                         $lastProgress = microtime(true);
                         $job['progress'] = ['phase'=>'Game posters and synopses', 'done'=>$done, 'total'=>$total, 'file'=>$file, 'at'=>date('c')];
-                        \Vaultcast\Repository::putDocument('maintenance-job:' . $id, $job);
+                        self::saveJob($id, $job);
                     });
                     break;
                 case 'metadata-items':
@@ -150,7 +188,7 @@ final class Maintenance
                         if ($done !== $total && microtime(true) - $lastProgress < 1) return;
                         $lastProgress = microtime(true);
                         $job['progress'] = ['phase'=>$phase, 'done'=>$done, 'total'=>$total, 'file'=>$file, 'at'=>date('c')];
-                        \Vaultcast\Repository::putDocument('maintenance-job:' . $id, $job);
+                        self::saveJob($id, $job);
                     }, 120, 120, ($job['target'] ?? '') === 'resume' || strpos((string)($job['requested_by'] ?? ''), 'Continuation of ') === 0, $scope, $cursor);
                     self::checkpoint();
                     // Do not let checkpoint throttling miss a cancellation at
@@ -168,7 +206,7 @@ final class Maintenance
                     $job['result']=SiteArtwork::optimise(function($done,$total,$file)use(&$job,$id,&$lastProgress){
                         if($done!==$total&&microtime(true)-$lastProgress<1)return;$lastProgress=microtime(true);
                         $job['progress']=['phase'=>'Site and theme artwork','done'=>$done,'total'=>$total,'file'=>$file,'at'=>date('c')];
-                        \Vaultcast\Repository::putDocument('maintenance-job:'.$id,$job);
+                        self::saveJob($id, $job);
                     });
                     break;
                 case 'segments':
@@ -176,7 +214,7 @@ final class Maintenance
                     $job['result']=SegmentWarmup::run(function($done,$total,$file)use(&$job,$id,&$lastProgress){
                         if($done!==$total&&microtime(true)-$lastProgress<1)return;$lastProgress=microtime(true);
                         $job['progress']=['phase'=>'Intro / credits timings','done'=>$done,'total'=>$total,'file'=>$file,'at'=>date('c')];
-                        \Vaultcast\Repository::putDocument('maintenance-job:'.$id,$job);
+                        self::saveJob($id, $job);
                     });
                     break;
                 case 'facts':
@@ -215,7 +253,7 @@ final class Maintenance
                     $job['result']=Drop::cleanup(function($done,$total,$file)use(&$job,$id,&$lastProgress){
                         if($done!==$total&&microtime(true)-$lastProgress<1)return;$lastProgress=microtime(true);self::checkpoint();
                         $job['progress']=['phase'=>'Expired Drop files','done'=>$done,'total'=>$total,'file'=>$file,'at'=>date('c')];
-                        \Vaultcast\Repository::putDocument('maintenance-job:'.$id,$job);
+                        self::saveJob($id, $job);
                     });
                     break;
                 case 'views':
@@ -236,7 +274,7 @@ final class Maintenance
                     if (!is_array($req)) throw new RuntimeException('Import request missing.');
                     $job['result'] = Ingest::commit($req, function ($done, $total, $file) use (&$job, $id) {
                         $job['progress'] = ['done' => (int)$done, 'total' => (int)$total, 'file' => (string)$file, 'at' => date('c')];
-                        \Vaultcast\Repository::putDocument('maintenance-job:' . $id, $job);
+                        self::saveJob($id, $job);
                     });
                     // Per-file errors are reported in the result; the job itself completed
                     if (isset($job['result']['ok']) && !$job['result']['ok'] && !empty($job['result']['results'])) $job['result']['partial'] = true;
@@ -256,7 +294,7 @@ final class Maintenance
             $job['error'] = $error->getMessage();
         } finally {
             $job['finished_at'] = date('c');
-            \Vaultcast\Repository::putDocument('maintenance-job:' . $id, $job);
+            self::saveJob($id, $job);
             self::$active = null; flock($lock, LOCK_UN); fclose($lock);
         }
         return ['ok' => $job['status'] === 'complete', 'job' => $job];

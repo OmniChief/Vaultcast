@@ -88,22 +88,23 @@ final class StalkerLibrary {
         if($previous)return $previous['catalogue_id'];
         $id=bin2hex(random_bytes(16));self::query('INSERT INTO vaultcast_stalker_library(id,kind,title,title_key,year,imdb_id,tmdb_id,payload,unavailable_since) VALUES(?,?,?,?,?,?,?,?,?)',[$id,$kind,mb_substr($m['name'],0,500),$key,$m['year'],$m['imdb_id'],$m['tmdb_id'],self::json($m),time()]);return $id;
     }
-    private static function ingest(array $feed,string $kind,array $row,string $category,string $generation): string {
+    private static function ingest(array $feed,string $kind,array $row,string $category,string $generation): ?string {
         $m=self::metadata($feed,$row,$kind,$category);
-        $old=self::query('SELECT s.catalogue_id,s.payload,s.playback,c.imdb_id,c.tmdb_id,c.title_key,c.year FROM vaultcast_stalker_offers s JOIN vaultcast_stalker_library c ON c.id=s.catalogue_id WHERE s.feed_id=? AND s.kind=? AND s.item_id=?',[$feed['id'],$kind,(string)$row['id']])->fetch();
+        $old=self::query('SELECT s.catalogue_id,s.available,s.payload,s.playback,c.imdb_id,c.tmdb_id,c.title_key,c.year FROM vaultcast_stalker_offers s JOIN vaultcast_stalker_library c ON c.id=s.catalogue_id WHERE s.feed_id=? AND s.kind=? AND s.item_id=?',[$feed['id'],$kind,(string)$row['id']])->fetch();
         $key=hash('sha256',self::title($m['o_name']??$m['name']));
         $oldMetadata=$old?json_decode($old['payload'],true):[];$oldTitle=$oldMetadata?hash('sha256',self::title($oldMetadata['o_name']??$oldMetadata['name'])):'';
         $same=$old&&self::compatible($m,$old)&&($oldTitle===$key||($m['imdb_id']!==''&&$m['imdb_id']===$old['imdb_id'])||($m['tmdb_id']!==''&&$m['tmdb_id']===$old['tmdb_id']))&&(!$m['year']||!$old['year']||(int)$old['year']===$m['year']);
         $private=['cmd'=>is_scalar($row['cmd']??null)?(string)$row['cmd']:'','series'=>(string)($row['series_number']??''),'metadata'=>$m];
-        if($same&&$old['payload']===self::json($m)&&$old['playback']===self::json($private)){
+        $payload = self::json($m);
+        $playback = self::json($private);
+        if($same&&$old['payload']===$payload&&$old['playback']===$playback){
             self::query('UPDATE vaultcast_stalker_offers SET config=?,generation=?,available=1,last_seen=? WHERE feed_id=? AND kind=? AND item_id=?',[StalkerCatalogues::config($feed),$generation,time(),$feed['id'],$kind,(string)$row['id']]);
-            return $old['catalogue_id'];
+            return $old['available'] ? null : $old['catalogue_id'];
         }
         $id=self::identity($m,$kind,$same?$old:null);
         if($m['year'])foreach(array_unique([$key,hash('sha256',self::title($m['name']))]) as $alias)self::query('INSERT IGNORE INTO vaultcast_stalker_aliases(catalogue_id,title_key,year) VALUES(?,?,?)',[$id,$alias,$m['year']]);
         if($same)self::query("UPDATE vaultcast_stalker_library SET imdb_id=IF(imdb_id='',?,imdb_id),tmdb_id=IF(tmdb_id='',?,tmdb_id) WHERE id=?",[$m['imdb_id'],$m['tmdb_id'],$id]);
-        $private=['cmd'=>is_scalar($row['cmd']??null)?(string)$row['cmd']:'','series'=>(string)($row['series_number']??''),'metadata'=>$m];
-        self::query('INSERT INTO vaultcast_stalker_offers(feed_id,kind,item_id,catalogue_id,config,generation,available,last_seen,payload,playback) VALUES(?,?,?,?,?,?,1,?,?,?) ON DUPLICATE KEY UPDATE catalogue_id=VALUES(catalogue_id),config=VALUES(config),generation=VALUES(generation),available=1,last_seen=VALUES(last_seen),payload=VALUES(payload),playback=VALUES(playback)',[$feed['id'],$kind,(string)$row['id'],$id,StalkerCatalogues::config($feed),$generation,time(),self::json($m),self::json($private)]);
+        self::query('INSERT INTO vaultcast_stalker_offers(feed_id,kind,item_id,catalogue_id,config,generation,available,last_seen,payload,playback) VALUES(?,?,?,?,?,?,1,?,?,?) ON DUPLICATE KEY UPDATE catalogue_id=VALUES(catalogue_id),config=VALUES(config),generation=VALUES(generation),available=1,last_seen=VALUES(last_seen),payload=VALUES(payload),playback=VALUES(playback)',[$feed['id'],$kind,(string)$row['id'],$id,StalkerCatalogues::config($feed),$generation,time(),$payload,$playback]);
         if($old&&$old['catalogue_id']!==$id)self::aggregate($old['catalogue_id']);
         return $id;
     }
@@ -144,7 +145,10 @@ final class StalkerLibrary {
     }
     public static function publish(array $feed,string $kind,string $generation,array $rows): void {
         $changed=[];
-        foreach($rows as $row)$changed[self::ingest($feed,$kind,json_decode($row['payload'],true),$row['category'],$generation)]=true;
+        foreach($rows as $row){
+            $id=self::ingest($feed,$kind,json_decode($row['payload'],true),$row['category'],$generation);
+            if($id!==null)$changed[$id]=true;
+        }
         foreach(array_keys($changed) as $id)self::aggregate($id);
     }
     public static function providerFolders(array $feed,string $kind): array {
@@ -328,12 +332,32 @@ final class StalkerLibrary {
             \Vaultcast\Repository::putDocument($key,['id'=>$complete?'':end($rows)['id'],'complete'=>$complete]);
         });
     }
-    private static function local(array $item,string $kind): bool {
-        $where=[];$args=[$kind];foreach(['imdb_id','tmdb_id'] as $field)if(!empty($item[$field])){$where[]='l.'.$field.'=?';$args[]=$item[$field];}
-        if(!empty($item['year'])){$where[]='(l.title_key=? AND l.year=?)';$args[]=hash('sha256',self::title($item['o_name']??$item['name']));$args[]=$item['year'];}
-        if(!$where)return false;
-        foreach(self::query('SELECT l.imdb_id,l.tmdb_id FROM vaultcast_stalker_local l JOIN vaultcast_items i ON i.id=l.item_id WHERE l.kind=? AND ('.implode(' OR ',$where).') LIMIT 100',$args) as $row)if(self::compatible($item,$row))return true;
-        return false;
+    private static function localMatches(array $items, string $kind): array {
+        $inputs = [];
+        $args = [];
+        foreach ($items as $item) {
+            $imdb = (string)($item['imdb_id'] ?? '');
+            $tmdb = (string)($item['tmdb_id'] ?? '');
+            $year = (int)($item['year'] ?? 0);
+            if ($imdb === '' && $tmdb === '' && !$year) continue;
+            $titleKey = $year ? hash('sha256', self::title($item['o_name'] ?? $item['name'])) : '';
+            $inputs[] = 'SELECT ? AS id, CONVERT(? USING ascii) AS imdb_id, CONVERT(? USING ascii) AS tmdb_id, CONVERT(? USING ascii) AS title_key, CAST(? AS SIGNED) AS year';
+            array_push($args, $item['catalogueId'], $imdb, $tmdb, $titleKey, $year);
+        }
+        if (!$inputs) return [];
+
+        // Keep each lookup on its own local-library index and stop at the first compatible copy.
+        $checks = [];
+        foreach (["p.imdb_id<>'' AND l.imdb_id=p.imdb_id", "p.tmdb_id<>'' AND l.tmdb_id=p.tmdb_id",
+                  "p.year<>0 AND l.title_key=p.title_key AND l.year=p.year"] as $match) {
+            $checks[] = "EXISTS (SELECT 1 FROM vaultcast_stalker_local l JOIN vaultcast_items i ON i.id=l.item_id
+                WHERE l.kind=? AND $match
+                AND (p.imdb_id='' OR l.imdb_id='' OR l.imdb_id=p.imdb_id)
+                AND (p.tmdb_id='' OR l.tmdb_id='' OR l.tmdb_id=p.tmdb_id))";
+            $args[] = $kind;
+        }
+        $sql = 'SELECT p.id FROM (' . implode(' UNION ALL ', $inputs) . ') p WHERE ' . implode(' OR ', $checks);
+        return array_fill_keys(self::query($sql, $args)->fetchAll(PDO::FETCH_COLUMN), true);
     }
     public static function refreshFilters(string $kind,bool $force=false): void {
         $key='stalker_library_filters_v3_'.$kind;
@@ -356,13 +380,21 @@ final class StalkerLibrary {
         $sort=['title'=>'c.title ASC','newest'=>'c.year DESC,c.title ASC','oldest'=>'c.year IS NULL,c.year ASC,c.title ASC'][$opts['sort']??'title']??'c.title ASC';$offset=max(0,min(1000000,(int)($opts['offset']??0)));
         $from='vaultcast_stalker_library c'.$facetJoin;$args=array_merge($joinArgs,$args);
         // The extra row tells us whether Next should be enabled without counting all matches.
-        $started=microtime(true);$rows=self::query('SELECT c.* FROM '.$from.' WHERE '.$where.' ORDER BY '.$sort.',c.id LIMIT 49 OFFSET '.$offset,$args)->fetchAll();if(class_exists('RequestTiming',false))RequestTiming::add('stalker_rows',$started);
+        $started=microtime(true);
+        $order=$sort.',c.id';
+        // Leave the large metadata payloads out of the search and page selection.
+        $page='SELECT c.id FROM '.$from.' WHERE '.$where.' ORDER BY '.$order.' LIMIT 49 OFFSET '.$offset;
+        $rows=self::query('SELECT c.id,c.available,c.unavailable_since,c.payload FROM ('.$page.') page_ids JOIN vaultcast_stalker_library c ON c.id=page_ids.id ORDER BY '.$order,$args)->fetchAll();
+        if(class_exists('RequestTiming',false))RequestTiming::add('stalker_rows',$started);
         $hasMore=count($rows)>48;
         if($hasMore)array_pop($rows);
         $feeds=[];foreach($state['feeds']??[] as $f)if(($f['type']??'')==='stalker'&&!empty($f['enabled'])&&!StalkerCatalogues::expired($f))$feeds[$f['id']]=$f;
         $started=microtime(true);$offers=[];if($rows){$ids=array_column($rows,'id');foreach(self::query('SELECT catalogue_id,feed_id,config,payload FROM vaultcast_stalker_offers WHERE available=1 AND catalogue_id IN ('.implode(',',array_fill(0,count($ids),'?')).') ORDER BY feed_id,item_id',$ids) as $s){$feed=$feeds[$s['feed_id']]??null;if(!$feed||StalkerCatalogues::config($feed)!==$s['config'])continue;$m=json_decode($s['payload'],true);$m['connection']=$feed['name'];$offers[$s['catalogue_id']][]=$m;}}if(class_exists('RequestTiming',false))RequestTiming::add('stalker_offers',$started);
-        $canSeeLocal=AreaAccess::allowed(AreaAccess::viewer(),'library');
-        $started=microtime(true);$items=[];foreach($rows as $r){$m=json_decode($r['payload'],true);$m['catalogueId']=$r['id'];$m['sources']=$offers[$r['id']]??[];$m['available']=(bool)$r['available'];$m['verificationPending']=!$m['sources']&&($m['available']||$r['unavailable_since']===null);$m['local']=$canSeeLocal&&self::local($m,$kind);$m['unavailableSince']=$r['unavailable_since'];$items[]=$m;}if(class_exists('RequestTiming',false))RequestTiming::add('stalker_local',$started);
+        $started=microtime(true);$items=[];foreach($rows as $r){$m=json_decode($r['payload'],true);$m['catalogueId']=$r['id'];$m['sources']=$offers[$r['id']]??[];$m['available']=(bool)$r['available'];$m['verificationPending']=!$m['sources']&&($m['available']||$r['unavailable_since']===null);$m['unavailableSince']=$r['unavailable_since'];$items[]=$m;}
+        $localMatches = AreaAccess::allowed(AreaAccess::viewer(),'library') ? self::localMatches($items, $kind) : [];
+        foreach ($items as &$item) $item['local'] = isset($localMatches[$item['catalogueId']]);
+        unset($item);
+        if(class_exists('RequestTiming',false))RequestTiming::add('stalker_local',$started);
         // The worker prepares filter choices for all pages of this catalogue.
         $filterData=\Vaultcast\Repository::cacheGet('stalker_library_filters_v3_'.$kind);
         $facets=$filterData['facets']??[];$years=$filterData['years']??[];
