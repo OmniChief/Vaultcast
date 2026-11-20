@@ -13,7 +13,7 @@ window.VaultcastStalkerVod=function(host,options){
   var accountFavourites=null,accountDefaults=null;
   function accountRequest(body){
     var options={method:body===null?'GET':'POST',credentials:'same-origin',
-      headers:body===null?{}:{'Content-Type':'application/json'},
+      headers:body===null?{}:{'Content-Type':'application/json','X-Vaultcast-Request':'same-origin'},
       body:body===null?undefined:JSON.stringify(body)
     };
     var request=fetch((window.__STREAM_BASE__||'/')+'netplay/application/me/stalker-vod-favourites',options);

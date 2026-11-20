@@ -7,7 +7,7 @@ const { pipeline } = require('stream/promises');
 const { documents, enabled, now, parse, sha } = require('./account-data');
 const { authorized, cached, parentalStatus } = require('./profile-policy');
 const { areaAllowed, areaDenied, playbackVisible } = require('./library');
-const { remux } = require('./media-probe');
+const { remux, libraryCaptionSource } = require('./media-probe');
 const { serveConversion } = require('./conversion-playback');
 const { libraryFile, mimeFor, tokenLifetime } = require('./playback');
 const { maxBytes, subtitles, readSubtitle, decodeSubtitle, subtitleFormat, toVtt, saveSubtitle } = require('./subtitles');
@@ -191,7 +191,7 @@ module.exports = function mountStream(app, prefix, { db, root, readSession, upda
         return response.status(403).json({ ok: false, error: 'Playback token expired.' });
       }
       if (!media || !await libraryFile(media.file, media.folder)) return response.sendStatus(404);
-      if (media.captionSource && media.captionSource !== media.file && !await libraryFile(media.captionSource, media.folder)) {
+      if (media.captionSource && media.captionSource !== media.file && !await libraryCaptionSource(media.captionSource, media.folder)) {
         return response.sendStatus(404);
       }
       const track = (await subtitles(root, media.file, media.captionSource)).get(id);

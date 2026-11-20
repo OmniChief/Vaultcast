@@ -970,7 +970,7 @@ function confirmDialog(message, opts){
   function postProgress(itemId, position, duration){
     var body = JSON.stringify({ item_id: itemId, position: position || 0, duration: duration || 0 });
     fetch(viewingApi + '/progress', { method: 'POST', credentials: 'same-origin', keepalive: true,
-      headers: { 'Content-Type': 'application/json' }, body: body }).catch(function(){});
+      headers: { 'Content-Type': 'application/json', 'X-Vaultcast-Request': 'same-origin' }, body: body }).catch(function(){});
   }
   var navigationCache = window.createRequestCache();
   var pageReads=[], pageReadKey=null;
@@ -995,6 +995,7 @@ function confirmDialog(message, opts){
     opts = opts || {};
     var requestUser=state.user && state.user.id;
     var headers = opts.headers || {};
+    if (String(opts.method || 'GET').toUpperCase() !== 'GET') headers['X-Vaultcast-Request'] = 'same-origin';
     var timing = /^\/items\/[a-f0-9]{8,64}\/segments(?:\?|$)/.test(path);
     var stalkerPreview = path === '/live/iptv_preview' && isStalkerLineupUrl(opts.body && opts.body.url);
     var avatarChange = path === '/me/prefs' && opts.body && (opts.body.avatar_data || opts.body.remove_avatar);
@@ -5869,7 +5870,7 @@ try {
       method: 'POST',
       credentials: 'same-origin',
       cache: 'no-store',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-Vaultcast-Request': 'same-origin' },
       body: JSON.stringify(body || {})
     };
     var nativeBase = window.__VAULTCAST_APPLICATION_BASE__;
@@ -7187,7 +7188,7 @@ try {
   function stopXtreamSource(source){
     var match=String(source&&source.url||'').match(/[?&]ticket=([a-f0-9]+)(?:&|$)/);
     if(!match)return Promise.resolve();
-    return fetch(viewingApi+'/live/xtream_stop',{method:'POST',credentials:'same-origin',keepalive:true,headers:{'Content-Type':'application/json'},body:JSON.stringify({ticket:match[1]})}).catch(function(){});
+    return fetch(viewingApi+'/live/xtream_stop',{method:'POST',credentials:'same-origin',keepalive:true,headers:{'Content-Type':'application/json','X-Vaultcast-Request':'same-origin'},body:JSON.stringify({ticket:match[1]})}).catch(function(){});
   }
   function paintXtreamPage(root){
     var xtreamClient=liveUid('xtream')+liveUid('client'),playQueue=Promise.resolve();

@@ -2,7 +2,7 @@
 
 const { execFile, spawn } = require('child_process');
 const { promisify } = require('util');
-const { isAbsolute, relative, sep } = require('path');
+const { basename, dirname, isAbsolute, join, relative, sep } = require('path');
 const { realpath, stat } = require('fs').promises;
 const { pipeline } = require('stream/promises');
 const { once } = require('events');
@@ -19,6 +19,27 @@ async function libraryFile(file, folder) {
   const [resolved, directory] = await Promise.all([realpath(file), realpath(folder)]);
   const child = relative(directory, resolved);
   return child && child !== '..' && !child.startsWith('..' + sep) && !isAbsolute(child) ? resolved : null;
+}
+
+// A prepared copy can retain the deleted original's name for matching its
+// neighbouring subtitle files. The original need not exist, but its parent
+// directory must still resolve inside the configured library root.
+async function libraryCaptionSource(file, folder) {
+  if (typeof file !== 'string' || !isAbsolute(file)) return null;
+  try {
+    const existing = await realpath(file).catch(error => {
+      if (['ENOENT', 'ENOTDIR'].includes(error.code)) return null;
+      throw error;
+    });
+    if (existing) return libraryFile(file, folder);
+    const [directory, root] = await Promise.all([realpath(dirname(file)), realpath(folder)]);
+    const child = relative(root, directory);
+    if (child === '..' || child.startsWith('..' + sep) || isAbsolute(child)) return null;
+    return join(directory, basename(file));
+  } catch (error) {
+    if (['ENOENT', 'ENOTDIR'].includes(error.code)) return null;
+    throw error;
+  }
 }
 
 async function probeOutput(root, file, settings, kind, args, parse) {
@@ -109,4 +130,4 @@ async function remux(root, file, settings, request, response, token) {
   }
 }
 
-module.exports = { probe, remux, compatibleAudio, libraryFile };
+module.exports = { probe, remux, compatibleAudio, libraryFile, libraryCaptionSource };

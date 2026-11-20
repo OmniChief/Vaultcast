@@ -4,7 +4,7 @@ const { randomBytes, randomInt } = require('crypto');
 const { stat } = require('fs').promises;
 const { extname, isAbsolute } = require('path');
 const { documents, enabled, now, parse, sha, publicUser } = require('./account-data');
-const { probe, compatibleAudio, libraryFile } = require('./media-probe');
+const { probe, compatibleAudio, libraryFile, libraryCaptionSource } = require('./media-probe');
 const mountConversions = require('./library-conversions');
 const { activeConversion } = require('./conversion-playback');
 const { areaAllowed, areaDenied, itemArea, mediaSignature, playbackVisible } = require('./library');
@@ -121,11 +121,12 @@ module.exports = function mountPlayback(app, prefix, { root, db, handle, json, u
       if (typeof path !== 'string' || !await isFile(path)) {
         return response.status(404).json({ ok: false, error: 'File missing' });
       }
-      if (!await libraryFile(path, section.path)) return unavailable(response);
-      const captionSource = String(item.caption_source ?? item.path ?? path);
-      if (!external && video && captionSource !== path && !await libraryFile(captionSource, section.path)) {
-        return unavailable(response);
+      if (!await libraryFile(path, section.path)) {
+        return response.status(403).json({ ok: false, error: 'The media file is outside its configured library folder.' });
       }
+      const requestedCaptionSource = String(item.caption_source ?? item.path ?? path);
+      const captionSource = !external && video && requestedCaptionSource !== path
+        ? await libraryCaptionSource(requestedCaptionSource, section.path) || path : path;
 
       const tracks = !external && video ? await subtitles(root, path, captionSource) : new Map();
       const inspected = !external && enabled(body.probe) ? await probe(root, path, settings) : null;

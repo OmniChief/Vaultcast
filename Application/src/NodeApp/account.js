@@ -56,8 +56,19 @@ function requestAllowed(request, settings) {
   try {
     const url = new URL(origin);
     if (!['http:', 'https:'].includes(url.protocol) || url.origin !== origin) return false;
+    // Fetch Metadata describes the browser's actual request origin, whereas nginx
+    // and other reverse proxies can remove the public port or rewrite Host.
+    // A browser cannot forge Sec-Fetch-Site, so a same-origin request is safe
+    // even when the internal authority no longer matches the public address.
+    if (site === 'same-origin') return true;
     const authority = new URL(url.protocol + '//' + request.headers.host);
-    if (authority.origin === url.origin || (site === 'same-origin' && authority.hostname === url.hostname)) return true;
+    if (authority.origin === url.origin) return true;
+    // Older browsers do not send Fetch Metadata. The application's custom
+    // request header requires CORS preflight on a different origin, which this
+    // Node service deliberately does not permit. It handles proxies that drop
+    // an external :port without allowing cross-origin form-based CSRF.
+    if (!site && request.headers['x-vaultcast-request'] === 'same-origin' &&
+        authority.hostname === url.hostname) return true;
     return settings.public_base_url ? new URL(settings.public_base_url).origin === url.origin : false;
   } catch (error) {
     return false;
