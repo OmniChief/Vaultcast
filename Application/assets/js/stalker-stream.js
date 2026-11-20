@@ -42,7 +42,7 @@
     options.stream({ destroy: destroy });
     function fail(error) {
       if (!current()) return;
-      var message = error && error.name === 'AbortError' ? 'The live stream did not respond in time.' : (error.message || 'Live playback failed.');
+      var message = error && error.name === 'AbortError' ? 'The provider stream did not respond in time.' : (error.message || 'Provider playback failed.');
       destroy(); options.error(message);
     }
     function tsPlayer(chunks) {
@@ -78,7 +78,7 @@
           abort() { this.cancelled = true; this._status = M.LoaderStatus.kIdle; controller.abort(); }
           destroy() { this.abort(); super.destroy(); }
         }
-        inner = M.createPlayer({ type: 'mpegts', isLive: true, url: url }, {
+        inner = M.createPlayer({ type: 'mpegts', isLive: !options.onDemand, url: url }, {
           customLoader: LiveLoader, enableWorker: false, lazyLoad: false,
           autoCleanupSourceBuffer: true, autoCleanupMaxBackwardDuration: 30, autoCleanupMinBackwardDuration: 10
         });
@@ -86,13 +86,13 @@
         inner.on(M.Events.MEDIA_INFO, function (info) { audioCodec = info.audioCodec || ''; });
         inner.on(M.Events.ERROR, function (type, detail, info) {
           var reason = audioCodec + ' ' + (info && (info.msg || info.message) || '');
-          fail(new Error(/ac-3|ec-3|ac3|eac3/i.test(reason) ? 'This channel uses Dolby audio that this browser cannot decode. Try a browser or native player with Dolby audio support.' : 'The MPEG-TS stream could not be decoded. Its codecs may be unsupported by this browser.'));
+          fail(new Error(/ac-3|ec-3|ac3|eac3/i.test(reason) ? 'This provider video uses Dolby audio that this browser cannot decode. Try another player with Dolby audio support.' : 'The MPEG-TS stream could not be decoded. Its codecs may be unsupported by this browser.'));
         });
         video.addEventListener('canplay', play);
         inner.attachMediaElement(video);
         audio = window.VaultcastAc3Audio(video, inner, { error: fail, note: options.note });
         inner.load(); play();
-        if (options.note) options.note('Live MPEG-TS stream');
+        if (options.note) options.note(options.onDemand ? 'On-demand MPEG-TS stream' : 'Live MPEG-TS stream');
       });
     }
     async function hlsPlayer(chunks) {
@@ -136,7 +136,7 @@
     }
     return fetch(url, { credentials: 'same-origin', cache: 'no-store', signal: controller.signal }).then(async function (response) {
       if (response.url && new URL(response.url).origin === location.origin) url = response.url;
-      if (!response.ok) throw new Error('Live stream request failed: HTTP ' + response.status + (response.headers.get('X-Vaultcast-Error-Origin') === 'provider' ? ' from provider.' : '.'));
+      if (!response.ok) throw new Error('Provider stream request failed: HTTP ' + response.status + (response.headers.get('X-Vaultcast-Error-Origin') === 'provider' ? ' from provider.' : '.'));
       if (!response.body || !response.body.getReader) throw new Error('This browser does not support streaming responses.');
       reader = response.body.getReader();
       var chunks = [], size = 0, prefix = '', type = response.headers.get('content-type') || '';
@@ -153,7 +153,7 @@
       var sample = new Uint8Array(Math.min(size, 564)), copied = 0;
       chunks.forEach(function (c) { var part = c.subarray(0, sample.length - copied); sample.set(part, copied); copied += part.length; });
       if (/mp2t/i.test(type) || (sample.length > 188 && sample[0] === 71 && sample[188] === 71)) return tsPlayer(chunks);
-      throw new Error('The provider returned an unsupported live-stream format.');
+      throw new Error(options.onDemand ? 'This provider video is not HLS or MPEG-TS, and native browser playback failed. Try another source or download the video.' : 'The provider returned an unsupported live-stream format.');
     }).then(function () { clearTimeout(timer); }).catch(fail);
   };
 }());

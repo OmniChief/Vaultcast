@@ -110,11 +110,14 @@ async function issue(root, feed, id, kind, item, viewer, signal, compatibility =
   };
   await cache(root, ticketKey(ticket), state, lifetime);
   const query = new URLSearchParams({ feed: feed.id, channel: id, ticket });
+  const pathname = new URL(url).pathname;
   const hls = kind === 'live'
-    ? !compatibility || /\.m3u8$/i.test(new URL(url).pathname)
-    : /\.m3u8(?:[?#]|$)/i.test(url);
+    ? !compatibility || /\.m3u8$/i.test(pathname)
+    : /\.m3u8$/i.test(pathname);
   if (hls) query.set('format', '.m3u8');
-  return { ok: true, source: { kind, url: playbackPath + '?' + query } };
+  const transport = kind !== 'live' && /\.(?:ts|m2ts|mts|mpegts)$/i.test(pathname)
+    ? 'mpegts' : undefined;
+  return { ok: true, source: { kind, url: playbackPath + '?' + query, ...(transport ? { transport } : {}) } };
 }
 
 async function authorizedTicket(root, feed, id, ticket, viewer) {
@@ -313,7 +316,6 @@ async function serve(root, feed, state, request, response) {
       range &&
       ((res.statusCode === 400 && mp4()) ||
         (state.kind !== 'live' &&
-          state.id.startsWith('series:') &&
           [456, 458].includes(res.statusCode) &&
           /^bytes=0-/.test(range)));
     if (retry) {
@@ -321,7 +323,9 @@ async function serve(root, feed, state, request, response) {
       result = await follow(client, target ?? session.url, { ...options, range: undefined });
       res = result.res;
     }
-    const maybeMp4 = retry && res.statusCode === 400 && mp4() && request.method !== 'HEAD';
+    // Some portals label genuine MP4 bytes as HTTP 400 even without a Range header.
+    // Accept that response only after verifying the MP4 file signature below.
+    const maybeMp4 = res.statusCode === 400 && mp4() && request.method !== 'HEAD';
     if ((res.statusCode < 200 || res.statusCode >= 300) && !maybeMp4) {
       response.set({'X-Vaultcast-Error-Origin':'provider','X-Vaultcast-Upstream-Status':String(res.statusCode)});
       throw problem(
@@ -357,10 +361,13 @@ async function serve(root, feed, state, request, response) {
         }
         if (prefix && !'#EXTM3U'.startsWith(prefix)) break;
       }
-      if (maybeMp4 && !Buffer.concat(chunks, size).subarray(0, 64).includes('ftyp'))
+      if (maybeMp4 && (size < 8 || Buffer.concat(chunks, size).toString('ascii', 4, 8) !== 'ftyp'))
         throw problem(400, 'Provider refused the media request.');
     }
     const type = String(res.headers['content-type'] ?? '').split(';')[0];
+    const sample = Buffer.concat(chunks, size).subarray(0, 64);
+    const isMp4 = sample.length >= 8 && sample.toString('ascii', 4, 8) === 'ftyp';
+    const mediaType = isMp4 && !/^video\//i.test(type) ? 'video/mp4' : type;
     response.set({
       'Cache-Control': 'private, no-store',
       'X-Accel-Buffering': 'no',
@@ -368,8 +375,8 @@ async function serve(root, feed, state, request, response) {
       'Content-Security-Policy': "default-src 'none'; sandbox",
       'Content-Type': isList
         ? 'application/vnd.apple.mpegurl'
-        : /^(?:video|audio)\/[\w.+-]+$/i.test(type) || type === 'text/vtt'
-          ? type
+        : /^(?:video|audio)\/[\w.+-]+$/i.test(mediaType) || mediaType === 'text/vtt'
+          ? mediaType
           : 'application/octet-stream',
     });
     if (isList) {

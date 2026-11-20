@@ -6321,7 +6321,7 @@ try {
   // never invokes library-only transcode, conversion or progress endpoints.
   function startStalkerLibraryPlayer(host,source,item,context){
     closePlayer();stopRadio();
-    var key='stalker-vod:'+context.id,alive=true,stream=null,xtream=String(source.url||'').indexOf('/live/xtream_stream?')!==-1,heartbeat=null,heartbeatBusy=false;
+    var key='stalker-vod:'+context.id,alive=true,stream=null,xtream=String(source.url||'').indexOf('/live/xtream_stream?')!==-1,heartbeat=null,heartbeatBusy=false,transportFallback=false;
     var video=h('video',{id:'player-media',controls:true,autoplay:true,playsinline:true,preload:'metadata'});
     video.setAttribute('webkit-playsinline','true');
     var frame=h('div',{id:'player-overlay',className:'player-overlay player-simple player-inline stalker-library-player'},[video]);
@@ -6358,7 +6358,7 @@ try {
       if(!alive)return;alive=false;
       if(heartbeat)clearInterval(heartbeat);heartbeat=null;
       window.removeEventListener('pagehide',cleanupProvider);
-      if(stream){try{stream.stopLoad();stream.destroy();}catch(ignore){}stream=null;}
+      if(stream){try{if(stream.stopLoad)stream.stopLoad();}catch(ignore){}try{stream.destroy();}catch(ignore2){}stream=null;}
       try{video.pause();video.removeAttribute('src');video.load();}catch(ignore2){}
       if(xtream)stopXtreamSource(source);
     }
@@ -6375,14 +6375,27 @@ try {
       },15000);
     }
     video.addEventListener('playing',function(){if(alive&&context.onPlaying)context.onPlaying();});
-    video.addEventListener('error',function(){if(alive){if(xtream)cleanupProvider();playbackFailed('The provider video could not be played by this browser.');}});
     video.addEventListener('ended',function(){if(!alive)return;if(xtream)cleanupProvider();if(context.onEnded&&(!autoNext||autoNext.checked))context.onEnded();});
-    attachIptvStream(video,source,{
+    var streamOptions={
       current:function(){return alive&&!frame._closing&&frame.isConnected;},
       play:play,
       stream:function(value){stream=value;refreshTracks(value);if(value&&value.on){var events=(window.Hls&&window.Hls.Events)||value.Events||{},names=['AUDIO_TRACKS_UPDATED','AUDIO_TRACK_SWITCHED','SUBTITLE_TRACKS_UPDATED','SUBTITLE_TRACK_SWITCH'],fallback=['hlsAudioTracksUpdated','hlsAudioTrackSwitched','hlsSubtitleTracksUpdated','hlsSubtitleTrackSwitch'];names.forEach(function(name,index){var event=events[name]||fallback[index];value.on(event,function(){refreshTracks(value);});});}},
       error:function(message){if(alive){if(xtream)cleanupProvider();playbackFailed(message);}}
+    };
+    video.addEventListener('error',function(){
+      if(!alive)return;
+      // A provider may serve MPEG-TS or HLS behind an extensionless VOD URL.
+      // Try the existing single-request transport once when native DirectPlay fails.
+      if(!xtream&&!transportFallback&&source.transport!=='mpegts'&&!/\.m3u8(?:[?#]|$)/i.test(source.url)){
+        transportFallback=true;
+        try{video.pause();video.removeAttribute('src');video.load();}catch(ignore){}
+        attachIptvStream(video,Object.assign({},source,{transport:'detect'}),streamOptions);
+        return;
+      }
+      if(xtream)cleanupProvider();
+      playbackFailed('The provider video could not be decoded by this browser. Try another source or download the video.');
     });
+    attachIptvStream(video,source,streamOptions);
     video.addEventListener('loadedmetadata',function(){if(!stream)refreshTracks(null);});
     host.scrollIntoView({block:'nearest',behavior:'smooth'});
   }
@@ -7630,14 +7643,14 @@ try {
     var nativeBase=window.__VAULTCAST_APPLICATION_BASE__;
     if(nativeBase && url.indexOf(LIVE_API+'stalker_stream?')===0) url=nativeBase+'/live/'+url.slice(LIVE_API.length);
     var portalStream=url.indexOf('/live/stalker_stream?')!==-1,xtreamStream=url.indexOf('/live/xtream_stream?')!==-1;
-    if(portalStream&&(source.kind==='live'||url.indexOf('ticket=')===-1)){
+    if(portalStream&&(source.kind==='live'||url.indexOf('ticket=')===-1||source.transport==='mpegts'||source.transport==='detect')){
       if(!window._vaultcastStalkerStreamLoading)window._vaultcastStalkerStreamLoading=new Promise(function(resolve,reject){
         if(window.attachStalkerStream){resolve();return;}
         var script=document.createElement('script');script.src=window.VaultcastDependencies.stalkerStream;
         script.onload=function(){window.attachStalkerStream?resolve():reject(new Error('Live transport unavailable.'));};
         script.onerror=function(){window._vaultcastStalkerStreamLoading=null;script.remove();reject(new Error('Could not load live transport.'));};document.head.appendChild(script);
       });
-      return window._vaultcastStalkerStreamLoading.then(function(){if(current())return window.attachStalkerStream(video,url+'&playback='+encodeURIComponent(liveUid('st')),Object.assign({},options,{current:current,fragmentLoader:iptvFragmentLoader}),loadHls);}).catch(function(error){if(current())options.error(error.message);});
+      return window._vaultcastStalkerStreamLoading.then(function(){if(current())return window.attachStalkerStream(video,url+'&playback='+encodeURIComponent(liveUid('st')),Object.assign({},options,{current:current,onDemand:source.kind!=='live',fragmentLoader:iptvFragmentLoader}),loadHls);}).catch(function(error){if(current())options.error(error.message);});
     }
     // Keep normal viewing and browse previews on exactly the same playback path.
     if(!/\.m3u8(?:[?#]|$)/i.test(url)){video.src=url;options.play();if(options.note)options.note('Non-HLS stream: browser DirectPlay attempted.');return Promise.resolve();}
