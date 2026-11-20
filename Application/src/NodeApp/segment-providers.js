@@ -107,9 +107,13 @@ async function identify(root, item, identity) {
   return result;
 }
 
-async function preview(root, item, query, duration) {
+async function preview(root, item, query, duration, fresh = true) {
   const out = { ok: true, segments: [], source: 'TheIntroDB', duration, lookup: query };
   const key = 'episode-segments-v5:' + sha(JSON.stringify([query, item.mtime ?? null, item.size ?? null]));
+  if (!fresh) {
+    const hit = await cached(root, key);
+    if (hit) return hit;
+  }
   const series = enabled(item.show);
   const [status, data] = await providerJson('https://api.theintrodb.org/v4/media?' + new URLSearchParams(query));
   let ttl = 86400;

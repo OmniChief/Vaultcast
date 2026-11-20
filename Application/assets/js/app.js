@@ -1019,7 +1019,8 @@ function confirmDialog(message, opts){
       (method === 'POST' && (stalkerPreview || path === '/login' || path === '/logout' || (path === '/me/prefs' && !avatarChange) || timing ||
         /^\/items\/[a-f0-9]{16}\/play$/.test(path)));
     var watchPage = inViewingPage();
-    var viewingRoute = path === '/admin/library-index' || (watchPage && (nativeBrowse || nativeDetail || timing || ['/status','/me','/login','/logout','/home'].indexOf(path) >= 0)) || /^\/items\/[a-f0-9]{16}\/(?:probe|transcode|next)(?:\?|$)/.test(path) ||
+    var viewingRoute = path === '/admin/library-index' || path === '/admin/segment-warmup' || (timing && (watchPage || state.user)) ||
+      (watchPage && (nativeBrowse || nativeDetail || ['/status','/me','/login','/logout','/home'].indexOf(path) >= 0)) || /^\/items\/[a-f0-9]{16}\/(?:probe|transcode|next)(?:\?|$)/.test(path) ||
       (method === 'POST' && opts.libraryPlayback && /^\/items\/[a-f0-9]{16}\/play$/.test(path)) ||
       (method === 'GET' && /^\/items\/[a-f0-9]{16}(?:\?|$)/.test(path));
     delete fetchOpts.libraryPlayback;
@@ -9762,7 +9763,16 @@ try {
     var showStalker=!!(state.home&&state.home.features&&state.home.features.live&&can('iptv_manage'));
     info[stalkerTask]=['Live','Save Live TV, Movies, Series and episodes from enabled Stalker connections for local browsing.'];
     var filter='All',busy=false,timer=null,sequence=0,lastData=null,refreshPending=false;
-    function requestAction(url,body,button){button.disabled=true;return api(url,{method:'POST',body:body}).then(function(j){if(!j.ok)throw new Error(j.error||'Task request failed');if(host.isConnected)refresh();}).catch(function(e){toast(e.message,{kind:'bad'});if(button.isConnected)button.disabled=false;});}
+    function requestAction(url,body,button){
+      if(url==='/admin/maintenance' && body.task==='segments'){
+        url='/admin/segment-warmup';body={operation:'start'};
+      }
+      button.disabled=true;
+      return api(url,{method:'POST',body:body}).then(function(j){
+        if(!j.ok)throw new Error(j.error||'Task request failed');
+        if(host.isConnected)refresh();
+      }).catch(function(e){toast(e.message,{kind:'bad'});if(button.isConnected)button.disabled=false;});
+    }
     function requestStalker(operation,button,source){
       button.disabled=true;
       stalkerPost('stalker_catalogue_control',{operation:operation,feed:source?source.feed_id:'',kind:source?source.kind:'all'})
@@ -9775,7 +9785,11 @@ try {
     }
     function loadTasks(){
       var stalker=showStalker?liveApi('stalker_catalogue_status','summary=1').catch(function(){return null;}):Promise.resolve(null);
-      return Promise.all([api('/admin/maintenance'),stalker]).then(function(results){
+      var tasks=window.__VAULTCAST_STANDALONE__ ? api('/admin/segment-warmup').then(function(result){
+        if(!result.ok)return result;
+        return {ok:true,tasks:{segments:'Match TV / anime intros and credits, and movie credits'},jobs:result.job?[result.job]:[],details:{}};
+      }) : api('/admin/maintenance');
+      return Promise.all([tasks,stalker]).then(function(results){
         var data=results[0];
         if(!data.ok||!showStalker)return data;
         var status=results[1],sources=status&&status.ok?status.sources||[]:[];
@@ -9844,7 +9858,10 @@ try {
           if(job.task===stalkerTask){
             if(active)row.appendChild(h('button',{className:'btn',type:'button',text:'Pause task',onClick:function(e){requestStalker('pause',e.currentTarget,job.source);}}));
             else if(['failed','paused'].includes(job.status))row.appendChild(h('button',{className:'btn',type:'button',text:'Resume task',onClick:function(e){requestStalker('load',e.currentTarget,job.source);}}));
-          }else if(active)row.appendChild(h('button',{className:'btn',text:'Cancel task',onClick:function(e){requestAction('/admin/maintenance/cancel',{id:job.id},e.currentTarget);}}));
+          }else if(active)row.appendChild(h('button',{className:'btn',text:'Cancel task',onClick:function(e){
+            if(job.task==='segments' && job.runner==='node')requestAction('/admin/segment-warmup',{operation:'cancel',id:job.id},e.currentTarget);
+            else requestAction('/admin/maintenance/cancel',{id:job.id},e.currentTarget);
+          }}));
           else if(job.status==='failed'&&j.tasks[job.task])row.appendChild(h('button',{className:'btn',text:'Run again',onClick:function(e){requestAction('/admin/maintenance',{task:job.task},e.currentTarget);}}));
           host.appendChild(row);
         });

@@ -5,7 +5,7 @@ const { join } = require('path');
 const { spawn } = require('child_process');
 const { flock, lockFile } = require('./file-lock');
 
-module.exports = function startMaintenanceQueue(root) {
+module.exports = function startMaintenanceQueue(root, application) {
   if (!flock) return null;
   const data = join(root, 'data');
   const dir = join(data, 'runtime', 'maintenance-queue');
@@ -30,6 +30,15 @@ module.exports = function startMaintenanceQueue(root) {
       pending.sort((a, b) => a.job.created - b.job.created || a.name.localeCompare(b.name));
       const selected = pending[0];
       if (!selected) return;
+      if (application?.ready()) {
+        const status = await application.adoptTimingJob(selected.name.slice(0, -5));
+        if (status === 'claimed') {
+          await fs.unlink(selected.path);
+          retry.delete(selected.name);
+          return;
+        }
+        if (status === 'busy') { retry.set(selected.name, Date.now() + 3000); return; }
+      }
 
       // Avoid starting a PHP process while a manual CLI job already holds the
       // maintenance lock. PHP checks it again without waiting after startup.

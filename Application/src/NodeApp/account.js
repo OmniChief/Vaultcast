@@ -15,6 +15,7 @@ const mountPlayback = require('./playback');
 const mountStalkerStatus = require('./stalker-status');
 const mountXtream = require('./xtream');
 const mountEpisodeSegments = require('./episode-segments');
+const mountSegmentWarmup = require('./segment-warmup');
 const mountProgress = require('./progress');
 const mountAchievements = require('./achievements');
 const mountBrowserAssets = require('./browser-assets');
@@ -196,12 +197,15 @@ module.exports = function mountAccount(app, express, root) {
   mountBrowserAssets(app, route, { root, handle, unavailable });
   mountLibrary(app, route, { root, handle, unavailable });
   const preparingLibrary = mountLibraryIndex(app, route, { root, db, handle, updating });
-  mountEpisodeSegments(app, route, { root, handle, json, unavailable });
+  mountEpisodeSegments(app, route, { root, db, handle, json, unavailable });
+  const preparingSegments = mountSegmentWarmup(app, route, { root, db, handle, json, updating });
   const stalkerRequests = mountStalkerStatus(app, route, { root, handle, unavailable, json: express.json({ limit: '256kb' }), downloads, stalker, services: db.services, run: db.run });
   const xtreamActive = mountXtream(app, route, { root, handle, json, services: db.services });
   mountProgress(app, route, { handle, json, unavailable, root });
   mountAchievements(app, route, { root, handle, json });
   const converting = mountPlayback(app, route, { root, db, handle, json, unavailable });
   const streaming = mountStream(app, route, { db, root, readSession: session, updating, express, unavailable, requestAllowed });
-  return { ...db, streaming: () => streaming() || xtreamActive() || converting() || preparingLibrary(), stalkerActive: () => stalker.active() || stalkerRequests() };
+  return { ...db, adoptTimingJob: preparingSegments.adopt,
+    streaming: () => streaming() || xtreamActive() || converting() || preparingLibrary() || preparingSegments.active(),
+    stalkerActive: () => stalker.active() || stalkerRequests() };
 };

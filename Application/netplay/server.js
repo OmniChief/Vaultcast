@@ -135,7 +135,7 @@ const socketOptions = {
 const io = standalone ? socketIo(socketOptions) : socketIo(server, socketOptions);
 
 let maintenanceQueue;
-try { if (!standalone) maintenanceQueue = require('../src/Workers/maintenance-queue')(path.join(__dirname, '..')); }
+try { if (!standalone) maintenanceQueue = require('../src/Workers/maintenance-queue')(path.join(__dirname, '..'), applicationDatabase); }
 catch (error) { console.warn('Node maintenance queue is unavailable'); }
 
 let conversionUpload;

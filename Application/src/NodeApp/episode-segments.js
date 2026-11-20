@@ -1,10 +1,10 @@
 'use strict';
 
-const { createHash } = require('crypto');
+const timing = require('./segment-match');
 const { identify, preview, searchShows } = require('./segment-providers');
 const { mediaSignature, areaAllowed, areaDenied, itemArea, playbackVisible } = require('./library');
 const { authorized, parentalStatus } = require('./profile-policy');
-const { documents, enabled, now, parse, publicUser, sha } = require('./account-data');
+const { documents, enabled, now, parse, publicUser } = require('./account-data');
 
 const empty = () => ({ ok: true, segments: [], source: 'TheIntroDB' });
 const numeric = value => (typeof value === 'number' ||
@@ -34,7 +34,7 @@ function manualRecord(body, fingerprint) {
   return { lookup, ok: true, segments, source: 'Admin', duration: Number(duration), fingerprint, updated_at: now() };
 }
 
-module.exports = function mountEpisodeSegments(app, prefix, { root, handle, json, unavailable }) {
+module.exports = function mountEpisodeSegments(app, prefix, { root, db, handle, json, unavailable }) {
   const endpoint = prefix + '/items/:id([a-f0-9]{8,64})/segments';
   const operation = handle(async (request, response, pool, _bcrypt, settings, current) => {
     if (!current.user && !current.authenticated && settings.auth?.lan_guest_access !== false) return unavailable(response);
@@ -59,10 +59,9 @@ module.exports = function mountEpisodeSegments(app, prefix, { root, handle, json
     }
 
     const series = enabled(item.show);
-    const eligible = !['rom', 'audio'].includes(item.media_kind) &&
-      (series || ['movies', 'movie', 'disney'].includes(item.type));
+    const eligible = timing.eligible(item);
     const key = 'episode-segments:' + item.id;
-    const fingerprint = sha(JSON.stringify([item.id, item.mtime ?? null, item.size ?? null]));
+    const fingerprint = timing.fingerprint(item);
     const editing = request.method === 'GET' && Object.hasOwn(request.query, 'edit');
     if (request.method === 'POST' || editing) {
       const body = request.body ?? {};
@@ -71,24 +70,11 @@ module.exports = function mountEpisodeSegments(app, prefix, { root, handle, json
         return response.status(403).json({ ok: false, error: 'This action requires the timing_edit permission.' });
       }
       if (editing) {
-        const showKey = series ? createHash('sha1').update(String(item.section) + '|' + item.show).digest('hex').slice(0, 16) : '';
-        const guideKey = 'tvmaze-guide:' + showKey;
-        const inputs = await documents(pool, [key, 'match_overrides', ...(series ? [guideKey] : [])]);
-        const saved = inputs[key]?.fingerprint === fingerprint ? inputs[key] : null;
+        const { saved, identity } = await timing.context(pool, item);
         const record = saved ? { ...saved } : { ok: true, segments: [], duration: 0 };
         if (!enabled(record.duration)) {
           const [facts] = await pool.execute('SELECT duration FROM vaultcast_media_facts WHERE item_id=? AND sig=?', [item.id, mediaSignature(item)]);
           record.duration = Number(facts[0]?.duration) || 0;
-        }
-        const identity = { showKey, pin: inputs.match_overrides?.shows?.[showKey],
-          guide: inputs[guideKey], override: inputs.match_overrides?.items?.[item.id] };
-        if (!series) {
-          const [pins] = await pool.execute(
-            "SELECT kind,payload FROM vaultcast_metadata_pins WHERE target_id=? AND kind IN ('movie_poster','movie_synopsis')", [item.id]);
-          for (const pin of pins) {
-            const data = parse(pin.payload);
-            if (data && !enabled(data.cleared)) identity[pin.kind === 'movie_poster' ? 'poster' : 'synopsis'] = data;
-          }
         }
         return async () => response.json({ ...record, is_movie: !series, identity: await identify(root, item, identity),
           season: Number.parseInt(item.season ?? 1, 10) || 0, episode: Number.parseInt(item.episode ?? 1, 10) || 0 });
@@ -139,14 +125,8 @@ module.exports = function mountEpisodeSegments(app, prefix, { root, handle, json
     if (!eligible || user.prefs?.skip_segments === false || !numeric(duration) || duration <= 0 || duration > 21600) {
       return response.json(empty());
     }
-    if (series) {
-      const season = Number.parseInt(item.season, 10) || 0;
-      const episode = Number.parseInt(item.episode, 10) || 0;
-      if (season < 0 || season > 1000 || episode < 0 || episode > 10000) return response.json(empty());
-    }
-    const record = (await documents(pool, [key]))[key];
-    if (record?.source === 'Admin' && record.fingerprint === fingerprint) return response.json(record);
-    return unavailable(response);
+    const input = await timing.context(pool, item);
+    return async () => response.json(await timing.match(root, db, item, input, Number(duration)));
   }, true);
 
   app.get(endpoint, operation);

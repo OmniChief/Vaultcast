@@ -49,6 +49,7 @@ function mountBrowserAssets(app, prefix, { root, handle, unavailable }) {
     if (!template || !/^\d+\.\d+\.\d+$/.test(build)) return unavailable(response);
     const { [installation]: installed } = await documents(pool, [installation]);
     const config = shellConfig(settings, installed, response.locals.base);
+    if (response.locals.directHttp) config.__VAULTCAST_STANDALONE__ = true;
     config.__VAULTCAST_VIEWER__ = _request.path.startsWith('/watch/');
     if (!current.user && !response.locals.directHttp && _request.path === prefix + '/shell' && settings.auth?.lan_guest_access !== false) return response.sendStatus(404);
     if (!current.user) config.__STREAM_STARTUP__ = { me: { ok: true, authenticated: false, user: null, guest_browsing: false } };
