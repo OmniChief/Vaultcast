@@ -31,6 +31,8 @@ let transfers = 0;
 const problem = (status, message) => Object.assign(new Error(message), { status, expose: true });
 const fingerprint = (feed) => sha(phpJson(feed));
 const ticketKey = (token) => 'stalker_play_ticket_' + sha(token);
+const sessionKey = (feed, state, playback) =>
+  'stalker_playback_v3_' + sha(phpJson([state.viewer, feed, state.id, playback]));
 const flag = (value) =>
   /^(?:1|on|yes|true)$/i.test(String(value).trim())
     ? true
@@ -129,14 +131,14 @@ async function authorizedTicket(root, feed, id, ticket, viewer) {
 }
 
 async function playbackSession(root, feed, state, playback, signal) {
-  const key = 'stalker_playback_v3_' + sha(phpJson([state.viewer, feed, state.id, playback]));
+  const key = sessionKey(feed, state, playback);
   let result = await cached(root, key);
   if (result) return result;
   if (selections.has(key)) return selections.get(key);
   const initialise = async () => {
     const client = await provider(root, feed, signal);
-    const url =
-      now() - state.created < 30 ? state.url : (await resolve(client, state.kind, state.id, state.item)).url;
+    const url = now() - state.created < 30
+      ? state.url : (await resolve(client, state.kind, state.id, state.item)).url;
     const jar = 'st' + sha(key).slice(0, 32);
     await mkdir(join(tmpdir(), 'iptv_hls_cj'), { recursive: true, mode: 0o700 });
     client.cookiePath = join(tmpdir(), 'iptv_hls_cj', jar + '.jar');
@@ -309,7 +311,8 @@ async function serve(root, feed, state, request, response) {
     const range = request.headers.range;
     if (range && !/^bytes=(?:\d+-\d*|-\d+)$/.test(range)) throw problem(416, 'Invalid byte range.');
     const options = { method: request.method, range, signal: controller.signal };
-    let result = await follow(client, target ?? session.url, options);
+    let mediaOptions = options;
+    let result = await follow(client, target ?? session.url, mediaOptions);
     res = result.res;
     const mp4 = () => /^video\/mp4\b/i.test(res.headers['content-type'] ?? '');
     const retry =
@@ -320,8 +323,33 @@ async function serve(root, feed, state, request, response) {
           /^bytes=0-/.test(range)));
     if (retry) {
       res.destroy();
-      result = await follow(client, target ?? session.url, { ...options, range: undefined });
+      mediaOptions = { ...options, range: undefined };
+      result = await follow(client, target ?? session.url, mediaOptions);
       res = result.res;
+    }
+    // Stalker VOD links can be one-use or expire before the browser opens them.
+    // Recover one rejected root request with a fresh device session/create_link;
+    // do not re-resolve HLS segments or repeatedly hammer a rejecting portal.
+    if (state.kind !== 'live' && target == null && [456, 458].includes(res.statusCode) &&
+        now() - Number(session.refreshedAt ?? 0) >= 60) {
+      const denied = res.statusCode;
+      session.refreshedAt = now();
+      await cache(root, sessionKey(feed, state, playback), session, lifetime);
+      res.destroy();
+      try {
+        await client.session(true);
+        const renewed = (await resolve(client, state.kind, state.id, state.item)).url;
+        result = await follow(client, renewed, mediaOptions);
+        res = result.res;
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          session.url = renewed;
+          await cache(root, sessionKey(feed, state, playback), session, lifetime);
+        }
+      } catch (error) {
+        if (controller.signal.aborted) throw error;
+        response.set({ 'X-Vaultcast-Error-Origin': 'provider', 'X-Vaultcast-Upstream-Status': String(denied) });
+        throw problem(denied, 'The provider rejected the video link and could not renew it.');
+      }
     }
     // Some portals label genuine MP4 bytes as HTTP 400 even without a Range header.
     // Accept that response only after verifying the MP4 file signature below.
