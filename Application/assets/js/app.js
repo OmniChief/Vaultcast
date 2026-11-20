@@ -7040,14 +7040,14 @@ try {
       h('div',{className:'row-actions'},[all,none,save])
     ]);
     host.appendChild(card);
-    var sources=[],previous={},draft=null,draftKey='',timer=null,busy=false,openGroups={};
+    var sources=[],previous={},draft=null,draftKey='',timer=null,busy=false,dirty=false,refreshEpoch=0,openGroups={};
     function key(){return feed.value+'/'+kind.value;}
     function draw(){
       if(!card.isConnected)return;
       var k=key(),source=sources.find(function(s){return s.feed_id===feed.value&&s.kind===kind.value;});
       if(source&&source.folders&&source.folders.length)previous[k]=source.folders;
       var folders=(source&&source.folders&&source.folders.length?source.folders:previous[k]||[]).filter(function(f){return f.folder_id&&f.folder_id!=='*';});
-      if(draftKey!==k){draftKey=k;draft=null;}
+      if(draftKey!==k){draftKey=k;draft=null;dirty=false;}
       if(!draft)draft={mode:source&&source.folderMode==='include'?'include':'all',ids:new Set(source&&source.folderIds||[])};
       list.replaceChildren();
       var ready=!!source&&(folders.length>0||(source.folders||[]).some(function(f){return f.folder_id==='*';}));
@@ -7084,6 +7084,7 @@ try {
         entries.forEach(function(folder){
           var check=h('input',{type:'checkbox',checked:selected(folder)});
           check.onchange=function(){
+            dirty=true;
             if(draft.mode==='all'){
               draft.mode='include';
               draft.ids=new Set(folders.map(function(f){return f.folder_id;}));
@@ -7100,38 +7101,52 @@ try {
     }
     function refresh(){
       if(!card.isConnected)return;
+      if(busy){clearTimeout(timer);timer=setTimeout(refresh,3000);return;}
+      var epoch=refreshEpoch;
       liveApi('stalker_catalogue_status').then(function(data){
-        if(!card.isConnected)return;sources=data.sources||[];draw();
+        if(!card.isConnected||epoch!==refreshEpoch)return;sources=data.sources||[];
+        // Status polling must not rebuild checkboxes while an unsaved edit is
+        // in progress. The current draft remains authoritative until Save.
+        if(!dirty&&!busy)draw();
         clearTimeout(timer);
         if(sources.some(function(s){return ['queued','running','partial','waiting'].includes(s.status);}))timer=setTimeout(refresh,3000);
       }).catch(function(error){if(card.isConnected)info.textContent=error.message;});
     }
-    feed.onchange=kind.onchange=function(){draft=null;draftKey='';draw();};
+    feed.onchange=kind.onchange=function(){draft=null;draftKey='';dirty=false;draw();};
     discover.onclick=function(){
       if(busy||!feed.value)return;
       busy=true;discover.disabled=true;info.textContent='Fetching provider folder names…';
       stalkerPost('stalker_catalogue_control',{operation:'discover',feed:feed.value,kind:kind.value}).then(function(data){
-        sources=data.sources||[];draft=null;draftKey='';draw();
+        sources=data.sources||[];draft=null;draftKey='';dirty=false;draw();
       }).catch(function(error){info.className='bad';info.textContent=error.message;})
         .finally(function(){busy=false;discover.disabled=false;});
     };
     all.onclick=function(){
-      if(!draft)return;draft.mode='all';draft.ids.clear();
+      if(!draft)return;dirty=true;draft.mode='all';draft.ids.clear();
       list.querySelectorAll('input[type="checkbox"]').forEach(function(c){c.checked=true;});
       info.textContent='All provider folders selected, including provider-wide All · Save to apply.';
     };
     none.onclick=function(){
-      if(!draft)return;draft.mode='include';draft.ids.clear();
+      if(!draft)return;dirty=true;draft.mode='include';draft.ids.clear();
       list.querySelectorAll('input[type="checkbox"]').forEach(function(c){c.checked=false;});
       info.textContent='All provider folders will be skipped · Save to apply.';
     };
     save.onclick=function(){
       if(!draft||busy)return;
-      busy=true;save.disabled=true;info.textContent='Saving folder selection…';
-      stalkerPost('stalker_catalogue_control',{operation:'folders',feed:feed.value,kind:kind.value,mode:draft.mode,folders:Array.from(draft.ids)}).then(function(data){
-        sources=data.sources||[];draft=null;draw();refresh();
+      var chosenFeed=feed.value,chosenKind=kind.value,mode=draft.mode,ids=Array.from(draft.ids),confirmed=false;
+      busy=true;refreshEpoch++;save.disabled=true;feed.disabled=kind.disabled=true;info.className='muted';info.textContent='Saving folder selection…';
+      stalkerPost('stalker_catalogue_control',{operation:'folders',feed:chosenFeed,kind:chosenKind,mode:mode,folders:ids}).then(function(data){
+        var source=(data.sources||[]).find(function(s){return s.feed_id===chosenFeed&&s.kind===chosenKind;});
+        var persisted=new Set(source&&source.folderIds||[]);
+        if(!source||source.folderMode!==mode||(mode==='include'&&(persisted.size!==ids.length||ids.some(function(id){return !persisted.has(id);}))))
+          throw new Error('The provider folder selection could not be verified. Please try saving again.');
+        sources=data.sources||[];draft=null;dirty=false;confirmed=true;
       }).catch(function(error){info.className='bad';info.textContent=error.message;})
-        .finally(function(){busy=false;save.disabled=false;});
+        .finally(function(){
+          busy=false;feed.disabled=kind.disabled=false;
+          if(confirmed){draw();info.className='muted';info.textContent='Selection saved and verified · '+(mode==='all'?'all provider folders':ids.length+' named folders')+'.';clearTimeout(timer);timer=setTimeout(refresh,3000);}
+          else save.disabled=false;
+        });
     };
     refresh();
   }
