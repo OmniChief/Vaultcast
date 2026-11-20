@@ -146,6 +146,11 @@ module.exports = function startStalkerWorkers(root, db) {
         try {
           const result = await engines[worker.name].tick(controller.signal);
           worker.next = Date.now() + (worker.name === 'catalogue' && result.busy ? 1000 : worker.delay);
+          // The catalogue has bounded one-page checkpoints. Wake it promptly
+          // instead of imposing the general three-second polling interval on
+          // every provider page and every publication batch.
+          if (worker.name === 'catalogue' && result.busy)
+            setTimeout(tick, 1100).unref();
         } catch (error) {
           worker.next = Date.now() + worker.delay;
         } finally {

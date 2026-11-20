@@ -439,25 +439,33 @@ module.exports = function libraryWriter(decode) {
     )
       return;
     await q(pool, 'DELETE FROM vaultcast_stalker_facets WHERE catalogue_id=?', [id]);
-    for (const [field, value] of desired.values())
-      await q(pool, 'INSERT IGNORE INTO vaultcast_stalker_facets(catalogue_id,facet,value) VALUES(?,?,?)', [
-        id,
-        field,
-        value,
-      ]);
+    const entries = [...desired.values()];
+    for (let offset = 0; offset < entries.length; offset += 40) {
+      const batch = entries.slice(offset, offset + 40);
+      await q(
+        pool,
+        'INSERT IGNORE INTO vaultcast_stalker_facets(catalogue_id,facet,value) VALUES ' +
+          batch.map(() => '(?,?,?)').join(','),
+        batch.flatMap(([field, value]) => [id, field, value]),
+      );
+    }
   }
   async function publish(pool, feed, kind, generation, rows) {
-    const changed = new Set();
+    if (!rows.length) return;
+    const changed = new Set(), unchanged = [];
+    const originals = await q(
+      pool,
+      'SELECT s.item_id,s.catalogue_id,s.available,s.payload,s.playback,c.imdb_id,c.tmdb_id,c.title_key,c.year ' +
+        'FROM vaultcast_stalker_offers s JOIN vaultcast_stalker_library c ON c.id=s.catalogue_id ' +
+        'WHERE s.feed_id=? AND s.kind=? AND s.item_id IN (' + rows.map(() => '?').join(',') + ')',
+      [feed.id, kind, ...rows.map((row) => String(row.item_id))],
+    );
+    const previous = new Map(originals.map((row) => [String(row.item_id), row]));
+    const config = configHash(feed), seen = now();
     for (const stored of rows) {
       const row = parse(stored.payload),
         m = metadata(feed, row, kind, stored.category);
-      const old = (
-        await q(
-          pool,
-          'SELECT s.catalogue_id,s.available,s.payload,s.playback,c.imdb_id,c.tmdb_id,c.title_key,c.year FROM vaultcast_stalker_offers s JOIN vaultcast_stalker_library c ON c.id=s.catalogue_id WHERE s.feed_id=? AND s.kind=? AND s.item_id=?',
-          [feed.id, kind, String(row.id)],
-        )
-      )[0];
+      const old = previous.get(String(row.id));
       const key = sha(title(m.o_name ?? m.name)),
         oldMetadata = old ? parse(old.payload) : {};
       const same =
@@ -479,11 +487,7 @@ module.exports = function libraryWriter(decode) {
         JSON.stringify(parse(old.payload)) === payload &&
         JSON.stringify(parse(old.playback)) === playback
       ) {
-        await q(
-          pool,
-          'UPDATE vaultcast_stalker_offers SET config=?,generation=?,available=1,last_seen=? WHERE feed_id=? AND kind=? AND item_id=?',
-          [configHash(feed), generation, now(), feed.id, kind, String(row.id)],
-        );
+        unchanged.push(String(row.id));
         if (!Number(old.available)) changed.add(old.catalogue_id);
         continue;
       }
@@ -499,11 +503,17 @@ module.exports = function libraryWriter(decode) {
         pool,
         `INSERT INTO vaultcast_stalker_offers(feed_id,kind,item_id,catalogue_id,config,generation,available,last_seen,payload,playback) VALUES(?,?,?,?,?,?,1,?,?,?)
         ON DUPLICATE KEY UPDATE catalogue_id=VALUES(catalogue_id),config=VALUES(config),generation=VALUES(generation),available=1,last_seen=VALUES(last_seen),payload=VALUES(payload),playback=VALUES(playback)`,
-        [feed.id, kind, String(row.id), id, configHash(feed), generation, now(), payload, playback],
+        [feed.id, kind, String(row.id), id, config, generation, seen, payload, playback],
       );
       if (old && old.catalogue_id !== id) changed.add(old.catalogue_id);
       changed.add(id);
     }
+    if (unchanged.length) await q(
+      pool,
+      'UPDATE vaultcast_stalker_offers SET config=?,generation=?,available=1,last_seen=? ' +
+        'WHERE feed_id=? AND kind=? AND item_id IN (' + unchanged.map(() => '?').join(',') + ')',
+      [config, generation, seen, feed.id, kind, ...unchanged],
+    );
     for (const id of changed) await aggregate(pool, id);
   }
   async function reconcile(pool, job) {

@@ -472,8 +472,9 @@ module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavai
         if (feed && config !== keys.get(id)) source.status = 'scan_required';
         if (job.kind === 'series' && source.status === 'complete' && job.last_hash !== 'episodes_complete') source.status = 'scan_required';
         if (feed && expired(id)) source.status = 'expired';
-        source.active = Array.isArray(active) && active.length === 3 && active[0] === id &&
-          active[1] === job.kind && active[2] === generation &&
+        const activeJobs = Array.isArray(active) && Array.isArray(active[0]) ? active : [active];
+        source.active = activeJobs.some(jobKey => Array.isArray(jobKey) && jobKey.length === 3 &&
+          jobKey[0] === id && jobKey[1] === job.kind && jobKey[2] === generation) &&
           ['queued', 'running', 'partial', 'waiting'].includes(source.status) && Number(job.next_run) <= now();
         const folders = foldersByJob.get(key) ?? [];
         if (summary) {
