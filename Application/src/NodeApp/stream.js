@@ -114,7 +114,7 @@ module.exports = function mountStream(app, prefix, { db, root, readSession, upda
       if (!resolved) return response.sendStatus(404);
       const type = mimeFor(extname(resolved).slice(1).toLowerCase());
       const head = request.method === 'HEAD';
-      if (!head && media.accel && !enabled(request.query.direct) && process.platform === 'linux') {
+      if (!response.locals.directHttp && !head && media.accel && !enabled(request.query.direct) && process.platform === 'linux') {
         if (!(await stat(resolved)).isFile()) return response.sendStatus(404);
         const uri = resolved.split('/').map(encodeURIComponent).join('/');
         return response.set({ 'Content-Type': type, 'Accept-Ranges': 'bytes', 'X-Accel-Redirect': '/_vaultcast_media' + uri }).end();

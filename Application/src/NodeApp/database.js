@@ -5,6 +5,7 @@ const { join } = require('path');
 const { flock, lockFile, configureWindowsLocks } = require('../Workers/file-lock');
 const installationConfig = require('./legacy-config');
 const installDependencies = require('./dependencies');
+const retireRouter = require('./retire-router');
 
 module.exports = function applicationDatabase(root) {
   const operationLock = join(root, 'data/database-operation.lock');
@@ -13,6 +14,8 @@ module.exports = function applicationDatabase(root) {
   let initializing = false;
   let ready = false;
   let dependencyRetry = 0;
+  let routerRetired = false;
+  let retireRetry = 0;
 
   async function withLock(operation) {
     const file = await open(operationLock, 'r').catch(error => {
@@ -42,7 +45,15 @@ module.exports = function applicationDatabase(root) {
   }
 
   async function initialize() {
-    if ((!flock && process.platform !== 'win32') || initializing || ready) return;
+    if (initializing || (!flock && process.platform !== 'win32')) return;
+    if (ready) {
+      if (!routerRetired && Date.now() >= retireRetry) {
+        retireRetry = Date.now() + 60000;
+        try { routerRetired = await retireRouter(root); }
+        catch (error) { console.warn('Could not retire the old development router:', error.message); }
+      }
+      return;
+    }
     initializing = true;
     try {
       const config = await installationConfig(root);

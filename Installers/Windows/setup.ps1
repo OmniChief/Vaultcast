@@ -529,7 +529,7 @@ foreach ($id in $ownedServiceIds) {
 New-Item -ItemType Directory -Path $installRoot -Force | Out-Null
 # Copy application files only. Updates never replace saved data or configuration.
 if ($sourceRoot.TrimEnd('\') -ne $installRoot) {
-    foreach ($entry in @('index.php','router.php','.htaccess','manifest.json','sw.js','VERSION','assets','src','deploy')) {
+    foreach ($entry in @('index.php','.htaccess','manifest.json','sw.js','VERSION','assets','src','deploy')) {
         Copy-Item -LiteralPath (Join-Path $sourceRoot $entry) -Destination $installRoot -Recurse -Force
     }
     New-Item -ItemType Directory -Path (Join-Path $installRoot 'netplay') -Force | Out-Null

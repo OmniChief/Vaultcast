@@ -51,7 +51,7 @@ done
 ! ss -ltn | awk '{print $4}' | grep -q ":$PORT\$" || { echo "Port $PORT is in use."; exit 1; }
 useradd -r -U -M -d "$APP" -s /usr/sbin/nologin "$U"
 mkdir -p "$APP"/{app/data,sessions,logs,etc/php,etc/nginx}
-for e in index.php router.php .htaccess manifest.json sw.js VERSION assets src deploy; do cp -R "$e" "$APP/app/"; done
+for e in index.php .htaccess manifest.json sw.js VERSION assets src deploy; do cp -R "$e" "$APP/app/"; done
 cp ../LICENSE ../NOTICE "$APP/app/" 2>/dev/null || true
 
 {

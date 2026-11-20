@@ -7194,6 +7194,37 @@ try {
     var previous=h('button',{className:'btn',text:'Previous',onClick:function(){page--;load();}}),next=h('button',{className:'btn',text:'Next',onClick:function(){page++;load();}}),back=h('button',{className:'btn',text:'Back to series',hidden:true,onClick:function(){series='';back.hidden=true;page=1;load();}});
     function fail(error){if(root.isConnected){status.className='bad';status.textContent=error.message;}}
     function parameters(){return {feed:feed.value,kind:kind.value,category:category.value,series:series,q:query.value,page:page};}
+    function playItem(item, selection){
+      var play=++playSerial;
+      var request=Object.assign({},selection,{id:item.id,client:xtreamClient,sequence:play});
+      function current(){return root.isConnected && play===playSerial;}
+      closePlayer();
+      player.replaceChildren();
+      guide.replaceChildren();
+      status.textContent='Connecting…';
+      playQueue=playQueue.catch(function(){}).then(function(){
+        if(!current())return;
+        return stalkerPost('xtream_play',request).then(function(data){
+          if(!current())return stopXtreamSource(data.source);
+          startStalkerLibraryPlayer(player,data.source,data.item||item,{
+            id:'xtream:'+request.feed+':'+request.kind+':'+item.id,
+            nextEpisode:data.nextEpisode,
+            onEnded:function(){
+              if(data.nextEpisode && current() && series===selection.series)playItem(data.nextEpisode,selection);
+            },
+            onError:function(message){if(current())fail(new Error(message));},
+            onPlaying:function(){if(current())status.textContent=item.name;}
+          });
+        });
+      }).catch(function(error){if(current())fail(error);});
+      if(request.kind!=='live')return;
+      liveApi('xtream_guide',new URLSearchParams({feed:request.feed,id:item.id})).then(function(data){
+        if(!current())return;
+        guide.replaceChildren(h('h3',{text:'Programme guide'}));
+        (data.programmes||[]).forEach(function(p){guide.appendChild(h('p',{text:p.start+' · '+p.title}));});
+        if(!(data.programmes||[]).length)guide.appendChild(h('p',{text:'No programme information supplied.'}));
+      }).catch(function(){if(current())guide.replaceChildren(h('p',{text:'Programme guide unavailable.'}));});
+    }
     function load(refresh){
       var mine=++serial;status.className='muted';status.textContent='Loading…';results.replaceChildren();previous.disabled=true;next.disabled=true;
       var params=parameters();if(refresh)params.refresh='1';
@@ -7201,15 +7232,7 @@ try {
         if(!root.isConnected||mine!==serial)return;status.textContent=data.total?data.total+' titles · Page '+page:'No titles found.';previous.disabled=page<=1;next.disabled=page*60>=data.total;
         (data.items||[]).forEach(function(item){results.appendChild(h('button',{className:'btn',text:(series?'S'+item.season+' E'+item.episode+' · ':'')+item.name,onClick:function(){
           if(kind.value==='series'&&!series){series=item.id;page=1;query.value='';back.hidden=false;load();return;}
-          var request=parameters(),play=++playSerial;request.id=item.id;request.client=xtreamClient;request.sequence=play;closePlayer();player.replaceChildren();status.textContent='Connecting…';
-          playQueue=playQueue.catch(function(){}).then(function(){
-            if(!root.isConnected||play!==playSerial)return;
-            return stalkerPost('xtream_play',request).then(function(data){
-              if(!root.isConnected||play!==playSerial)return stopXtreamSource(data.source);
-              startStalkerLibraryPlayer(player,data.source,item,{id:'xtream:'+request.feed+':'+item.id,onError:function(message){fail(new Error(message));},onPlaying:function(){status.textContent=item.name;}});
-            });
-          }).catch(function(error){if(play===playSerial)fail(error);});
-          guide.replaceChildren();if(kind.value==='live')liveApi('xtream_guide',new URLSearchParams({feed:request.feed,id:item.id})).then(function(data){if(!root.isConnected||play!==playSerial)return;guide.replaceChildren(h('h3',{text:'Programme guide'}));(data.programmes||[]).forEach(function(p){guide.appendChild(h('p',{text:p.start+' · '+p.title}));});if(!(data.programmes||[]).length)guide.appendChild(h('p',{text:'No programme information supplied.'}));}).catch(function(){if(play===playSerial)guide.replaceChildren(h('p',{text:'Programme guide unavailable.'}));});
+          playItem(item,parameters());
         }}));});
       }).catch(function(error){if(mine===serial)fail(error);});
     }

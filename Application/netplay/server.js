@@ -12,6 +12,7 @@ const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
 const { createHash } = require('crypto');
+const standalone = process.argv.includes('--standalone');
 
 const runtimeRevision = createHash('sha256').update(fs.readFileSync(__filename)).digest('hex');
 // Node's require() cache keeps migrated routes/workers in memory. A built-in
@@ -113,7 +114,7 @@ app.get('/runtime/download/:token', (req, res) => {
   if (!runner) return res.json({ ok: false });
   return runner(req, res);
 });
-const server = http.createServer(app);
+const server = standalone ? http.createServer() : http.createServer(app);
 
 app.use(cors({
   origin: '*',
@@ -122,19 +123,19 @@ app.use(cors({
   credentials: false,
 }));
 
-const io = socketIo(server, {
+const socketOptions = {
   cors: {
     origin: '*',
     methods: ['GET', 'POST'],
     credentials: false,
   },
-  path: '/socket.io',
   // savestate transfer on guest join can exceed default 1MB buffer
   maxHttpBufferSize: 20e6,
-});
+};
+const io = standalone ? socketIo(socketOptions) : socketIo(server, socketOptions);
 
 let maintenanceQueue;
-try { maintenanceQueue = require('../src/Workers/maintenance-queue')(path.join(__dirname, '..')); }
+try { if (!standalone) maintenanceQueue = require('../src/Workers/maintenance-queue')(path.join(__dirname, '..')); }
 catch (error) { console.warn('Node maintenance queue is unavailable'); }
 
 let conversionUpload;
@@ -149,8 +150,8 @@ let videoUpload;
 try { videoUpload = require('../src/Workers/video-upload')(io); }
 catch (error) { console.warn('Node video uploads are unavailable'); }
 
-const PORT = Number(process.env.PORT || 3100);
-const HOST = process.env.HOST || '127.0.0.1';
+const PORT = Number(process.env.PORT || (standalone ? 8080 : 3100));
+const HOST = standalone ? '127.0.0.1' : process.env.HOST || '127.0.0.1';
 const LOG_FILE = process.env.NETPLAY_LOG || path.join(__dirname, 'netplay.log');
 let rooms = Object.create(null);
 
@@ -526,7 +527,21 @@ setInterval(async () => {
   }
 }, 30_000).unref();
 
-server.listen(PORT, HOST, () => {
-  npLog('listen', { host: HOST, port: PORT, logFile: LOG_FILE, version: 'vaultcast-lockstep-4' });
-  console.log(`vaultcast-netplay listening on http://${HOST}:${PORT}`);
+async function listen() {
+  let base = '/';
+  if (standalone) {
+    const root = path.join(__dirname, '..');
+    ({ base } = await require('../src/NodeApp/legacy-config')(root));
+    server.on('request', require('../src/NodeApp/site-router')(express, app, root, base));
+    io.path(base + 'netplay/socket.io');
+    io.attach(server);
+  }
+  server.listen(PORT, HOST, () => {
+    npLog('listen', { host: HOST, port: PORT, logFile: LOG_FILE, version: 'vaultcast-lockstep-4' });
+    console.log(`Vaultcast listening on http://${HOST}:${PORT}${base}`);
+  });
+}
+listen().catch(() => {
+  console.error('Cannot start Vaultcast. Check the installation database configuration and base path.');
+  process.exit(1);
 });

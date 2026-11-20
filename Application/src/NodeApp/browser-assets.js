@@ -50,7 +50,7 @@ function mountBrowserAssets(app, prefix, { root, handle, unavailable }) {
     const { [installation]: installed } = await documents(pool, [installation]);
     const config = shellConfig(settings, installed, response.locals.base);
     config.__VAULTCAST_VIEWER__ = _request.path.startsWith('/watch/');
-    if (!current.user && _request.path === prefix + '/shell' && settings.auth?.lan_guest_access !== false) return response.sendStatus(404);
+    if (!current.user && !response.locals.directHttp && _request.path === prefix + '/shell' && settings.auth?.lan_guest_access !== false) return response.sendStatus(404);
     if (!current.user) config.__STREAM_STARTUP__ = { me: { ok: true, authenticated: false, user: null, guest_browsing: false } };
     const cacheKey = createHash('sha256').update(build).digest('hex').slice(0, 16);
     for (const key of ['stalkerVod', 'stalkerCountries', 'stalkerStream', 'mpegts', 'stalkerAc3', 'stalkerAc3Worker']) {
@@ -105,7 +105,7 @@ function mountBrowserAssets(app, prefix, { root, handle, unavailable }) {
         if (!info.isFile()) return unavailable(response);
         if (response.destroyed) return;
         const type = types.get(extname(name)) ?? 'application/octet-stream';
-        if (request.method !== 'HEAD' && process.platform === 'linux' && enabled(settings.streaming?.nginx_accel)) {
+        if (!response.locals.directHttp && request.method !== 'HEAD' && process.platform === 'linux' && enabled(settings.streaming?.nginx_accel)) {
           const uri = resolved.split('/').map(encodeURIComponent).join('/');
           return response.set({ 'Content-Type': type, 'Cache-Control': 'public, max-age=31536000, immutable',
             'X-Accel-Redirect': '/_vaultcast_media' + uri }).end();

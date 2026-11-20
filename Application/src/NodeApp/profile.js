@@ -156,7 +156,7 @@ module.exports = function mountProfiles(app, prefix, { root, handle, unavailable
     const user = current.user;
     if (!user) {
       // The legacy web route has the verified peer address for LAN guest access.
-      if (settings.auth?.lan_guest_access !== false) return unavailable(response);
+      if (!response.locals.directHttp && settings.auth?.lan_guest_access !== false) return unavailable(response);
       return response.json({ ok: true, user: null, authenticated: false, guest_browsing: false, pending_convert_count: 0 });
     }
     const time = now();

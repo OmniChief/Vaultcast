@@ -216,7 +216,7 @@ site="/etc/nginx/sites-available/vaultcast-$web_port"
 as_root systemctl enable --now mariadb nginx
 [[ -z "$(as_root mariadb -N -B -e "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='$db_name'")" ]] || { echo 'That database already exists; choose another name.'; exit 1; }
 as_root mkdir -p "$destination"
-for entry in index.php router.php .htaccess manifest.json sw.js VERSION assets src deploy; do as_root cp -R -- "$entry" "$destination/"; done
+for entry in index.php .htaccess manifest.json sw.js VERSION assets src deploy; do as_root cp -R -- "$entry" "$destination/"; done
 # Vaultcast's licence and third-party notice. Distribution packages bring their own
 # licences (/usr/share/doc/<package>/copyright); the relay's npm packages keep theirs in node_modules.
 as_root cp ../LICENSE ../NOTICE "$destination/"

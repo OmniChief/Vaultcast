@@ -164,6 +164,23 @@ function item(row, kind) {
     kind, category: String(row.category_id ?? ''), season: Number(row.season) || 0, episode: Number(row.episode_num) || 0 };
 }
 
+function seriesEpisodes(groups) {
+  const rows = [];
+  const seen = new Set();
+  for (const [season, entries] of Object.entries(groups ?? {})) {
+    if (!entries || typeof entries !== 'object') continue;
+    const single = entries.id != null || entries.stream_id != null;
+    for (const episode of single ? [entries] : objects(entries)) {
+      const id = String(episode.id ?? episode.stream_id ?? '');
+      if (!/^\d+$/.test(id) || seen.has(id)) continue;
+      seen.add(id);
+      rows.push({ ...episode, stream_id: id, season: episode.season ?? (single ? 0 : season) });
+    }
+  }
+  return rows.sort((a, b) => (Number(a.season) || 0) - (Number(b.season) || 0) ||
+    (Number(a.episode_num) || 0) - (Number(b.episode_num) || 0));
+}
+
 async function catalogue(root, feed, input, action, viewer, signal, base) {
   const kind = input.kind ?? 'live';
   if (!['live', 'series', 'vod'].includes(kind)) throw fail(422, 'Invalid library type.');
@@ -183,7 +200,7 @@ async function catalogue(root, feed, input, action, viewer, signal, base) {
   let rows;
   if (input.series) {
     if (kind !== 'series' || !/^\d+$/.test(input.series)) throw fail(422, 'Invalid series.');
-    rows = objects((await fetchApi('get_series_info', { series_id: input.series })).episodes).flatMap(objects);
+    rows = seriesEpisodes((await fetchApi('get_series_info', { series_id: input.series })).episodes);
   } else {
     rows = objects(await fetchApi(kind === 'series' ? 'get_series' : 'get_' + kind + '_streams',
       input.category ? { category_id: input.category } : {}));
@@ -202,7 +219,8 @@ async function catalogue(root, feed, input, action, viewer, signal, base) {
     return { ok: true, items, page, total };
   }
   if (kind === 'series' && !input.series) throw fail(422, 'Select an episode.');
-  const row = rows.find(row => item(row, kind).id === String(input.id));
+  const index = rows.findIndex(row => item(row, kind).id === String(input.id));
+  const row = rows[index];
   if (!row) throw fail(422, 'Title no longer available. Refresh the library.');
   const selected = item(row, kind);
   const ext = kind === 'live' ? 'm3u8' : String(row.container_extension ?? 'mp4');
@@ -221,7 +239,8 @@ async function catalogue(root, feed, input, action, viewer, signal, base) {
     await cache(root, 'xtream-play:' + ticket, { feed: feed.id, viewer, fingerprint: sha(phpJson(feed)), url, session }, 21600);
     return { id: session, viewer, client, sequence, expires: now() + 90 };
   });
-  return { ok: true, item: selected, source: { kind, url: base.slice(0, -1) + streamPath + '?ticket=' + ticket + '&format=.' + ext } };
+  const nextEpisode = input.series && rows[index + 1] ? item(rows[index + 1], kind) : null;
+  return { ok: true, item: selected, nextEpisode, source: { kind, url: base.slice(0, -1) + streamPath + '?ticket=' + ticket + '&format=.' + ext } };
 }
 
 async function stream(root, base, ticket, state, request, response, controller) {
