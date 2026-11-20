@@ -28,11 +28,19 @@ self.addEventListener('activate', function(event){
 });
 self.addEventListener('fetch', function(event){
   var url = new URL(event.request.url);
-  if (event.request.method !== 'GET' || url.origin !== BASE.origin) return;
+  if (url.origin !== BASE.origin) return;
+  // Tabs opened before the update can still have outstanding provider requests.
+  var legacy = BASE.pathname + 'api/live/';
+  if (url.pathname.indexOf(legacy) === 0 && /^xtream_[a-z_]+\/?$/.test(url.pathname.slice(legacy.length))) {
+    url.pathname = BASE.pathname + 'netplay/application/live/' + url.pathname.slice(legacy.length);
+    event.respondWith(Response.redirect(url.href, 307));
+    return;
+  }
+  if (event.request.method !== 'GET') return;
   // Page loads: always the network (pages are personal and never cached); the offline page only when it fails.
   if (event.request.mode === 'navigate' && url.pathname.indexOf(BASE.pathname) === 0 && url.pathname.indexOf(BASE.pathname + 'api/') !== 0) {
     var page = url.pathname.slice(BASE.pathname.length);
-    var viewing = /^(?:library|movies|tvshows)(?:\/|$)|^live\/(?:stalker(?:-vod)?|xtream)(?:\/|$)/.test(page);
+    var viewing = /^(?:library|movies|tvshows)(?:\/|$)|^live\/(?:stalker(?:-vod)?|xtream)(?:\/|$)|^settings\/live-xtream\/?$/.test(page);
     var navigation = viewing && url.searchParams.get('compat') !== 'on'
       ? fetch(BASE.pathname + 'netplay/watch/' + page + url.search, { credentials:'same-origin', cache:'no-store' })
       : fetch(event.request);

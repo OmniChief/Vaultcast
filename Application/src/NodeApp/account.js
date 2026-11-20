@@ -196,7 +196,7 @@ module.exports = function mountAccount(app, express, root) {
   mountLibrary(app, route, { root, handle, unavailable });
   mountEpisodeSegments(app, route, { root, handle, json, unavailable });
   const stalkerRequests = mountStalkerStatus(app, route, { root, handle, unavailable, json: express.json({ limit: '256kb' }), downloads, stalker, services: db.services, run: db.run });
-  const xtreamActive = mountXtream(app, route, { root, handle, json });
+  const xtreamActive = mountXtream(app, route, { root, handle, json, services: db.services });
   mountProgress(app, route, { handle, json, unavailable, root });
   mountAchievements(app, route, { root, handle, json });
   const converting = mountPlayback(app, route, { root, db, handle, json, unavailable });

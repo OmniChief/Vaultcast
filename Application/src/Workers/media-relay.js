@@ -127,7 +127,7 @@ function xtreamPath(account) {
 }
 
 async function xtreamCurrent(base, session) {
-  // PHP updates the tiny session file in place under its exclusive lock.
+  // Heartbeats update the tiny session file in place under its exclusive lock.
   // An empty or partial read may coincide with that write.
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
@@ -244,7 +244,10 @@ async function serveMedia(request, response) {
       if (xtreamLock) { await xtreamLock.close(); xtreamLock = null; }
       if (stopped || (xtreamBase && !await xtreamCurrent(xtreamBase, ticket.xtream.session))) return response.sendStatus(409);
     }
-    if (ticket && typeof ticket.fallback === 'string' && /^\/api\/live\/(?:iptv_hls|stalker_stream|xtream_stream)\?/.test(ticket.fallback)) {
+    if (ticket?.xtream && /^\/api\/live\/xtream_stream\?ticket=[a-f0-9]{64}(?:&|$)/.test(ticket.fallback)) {
+      return response.set('X-Accel-Redirect', ticket.fallback.replace('/api/live/', '/netplay/application/live/')).end();
+    }
+    if (ticket && typeof ticket.fallback === 'string' && /^\/api\/live\/(?:iptv_hls|stalker_stream)\?/.test(ticket.fallback)) {
       return response.set('X-Accel-Redirect', ticket.fallback).end();
     }
     response.sendStatus(502);

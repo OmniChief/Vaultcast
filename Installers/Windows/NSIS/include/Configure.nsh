@@ -342,6 +342,7 @@ Function WriteNginxConf
   FileWrite $9 "        fastcgi_param SCRIPT_FILENAME $$document_root/index.php;$\r$\n"
   FileWrite $9 "        fastcgi_pass vaultcast_php;$\r$\n    }$\r$\n"
   FileWrite $9 "    location = /api { return 302 /api/status; }$\r$\n"
+  FileWrite $9 "    location ^~ /api/live/xtream_ {$\r$\n        rewrite ^/api/live/(xtream_[a-z_]+)/?$$ /netplay/application/live/$$1 last;$\r$\n        return 404;$\r$\n    }$\r$\n"
   FileWrite $9 "    location ^~ /api/ {$\r$\n        include fastcgi_params;$\r$\n"
   FileWrite $9 "        fastcgi_param SCRIPT_FILENAME $$document_root/index.php;$\r$\n"
   FileWrite $9 "        fastcgi_param SCRIPT_NAME /index.php;$\r$\n        fastcgi_read_timeout 300s;$\r$\n"

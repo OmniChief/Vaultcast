@@ -4893,13 +4893,13 @@ try {
       sectionLetter:state.sectionLetter, collectionsLetter:state.collectionsLetter, hubTab:state.hubTab, cinemaId:state.cinemaId, requestsTab:state.requestsTab });
   }
   function viewingPath(path){
-    var watch = /^(?:library|movies|tvshows)(?:\/|$)|^live\/(?:stalker(?:-vod)?|xtream)(?:\/|$)/.test(path.split('?')[0]);
+    var watch = /^(?:library|movies|tvshows)(?:\/|$)|^live\/(?:stalker(?:-vod)?|xtream)(?:\/|$)|^settings\/live-xtream\/?$/.test(path.split('?')[0]);
     var signingIn = /^(?:login|welcome)$/.test(path) && location.pathname.indexOf(BASE+'netplay/watch/') === 0;
     return watch || signingIn ? 'netplay/watch/' + path : path;
   }
   function inViewingPage(){
     return location.pathname.indexOf(BASE + 'netplay/watch/') === 0 || !!window.__VAULTCAST_VIEWER__ &&
-      /^(?:library|movies|tvshows|live|welcome|login)(?:\/|$)/.test(R.relative(location.pathname, BASE));
+      /^(?:library|movies|tvshows|live|welcome|login)(?:\/|$)|^settings\/live-xtream\/?$/.test(R.relative(location.pathname, BASE));
   }
   function navUrl(extra){ return BASE + viewingPath(routePath(extra)); }
   function shareUrl(path){
@@ -5740,7 +5740,7 @@ try {
   function liveApi(action, params){
     var suffix = action + (params ? '?' + String(params).replace(/^&/, '') : '');
     var options = { credentials:'same-origin', cache:'no-store' };
-    var provider = ['xtream_connections','xtream_categories','xtream_browse','xtream_guide','stalker','stalker_catalogue_status',
+    var provider = ['xtream_connections','xtream_categories','xtream_browse','xtream_guide','xtream_import_status','stalker','stalker_catalogue_status',
       'stalker_update_status','stalker_offline','stalker_vod_catalogue','stalker_vod_detail','stalker_browse','stalker_countries',
       'stalker_live_categories','stalker_live_channels','stalker_live_guide','stalker_channel','stalker_live_fields',
       'stalker_epg_fields','stalker_vod_fields','stalker_vod_probe','stalker_art'].indexOf(action) >= 0;
@@ -5827,7 +5827,7 @@ try {
       native = body.channels.length > 0 && body.channels.every(function(item){ return isStalkerLineupUrl(item && item.url); });
     }
     var viewerAction = ['stalker_cancel','stalker_delete','stalker_download','stalker_retry','stalker_updates','stalker_catalogue_control','stalker_manage','stalker_play','stalker_check_media'].indexOf(action) >= 0 ||
-      ['xtream_manage','xtream_play','xtream_heartbeat','xtream_stop'].indexOf(action) >= 0;
+      ['xtream_manage','xtream_play','xtream_heartbeat','xtream_stop','xtream_import'].indexOf(action) >= 0;
     var request = viewerAction ? fetch(viewingApi + '/live/' + action, options) : native ? fetch(nativeBase + '/live/' + action, options).then(function(r){
       if (r.status === 503 && r.headers.get('X-Vaultcast-App-Unavailable') === '1') return fetch(LIVE_API + action, options);
       return r;

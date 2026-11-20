@@ -14,6 +14,7 @@ const { cache, doc, save } = require('./stalker-store');
 const { mediaUrl, publicAddresses, providerBody, phpJson } = require('./stalker-provider');
 const ProviderCookies = require('./provider-cookies');
 const { playlist, resourceUrl } = require('./provider-playlist');
+const providerImport = require('./xtream-import');
 
 const streamPath = '/netplay/application/live/xtream_stream';
 const fail = (status, message) => Object.assign(new Error(message), { status, expose: true });
@@ -74,7 +75,7 @@ async function upstream(address, { signal, jar, range }) {
 
 async function api(root, feed, action, params, refresh, signal) {
   const key = 'xtream-api:' + sha(phpJson([feed, action, Object.keys(params).length ? params : []]));
-  if (!refresh) {
+  if (action && !refresh) {
     const hit = await cached(root, key);
     if (hit && typeof hit === 'object') return hit;
   }
@@ -85,28 +86,40 @@ async function api(root, feed, action, params, refresh, signal) {
     const data = JSON.parse((await providerBody(res, 32 * 1024 * 1024)).toString('utf8'));
     if (!data || typeof data !== 'object') throw fail(502, 'Provider returned an invalid catalogue.');
     if (data.user_info && Number(data.user_info.auth) !== 1) throw fail(502, 'Provider rejected the saved account.');
-    await cache(root, key, data, 300).catch(() => {});
+    if (action) await cache(root, key, data, 300).catch(() => {});
     return data;
   } finally { await closeXtreamUpstream(res); }
 }
 
-async function manage(root, pool, input, signal) {
-  const { operation = 'save', feed: id = '' } = input;
+async function checkAccount(root, feed, signal, includeCreated = false) {
+  const { user_info: account } = await api(root, feed, '', {}, true, signal);
+  if (Number(account?.auth) !== 1) throw fail(502, 'Provider rejected the account.');
+  const fields = ['status', 'exp_date', 'active_cons', 'max_connections'];
+  if (includeCreated) fields.push('created_at');
+  return Object.fromEntries(fields.filter(key => Object.hasOwn(account, key)).map(key => [key, account[key]]));
+}
+
+async function withConfigurationLock(root, signal, operation) {
   const dir = join(root, 'data/runtime/xtream');
   await mkdir(dir, { recursive: true, mode: 0o700 });
   const lock = await open(join(dir, 'configuration.lock'), 'a', 0o600);
   try {
-    await lockFile(lock, 3, signal);
+    try { await lockFile(lock, 3, signal); }
+    catch { throw fail(409, 'Connection settings are being saved. Please try again.'); }
+    return await operation();
+  } finally { await lock.close(); }
+}
+
+async function manage(root, pool, input, signal) {
+  const { operation = 'save', feed: id = '' } = input;
+  return withConfigurationLock(root, signal, async () => {
     const stored = await doc(pool, 'xtream-connections');
     const feeds = new Map(objects(stored.connections).map(feed => [feed.id, feed]));
     const previous = feeds.get(id);
     if (id && !previous) throw fail(404, 'Connection no longer exists.');
     if (operation === 'check') {
       if (!previous) throw fail(422, 'Save the connection first.');
-      const data = await api(root, previous, '', {}, true, signal);
-      if (Number(data.user_info?.auth) !== 1) throw fail(502, 'Provider rejected the account.');
-      return { ok: true, account: Object.fromEntries(['status','exp_date','active_cons','max_connections']
-        .filter(key => Object.hasOwn(data.user_info, key)).map(key => [key, data.user_info[key]])) };
+      return { ok: true, account: await checkAccount(root, previous, signal) };
     }
     if (operation === 'remove' && previous) feeds.delete(id);
     else if (operation === 'save') {
@@ -131,7 +144,19 @@ async function manage(root, pool, input, signal) {
     if (previous) await changeSession(accountPath(root, previous), state => ({ ...state, expires: 0 }));
     await save(pool, 'xtream-connections', { connections: Object.fromEntries(feeds) });
     return { ok: true };
-  } finally { await lock.close(); }
+  });
+}
+
+async function importPage(url, signal) {
+  let res;
+  try {
+    ({ res } = await upstream(url, { signal }));
+    if (res.statusCode !== 200) throw fail(502, 'Provider page returned HTTP ' + res.statusCode + '.');
+    return (await providerBody(res, 2 * 1024 * 1024)).toString('utf8');
+  } catch (error) {
+    if (error.expose) throw error;
+    throw fail(502, 'Could not fetch the provider page. Check its URL and whether it requires a browser login.');
+  } finally { await closeXtreamUpstream(res); }
 }
 
 function item(row, kind) {
@@ -199,7 +224,7 @@ async function catalogue(root, feed, input, action, viewer, signal, base) {
   return { ok: true, item: selected, source: { kind, url: base.slice(0, -1) + streamPath + '?ticket=' + ticket + '&format=.' + ext } };
 }
 
-async function stream(base, ticket, state, request, response, controller) {
+async function stream(root, base, ticket, state, request, response, controller) {
   const { session } = state, signal = controller.signal;
   const target = request.query.resource == null ? state.url : resourceUrl(request.query.resource, sha(session), ticket);
   const current = () => xtreamCurrent(base, session);
@@ -216,7 +241,9 @@ async function stream(base, ticket, state, request, response, controller) {
     timer = setInterval(() => { current().then(ok => { if (!ok) controller.abort(stopped()); }, () => controller.abort(stopped())); }, 500);
     const jar = new ProviderCookies(base + '.cookies');
     await jar.loadJar();
-    const result = await upstream(target, { signal, jar, range });
+    const resolvedKey = 'xtream-resolved:' + sha(session + target);
+    const resolved = await cached(root, resolvedKey);
+    const result = await upstream(resolved?.url || target, { signal, jar, range });
     res = result.res;
     if (res.statusCode === 416) {
       if (res.headers['content-range']) response.set('Content-Range', res.headers['content-range']);
@@ -225,6 +252,8 @@ async function stream(base, ticket, state, request, response, controller) {
     if (![200, 206].includes(res.statusCode)) throw fail(502, 'Provider refused the stream (HTTP ' + res.statusCode + ').');
     const type = String(res.headers['content-type'] ?? 'application/octet-stream').split(';')[0];
     if (/html|json/i.test(type)) throw fail(502, 'The provider returned an error page instead of media.');
+    if (result.url.href !== target && result.url.href !== resolved?.url)
+      await cache(root, resolvedKey, { url: result.url.href }, 21600);
     const encoding = String(res.headers['content-encoding'] ?? 'identity').toLowerCase();
     const decoders = { gzip: createGunzip, deflate: createInflate, br: createBrotliDecompress };
     if (encoding !== 'identity') {
@@ -277,7 +306,7 @@ async function stream(base, ticket, state, request, response, controller) {
   }
 }
 
-module.exports = function mountXtream(app, prefix, { root, handle, json }) {
+module.exports = function mountXtream(app, prefix, { root, handle, json, services }) {
   let active = 0;
   const operation = handle(async (request, response, pool, _bcrypt, settings, current) => {
     if (enabled(settings.features_explicit?.live) && !enabled(settings.features?.live)) return response.status(404).json({ ok: false, error: 'Live channels are disabled in Settings → Integrations.' });
@@ -287,15 +316,26 @@ module.exports = function mountXtream(app, prefix, { root, handle, json }) {
     if (!areaAllowed(user, 'live', parental)) return response.status(403).json({ ok: false, code: 'area_denied', area: 'live', error: 'Your account does not have access to Live.' });
     if (parental.restricted) return response.status(403).json({ ok: false, error: 'Provider catalogues are unavailable for restricted profiles.' });
     const action = request.params.action;
-    const docs = await documents(pool, ['xtream_connections','xtream_manage'].includes(action) ? ['xtream-connections', 'permission_roles'] : ['xtream-connections']);
+    if (request.method === 'HEAD' && action !== 'xtream_stream') return response.sendStatus(405);
+    const adminAction = ['xtream_manage', 'xtream_import', 'xtream_import_status'].includes(action);
+    const docs = await documents(pool, adminAction || action === 'xtream_connections' ? ['xtream-connections', 'permission_roles'] : ['xtream-connections']);
     const feeds = objects(docs['xtream-connections']?.connections);
-    if (action === 'xtream_manage') {
+    if (adminAction) {
       if (!publicUser(user, settings, docs, now()).capabilities.iptv_manage)
         return response.status(403).json({ ok: false, error: 'Managing providers requires the iptv_manage permission.' });
-      try { return response.json(await manage(root, pool, request.body ?? {}, AbortSignal.timeout(15000))); }
-      catch (error) {
+      active++;
+      try {
+        const signal = AbortSignal.timeout(15000);
+        if (action === 'xtream_manage') return response.json(await manage(root, pool, request.body ?? {}, signal));
+        const body = action === 'xtream_import_status' ? null : request.body ?? {};
+        const run = () => providerImport({ root, pool, body, viewer, parser: services().html,
+          readPage: url => importPage(url, signal),
+          checkAccount: entry => checkAccount(root, entry, signal, true),
+        });
+        return response.json(await (['configure', 'add'].includes(body?.operation) ? withConfigurationLock(root, signal, run) : run()));
+      } catch (error) {
         return response.status(error.expose ? error.status : 502).json({ ok: false, error: error.expose ? error.message : 'Could not update the provider connection.' });
-      }
+      } finally { active--; }
     }
     if (action === 'xtream_connections') {
       const manage = publicUser(user, settings, docs, now()).capabilities.iptv_manage;
@@ -319,7 +359,14 @@ module.exports = function mountXtream(app, prefix, { root, handle, json }) {
         if (!ticketAction) return response.json(await catalogue(root, feed, input, action, viewer,
           AbortSignal.any([controller.signal, AbortSignal.timeout(30000)]), response.locals.base));
         const base = accountPath(root, feed);
-        if (action === 'xtream_stream') return await stream(base, ticket, state, request, response, controller);
+        if (action === 'xtream_stream') {
+          try { return await stream(root, base, ticket, state, request, response, controller); }
+          catch (error) {
+            if (!controller.signal.aborted && ![403, 409, 416].includes(error.status))
+              await changeSession(base, saved => saved.id === state.session ? { ...saved, expires: 0 } : null);
+            throw error;
+          }
+        }
         await changeSession(base, saved => {
           if (action === 'xtream_stop') return saved.id === state.session ? { ...saved, expires: 0 } : null;
           if (saved.id !== state.session || saved.expires <= now()) throw fail(409, 'Playback was stopped or replaced.');
@@ -333,7 +380,7 @@ module.exports = function mountXtream(app, prefix, { root, handle, json }) {
       } finally { active--; response.removeListener('close', close); }
     };
   }, true);
-  app.get(prefix + '/live/:action(xtream_connections|xtream_categories|xtream_browse|xtream_stream|xtream_guide)', operation);
-  app.post(prefix + '/live/:action(xtream_manage|xtream_play|xtream_stop|xtream_heartbeat)', json, operation);
+  app.get(prefix + '/live/:action(xtream_connections|xtream_categories|xtream_browse|xtream_stream|xtream_guide|xtream_import_status)', operation);
+  app.post(prefix + '/live/:action(xtream_manage|xtream_play|xtream_stop|xtream_heartbeat|xtream_import)', json, operation);
   return () => active > 0;
 };
