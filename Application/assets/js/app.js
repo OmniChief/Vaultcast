@@ -1019,7 +1019,7 @@ function confirmDialog(message, opts){
       (method === 'POST' && (stalkerPreview || path === '/login' || path === '/logout' || (path === '/me/prefs' && !avatarChange) || timing ||
         /^\/items\/[a-f0-9]{16}\/play$/.test(path)));
     var watchPage = inViewingPage();
-    var viewingRoute = (watchPage && (nativeBrowse || nativeDetail || timing || ['/status','/me','/login','/logout','/home'].indexOf(path) >= 0)) || /^\/items\/[a-f0-9]{16}\/(?:probe|transcode|next)(?:\?|$)/.test(path) ||
+    var viewingRoute = path === '/admin/library-index' || (watchPage && (nativeBrowse || nativeDetail || timing || ['/status','/me','/login','/logout','/home'].indexOf(path) >= 0)) || /^\/items\/[a-f0-9]{16}\/(?:probe|transcode|next)(?:\?|$)/.test(path) ||
       (method === 'POST' && opts.libraryPlayback && /^\/items\/[a-f0-9]{16}\/play$/.test(path)) ||
       (method === 'GET' && /^\/items\/[a-f0-9]{16}(?:\?|$)/.test(path));
     delete fetchOpts.libraryPlayback;
@@ -5625,10 +5625,60 @@ try {
     return bb;
   }
 
+  function libraryIndexPanel(){
+    var panel = h('section', {className:'row', hidden:true});
+    var message = h('p', {className:'muted', role:'status'});
+    var button = h('button', {className:'btn', type:'button', text:'Prepare library index', onClick:function(){ update(true); }});
+    panel.appendChild(h('div', {className:'row-head'}, [h('h2', {text:'Library search and show listings'}), button]));
+    panel.appendChild(message);
+    function update(start){
+      if (!panel.isConnected) return;
+      button.disabled = true;
+      api('/admin/library-index', start ? {method:'POST', body:{}} : {}).then(function(result){
+        if (!panel.isConnected) return;
+        if (!result.ok) throw new Error(result.error || 'Could not read the library index status.');
+        if (result.ready) {
+          if (state.home) state.home.browse_index_ready = true;
+          if (!panel.hidden) {
+            navigationCache.clear();
+            toast('Library search and show listings are ready.');
+            api('/home').then(function(home){
+              if (home.ok && panel.isConnected) { state.home = home; render(); }
+            }).catch(function(){});
+          }
+          panel.hidden = true;
+          return;
+        }
+        panel.hidden = false;
+        var working = result.phase === 'items' || result.phase === 'shows';
+        button.hidden = working;
+        button.disabled = working;
+        if (working) {
+          message.textContent = 'Preparing listings · ' + result.items + ' titles · ' + result.shows + ' shows';
+          setTimeout(function(){ update(false); }, 2000);
+        } else {
+          button.textContent = result.phase === 'failed' ? 'Retry preparation' : 'Prepare library index';
+          message.textContent = result.phase === 'failed' ? 'Preparation stopped. Retry to resume from the last saved batch.' :
+            'Build the search and show index from titles already in your library.';
+        }
+      }).catch(function(error){
+        if (!panel.isConnected) return;
+        panel.hidden = false;
+        message.textContent = error.message;
+        button.hidden = false;
+        button.disabled = false;
+      });
+    }
+    setTimeout(function(){ update(false); }, 0);
+    return panel;
+  }
+
   function viewHome(){
     var home = state.home || { continue_watching:[], sections:[] };
     var libraryHero=billboardEl(home);libraryHero.classList.add('library-hero');standardBillboard(libraryHero,librarySummary(home));libraryHero.appendChild(heroArt('library'));
     var parts = [ libraryHero ];
+    if (state.user && state.user.role === 'admin' && home.browse_index_ready !== true && (home.sections || []).length)
+      parts.push(libraryIndexPanel());
     var cw = cwOnePerShow(home.continue_watching);
     if (cw.length) parts.push(rowEl('Continue watching', cw.map(function(it){ return cardEl(it, it.progress); }), { meta: String(cw.length) }));
     /* Smart collections pinned to Home (filled in after the page draws). */

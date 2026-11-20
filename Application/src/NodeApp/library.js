@@ -60,9 +60,7 @@ async function visibleCards(pool, cards, parental) {
 async function playbackVisible(pool, item, parental) {
   if (!parental.restricted || item.media_kind !== 'video') return true;
   let showKey = typeof item.show_key === 'string' && enabled(item.show_key) ? item.show_key : '';
-  if (!showKey && ['tv', 'anime'].includes(item.type) && String(item.show ?? '') !== '' && item.section != null) {
-    showKey = createHash('sha1').update(String(item.section) + '|' + item.show).digest('hex').slice(0, 16);
-  }
+  if (!showKey && ['tv', 'anime'].includes(item.type) && item.section != null) showKey = episodeGroup(item);
   return (await visibleCards(pool, [{ id: item.id, media_kind: item.media_kind, show_key: showKey }], parental)).length > 0;
 }
 
@@ -303,9 +301,13 @@ function sample(ids, size) {
   return ids.slice(0, size);
 }
 
+const catalogueRelativePath = "COALESCE(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(i.payload,'$.rel')),'null'),'')";
+const catalogueShowName = "COALESCE(NULLIF(i.show_title,''),NULLIF(SUBSTRING_INDEX(REPLACE(" + catalogueRelativePath +
+  ",CHAR(92),'/'),'/',1),''),i.title)";
+
 async function localShows(pool, section) {
-  const [rows] = await pool.execute("SELECT show_title AS title,COUNT(*) AS episode_count FROM vaultcast_items " +
-    "WHERE section_id=? AND show_title<>'' GROUP BY BINARY show_title,show_title ORDER BY show_title", [section.id]);
+  const [rows] = await pool.execute('SELECT name AS title,COUNT(*) AS episode_count FROM (SELECT ' + catalogueShowName +
+    ' AS name FROM vaultcast_items i WHERE i.section_id=?) AS titles GROUP BY BINARY name,name ORDER BY name', [section.id]);
   return rows.map(row => ({ title: row.title, section: section.id, type: section.type, episode_count: Number(row.episode_count),
     available_count: Number(row.episode_count), show_key: episodeGroup({ section: section.id, show: row.title }) }));
 }
@@ -318,18 +320,11 @@ async function randomSectionCards(root, pool, section, count, settings, docs) {
       const slugs = reverseSlugs(docs.slugs, 'show');
       return sample(await localShows(pool, section), count).map(show => showCard(show, slugs));
     }
-    const [rows] = await pool.execute('SELECT show_key FROM vaultcast_show_summaries WHERE section_id=? LIMIT 10001', [id]);
-    if (rows.length > 10000) return null;
-    const ids = sample(rows.map(row => row.show_key), count);
-    if (!ids.length) cards = [];
-    else {
-      const [picked] = await pool.execute('SELECT show_key,payload FROM vaultcast_show_summaries WHERE section_id=? AND show_key IN (' +
-        ids.map(() => '?').join(',') + ')', [id, ...ids]);
-      const byKey = new Map(picked.map(row => [row.show_key, parse(row.payload)]));
-      if (ids.some(key => !byKey.has(key))) return null;
-      const slugs = reverseSlugs(docs.slugs, 'show');
-      cards = ids.map(key => showCard(byKey.get(key), slugs));
-    }
+    const [picked] = await pool.execute('SELECT s.payload FROM (SELECT show_key,RAND() AS position_key ' +
+      'FROM vaultcast_show_summaries WHERE section_id=? ORDER BY position_key LIMIT ' + Math.max(1, Math.min(100, int(count))) +
+      ') AS subset JOIN vaultcast_show_summaries s ON s.show_key=subset.show_key ORDER BY subset.position_key', [id]);
+    const slugs = reverseSlugs(docs.slugs, 'show');
+    cards = picked.map(row => showCard(parse(row.payload), slugs));
   } else {
     if (!['movies', 'disney', 'roms', 'music'].includes(section.type)) return null;
     const [revisions] = await pool.execute("SELECT revision FROM vaultcast_documents WHERE name='catalogue'");
@@ -418,7 +413,7 @@ async function showDetail(root, pool, summary, settings, parental) {
     'WHERE b.show_key=? AND b.section_id=? AND i.section_id=b.section_id ORDER BY i.title,i.id LIMIT 5001',
     [key, summary.section]) : await pool.execute(
     'SELECT i.payload,f.sig,f.duration,f.needs_convert FROM vaultcast_items i LEFT JOIN vaultcast_media_facts f ON f.item_id=i.id ' +
-    'WHERE i.section_id=? AND i.show_title=? ORDER BY i.title,i.id LIMIT 5001', [summary.section, summary.title]);
+    'WHERE i.section_id=? AND ' + catalogueShowName + '=? ORDER BY i.title,i.id LIMIT 5001', [summary.section, summary.title]);
   if (rows.length > 5000) return null;
   const showSlugs = reverseSlugs(docs.slugs, 'show');
   const emptySlugs = new Map();
@@ -426,7 +421,7 @@ async function showDetail(root, pool, summary, settings, parental) {
   const episodeKey = (season, episode) => season + ':' + episode;
   for (const row of rows) {
     const item = parse(row.payload);
-    const name = item.show || String(item.rel ?? '').replace(/\\/g, '/').split('/')[0] || item.title || '';
+    const name = catalogueShowTitle(item);
     if (name !== summary.title) continue;
     const card = itemCard(row, item, settings, emptySlugs, emptySlugs);
     Object.assign(card, { show_key: key, show_slug: showSlugs.get(key) ?? key, available: true, status: 'available' });
@@ -583,9 +578,8 @@ async function cachedSynopsis(root, pool, item) {
 }
 
 const compareEpisodePath = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
-const episodeGroup = item => createHash('sha1').update(String(item.section ?? '') + '|' +
-  (item.show || String(item.rel ?? '').replace(/\\/g, '/').split('/')[0] || item.title || 'Unknown'))
-  .digest('hex').slice(0, 16);
+const catalogueShowTitle = item => item.show || String(item.rel ?? '').replace(/\\/g, '/').split('/')[0] || item.title || 'Unknown';
+const episodeGroup = item => createHash('sha1').update(String(item.section ?? '') + '|' + catalogueShowTitle(item)).digest('hex').slice(0, 16);
 
 function progressFinished(progress, episode) {
   if (enabled(progress.watched)) return true;
@@ -680,8 +674,8 @@ function unindexedSearchSource(sections) {
   const placeholders = rows => rows.map(() => '?').join(',');
   const mappings = sections.map(() => 'WHEN ? THEN ?').join(' ');
   const seriesScope = series.length ? 'i.section_id IN (' + placeholders(series) + ')' : '0=1';
-  const path = "COALESCE(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(i.payload,'$.rel')),'null'),'')";
-  const show = "COALESCE(NULLIF(i.show_title,''),NULLIF(SUBSTRING_INDEX(REPLACE(" + path + ",CHAR(92),'/'),'/',1),''),i.title)";
+  const path = catalogueRelativePath;
+  const show = catalogueShowName;
   const sql = 'WITH search_items AS (SELECT i.id AS item_id,i.section_id,i.media_kind,i.title,i.system_name,' +
     "COALESCE(NULLIF(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(i.payload,'$.type')),'null'),''),CASE i.section_id " +
     mappings + " ELSE '' END) AS type," + path + ' AS search_path,' +
@@ -962,6 +956,7 @@ module.exports = function mountLibrary(app, prefix, { root, handle, unavailable 
     const custom = await Promise.all(artworkKinds.map(kind =>
       stat(join(root, 'data/site', kind + '-poster.img')).then(info => info.isFile(), () => false)));
     return response.json({ ...home.home, areas, sections,
+      ...(user.role === 'admin' ? { browse_index_ready: enabled(docs['browse-index-ready']) } : {}),
       features: { ...home.home.features, ...(!areas.live ? { live: false } : {}) },
       item_count: areas.library && areas.games ? home.home.item_count :
         sections.reduce((total, section) => total + int(section.item_count ?? section.count), 0),
@@ -1060,8 +1055,12 @@ module.exports = function mountLibrary(app, prefix, { root, handle, unavailable 
     if (!(await visibleCards(pool, [{ kind: 'show', show_key: id }], parental)).length) {
       return response.status(403).json({ ok: false, code: 'parental_blocked', error: 'This title isn’t available on this profile.' });
     }
-    const [rows] = await pool.execute('SELECT payload FROM vaultcast_show_summaries WHERE show_key=?', [id]);
-    let summary = rows.length ? parse(rows[0].payload) : null;
+    const docs = await documents(pool, ['browse-index-ready']);
+    let summary = null;
+    if (enabled(docs['browse-index-ready'])) {
+      const [rows] = await pool.execute('SELECT payload FROM vaultcast_show_summaries WHERE show_key=?', [id]);
+      summary = rows.length ? parse(rows[0].payload) : null;
+    }
     if (!summary) {
       for (const section of list(settings.sections).filter(entry => ['tv','anime'].includes(entry.type))) {
         summary = (await localShows(pool, section)).find(show => show.show_key === id);
@@ -1259,4 +1258,4 @@ module.exports = function mountLibrary(app, prefix, { root, handle, unavailable 
   }));
 };
 
-Object.assign(module.exports, { areaAllowed, areaDenied, itemArea, mediaSignature, playbackVisible, visibleCards });
+Object.assign(module.exports, { areaAllowed, areaDenied, catalogueShowTitle, episodeGroup, itemArea, mediaSignature, playbackVisible, visibleCards });
