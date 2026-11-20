@@ -12,7 +12,7 @@
 # (/etc/apt/preferences.d/lock_system_packages.pref); overriding that would change NAS defaults.
 #  * Multiplayer: official Node.js 22 prebuilt under $APP/node + vaultcast-netplay.service (loopback 3100).
 #  * Downloads: connects the App Center Transmission (auto-detects RPC port/auth; never edits it).
-# Safe to rerun: an existing installation only gets missing optional features.
+# Reruns repair the Vaultcast nginx route and complete missing optional features.
 # Usage (as root, from this folder of a Vaultcast checkout):
 #   VAULTCAST_PORT=9999 VAULTCAST_DIR=/Volume1/vaultcast ./install.sh
 set -euo pipefail
@@ -37,9 +37,10 @@ export LD_LIBRARY_PATH=$PHPROOT/lib
 [[ "$DB" =~ ^[a-zA-Z0-9_]{1,32}$ ]] || { echo 'Use letters, digits and underscores for VAULTCAST_DB (maximum 32 characters).'; exit 1; }
 [[ "$U" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || { echo 'Use a valid service account name for VAULTCAST_USER.'; exit 1; }
 # First run creates everything fresh and refuses to reuse anything that already exists.
-# A rerun on an existing installation only completes the optional features below.
+# A rerun uses the private Vaultcast instance and keeps its site settings.
 if [ -e "$APP/etc/php/php-fpm.conf" ] && [ -e $UNITS/vaultcast-nginx.service ] && getent passwd "$U" >/dev/null; then
-    echo "Existing installation found at $APP; only optional features are completed."
+    echo "Existing installation found at $APP; repairing its nginx route and checking optional features."
+    env -u LD_LIBRARY_PATH bash deploy/update-nginx.sh --terramaster "$APP"
     RERUN=1
 else
 RERUN=0
