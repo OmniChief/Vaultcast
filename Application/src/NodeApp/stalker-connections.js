@@ -3,6 +3,7 @@
 const { randomBytes } = require('crypto');
 const { enabled, now, parse } = require('./account-data');
 const { configHash, mediaUrl } = require('./stalker-provider');
+const { feedRows } = require('./stalker-feeds');
 const { q, save, notify, transaction } = require('./stalker-store');
 
 const invalid = (message) => Object.assign(new Error(message), { userError: true });
@@ -51,8 +52,8 @@ function initialise(state) {
     enabled: true,
     preinstalled: true,
   };
-  state.feeds ??= [];
-  if (!Array.isArray(state.feeds)) throw invalid('The saved IPTV connections could not be read.');
+  if (state.feeds != null && typeof state.feeds !== 'object') throw invalid('The saved IPTV connections could not be read.');
+  state.feeds = feedRows(state.feeds);
   state.seededDefaults = { ...state.seededDefaults };
   if (!enabled(state.seededDefaults[defaultFeed.id])) {
     state.seededDefaults[defaultFeed.id] = new Date().toISOString();

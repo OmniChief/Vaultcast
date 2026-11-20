@@ -3,9 +3,10 @@
 const { randomBytes } = require('crypto');
 const { q, take, cache, doc, save, transaction } = require('./stalker-store');
 const { sha, now, parse, enabled } = require('./account-data');
-const { configHash, StalkerProvider } = require('./stalker-provider');
+const { configHash, portalEndpoint } = require('./stalker-provider');
 
 module.exports = function libraryWriter(decode) {
+  const endpoints = new WeakMap();
   const text = (value) =>
     value == null || typeof value === 'object' ? '' : decode(String(value).replace(/<[^>]*>/g, '')).trim();
   const displayTitle = (value) =>
@@ -107,7 +108,8 @@ module.exports = function libraryWriter(decode) {
         if (value == null || typeof value === 'object' || !String(value).trim() || locations.length >= 8)
           continue;
         try {
-          const url = new URL(String(value).trim(), new StalkerProvider('', feed).endpoint);
+          if (!endpoints.has(feed)) endpoints.set(feed, portalEndpoint(feed.url));
+          const url = new URL(String(value).trim(), endpoints.get(feed));
           if (
             !['http:', 'https:'].includes(url.protocol) ||
             url.username ||

@@ -6,8 +6,13 @@ const { tmpdir } = require('os');
 const { now, sha, parse, documents, enabled, publicUser } = require('./account-data');
 const { configHash, phpJson, atomicJson, StalkerProvider } = require('./stalker-provider');
 
+const { savedFeeds, feedRows } = require('./stalker-feeds');
 const { q, transaction } = require('./queries');
-const doc = async (pool, name, fallback = {}) => (await documents(pool, [name]))[name] ?? fallback;
+async function doc(pool, name, fallback = {}) {
+  const value = (await documents(pool, [name]))[name] ?? fallback;
+  if (name === 'live_iptv' && value?.feeds) return { ...value, feeds: feedRows(value.feeds) };
+  return value;
+}
 const save = (pool, name, value) =>
   q(
     pool,
@@ -111,7 +116,7 @@ async function locked(pool, job) {
   if (rows[0]?.generation !== job.generation || rows[0].config !== job.config || !pending(rows[0].status))
     return false;
   const state = await doc(pool, 'live_iptv');
-  const feed = state.feeds?.find(
+  const feed = (savedFeeds(state) ?? []).find(
     (feed) => feed.id === job.feed_id && feed.type === 'stalker' && enabled(feed.enabled),
   );
   return Boolean(feed && configHash(feed) === job.config);
@@ -172,7 +177,7 @@ async function queue(pool, root, feed, kind, reset = true) {
   )[0];
   if (
     old?.status === 'complete' &&
-    ((kind === 'series' && old.last_hash !== 'episodes_complete') ||
+    ((kind === 'series' && !['episodes_complete', 'titles_complete'].includes(old.last_hash)) ||
       (kind === 'live' && !(await snapshot(root, liveKey(feed, 'imported-live')))))
   )
     reset = true;

@@ -9,6 +9,8 @@ const { documents, enabled, now, parse, publicUser } = require('./account-data')
 
 const { configHash } = require('./stalker-provider');
 const { indexed, direct, categoryExport, detail } = require('./stalker-browse');
+const { episodeBrowse } = require('./stalker-episodes');
+const { bound, take } = require('./stalker-store');
 const { guidePage } = require('./stalker-guide');
 const { channelDetail, channelPage, channelPageFromProvider, liveCategories, livePageEntry, liveSnapshot, byCountry } = require('./stalker-live-browse');
 
@@ -23,41 +25,8 @@ const playbackActions = ['stalker_play','stalker_stream','stalker_check_media'];
 
 const browseActions = ['stalker_vod_catalogue','stalker_vod_detail','stalker_browse','stalker_countries','stalker_live_categories','stalker_live_channels','stalker_live_guide','stalker_channel'];
 const kinds = ['live', 'vod', 'series'];
-const secretFields = ['mac', 'username', 'password', 'serial', 'deviceId', 'deviceId2'];
+const { savedFeeds } = require('./stalker-feeds');
 const complete = status => ['complete', 'skipped'].includes(status);
-
-function savedFeeds(state) {
-  if (!state) return [];
-  if (state.feeds == null) return [];
-  if (typeof state.feeds !== 'object') return null;
-  const feeds = [], ids = new Set();
-  for (const [key, raw] of Object.entries(state.feeds)) {
-    if (raw?.type !== 'stalker') continue;
-    const feed = { ...raw, id: raw.id || key, url: String(raw.url ?? '').trim(), mac: String(raw.mac ?? '').trim().toUpperCase() };
-    try { feed.name = String(raw.name ?? '').trim() || new URL(feed.url).hostname; } catch { continue; }
-    for (const field of secretFields.slice(1)) feed[field] ??= '';
-
-    if (typeof feed.id !== 'string' || !/^[\w.-]+$/.test(feed.id) || ids.has(feed.id)) return null;
-    ids.add(feed.id);
-    if (!/^https?:\/\//i.test(feed.url) || !/^(?:[A-F0-9]{2}:){5}[A-F0-9]{2}$/.test(feed.mac) ||
-        secretFields.slice(1).some(key => typeof feed[key] !== 'string' || Buffer.byteLength(feed[key]) > 512 || /[\r\n\0]/.test(feed[key]))) {
-      return null;
-    }
-    try {
-      const url = new URL(feed.url);
-      if (url.username || url.password || /[?#\r\n]/.test(feed.url)) return null;
-      feeds.push(feed);
-    } catch (error) {
-      return null;
-    }
-  }
-  // Legacy cache fingerprints use the field order and defaults of iptv_normalize_feed.
-  return feeds.map(feed => ({
-    type: 'stalker', ...Object.fromEntries(secretFields.map(key => [key,feed[key]])),
-    id: feed.id, name: feed.name, url: feed.url,
-    enabled: feed.enabled == null || enabled(feed.enabled), preinstalled: enabled(feed.preinstalled),
-  }));
-}
 
 async function viewerCatalogue(
   request,
@@ -128,7 +97,7 @@ async function viewerCatalogue(
           );
         }
         if (action === 'stalker_live_guide')
-          return response.json(await guidePage(root, feed, opts, expired(feed.id), decode));
+          return response.json(await guidePage(root, feed, opts, expired(feed.id), decode, signal));
         const data = expired(feed.id) ? null : await liveSnapshot(root, feed);
         if ((!data || enabled(opts.refresh)) && !expired(feed.id)) {
           try {
@@ -169,6 +138,10 @@ async function viewerCatalogue(
       categories: [],
       catalogueLoading: false,
     });
+  if (kind === 'series' && opts.parent && !enabled(opts.categories_only))
+    return episodeBrowse(pool, root, feed, take(opts.parent, 120),
+      bound(opts.page ?? Math.floor(bound(opts.offset, 0, 600000) / 60) + 1, 1, 10000),
+      enabled(opts.refresh), decode, network, response);
   return response.json(await direct(pool, root, feed, kind, opts));
 }
 
@@ -265,7 +238,7 @@ module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavai
       if (opts.resource != null) return fail(403, 'Invalid playback resource.');
       const channelUrl = lineup.channelUrl(feed.id, id);
       const saved = live_iptv?.channels?.some(
-        (channel) => (channel.enabled == null || enabled(channel.enabled)) && channel.url === channelUrl,
+        (channel) => (channel.enabled == null || enabled(channel.enabled)) && (channel.url === channelUrl || channel.url === response.locals.base.slice(0,-1) + channelUrl),
       );
       if (
         !saved &&
@@ -417,7 +390,7 @@ module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavai
         return enabled(expiry) && Number(expiry) <= now();
       };
       if (action === 'iptv_preview') {
-        const selected = lineup.selection(request.body?.url);
+        const selected = lineup.selection(request.body?.url, response.locals.base);
         if (!selected) return unavailable(response);
         if (!feeds.some(feed => feed.id === selected.feed && feed.enabled)) {
           return response.status(404).json({ ok: false, error: 'Portal source is unavailable.' });
@@ -429,7 +402,7 @@ module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavai
         if (!Array.isArray(items) || !items.length || items.length > 25) return unavailable(response);
         const status = (await documents(pool, ['live_iptv_status'])).live_iptv_status;
         if (status == null && await stat(join(root,'data/live/iptv_status.json')).catch(() => null)) return unavailable(response);
-        const prepared = await lineup.probeItems(pool, root, feeds, expired, items);
+        const prepared = await lineup.probeItems(pool, root, feeds, expired, items, response.locals.base);
         if (!prepared) return unavailable(response);
         response.locals.mutationStarted = true;
         return network(response, async signal => response.json(await lineup.check(root, run, prepared, signal)), 30000 * items.length);
@@ -478,7 +451,7 @@ module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavai
         seen.add(key);
         const source = { ...job, name: feed?.name ?? 'Removed connection', scanned: Number(job.processed) };
         if (feed && config !== keys.get(id)) source.status = 'scan_required';
-        if (job.kind === 'series' && source.status === 'complete' && job.last_hash !== 'episodes_complete') source.status = 'scan_required';
+        if (job.kind === 'series' && source.status === 'complete' && !['episodes_complete', 'titles_complete'].includes(job.last_hash)) source.status = 'scan_required';
         if (feed && expired(id)) source.status = 'expired';
         const activeJobs = Array.isArray(active) && Array.isArray(active[0]) ? active : [active];
         source.active = activeJobs.some(jobKey => Array.isArray(jobKey) && jobKey.length === 3 &&

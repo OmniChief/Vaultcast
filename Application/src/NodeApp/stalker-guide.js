@@ -6,7 +6,7 @@ const { now, enabled } = require('./account-data');
 const { cached } = require('./profile-policy');
 const { take, liveKey, cache, snapshotPath, bound } = require('./stalker-store');
 const { phpJson } = require('./stalker-provider');
-const { channelPage, liveSnapshot } = require('./stalker-live-browse');
+const { channelPage, channelPageFromProvider, liveSnapshot } = require('./stalker-live-browse');
 
 const regions = ['GB', 'GB-freeview', 'US'];
 const maxIndex = 16 * 1024 * 1024;
@@ -151,9 +151,9 @@ async function readIndex(path, decode) {
   if (!file) return { status: 'missing' };
   try {
     const { size } = await file.stat();
-    if (size > maxIndex) return { status: 'oversized' };
     const lookup = await lookupReader(path, await bytes(file, Math.min(80, size), 0));
     if (lookup) return lookup;
+    if (size > maxIndex) return { status: 'oversized' };
     const data = JSON.parse(await bytes(file, size, 0));
     if (!data.programmes || typeof data.programmes !== 'object') return { status: 'invalid' };
     const { names, regional } = guideNameMaps(data.channels ?? {}, data.programmes, decode);
@@ -172,8 +172,8 @@ async function readIndex(path, decode) {
 }
 
 async function candidatesFor(index, channel, decode) {
-  let source = channel.xmltvId;
-  if (index.has(source)) return index.entries(source);
+  if (channel.xmltvId && index.has(channel.xmltvId)) return index.entries(channel.xmltvId);
+  let source = '';
   const key = matchName(channel.name, decode);
   const exact = get(index.names, key),
     regional = exact ? null : get(index.regional, key);
@@ -263,6 +263,7 @@ function portalListings(guide, ids, time, decode) {
       );
       if (!title) continue;
       if (!listings.has(id)) listings.set(id, []);
+      if (listings.get(id).length >= 60) continue;
       listings.get(id).push({
         ...metadata(row, decode),
         title,
@@ -271,7 +272,7 @@ function portalListings(guide, ids, time, decode) {
         end,
         source: 'provider',
       });
-      if (++count >= 240) return { listings, count };
+      count++;
     }
   }
   return { listings, count };
@@ -302,9 +303,9 @@ function merge(entries, event, source, time) {
   return true;
 }
 
-async function guidePage(root, feed, opts, expired, decode) {
+async function guidePage(root, feed, opts, expired, decode, signal) {
   const category = String(opts.category ?? '');
-  if (!/^\d{1,12}$/.test(category))
+  if (!category || Buffer.byteLength(category) > 120 || /[\x00-\x1f\x7f]/.test(category))
     throw Object.assign(new Error('Select a live TV category.'), { status: 422 });
   const page = bound(opts.page, 1, 10000),
     time = now();
@@ -312,7 +313,7 @@ async function guidePage(root, feed, opts, expired, decode) {
   if (expired) return loading;
   const key = liveKey(feed, 'imported-live'),
     info = await stat(snapshotPath(root, key)).catch(() => null);
-  if (!info) return loading;
+  const fallback = info ? null : await channelPageFromProvider(root, feed, { category, page }, signal);
   const pathFor = (region) =>
     join(root, 'data/live/epg_cache', 'stalker-open-' + region.toLowerCase() + '.json');
   const revisions = {};
@@ -322,16 +323,16 @@ async function guidePage(root, feed, opts, expired, decode) {
   // Keep a separate response key because artwork is stripped before caching the viewer payload.
   const cacheKey = liveKey(
     feed,
-    'viewer-guide-v1:' + phpJson([[info.ino, info.mtimeMs, info.size], category, page, revisions]),
+    'viewer-guide-v1:' + phpJson([info ? [info.ino, info.mtimeMs, info.size] : fallback.items.map(item => [item.id,item.name,item.xmltvId]), category, page, revisions]),
   );
   const hit = enabled(opts.refresh) ? null : await cached(root, cacheKey);
   if (hit) return hit;
-  const data = await liveSnapshot(root, feed);
-  if (!data) return loading;
-  const visible = channelPage(data, feed, opts).items,
+  const data = info ? await liveSnapshot(root, feed) : null;
+  if (!data && !fallback) return loading;
+  const visible = fallback ? fallback.items : channelPage(data, feed, opts).items,
     ids = new Set(visible.map((item) => item.id));
   if (!ids.size) return { ok: true, programmes: [], available: false, channelCount: 0 };
-  const { listings, count } = portalListings(data.guide, ids, time, decode),
+  const { listings } = portalListings(data?.guide, ids, time, decode),
     portal = new Set(listings.keys()),
     added = new Set();
   const openEpgIndexStatus = {};
@@ -359,12 +360,7 @@ async function guidePage(root, feed, opts, expired, decode) {
       await index.close?.();
     }
   }
-  const providerEpgUnavailable = !enabled(data.guide);
-  if (providerEpgUnavailable && !listings.size)
-    throw Object.assign(
-      new Error('Provider EPG is unavailable and no matching cached Open EPG listings were found.'),
-      { status: 502 },
-    );
+  const providerEpgUnavailable = !enabled(data?.guide);
   for (const channel of visible) {
     const seen = new Set(),
       entries = [];
@@ -383,7 +379,7 @@ async function guidePage(root, feed, opts, expired, decode) {
       subtitle: event.description,
       kind: 'epg',
     }));
-    await cache(
+    if (programs.length) await cache(
       root,
       liveKey(feed, 'presentation:v3:' + channel.id),
       { name: channel.name, logo: '', programs },
@@ -396,7 +392,7 @@ async function guidePage(root, feed, opts, expired, decode) {
     available: listings.size > 0,
     channelCount: ids.size,
     guideChannels: listings.size,
-    limited: count >= 240,
+    limited: [...listings.values()].some(entries => entries.length >= 60),
     providerEpgUnavailable,
     providerMatchedChannels: portal.size,
     openEpgIndexStatus,

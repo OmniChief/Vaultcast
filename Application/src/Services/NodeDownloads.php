@@ -26,28 +26,6 @@ final class NodeDownloads
         ]);
     }
 
-    public static function stalker(string $url, string $target, array $feed, int $limit): bool
-    {
-        if (!NodeRuntime::downloadReady()) return false;
-        $parts = parse_url($url);
-        if (!$parts || !in_array($parts['scheme'] ?? '', ['http','https'], true) || isset($parts['user'])
-            || isset($parts['pass']) || empty($parts['host'])) return false;
-        $host = strtolower($parts['host']);
-        $jar = $feed['_downloadCookies'] ?? stalker_cookie_path($feed);
-        $cookies = NodeMedia::cookies($jar, $host, $parts['path'] ?? '/', $parts['scheme'] === 'https');
-        if ($cookies === null) return false;
-        try {
-            $ips = stalker_public_addresses($url);
-        } catch (RuntimeException $error) {
-            return false;
-        }
-        return self::transfer($url, $host, $ips, [
-            'purpose'=>'download', 'target'=>$target, 'limit'=>$limit, 'type'=>'stalker',
-            'cookies'=>$cookies, 'ref'=>preg_replace('#/(?:server/load|portal)\.php$#','/c/',stalker_endpoint($feed)),
-            'ua'=>'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 MAG250 stbapp ver: 4 rev: 1812 Mobile Safari/533.3',
-        ]);
-    }
-
     private static function transfer(string $url, string $host, array $ips, array $job): bool
     {
         if (!$ips) return false;

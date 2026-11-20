@@ -44,6 +44,12 @@ async function providerBody(response, limit) {
     }
   }
 }
+function portalEndpoint(value) {
+  const url = mediaUrl(value);
+  if (url.search || url.hash) throw new Error('Enter a portal URL without a query or fragment.');
+  const path = url.pathname.replace(/\/+$/, '').replace(/\/c$/, '');
+  return url.origin + (/\/(?:server\/load|portal)\.php$/.test(path) ? path : path + '/server/load.php');
+}
 const configHash = (feed) =>
   sha(
     phpJson(
@@ -130,25 +136,10 @@ async function snapshot(root, key) {
 }
 
 async function usableEpisode(pool, feed, config, episode) {
-  if (episode?.episodeGeneration == null) return false;
-  const [jobs] = await pool.execute(
-    "SELECT generation,status FROM vaultcast_stalker_jobs WHERE feed_id=? AND kind='series' AND config=? AND status NOT IN ('removed','expired','scan_required')",
-    [feed.id, config],
-  );
-  const job = jobs[0];
-  if (!job) return false;
-  if (episode.episodeGeneration === job.generation) return true;
-  if (episode.root == null) return false;
+  if (episode?.episodeGeneration == null || episode.root == null) return false;
   const [offers] = await pool.execute(
-    "SELECT 1 FROM vaultcast_stalker_offers WHERE feed_id=? AND kind='series' AND item_id=? AND config=? AND available=1" +
-      (job.status === 'complete' ? ' AND generation=?' : '') +
-      ' LIMIT 1',
-    [
-      feed.id,
-      String(episode.root),
-      config,
-      ...(job.status === 'complete' ? [episode.episodeGeneration] : []),
-    ],
+    "SELECT 1 FROM vaultcast_stalker_offers WHERE feed_id=? AND kind='series' AND item_id=? AND config=? AND generation=? AND available=1 LIMIT 1",
+    [feed.id, String(episode.root), config, episode.episodeGeneration],
   );
   return offers.length > 0;
 }
@@ -222,6 +213,8 @@ async function itemEntry(pool, root, feed, id, legacyMetadata) {
 
 const ProviderCookies = require('./provider-cookies');
 
+const pendingSessions = new Map();
+
 class StalkerProvider extends ProviderCookies {
   constructor(root, feed, cookiePath, signal) {
     super(cookiePath);
@@ -229,11 +222,7 @@ class StalkerProvider extends ProviderCookies {
     this.feed = feed;
     this.signal = signal;
     const url = mediaUrl(feed.url);
-    if (url.search || url.hash) throw new Error('Enter a portal URL without a query or fragment.');
-    const path = url.pathname.replace(/\/$/, '').replace(/\/c$/, '');
-    this.endpoint = /\/(?:server\/load|portal)\.php$/.test(path)
-      ? url.origin + path
-      : url.origin + path + '/server/load.php';
+    this.endpoint = portalEndpoint(feed.url);
     this.cookies = [
       {
         domain: url.hostname.toLowerCase(),
@@ -254,7 +243,7 @@ class StalkerProvider extends ProviderCookies {
     await this.loadJar();
     const selected = await cached(this.root, 'stalker_endpoint_' + sha(this.feed.url));
     const base = new URL(this.feed.url).pathname.replace(/\/$/, '').replace(/\/c$/, '');
-    if (selected?.path === base + '/portal.php')
+    if ([base + '/portal.php', base + '/server/load.php'].includes(selected?.path))
       this.endpoint = new URL(this.endpoint).origin + selected.path;
     const session = await cached(this.root, 'stalker_session_' + sha(phpJson(this.feed)));
     if (
@@ -314,7 +303,7 @@ class StalkerProvider extends ProviderCookies {
     try {
       if (this.mediaCookies) {
         if (response.headers['set-cookie']?.length) await this.mediaCookies(url, response.headers);
-      } else await this.acceptCookies(url, response.headers);
+      } else if (response.headers['set-cookie']?.length) await this.acceptCookies(url, response.headers);
     } catch (error) {
       response.destroy();
       throw error;
@@ -324,10 +313,17 @@ class StalkerProvider extends ProviderCookies {
 
   async request(type, action, params = {}, token = '', endpoint = this.endpoint) {
     const cooldownKey = 'stalker_cooldown_' + sha(phpJson([this.feed.url, this.feed.mac]));
-    const cooldown = await cached(this.root, cooldownKey);
+    // A list-page throttle belongs to its catalogue folder. Authentication
+    // and other portal-wide throttles still apply to every request.
+    const scope = action === 'get_ordered_list' && (params.category ?? params.genre) != null
+      ? 'stalker_folder_cooldown_' + sha(phpJson([configHash(this.feed), type,
+          params.category ?? params.genre, params.movie_id ?? '']))
+      : null;
+    const global = await cached(this.root, cooldownKey);
+    const cooldown = Number(global?.until) > now() || !scope ? global : await cached(this.root, scope);
     if (Number(cooldown?.until) > now())
       throw Object.assign(new Error('Provider rate limited requests (HTTP 429).'), {
-        retryAt: cooldown.until,
+        retryAt: cooldown.until, folderLimited: Boolean(scope && cooldown !== global),
       });
     const url = endpoint + '?' + new URLSearchParams({ ...params, type, action, JsHttpRequest: '1-xml' });
     const response = await this.response(url, { metadata: true, token, signal: AbortSignal.timeout(30000) });
@@ -340,12 +336,12 @@ class StalkerProvider extends ProviderCookies {
             ? now() + Math.min(31536000, Number(raw))
             : Math.floor(Date.parse(raw) / 1000) || 0,
         );
-        const hash = sha(cooldownKey);
+        const hash = sha(scope || cooldownKey);
         await atomicJson(join(this.root, 'data/cache/kv', hash.slice(0, 2), hash + '.json'), {
           e: until,
           v: { until },
         });
-        throw Object.assign(new Error('Provider rate limited requests (HTTP 429).'), { retryAt: until });
+        throw Object.assign(new Error('Provider rate limited requests (HTTP 429).'), { retryAt: until, folderLimited: Boolean(scope) });
       }
       if ([401, 403].includes(response.statusCode))
         throw Object.assign(
@@ -357,7 +353,7 @@ class StalkerProvider extends ProviderCookies {
           new Error('Portal ' + type + '/' + action + ' request failed (HTTP ' + response.statusCode + ').'),
           { status: response.statusCode },
         );
-      const data = JSON.parse((await providerBody(response, 16 * 1024 * 1024)).toString('utf8'));
+      const data = JSON.parse((await providerBody(response, 16 * 1024 * 1024)).toString('utf8').replace(/^\uFEFF/, ''));
       if (action === 'do_auth' && typeof data?.js === 'boolean') return { status: data.js };
       if (
         data &&
@@ -375,6 +371,25 @@ class StalkerProvider extends ProviderCookies {
 
   async session(renew = false) {
     if (!renew && this.token && this.expires > now()) return this.token;
+    if (!this.shareSession || !this.cookiePath) return this.handshake();
+    const key = this.root + ':' + this.cookiePath;
+    const running = pendingSessions.get(key);
+    if (running) {
+      try { await running; } catch (error) {
+        this.signal?.throwIfAborted();
+        if (error.name !== 'AbortError' && error.name !== 'TimeoutError') throw error;
+        return this.session(renew);
+      }
+      this.signal?.throwIfAborted();
+      await this.loadCookies();
+      if (this.token && this.expires > now()) return this.token;
+    }
+    const pending = this.handshake().finally(() => pendingSessions.delete(key));
+    pendingSessions.set(key, pending);
+    return pending;
+  }
+
+  async handshake() {
     const candidates = [this.endpoint];
     if (!/\.php\/?$/.test(new URL(this.feed.url).pathname)) {
       candidates.push(
@@ -450,11 +465,13 @@ class StalkerProvider extends ProviderCookies {
   }
 
   async call(type, action, params = {}) {
+    const token = await this.session();
     try {
-      return await this.request(type, action, params, await this.session());
+      return await this.request(type, action, params, token);
     } catch (error) {
       if (!error.authentication) throw error;
-      return this.request(type, action, params, await this.session(true));
+      if (this.shareSession) await this.loadCookies();
+      return this.request(type, action, params, await this.session(this.token === token));
     }
   }
 
@@ -490,14 +507,25 @@ class StalkerProvider extends ProviderCookies {
     const key = 'stalker_paging_v2_' + sha(phpJson([this.feed, type, params]));
     const mode = await cached(this.root, key);
     if (mode) return this.call(type, 'get_ordered_list', { ...params, p: page - 1 + Number(mode.offset) });
-    const zero = await this.call(type, 'get_ordered_list', { ...params, p: 0 });
+    let zero, first = [];
+    try {
+      zero = await this.call(type, 'get_ordered_list', { ...params, p: 0 });
+      validate(zero);
+      first = Object.values(zero.data);
+    } catch (error) {
+      // Some one-based portals reject page zero outright.
+      if (error.authentication || error.retryAt || this.signal?.aborted ||
+          (error.status && ![400, 404, 416, 422].includes(error.status))) throw error;
+      if (!zero && !error.status) throw error;
+    }
+    // A complete nonempty page zero is already sufficient for this request.
+    // Don't probe beyond the end just to learn an offset we won't use.
+    if (page === 1 && first.length && Number(zero.total_items) === first.length) return zero;
     const one = await this.call(type, 'get_ordered_list', { ...params, p: 1 });
-    validate(zero);
     validate(one);
-    const first = Object.values(zero.data),
-      second = Object.values(one.data);
-    const offset =
-      !first.length || phpJson(first.map((row) => row.id)) === phpJson(second.map((row) => row.id)) ? 1 : 0;
+    const second = Object.values(one.data);
+    const offset = !first.length || (first.length === second.length &&
+      first.every((row, index) => String(row.id) === String(second[index].id))) ? 1 : 0;
     if (first.length || second.length) {
       const hash = sha(key);
       await atomicJson(join(this.root, 'data/cache/kv', hash.slice(0, 2), hash + '.json'), {
@@ -509,7 +537,7 @@ class StalkerProvider extends ProviderCookies {
       ? offset
         ? one
         : zero
-      : this.call(type, 'get_ordered_list', { ...params, p: page - 1 + offset });
+      : page === 2 && !offset ? one : this.call(type, 'get_ordered_list', { ...params, p: page - 1 + offset });
   }
 
   async accountExpiry() {
@@ -639,6 +667,7 @@ class StalkerProvider extends ProviderCookies {
 
 module.exports = {
   StalkerProvider,
+  portalEndpoint,
   itemEntry,
   directItem,
   usableEpisode,

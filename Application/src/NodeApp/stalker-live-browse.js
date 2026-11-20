@@ -1,7 +1,8 @@
 'use strict';
 
+const { stat } = require('fs').promises;
 const { enabled, sha, parse } = require('./account-data');
-const { take, snapshot, liveKey, q, doc, bound, cache, provider, page: providerRows } = require('./stalker-store');
+const { take, snapshot, snapshotPath, liveKey, q, doc, bound, cache, provider, page: providerRows } = require('./stalker-store');
 const { country, countries, genre } = require('./stalker-taxonomy');
 const { cached } = require('./profile-policy');
 const { configHash, phpJson } = require('./stalker-provider');
@@ -26,26 +27,62 @@ const groups = [
 ];
 const flag = (value) => ['1', 'true', 'yes', 'on'].includes(String(value).trim().toLowerCase());
 const error = (message) => Object.assign(new Error(message), { status: 422 });
+// Keep a small, byte-bounded cache for repeated channel, guide and player
+// reads. Atomic snapshot replacements change the file identity immediately.
 const loadingSnapshots = new Map();
-function liveSnapshot(root, feed) {
-  const key = liveKey(feed, 'imported-live'),
-    path = root + '/' + key;
-  if (!loadingSnapshots.has(path)) {
-    loadingSnapshots.set(
-      path,
-      snapshot(root, key).finally(() => loadingSnapshots.delete(path)),
-    );
+const snapshots = new Map();
+const indexes = new WeakMap();
+let retainedBytes = 0;
+async function liveSnapshot(root, feed) {
+  const key = liveKey(feed, 'imported-live'), path = snapshotPath(root, key);
+  const info = await stat(path).catch(() => null);
+  const stamp = info && [info.ino, info.size, info.mtimeMs].join(':');
+  const old = snapshots.get(path);
+  if (old) {
+    snapshots.delete(path);
+    if (old.stamp === stamp) {
+      snapshots.set(path, old);
+      return old.data;
+    }
+    retainedBytes -= old.size;
   }
-  return loadingSnapshots.get(path);
+  if (!info) return null;
+  const loading = loadingSnapshots.get(path);
+  if (loading?.stamp === stamp) return loading.promise;
+  const entry = { stamp };
+  entry.promise = snapshot(root, key).then(data => {
+    if (data && loadingSnapshots.get(path) === entry && info.size <= 16 * 1024 * 1024) {
+      while (snapshots.size && (snapshots.size >= 4 || retainedBytes + info.size > 16 * 1024 * 1024)) {
+        const [first, evicted] = snapshots.entries().next().value;
+        retainedBytes -= evicted.size;
+        snapshots.delete(first);
+      }
+      snapshots.set(path, { stamp, data, size: info.size });
+      retainedBytes += info.size;
+    }
+    return data;
+  }).finally(() => {
+    if (loadingSnapshots.get(path) === entry) loadingSnapshots.delete(path);
+  });
+  loadingSnapshots.set(path, entry);
+  return entry.promise;
 }
 
-function channels(data) {
-  // JSON.parse enumerates numeric keys by ID. Restore the imported provider channel order.
-  return Object.values(data.channels).sort(
-    (a, b) =>
-      (parseInt(a.number, 10) || 0) - (parseInt(b.number, 10) || 0) ||
-      Buffer.compare(Buffer.from(String(a.id)), Buffer.from(String(b.id))),
-  );
+function channelIndex(data) {
+  let index = indexes.get(data);
+  if (index) return index;
+  const all = Object.values(data.channels).filter(playable).sort((a, b) =>
+    (parseInt(a.number, 10) || 0) - (parseInt(b.number, 10) || 0) ||
+    (String(a.id) < String(b.id) ? -1 : String(a.id) > String(b.id) ? 1 : 0));
+  const folders = new Map();
+  for (const row of all) {
+    const id = String(row.tv_genre_id ?? '');
+    if (!folders.has(id)) folders.set(id, []);
+    folders.get(id).push(row);
+  }
+  index = { all, folders };
+  indexes.set(data, index);
+  return index;
 }
 function validChannel(row) {
   return (
@@ -101,9 +138,8 @@ function channelPage(data, feed, opts) {
   if (!data) return { ok: true, items: [], total: 0, hasMore: false, catalogueLoading: true };
   const selected = data.categories.find((row) => row.id === category);
   if (!selected) throw error('Unknown provider category.');
-  const rows = channels(data).filter(
-    (row) => playable(row) && (category === '*' || String(row.tv_genre_id ?? '') === category),
-  );
+  const index = channelIndex(data);
+  const rows = category === '*' ? index.all : index.folders.get(category) ?? [];
   const page = bound(opts.page, 1, 10000);
   return present(rows.slice((page - 1) * 60, page * 60), feed, selected, category, page,
     rows.length, page * 60 < rows.length);
@@ -148,7 +184,7 @@ async function liveProviderPage(root, feed, opts, signal) {
   if (!selected) throw error('Unknown provider category.');
   const key = liveKey(feed, 'live-page:v1:' + category + ':' + number),
     sizeKey = liveKey(feed, 'live-page-size:v1:' + category);
-  let saved = opts.refresh ? null : await cached(root, key);
+  let saved = enabled(opts.refresh) ? null : await cached(root, key);
   if (!saved) {
     const client = await provider(root, feed, signal);
     const response = await client.ordered(
@@ -206,8 +242,7 @@ async function byCountry(root, feeds, expired, opts) {
     }
     let scanned = 0;
     const categories = new Map(data.categories.map((row) => [row.id, row.name]));
-    for (const row of channels(data)) {
-      if (!validChannel(row)) continue;
+    for (const row of channelIndex(data).all) {
       scanned++;
       if (scanned % 512 === 0) await new Promise((resolve) => setImmediate(resolve));
       const id = String(row.id),
