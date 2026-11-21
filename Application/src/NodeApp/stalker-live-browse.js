@@ -76,9 +76,10 @@ function channelIndex(data) {
     (String(a.id) < String(b.id) ? -1 : String(a.id) > String(b.id) ? 1 : 0));
   const folders = new Map();
   for (const row of all) {
-    const id = String(row.tv_genre_id ?? '');
-    if (!folders.has(id)) folders.set(id, []);
-    folders.get(id).push(row);
+    for (const id of Array.isArray(row.importFolders) ? row.importFolders : [String(row.tv_genre_id ?? '')]) {
+      if (!folders.has(id)) folders.set(id, []);
+      folders.get(id).push(row);
+    }
   }
   index = { all, folders };
   indexes.set(data, index);
@@ -136,7 +137,8 @@ function channelPage(data, feed, opts) {
   const category = take(opts.category, 120);
   if (!category) throw error('Choose a provider category.');
   if (!data) return { ok: true, items: [], total: 0, hasMore: false, catalogueLoading: true };
-  const selected = data.categories.find((row) => row.id === category);
+  const selected = data.categories.find((row) => row.id === category) ??
+    (category === '*' ? { name: 'All channels', country: 'ZZ' } : null);
   if (!selected) throw error('Unknown provider category.');
   const index = channelIndex(data);
   const rows = category === '*' ? index.all : index.folders.get(category) ?? [];
@@ -148,12 +150,7 @@ function channelPage(data, feed, opts) {
 // A full get_all_channels response is not supported by every Stalker portal. The
 // importer may therefore have no snapshot even though individual pages work.
 // Use short-lived, feed-scoped provider pages without exposing stream commands.
-async function liveCategories(root, feed, signal, refresh = false) {
-  const key = liveKey(feed, 'live-categories:v1');
-  const saved = refresh ? null : await cached(root, key);
-  if (Array.isArray(saved)) return saved;
-  const client = await provider(root, feed, signal);
-  const response = await client.call('itv', 'get_genres');
+function parseLiveCategories(response, importing = false) {
   if (!response || typeof response !== 'object' || enabled(response.error) ||
       response.success === false || response.status === false)
     throw new Error('Invalid Live TV categories.');
@@ -168,21 +165,37 @@ async function liveCategories(root, feed, signal, refresh = false) {
     seen.add(id);
     const name = take(String(row.title ?? row.name ?? id).replace(/<[^>]*>/g, '').trim(), 160);
     categories.push({ id, name, country: country(name), genre: genre(name) });
-    if (categories.length >= 1000) break;
+    if (importing && categories.length > 1000) throw Object.assign(new Error('Live TV exceeds the folder limit.'), { catalogue: true });
+    if (!importing && categories.length >= 1000) break;
   }
   if (!categories.length) categories.push({ id: '*', name: 'All channels', country: 'ZZ', genre: 'General' });
+  return categories;
+}
+
+async function liveCategories(root, feed, signal, refresh = false) {
+  const key = liveKey(feed, 'live-categories:v1');
+  const saved = refresh ? null : await cached(root, key);
+  if (Array.isArray(saved)) return saved;
+  const client = await provider(root, feed, signal);
+  const response = await client.call('itv', 'get_genres');
+  const categories = parseLiveCategories(response);
   await cache(root, key, categories, 600);
   return categories;
 }
+
+const livePageKey = (feed, category, number) => liveKey(feed, 'live-page:v1:' + category + ':' + number);
 
 async function liveProviderPage(root, feed, opts, signal) {
   const category = take(opts.category, 120),
     number = bound(opts.page, 1, 10000);
   if (!category) throw error('Choose a provider category.');
-  const categories = await liveCategories(root, feed, signal, enabled(opts.refresh));
-  const selected = categories.find((row) => row.id === category);
+  let categories = await liveCategories(root, feed, signal);
+  if (!categories.some(row => row.id === category) && enabled(opts.refresh))
+    categories = await liveCategories(root, feed, signal, true);
+  const selected = categories.find((row) => row.id === category) ??
+    (category === '*' ? { name: 'All channels', country: 'ZZ' } : null);
   if (!selected) throw error('Unknown provider category.');
-  const key = liveKey(feed, 'live-page:v1:' + category + ':' + number),
+  const key = livePageKey(feed, category, number),
     sizeKey = liveKey(feed, 'live-page-size:v1:' + category);
   let saved = enabled(opts.refresh) ? null : await cached(root, key);
   if (!saved) {
@@ -203,13 +216,15 @@ async function liveProviderPage(root, feed, opts, signal) {
 
 async function channelPageFromProvider(root, feed, opts, signal) {
   const data = await liveProviderPage(root, feed, opts, signal);
-  return present(data.rows, feed, data.selected, data.category, data.page,
-    data.total, data.hasMore);
+  return { ...present(data.rows, feed, data.selected, data.category, data.page,
+    data.total, data.hasMore), providerPage: true };
 }
 
-async function livePageEntry(root, feed, opts, id, signal) {
-  const data = await liveProviderPage(root, feed, opts, signal);
-  const row = data.rows.find((item) => playable(item) && String(item.id) === id);
+async function livePageEntry(root, feed, opts, id, signal, cachedOnly = false) {
+  const data = cachedOnly
+    ? await cached(root, livePageKey(feed, opts.category, Number(opts.page)))
+    : await liveProviderPage(root, feed, opts, signal);
+  const row = data?.rows?.find((item) => playable(item) && String(item.id) === id);
   const linkFlag = (value) => /^(?:1|on|yes|true)$/i.test(String(value ?? '').trim())
     ? true : /^(?:0|off|no|false|)$/i.test(String(value ?? '').trim()) ? false : null;
   return row?.cmd ? {
@@ -345,4 +360,4 @@ async function channelDetail(pool, root, feed, opts, expired) {
     guideError,
   };
 }
-module.exports = { channelPage, channelPageFromProvider, liveCategories, livePageEntry, channelDetail, byCountry, liveSnapshot };
+module.exports = { parseLiveCategories, channelPage, channelPageFromProvider, liveCategories, livePageEntry, channelDetail, byCountry, liveSnapshot };

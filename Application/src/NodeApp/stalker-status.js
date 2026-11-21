@@ -99,14 +99,16 @@ async function viewerCatalogue(
         if (action === 'stalker_live_guide')
           return response.json(await guidePage(root, feed, opts, expired(feed.id), decode, signal));
         const data = expired(feed.id) ? null : await liveSnapshot(root, feed);
-        if ((!data || enabled(opts.refresh)) && !expired(feed.id)) {
+        const missingFolder = action === 'stalker_live_channels' && opts.category !== '*' &&
+          !data?.categories.some(row => row.id === opts.category);
+        if ((!data || missingFolder || enabled(opts.refresh)) && !expired(feed.id)) {
           try {
             if (action === 'stalker_live_categories')
               return response.json({ ok: true, categories: await liveCategories(root, feed, signal, enabled(opts.refresh)), catalogueLoading: false });
             return response.json(await channelPageFromProvider(root, feed, opts, signal));
           } catch (error) {
             // An explicit refresh must not hide an otherwise usable saved list.
-            if (!data) throw error;
+            if (!data || missingFolder) throw error;
           }
         }
         return response.json(
@@ -254,7 +256,9 @@ module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavai
     if (!item?.cmd && !hinted)
       return fail(422, 'This catalogue entry is unavailable. Refresh the catalogue and select it again.');
     return network(response, async (signal) => {
-      const selected = item?.cmd ? item : await livePageEntry(root, feed, opts, id, signal);
+      // A recently viewed portal page can hold a newer command for the same ID.
+      const viewed = hinted ? await livePageEntry(root, feed, opts, id, signal, Boolean(item?.cmd)) : null;
+      const selected = viewed ?? item;
       if (!selected?.cmd)
         return fail(422, 'This channel is no longer on its provider page. Refresh Live TV and select it again.');
       if (action === 'stalker_check_media')

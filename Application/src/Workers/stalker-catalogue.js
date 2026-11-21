@@ -13,9 +13,6 @@ const {
   save,
   pending,
   take,
-  snapshot,
-  saveSnapshot,
-  liveKey,
   transaction,
   locked,
   provider,
@@ -26,7 +23,6 @@ const {
   groups,
   page,
 } = store;
-const { country, genre } = require('../NodeApp/stalker-taxonomy');
 const { savedFeeds } = require('../NodeApp/stalker-feeds');
 const libraryWriter = require('../NodeApp/stalker-library-write');
 
@@ -342,82 +338,7 @@ module.exports = function catalogueWorker(db, root) {
     }
   }
 
-  async function live(feed, job, client) {
-    try {
-      const response = await client.call('itv', 'get_genres'),
-        rows = Object.values(response.data ?? response),
-        categories = [];
-      for (const row of rows) {
-        if (
-          !row ||
-          row.id == null ||
-          typeof row.id === 'object' ||
-          !String(row.id) ||
-          Buffer.byteLength(String(row.id)) > 120
-        )
-          continue;
-        const name = take(row.title ?? row.name ?? row.id, 160);
-        categories.push({ id: String(row.id), name, country: country(name), genre: genre(name) });
-        if (categories.length >= 1000) break;
-      }
-      const bulk = await client.call('itv', 'get_all_channels'),
-        raw = bulk.data ?? bulk;
-      if (
-        !raw ||
-        typeof raw !== 'object' ||
-        Object.keys(raw).length > 50000 ||
-        Number(bulk.total_items ?? 0) > Object.keys(raw).length
-      )
-        throw new Error('Provider returned an incomplete or oversized Live TV list.');
-      const members = new Map();
-      for (const row of Object.values(raw))
-        if (row && row.id != null && typeof row.id !== 'object' && enabled(row.cmd))
-          members.set(String(row.id), row);
-      if (!members.size) throw new Error('Provider returned no playable Live TV channels.');
-      const channels = Object.fromEntries(members);
-      let guide = {};
-      try {
-        const result = await client.call('itv', 'get_epg_info', { period: 48 });
-        if (result && typeof (result.data ?? result) === 'object') guide = result.data ?? result;
-      } catch (error) {
-        if (client.signal?.aborted) throw error;
-      }
-      await commit(job, async (connection) => {
-        await saveSnapshot(root, liveKey(feed, 'imported-live'), {
-          categories,
-          channels,
-          guide,
-          imported: now(),
-        });
-        await q(
-          connection,
-          "UPDATE vaultcast_stalker_jobs SET status='complete',processed=?,error='',next_run=0 WHERE feed_id=? AND kind='live'",
-          [members.size, feed.id],
-        );
-      });
-    } catch (error) {
-      if (client.signal?.aborted) return;
-      await commit(job, async (connection) => {
-        if (error.retryAt)
-          await q(
-            connection,
-            "UPDATE vaultcast_stalker_jobs SET status='waiting',next_run=GREATEST(next_run,?),error=? WHERE feed_id=? AND config=? AND status IN ('queued','running','partial','waiting')",
-            [
-              error.retryAt,
-              'Provider rate limited requests. Import will resume after the cooldown.',
-              feed.id,
-              job.config,
-            ],
-          );
-        else
-          await q(
-            connection,
-            "UPDATE vaultcast_stalker_jobs SET status='failed',error=?,next_run=0 WHERE feed_id=? AND kind='live'",
-            ['Live TV could not be imported. Check the provider and retry.', feed.id],
-          );
-      });
-    }
-  }
+  const live = require('./stalker-live-import')(root, database, commit);
 
   async function maintenance(_feeds, jobs) {
     await database(async (pool) => {
@@ -471,14 +392,15 @@ module.exports = function catalogueWorker(db, root) {
             'vaultcast_stalker_folder_items',
             'vaultcast_stalker_folders',
           ]) {
-            const removed = !feed;
+            const removed = !feed || (job.kind === 'live' && current.status === 'complete' &&
+              table === 'vaultcast_stalker_staging');
             await q(
               connection,
               'DELETE FROM ' +
                 table +
                 ' WHERE feed_id=? AND kind=?' +
                 (removed ? '' : ' AND generation<>?') +
-                ' LIMIT 100',
+                ' LIMIT 500',
               removed ? scope(job) : key(job),
             );
           }
@@ -543,7 +465,8 @@ module.exports = function catalogueWorker(db, root) {
           const reset = await doc(connection, 'stalker-catalogue-reset');
           if (reset.state !== 'purging' || Number(reset.table ?? 0) !== index) return;
           if (index < tables.length) {
-            if (!(await q(connection, 'DELETE FROM ' + tables[index] + ' LIMIT 500')).affectedRows)
+            const mediaScope = index < 3 ? " WHERE kind IN ('vod','series')" : '';
+            if (!(await q(connection, 'DELETE FROM ' + tables[index] + mediaScope + ' LIMIT 500')).affectedRows)
               await save(connection, 'stalker-catalogue-reset', { ...reset, table: index + 1 });
           } else {
             await q(connection, "DELETE FROM vaultcast_stalker_jobs WHERE kind IN ('vod','series')");
@@ -614,13 +537,16 @@ module.exports = function catalogueWorker(db, root) {
         const client = await provider(root, feed, signal);
         await advance(feed, job, signal, client);
         const until = Date.now() + 3500;
-        for (let i = 0; i < 5 && job.kind !== 'live' && Date.now() < until; i++) {
+        for (let i = 0; i < 5 && Date.now() < until; i++) {
           signal?.throwIfAborted();
           const [next] = await database(pool => q(pool,
             'SELECT * FROM vaultcast_stalker_jobs WHERE feed_id=? AND kind=? AND generation=?',
             key(job)));
           if (!next || !pending(next.status) || Number(next.next_run) > now()) break;
-          await step(feed, next, client);
+          if (next.kind === 'live') {
+            if (next.last_hash !== 'live_pages') break;
+            await live(feed, next, client);
+          } else await step(feed, next, client);
         }
       } catch (error) {
         if (signal?.aborted) return;

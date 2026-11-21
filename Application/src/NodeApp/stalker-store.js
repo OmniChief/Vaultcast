@@ -97,7 +97,7 @@ const snapshot = (root, key) =>
   readFile(snapshotPath(root, key), 'utf8')
     .then(JSON.parse)
     .catch(() => null);
-const saveSnapshot = (root, key, value) => atomicJson(snapshotPath(root, key), value);
+const saveSnapshot = (root, key, value, publish) => atomicJson(snapshotPath(root, key), value, publish);
 const liveKey = (feed, suffix) => 'stalker_live_snapshot_' + sha(phpJson([configHash(feed), suffix]));
 const episodeKey = (feed, suffix) => 'episodes:' + configHash(feed) + ':' + suffix;
 const cache = (root, key, value, ttl) => {

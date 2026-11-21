@@ -258,7 +258,7 @@ window.VaultcastStalkerCountries=function(host,options){
   var selected=null,loading=false,guideBusy=false,guideRefreshPending=false,guideForceRefresh=false,refreshChannels=false,search='',chosen='',offset=0,body,status,list,hero,summary,more,guideButton;
   var overrides={},favourites=[],onlyFavourites=false,clockTimer=null,cache=new Map();
   var preference='vaultcast-stalker-live-favourites-'+options.owner;
-  var guideConnectionAt=Date.now(),guideDb=null;
+  var guideConnectionAt=Date.now(),guideDb=null,lastGuideCleanup=0;
   // Persist final page results, scoped to this signed-in viewer and provider.
   // Expiry is checked on connection, not by a timer during viewing.
   function browserGuideDb(){
@@ -273,10 +273,10 @@ window.VaultcastStalkerCountries=function(host,options){
       request.onerror=request.onblocked=function(){finish(null);};
     });return guideDb;
   }
-  function guideCacheKey(entry){return JSON.stringify(['guide-v3',String(options.owner),country,entry.feed,entry.category,entry.page,entry.channelIds||[]]);}
+  function guideCacheKey(entry){return JSON.stringify(['guide-v3',String(options.owner),country,entry.feed,entry.category,entry.page,!!entry.providerPage,entry.channelIds||[]]);}
   function cachedGuide(key){return browserGuideDb().then(function(db){return new Promise(function(resolve){
     if(!db){resolve(null);return;}try{var request=db.transaction('pages','readonly').objectStore('pages').get(key);
-      request.onsuccess=function(){var row=request.result;resolve(row&&Number.isFinite(row.at)&&row.at<=Date.now()&&guideConnectionAt-row.at<86400000&&row.data?row.data:null);};
+      request.onsuccess=function(){var row=request.result;resolve(row&&Number.isFinite(row.at)&&row.at<=Date.now()&&Date.now()-row.at<86400000&&row.data?row:null);};
       request.onerror=function(){resolve(null);};
     }catch(ignore){resolve(null);}
   });});}
@@ -289,7 +289,9 @@ window.VaultcastStalkerCountries=function(host,options){
       tx.onerror=function(){};
       store.put({key:key,at:Date.now(),data:{ok:true,programmes:data.programmes||{},channelLogos:data.channelLogos||{}}});
       // Remove expired records without retaining other users' guide data forever.
-      var cursor=store.openCursor();cursor.onsuccess=function(){var item=cursor.result;if(!item)return;if(guideConnectionAt-Number(item.value.at)>=86400000)item.delete();item.continue();};
+      if(Date.now()-lastGuideCleanup<3600000)return;
+      lastGuideCleanup=Date.now();
+      var cursor=store.openCursor();cursor.onsuccess=function(){var item=cursor.result;if(!item)return;if(lastGuideCleanup-Number(item.value.at)>=86400000)item.delete();item.continue();};
     }catch(ignore){}});
   }
   try{overrides=JSON.parse(localStorage.getItem('vaultcast-stalker-country-overrides-'+options.owner)||'{}');}catch(ignore){}
@@ -470,11 +472,11 @@ window.VaultcastStalkerCountries=function(host,options){
     var pending=pageInventory.filter(function(p){return !guideFetched[p.feed+'|'+p.category+'|'+p.page];});
     if(!pending.length){guideForceRefresh=false;paint();return;}
     var entry=pending[0];
-    var token=serial,id=entry.feed+'|'+entry.category+'|'+entry.page,cacheKey=guideCacheKey(entry),fromBrowser=false,complete=false;guideBusy=true;paint();
+    var token=serial,id=entry.feed+'|'+entry.category+'|'+entry.page,cacheKey=guideCacheKey(entry),fromBrowser=false,fetchedAt=0,complete=false;guideBusy=true;paint();
     cachedGuide(cacheKey).then(function(cached){
       if(!current(token))return null;
-      if(cached&&!guideForceRefresh){fromBrowser=true;return cached;}
-      return options.api('stalker_live_guide','feed='+encodeURIComponent(entry.feed)+'&category='+encodeURIComponent(entry.category)+'&page='+entry.page+(guideForceRefresh?'&refresh=1':''));
+      if(cached&&!guideForceRefresh){fromBrowser=true;fetchedAt=cached.at;return cached.data;}
+      return options.api('stalker_live_guide','feed='+encodeURIComponent(entry.feed)+'&category='+encodeURIComponent(entry.category)+'&page='+entry.page+(entry.providerPage?'&provider_page=1':'')+(guideForceRefresh?'&refresh=1':''));
     }).then(function(data){
       if(!current(token))return;if(!data||!data.ok)throw Error(data&&data.error||'Programme guide unavailable');
       // EPG is metadata for this provider page, never a source of channel rows.
@@ -489,7 +491,7 @@ window.VaultcastStalkerCountries=function(host,options){
       if(!fromBrowser&&complete)cacheGuide(cacheKey,data);
     }).catch(function(){if(current(token))status.textContent='Saved programme listings could not be loaded.';}).then(function(){
       if(!current(token))return;
-      guideFetched[id]=true;guideFetchedAt[id]=Date.now()-(complete?0:86400000-60000);
+      guideFetched[id]=true;guideFetchedAt[id]=complete?(fetchedAt||Date.now()):Date.now()-86400000+60000;
       guideBusy=false;snapshot();requestGuide();
     });
   }
@@ -505,7 +507,7 @@ window.VaultcastStalkerCountries=function(host,options){
         if(!current(token))return;if(!result||!result.ok)throw Error(result&&result.error||'Channel page unavailable');
         var added=0;
         (result.items||[]).forEach(function(item){var k=item.feed+'|'+item.id;if(!existing.has(k)){existing.add(k);channels.push(item);added++;}});
-        if((result.items||[]).length)pageInventory.push({feed:source.feed,category:source.id,page:progress.page,channelIds:result.items.map(function(item){return String(item.id);})});
+        if((result.items||[]).length)pageInventory.push({feed:source.feed,category:source.id,page:progress.page,providerPage:!!result.providerPage,channelIds:result.items.map(function(item){return String(item.id);})});
         var signature=(result.items||[]).map(function(item){return String(item.id);}).join('|');
         sourcePages[id]={page:progress.page+1,more:!!result.hasMore&&signature!==progress.signature,signature:signature};paint();
       }).catch(function(error){if(current(token))failures.push(source.connection+': '+error.message);}).then(function(){if(!current(token))return;status.textContent=failures.slice(-3).join(' · ');step();});

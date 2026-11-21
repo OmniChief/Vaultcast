@@ -117,12 +117,13 @@ async function publicAddresses(url) {
   return ips.map((row) => row.address);
 }
 
-async function atomicJson(path, value) {
+async function atomicJson(path, value, publish) {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   const temporary = path + '.' + randomBytes(8).toString('hex') + '.tmp';
   try {
     await writeFile(temporary, JSON.stringify(value), { flag: 'wx', mode: 0o600 });
-    await rename(temporary, path);
+    if (publish) await publish(() => rename(temporary, path));
+    else await rename(temporary, path);
   } finally {
     await unlink(temporary).catch(() => {});
   }
@@ -360,7 +361,9 @@ class StalkerProvider extends ProviderCookies {
         Object.hasOwn(data, 'js') &&
         (data.js == null || data.js === false || enabled(data.js.error))
       ) {
-        throw Object.assign(new Error('Portal rejected the session or device.'), { authentication: true });
+        throw Object.assign(new Error('Portal rejected the session or device.'), {
+          authentication: true, emptyReply: data.js == null || data.js === false,
+        });
       }
       if (!data?.js || typeof data.js !== 'object') throw new Error('Portal returned an invalid response.');
       return data.js;
@@ -514,9 +517,9 @@ class StalkerProvider extends ProviderCookies {
       first = Object.values(zero.data);
     } catch (error) {
       // Some one-based portals reject page zero outright.
-      if (error.authentication || error.retryAt || this.signal?.aborted ||
+      if ((error.authentication && !error.emptyReply) || error.retryAt || this.signal?.aborted ||
           (error.status && ![400, 404, 416, 422].includes(error.status))) throw error;
-      if (!zero && !error.status) throw error;
+      if (!zero && !error.status && !error.emptyReply) throw error;
     }
     // A complete nonempty page zero is already sufficient for this request.
     // Don't probe beyond the end just to learn an offset we won't use.

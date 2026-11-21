@@ -313,7 +313,8 @@ async function guidePage(root, feed, opts, expired, decode, signal) {
   if (expired) return loading;
   const key = liveKey(feed, 'imported-live'),
     info = await stat(snapshotPath(root, key)).catch(() => null);
-  const fallback = info ? null : await channelPageFromProvider(root, feed, { category, page }, signal);
+  const fallback = !info || enabled(opts.provider_page)
+    ? await channelPageFromProvider(root, feed, { category, page }, signal) : null;
   const pathFor = (region) =>
     join(root, 'data/live/epg_cache', 'stalker-open-' + region.toLowerCase() + '.json');
   const revisions = {};
@@ -323,7 +324,7 @@ async function guidePage(root, feed, opts, expired, decode, signal) {
   // Keep a separate response key because artwork is stripped before caching the viewer payload.
   const cacheKey = liveKey(
     feed,
-    'viewer-guide-v1:' + phpJson([info ? [info.ino, info.mtimeMs, info.size] : fallback.items.map(item => [item.id,item.name,item.xmltvId]), category, page, revisions]),
+    'viewer-guide-v1:' + phpJson([info && [info.ino, info.mtimeMs, info.size], fallback?.items.map(item => [item.id,item.name,item.xmltvId]) ?? null, category, page, revisions]),
   );
   const hit = enabled(opts.refresh) ? null : await cached(root, cacheKey);
   if (hit) return hit;
