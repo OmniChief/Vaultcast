@@ -427,7 +427,7 @@ window.VaultcastStalkerCountries=function(host,options){
     });
     picker.onchange=function(){country=picker.value;openGenre(genreOrder.find(function(value){return sourcesFor(value).length;})||'General');};
     navigation.append(h('label',{},[h('span',{className:'eyebrow',text:'Your line-up'}),picker]));
-    var nav=h('nav',{'aria-label':'Live TV genres'});genreOrder.forEach(function(value){if(!sourcesFor(value).length&&value!==genre)return;nav.appendChild(h('button',{type:'button',className:'stalker-tv-nav'+(genre===value?' selected':''),'aria-pressed':String(genre===value),text:genreName(value),onClick:function(){openGenre(value);}}));});navigation.appendChild(nav);
+    var nav=h('nav',{'aria-label':'Live TV genres'});genreOrder.forEach(function(value){if(!sourcesFor(value).length&&value!==genre)return;nav.appendChild(h('button',{type:'button',className:'btn '+(genre===value?'primary':'ghost'),'aria-pressed':String(genre===value),text:genreName(value),onClick:function(){openGenre(value);}}));});navigation.appendChild(nav);
     var reload=h('button',{type:'button',className:'btn ghost',text:'Refresh channels',onClick:function(){cache.clear();discover(true);}});navigation.appendChild(reload);
     body=h('div',{className:'stalker-tv-content'});status=h('p',{className:'muted',role:'status'});
     var find=h('input',{type:'search',value:search,placeholder:'Find channels, programmes or cast…','aria-label':'Search loaded channels, programmes and cast'});find.oninput=function(){search=find.value;paint();};

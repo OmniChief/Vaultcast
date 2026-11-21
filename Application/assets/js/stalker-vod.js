@@ -1437,10 +1437,13 @@ window.VaultcastStalkerVod=function(host,options){
       h('button',{className:'btn ghost',type:'button',text:'Refresh',onClick:function(){pageCache.clear();filterCache={};load(undefined,true);}})
     ];
     if(options.manage)actions.push(h('button',{className:'btn ghost',type:'button',text:'Catalogue settings',onClick:options.manage}));
-    host.replaceChildren(h('h2',{text:kind==='series'?'Series catalogue':'Movie catalogue'}),
-      h('form',{className:'stalker-searchbar',onSubmit:function(e){e.preventDefault();offset=0;load();}},
+    var catalogue=h('div',{className:'stack'},[
+      h('div',{className:'row-head'},[h('h2',{text:kind==='series'?'Series catalogue':'Movie catalogue'})]),
+      h('form',{className:'row-actions stalker-searchbar',onSubmit:function(e){e.preventDefault();clearTimeout(timer);offset=0;load();}},
         [search,h('button',{className:'btn primary',type:'submit',text:'Search'})]),
-      h('div',{className:'row-actions'},actions),filterPanel,status,grid,h('div',{className:'row-actions'},[previous,next]));
+      h('div',{className:'row-actions'},actions),filterPanel,status,grid,h('div',{className:'row-actions'},[previous,next])
+    ]);
+    host.replaceChildren(catalogue);
     renderFilters();
   }
   function backButton(){
