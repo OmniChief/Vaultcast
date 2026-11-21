@@ -3309,13 +3309,13 @@ html[data-motion="reduced"] .vca-overall span,html[data-motion="reduced"] .vca-b
 @media(max-width:480px){.stalker-studio-guide-actions{grid-column:1;max-width:none}.stalker-studio-quality-options{max-width:none}}
 
 /* Stalker television: shared brand tokens, persistent genre navigation and guide. */
-.stalker-country-browser.stalker-tv{display:grid;grid-template-columns:180px minmax(0,1fr);gap:24px;align-items:start}
+.stalker-country-browser.stalker-tv{display:grid;grid-template-columns:clamp(13.5rem,16vw,17rem) minmax(0,1fr);gap:24px;align-items:start}
 .stalker-country-browser.stalker-tv[hidden]{display:none}
 .stalker-tv-navigation{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:16px;display:flex;flex-direction:column;gap:20px;min-width:0}
 .stalker-tv-navigation label{display:grid;gap:8px}.stalker-tv-navigation select{min-width:0;width:100%}
 .stalker-tv-navigation nav{display:flex;flex-direction:column;gap:5px}
 .stalker-tv-navigation .btn{justify-content:flex-start;text-align:start}
-.stalker-tv-content{min-width:0}.stalker-tv-heading{display:flex;gap:16px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+.stalker-tv-content{min-width:0}.stalker-tv-content>[role="status"]:empty{display:none}.stalker-tv-heading{display:flex;gap:16px;align-items:center;justify-content:space-between;flex-wrap:wrap}
 .stalker-tv-heading input{width:min(100%,360px);min-width:0}.stalker-tv-heading h2{margin:4px 0 0}
 .stalker-tv-toolbar{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0}.stalker-tv-toolbar .row-actions{flex-wrap:wrap}
 .stalker-tv-feature{display:grid;grid-template-columns:minmax(0,1fr) auto;background:linear-gradient(125deg,var(--card),var(--bg2));border:1px solid var(--border);border-radius:var(--radius-xl);overflow:hidden;margin:18px 0}

@@ -406,9 +406,18 @@ window.VaultcastStalkerCountries=function(host,options){
       var watch=h('button',{type:'button',className:'btn',text:'Watch',onClick:function(){play(item,watch);}});
       list.appendChild(h('article',{className:'stalker-tv-channel','data-channel':key(item)},[h('div',{className:'stalker-tv-channel-name'},[logo(item),h('strong',{text:item.name})]),select,h('div',{className:'stalker-tv-next'},[h('span',{className:'stalker-tv-programme-label',text:'Next'}),h('strong',{text:epg.next?epg.next.title:'Listings unavailable'}),epg.next?h('small',{text:time(epg.next.start)+'–'+time(epg.next.end),className:'muted'}):null]),h('div',{className:'row-actions stalker-tv-watch'},[watch,star(item)])]));
     });
-    if(!items.length)list.appendChild(h('p',{className:'muted',text:onlyFavourites?'No favourites in the loaded channels for this genre. Use ☆ to save a channel.':loading?'Loading channels…':'No matching channels in loaded pages.'}));
-    summary.textContent=items.length+' channels · '+all.filter(function(item){return !!programmeInfo(item).current;}).length+' with programme listings'+(loading?' · Loading more…':'');
-    more.hidden=!selected.sources.some(function(s){return !sourcePages[folderKey(s)]||sourcePages[folderKey(s)].more;});more.disabled=loading;
+    var hasPages=selected.sources.some(function(source){
+      var progress=sourcePages[folderKey(source)];return !progress||progress.more;
+    });
+    if(!items.length&&!loading&&selected.sources.length&&!failures.length){
+      var empty=onlyFavourites?'No favourites in the loaded channels for this genre. Use ☆ to save a channel.':
+        search?'No matching channels in the loaded pages.':'No channels in the loaded pages for this genre.';
+      list.appendChild(h('p',{className:'muted',text:empty}));
+    }
+    summary.hidden=!items.length;
+    summary.textContent=items.length?items.length+' channels · '+items.filter(function(item){return !!programmeInfo(item).current;}).length+' with programme listings':'';
+    more.hidden=!hasPages||loading;
+    more.textContent=!channels.length&&failures.length?'Retry loading channels':'Load more channels';
     guideButton.disabled=guideBusy||guideRefreshPending||!pageInventory.length;guideButton.textContent=guideBusy||guideRefreshPending?'Refreshing EPG…':'Refresh EPG';
     if(!hero.querySelector('details[open]')&&!hero.contains(focused))showFeature(items.find(function(item){return key(item)===chosen;})||items[0]);
     if(focusKey&&focusIndex>=0){var row=Array.from(list.querySelectorAll('[data-channel]')).find(function(el){return el.getAttribute('data-channel')===focusKey;});var target=row&&row.querySelectorAll('button')[focusIndex];if(target)target.focus({preventScroll:true});}
