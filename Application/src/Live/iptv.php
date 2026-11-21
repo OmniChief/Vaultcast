@@ -487,9 +487,7 @@ function iptv_channel_categories($group) {
  */
 function iptv_feed_index($feed, $forceRefresh = false) {
     if (($feed['type'] ?? '') === 'stalker') {
-        $index=StalkerVod::legacyLiveIndex($feed);
-        unset($index['commands']);
-        return $index;
+        return StalkerLiveBrowse::lineupIndex($feed);
     }
     $raw = iptv_cache_path_feed($feed['id']);
     iptv_refresh_m3u_cache($feed['url'], $raw, 86400, $forceRefresh);
@@ -973,12 +971,13 @@ function iptv_status_key($url) {
  */
 function iptv_probe_url($url, $timeout = 8) {
     $url = trim((string)$url);
-    $displayUrl = $url; $portal = false;
+    $displayUrl = $url;
     $query = []; parse_str((string)parse_url($url,PHP_URL_QUERY),$query);
     if (isset($query['feed'],$query['channel']) && $url===stalker_channel_url((string)$query['feed'],(string)$query['channel'])) {
-        $feed = iptv_feed_by_id(iptv_load(),(string)$query['feed']);
-        if (!$feed || ($feed['type'] ?? '')!=='stalker' || empty($feed['enabled'])) throw new InvalidArgumentException('Portal source is unavailable.');
-        $url = stalker_resolve($feed,(string)$query['channel']); $portal = true;
+        if (is_file(iptv_status_file())) iptv_status_load();
+        $probe = stalker_node_post('iptv_probe', ['channels'=>[['url'=>$url]]]);
+        if (empty($probe['results'][0])) throw new RuntimeException('The provider check returned no result.');
+        return $probe['results'][0];
     }
     if ($url === '' || !preg_match('#^https?://#i', $url)) {
         throw new InvalidArgumentException('Invalid stream url');
@@ -1054,7 +1053,7 @@ function iptv_probe_url($url, $timeout = 8) {
         'method' => $method,
         'error' => $err !== '' ? $err : null,
         'checkedAt' => gmdate('c'),
-        'finalUrl' => $portal ? $displayUrl : $finalUrl,
+        'finalUrl' => $finalUrl,
     );
 
     $key = iptv_status_key($displayUrl);

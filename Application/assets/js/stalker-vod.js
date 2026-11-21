@@ -24,11 +24,12 @@ window.VaultcastStalkerVod=function(host,options){
     try{return JSON.parse(localStorage.getItem('stalker-vod-preferred-provider-v1-'+options.owner+'-'+tab)||'null');}
     catch(e){return null;}
   }
+  var accountWrites=Promise.resolve();
   function saveAccountSettings(body){
-    accountRequest(body).catch(function(){if(status)status.textContent='Saved on this device, but account sync failed. Try again when connected.';});
+    accountWrites=accountWrites.then(function(){return accountRequest(body);}).catch(function(){if(status)status.textContent='Saved on this device, but account sync failed. Try again when connected.';});
   }
   function loadAccountSettings(){
-    return accountRequest(null).then(function(data){
+    return accountWrites.then(function(){return accountRequest(null);}).then(function(data){
       var migration={};
       if(Array.isArray(data.favourites)){
         accountFavourites=data.favourites;
@@ -892,7 +893,7 @@ window.VaultcastStalkerVod=function(host,options){
       }
       return true;
     }catch(e){
-      status.textContent='Could not save favourites in browser storage. Check browser storage permissions or available space.';
+      if(status)status.textContent='Could not save favourites in browser storage. Check browser storage permissions or available space.';
       return false;
     }
   }
@@ -1221,7 +1222,7 @@ window.VaultcastStalkerVod=function(host,options){
   }
   function cataloguePage(params,refresh){
     var key=params.toString(),cached=cataloguePages.get(key),generation=catalogueGeneration;
-    if(!refresh&&cached&&Date.now()-cached.at<600000)return Promise.resolve(cached.data);
+    if(!refresh&&cached&&Date.now()-cached.at<15000)return Promise.resolve(cached.data);
     return options.api('stalker_vod_catalogue',key).then(function(data){
       if(data&&data.ok&&generation===catalogueGeneration){cataloguePages.delete(key);cataloguePages.set(key,{at:Date.now(),data:data});
         while(cataloguePages.size>24)cataloguePages.delete(cataloguePages.keys().next().value);
@@ -1296,7 +1297,8 @@ window.VaultcastStalkerVod=function(host,options){
       titlesStarted:titlesStarted,scrollY:window.scrollY||document.documentElement.scrollTop||0};
   }
   function restore(saved){
-    if(!saved||saved.kind!==kind)return false;
+    if(!saved||!['vod','series'].includes(saved.kind))return false;
+    kind=saved.kind;
     stop();active=true;serial++;feeds=options.connections.filter(function(f){return f.enabled;});
     if(typeof saved.language==='string')language=saved.language;
     category=saved.category||'';providerFolderId=saved.providerFolderId||saved.providerFilter||'';providerSelections=saved.providerSelections||{};query=saved.query||'';genreFilter=saved.genreFilter||'';scanCursor=saved.scanCursor||0;scanQuery=saved.scanQuery===undefined?(saved.query||''):saved.scanQuery;searchMode=saved.searchMode||'title';sortOrder=saved.sortOrder||'provider';fullSortRequested=!!saved.fullSortRequested;minRating=saved.minRating||'';yearFilter=saved.yearFilter||'';searchAllMode=!!saved.searchAllMode;showFolderBrowser=!(category||searchAllMode);
@@ -1321,7 +1323,13 @@ window.VaultcastStalkerVod=function(host,options){
     epgProbeButton=h('button',{className:'btn ghost',type:'button',text:'Inspect live TV EPG fields (.json)',onClick:exportEpgFields});
     host.replaceChildren(type,h('div',{className:'row-actions stalker-diagnostic-actions'},[exportButton,groupExportButton,fieldProbeButton,liveProbeButton,epgProbeButton]),status);
   }
-  return {showDiagnostics:showDiagnostics,show:function(value){
+  function openFavourites(value){
+    stop();active=true;kind=value;category='';categories=[];providerSelections={};
+    searchAllMode=false;showFolderBrowser=false;reset();render();
+    var token=serial;
+    loadAccountSettings().then(function(){if(valid(token))showFavourites();});
+  }
+  return {showDiagnostics:showDiagnostics,openFavourites:openFavourites,loadPreferences:loadAccountSettings,show:function(value){
     if(active&&kind===value)return;
     stop();active=true;kind=value;letter='#';query='';genreFilter='';providerFolderId='';searchAllMode=false;titlesStarted=false;showFolderBrowser=true;category='';categories=[];providerSelections={};sortOrder=value==='vod'?'rating':'provider';fullSortRequested=false;groupsLoading=true;reset();render();
     // Load the account preference before choosing the default provider.
@@ -1340,17 +1348,19 @@ window.VaultcastStalkerVod=function(host,options){
 var providerBrowser=window.VaultcastStalkerVod;
 window.VaultcastStalkerVod=function(host,options){
   var legacy=providerBrowser(host,options),h=options.h,mode='catalogue',active=false,kind='vod',generation=0,timer=null;
-  var filters={q:'',language:'',audience:'',genre:'',year:'',letter:'',availability:'',sort:'title'},offset=0,items=[],more=false,loading=false;
-  var grid,status,next,previous,filterHost,search,alphabet,facetData={},years=[];
+  var defaults={q:'',language:'',audience:'',genre:'',year:'',letter:'',availability:'',sort:'title'};
+  var filters=Object.assign({},defaults),offset=0,items=[],more=false,loading=false,positions={},providerMode='folders';
+  var grid,status,next,previous,filterHost,search,filterLabel,filterPanel,facetData={},years=[];
   var pageCache=new Map(),filterCache={};
   function alive(token){return active&&mode==='catalogue'&&token===generation&&host.isConnected&&options.current();}
   function stop(){active=false;generation++;clearTimeout(timer);legacy.stop();}
-  function snapshot(){if(mode==='provider')return legacy.snapshot();return {catalogue:true,kind:kind,filters:Object.assign({},filters),offset:offset,scrollY:window.scrollY||0};}
+  function snapshot(){if(mode==='provider')return providerMode==='favourites'?{kind:kind,favourites:true}:legacy.snapshot();return {catalogue:true,kind:kind,filters:Object.assign({},filters),offset:offset,scrollY:window.scrollY||0};}
   function change(key,value){filters[key]=value;offset=0;load();}
   function select(label,key,values){return h('label',{className:'stalker-vod-filter'},[h('span',{text:label}),h('select',{'aria-label':label,onChange:function(e){change(key,e.target.value);}},values.map(function(v){return h('option',{value:v[0],text:v[1],selected:filters[key]===String(v[0])});}))]);}
   function renderFilters(){
     function choices(field,label){return [['',label]].concat((facetData[field]||[]).map(function(f){return [f.value,f.value+' ('+f.count+')'];}));}
     filterHost.replaceChildren(
+      select('First letter','letter',[['','Any letter']].concat('ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').map(function(letter){return [letter,letter];}))),
       select('Audio language','language',choices('languages','All audio languages')),
       select('Intended audience','audience',choices('audienceLanguages','All audience languages')),
       select('Genre','genre',choices('genres','All genres')),
@@ -1359,11 +1369,17 @@ window.VaultcastStalkerVod=function(host,options){
       select('Sort','sort',[['title','Title A–Z'],['newest','Newest first'],['oldest','Oldest first']]),
       h('button',{className:'btn ghost',type:'button',text:'Clear filters',onClick:function(){Object.keys(filters).forEach(function(k){filters[k]=k==='sort'?'title':'';});search.value='';offset=0;load();}})
     );
-    alphabet.replaceChildren();[''].concat('ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')).forEach(function(letter){alphabet.appendChild(h('button',{type:'button',className:'btn ghost'+(filters.letter===letter?' active':''),'aria-pressed':String(filters.letter===letter),text:letter||'All',onClick:function(){change('letter',letter);}}));});
+    var count=Object.keys(filters).filter(function(key){return key!=='q'&&filters[key]!==defaults[key];}).length;
+    filterLabel.textContent=count?'Filters & sort ('+count+')':'Filters & sort';
   }
   function card(item){
     var sources=(item.sources||[]).slice();
-    if(filters.language)sources.sort(function(a,b){return Number((b.languages||[]).includes(filters.language))-Number((a.languages||[]).includes(filters.language));});
+    var rank={UHD:4,'4K':4,'2160P':4,FHD:3,'1080P':3,HD:2,'720P':2,SD:1};
+    sources.sort(function(a,b){
+      var language=filters.language;
+      var preference=language?Number((b.languages||[]).includes(language))-Number((a.languages||[]).includes(language)):0;
+      return preference||(rank[String(b.quality).toUpperCase()]||0)-(rank[String(a.quality).toUpperCase()]||0);
+    });
     var selected=sources[0],label=item.local?'In local Vaultcast library':item.verificationPending?'Provider availability is being verified':item.available?'Available from providers':'No longer available from providers';
     function open(){if(!selected)return;options.open(selected.feed,Object.assign({},item,selected,{sources:sources,poster:selected.poster||item.poster}),poster);}
     var poster=h('button',{className:'stalker-vod-cover',type:'button','aria-label':(selected?'Open ':'Unavailable: ')+item.name,disabled:!selected,onClick:open},[h('span',{className:'stalker-vod-placeholder',text:item.name})]);
@@ -1381,39 +1397,81 @@ window.VaultcastStalkerVod=function(host,options){
     }
     var dot=h('span',{className:'stalker-library-dot '+(item.local?'local':item.verificationPending?'pending':item.available?'available':'unavailable'),title:label,role:'img','aria-label':label});
     var choices=h('select',{'aria-label':'Connection for '+item.name,onChange:function(e){selected=sources[Number(e.target.value)];}},sources.map(function(source,i){return h('option',{value:String(i),text:source.connection+(source.quality?' · '+source.quality:'')+' · '+((source.languages||[]).join(', ')||'Audio language unknown')});}));
-    var details=h('details',{className:'stalker-library-details'},[h('summary',{text:'Details & connections'}),h('p',{text:item.description||'No description supplied by providers.'}),h('p',{className:'muted',text:'Audio: '+((item.languages||[]).join(', ')||'Unknown')+' · Audience: '+((item.audienceLanguages||[]).join(', ')||'Unknown')})]);
+    var details=h('details',{className:'stalker-library-details'},[h('summary',{text:sources.length>1?sources.length+' source options':'Details'}),h('p',{text:item.description||'No description supplied by providers.'}),h('p',{className:'muted',text:'Audio: '+((item.languages||[]).join(', ')||'Unknown')+' · Audience: '+((item.audienceLanguages||[]).join(', ')||'Unknown')})]);
     if(sources.length)details.append(choices,h('button',{type:'button',className:'btn',text:kind==='series'||!selected.playable?'Browse titles':'Open video',onClick:open}));
     else details.appendChild(h('p',{text:item.verificationPending?'Provider availability is being verified. The previous catalogue is retained; no removal countdown has started.':item.unavailableSince?'All provider sources were confirmed unavailable. This entry is retained for 15 days from confirmed loss.':'Availability has not yet been verified. This entry is retained without a removal countdown.'}));
     if(item.local)details.appendChild(h('p',{text:'Also available in your local Vaultcast library.'}));
     return h('article',{className:'stalker-vod-card'},[h('div',{className:'stalker-vod-poster-frame'},[poster,dot]),h('div',{className:'stalker-vod-copy'},[h('button',{className:'stalker-vod-title',text:item.name,disabled:!selected,onClick:open}),h('small',{className:'muted',text:[item.year,(item.genres||[]).join(', ')].filter(Boolean).join(' · ')}),details])]);
   }
   function load(scroll,refresh){
-    var token=++generation;loading=true;status.textContent='Loading catalogue…';grid.setAttribute('aria-busy','true');next.disabled=true;previous.disabled=true;
+    clearTimeout(timer);var token=++generation;loading=true;status.textContent='Loading catalogue…';grid.setAttribute('aria-busy','true');next.disabled=true;previous.disabled=true;
     var params=new URLSearchParams(Object.assign({indexed:'1',kind:kind,offset:String(offset)},filters));
     var key=params.toString(),cached=pageCache.get(key),now=Date.now();
-    var request=!refresh&&cached&&now-cached.time<120000?Promise.resolve(cached.data):options.api('stalker_vod_catalogue',key).then(function(data){
-      if(alive(token)&&data&&data.ok){pageCache.delete(key);pageCache.set(key,{time:Date.now(),data:data});while(pageCache.size>30)pageCache.delete(pageCache.keys().next().value);filterCache[kind]={time:Date.now(),facets:data.facets||{},years:data.years||[]};}
+    var request=!refresh&&cached&&now-cached.time<15000?Promise.resolve(cached.data):options.api('stalker_vod_catalogue',key).then(function(data){
+      if(alive(token)&&data&&data.ok){pageCache.delete(key);pageCache.set(key,{time:Date.now(),data:data});while(pageCache.size>8)pageCache.delete(pageCache.keys().next().value);filterCache[kind]={time:Date.now(),facets:data.facets||{},years:data.years||[]};}
       return data;
     });
     request.then(function(data){
       if(!alive(token))return;if(!data||!data.ok)throw Error(data&&data.error||'Could not load the catalogue.');
       items=data.items||[];more=!!data.hasMore;var choices=filterCache[kind];facetData=choices&&Date.now()-choices.time<300000?choices.facets:data.facets||{};years=choices&&Date.now()-choices.time<300000?choices.years:data.years||[];renderFilters();grid.replaceChildren();items.forEach(function(item){grid.appendChild(card(item));});
-      status.textContent=items.length?'Titles '+(offset+1)+'–'+(offset+items.length):'No matching catalogue titles. An administrator can build the catalogue in Stalker settings.';
+      var filtered=Object.keys(filters).some(function(k){return filters[k]!==defaults[k]&&k!=='sort';});
+      status.textContent=items.length?'Titles '+(offset+1)+'–'+(offset+items.length):
+        filtered?'No titles match this search.':data.indexing?'The catalogue is importing. Waiting for the first titles…':'No published titles on this page.';
+      if(data.indexing&&items.length)status.textContent+=' · Import in progress';
+      if(data.indexing&&!items.length&&!filtered&&!offset)timer=setTimeout(function(){if(alive(token))load(undefined,true);},15000);
+      if(!items.length&&filtered)grid.appendChild(h('button',{className:'btn ghost',type:'button',text:'Clear search and filters',onClick:function(){
+        filters=Object.assign({},defaults);search.value='';offset=0;load();
+      }}));
       next.disabled=!more;previous.disabled=offset===0;
       if(typeof scroll==='number')requestAnimationFrame(function(){if(alive(token))window.scrollTo(0,scroll);});
-    }).catch(function(error){if(alive(token)){status.textContent=error.message+' Use Reload to retry.';previous.disabled=offset===0;}}).finally(function(){if(alive(token)){loading=false;grid.setAttribute('aria-busy','false');}});
+    }).catch(function(error){if(alive(token)){grid.replaceChildren();status.textContent=error.message;grid.appendChild(h('button',{type:'button',className:'btn',text:'Retry',onClick:function(){load(undefined,true);}}));previous.disabled=offset===0;}}).finally(function(){if(alive(token)){loading=false;grid.setAttribute('aria-busy','false');}});
   }
   function render(){
-    search=h('input',{type:'search',value:filters.q,placeholder:'Search the VOD catalogue','aria-label':'Search catalogue',onInput:function(e){filters.q=e.target.value;clearTimeout(timer);timer=setTimeout(function(){offset=0;load();},250);}});
-    status=h('p',{className:'muted',role:'status','aria-live':'polite'});grid=h('div',{className:'stalker-vod-grid'});filterHost=h('div',{className:'stalker-vod-filters'});alphabet=h('nav',{className:'stalker-library-alphabet','aria-label':'Catalogue alphabet'});
+    search=h('input',{type:'search',value:filters.q,placeholder:kind==='series'?'Search series…':'Search movies…','aria-label':'Search catalogue',onInput:function(e){filters.q=e.target.value;generation++;next.disabled=previous.disabled=true;clearTimeout(timer);timer=setTimeout(function(){offset=0;load();},250);}});
+    status=h('p',{className:'muted',role:'status','aria-live':'polite'});grid=h('div',{className:'stalker-vod-grid'});filterHost=h('div',{className:'stalker-vod-filters'});filterLabel=h('summary',{text:'Filters & sort'});filterPanel=h('details',{className:'stalker-filter-panel'},[filterLabel,filterHost]);
     previous=h('button',{type:'button',className:'btn ghost',text:'← Previous',onClick:function(){if(loading||offset===0)return;offset=Math.max(0,offset-48);load(0);}});
     next=h('button',{type:'button',className:'btn',text:'Next →',onClick:function(){if(loading||!more)return;offset+=48;load(0);}});
-    var actions=[h('button',{className:'btn ghost',type:'button',text:'Reload',onClick:function(){pageCache.clear();filterCache={};load(undefined,true);}}),h('button',{className:'btn ghost',type:'button',text:'Provider folders & favourites',onClick:function(){stop();mode='provider';legacy.show(kind);host.prepend(h('button',{type:'button',className:'btn ghost',text:'← VOD catalogue',onClick:function(){show(kind);}}));}})];
+    var actions=[
+      h('button',{className:'btn ghost',type:'button',text:'Favourites',onClick:function(){openProvider('favourites');}}),
+      h('button',{className:'btn ghost',type:'button',text:'Provider folders',onClick:function(){openProvider('folders');}}),
+      h('button',{className:'btn ghost',type:'button',text:'Refresh',onClick:function(){pageCache.clear();filterCache={};load(undefined,true);}})
+    ];
     if(options.manage)actions.push(h('button',{className:'btn ghost',type:'button',text:'Catalogue settings',onClick:options.manage}));
-    host.replaceChildren(h('h2',{text:kind==='series'?'Series catalogue':'Movie catalogue'}),h('form',{className:'stalker-searchbar',onSubmit:function(e){e.preventDefault();clearTimeout(timer);offset=0;load();}},[search,h('button',{className:'btn primary',type:'submit',text:'Search'})]),h('div',{className:'row-actions'},actions),filterHost,alphabet,h('p',{className:'stalker-library-legend muted'},[h('span',{className:'available',text:'● Green: provider available'}),' · ',h('span',{className:'unavailable',text:'● Red: unavailable'}),' · ',h('span',{className:'local',text:'● Blue: in local library'}),h('br'), 'Audio languages come from provider metadata; audience language is inferred from provider folders.']),status,grid,h('div',{className:'row-actions'},[previous,next]));
+    var catalogue=h('div',{className:'stack'},[
+      h('div',{className:'row-head'},[h('h2',{text:kind==='series'?'Series catalogue':'Movie catalogue'})]),
+      h('form',{className:'row-actions stalker-searchbar',onSubmit:function(e){e.preventDefault();clearTimeout(timer);offset=0;load();}},
+        [search,h('button',{className:'btn primary',type:'submit',text:'Search'})]),
+      h('div',{className:'row-actions'},actions),filterPanel,status,grid,h('div',{className:'row-actions'},[previous,next])
+    ]);
+    host.replaceChildren(catalogue);
     renderFilters();
   }
-  function show(value){stop();mode='catalogue';active=true;kind=value;offset=0;items=[];render();load();}
-  return {show:show,stop:stop,snapshot:snapshot,restore:function(saved){if(!saved)return false;if(!saved.catalogue){stop();mode='provider';return legacy.restore(saved);}stop();mode='catalogue';active=true;kind=saved.kind;filters=Object.assign(filters,saved.filters||{});offset=saved.offset||0;render();load(saved.scrollY||0);return true;},showDiagnostics:function(){stop();mode='provider';legacy.showDiagnostics();},hasFavourite:legacy.hasFavourite,toggleFavourite:legacy.toggleFavourite};
+  function backButton(){
+    return h('button',{type:'button',className:'btn ghost',text:'← Back to catalogue',onClick:function(){show(kind);}});
+  }
+  function openProvider(destination,saved){
+    if(mode==='catalogue'&&active)positions[kind]=snapshot();
+    stop();mode='provider';providerMode=destination;
+    if(destination==='favourites')legacy.openFavourites(kind);
+    else if(!saved||!legacy.restore(saved))legacy.show(kind);
+    host.prepend(backButton());
+  }
+  function show(value,saved){
+    if(mode==='catalogue'&&active)positions[kind]=snapshot();
+    stop();mode='catalogue';active=true;kind=value;
+    var position=saved||positions[kind]||{};
+    filters=Object.assign({},defaults,position.filters);offset=position.offset||0;items=[];
+    facetData=filterCache[kind]?.facets||{};years=filterCache[kind]?.years||[];
+    render();load(position.scrollY);
+  }
+  legacy.loadPreferences();
+  return {show:show,stop:function(){if(mode==='catalogue'&&active)positions[kind]=snapshot();stop();},
+    snapshot:snapshot,restore:function(saved){
+      if(!saved)return false;
+      if(saved.catalogue)show(saved.kind,saved);
+      else {kind=saved.kind;openProvider(saved.favourites?'favourites':'folders',saved);}
+      return true;
+    },showDiagnostics:function(){stop();mode='provider';legacy.showDiagnostics();},
+    hasFavourite:legacy.hasFavourite,toggleFavourite:legacy.toggleFavourite};
 };
 })();

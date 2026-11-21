@@ -202,45 +202,38 @@ final class CompatibilityBrowser {
         if($view==='live')return self::live($id,$page,$query);
         throw new RuntimeException('Page not found.');
     }
-    private static function stalkerRequest(string $action,array $selection): ?array {
+    private static function stalkerRequest(string $action,array $selection): array {
         $session=$_COOKIE[Auth::COOKIE]??'';
-        if(!empty($_SERVER['HTTP_AUTHORIZATION'])||!self::$signed||!is_string($session)
-            ||!preg_match('/^[a-f0-9]{64}$/D',$session)||!NodeRuntime::stalkerCompatibilityReady())return null;
-        if($action==='stalker_play'&&(self::$base!=='/'||!preg_match('/^nginx\b/i',(string)($_SERVER['SERVER_SOFTWARE']??''))))return null;
+        $authorization=trim((string)($_SERVER['HTTP_AUTHORIZATION']??''));
+        if(preg_match('/^Bearer[ \t]+(vc_[a-f0-9]{64})$/iD',$authorization,$match))$session=$match[1];
+        if(!self::$signed||!is_string($session)||!preg_match('/^(?:vc_)?[a-f0-9]{64}$/D',$session))
+            throw new RuntimeException('Sign in to use the provider catalogue.');
         $token=NodeMedia::writeTicket(['purpose'=>'stalker-compat','action'=>$action,'selection'=>$selection,
             'viewer'=>(string)self::$viewer['id'],'sessionHash'=>hash('sha256',$session)]);
-        if($token===null)return null;
+        if($token===null)throw new RuntimeException('The provider service is unavailable.');
         try{
-            $context=stream_context_create(['http'=>['timeout'=>$action==='stalker_play'?100:15,
+            $context=stream_context_create(['http'=>['timeout'=>$action==='stalker_play'?100:65,
                 'ignore_errors'=>true,'follow_location'=>0,'header'=>'Connection: close']]);
             $body=@file_get_contents(NodeRuntime::loopback('/application/compat/stalker/'.$token),false,$context,0,4194305);
-            if(in_array('x-vaultcast-app-unavailable: 1',array_map('strtolower',$http_response_header??[]),true))return null;
+            if(in_array('x-vaultcast-app-unavailable: 1',array_map('strtolower',$http_response_header??[]),true))throw new RuntimeException('The provider service is unavailable.');
             $data=is_string($body)&&strlen($body)<=4194304?json_decode($body,true):null;
             if(empty($data['ok']))throw new RuntimeException('The selected Stalker request could not be completed.');
             return $data;
         }finally{@unlink(STREAM_DATA.'/runtime/node-media/'.$token.'.json');}
     }
     private static function stalkerTitles(array $feed,array $options): array {
-        return self::stalkerRequest('stalker_vod_catalogue',$options) ?? StalkerDirect::browse(['feeds'=>[$feed]],$options);
+        return self::stalkerRequest('stalker_vod_catalogue',$options);
     }
-    private static function stalkerSource(array $feed,string $id,string $kind): array {
-        $native=self::stalkerRequest('stalker_play',['feed'=>$feed['id'],'id'=>$id,'kind'=>$kind]);
-        if($native!==null){
-            $url=$native['source']['url']??'';
-            if(!is_string($url)||strpos($url,'/netplay/application/live/stalker_stream?')!==0)throw new RuntimeException('Invalid playback selection.');
-            parse_str((string)parse_url($url,PHP_URL_QUERY),$params);
-            return [$url,($params['format']??'')==='.m3u8'];
-        }
-        $url=$kind==='live'?stalker_resolve($feed,$id):stalker_vod_resolve($feed,$id);
-        $ticket=bin2hex(random_bytes(16));
-        \Vaultcast\Repository::cachePut('stalker_play_ticket_'.hash('sha256',$ticket),[
-            'viewer'=>(string)self::$viewer['id'],'feed'=>$feed['id'],'fingerprint'=>hash('sha256',json_encode($feed)),
-            'kind'=>$kind,'id'=>$id,'url'=>$url,'created'=>time(),'item'=>$kind==='live'?null:stalker_vod_entry($feed,$id)
-        ],21600);
-        $hls=(bool)preg_match('/\.m3u8(?:[?#]|$)/i',$kind==='live'?(string)parse_url($url,PHP_URL_PATH):$url);
-        $params=['feed'=>$feed['id'],'channel'=>$id,'ticket'=>$ticket];
-        if($hls)$params['format']='.m3u8';
-        return [self::$base.'api/live/stalker_stream?'.http_build_query($params,'','&',PHP_QUERY_RFC3986),$hls];
+    private static function stalkerSource(array $feed,string $id,string $kind,array $page=[]): array {
+        $native=self::stalkerRequest('stalker_play',['feed'=>$feed['id'],'id'=>$id,'kind'=>$kind]+$page);
+        $url=$native['source']['url']??'';
+        $path=is_string($url)?parse_url($url,PHP_URL_PATH):null;
+        $endpoint='netplay/application/live/stalker_stream';
+        if(!in_array($path,['/'.$endpoint,self::$base.$endpoint],true)||parse_url($url,PHP_URL_HOST)!==null)
+            throw new RuntimeException('Invalid playback selection.');
+        $query=(string)parse_url($url,PHP_URL_QUERY);
+        parse_str($query,$params);
+        return [self::$base.$endpoint.'?'.$query,($params['format']??'')==='.m3u8'];
     }
     /** Samsung-safe Stalker country browsing across all enabled connections. */
     private static function stalker(int $page): string {
@@ -307,7 +300,7 @@ final class CompatibilityBrowser {
         // JavaScript, or upfront live channel scan is required.
         foreach($feeds as $feed){
             try{
-                $data=self::stalkerRequest('stalker_live_categories',['feed'=>$feed['id']]) ?? StalkerLiveBrowse::categories($feed);
+                $data=self::stalkerRequest('stalker_live_categories',['feed'=>$feed['id']]);
                 $categories=$data['categories'];
                 foreach($categories as $folder){
                     $folder['feed']=$feed['id'];$folder['connection']=$feed['name'];
@@ -379,7 +372,7 @@ final class CompatibilityBrowser {
             if(!$feed)continue;
             try{
                 $options=['feed'=>$feed['id'],'category'=>$source['id'],'page'=>$page];
-                $data=self::stalkerRequest('stalker_live_channels',$options) ?? StalkerLiveBrowse::channels($feed,$options);
+                $data=self::stalkerRequest('stalker_live_channels',$options);
                 $more=$more||!empty($data['hasMore']);
                 foreach($data['items']??[] as $item)$channels[]=$item;
             }catch(Throwable $e){$failures[]=$source['connection'].' · '. $source['name'];}
@@ -437,7 +430,7 @@ final class CompatibilityBrowser {
             try{
                 $feed=null;foreach($feeds as $candidate)if((string)$candidate['id']===$selectedFeed){$feed=$candidate;break;}
                 if(!$feed)throw new RuntimeException('Connection unavailable.');
-                [$stream,$hls]=self::stalkerSource($feed,(string)$item['id'],'live');
+                [$stream,$hls]=self::stalkerSource($feed,(string)$item['id'],'live',['category'=>$item['category']??'','page'=>$item['page']??$page]);
                 if($hls)$html.='<p class="compat-note">This provider supplied an HLS playlist. Older Tizen browsers may not support HLS; Vaultcast cannot change the provider format without transcoding.</p>';
                 $html.=self::player($stream,false,[],['hls'=>$hls]);
             }catch(Throwable $e){$html.='<p class="compat-note">Playback unavailable. Try another connection or retry the channel.</p>';}

@@ -2,8 +2,8 @@
 
 const { enabled, parse, sha } = require('./account-data');
 const { cached } = require('./profile-policy');
-const { q, take, snapshot, episodeKey, provider, groups, bound } = require('./stalker-store');
-const { configHash, phpJson, usableEpisode, directItem, itemEntry } = require('./stalker-provider');
+const { q, take, provider, groups, bound } = require('./stalker-store');
+const { configHash, phpJson, itemEntry } = require('./stalker-provider');
 const libraryWriter = require('./stalker-library-write');
 
 const like = (value) => '%' + value.replace(/[!%_]/g, '!$&') + '%';
@@ -136,8 +136,10 @@ async function indexed(pool, root, feeds, opts, libraryAllowed, decode) {
   });
   const local = libraryAllowed ? await localMatches(pool, items, kind, library.title) : new Set();
   for (const item of items) item.local = local.has(item.catalogueId);
+  const importing = await q(pool,
+    "SELECT 1 FROM vaultcast_stalker_jobs WHERE kind=? AND status IN ('queued','running','partial') LIMIT 1", [kind]);
   const filters = await cached(root, 'stalker_library_filters_v3_' + kind);
-  return { ok: true, items, hasMore, facets: filters?.facets ?? [], years: filters?.years ?? [] };
+  return { ok: true, items, hasMore, indexing: importing.length > 0, facets: filters?.facets ?? [], years: filters?.years ?? [] };
 }
 
 async function providerPage(pool, feed, kind, category, term, page) {
@@ -167,13 +169,6 @@ async function providerPage(pool, feed, kind, category, term, page) {
   };
 }
 
-async function episodePage(pool, root, feed, parent, page) {
-  const saved = await snapshot(root, episodeKey(feed, 'page:' + phpJson([parent, page])));
-  if (!(await usableEpisode(pool, feed, configHash(feed), saved)))
-    return { items: [], total: 0, hasMore: false, catalogueLoading: true };
-  return { items: saved.items, total: saved.total, hasMore: saved.hasMore };
-}
-
 async function direct(pool, root, feed, kind, opts) {
   const parent = take(opts.parent, 120);
   const page = bound(opts.page ?? Math.floor(bound(opts.offset, 0, 600000) / 60) + 1, 1, 10000);
@@ -181,7 +176,7 @@ async function direct(pool, root, feed, kind, opts) {
     ? []
     : await q(
         pool,
-        "SELECT f.folder_id AS id,f.title AS name FROM vaultcast_stalker_folders f JOIN vaultcast_stalker_jobs j ON j.feed_id=f.feed_id AND j.kind=f.kind AND j.generation=f.generation WHERE j.feed_id=? AND j.kind=? AND j.config=? AND f.folder_id<>'' AND f.status='complete' ORDER BY f.title",
+        "SELECT f.folder_id AS id,f.title AS name FROM vaultcast_stalker_folders f JOIN vaultcast_stalker_jobs j ON j.feed_id=f.feed_id AND j.kind=f.kind AND j.generation=f.generation WHERE j.feed_id=? AND j.kind=? AND j.config=? AND f.folder_id<>'' AND f.status NOT IN ('skipped','failed') ORDER BY f.title",
         [feed.id, kind, configHash(feed)],
       );
   if (enabled(opts.categories_only))
@@ -204,7 +199,6 @@ async function direct(pool, root, feed, kind, opts) {
       take(String(opts.q ?? '').trim(), 160),
       page,
     );
-  else if (kind === 'series') result = await episodePage(pool, root, feed, parent, page);
   else result = { items: [], total: 0, hasMore: false };
   for (const item of result.items) {
     item.sources = [
@@ -215,17 +209,13 @@ async function direct(pool, root, feed, kind, opts) {
       ),
     ];
   }
-  if (parent) {
-    const show = await directItem(pool, root, feed, parent);
-    result.show = show?.metadata ?? null;
-  }
   return {
     ...result,
     ok: true,
     facets: { category: categories.map((row) => ({ value: row.id, name: row.name })) },
     categories,
     page,
-    expandedEpisodes: Boolean(parent),
+    expandedEpisodes: false,
     catalogueLoading: result.catalogueLoading ?? false,
     connections: [
       { name: feed.name, scanned: result.items.length, total: result.total, done: true, error: '' },

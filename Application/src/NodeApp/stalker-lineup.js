@@ -11,7 +11,8 @@ const encode = (value) =>
 function channelUrl(feed, id) {
   return '/api/live/stalker_stream?feed=' + encode(feed) + '&channel=' + encode(id) + '&format=.m3u8';
 }
-function selection(value) {
+function selection(value, base = '/') {
+  if (typeof value === 'string' && base !== '/' && value.startsWith(base)) value = '/' + value.slice(base.length);
   if (typeof value !== 'string' || !value.startsWith('/api/live/stalker_stream?')) return null;
   const params = new URLSearchParams(value.slice(value.indexOf('?') + 1));
   const feed = params.get('feed'),
@@ -19,11 +20,11 @@ function selection(value) {
   return feed && id && value === channelUrl(feed, id) ? { feed, id } : null;
 }
 
-async function probeItems(pool, root, feeds, expired, channels) {
+async function probeItems(pool, root, feeds, expired, channels, base) {
   const result = [],
     snapshots = new Map();
   for (const channel of channels) {
-    const selected = selection(channel?.url);
+    const selected = selection(channel?.url, base);
     if (!selected) return null;
     const feed = feeds.find((f) => f.id === selected.feed && f.enabled);
     const error = !feed

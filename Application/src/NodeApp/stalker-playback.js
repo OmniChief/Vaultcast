@@ -299,7 +299,7 @@ async function serve(root, feed, state, request, response) {
         .catch(() => {})
         .then(async () => {
           client.cookies = [];
-          await client.loadCookies();
+          await client.loadJar();
           await client.acceptCookies(url, headers);
         })
         .finally(() => {
@@ -310,20 +310,20 @@ async function serve(root, feed, state, request, response) {
     };
     const range = request.headers.range;
     if (range && !/^bytes=(?:\d+-\d*|-\d+)$/.test(range)) throw problem(416, 'Invalid byte range.');
-    const options = { method: request.method, range, signal: controller.signal };
+    const options = { method: request.method, range, ifRange: range ? request.headers['if-range'] : undefined, signal: controller.signal };
     let mediaOptions = options;
     let result = await follow(client, target ?? session.url, mediaOptions);
     res = result.res;
     const mp4 = () => /^video\/mp4\b/i.test(res.headers['content-type'] ?? '');
     const retry =
       range &&
-      ((res.statusCode === 400 && mp4()) ||
+      ((res.statusCode === 400 && mp4() && /^bytes=0-/.test(range)) ||
         (state.kind !== 'live' &&
           [456, 458].includes(res.statusCode) &&
           /^bytes=0-/.test(range)));
     if (retry) {
       res.destroy();
-      mediaOptions = { ...options, range: undefined };
+      mediaOptions = { ...options, range: undefined, ifRange: undefined };
       result = await follow(client, target ?? session.url, mediaOptions);
       res = result.res;
     }
@@ -422,10 +422,10 @@ async function serve(root, feed, state, request, response) {
       );
     }
     response.status(maybeMp4 ? 200 : res.statusCode);
-    for (const key of ['content-range', 'content-length', 'accept-ranges']) {
+    for (const key of ['content-range', 'content-length', 'accept-ranges', 'etag', 'last-modified']) {
       if (
         res.headers[key] &&
-        !(key === 'content-length' && encoding !== 'identity') &&
+        !(key === 'content-length' && encoding !== 'identity' && request.method !== 'HEAD') &&
         !(key === 'content-range' && maybeMp4)
       )
         response.set(key, res.headers[key]);
