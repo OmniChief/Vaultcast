@@ -373,3 +373,5 @@ html{background:transparent}
   .compat-panel .compat-action{max-width:100%}
   .compat-list li .compat-button{display:block;margin:5px 0}
 }
+
+#compat-xtream-controls{margin:12px 0 18px}#compat-xtream-results .compat-list li{padding:10px 14px}#compat-xtream-player:empty{display:none}#compat-xtream-player{margin:18px 0}#compat-xtream-controls input{max-width:65%;margin-right:8px}
