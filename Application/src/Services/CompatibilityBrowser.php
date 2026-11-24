@@ -48,21 +48,20 @@ final class CompatibilityBrowser {
     }
     private static function isShow(array $item): bool {return ($item['kind'] ?? '')==='show'||($item['media_kind'] ?? '')==='show'||(!empty($item['show_key'])&&empty($item['media_kind']));}
     private static function mediaUrl(array $item,array $context=[]): string {return self::url($context+['view'=>self::isShow($item)?'show':'item','id'=>self::isShow($item)?($item['show_key'] ?? $item['id']):$item['id']]);}
-    private static function poster(array $item,string $size='card'): string {
+    private static function poster(array $item,string $size='card',int $percent=0): string {
         $show=self::isShow($item);$id=$show?($item['show_key'] ?? $item['id']):($item['id'] ?? '');$title=$item['title'] ?? 'Untitled';
         $url=self::$base.'api/'.($show?'shows/':'items/').rawurlencode((string)$id).'/poster?variant='.($size==='detail'?'full':'medium');
-        $html='<span class="compat-poster compat-poster-'.$size.'"><span class="compat-poster-fallback">'.self::esc(mb_substr((string)$title,0,1)).'</span>';
+        $html='<span class="compat-poster compat-poster-'.$size.'"><span class="compat-poster-fallback">'.self::esc($size==='card'?(string)$title:mb_substr((string)$title,0,1)).'</span>';
         if($id!=='' && ($item['has_poster'] ?? true))$html.='<img data-compat-poster="1" loading="lazy" src="'.self::esc($url).'" alt="'.self::esc($title).'" width="240" height="360">';
+        if($percent>0)$html.='<span class="compat-progress compat-poster-progress"><span style="width:'.min(100,$percent).'%"></span></span>';
         return $html.'</span>';
     }
     private static function cards(array $items,array $context=[]): string {
         $html='<ul class="compat-cards">';$count=0;
         foreach($items as $item){if(($item['media_kind'] ?? '')==='rom'||($item['type'] ?? '')==='roms'||!AreaAccess::allowed(self::$viewer,AreaAccess::itemArea($item))||!Parental::allows(self::$viewer,$item))continue;
             $count++;$meta=[];if(!empty($item['year']))$meta[]=$item['year'];if(!empty($item['season_count']))$meta[]=$item['season_count'].' seasons';if(!empty($item['episode']))$meta[]='Episode '.$item['episode'];
-            $html.='<li><a class="compat-card" href="'.self::esc(self::mediaUrl($item,$context)).'" title="'.self::esc($item['title'] ?? 'Untitled').'">'.self::poster($item).'<span class="compat-card-caption"><strong>'.self::esc($item['title'] ?? 'Untitled').'</strong><small>'.self::esc(implode(' · ',$meta)).'</small></span>';
-            $progress=$item['progress'] ?? [];$duration=(float)($progress['duration'] ?? 0);$position=(float)($progress['position'] ?? 0);
-            if($duration>0 && $position>0)$html.='<span class="compat-progress"><span style="width:'.min(100,(int)round($position/$duration*100)).'%"></span></span>';
-            $html.='</a></li>';
+            $progress=$item['progress'] ?? [];$duration=(float)($progress['duration'] ?? 0);$position=(float)($progress['position'] ?? 0);$percent=$duration>0&&$position>0?min(100,(int)round($position/$duration*100)):0;
+            $html.='<li><a class="compat-card" href="'.self::esc(self::mediaUrl($item,$context)).'" title="'.self::esc($item['title'] ?? 'Untitled').'">'.self::poster($item,'card',$percent).'<span class="compat-card-caption"><strong>'.self::esc($item['title'] ?? 'Untitled').'</strong><small>'.self::esc(implode(' · ',$meta)).'</small></span></a></li>';
         }
         return $count?$html.'</ul>':'<p class="compat-empty">Nothing here yet.</p>';
     }
@@ -87,7 +86,7 @@ final class CompatibilityBrowser {
     }
     private static function home(array $home): string {
         $name=self::$signed?((self::$viewer['display_name'] ?? '') ?: self::$viewer['username']):'';
-        $html='<div class="compat-hero">'.self::artwork().'<div class="compat-hero-copy">'.self::heading('YOUR SPACE. YOUR STORIES.',$name!==''?'Welcome back, '.$name:'Make yourself at home.','Your favourites, your next episode and something new to discover.').'<div class="compat-actions">'.(AreaAccess::allowed(self::$viewer,'library')?self::link('Explore the library',['view'=>'library']):'').(!empty($home['features']['live'])?self::link('Live',['view'=>'live']):'').'</div></div></div>';
+        $html='<div class="compat-hero">'.self::artwork().'<div class="compat-hero-copy">'.self::heading('YOUR SPACE. YOUR STORIES.',$name!==''?'Welcome back, '.$name:'Make yourself at home.','Your favourites, your next episode and something new to discover.').'<div class="compat-actions">'.(AreaAccess::allowed(self::$viewer,'library')?'<a class="compat-button compat-primary" href="'.self::esc(self::url(['view'=>'library'])).'">Explore the library</a>':'').(!empty($home['features']['live'])?self::link('Live',['view'=>'live']):'').'</div></div></div>';
         $panels=[];$continue=array_slice($home['continue_watching'] ?? [],0,6);if(!$continue)$continue=self::recentProgress();
         if($continue)$panels['recent']='<section class="compat-shelf"><h2>Continue watching</h2>'.self::cards($continue).'</section>';
         $personal=self::personal();$favourites=[];
@@ -1312,12 +1311,17 @@ final class CompatibilityBrowser {
                 $html.='</div>';break;
             }
         }
-        $html.='<p class="compat-note">'.count($channels).' channels</p><ul class="compat-list compat-lineup">';
+        $html.='<p class="compat-note">'.count($channels).' channels</p><ul class="compat-list compat-lineup compat-live-grid">';
+        $nowMs=(int)(microtime(true)*1000);
         foreach(array_slice($channels,($page-1)*16,16) as $ch){
-            $html.='<li>'.self::browseRow((string)($ch['name'] ?? 'Channel'),'', $browse+['id'=>$ch['id']],(string)($ch['number'] ?? ''),(string)$ch['id']===$id);
-            if(!empty($ch['now']))$html.=self::programme($ch['now'],'Now · ');
-            if(!empty($ch['next']))$html.=self::programme($ch['next'],'Next · ');
-            $html.=self::link('Programme guide',$browse+['schedule'=>$ch['id']]).'</li>';
+            $current=(array)($ch['now'] ?? []);$next=(array)($ch['next'] ?? []);$start=(int)($current['startUnix'] ?? 0);$end=(int)($current['endUnix'] ?? 0);
+            $percent=$end>$start?max(0,min(100,(int)round(100*($nowMs-$start)/($end-$start)))):0;
+            $logo=(string)($ch['logo'] ?? '');$name=(string)($ch['name'] ?? 'Channel');$logoHtml='';
+            if(preg_match('#^https?://[^\s<>"\\\\]+$#iD',$logo)||preg_match('#^/(?!/)[^\s<>"\\\\]+$#D',$logo))$logoHtml='<img class="compat-channel-logo" src="'.self::esc($logo).'" alt="">';
+            $html.='<li class="compat-live-tile'.((string)$ch['id']===$id?' active':'').'"><a class="compat-live-watch" href="'.self::esc(self::url($browse+['id'=>$ch['id']])).'"'.((string)$ch['id']===$id?' aria-current="page"':'').'><span class="compat-live-top"><strong class="compat-live-number">'.self::esc($ch['number'] ?? '').'</strong>'.$logoHtml.'<span class="compat-live-badge">'.(($ch['kind'] ?? '')==='iptv'?'IPTV':'LIVE').'</span></span><span class="compat-live-channel">'.self::esc($name).'</span><strong class="compat-live-title">'.self::esc($current['title'] ?? 'Watch channel').'</strong>';
+            if($start&&$end>$start)$html.='<span class="compat-live-time">'.self::esc(gmdate('H:i',(int)($start/1000)).'–'.gmdate('H:i',(int)($end/1000))).' UTC</span><span class="compat-progress"><span style="width:'.$percent.'%"></span></span>';
+            if(!empty($next['title']))$html.='<span class="compat-live-next">Next · '.self::esc($next['title']).'</span>';
+            $html.='</a>'.self::link('Programme guide',$browse+['schedule'=>$ch['id']]).'</li>';
         }
         if(!$channels)$html.='<li class="compat-empty">No matching channels.</li>';
         return $html.'</ul>'.self::pages(['view'=>'live','tab'=>$tab,'q'=>$query],$page,$page*16<count($channels));
@@ -1373,10 +1377,10 @@ final class CompatibilityBrowser {
         }
         $headerSearch='';
         if($home && AreaAccess::allowed(self::$viewer,'library'))$headerSearch='<form class="compat-header-search" role="search" method="get" action="'.self::esc(self::$base).'"><input type="hidden" name="compat" value="on"><input type="hidden" name="view" value="search"><label class="compat-header-search-label" for="compat-header-query">Search movies and shows</label><input id="compat-header-query" type="text" name="q" value="'.self::esc($view==='search'?(string)($_GET['q'] ?? ''):'').'" placeholder="Search movies &amp; shows…" maxlength="200"><button type="submit">Search</button></form>';
-        $nav='<div class="compat-header"><div class="compat-header-inner"><div class="compat-topbar"><a class="compat-brand" href="'.self::esc(self::url()).'"><span class="compat-logo">&#9654;</span> '.self::esc($site).'</a>'.$headerSearch.'</div><div class="compat-major-nav" role="navigation" aria-label="Main navigation">';
-        $tabs=['home'=>'Home'];if($home && AreaAccess::allowed(self::$viewer,'library'))$tabs['library']='Library';if(!empty($home['features']['live']))$tabs['live']='Live';if($home && AreaAccess::allowed(self::$viewer,'games'))$tabs['play']='Play';if($home&&self::$signed)$tabs['misc']='Misc';if($home&&self::offlineAvailable())$tabs['offline']='Downloads';$tabs['account']=self::$signed?'Settings':'Sign in';
-        foreach($tabs as $key=>$label){$target=$key==='account'&&!self::$signed?'login':$key;$selected=$view===$target || ($key==='play'&&in_array($view,['game','emulator'],true)) || ($key==='library'&&in_array($view,['section','show','item','search','collections','collection','requests'],true)) || ($key==='account'&&in_array($view,['parental','tools','tool','tool-result','configuration','users','edit-user','roles','edit-role','live-admin','factory-reset'],true)) || ($key==='home'&&in_array($view,['favourites','watchlist','calendar','history','arrivals','tonight','cinema','invitations','home-options','lists','friends','inbox','chat'],true));$nav.='<a'.($selected?' class="active" aria-current="page"':'').' href="'.self::esc(self::url(['view'=>$target])).'">'.self::esc($label).'</a>';}
-        $nav.='</div></div></div>';
+        $nav='<div class="compat-header"><div class="compat-header-inner"><div class="compat-topbar"><a class="compat-brand" href="'.self::esc(self::url()).'"><span class="compat-logo">&#9654;</span> <span class="compat-brand-name">'.self::esc($site).'</span></a><div class="compat-major-nav" role="navigation" aria-label="Main navigation">';
+        $tabs=['home'=>'Home'];if($home && AreaAccess::allowed(self::$viewer,'library'))$tabs['library']='Library';if(!empty($home['features']['live']))$tabs['live']='Live';if($home && AreaAccess::allowed(self::$viewer,'games'))$tabs['play']='Play';if($home&&self::$signed)$tabs['misc']='Misc';if($home&&self::offlineAvailable())$tabs['offline']='Downloads';$tabs['account']=self::$signed?'Settings':'Sign in';$navRight='';
+        foreach($tabs as $key=>$label){$target=$key==='account'&&!self::$signed?'login':$key;$selected=$view===$target || ($key==='play'&&in_array($view,['game','emulator'],true)) || ($key==='library'&&in_array($view,['section','show','item','search','collections','collection','requests'],true)) || ($key==='account'&&in_array($view,['parental','tools','tool','tool-result','configuration','users','edit-user','roles','edit-role','live-admin','factory-reset'],true)) || ($key==='home'&&in_array($view,['favourites','watchlist','calendar','history','arrivals','tonight','cinema','invitations','home-options','lists','friends','inbox','chat'],true));$anchor='<a'.($selected?' class="active" aria-current="page"':'').' href="'.self::esc(self::url(['view'=>$target])).'">'.self::esc($label).'</a>';if(in_array($key,['offline','account'],true))$navRight.=$anchor;else $nav.=$anchor;}
+        $nav.='</div><div class="compat-header-right">'.$headerSearch.'<div class="compat-account-nav" role="navigation" aria-label="Account and downloads">'.$navRight.'</div></div></div></div></div>';
         if($home){
             $nav.='<div class="compat-subnav" role="navigation" aria-label="Section navigation"><div class="compat-subnav-inner">';
             if(in_array($view,['library','section','show','item','search','collections','collection','requests'],true)){

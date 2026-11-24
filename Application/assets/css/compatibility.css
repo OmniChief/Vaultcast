@@ -630,3 +630,350 @@ body.compat-manly-man a.compat-choice.active{background:#ffc073;color:#10191c;bo
 #compat-provider-admin .compat-folder-choices{margin:12px 0;padding:6px 10px;border:1px solid rgba(128,128,128,.4)}
 #compat-provider-admin .compat-folder-choices label{padding:6px 0;line-height:1.4}
 #compat-provider-admin #compat-provider-status{font-weight:bold;margin:6px 0 12px}
+
+
+/* Visual parity: full interface dimensions, with CSS2/3 inline-block and table
+   layout fallbacks instead of flex/grid, CSS variables or color-mix. */
+html,body{min-height:100%;font-family:"Inter var",Inter,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;font-size:16px;line-height:1.5;-webkit-text-size-adjust:100%}
+#compat-shell{max-width:none;padding:20px 3.6% 36px}
+.compat-header{padding:0 3.6%;overflow:visible;border-bottom-width:1px}
+.compat-header-inner,.compat-subnav-inner{max-width:none}
+.compat-topbar{display:table;table-layout:auto;width:100%;min-height:64px;padding:8px 0;overflow:visible}
+.compat-topbar .compat-brand,.compat-topbar .compat-major-nav,.compat-header-right{display:table-cell;vertical-align:middle;margin:0;float:none}
+.compat-brand{font-size:17px;white-space:nowrap;letter-spacing:.035em;padding-right:12px;font-weight:800}
+.compat-logo{width:28px;height:28px;line-height:28px;font-size:14px;border-radius:8px;margin-right:6px}
+.compat-brand-name{display:inline-block;vertical-align:middle;max-width:180px;overflow:hidden;text-overflow:ellipsis}
+.compat-major-nav{white-space:nowrap;text-align:center;padding:4px;border:1px solid;border-radius:12px}
+.compat-major-nav a{font-size:15px;line-height:22px;padding:8px 14px;margin:0 2px;border-radius:8px;font-weight:650}
+.compat-header-right{text-align:right;padding-left:12px;white-space:nowrap}
+.compat-header-search{float:none;display:inline-block;vertical-align:middle;width:230px;margin:0 5px 0 0;max-width:100%}
+.compat-header-search input[type=text]{width:68%;font-size:13px;padding:8px 10px;border-radius:10px}
+.compat-header-search button{font-size:13px;width:28%;padding:8px 4px;margin:0;min-height:36px}
+.compat-account-nav{display:inline-block;vertical-align:middle}
+.compat-account-nav a{display:inline-block;padding:8px 10px;border:1px solid;border-radius:10px;font-weight:bold;font-size:14px;margin:0 0 0 4px;text-decoration:none}
+.compat-subnav{padding:8px 3.6%;border-bottom-width:1px}
+.compat-subnav a,.compat-subnav .compat-disclosure-button{padding:8px 13px;margin:0 3px 0 0;font-size:14px;border-radius:8px;font-weight:600;line-height:22px}
+.compat-subnav a.active{border-color:transparent;border-bottom-width:2px}
+.compat-heading{margin:6px 0 20px}
+.compat-heading h2{font-size:32px;font-weight:750;letter-spacing:-.035em;line-height:1.12;margin:6px 0 8px}
+.compat-eyebrow{font-size:11px;letter-spacing:.2em;margin:0 0 9px;font-weight:800}
+.compat-hero{padding:36px 40px;min-height:205px;border-radius:22px;margin:0 0 26px}
+.compat-hero h2{font-size:44px;letter-spacing:-.055em;line-height:1.08;max-width:850px}
+.compat-hero .compat-note{font-size:16px;max-width:520px;line-height:1.7}
+.compat-hero-art{width:156px;height:234px;margin:0 0 0 26px;border-radius:14px}
+.compat-shelf{margin:24px 0 30px}
+.compat-row-head{margin-bottom:12px}
+.compat-row-head h2,.compat-shelf h2{font-size:22px;line-height:1.3;letter-spacing:-.025em;font-weight:680}
+.compat-cards{margin:0 -6px 18px}
+.compat-cards li{padding:6px;width:12.5%}
+.compat-card{position:relative;padding:0;margin:0;overflow:hidden;border:1px solid;border-radius:14px;box-shadow:0 6px 18px rgba(0,0,0,.2)}
+.compat-card:hover{text-decoration:none}
+.compat-card .compat-poster{border:0;border-radius:13px 13px 0 0;box-shadow:none}
+.compat-card .compat-poster-fallback{top:auto;bottom:12px;left:10px;right:10px;text-align:left;font-size:14px;line-height:1.3;word-wrap:break-word;overflow:hidden;max-height:85%;text-shadow:0 2px 6px #000}
+.compat-card-caption{padding:10px 12px 12px}
+.compat-card-caption strong{margin:0;font-size:14px;line-height:1.45;font-weight:620;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.compat-card-caption small{margin:3px 0 0;font-size:12px;line-height:1.5;min-height:18px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.compat-poster-progress{position:absolute;left:0;right:0;bottom:0;height:4px;margin:0;border-radius:0;z-index:2}
+.compat-poster-progress>span{height:4px}
+.compat-panel,.compat-empty,.compat-search,.compat-detail{border-radius:14px;padding:20px;margin:14px 0 20px}
+.compat-detail{padding:24px}
+.compat-media-detail>.compat-poster{width:180px;height:270px;margin:0 24px 12px 0;border-radius:10px}
+.compat-detail h2{font-size:32px;line-height:1.12;letter-spacing:-.035em}
+.compat-synopsis{line-height:1.65}
+button,a.compat-button,a.compat-choice{font-size:14px;min-height:36px;padding:8px 14px;line-height:1.5;border-radius:10px;box-sizing:border-box;font-weight:600}
+.compat-choice.active,a.compat-choice.active{padding:8px 14px;border-width:1px}
+.compat-actions .compat-action button,.compat-fields button[type=submit]{font-weight:700}
+.compat-fields label{font-size:14px;line-height:1.5;margin:12px 0}
+.compat-fields input:not([type=checkbox]),.compat-fields select,.compat-fields textarea{border-radius:8px;padding:10px 12px}
+.compat-fields .compat-check input{display:inline-block;margin-right:8px;width:18px;height:18px}
+.compat-list li,.compat-browse-row,.compat-episode-link{border-radius:12px}
+.compat-list li{padding:12px 16px;margin-bottom:8px}
+.compat-video-stage{position:relative;width:100%;height:0;padding-top:56.25%;overflow:hidden;border-radius:12px;background:#000}
+.compat-video-stage #compat-media{position:absolute;top:0;left:0;width:100%;height:100%;min-height:0;max-height:none;border:0;border-radius:0;object-fit:contain}
+.compat-live-grid{list-style:none;margin:10px -7px 22px;padding:0;font-size:0}
+.compat-live-grid li.compat-live-tile{display:inline-block;vertical-align:top;width:calc(25% - 14px);width:23.5%;margin:0 .75% 14px;padding:14px;box-sizing:border-box;border-radius:20px;font-size:15px;min-height:224px}
+.compat-live-grid .compat-live-watch{display:block;text-decoration:none;min-height:165px}
+.compat-live-top{display:block;overflow:hidden;line-height:36px;height:36px;margin-bottom:8px}
+.compat-live-number{float:left;font-size:27px;font-weight:820;letter-spacing:-.05em;line-height:36px;margin-right:8px}
+.compat-channel-logo{display:inline-block;vertical-align:middle;max-width:84px;max-height:34px;margin-right:4px}
+.compat-live-badge{float:right;border-radius:20px;font-size:10px;font-weight:800;letter-spacing:.08em;line-height:18px;padding:2px 7px;margin-top:7px}
+.compat-live-channel,.compat-live-title,.compat-live-time,.compat-live-next{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.compat-live-channel{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em}
+.compat-live-title{font-size:17px;line-height:1.4;margin:7px 0}
+.compat-live-time,.compat-live-next{font-size:12px;margin:5px 0}
+.compat-live-grid .compat-button{display:inline-block;font-size:12px;margin:10px 0 0;min-height:32px;padding:6px 10px}
+.compat-live-grid .compat-empty{display:block;width:auto;font-size:16px}
+.compat-content-box .compat-live-grid li.compat-live-tile{width:20%}
+.compat-compact .compat-hero{min-height:0;padding:20px}
+.compat-compact .compat-hero-art{width:100px;height:150px}
+@media screen and (max-width:1200px){
+ .compat-header-search{width:180px}.compat-major-nav a{padding:8px 10px}.compat-brand-name{max-width:120px}
+ .compat-cards li{width:16.666%}.compat-live-grid li.compat-live-tile{width:31.8%}
+}
+@media screen and (max-width:960px){
+ .compat-topbar{display:block;padding:10px 0}.compat-topbar .compat-brand{display:inline-block;margin:0 12px 8px 0}.compat-topbar .compat-major-nav{display:inline-block;text-align:left;clear:none;white-space:normal;margin-bottom:8px}
+ .compat-header-right{display:block;text-align:left;padding:0;white-space:normal}.compat-header-search{width:240px}
+ .compat-cards li{width:20%}.compat-live-grid li.compat-live-tile{width:48.5%}
+}
+@media screen and (max-width:760px){
+ #compat-shell{padding:16px 18px 24px}.compat-header,.compat-subnav{padding-left:16px;padding-right:16px}
+ .compat-hero{min-height:0;padding:24px}.compat-hero h2{font-size:32px}.compat-hero-art{width:110px;height:165px}
+ .compat-heading h2,.compat-detail h2{font-size:27px}.compat-cards li{width:25%}.compat-card-caption{padding:8px 9px 10px}
+ .compat-media-detail>.compat-poster{width:145px;height:217px;margin-right:18px}
+}
+@media screen and (max-width:480px){
+ #compat-shell{padding:12px}.compat-header,.compat-subnav{padding-left:10px;padding-right:10px}
+ .compat-topbar .compat-major-nav{display:block;padding:3px;margin:0 0 8px}.compat-major-nav a{padding:7px 9px;font-size:14px;margin:2px 0}
+ .compat-header-right{display:block}.compat-header-search{width:60%;max-width:100%;margin:0}.compat-header-search button{padding:7px 2px}
+ .compat-account-nav a{font-size:12px;padding:7px 6px}.compat-brand-name{max-width:170px}
+ .compat-hero{padding:18px}.compat-hero h2{font-size:27px}.compat-hero-art{width:74px;height:111px;margin-left:12px}
+ .compat-heading h2,.compat-detail h2{font-size:24px}.compat-cards li{width:50%;padding:5px}.compat-card-caption strong{font-size:13px}
+ .compat-media-detail>.compat-poster{float:none;width:130px;height:195px;margin:0 auto 16px}
+ .compat-live-grid li.compat-live-tile{display:block;width:auto;margin:0 0 10px;min-height:0}
+}
+.compat-width-medium .compat-cards li{width:20%}
+.compat-width-small .compat-topbar,.compat-width-tiny .compat-topbar{display:block}
+.compat-width-small .compat-topbar .compat-brand,.compat-width-tiny .compat-topbar .compat-brand{display:inline-block}
+.compat-width-small .compat-topbar .compat-major-nav,.compat-width-tiny .compat-topbar .compat-major-nav{display:block;white-space:normal;text-align:left}
+.compat-width-small .compat-header-right,.compat-width-tiny .compat-header-right{display:block;text-align:left;white-space:normal;padding:4px 0}
+.compat-width-small .compat-cards li{width:25%}.compat-width-tiny .compat-cards li{width:50%}
+.compat-width-small .compat-live-grid li.compat-live-tile{width:48%}.compat-width-tiny .compat-live-grid li.compat-live-tile{display:block;width:auto;margin:0 0 10px;min-height:0}
+.compat-width-tiny .compat-heading h2,.compat-width-tiny .compat-detail h2{font-size:24px}
+
+/* dark: values flattened from the full-interface theme tokens. */
+body.compat-dark{background:#070a13;background:radial-gradient(ellipse 1000px 540px at 0 0,#11242f,transparent 70%),radial-gradient(ellipse 900px 650px at 100% 0,#151828,transparent 70%),#070a13;color:#edf8ff}
+body.compat-dark .compat-header,body.compat-dark .compat-subnav{background:#09101e;border-color:#1d2b41}
+body.compat-dark .compat-major-nav,body.compat-dark .compat-header-search input[type=text]{background:#0c1222;border-color:#2e4b66}
+body.compat-dark .compat-brand,body.compat-dark .compat-card,body.compat-dark .compat-card strong,body.compat-dark .compat-live-watch,body.compat-dark .compat-list .compat-live-watch{color:#edf8ff}
+body.compat-dark .compat-logo,body.compat-dark .compat-major-nav a.active,body.compat-dark .compat-account-nav a.active,body.compat-dark a.compat-primary,body.compat-dark .compat-play-primary:first-of-type button,body.compat-dark .compat-poster-progress>span,body.compat-dark .compat-live-grid .compat-progress>span{background:#59e9ff;background:linear-gradient(115deg,#59e9ff,#a7a0ff);color:#070a13;border-color:#59e9ff}
+body.compat-dark .compat-major-nav a:not(.active),body.compat-dark .compat-subnav a:not(.active),body.compat-dark .compat-account-nav a:not(.active){color:#a7b9d2;background:transparent}
+body.compat-dark .compat-subnav a.active{color:#59e9ff;background:#162d3e;border-color:transparent;border-bottom-color:#59e9ff;box-shadow:inset 0 -2px 0 #59e9ff}
+body.compat-dark .compat-account-nav a{border-color:#2e4b66}
+body.compat-dark .compat-hero{background:#17243b;background:radial-gradient(ellipse at 90% 20%,#384068,transparent 60%),#17243b;border-color:#2e4b66}
+body.compat-dark .compat-panel,body.compat-dark .compat-search,body.compat-dark .compat-detail,body.compat-dark .compat-empty{background:#0e1729;border-color:#2e4b66}
+body.compat-dark .compat-card,body.compat-dark .compat-live-grid li.compat-live-tile,body.compat-dark .compat-list li,body.compat-dark .compat-provider-card{background:#0e1729;border-color:#1d2b41}
+body.compat-dark .compat-card .compat-poster,body.compat-dark .compat-detail .compat-poster{background:#17243b;background:linear-gradient(145deg,#17243b,#0c1222)}
+body.compat-dark .compat-card .compat-poster-fallback{color:#edf8ff;text-shadow:none}
+body.compat-dark .compat-card-caption small,body.compat-dark .compat-live-channel,body.compat-dark .compat-live-time,body.compat-dark .compat-live-next,body.compat-dark .compat-note{color:#a7b9d2}
+body.compat-dark .compat-live-badge{background:#162d3e;color:#59e9ff;border:1px solid #2e4b66}
+body.compat-dark .compat-live-grid li.compat-live-tile.active{border-color:#59e9ff}
+body.compat-dark .compat-directory a.compat-browse-row,body.compat-dark .compat-episode-link{background:#0e1729;border-color:#1d2b41;color:#edf8ff}
+body.compat-dark .compat-browse-row.active,body.compat-dark .compat-browse-row:hover,body.compat-dark .compat-card:hover,body.compat-dark .compat-live-watch:hover,body.compat-dark .compat-card:focus,body.compat-dark .compat-episode-link:focus{border-color:#59e9ff;color:#edf8ff}
+body.compat-dark .compat-card:focus{background:#0e1729}
+body.compat-dark button:focus,body.compat-dark a:focus,body.compat-dark input:focus,body.compat-dark select:focus,body.compat-dark textarea:focus,body.compat-dark .compat-header a:focus,body.compat-dark .compat-subnav a:focus,body.compat-dark .compat-card:focus,body.compat-dark .compat-live-watch:focus{outline:3px solid #59e9ff;outline-offset:2px}
+body.compat-dark .compat-major-nav a.active:focus,body.compat-dark .compat-account-nav a.active:focus,body.compat-dark a.compat-primary:focus,body.compat-dark .compat-play-primary:first-of-type button:focus{background:#59e9ff;color:#070a13}
+
+/* retro-scifi: values flattened from the full-interface theme tokens. */
+body.compat-retro-scifi{background:#050d09;background:radial-gradient(ellipse 1000px 540px at 0 0,#15291c,transparent 70%),radial-gradient(ellipse 900px 650px at 100% 0,#162214,transparent 70%),#050d09;color:#e4ffe9}
+body.compat-retro-scifi .compat-header,body.compat-retro-scifi .compat-subnav{background:#07180f;border-color:#1d3a26}
+body.compat-retro-scifi .compat-major-nav,body.compat-retro-scifi .compat-header-search input[type=text]{background:#0a1910;border-color:#326140}
+body.compat-retro-scifi .compat-brand,body.compat-retro-scifi .compat-card,body.compat-retro-scifi .compat-card strong,body.compat-retro-scifi .compat-live-watch,body.compat-retro-scifi .compat-list .compat-live-watch{color:#e4ffe9}
+body.compat-retro-scifi .compat-logo,body.compat-retro-scifi .compat-major-nav a.active,body.compat-retro-scifi .compat-account-nav a.active,body.compat-retro-scifi a.compat-primary,body.compat-retro-scifi .compat-play-primary:first-of-type button,body.compat-retro-scifi .compat-poster-progress>span,body.compat-retro-scifi .compat-live-grid .compat-progress>span{background:#8affaa;background:linear-gradient(115deg,#8affaa,#c7f785);color:#050d09;border-color:#8affaa}
+body.compat-retro-scifi .compat-major-nav a:not(.active),body.compat-retro-scifi .compat-subnav a:not(.active),body.compat-retro-scifi .compat-account-nav a:not(.active){color:#a3c9ad;background:transparent}
+body.compat-retro-scifi .compat-subnav a.active{color:#8affaa;background:#1a3623;border-color:transparent;border-bottom-color:#8affaa;box-shadow:inset 0 -2px 0 #8affaa}
+body.compat-retro-scifi .compat-account-nav a{border-color:#326140}
+body.compat-retro-scifi .compat-hero{background:#193a24;background:radial-gradient(ellipse at 90% 20%,#41653a,transparent 60%),#193a24;border-color:#326140}
+body.compat-retro-scifi .compat-panel,body.compat-retro-scifi .compat-search,body.compat-retro-scifi .compat-detail,body.compat-retro-scifi .compat-empty{background:#0c2115;border-color:#326140}
+body.compat-retro-scifi .compat-card,body.compat-retro-scifi .compat-live-grid li.compat-live-tile,body.compat-retro-scifi .compat-list li,body.compat-retro-scifi .compat-provider-card{background:#0c2115;border-color:#1d3a26}
+body.compat-retro-scifi .compat-card .compat-poster,body.compat-retro-scifi .compat-detail .compat-poster{background:#193a24;background:linear-gradient(145deg,#193a24,#0a1910)}
+body.compat-retro-scifi .compat-card .compat-poster-fallback{color:#e4ffe9;text-shadow:none}
+body.compat-retro-scifi .compat-card-caption small,body.compat-retro-scifi .compat-live-channel,body.compat-retro-scifi .compat-live-time,body.compat-retro-scifi .compat-live-next,body.compat-retro-scifi .compat-note{color:#a3c9ad}
+body.compat-retro-scifi .compat-live-badge{background:#1a3623;color:#8affaa;border:1px solid #326140}
+body.compat-retro-scifi .compat-live-grid li.compat-live-tile.active{border-color:#8affaa}
+body.compat-retro-scifi .compat-directory a.compat-browse-row,body.compat-retro-scifi .compat-episode-link{background:#0c2115;border-color:#1d3a26;color:#e4ffe9}
+body.compat-retro-scifi .compat-browse-row.active,body.compat-retro-scifi .compat-browse-row:hover,body.compat-retro-scifi .compat-card:hover,body.compat-retro-scifi .compat-live-watch:hover,body.compat-retro-scifi .compat-card:focus,body.compat-retro-scifi .compat-episode-link:focus{border-color:#8affaa;color:#e4ffe9}
+body.compat-retro-scifi .compat-card:focus{background:#0c2115}
+body.compat-retro-scifi button:focus,body.compat-retro-scifi a:focus,body.compat-retro-scifi input:focus,body.compat-retro-scifi select:focus,body.compat-retro-scifi textarea:focus,body.compat-retro-scifi .compat-header a:focus,body.compat-retro-scifi .compat-subnav a:focus,body.compat-retro-scifi .compat-card:focus,body.compat-retro-scifi .compat-live-watch:focus{outline:3px solid #8affaa;outline-offset:2px}
+body.compat-retro-scifi .compat-major-nav a.active:focus,body.compat-retro-scifi .compat-account-nav a.active:focus,body.compat-retro-scifi a.compat-primary:focus,body.compat-retro-scifi .compat-play-primary:first-of-type button:focus{background:#8affaa;color:#050d09}
+
+/* light: values flattened from the full-interface theme tokens. */
+body.compat-light{background:#edf3f9;background:radial-gradient(ellipse 1000px 540px at 0 0,#d2e3ee,transparent 70%),radial-gradient(ellipse 900px 650px at 100% 0,#e1e5f3,transparent 70%),#edf3f9;color:#12243a}
+body.compat-light .compat-header,body.compat-light .compat-subnav{background:#feffff;border-color:#e11aNaN}
+body.compat-light .compat-major-nav,body.compat-light .compat-header-search input[type=text]{background:#fff;border-color:#be27NaN}
+body.compat-light .compat-brand,body.compat-light .compat-card,body.compat-light .compat-card strong,body.compat-light .compat-live-watch,body.compat-light .compat-list .compat-live-watch{color:#12243a}
+body.compat-light .compat-logo,body.compat-light .compat-major-nav a.active,body.compat-light .compat-account-nav a.active,body.compat-light a.compat-primary,body.compat-light .compat-play-primary:first-of-type button,body.compat-light .compat-poster-progress>span,body.compat-light .compat-live-grid .compat-progress>span{background:#086d99;background:linear-gradient(115deg,#086d99,#6855b7);color:#fff;border-color:#086d99}
+body.compat-light .compat-major-nav a:not(.active),body.compat-light .compat-subnav a:not(.active),body.compat-light .compat-account-nav a:not(.active){color:#465d75;background:transparent}
+body.compat-light .compat-subnav a.active{color:#086d99;background:#e01bNaN;border-color:transparent;border-bottom-color:#086d99;box-shadow:inset 0 -2px 0 #086d99}
+body.compat-light .compat-account-nav a{border-color:#be27NaN}
+body.compat-light .compat-hero{background:#dce6f1;background:radial-gradient(ellipse at 90% 20%,#c2c5e4,transparent 60%),#dce6f1;border-color:#be27NaN}
+body.compat-light .compat-panel,body.compat-light .compat-search,body.compat-light .compat-detail,body.compat-light .compat-empty{background:#fff;border-color:#be27NaN}
+body.compat-light .compat-card,body.compat-light .compat-live-grid li.compat-live-tile,body.compat-light .compat-list li,body.compat-light .compat-provider-card{background:#fff;border-color:#e11aNaN}
+body.compat-light .compat-card .compat-poster,body.compat-light .compat-detail .compat-poster{background:#dce6f1;background:linear-gradient(145deg,#dce6f1,#fff)}
+body.compat-light .compat-card .compat-poster-fallback{color:#12243a;text-shadow:none}
+body.compat-light .compat-card-caption small,body.compat-light .compat-live-channel,body.compat-light .compat-live-time,body.compat-light .compat-live-next,body.compat-light .compat-note{color:#465d75}
+body.compat-light .compat-live-badge{background:#e01bNaN;color:#086d99;border:1px solid #be27NaN}
+body.compat-light .compat-live-grid li.compat-live-tile.active{border-color:#086d99}
+body.compat-light .compat-directory a.compat-browse-row,body.compat-light .compat-episode-link{background:#fff;border-color:#e11aNaN;color:#12243a}
+body.compat-light .compat-browse-row.active,body.compat-light .compat-browse-row:hover,body.compat-light .compat-card:hover,body.compat-light .compat-live-watch:hover,body.compat-light .compat-card:focus,body.compat-light .compat-episode-link:focus{border-color:#086d99;color:#12243a}
+body.compat-light .compat-card:focus{background:#fff}
+body.compat-light button:focus,body.compat-light a:focus,body.compat-light input:focus,body.compat-light select:focus,body.compat-light textarea:focus,body.compat-light .compat-header a:focus,body.compat-light .compat-subnav a:focus,body.compat-light .compat-card:focus,body.compat-light .compat-live-watch:focus{outline:3px solid #086d99;outline-offset:2px}
+body.compat-light .compat-major-nav a.active:focus,body.compat-light .compat-account-nav a.active:focus,body.compat-light a.compat-primary:focus,body.compat-light .compat-play-primary:first-of-type button:focus{background:#086d99;color:#fff}
+
+/* steampunk: values flattened from the full-interface theme tokens. */
+body.compat-steampunk{background:#15110e;background:radial-gradient(ellipse 1000px 540px at 0 0,#2d251a,transparent 70%),radial-gradient(ellipse 900px 650px at 100% 0,#261c16,transparent 70%),#15110e;color:#f7e9cf}
+body.compat-steampunk .compat-header,body.compat-steampunk .compat-subnav{background:#201912;border-color:#423524}
+body.compat-steampunk .compat-major-nav,body.compat-steampunk .compat-header-search input[type=text]{background:#211a15;border-color:#77613f}
+body.compat-steampunk .compat-brand,body.compat-steampunk .compat-card,body.compat-steampunk .compat-card strong,body.compat-steampunk .compat-live-watch,body.compat-steampunk .compat-list .compat-live-watch{color:#f7e9cf}
+body.compat-steampunk .compat-logo,body.compat-steampunk .compat-major-nav a.active,body.compat-steampunk .compat-account-nav a.active,body.compat-steampunk a.compat-primary,body.compat-steampunk .compat-play-primary:first-of-type button,body.compat-steampunk .compat-poster-progress>span,body.compat-steampunk .compat-live-grid .compat-progress>span{background:#e2bb72;background:linear-gradient(115deg,#e2bb72,#cd8b64);color:#15110e;border-color:#e2bb72}
+body.compat-steampunk .compat-major-nav a:not(.active),body.compat-steampunk .compat-subnav a:not(.active),body.compat-steampunk .compat-account-nav a:not(.active){color:#c9b695;background:transparent}
+body.compat-steampunk .compat-subnav a.active{color:#e2bb72;background:#392e21;border-color:transparent;border-bottom-color:#e2bb72;box-shadow:inset 0 -2px 0 #e2bb72}
+body.compat-steampunk .compat-account-nav a{border-color:#77613f}
+body.compat-steampunk .compat-hero{background:#35281e;background:radial-gradient(ellipse at 90% 20%,#583f2e,transparent 60%),#35281e;border-color:#77613f}
+body.compat-steampunk .compat-panel,body.compat-steampunk .compat-search,body.compat-steampunk .compat-detail,body.compat-steampunk .compat-empty{background:#251d17;border-color:#77613f}
+body.compat-steampunk .compat-card,body.compat-steampunk .compat-live-grid li.compat-live-tile,body.compat-steampunk .compat-list li,body.compat-steampunk .compat-provider-card{background:#251d17;border-color:#423524}
+body.compat-steampunk .compat-card .compat-poster,body.compat-steampunk .compat-detail .compat-poster{background:#35281e;background:linear-gradient(145deg,#35281e,#211a15)}
+body.compat-steampunk .compat-card .compat-poster-fallback{color:#f7e9cf;text-shadow:none}
+body.compat-steampunk .compat-card-caption small,body.compat-steampunk .compat-live-channel,body.compat-steampunk .compat-live-time,body.compat-steampunk .compat-live-next,body.compat-steampunk .compat-note{color:#c9b695}
+body.compat-steampunk .compat-live-badge{background:#392e21;color:#e2bb72;border:1px solid #77613f}
+body.compat-steampunk .compat-live-grid li.compat-live-tile.active{border-color:#e2bb72}
+body.compat-steampunk .compat-directory a.compat-browse-row,body.compat-steampunk .compat-episode-link{background:#251d17;border-color:#423524;color:#f7e9cf}
+body.compat-steampunk .compat-browse-row.active,body.compat-steampunk .compat-browse-row:hover,body.compat-steampunk .compat-card:hover,body.compat-steampunk .compat-live-watch:hover,body.compat-steampunk .compat-card:focus,body.compat-steampunk .compat-episode-link:focus{border-color:#e2bb72;color:#f7e9cf}
+body.compat-steampunk .compat-card:focus{background:#251d17}
+body.compat-steampunk button:focus,body.compat-steampunk a:focus,body.compat-steampunk input:focus,body.compat-steampunk select:focus,body.compat-steampunk textarea:focus,body.compat-steampunk .compat-header a:focus,body.compat-steampunk .compat-subnav a:focus,body.compat-steampunk .compat-card:focus,body.compat-steampunk .compat-live-watch:focus{outline:3px solid #e2bb72;outline-offset:2px}
+body.compat-steampunk .compat-major-nav a.active:focus,body.compat-steampunk .compat-account-nav a.active:focus,body.compat-steampunk a.compat-primary:focus,body.compat-steampunk .compat-play-primary:first-of-type button:focus{background:#e2bb72;color:#15110e}
+
+/* vintage-tv: values flattened from the full-interface theme tokens. */
+body.compat-vintage-tv{background:#181914;background:radial-gradient(ellipse 1000px 540px at 0 0,#302c1e,transparent 70%),radial-gradient(ellipse 900px 650px at 100% 0,#29231b,transparent 70%),#181914;color:#f6efd4}
+body.compat-vintage-tv .compat-header,body.compat-vintage-tv .compat-subnav{background:#24251e;border-color:#454733}
+body.compat-vintage-tv .compat-major-nav,body.compat-vintage-tv .compat-header-search input[type=text]{background:#25271f;border-color:#6d714a}
+body.compat-vintage-tv .compat-brand,body.compat-vintage-tv .compat-card,body.compat-vintage-tv .compat-card strong,body.compat-vintage-tv .compat-live-watch,body.compat-vintage-tv .compat-list .compat-live-watch{color:#f6efd4}
+body.compat-vintage-tv .compat-logo,body.compat-vintage-tv .compat-major-nav a.active,body.compat-vintage-tv .compat-account-nav a.active,body.compat-vintage-tv a.compat-primary,body.compat-vintage-tv .compat-play-primary:first-of-type button,body.compat-vintage-tv .compat-poster-progress>span,body.compat-vintage-tv .compat-live-grid .compat-progress>span{background:#e7be68;background:linear-gradient(115deg,#e7be68,#d78c63);color:#181914;border-color:#e7be68}
+body.compat-vintage-tv .compat-major-nav a:not(.active),body.compat-vintage-tv .compat-subnav a:not(.active),body.compat-vintage-tv .compat-account-nav a:not(.active){color:#c4c2a5;background:transparent}
+body.compat-vintage-tv .compat-subnav a.active{color:#e7be68;background:#3d3a28;border-color:transparent;border-bottom-color:#e7be68;box-shadow:inset 0 -2px 0 #e7be68}
+body.compat-vintage-tv .compat-account-nav a{border-color:#6d714a}
+body.compat-vintage-tv .compat-hero{background:#3a3b2a;background:radial-gradient(ellipse at 90% 20%,#5e4d37,transparent 60%),#3a3b2a;border-color:#6d714a}
+body.compat-vintage-tv .compat-panel,body.compat-vintage-tv .compat-search,body.compat-vintage-tv .compat-detail,body.compat-vintage-tv .compat-empty{background:#292b21;border-color:#6d714a}
+body.compat-vintage-tv .compat-card,body.compat-vintage-tv .compat-live-grid li.compat-live-tile,body.compat-vintage-tv .compat-list li,body.compat-vintage-tv .compat-provider-card{background:#292b21;border-color:#454733}
+body.compat-vintage-tv .compat-card .compat-poster,body.compat-vintage-tv .compat-detail .compat-poster{background:#3a3b2a;background:linear-gradient(145deg,#3a3b2a,#25271f)}
+body.compat-vintage-tv .compat-card .compat-poster-fallback{color:#f6efd4;text-shadow:none}
+body.compat-vintage-tv .compat-card-caption small,body.compat-vintage-tv .compat-live-channel,body.compat-vintage-tv .compat-live-time,body.compat-vintage-tv .compat-live-next,body.compat-vintage-tv .compat-note{color:#c4c2a5}
+body.compat-vintage-tv .compat-live-badge{background:#3d3a28;color:#e7be68;border:1px solid #6d714a}
+body.compat-vintage-tv .compat-live-grid li.compat-live-tile.active{border-color:#e7be68}
+body.compat-vintage-tv .compat-directory a.compat-browse-row,body.compat-vintage-tv .compat-episode-link{background:#292b21;border-color:#454733;color:#f6efd4}
+body.compat-vintage-tv .compat-browse-row.active,body.compat-vintage-tv .compat-browse-row:hover,body.compat-vintage-tv .compat-card:hover,body.compat-vintage-tv .compat-live-watch:hover,body.compat-vintage-tv .compat-card:focus,body.compat-vintage-tv .compat-episode-link:focus{border-color:#e7be68;color:#f6efd4}
+body.compat-vintage-tv .compat-card:focus{background:#292b21}
+body.compat-vintage-tv button:focus,body.compat-vintage-tv a:focus,body.compat-vintage-tv input:focus,body.compat-vintage-tv select:focus,body.compat-vintage-tv textarea:focus,body.compat-vintage-tv .compat-header a:focus,body.compat-vintage-tv .compat-subnav a:focus,body.compat-vintage-tv .compat-card:focus,body.compat-vintage-tv .compat-live-watch:focus{outline:3px solid #e7be68;outline-offset:2px}
+body.compat-vintage-tv .compat-major-nav a.active:focus,body.compat-vintage-tv .compat-account-nav a.active:focus,body.compat-vintage-tv a.compat-primary:focus,body.compat-vintage-tv .compat-play-primary:first-of-type button:focus{background:#e7be68;color:#181914}
+
+/* after-hours: values flattened from the full-interface theme tokens. */
+body.compat-after-hours{background:#160e18;background:radial-gradient(ellipse 1000px 540px at 0 0,#2f222b,transparent 70%),radial-gradient(ellipse 900px 650px at 100% 0,#281925,transparent 70%),#160e18;color:#f9e8ef}
+body.compat-after-hours .compat-header,body.compat-after-hours .compat-subnav{background:#241625;border-color:#4a2f43}
+body.compat-after-hours .compat-major-nav,body.compat-after-hours .compat-header-search input[type=text]{background:#251626;border-color:#82596b}
+body.compat-after-hours .compat-brand,body.compat-after-hours .compat-card,body.compat-after-hours .compat-card strong,body.compat-after-hours .compat-live-watch,body.compat-after-hours .compat-list .compat-live-watch{color:#f9e8ef}
+body.compat-after-hours .compat-logo,body.compat-after-hours .compat-major-nav a.active,body.compat-after-hours .compat-account-nav a.active,body.compat-after-hours a.compat-primary,body.compat-after-hours .compat-play-primary:first-of-type button,body.compat-after-hours .compat-poster-progress>span,body.compat-after-hours .compat-live-grid .compat-progress>span{background:#eeb5bc;background:linear-gradient(115deg,#eeb5bc,#dc87ac);color:#160e18;border-color:#eeb5bc}
+body.compat-after-hours .compat-major-nav a:not(.active),body.compat-after-hours .compat-subnav a:not(.active),body.compat-after-hours .compat-account-nav a:not(.active){color:#d1afc2;background:transparent}
+body.compat-after-hours .compat-subnav a.active{color:#eeb5bc;background:#3e2a39;border-color:transparent;border-bottom-color:#eeb5bc;box-shadow:inset 0 -2px 0 #eeb5bc}
+body.compat-after-hours .compat-account-nav a{border-color:#82596b}
+body.compat-after-hours .compat-hero{background:#3d2438;background:radial-gradient(ellipse at 90% 20%,#613b52,transparent 60%),#3d2438;border-color:#82596b}
+body.compat-after-hours .compat-panel,body.compat-after-hours .compat-search,body.compat-after-hours .compat-detail,body.compat-after-hours .compat-empty{background:#2b192c;border-color:#82596b}
+body.compat-after-hours .compat-card,body.compat-after-hours .compat-live-grid li.compat-live-tile,body.compat-after-hours .compat-list li,body.compat-after-hours .compat-provider-card{background:#2b192c;border-color:#4a2f43}
+body.compat-after-hours .compat-card .compat-poster,body.compat-after-hours .compat-detail .compat-poster{background:#3d2438;background:linear-gradient(145deg,#3d2438,#251626)}
+body.compat-after-hours .compat-card .compat-poster-fallback{color:#f9e8ef;text-shadow:none}
+body.compat-after-hours .compat-card-caption small,body.compat-after-hours .compat-live-channel,body.compat-after-hours .compat-live-time,body.compat-after-hours .compat-live-next,body.compat-after-hours .compat-note{color:#d1afc2}
+body.compat-after-hours .compat-live-badge{background:#3e2a39;color:#eeb5bc;border:1px solid #82596b}
+body.compat-after-hours .compat-live-grid li.compat-live-tile.active{border-color:#eeb5bc}
+body.compat-after-hours .compat-directory a.compat-browse-row,body.compat-after-hours .compat-episode-link{background:#2b192c;border-color:#4a2f43;color:#f9e8ef}
+body.compat-after-hours .compat-browse-row.active,body.compat-after-hours .compat-browse-row:hover,body.compat-after-hours .compat-card:hover,body.compat-after-hours .compat-live-watch:hover,body.compat-after-hours .compat-card:focus,body.compat-after-hours .compat-episode-link:focus{border-color:#eeb5bc;color:#f9e8ef}
+body.compat-after-hours .compat-card:focus{background:#2b192c}
+body.compat-after-hours button:focus,body.compat-after-hours a:focus,body.compat-after-hours input:focus,body.compat-after-hours select:focus,body.compat-after-hours textarea:focus,body.compat-after-hours .compat-header a:focus,body.compat-after-hours .compat-subnav a:focus,body.compat-after-hours .compat-card:focus,body.compat-after-hours .compat-live-watch:focus{outline:3px solid #eeb5bc;outline-offset:2px}
+body.compat-after-hours .compat-major-nav a.active:focus,body.compat-after-hours .compat-account-nav a.active:focus,body.compat-after-hours a.compat-primary:focus,body.compat-after-hours .compat-play-primary:first-of-type button:focus{background:#eeb5bc;color:#160e18}
+
+/* ninja-extreme: values flattened from the full-interface theme tokens. */
+body.compat-ninja-extreme{background:#131b36;background:radial-gradient(ellipse 1000px 540px at 0 0,#2f323f,transparent 70%),radial-gradient(ellipse 900px 650px at 100% 0,#1a2d45,transparent 70%),#131b36;color:#f4f7ff}
+body.compat-ninja-extreme .compat-header,body.compat-ninja-extreme .compat-subnav{background:#192745;border-color:#395178}
+body.compat-ninja-extreme .compat-major-nav,body.compat-ninja-extreme .compat-header-search input[type=text]{background:#1d2b4c;border-color:#5779a1}
+body.compat-ninja-extreme .compat-brand,body.compat-ninja-extreme .compat-card,body.compat-ninja-extreme .compat-card strong,body.compat-ninja-extreme .compat-live-watch,body.compat-ninja-extreme .compat-list .compat-live-watch{color:#f4f7ff}
+body.compat-ninja-extreme .compat-logo,body.compat-ninja-extreme .compat-major-nav a.active,body.compat-ninja-extreme .compat-account-nav a.active,body.compat-ninja-extreme a.compat-primary,body.compat-ninja-extreme .compat-play-primary:first-of-type button,body.compat-ninja-extreme .compat-poster-progress>span,body.compat-ninja-extreme .compat-live-grid .compat-progress>span{background:#ffe280;background:linear-gradient(115deg,#ffe280,#64e2de);color:#131b36;border-color:#ffe280}
+body.compat-ninja-extreme .compat-major-nav a:not(.active),body.compat-ninja-extreme .compat-subnav a:not(.active),body.compat-ninja-extreme .compat-account-nav a:not(.active){color:#becde7;background:transparent}
+body.compat-ninja-extreme .compat-subnav a.active{color:#ffe280;background:#394253;border-color:transparent;border-bottom-color:#ffe280;box-shadow:inset 0 -2px 0 #ffe280}
+body.compat-ninja-extreme .compat-account-nav a{border-color:#5779a1}
+body.compat-ninja-extreme .compat-hero{background:#2c3d64;background:radial-gradient(ellipse at 90% 20%,#396380,transparent 60%),#2c3d64;border-color:#5779a1}
+body.compat-ninja-extreme .compat-panel,body.compat-ninja-extreme .compat-search,body.compat-ninja-extreme .compat-detail,body.compat-ninja-extreme .compat-empty{background:#223151;border-color:#5779a1}
+body.compat-ninja-extreme .compat-card,body.compat-ninja-extreme .compat-live-grid li.compat-live-tile,body.compat-ninja-extreme .compat-list li,body.compat-ninja-extreme .compat-provider-card{background:#223151;border-color:#395178}
+body.compat-ninja-extreme .compat-card .compat-poster,body.compat-ninja-extreme .compat-detail .compat-poster{background:#2c3d64;background:linear-gradient(145deg,#2c3d64,#1d2b4c)}
+body.compat-ninja-extreme .compat-card .compat-poster-fallback{color:#f4f7ff;text-shadow:none}
+body.compat-ninja-extreme .compat-card-caption small,body.compat-ninja-extreme .compat-live-channel,body.compat-ninja-extreme .compat-live-time,body.compat-ninja-extreme .compat-live-next,body.compat-ninja-extreme .compat-note{color:#becde7}
+body.compat-ninja-extreme .compat-live-badge{background:#394253;color:#ffe280;border:1px solid #5779a1}
+body.compat-ninja-extreme .compat-live-grid li.compat-live-tile.active{border-color:#ffe280}
+body.compat-ninja-extreme .compat-directory a.compat-browse-row,body.compat-ninja-extreme .compat-episode-link{background:#223151;border-color:#395178;color:#f4f7ff}
+body.compat-ninja-extreme .compat-browse-row.active,body.compat-ninja-extreme .compat-browse-row:hover,body.compat-ninja-extreme .compat-card:hover,body.compat-ninja-extreme .compat-live-watch:hover,body.compat-ninja-extreme .compat-card:focus,body.compat-ninja-extreme .compat-episode-link:focus{border-color:#ffe280;color:#f4f7ff}
+body.compat-ninja-extreme .compat-card:focus{background:#223151}
+body.compat-ninja-extreme button:focus,body.compat-ninja-extreme a:focus,body.compat-ninja-extreme input:focus,body.compat-ninja-extreme select:focus,body.compat-ninja-extreme textarea:focus,body.compat-ninja-extreme .compat-header a:focus,body.compat-ninja-extreme .compat-subnav a:focus,body.compat-ninja-extreme .compat-card:focus,body.compat-ninja-extreme .compat-live-watch:focus{outline:3px solid #ffe280;outline-offset:2px}
+body.compat-ninja-extreme .compat-major-nav a.active:focus,body.compat-ninja-extreme .compat-account-nav a.active:focus,body.compat-ninja-extreme a.compat-primary:focus,body.compat-ninja-extreme .compat-play-primary:first-of-type button:focus{background:#ffe280;color:#131b36}
+
+/* anime: values flattened from the full-interface theme tokens. */
+body.compat-anime{background:#181a33;background:radial-gradient(ellipse 1000px 540px at 0 0,#322c46,transparent 70%),radial-gradient(ellipse 900px 650px at 100% 0,#232c42,transparent 70%),#181a33;color:#fff0f5}
+body.compat-anime .compat-header,body.compat-anime .compat-subnav{background:#23263f;border-color:#45486b}
+body.compat-anime .compat-major-nav,body.compat-anime .compat-header-search input[type=text]{background:#242744;border-color:#756f99}
+body.compat-anime .compat-brand,body.compat-anime .compat-card,body.compat-anime .compat-card strong,body.compat-anime .compat-live-watch,body.compat-anime .compat-list .compat-live-watch{color:#fff0f5}
+body.compat-anime .compat-logo,body.compat-anime .compat-major-nav a.active,body.compat-anime .compat-account-nav a.active,body.compat-anime a.compat-primary,body.compat-anime .compat-play-primary:first-of-type button,body.compat-anime .compat-poster-progress>span,body.compat-anime .compat-live-grid .compat-progress>span{background:#f4b6d1;background:linear-gradient(115deg,#f4b6d1,#92e3d8);color:#181a33;border-color:#f4b6d1}
+body.compat-anime .compat-major-nav a:not(.active),body.compat-anime .compat-subnav a:not(.active),body.compat-anime .compat-account-nav a:not(.active){color:#cbc8e4;background:transparent}
+body.compat-anime .compat-subnav a.active{color:#f4b6d1;background:#3e3956;border-color:transparent;border-bottom-color:#f4b6d1;box-shadow:inset 0 -2px 0 #f4b6d1}
+body.compat-anime .compat-account-nav a{border-color:#756f99}
+body.compat-anime .compat-hero{background:#363b5c;background:radial-gradient(ellipse at 90% 20%,#4b6178,transparent 60%),#363b5c;border-color:#756f99}
+body.compat-anime .compat-panel,body.compat-anime .compat-search,body.compat-anime .compat-detail,body.compat-anime .compat-empty{background:#292c4a;border-color:#756f99}
+body.compat-anime .compat-card,body.compat-anime .compat-live-grid li.compat-live-tile,body.compat-anime .compat-list li,body.compat-anime .compat-provider-card{background:#292c4a;border-color:#45486b}
+body.compat-anime .compat-card .compat-poster,body.compat-anime .compat-detail .compat-poster{background:#363b5c;background:linear-gradient(145deg,#363b5c,#242744)}
+body.compat-anime .compat-card .compat-poster-fallback{color:#fff0f5;text-shadow:none}
+body.compat-anime .compat-card-caption small,body.compat-anime .compat-live-channel,body.compat-anime .compat-live-time,body.compat-anime .compat-live-next,body.compat-anime .compat-note{color:#cbc8e4}
+body.compat-anime .compat-live-badge{background:#3e3956;color:#f4b6d1;border:1px solid #756f99}
+body.compat-anime .compat-live-grid li.compat-live-tile.active{border-color:#f4b6d1}
+body.compat-anime .compat-directory a.compat-browse-row,body.compat-anime .compat-episode-link{background:#292c4a;border-color:#45486b;color:#fff0f5}
+body.compat-anime .compat-browse-row.active,body.compat-anime .compat-browse-row:hover,body.compat-anime .compat-card:hover,body.compat-anime .compat-live-watch:hover,body.compat-anime .compat-card:focus,body.compat-anime .compat-episode-link:focus{border-color:#f4b6d1;color:#fff0f5}
+body.compat-anime .compat-card:focus{background:#292c4a}
+body.compat-anime button:focus,body.compat-anime a:focus,body.compat-anime input:focus,body.compat-anime select:focus,body.compat-anime textarea:focus,body.compat-anime .compat-header a:focus,body.compat-anime .compat-subnav a:focus,body.compat-anime .compat-card:focus,body.compat-anime .compat-live-watch:focus{outline:3px solid #f4b6d1;outline-offset:2px}
+body.compat-anime .compat-major-nav a.active:focus,body.compat-anime .compat-account-nav a.active:focus,body.compat-anime a.compat-primary:focus,body.compat-anime .compat-play-primary:first-of-type button:focus{background:#f4b6d1;color:#181a33}
+
+/* manly-man: values flattened from the full-interface theme tokens. */
+body.compat-manly-man{background:#10191c;background:radial-gradient(ellipse 1000px 540px at 0 0,#2c2d26,transparent 70%),radial-gradient(ellipse 900px 650px at 100% 0,#19292b,transparent 70%),#10191c;color:#f5ecdc}
+body.compat-manly-man .compat-header,body.compat-manly-man .compat-subnav{background:#17252a;border-color:#374849}
+body.compat-manly-man .compat-major-nav,body.compat-manly-man .compat-header-search input[type=text]{background:#1a292e;border-color:#77674e}
+body.compat-manly-man .compat-brand,body.compat-manly-man .compat-card,body.compat-manly-man .compat-card strong,body.compat-manly-man .compat-live-watch,body.compat-manly-man .compat-list .compat-live-watch{color:#f5ecdc}
+body.compat-manly-man .compat-logo,body.compat-manly-man .compat-major-nav a.active,body.compat-manly-man .compat-account-nav a.active,body.compat-manly-man a.compat-primary,body.compat-manly-man .compat-play-primary:first-of-type button,body.compat-manly-man .compat-poster-progress>span,body.compat-manly-man .compat-live-grid .compat-progress>span{background:#ffc073;background:linear-gradient(115deg,#ffc073,#77c9c1);color:#10191c;border-color:#ffc073}
+body.compat-manly-man .compat-major-nav a:not(.active),body.compat-manly-man .compat-subnav a:not(.active),body.compat-manly-man .compat-account-nav a:not(.active){color:#c3c8bf;background:transparent}
+body.compat-manly-man .compat-subnav a.active{color:#ffc073;background:#373c37;border-color:transparent;border-bottom-color:#ffc073;box-shadow:inset 0 -2px 0 #ffc073}
+body.compat-manly-man .compat-account-nav a{border-color:#77674e}
+body.compat-manly-man .compat-hero{background:#2b3e42;background:radial-gradient(ellipse at 90% 20%,#3c5e5f,transparent 60%),#2b3e42;border-color:#77674e}
+body.compat-manly-man .compat-panel,body.compat-manly-man .compat-search,body.compat-manly-man .compat-detail,body.compat-manly-man .compat-empty{background:#1e3036;border-color:#77674e}
+body.compat-manly-man .compat-card,body.compat-manly-man .compat-live-grid li.compat-live-tile,body.compat-manly-man .compat-list li,body.compat-manly-man .compat-provider-card{background:#1e3036;border-color:#374849}
+body.compat-manly-man .compat-card .compat-poster,body.compat-manly-man .compat-detail .compat-poster{background:#2b3e42;background:linear-gradient(145deg,#2b3e42,#1a292e)}
+body.compat-manly-man .compat-card .compat-poster-fallback{color:#f5ecdc;text-shadow:none}
+body.compat-manly-man .compat-card-caption small,body.compat-manly-man .compat-live-channel,body.compat-manly-man .compat-live-time,body.compat-manly-man .compat-live-next,body.compat-manly-man .compat-note{color:#c3c8bf}
+body.compat-manly-man .compat-live-badge{background:#373c37;color:#ffc073;border:1px solid #77674e}
+body.compat-manly-man .compat-live-grid li.compat-live-tile.active{border-color:#ffc073}
+body.compat-manly-man .compat-directory a.compat-browse-row,body.compat-manly-man .compat-episode-link{background:#1e3036;border-color:#374849;color:#f5ecdc}
+body.compat-manly-man .compat-browse-row.active,body.compat-manly-man .compat-browse-row:hover,body.compat-manly-man .compat-card:hover,body.compat-manly-man .compat-live-watch:hover,body.compat-manly-man .compat-card:focus,body.compat-manly-man .compat-episode-link:focus{border-color:#ffc073;color:#f5ecdc}
+body.compat-manly-man .compat-card:focus{background:#1e3036}
+body.compat-manly-man button:focus,body.compat-manly-man a:focus,body.compat-manly-man input:focus,body.compat-manly-man select:focus,body.compat-manly-man textarea:focus,body.compat-manly-man .compat-header a:focus,body.compat-manly-man .compat-subnav a:focus,body.compat-manly-man .compat-card:focus,body.compat-manly-man .compat-live-watch:focus{outline:3px solid #ffc073;outline-offset:2px}
+body.compat-manly-man .compat-major-nav a.active:focus,body.compat-manly-man .compat-account-nav a.active:focus,body.compat-manly-man a.compat-primary:focus,body.compat-manly-man .compat-play-primary:first-of-type button:focus{background:#ffc073;color:#10191c}
+
+/* Preserve the full interface's distinct themed buttons, not just its colours. */
+body.compat-steampunk .compat-major-nav a.active{background:#302218;background:linear-gradient(#5c4227,#302218);color:#f3d69e;border-color:#c49d61}
+body.compat-steampunk .compat-subnav a.active{color:#f1ce8a;border-bottom-color:#c79e5d}
+body.compat-vintage-tv .compat-major-nav a.active{background:#eddbb3;background:linear-gradient(#eddbb3,#c5ac7e);color:#261c11;border-color:#f5e7c2}
+body.compat-vintage-tv .compat-subnav a.active{color:#e5cd8b;border-bottom-color:#cfab66}
+body.compat-after-hours .compat-major-nav a.active{background:#65304f;background:linear-gradient(125deg,#65304f,#3b203a);color:#fce0e8;border-color:#df9bb7}
+body.compat-after-hours .compat-subnav a.active{color:#f0bacf;border-bottom-color:#cf90ad}
+body.compat-ninja-extreme .compat-major-nav a.active{background:#64e2de;color:#15364c;border:1px solid #b4fff1;border-radius:13px;font-weight:bold}
+body.compat-ninja-extreme .compat-subnav a.active{border-bottom-color:#ff9b85}
+body.compat-anime .compat-major-nav a.active{background:#d9b4dc;background:linear-gradient(120deg,#d9b4dc,#a7dcd4);color:#2d3150;border-color:#eee0f6;border-radius:15px}
+body.compat-anime .compat-subnav a.active{color:#f3c8e0;border-bottom-color:#9fe1d7}
+body.compat-manly-man .compat-major-nav a.active{background:#e9b77d;background:linear-gradient(#e9b77d,#bd8b55);color:#19292e;border-color:#ffe0ad}
+body.compat-manly-man .compat-subnav a.active{color:#ffcc8c;border-bottom-color:#c4a072}
+.compat-card .compat-poster img{border-radius:13px 13px 0 0}
+.compat-header-search input[type=text]{vertical-align:middle}
+.compat-header-search button{vertical-align:middle}
+.compat-topbar .compat-major-nav{clear:none}
+.compat-content-box .compat-cards li{padding:0}
+.compat-content-box .compat-cards li .compat-card{margin:5px}
+.compat-video-stage:-webkit-full-screen{padding:0;width:100%;height:100%;border-radius:0}
+.compat-video-stage:-moz-full-screen{padding:0;width:100%;height:100%;border-radius:0}
+.compat-video-stage:-ms-fullscreen{padding:0;width:100%;height:100%;border-radius:0}
+.compat-video-stage:fullscreen{padding:0;width:100%;height:100%;border-radius:0}
+#compat-media:-webkit-full-screen{position:static;width:100%;height:100%;padding:0;margin:0}
+#compat-media:-moz-full-screen{position:static;width:100%;height:100%;padding:0;margin:0}
+#compat-media:-ms-fullscreen{position:static;width:100%;height:100%;padding:0;margin:0}
+#compat-media:fullscreen{position:static;width:100%;height:100%;padding:0;margin:0}
+@media screen and (max-width:480px){.compat-header-search{width:100%;display:block;margin:0 0 6px}.compat-account-nav{display:block;text-align:left}.compat-account-nav a{margin:0 4px 0 0}}
+.compat-width-tiny .compat-header-search{width:100%;display:block;margin:0 0 6px}
+.compat-width-tiny .compat-account-nav{display:block;text-align:left}
