@@ -828,7 +828,7 @@ final class CompatibilityBrowser {
         // Delegate through the ordinary authenticated Node endpoints. A temporary
         // filesystem ticket is unnecessary for requests originating in this page.
         // Keep the original session on loopback only, never forward it to a portal.
-        $allowed=['stalker','stalker_live_categories','stalker_live_channels','stalker_live_guide','stalker_vod_catalogue','stalker_play'];
+        $allowed=['stalker','stalker_live_categories','stalker_live_channels','stalker_live_guide','stalker_vod_catalogue','stalker_play','stalker_check_media'];
         if(!in_array($action,$allowed,true))throw new RuntimeException('Invalid provider action.');
         $session=$_COOKIE[Auth::COOKIE]??'';
         $authorization=trim((string)($_SERVER['HTTP_AUTHORIZATION']??$_SERVER['REDIRECT_HTTP_AUTHORIZATION']??''));
@@ -837,11 +837,11 @@ final class CompatibilityBrowser {
         if(!self::$signed||!is_string($session)||!preg_match('/^(?:vc_)?[a-f0-9]{64}$/D',$session))
             throw new RuntimeException('Sign in to use the provider catalogue.');
         $headers=['Connection: close','Accept: application/json',$bearer?'Authorization: Bearer '.$session:'Cookie: '.Auth::COOKIE.'='.$session];
-        $play=$action==='stalker_play';
+        $play=in_array($action,['stalker_play','stalker_check_media'],true);
         $path='/application/live/'.$action;
         $options=['timeout'=>$play?125:65,'ignore_errors'=>true,'follow_location'=>0,'method'=>$play?'POST':'GET'];
         if($play){
-            $selection['compatibility']=true;
+            if($action==='stalker_play')$selection['compatibility']=true;
             $options['content']=json_encode($selection,JSON_THROW_ON_ERROR);
             $headers[]='Content-Type: application/json';
         }elseif($selection)$path.='?'.http_build_query($selection,'','&',PHP_QUERY_RFC3986);
@@ -867,6 +867,13 @@ final class CompatibilityBrowser {
     private static function stalkerSource(array $feed,string $id,string $kind,array $page=[]): array {
         $native=self::stalkerRequest('stalker_play',['feed'=>$feed['id'],'id'=>$id,'kind'=>$kind]+$page);
         $url=$native['source']['url']??'';
+        if(($native['source']['delivery']??'')==='direct'){
+            $parts=is_string($url)?parse_url($url):false;
+            if(!$parts||!in_array(strtolower($parts['scheme']??''),['http','https'],true)||empty($parts['host'])||isset($parts['user'])||isset($parts['pass'])||preg_match('/[\x00-\x20\x7f]/',$url))
+                throw new RuntimeException('Invalid direct provider stream.');
+            // Native TV playback must not invoke the same-origin HLS relay.
+            return [$url,false];
+        }
         $path=is_string($url)?parse_url($url,PHP_URL_PATH):null;
         $endpoint='netplay/application/live/stalker_stream';
         $native=$kind==='live'&&in_array($path,['/'.$endpoint.'/tv.ts',self::$base.$endpoint.'/tv.ts'],true);
@@ -1059,6 +1066,21 @@ final class CompatibilityBrowser {
             if(!$item)return $html.'<p>This channel is no longer on the selected provider page.</p>'.self::link('Back to channels',$params+['page'=>$page]);
             $html.=self::link('Back to channels',$params+['page'=>$page]).'<h3>'.self::esc($item['name']).'</h3>';
             $watchParams=$params+['page'=>$page,'feed'=>$selectedFeed,'channel'=>$selectedChannel];
+            $relay=($_GET['delivery']??'')==='relay';
+            if((self::$viewer['role']??'')==='admin'){
+                $html.='<div class="compat-choicebar">'.self::link('Debug direct playback',$watchParams+['debug'=>'direct']).self::link('Debug Stalker profile',$watchParams+['debug'=>'stb']).'</div>';
+                $debug=(string)($_GET['debug']??'');
+                if(in_array($debug,['direct','stb'],true)){
+                    $html.='<section class="compat-panel"><h3>Administrator playback debug</h3><p>One bounded provider sample; no video playback is started. The report excludes stream addresses, portal credentials, cookies and tokens. Direct is a browser-like request from the NAS, not proof that the TV can connect.</p>';
+                    try{
+                        $report=self::stalkerRequest('stalker_check_media',['feed'=>$selectedFeed,'id'=>$selectedChannel,'kind'=>'live','profile'=>$debug,'category'=>(string)($item['category']??'*'),'page'=>(int)($item['page']??$page)]);
+                        $report=['channel'=>$selectedChannel,'connection'=>(string)$item['feed'],'server'=>$report];
+                        $html.='<textarea id="compat-stalker-debug" rows="18" readonly="readonly">'.self::esc(json_encode($report,JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES)).'</textarea>';
+                    }catch(Throwable $e){$html.='<p class="compat-error">'.self::esc($e instanceof RuntimeException?$e->getMessage():'Diagnostic request failed.').'</p><textarea id="compat-stalker-debug" rows="8" readonly="readonly">Server diagnostic failed.</textarea>';}
+                    return $html.self::link('Return to channel',$watchParams).'</section>';
+                }
+            }
+            $html.='<div class="compat-choicebar">'.self::choice('DirectPlay',$watchParams,!$relay).self::choice('NAS-assisted playback',$watchParams+['delivery'=>'relay'],$relay).'</div>';
             if(!empty($_GET['guide'])){
                 $html.=self::link('Watch channel',$watchParams).'<div class="compat-panel"><h3>Programme guide</h3>';
                 try{
@@ -1079,7 +1101,7 @@ final class CompatibilityBrowser {
                 foreach($copies as $n=>$copy)if((string)$copy['feed']===$selectedFeed&&(string)$copy['id']===$selectedChannel){
                     $next=$copies[($n+1)%count($copies)];
                     $switches.=self::link('Try next source',$params+['page'=>$page,'feed'=>$next['feed'],'channel'=>$next['id']]);
-                    if($attempt+1<$limit){$fallback=self::url($params+['page'=>$page,'feed'=>$next['feed'],'channel'=>$next['id'],'attempt'=>$attempt+1]);$nextLabel=(string)$next['connection'].(!empty($next['compatQuality'])?' · '.$next['compatQuality']:'');}
+                    if($attempt+1<$limit){$fallback=self::url($params+['page'=>$page,'feed'=>$next['feed'],'channel'=>$next['id'],'attempt'=>$attempt+1]+($relay?['delivery'=>'relay']:[]));$nextLabel=(string)$next['connection'].(!empty($next['compatQuality'])?' · '.$next['compatQuality']:'');}
                     break;
                 }
             }
@@ -1089,10 +1111,9 @@ final class CompatibilityBrowser {
             try{
                 $feed=null;foreach($feeds as $candidate)if((string)$candidate['id']===$selectedFeed){$feed=$candidate;break;}
                 if(!$feed)throw new RuntimeException('Connection unavailable.');
-                [$stream,$hls]=self::stalkerSource($feed,(string)$item['id'],'live',['category'=>$item['category']??'','page'=>$item['page']??$page]);
-                if($hls)$html.='<p class="compat-note">This source requires HLS playback.</p>';
-                else $html.='<p class="compat-note">Native TV stream · compatible HLS transport segments are joined without transcoding.</p>';
-                $html.=self::player($stream,false,[],['hls'=>$hls,'live_source'=>true,'fallback_url'=>$fallback,'fallback_label'=>$nextLabel,'autoplay'=>$auto||$attempt>0]);
+                [$stream,$hls]=self::stalkerSource($feed,(string)$item['id'],'live',['category'=>$item['category']??'','page'=>$item['page']??$page,'delivery'=>$relay?'relay':'direct']);
+                $html.='<p class="compat-note">'.($relay?'NAS-assisted playback · video passes through this server.':'DirectPlay · your TV connects directly to the provider; no video passes through the NAS.').'</p>';
+                $html.=self::player($stream,false,[],['hls'=>$hls,'live_source'=>true,'stalker_direct'=>!$relay,'fallback_url'=>$fallback,'fallback_label'=>$nextLabel,'autoplay'=>$auto||$attempt>0]);
             }catch(Throwable $e){
                 $html.='<p class="compat-error">'.self::esc($e instanceof RuntimeException?$e->getMessage():'This source could not be opened.').'</p>';
                 if($fallback!=='')$html.='<a class="compat-button" id="compat-failed-source" data-compat-auto="'.($auto||$attempt>0?'1':'0').'" href="'.self::esc($fallback).'">Try '.self::esc($nextLabel).'</a>';

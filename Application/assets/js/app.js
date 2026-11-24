@@ -6311,7 +6311,21 @@ try {
     if(String(id).indexOf('stalker:')===0){var parts=String(id).split(':');return 'live/stalker/'+encodeURIComponent(parts[1])+'/'+encodeURIComponent(parts.slice(2).join(':'));}
     return 'live/'+encodeURIComponent(id);
   }
-  function stalkerCheckButton(feed,id,kind,status,source){return h('button',{className:'btn ghost',text:'Check playback',onClick:function(e){var button=e.currentTarget,profile=kind==='live'?'stb':'browser',hint=typeof source==='function'?source():source;button.disabled=true;status.textContent='Checking the provider media response…';stalkerPost('stalker_check_media',Object.assign({feed:feed,id:id,kind:kind,profile:profile},hint&&hint.category&&hint.page?{category:hint.category,page:hint.page}:{})).then(function(r){if(!status.isConnected)return;var result='Playback check ('+(profile==='browser'?'browser':'Stalker')+' profile): GET · HTTP '+r.http+' · '+r.type+' · '+r.format+(r.allow?' · Allowed methods: '+r.allow:'')+(r.timedOutOrFailed?' · Request incomplete/timed out':'');if(Number(r.http)===458)result+=' · The provider returned an HTML rejection page, not playable media. Try another source if available.';status.textContent=result;}).catch(function(error){if(status.isConnected)status.textContent=error.message;}).finally(function(){button.disabled=false;});}});}
+  function stalkerCheckButton(feed,id,kind,status,source){
+    if(!state.user||state.user.role!=='admin')return null;
+    return h('button',{className:'btn ghost',text:'Debug playback',onClick:function(e){
+      var button=e.currentTarget,old=status.parentNode.querySelector('.stalker-debug-panel');if(old){old.remove();return;}
+      var output=h('textarea',{rows:20,readonly:true,'aria-label':'Redacted playback report',style:'width:100%;font-family:monospace;'}),note=h('p',{className:'muted',text:'Stop playback first if the account permits only one stream. Each check reads at most 8 KiB from the NAS. Direct profile uses no provider cookies or MAG headers; it does not prove that your TV can reach or decode the stream.'}),panel=h('section',{className:'stalker-debug-panel'},[h('h3',{text:'Administrator playback debug'}),note]),actions=h('div',{className:'row-actions'}),busy=false;
+      function probe(profile){if(busy)return;busy=true;var hint=typeof source==='function'?source():source,video=document.getElementById('player-media'),sample=document.createElement('video'),caps={};
+        ['application/vnd.apple.mpegurl','video/mp2t','video/mp4; codecs="avc1.42E01E, mp4a.40.2"','video/mp4; codecs="hvc1"'].forEach(function(type){caps[type]=sample.canPlayType(type)||'not advertised';});
+        var browser={userAgent:navigator.userAgent,mediaSource:!!(window.MediaSource||window.ManagedMediaSource),capabilities:caps,player:video?{error:video.error?video.error.code:null,networkState:video.networkState,readyState:video.readyState,width:video.videoWidth,height:video.videoHeight,paused:video.paused,delivery:video._stalkerDelivery||'unknown'}:null};
+        output.value='Checking '+profile+'…';stalkerPost('stalker_check_media',Object.assign({feed:feed,id:id,kind:kind,profile:profile},hint&&hint.category&&hint.page?{category:hint.category,page:hint.page}:{})).then(function(r){output.value=JSON.stringify({channel:id,connection:feed,browser:browser,server:r},null,2);}).catch(function(error){output.value=JSON.stringify({channel:id,connection:feed,browser:browser,error:'Server diagnostic failed; '+String(error.message).replace(/https?:\/\/\S+/gi,'[redacted]')},null,2);}).finally(function(){busy=false;});
+      }
+      ['direct','stb'].forEach(function(profile){actions.appendChild(h('button',{className:'btn',text:profile==='direct'?'Check DirectPlay':'Check Stalker device',onClick:function(){probe(profile);}}));});
+      actions.appendChild(h('button',{className:'btn ghost',text:'Copy report',onClick:function(){output.select();if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(output.value).catch(function(){document.execCommand('copy');});else document.execCommand('copy');}}));
+      actions.appendChild(h('button',{className:'btn ghost',text:'Close debug',onClick:function(){panel.remove();}}));panel.append(actions,output);status.insertAdjacentElement('afterend',panel);
+    }});
+  }
   function startStalkerSimple(host,source,status,current,onPlaying){
     closePlayer();stopRadio();
     var alive=true,stream=null,video=h('video',{id:'player-media',controls:true,autoplay:true,muted:true,playsinline:true,preload:'auto'}),frame=h('div',{id:'player-overlay',className:'player-inline stalker-vod-inline'},[video]);
@@ -6606,15 +6620,16 @@ try {
     function refreshGuide(force){if(force!==true&&liveHint.guide)return Promise.resolve({ok:true,channel:context.channels[0]});return liveApi('stalker_channel','feed='+encodeURIComponent(feed)+'&id='+encodeURIComponent(channelId)+(force===true?'&refresh=1':'')).then(function(result){if(!current())return;if(!result||!result.ok)throw new Error(result&&result.error||'Could not load this channel.');context.channels=[result.channel];context.guideMessage=result.guideError||'';if(context.updateChannel)context.updateChannel();if(!context.playError)status.textContent=result.guideError||(result.channel.programs.length?'':'No programme listings were supplied for this channel.');return result;});}
     function simple(){
       if(!context)return;attempt++;context.simpleTried=true;
-      var source=context.sources[id]||(can('iptv_manage')?{kind:'live',url:LIVE_API+'stalker_stream?feed='+encodeURIComponent(feed)+'&channel='+encodeURIComponent(channelId)+'&format=.m3u8'+(liveSource&&liveSource.category&&liveSource.page?'&category='+encodeURIComponent(liveSource.category)+'&page='+encodeURIComponent(liveSource.page):'')}:null);
+      var source=context.sources[id];
       if(!source){status.textContent='Select Watch channel first to authorise playback.';return;}
       startStalkerSimple(player,source,status,current,context.onPlaying);
     }
-    function play(){
-      failed=false;playing=false;if(!context||!context.channels.length)return;var mine=++attempt;closePlayer();stopRadio();context.playError=false;context.simpleTried=false;status.className='muted';status.textContent='Connecting…';
-      stalkerPost('stalker_play',Object.assign({feed:feed,kind:'live',id:channelId},liveSource&&liveSource.category&&liveSource.page?{category:liveSource.category,page:liveSource.page}:{})).then(function(result){if(!current()||mine!==attempt)return;context.sources[id]=result.source;startLivePlayer(id,player,context);status.textContent=context.guideMessage||(context.channels[0].programs.length?'':'No programme listings were supplied for this channel.');}).catch(function(error){if(current()&&mine===attempt){context.playError=true;failover(error.message);}});
+    function play(delivery){
+      delivery=delivery==='relay'?'relay':'direct';
+      failed=false;playing=false;if(!context||!context.channels.length)return;var mine=++attempt;closePlayer();stopRadio();context.playError=false;context.simpleTried=false;status.className='muted';status.textContent=delivery==='relay'?'Connecting through NAS relay…':'Resolving DirectPlay link…';
+      stalkerPost('stalker_play',Object.assign({feed:feed,kind:'live',id:channelId,delivery:delivery},liveSource&&liveSource.category&&liveSource.page?{category:liveSource.category,page:liveSource.page}:{})).then(function(result){if(!current()||mine!==attempt)return;context.sources[id]=result.source;startLivePlayer(id,player,context);status.textContent=context.guideMessage||(context.channels[0].programs.length?'':'No programme listings were supplied for this channel.');}).catch(function(error){if(current()&&mine===attempt){context.playError=true;failover(error.message);}});
     }
-    wrap.appendChild(h('div',{className:'row-actions live-channel-back'},[h('button',{className:'btn',text:'← Back to Stalker',onClick:function(){attempt++;failed=true;closePlayer();goLiveTab('stalker');}}),h('button',{className:'btn',text:'Watch channel',onClick:play}),h('button',{className:'btn ghost',text:'Use simple player',onClick:simple}),stalkerCheckButton(feed,channelId,'live',status,function(){return liveSource;}),h('button',{className:'btn ghost',text:'Stop playback',onClick:function(){attempt++;failed=true;closePlayer();status.textContent='Playback stopped.';}}),h('button',{className:'btn ghost',text:'Refresh guide',onClick:function(){refreshGuide(true).then(function(){if(current())paintChannelInformation(context.channels[0]);}).catch(function(error){status.textContent=error.message;});}})]));
+    wrap.appendChild(h('div',{className:'row-actions live-channel-back'},[h('button',{className:'btn',text:'← Back to Stalker',onClick:function(){attempt++;failed=true;closePlayer();goLiveTab('stalker');}}),h('button',{className:'btn',text:'Watch channel · DirectPlay',onClick:function(){play('direct');}}),h('button',{className:'btn ghost',text:'NAS-assisted playback',onClick:function(){play('relay');}}),h('button',{className:'btn ghost',text:'Use simple player',onClick:simple}),stalkerCheckButton(feed,channelId,'live',status,function(){return liveSource;}),h('button',{className:'btn ghost',text:'Stop playback',onClick:function(){attempt++;failed=true;closePlayer();status.textContent='Playback stopped.';}}),h('button',{className:'btn ghost',text:'Refresh guide',onClick:function(){refreshGuide(true).then(function(){if(current())paintChannelInformation(context.channels[0]);}).catch(function(error){status.textContent=error.message;});}})]));
     var liveHint=state._stalkerChannelHint&&state._stalkerChannelHint.id===id?state._stalkerChannelHint:{};
     var liveCopies=Array.isArray(liveHint.sources)?liveHint.sources.filter(function(src){return src&&src.feed&&src.id;}):[];
     var liveSource=liveCopies.find(function(src){return String(src.feed)===String(feed)&&String(src.id)===String(channelId);});
@@ -7685,6 +7700,24 @@ try {
   }
   function attachIptvStream(video,source,options){
     var current=options.current||function(){return true;},url=source.url;
+    if(source.delivery==='direct'){
+      video._stalkerDelivery='direct';
+      if(options.note)options.note('DirectPlay · provider to device, no NAS relay');
+      // Native HLS/TS/file players require no CORS or JavaScript fetch.
+      var native=source.format==='file'||source.format==='hls'&&video.canPlayType('application/vnd.apple.mpegurl')||
+        (source.format==='mpegts'||source.format==='unknown')&&video.canPlayType('video/mp2t');
+      if(native||!window.MediaSource||!window.ReadableStream||!window.AbortController){video.src=url;options.play();return Promise.resolve();}
+      // The desktop decoder can consume the provider directly when it offers CORS.
+      // Never add the relay playback query parameter to a provider URL.
+      if(!window._vaultcastStalkerStreamLoading)window._vaultcastStalkerStreamLoading=new Promise(function(resolve,reject){
+        if(window.attachStalkerStream){resolve();return;}
+        var script=document.createElement('script');script.src=window.VaultcastDependencies.stalkerStream;
+        script.onload=function(){window.attachStalkerStream?resolve():reject(new Error('Direct stream decoder unavailable.'));};
+        script.onerror=function(){window._vaultcastStalkerStreamLoading=null;script.remove();reject(new Error('Direct stream decoder unavailable.'));};document.head.appendChild(script);
+      });
+      return window._vaultcastStalkerStreamLoading.then(function(){if(current())return window.attachStalkerStream(video,url,Object.assign({},options,{current:current,onDemand:source.kind!=='live',fragmentLoader:iptvFragmentLoader,note:function(message){if(options.note)options.note('DirectPlay · '+message);},error:function(){if(current())options.error('DirectPlay failed: provider CORS, authentication, network or codec restrictions. Select NAS-assisted playback explicitly if needed.');}}),loadHls);}).catch(function(){if(current())options.error('DirectPlay decoder unavailable.');});
+    }
+    video._stalkerDelivery='relay';
     var nativeBase=window.__VAULTCAST_APPLICATION_BASE__;
     if(nativeBase && url.indexOf(LIVE_API+'stalker_stream?')===0) url=nativeBase+'/live/'+url.slice(LIVE_API.length);
     var portalStream=url.indexOf('/live/stalker_stream?')!==-1,xtreamStream=url.indexOf('/live/xtream_stream?')!==-1;
@@ -8176,6 +8209,7 @@ try {
     });
     video.addEventListener('error', function(){
       if (!lp.ch || !video.getAttribute('src') && !lp.hls) return;
+      if(video._stalkerDelivery==='direct'&&providerContext&&!lp.hls){setTuning(false);msg('DirectPlay failed (media error '+(video.error?video.error.code:'unknown')+'). Try a different source or select NAS-assisted playback.');return;}
       if (lp.ch.kind !== 'iptv' && lp.block) {
         lp.errors++;
         if (lp.errors > 5) { setTuning(false); msg('Several programmes failed to play on this channel. Try another channel.'); return; }

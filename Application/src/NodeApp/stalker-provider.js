@@ -271,6 +271,7 @@ class StalkerProvider extends ProviderCookies {
       userAgent = ua,
       referer,
       accept,
+      withoutCookies = false,
     } = {},
   ) {
     signal = this.signal ? (signal ? AbortSignal.any([signal, this.signal]) : this.signal) : signal;
@@ -286,7 +287,7 @@ class StalkerProvider extends ProviderCookies {
         ua: userAgent,
         accept,
         ref: referer ?? this.endpoint.replace(/\/(?:server\/load|portal)\.php$/, '/c/'),
-        cookies: this.cookieHeader(url, metadata),
+        cookies: withoutCookies ? '' : this.cookieHeader(url, metadata),
         range,
         ifRange,
         headers: metadata
@@ -302,9 +303,11 @@ class StalkerProvider extends ProviderCookies {
       signal,
     );
     try {
-      if (this.mediaCookies) {
-        if (response.headers['set-cookie']?.length) await this.mediaCookies(url, response.headers);
-      } else if (response.headers['set-cookie']?.length) await this.acceptCookies(url, response.headers);
+      if (!withoutCookies) {
+        if (this.mediaCookies) {
+          if (response.headers['set-cookie']?.length) await this.mediaCookies(url, response.headers);
+        } else if (response.headers['set-cookie']?.length) await this.acceptCookies(url, response.headers);
+      }
     } catch (error) {
       response.destroy();
       throw error;
@@ -327,7 +330,19 @@ class StalkerProvider extends ProviderCookies {
         retryAt: cooldown.until, folderLimited: Boolean(scope && cooldown !== global),
       });
     const url = endpoint + '?' + new URLSearchParams({ ...params, type, action, JsHttpRequest: '1-xml' });
-    const response = await this.response(url, { metadata: true, token, signal: AbortSignal.timeout(30000) });
+    // Reverse proxies sometimes redirect the metadata endpoint. Never forward
+    // the MAC, session token, or account parameters to another origin.
+    const signal = AbortSignal.timeout(30000);
+    let response = await this.response(url, { metadata: true, token, signal });
+    let currentUrl = new URL(url);
+    for (let hops = 0; [301,302,307,308].includes(response.statusCode) && response.headers.location && hops < 2; hops++) {
+      const next = new URL(response.headers.location, currentUrl);
+      if (next.origin !== currentUrl.origin || next.username || next.password) break;
+      if (!next.search) next.search = currentUrl.search;
+      response.destroy();
+      currentUrl = next;
+      response = await this.response(next.href, { metadata: true, token, signal });
+    }
     try {
       if (response.statusCode === 429) {
         const raw = response.headers['retry-after'];
@@ -365,6 +380,10 @@ class StalkerProvider extends ProviderCookies {
           authentication: true, emptyReply: data.js == null || data.js === false,
         });
       }
+      // Some portals return the create_link command as a string instead of
+      // the usual object. Accept it only for this action, not catalogue data.
+      if (action === 'create_link' && typeof data?.js === 'string' && data.js.trim())
+        return { cmd: data.js };
       if (!data?.js || typeof data.js !== 'object') throw new Error('Portal returned an invalid response.');
       return data.js;
     } finally {
@@ -488,7 +507,7 @@ class StalkerProvider extends ProviderCookies {
       disable_ad: 0,
       download: 0,
     };
-    const extract = value => typeof value === 'string' && /(?:^|\s)(https?:\/\/[^\s]+)/i.exec(value);
+    const extract = value => typeof value === 'string' && /(?:^|[\s"'])(https?:\/\/[^\s"'<>]+)/i.exec(value);
     let match;
     for (const type of id.startsWith('series:') ? ['vod', 'series'] : ['vod']) {
       try {

@@ -269,9 +269,10 @@ module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavai
           await playback.checkMedia(root, feed, id, kind, selected, opts.profile ?? 'stb', signal),
         );
       const compatibility = Boolean(response.locals.stalkerSessionHash) || (action === 'stalker_play' && enabled(opts.compatibility));
+      const delivery = action === 'stalker_play' && opts.delivery === 'direct' ? 'direct' : 'relay';
       const result = await playback.issue(root, feed, id, kind, selected, user.id, signal, compatibility,
-        compatibility ? current.sessionHash : undefined);
-      result.source.url = response.locals.base.slice(0, -1) + result.source.url;
+        compatibility ? current.sessionHash : undefined, delivery);
+      if (result.source.delivery !== 'direct') result.source.url = response.locals.base.slice(0, -1) + result.source.url;
       if (streaming) return response.redirect(307, result.source.url);
       return response.json(result);
     });
@@ -284,6 +285,8 @@ module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavai
       }
       if (!authorized(response, current)) return;
       const user = current.user;
+      if (action === 'stalker_check_media' && user.role !== 'admin')
+        return response.status(403).json({ ok: false, error: 'Administrator access required for playback debug.' });
       if (response.locals.stalkerSessionHash && String(user.id) !== response.locals.stalkerViewer)
         return response.status(403).json({ ok: false, error: 'TV session changed.' });
       const parental = await parentalStatus(root, pool, current, user, now());

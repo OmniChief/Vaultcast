@@ -69,7 +69,7 @@ async function resolve(client, kind, id, item) {
   if (!item?.cmd)
     throw problem(422, 'This entry is unavailable. Refresh the provider catalogue and select it again.');
   if (kind !== 'live') return { url: await client.resolve(id, item), linkMode: 'create_link' };
-  const extract = (cmd) => /(?:^|\s)(https?:\/\/[^\s]+)/i.exec(cmd)?.[1];
+  const extract = (cmd) => /(?:^|[\s"'])(https?:\/\/[^\s"'<>]+)/i.exec(cmd)?.[1];
   const direct = extract(item.cmd);
   if (direct && item.use_http_tmp_link === false && item.use_load_balancing === false) {
     let url;
@@ -86,19 +86,29 @@ async function resolve(client, kind, id, item) {
     }
   }
   const params = { cmd: item.cmd, forced_storage: 'undefined', disable_ad: 0 };
-  let link = (await client.call('itv', 'create_link', { ...params, series: '', download: 0 })).cmd;
+  const fromReply = reply => extract(String(reply?.cmd ?? '')) || extract(String(reply?.url ?? ''));
+  let link = fromReply(await client.call('itv', 'create_link', { ...params, series: '', download: 0 }));
   if (!link) {
     await client.session(true);
-    link = (await client.call('itv', 'create_link', params)).cmd;
+    link = fromReply(await client.call('itv', 'create_link', params));
   }
-  const url = mediaUrl(extract(link));
+  if (!link) throw problem(422, 'The provider did not return a playable live link.');
+  const url = mediaUrl(link);
   await publicAddresses(url);
   return { url: url.href, linkMode: 'create_link' };
 }
 
-async function issue(root, feed, id, kind, item, viewer, signal, compatibility = false, sessionHash) {
+async function issue(root, feed, id, kind, item, viewer, signal, compatibility = false, sessionHash, delivery = 'relay') {
   const client = await provider(root, feed, signal);
-  const { url } = await resolve(client, kind, id, item);
+  const { url, linkMode } = await resolve(client, kind, id, item);
+  if (delivery === 'direct') {
+    // Only the authorized viewer receives the resolved URL; there is no
+    // upstream media request, probe, redirect relay, or transcoding here.
+    const pathname = new URL(url).pathname;
+    const format = /\.m3u8$/i.test(pathname) ? 'hls' : /\.(?:ts|m2ts|mts|mpegts)$/i.test(pathname) ? 'mpegts'
+      : /\.(?:mp4|m4v|webm|mkv)$/i.test(pathname) ? 'file' : 'unknown';
+    return { ok: true, source: { kind, url, delivery: 'direct', format, linkMode } };
+  }
   const ticket = randomBytes(16).toString('hex');
   const state = {
     viewer: String(viewer),
@@ -123,7 +133,7 @@ async function issue(root, feed, id, kind, item, viewer, signal, compatibility =
     query.set('format', /\.[a-z0-9]+$/i.exec(pathname)[0].toLowerCase());
   const transport = kind !== 'live' && /\.(?:ts|m2ts|mts|mpegts)$/i.test(pathname)
     ? 'mpegts' : undefined;
-  return { ok: true, source: { kind, url: playbackPath + (nativeLive ? '/tv.ts' : '') + '?' + query, ...(transport ? { transport } : {}) } };
+  return { ok: true, source: { kind, url: playbackPath + (nativeLive ? '/tv.ts' : '') + '?' + query, delivery: 'relay', ...(transport ? { transport } : {}) } };
 }
 
 async function compatibilitySession(root, { ticket, feed, channel }) {
@@ -208,7 +218,7 @@ async function probe(root, feed, id, item, signal) {
 const browserAgent =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 async function checkMedia(root, feed, id, kind, item, profile, signal) {
-  if (!(kind === 'live' ? ['stb', 'http1', 'vlc', 'browser'] : ['stb', 'browser']).includes(profile))
+  if (!(kind === 'live' ? ['stb', 'http1', 'vlc', 'browser', 'direct'] : ['stb', 'browser', 'direct']).includes(profile))
     throw problem(422, 'Unknown playback check profile.');
   const client = await provider(root, feed, signal);
   const { url, linkMode } = await resolve(client, kind, id, item);
@@ -216,8 +226,9 @@ async function checkMedia(root, feed, id, kind, item, profile, signal) {
   const options = {
     accept: 'video/*, application/vnd.apple.mpegurl, application/x-mpegURL, */*;q=0.8',
     userAgent:
-      profile === 'browser' ? browserAgent : profile === 'vlc' ? 'VLC/3.0.21 LibVLC/3.0.21' : undefined,
-    referer: ['browser', 'vlc'].includes(profile) ? '' : undefined,
+      ['browser','direct'].includes(profile) ? browserAgent : profile === 'vlc' ? 'VLC/3.0.21 LibVLC/3.0.21' : undefined,
+    referer: ['browser', 'vlc', 'direct'].includes(profile) ? '' : undefined,
+    withoutCookies: profile === 'direct',
     range: profile === 'browser' ? 'bytes=0-8191' : undefined,
   };
   let result = await follow(client, url, { ...options, signal: AbortSignal.timeout(15000) }, 4);
@@ -236,6 +247,7 @@ async function checkMedia(root, feed, id, kind, item, profile, signal) {
   }
   const { res } = result,
     chunks = [];
+  const probeStarted = Date.now();
   let received = 0,
     failed = false;
   try {
@@ -275,9 +287,20 @@ async function checkMedia(root, feed, id, kind, item, profile, signal) {
     linkMode,
     temporaryLink: item.use_http_tmp_link ?? null,
     loadBalancing: item.use_load_balancing ?? null,
-    type,
+    type: /^[a-z0-9.+-]+\/[a-z0-9.+-]+$/i.test(type) ? type : 'unknown',
     format,
     redirects: result.hops,
+    rawHttp: res.statusCode,
+    sampleMs: Date.now() - probeStarted,
+    cookiesSent: profile !== 'direct' ? 'provider session if required' : 'none',
+    cookieRequiredUnknown: true,
+    cors: res.headers['access-control-allow-origin'] === '*' ? 'wildcard' : res.headers['access-control-allow-origin'] ? 'origin-specific' : 'not advertised',
+    setsCookie: Boolean(res.headers['set-cookie']?.length),
+    acceptRanges: res.headers['accept-ranges'] === 'bytes',
+    contentLength: /^\d{1,16}$/.test(String(res.headers['content-length'] ?? '')) ? Number(res.headers['content-length']) : null,
+    endpoint: /\/portal\.php$/i.test(new URL(client.endpoint).pathname) ? 'portal.php' : 'server/load.php',
+    hlsEncrypted: format === 'HLS playlist' ? /#EXT-X-(?:SESSION-)?KEY:(?![^\r\n]*METHOD=NONE)/i.test(data.toString()) : null,
+    hlsFragmentedMp4: format === 'HLS playlist' ? /#EXT-X-MAP:/i.test(data.toString()) : null,
     https: result.url.protocol === 'https:',
     samePortalHost: result.url.hostname === new URL(client.endpoint).hostname,
     cloudflare: /cloudflare/i.test(data.toString()),

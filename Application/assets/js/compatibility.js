@@ -501,6 +501,8 @@
     })();
   }
 
+  var debugReport=document.getElementById('compat-stalker-debug');
+  if(debugReport){try{var debugVideo=document.createElement('video'),debugCaps=['application/vnd.apple.mpegurl','video/mp2t','video/mp4; codecs="avc1.42E01E, mp4a.40.2"','video/mp4; codecs="hvc1"'],debugLines=['','Browser: '+navigator.userAgent],di;for(di=0;di<debugCaps.length;di++)debugLines[debugLines.length]=debugCaps[di]+': '+(debugVideo.canPlayType?debugVideo.canPlayType(debugCaps[di])||'not advertised':'unavailable');debugLines[debugLines.length]='MediaSource: '+!!(window.MediaSource||window.ManagedMediaSource);try{var previous=sessionStorage.getItem('vaultcast-stalker-media-error');if(previous)debugLines[debugLines.length]='Last Stalker media event: '+previous;}catch(ignore){}debugReport.value+=debugLines.join('\n');}catch(debugError){}}
   var config=window.__VC_COMPAT_PLAYER__,media=document.getElementById('compat-media');
   if(!config||!media){var openPlay=document.getElementById('compat-open-play');if(openPlay)openPlay.submit();return;}
   var message=document.getElementById('compat-player-message'),base=config.base||'/',alive=true,hls=null,roll=null,progressTimer=null,requests=[],resume=Number((config.progress||{}).position)||0,resumed=false,remux=false,loadingHls=false,recovered=false,tuning=false,hlsTimer=null,cinemaTimer=null,cinemaBusy=false,cinemaSending=false,cinemaLastPulse=0,cinemaPending=false,cinemaBuffering=false;
@@ -652,6 +654,7 @@
     if(enabled&&enabled.checked&&next&&next.form){next.disabled=true;next.form.submit();}
   });
   listen(media,'error',function(){
+    if(config.stalker_direct){try{sessionStorage.setItem('vaultcast-stalker-media-error','error '+(media.error?media.error.code:0)+'; networkState '+media.networkState+'; readyState '+media.readyState);}catch(ignore){}}
     if(sourceChanging)return;
     if(config.live_source&&media.error&&media.error.code===1)return;
     if(config.hls&&!remux&&!hls&&!loadingHls){beginHls();return;}
@@ -660,7 +663,7 @@
   });
   if(config.live_source){
     listen(media,'play',function(){sourceRequested=true;armSourceTimer();if(config.hls&&!hls&&!loadingHls&&media.error)beginHls();});
-    listen(media,'playing',function(){sourcePlayed=true;clearSourceTimer();say('');});
+    listen(media,'playing',function(){sourcePlayed=true;clearSourceTimer();if(config.stalker_direct){try{sessionStorage.setItem('vaultcast-stalker-media-error','playing; '+media.videoWidth+'x'+media.videoHeight);}catch(ignore){}}say('');});
     listen(media,'timeupdate',function(){var at=Number(media.currentTime)||0;if(at>sourceLastTime){sourceLastTime=at;clearSourceTimer();}});
     listen(media,'waiting',armSourceTimer);listen(media,'stalled',armSourceTimer);
     listen(media,'pause',function(){if(!sourceChanging&&!media.ended&&!media.error){sourceRequested=false;clearSourceTimer();}});
