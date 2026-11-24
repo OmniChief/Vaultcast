@@ -32,6 +32,12 @@ final class CompatibilityBrowser {
         if($page===1&&!$more)return '';
         return '<div class="compat-pages" role="navigation" aria-label="Pages">'.($page>1?self::link('← Previous',['page'=>$page-1]+$params):'').'<span class="compat-page-current" aria-current="page">Page '.$page.'</span>'.($more?self::link('Next →',['page'=>$page+1]+$params):'').'</div>';
     }
+    private static function choice(string $label,array $params,bool $active=false): string {
+        return '<a class="compat-choice'.($active?' active':'').'"'.($active?' aria-current="true"':'').' href="'.self::esc(self::url($params)).'">'.self::esc($label).'</a>';
+    }
+    private static function browseRow(string $title,string $meta,array $params,string $number='',bool $active=false): string {
+        return '<a class="compat-browse-row'.($active?' active':'').'"'.($active?' aria-current="true"':'').' href="'.self::esc(self::url($params)).'">'.($number!==''?'<span class="compat-row-number">'.self::esc($number).'</span>':'').'<span class="compat-browse-copy"><strong>'.self::esc($title).'</strong>'.($meta!==''?'<small>'.self::esc($meta).'</small>':'').'</span><span class="compat-row-arrow" aria-hidden="true">&#8250;</span></a>';
+    }
     private static function disclosure(string $id,string $label,string $content,bool $open=false): string {
         return '<div class="compat-disclosure"><button type="button" class="compat-disclosure-toggle" data-compat-disclosure="'.$id.'" aria-controls="'.$id.'" aria-expanded="true" style="display:none">'.self::esc($label).'</button><div class="compat-disclosure-content" id="'.$id.'" data-compat-open="'.($open?'1':'0').'">'.$content.'</div></div>';
     }
@@ -627,9 +633,10 @@ final class CompatibilityBrowser {
         $base=['view'=>'live','tab'=>'stalker'];
         $kind=(string)($_GET['kind']??'live');
         if(!in_array($kind,['live','vod','series'],true))$kind='live';
-        $html='<h2>Stalker</h2>'.self::link('Back to Live TV',['view'=>'live']);
+        $html=self::heading('LIVE · PROVIDERS','Stalker').'<div class="compat-choicebar" role="navigation" aria-label="Stalker content">';
         foreach(['live'=>'Live TV','vod'=>'Movies','series'=>'Series'] as $tab=>$label)
-            $html.=self::link(($kind===$tab?'✓ ':'').$label,$base+['kind'=>$tab]);
+            $html.=self::choice($label,$base+['kind'=>$tab],$kind===$tab);
+        $html.='</div>';
         if(!$feeds)return $html.'<p>No enabled Stalker connections are available.</p>';
         if($kind!=='live')return $html.self::stalkerOnDemand($feeds,$kind,$page);
         $country=strtoupper(mb_substr((string)($_GET['country']??''),0,3));
@@ -701,8 +708,8 @@ final class CompatibilityBrowser {
                 return $rank($a)<=>$rank($b) ?: strcmp($countryName($a),$countryName($b));
             });
             $html.='<p class="compat-note">'.count($folders).' categories across '.count($feeds).' connections'.($errors?' · '.self::esc(implode('; ',$errors)):'').'</p>';
-            $html.='<h3>Countries</h3><ul class="compat-list">';
-            foreach($codes as $code)$html.='<li>'.self::link($countryName($code).' ('.$counts[$code].')',$base+['country'=>$code]).'</li>';
+            $html.='<h3>Countries</h3><ul class="compat-directory">';
+            foreach($codes as $code)$html.='<li>'.self::browseRow($countryName($code),$counts[$code].' provider categories',$base+['country'=>$code],$code==='ZZ'?'':$code).'</li>';
             return $html.'</ul>'.(!$codes?'<p>No provider categories could be loaded.</p>':'');
         }
         $html.=self::link('Countries',$base);
@@ -725,21 +732,22 @@ final class CompatibilityBrowser {
                     $rank=static function($x){return strtoupper($x)==='GENERAL'?0:(strtoupper($x)==='ENTERTAINMENT'?1:2);};
                     return $rank($a['name'])<=>$rank($b['name']) ?: strcasecmp($a['name'],$b['name']);
                 });
-                $html.='<section class="compat-panel"><h3>'.self::link($name.' ('.count($groups[$name]).')',$base+['country'=>$country,'section'=>$name]).'</h3>';
-                // Plain links remain operable on older Samsung Tizen browsers.
-                $html.='<ul class="compat-list">';
+                $html.='<section class="compat-panel compat-provider-group"><h3>'.self::browseRow($name,count($groups[$name]).' folders · Browse all channels',$base+['country'=>$country,'section'=>$name]).'</h3>';
+                $folderRows='<ul class="compat-directory">';
                 foreach($groups[$name] as $entry){
                     $first=$entry['sources'][0];
-                    $html.='<li>'.self::link($entry['name'].' · '.count($entry['sources']).' connection(s)',
+                    $folderRows.='<li>'.self::browseRow($entry['name'],count($entry['sources']).' connection(s)',
                         $base+['country'=>$country,'folder'=>$first['id'],'folder_feed'=>$first['feed']]).'</li>';
                 }
-                $html.='</ul></section>';
+                $html.=self::disclosure('compat-provider-'.substr(sha1($name),0,12),'Show individual folders',$folderRows.'</ul>',$name==='General & entertainment').'</section>';
             }
             return $html;
         }
-        $target=array_values(array_filter($countryFolders,static function($f)use($section,$folderId,$folderFeed){
+        $chosenFolder=null;
+        if($folderId!=='')foreach($countryFolders as $f)if((string)$f['id']===$folderId&&(string)$f['feed']===$folderFeed){$chosenFolder=$f;break;}
+        $target=array_values(array_filter($countryFolders,static function($f)use($section,$chosenFolder){
             return $section!==''?$f['section']===$section:
-                ((string)$f['id']===$folderId&&(string)$f['feed']===$folderFeed);
+                ($chosenFolder!==null&&$f['section']===$chosenFolder['section']&&mb_strtolower($f['name'])===mb_strtolower($chosenFolder['name']));
         }));
         if(!$target)return $html.'<p>This provider group is no longer available.</p>';
         $label=$section!==''?$section:$target[0]['name'];
@@ -783,15 +791,15 @@ final class CompatibilityBrowser {
         }
         $rootParams=$base+['country'=>$country]+($section!==''?['section'=>$section]:['folder'=>$folderId,'folder_feed'=>$folderFeed])+['source_offset'=>$sourceOffset];
         $params=$rootParams+['formats'=>$formatValue,'q'=>$channelQuery];
-        $html.='<p class="compat-note">Channel formats: ';
+        $formatControls='<div class="compat-choicebar"><span class="compat-note">Channel formats: </span>';
         foreach(['UHD','FHD','HD'] as $format){
             $toggled=array_values(array_diff($enabledFormats,[$format]));
             if(!in_array($format,$enabledFormats,true))$toggled[]=$format;
             $nextFormats=implode(',',array_values(array_intersect(['UHD','FHD','HD'],$toggled)));
-            $html.=self::link((in_array($format,$enabledFormats,true)?'✓ ':'✕ ').$format,$rootParams+['formats'=>$nextFormats,'q'=>$channelQuery,'page'=>$page]);
+            $formatControls.=self::choice($format,$rootParams+['formats'=>$nextFormats,'q'=>$channelQuery,'page'=>$page],in_array($format,$enabledFormats,true));
         }
-        $html.='</p>';
-        $html.=self::searchForm($rootParams+['formats'=>$formatValue],$channelQuery);
+        $html.=self::disclosure('compat-channel-filters','Quality filters',$formatControls.'</div>',$formatValue!=='UHD,FHD,HD');
+        if($selectedChannel==='')$html.=self::searchForm($rootParams+['formats'=>$formatValue],$channelQuery);
         $html.='<p class="compat-note">'.count($byName).' matching channels on this page · '.count($slice).' provider folders'.($failures?' · Unavailable: '.self::esc(implode(', ',$failures)):'').'</p>';
         if($selectedChannel!==''){
             $item=null;$copies=[];
@@ -799,13 +807,14 @@ final class CompatibilityBrowser {
             if(!$item)$item=$selectedRaw;
             if(!$item)return $html.'<p>This channel is no longer on the selected provider page.</p>'.self::link('Back to channels',$params+['page'=>$page]);
             $html.=self::link('Back to channels',$params+['page'=>$page]).'<h3>'.self::esc($item['name']).'</h3>';
+            $switches='';
             if(count($copies)>1){
-                $html.='<p>Available connections:</p><ul class="compat-list">';
-                foreach($copies as $copy)$html.='<li>'.self::link($copy['connection'], $params+['page'=>$page,'feed'=>$copy['feed'],'channel'=>$copy['id']]).'</li>';
-                $html.='</ul>';
+                $choices='<div class="compat-choicebar">';
+                foreach($copies as $copy)$choices.=self::choice((string)$copy['connection'],$params+['page'=>$page,'feed'=>$copy['feed'],'channel'=>$copy['id']],(string)$copy['feed']===$selectedFeed&&(string)$copy['id']===$selectedChannel);
+                $switches.=self::disclosure('compat-live-sources','Available connections ('.count($copies).')',$choices.'</div>');
                 foreach($copies as $n=>$copy)if((string)$copy['feed']===$selectedFeed&&(string)$copy['id']===$selectedChannel){
                     $next=$copies[($n+1)%count($copies)];
-                    $html.=self::link('Try next connection',$params+['page'=>$page,'feed'=>$next['feed'],'channel'=>$next['id']]);
+                    $switches.=self::link('Try next connection',$params+['page'=>$page,'feed'=>$next['feed'],'channel'=>$next['id']]);
                     break;
                 }
             }
@@ -816,15 +825,14 @@ final class CompatibilityBrowser {
                 if($hls)$html.='<p class="compat-note">This provider supplied an HLS playlist. Older Tizen browsers may not support HLS; Vaultcast cannot change the provider format without transcoding.</p>';
                 $html.=self::player($stream,false,[],['hls'=>$hls]);
             }catch(Throwable $e){$html.='<p class="compat-note">Playback unavailable. Try another connection or retry the channel.</p>';}
-            return $html;
+            return $html.$switches;
         }
-        $html.='<ul class="compat-list">';
+        $html.='<ul class="compat-directory compat-channel-directory">';
         foreach($byName as $group){
             $item=$group['copies'][0];
-            $html.='<li>'.self::link($group['name'],$params+['page'=>$page,'feed'=>$item['feed'],'channel'=>$item['id']]);
-            if(count($group['copies'])>1)$html.='<small> · '.count($group['copies']).' connections</small>';
-            $html.='</li>';
+            $html.='<li>'.self::browseRow($group['name'],count($group['copies']).' connection(s)',$params+['page'=>$page,'feed'=>$item['feed'],'channel'=>$item['id']]).'</li>';
         }
+        if(!$byName)$html.='<li class="compat-empty">No matching channels on this provider page. Try a different filter or the next provider folder.</li>';
         $html.='</ul>';
         $html.=self::pages($params,$page,$more);
         if($sourceOffset>0)$html.=self::link('Previous provider folders',array_merge($params,['source_offset'=>max(0,$sourceOffset-$window),'page'=>1]));
@@ -869,20 +877,18 @@ final class CompatibilityBrowser {
                 return (int)($b['season']??0)<=>(int)($a['season']??0)
                     ?: (int)($b['episode']??0)<=>(int)($a['episode']??0);
             });
-            $html.='<ul class="compat-list">';
+            $episodeList='<ul class="compat-list compat-provider-episodes">';
+            $lastSeason=null;$selectedEpisode=null;
             foreach($items as $item){
-                $label='Season '.($item['season']??'?').' · Episode '.($item['episode']??'?');
-                if(!empty($item['episodeTitle']))$label.=' · '.$item['episodeTitle'];
-                $html.='<li>'.self::link($label,$base+['lang'=>$lang,'parent'=>$parent,'feed'=>$feed['id'],'page'=>$page,'item'=>$item['id']]).'</li>';
+                $season=(string)($item['season']??'?');$episode=(string)($item['episode']??'?');
+                if($lastSeason!==$season){$episodeList.='<li class="compat-season-heading"><h3>Season '.self::esc($season).'</h3></li>';$lastSeason=$season;}
+                $episodeList.='<li>'.self::browseRow((string)($item['episodeTitle']??$item['name']??('Episode '.$episode)),'Episode '.$episode,$base+['lang'=>$lang,'parent'=>$parent,'feed'=>$feed['id'],'page'=>$page,'item'=>$item['id']],$episode,(string)$item['id']===$selectedItem).'</li>';
+                if((string)$item['id']===$selectedItem&&!empty($item['playable']))$selectedEpisode=$item;
             }
-            $html.='</ul>'.self::pages($base+['lang'=>$lang,'parent'=>$parent,'feed'=>$feed['id']],$page,!empty($data['hasMore']));
-            if($selectedItem!==''){
-                foreach($items as $item)if((string)$item['id']===$selectedItem&&$item['playable']){
-                    return $html.self::stalkerOnDemandPlayer($feed,$item);
-                }
-                $html.='<p>The selected episode is no longer on this page.</p>';
-            }
-            return $html;
+            $episodeList.='</ul>'.self::pages($base+['lang'=>$lang,'parent'=>$parent,'feed'=>$feed['id']],$page,!empty($data['hasMore']));
+            if($selectedEpisode!==null)return $html.self::stalkerOnDemandPlayer($feed,$selectedEpisode).self::disclosure('compat-vod-episodes','Browse other episodes',$episodeList);
+            if($selectedItem!=='')$html.='<p>The selected episode is no longer on this page.</p>';
+            return $html.$episodeList;
         }
         $folders=[];$errors=[];
         foreach($feeds as $feed){
@@ -898,9 +904,10 @@ final class CompatibilityBrowser {
         foreach($folders as $folder)$available[$folder['language']]=true;
         $langs=array_keys($available);
         usort($langs,static function($a,$b){return $a==='UK'?-1:($b==='UK'?1:strcmp($a,$b));});
-        $html.='<p>Language:</p>';
-        foreach($langs as $value)$html.=self::link(($lang===$value?'✓ ':'').($value==='UK'?'English':$value),$base+['lang'=>$value]);
-        $html.=self::link(($lang==='all'?'✓ ':'').'All languages',$base+['lang'=>'all']);
+        $html.='<div class="compat-choicebar">'.self::choice('English',$base+['lang'=>'UK'],$lang==='UK').self::choice('All languages',$base+['lang'=>'all'],$lang==='all');
+        $other='';foreach($langs as $value)if($value!=='UK')$other.=self::choice($value,$base+['lang'=>$value],$lang===$value);
+        if($other!=='')$html.=self::disclosure('compat-vod-languages','Other languages',$other,!in_array($lang,['UK','all'],true));
+        $html.='</div>';
         $html.=self::searchForm($base+['lang'=>$lang]+($folderId!==''?['folder'=>$folderId,'folder_feed'=>$folderFeed]:[]),$query);
         if($errors)$html.='<p class="compat-note">Some provider folders were unavailable.</p>';
         $filtered=array_values(array_filter($folders,static function($f)use($lang){return $lang==='all'||$f['language']===$lang;}));
@@ -913,10 +920,10 @@ final class CompatibilityBrowser {
             }
             $entries=array_values($grouped);
             usort($entries,static function($a,$b){return strcasecmp($a['name'],$b['name']);});
-            $html.='<h3>Provider folders</h3><ul class="compat-list">';
+            $html.='<h3>Provider folders</h3><ul class="compat-directory">';
             foreach($entries as $entry){
                 $first=$entry['sources'][0];
-                $html.='<li>'.self::link($entry['name'].' · '.count($entry['sources']).' connection(s)',
+                $html.='<li>'.self::browseRow($entry['name'],count($entry['sources']).' connection(s)',
                     $base+['lang'=>$lang,'folder'=>$first['id'],'folder_feed'=>$first['feed']]).'</li>';
             }
             return $html.'</ul>'.(!$entries?'<p>No folders in this language.</p>':'');
@@ -951,36 +958,37 @@ final class CompatibilityBrowser {
             $groups[$key]['sources'][]=$item;
         }
         uasort($groups,static function($a,$b){return strcasecmp($a['title'],$b['title']);});
-        $html.='<p class="compat-note">'.count($groups).' titles loaded'.($failed?' · '.$failed.' unavailable folders':'').'</p><ul class="compat-list">';
+        $html.='<p class="compat-note">'.count($groups).' titles loaded'.($failed?' · '.$failed.' unavailable folders':'').'</p>';$titleList='<ul class="compat-directory">';
         $params=$base+['lang'=>$lang,'q'=>$query,'source_offset'=>$sourceOffset]+($folderId!==''?['folder'=>$folderId,'folder_feed'=>$folderFeed]:[]);
         foreach($groups as $group){
             $first=$group['sources'][0];
-            $html.='<li>'.self::link($group['title'].($group['year']?' ('.$group['year'].')':''),
-                $params+['page'=>$page,'feed'=>$first['feed'],'item'=>$first['id']]);
-            if(count($group['sources'])>1)$html.='<small> · '.count($group['sources']).' connections</small>';
-            $html.='</li>';
+            $titleList.='<li>'.self::browseRow($group['title'],($group['year']?$group['year'].' · ':'').count($group['sources']).' connection(s)',
+                $params+['page'=>$page,'feed'=>$first['feed'],'item'=>$first['id']],'',(string)$first['id']===$selectedItem&&(string)$first['feed']===$selectedFeed).'</li>';
         }
-        $html.='</ul>';
+        if(!$groups)$titleList.='<li class="compat-empty">No titles on this page.</li>';
+        $titleList.='</ul>';
         if($selectedItem!==''){
             $found=null;$copies=[];
             foreach($groups as $group)foreach($group['sources'] as $item)
                 if((string)$item['id']===$selectedItem&&(string)$item['feed']===$selectedFeed){$found=$item;$copies=$group['sources'];break 2;}
             if($found!==null){
+                $html.=self::link('Back to results',$params+['page'=>$page]);
+                if(!empty($found['playable']))$html.=self::stalkerOnDemandPlayer($feedById[$selectedFeed],$found);
+                else $html.='<h3>'.self::esc($found['name']??'Series').'</h3>'.self::link('Browse seasons and episodes',$base+['lang'=>$lang,'parent'=>$found['id'],'feed'=>$selectedFeed]);
                 if(count($copies)>1){
-                    $html.='<h3>Other available connections</h3><ul class="compat-list">';
-                    foreach($copies as $source)$html.='<li>'.self::link($source['connection'],
-                        $params+['page'=>$page,'feed'=>$source['feed'],'item'=>$source['id']]).'</li>';
-                    $html.='</ul>';
+                    $sources='<div class="compat-choicebar">';
+                    foreach($copies as $source)$sources.=self::choice((string)$source['connection'],
+                        $params+['page'=>$page,'feed'=>$source['feed'],'item'=>$source['id']],(string)$source['feed']===$selectedFeed&&(string)$source['id']===$selectedItem);
+                    $html.=self::disclosure('compat-vod-sources','Available connections ('.count($copies).')',$sources.'</div>');
                     foreach($copies as $n=>$copy)if((string)$copy['feed']===$selectedFeed&&(string)$copy['id']===$selectedItem){
                         $next=$copies[($n+1)%count($copies)];
                         $html.=self::link('Try next connection',$params+['page'=>$page,'feed'=>$next['feed'],'item'=>$next['id']]);
                         break;
                     }
                 }
-                if(!empty($found['playable']))$html.=self::stalkerOnDemandPlayer($feedById[$selectedFeed],$found);
-                else $html.=self::link('Browse seasons and episodes',$base+['lang'=>$lang,'parent'=>$found['id'],'feed'=>$selectedFeed]);
             }else $html.='<p>This title is no longer on the selected page.</p>';
         }
+        $html.=$selectedItem!==''?self::disclosure('compat-vod-results','Browse other titles',$titleList):$titleList;
         $html.=self::pages($params,$page,$more);
         if($sourceOffset>0)$html.=self::link('Previous provider folders',$base+['lang'=>$lang,'q'=>$query,'source_offset'=>max(0,$sourceOffset-$window)]+($folderId!==''?['folder'=>$folderId,'folder_feed'=>$folderFeed]:[]));
         if($sourceOffset+$window<count($filtered))$html.=self::link('More provider folders',$base+['lang'=>$lang,'q'=>$query,'source_offset'=>$sourceOffset+$window]+($folderId!==''?['folder'=>$folderId,'folder_feed'=>$folderFeed]:[]));
@@ -1009,7 +1017,7 @@ final class CompatibilityBrowser {
         }
         require_once STREAM_ROOT.'/src/Live/store.php';require_once STREAM_ROOT.'/src/Live/epg.php';require_once STREAM_ROOT.'/src/Live/schedule.php';
         $schedule=mb_substr((string)($_GET['schedule'] ?? ''),0,100);$station=relay_load_station();$guide=LiveGuideCache::read(2,$schedule==='',self::$viewer,static function($hours,$slim)use($station){return epg_unified_guide($station,$hours,$slim,self::$viewer);});
-        $html='<h2>Live</h2>'.self::link('Radio',['view'=>'live','tab'=>'radio']);
+        $html=self::heading('LIVE TELEVISION',$tab==='iptv'?'IPTV':($tab==='relay'?'Relay channels':'On now'));
         $html.='<p class="compat-note">Type a channel number on your remote or keyboard. Three digits tune immediately; shorter numbers tune after a brief pause.</p><div id="compat-channel-number" role="status" aria-live="polite" style="display:none"></div><div id="compat-channel-map" style="display:none">';
         // Include the complete authorised lineup, regardless of pagination or search.
         foreach($guide['channels'] ?? [] as $ch){
@@ -1058,13 +1066,25 @@ final class CompatibilityBrowser {
             $html.='</section>';
         }
         $html.=self::searchForm(['view'=>'live','tab'=>$tab],$query);$channels=array_values(array_filter($guide['channels'] ?? [],static function($ch)use($query,$tab){return ($tab==='now'||($tab==='iptv'?($ch['kind'] ?? '')==='iptv':($ch['kind'] ?? '')!=='iptv'))&&($query===''||mb_stripos($ch['name'] ?? '',$query)!==false);}));
-        usort($channels,static function($a,$b){return (int)($a['number'] ?? 0)<=>(int)($b['number'] ?? 0);});$html.='<ul class="compat-list">';
+        usort($channels,static function($a,$b){return (int)($a['number'] ?? 0)<=>(int)($b['number'] ?? 0);});
+        $browse=['view'=>'live','tab'=>$tab,'q'=>$query,'page'=>$page];
+        if($id!==''){
+            foreach($channels as $index=>$ch)if((string)$ch['id']===$id){
+                $html.='<div class="compat-choicebar compat-channel-step">';
+                if($index>0)$html.=self::link('← '.$channels[$index-1]['name'],$browse+['id'=>$channels[$index-1]['id']]);
+                $html.=self::link('Programme guide',$browse+['schedule'=>$id]);
+                if(isset($channels[$index+1]))$html.=self::link($channels[$index+1]['name'].' →',$browse+['id'=>$channels[$index+1]['id']]);
+                $html.='</div>';break;
+            }
+        }
+        $html.='<p class="compat-note">'.count($channels).' channels</p><ul class="compat-list compat-lineup">';
         foreach(array_slice($channels,($page-1)*16,16) as $ch){
-            $html.='<li>'.self::link(($ch['number'] ?? '').' - '.($ch['name'] ?? 'Channel'),['view'=>'live','tab'=>$tab,'id'=>$ch['id']]).self::link('Programme guide',['view'=>'live','tab'=>$tab,'schedule'=>$ch['id']]);
+            $html.='<li>'.self::browseRow((string)($ch['name'] ?? 'Channel'),'', $browse+['id'=>$ch['id']],(string)($ch['number'] ?? ''),(string)$ch['id']===$id);
             if(!empty($ch['now']))$html.=self::programme($ch['now'],'Now · ');
             if(!empty($ch['next']))$html.=self::programme($ch['next'],'Next · ');
-            $html.='</li>';
+            $html.=self::link('Programme guide',$browse+['schedule'=>$ch['id']]).'</li>';
         }
+        if(!$channels)$html.='<li class="compat-empty">No matching channels.</li>';
         return $html.'</ul>'.self::pages(['view'=>'live','tab'=>$tab,'q'=>$query],$page,$page*16<count($channels));
     }
     public static function render(array $startup,string $base,string $site,string $error=''): void {

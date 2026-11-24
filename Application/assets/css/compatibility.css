@@ -522,3 +522,81 @@ body.compat-ninja-extreme .compat-play-primary:first-of-type button{background:#
 body.compat-anime .compat-play-primary:first-of-type button{background:#f4b6d1;color:#181a33;border-color:#f4b6d1}
 
 body.compat-manly-man .compat-play-primary:first-of-type button{background:#ffc073;color:#10191c;border-color:#ffc073}
+
+
+/* Compact browsing directories and explicit selections, including old TV engines. */
+.compat-choicebar{margin:8px 0 16px;line-height:1.6}
+.compat-choicebar .compat-disclosure{display:inline-block;vertical-align:middle;margin:0}
+.compat-choicebar .compat-disclosure-content{display:inline-block;vertical-align:middle}
+a.compat-choice{display:inline-block;vertical-align:middle;padding:9px 16px;margin:3px 5px 3px 0;border:1px solid currentColor;border-radius:8px;text-decoration:none;font-size:15px;font-weight:bold}
+a.compat-choice.active{border-width:2px;padding:8px 15px}
+.compat-directory{list-style:none;padding:0;margin:14px -5px 20px;font-size:0}
+.compat-directory li{display:inline-block;width:50%;padding:5px;vertical-align:top;box-sizing:border-box;font-size:16px}
+.compat-directory li.compat-empty{width:100%}
+a.compat-browse-row{display:block;overflow:hidden;position:relative;min-height:57px;padding:11px 30px 11px 14px;border:1px solid rgba(128,128,128,.5);border-radius:9px;text-decoration:none;box-sizing:border-box}
+a.compat-browse-row:hover{text-decoration:none;border-color:currentColor}
+a.compat-browse-row:focus{outline-offset:1px}
+a.compat-browse-row.active{border-width:2px;padding:10px 29px 10px 13px}
+.compat-row-number{float:left;min-width:34px;margin:0 13px 0 0;font-size:21px;line-height:1.4;font-weight:bold;text-align:center;opacity:.8}
+.compat-browse-copy{display:block;overflow:hidden;word-wrap:break-word}
+.compat-browse-copy strong{display:block;font-size:16px;line-height:1.35}
+.compat-browse-copy small{display:block;font-size:12px;opacity:.82;margin-top:4px;line-height:1.4}
+.compat-row-arrow{position:absolute;right:11px;top:50%;margin-top:-17px;font-size:24px;line-height:30px}
+.compat-provider-group{padding:14px 18px;margin:10px 0}
+.compat-provider-group h3{margin:0}
+.compat-provider-group h3 .compat-browse-row{border:0;padding-left:0}
+.compat-provider-group .compat-directory{margin-bottom:2px}
+.compat-provider-group .compat-disclosure{margin-bottom:0}
+.compat-provider-episodes li{padding:4px 6px;margin-bottom:5px}
+.compat-provider-episodes li.compat-season-heading{background:transparent;border:0;padding:12px 4px 4px;margin:0}
+.compat-season-heading h3{margin:0;font-size:19px}
+.compat-lineup li{padding:13px 16px}
+.compat-lineup li .compat-browse-row{border:0;padding-left:0}
+.compat-lineup .compat-programme{margin:4px 0;padding:6px 0}
+.compat-lineup .compat-programme p{margin:2px 0}
+.compat-lineup .compat-button{font-size:13px;padding:7px 11px}
+.compat-channel-step{margin:16px 0}
+.compat-browse-toolbar .compat-search{padding:12px 14px;margin:0 0 6px}
+.compat-browse-toolbar .compat-search label{width:72%;max-width:580px}
+.compat-browse-toolbar .compat-disclosure{display:inline-block;vertical-align:middle}
+.compat-browse-toolbar .compat-disclosure-content{margin-top:8px}
+.compat-browse-toolbar .compat-filters{margin:0 0 8px;padding:12px 16px}
+.compat-alphabet{margin:10px 0 18px}
+.compat-alphabet a{margin:2px;padding:7px 8px}
+.compat-config-groups{padding:8px 0}
+@media screen and (min-width:1200px){
+ .compat-directory li{width:33.333%}
+ .compat-browse-copy strong{font-size:17px}
+}
+@media screen and (max-width:760px){
+ .compat-directory li{width:50%}
+ .compat-choicebar .compat-disclosure{display:block}
+}
+@media screen and (max-width:480px){
+ .compat-directory li{width:100%}
+ .compat-choicebar a.compat-choice{padding:7px 12px;font-size:14px}
+ .compat-choicebar a.compat-choice.active{padding:6px 11px}
+ .compat-browse-toolbar .compat-search label{width:100%}
+ .compat-browse-toolbar .compat-search button{margin-top:8px}
+ .compat-provider-group{padding:10px 12px}
+}
+.compat-width-tiny .compat-directory li{width:100%}
+.compat-width-tiny .compat-browse-toolbar .compat-search label{width:100%}
+
+body.compat-dark a.compat-choice.active{background:#59e9ff;color:#070a13;border-color:#59e9ff}
+
+body.compat-light a.compat-choice.active{background:#086d99;color:#edf3f9;border-color:#086d99}
+
+body.compat-retro-scifi a.compat-choice.active{background:#8affaa;color:#050d09;border-color:#8affaa}
+
+body.compat-steampunk a.compat-choice.active{background:#e2bb72;color:#15110e;border-color:#e2bb72}
+
+body.compat-vintage-tv a.compat-choice.active{background:#e7be68;color:#181914;border-color:#e7be68}
+
+body.compat-after-hours a.compat-choice.active{background:#eeb5bc;color:#160e18;border-color:#eeb5bc}
+
+body.compat-ninja-extreme a.compat-choice.active{background:#ffe280;color:#131b36;border-color:#ffe280}
+
+body.compat-anime a.compat-choice.active{background:#f4b6d1;color:#181a33;border-color:#f4b6d1}
+
+body.compat-manly-man a.compat-choice.active{background:#ffc073;color:#10191c;border-color:#ffc073}
