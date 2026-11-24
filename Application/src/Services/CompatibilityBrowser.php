@@ -851,6 +851,9 @@ final class CompatibilityBrowser {
         $data=is_string($body)&&strlen($body)<=4194304?json_decode($body,true):null;
         if($status>=200&&$status<300&&!empty($data['ok']))return $data;
         $errors=[401=>'Your TV session is no longer signed in. Sign in again.',403=>'The Node provider request was rejected (HTTP 403).',404=>'The provider service or selection was not found.',410=>'This provider subscription has expired.',422=>'The provider selection is no longer available. Refresh the list.',429=>'The provider is rate limiting requests. Try again later.',502=>'The provider did not return a usable response.',503=>'The Node provider service is unavailable.',504=>'The provider request timed out.'];
+        // Expose only known, safe backend error messages, not provider URLs or credentials.
+        $safeMessages=['Select a saved Stalker connection.','Select a valid catalogue entry.','This catalogue entry is unavailable. Refresh the catalogue and select it again.','This channel is no longer on its provider page. Refresh Live TV and select it again.','The provider rejected the saved device or account.','The provider has rate limited requests.','The provider request could not be completed.','This provider subscription has expired.'];
+        if(in_array($data['error']??null,$safeMessages,true))throw new RuntimeException($data['error']);
         if($status===403){
             if(($data['code']??'')==='area_denied')throw new RuntimeException('Live access is disabled for this profile.');
             if(($data['code']??'')==='access_denied')throw new RuntimeException('This profile does not have active account access.');

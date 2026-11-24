@@ -95,7 +95,7 @@ async function resolve(client, kind, id, item) {
   return { url: url.href, linkMode: 'create_link' };
 }
 
-async function issue(root, feed, id, kind, item, viewer, signal, compatibility = false) {
+async function issue(root, feed, id, kind, item, viewer, signal, compatibility = false, sessionHash) {
   const client = await provider(root, feed, signal);
   const { url } = await resolve(client, kind, id, item);
   const ticket = randomBytes(16).toString('hex');
@@ -109,6 +109,7 @@ async function issue(root, feed, id, kind, item, viewer, signal, compatibility =
     created: now(),
     item,
     childKey: randomBytes(32).toString('hex'),
+    ...(compatibility && /^[a-f0-9]{64}$/.test(sessionHash ?? '') ? { compatibilitySession: sessionHash } : {}),
   };
   await cache(root, ticketKey(ticket), state, lifetime);
   const query = new URLSearchParams({ feed: feed.id, channel: id, ticket });
@@ -117,9 +118,21 @@ async function issue(root, feed, id, kind, item, viewer, signal, compatibility =
     ? !compatibility || /\.m3u8$/i.test(pathname)
     : /\.m3u8$/i.test(pathname);
   if (hls) query.set('format', '.m3u8');
+  else if (compatibility && kind === 'live') query.set('format', '.ts');
+  else if (compatibility && /\.(?:mp4|m4v|webm|mkv|ts|m2ts|mts)$/i.test(pathname))
+    query.set('format', /\.[a-z0-9]+$/i.exec(pathname)[0].toLowerCase());
   const transport = kind !== 'live' && /\.(?:ts|m2ts|mts|mpegts)$/i.test(pathname)
     ? 'mpegts' : undefined;
   return { ok: true, source: { kind, url: playbackPath + '?' + query, ...(transport ? { transport } : {}) } };
+}
+
+async function compatibilitySession(root, { ticket, feed, channel }) {
+  if (typeof ticket !== 'string' || !/^[a-f0-9]{32}$/.test(ticket) ||
+      typeof feed !== 'string' || typeof channel !== 'string') return null;
+  const state = await cached(root, ticketKey(ticket));
+  if (!state || state.feed !== feed || state.id !== channel ||
+      !/^[a-f0-9]{64}$/.test(state.compatibilitySession ?? '') || typeof state.viewer !== 'string') return null;
+  return { sessionHash: state.compatibilitySession, viewer: state.viewer };
 }
 
 async function authorizedTicket(root, feed, id, ticket, viewer) {
@@ -287,6 +300,14 @@ async function serve(root, feed, state, request, response) {
   let res, decoder;
   try {
     const target = resource == null ? null : resourceUrl(resource, state.childKey, playback);
+    // A native player's preliminary HEAD must not consume a one-use live
+    // provider URL. Validate the ticket first, then answer locally.
+    const nativeLive = Boolean(state.compatibilitySession) && state.kind === 'live' && target == null;
+    if (nativeLive && request.method === 'HEAD') {
+      const path = new URL(state.url).pathname;
+      return response.set('Cache-Control','private, no-store')
+        .type(/\.m3u8$/i.test(path) ? 'application/vnd.apple.mpegurl' : 'video/mp2t').end();
+    }
     const session = await playbackSession(root, feed, state, playback, controller.signal);
     if (!/^st[0-9a-f]{32}$/.test(session.jar)) throw problem(403, 'Invalid playback session.');
     const jar = join(tmpdir(), 'iptv_hls_cj', session.jar + '.jar');
@@ -310,7 +331,10 @@ async function serve(root, feed, state, request, response) {
     };
     const range = request.headers.range;
     if (range && !/^bytes=(?:\d+-\d*|-\d+)$/.test(range)) throw problem(416, 'Invalid byte range.');
-    const options = { method: request.method, range, ifRange: range ? request.headers['if-range'] : undefined, signal: controller.signal };
+    // Live transport streams are not seekable. Some TVs send a byte-zero
+    // range on first open; do not pass that probe to the live provider.
+    const upstreamRange = nativeLive && /^bytes=0-/.test(range ?? '') ? undefined : range;
+    const options = { method: request.method, range: upstreamRange, ifRange: upstreamRange ? request.headers['if-range'] : undefined, signal: controller.signal };
     let mediaOptions = options;
     let result = await follow(client, target ?? session.url, mediaOptions);
     res = result.res;
@@ -330,7 +354,7 @@ async function serve(root, feed, state, request, response) {
     // Stalker VOD links can be one-use or expire before the browser opens them.
     // Recover one rejected root request with a fresh device session/create_link;
     // do not re-resolve HLS segments or repeatedly hammer a rejecting portal.
-    if (state.kind !== 'live' && target == null && [456, 458].includes(res.statusCode) &&
+    if ((state.kind !== 'live' || nativeLive) && target == null && [456, 458].includes(res.statusCode) &&
         now() - Number(session.refreshedAt ?? 0) >= 60) {
       const denied = res.statusCode;
       session.refreshedAt = now();
@@ -450,4 +474,4 @@ async function serve(root, feed, state, request, response) {
   }
 }
 
-module.exports = { entry, issue, serve, checkMedia, probe, authorizedTicket };
+module.exports = { entry, issue, serve, checkMedia, probe, authorizedTicket, compatibilitySession };

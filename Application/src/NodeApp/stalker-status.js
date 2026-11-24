@@ -196,7 +196,7 @@ module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavai
       }
     };
   }
-  async function feedOperation(request, response, pool, settings, user, feeds, live_iptv) {
+  async function feedOperation(request, response, pool, settings, user, feeds, live_iptv, current) {
     const { action } = request.params,
       opts = request.method === 'POST' ? (request.body ?? {}) : request.query;
     const feed = feeds.find((f) => f.id === (action === 'stalker_manage' ? opts.id : opts.feed));
@@ -265,7 +265,9 @@ module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavai
         return response.json(
           await playback.checkMedia(root, feed, id, kind, selected, opts.profile ?? 'stb', signal),
         );
-      const result = await playback.issue(root, feed, id, kind, selected, user.id, signal, Boolean(response.locals.stalkerSessionHash) || (action === 'stalker_play' && enabled(opts.compatibility)));
+      const compatibility = Boolean(response.locals.stalkerSessionHash) || (action === 'stalker_play' && enabled(opts.compatibility));
+      const result = await playback.issue(root, feed, id, kind, selected, user.id, signal, compatibility,
+        compatibility ? current.sessionHash : undefined);
       result.source.url = response.locals.base.slice(0, -1) + result.source.url;
       if (streaming) return response.redirect(307, result.source.url);
       return response.json(result);
@@ -386,7 +388,7 @@ module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavai
       const feeds = savedFeeds(live_iptv);
       if (!feeds) return unavailable(response);
       if (playbackActions.includes(action) || diagnosticActions.includes(action) || action === 'stalker_manage')
-        return feedOperation(request, response, pool, settings, user, feeds, live_iptv);
+        return feedOperation(request, response, pool, settings, user, feeds, live_iptv, current);
       const keys = new Map(feeds.map(feed => [feed.id, configHash(feed)]));
       const accounts = feeds.length ? await documents(pool, [...keys.values()].map(key => 'stalker-account-' + key)) : {};
       const expired = id => {
@@ -502,8 +504,19 @@ module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavai
     return operation(request, response);
   });
   app.get(prefix + '/live/:action(stalker|stalker_catalogue_status|stalker_update_status|stalker_offline|stalker_offline_file|stalker_art|' + browseActions.concat(diagnosticActions).join('|') + ')', operation);
-  app.get(prefix + '/live/:action(stalker_stream)', (request,response) => {
+  app.get(prefix + '/live/:action(stalker_stream)', async (request,response) => {
     if (request.headers['sec-fetch-site'] === 'cross-site') return response.sendStatus(403);
+    // Native TV players may omit cookies, including on HLS child requests.
+    // Only an unguessable, authenticated compatibility playback selection can
+    // recover its original session. The ordinary handler revalidates that
+    // session, the viewer, Live permission, parental policy and saved feed.
+    if (!request.headers.authorization && !/(?:^|;\s*)vaultcast_session=/.test(String(request.headers.cookie || ''))) {
+      const identity = await playback.compatibilitySession(root, request.query).catch(() => null);
+      if (identity) {
+        response.locals.stalkerSessionHash = identity.sessionHash;
+        response.locals.stalkerViewer = identity.viewer;
+      }
+    }
     return operation(request,response);
   });
   app.post(prefix + '/live/:action(stalker_cancel|stalker_delete|stalker_download|stalker_retry|stalker_updates|stalker_catalogue_control|stalker_manage|stalker_play|stalker_check_media|iptv_preview|iptv_probe)', (request, response, next) => {
