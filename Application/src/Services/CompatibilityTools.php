@@ -103,8 +103,21 @@ trait CompatibilityTools {
     private static function toolPage(string $view,string $id): ?string {
         if($view==='tools'){
             $html=self::heading('YOUR TOOLS','Tools and settings','Actions run only when selected.');
-            foreach(self::toolDefinitions() as $key=>$definition){if($definition[3]==='admin'?(self::$viewer['role'] ?? '')!=='admin':!Permissions::allowed(self::$viewer,$definition[3]))continue;$html.=self::link($definition[0],['view'=>'tool','id'=>$key]);}
-            if((self::$viewer['role'] ?? '')==='admin')$html.=self::link('Application settings',['view'=>'configuration']).self::link('Live settings',['view'=>'live-admin']).self::link('Create movie collection',['view'=>'manage-collection']).self::link('Users and roles',['view'=>'users']);return $html;
+            $definitions=self::toolDefinitions();
+            $groups=[
+                'Updates & maintenance'=>['updates','jobs','maintenance','artwork-status','artwork','prepare-artwork','optimise','optimise-queue','cache'],
+                'Library & collections'=>['media','files','paths','collections-admin','collection-search','discover-collections','reports','ingest'],
+                'Downloads & conversion'=>['rss','download-status','transmission','conversions','import-downloads'],
+                'Server & diagnostics'=>['system','processes','logs','diagnostics','restart-service','kill','reboot']
+            ];
+            if((self::$viewer['role'] ?? '')==='admin')$html.='<div class="compat-tool-group"><h3>Administration</h3><div class="compat-tool-grid">'.self::link('Application settings',['view'=>'configuration']).self::link('Live settings',['view'=>'live-admin']).self::link('Users and roles',['view'=>'users']).self::link('Create movie collection',['view'=>'manage-collection']).'</div></div>';
+            $seen=[];foreach($groups as $label=>$keys){
+                $links='';foreach($keys as $key){if(!isset($definitions[$key]))continue;$definition=$definitions[$key];$seen[$key]=true;if($definition[3]==='admin'?(self::$viewer['role'] ?? '')!=='admin':!Permissions::allowed(self::$viewer,$definition[3]))continue;$links.=self::link($definition[0],['view'=>'tool','id'=>$key]);}
+                if($links!=='')$html.='<div class="compat-tool-group"><h3>'.self::esc($label).'</h3><div class="compat-tool-grid">'.$links.'</div></div>';
+            }
+            $links='';foreach($definitions as $key=>$definition){if(isset($seen[$key]))continue;if($definition[3]==='admin'?(self::$viewer['role'] ?? '')!=='admin':!Permissions::allowed(self::$viewer,$definition[3]))continue;$links.=self::link($definition[0],['view'=>'tool','id'=>$key]);}
+            if($links!=='')$html.='<div class="compat-tool-group"><h3>Other tools</h3><div class="compat-tool-grid">'.$links.'</div></div>';
+            return $html;
         }
         if($view==='tool'){
             $definition=self::toolDefinitions()[$id] ?? null;if(!$definition)throw new RuntimeException('Unknown tool.');self::toolPermission($definition[3]);$html=self::heading('TOOLS',$definition[0]).self::beginForm(['view'=>'tool','id'=>$id],'run_tool');

@@ -387,3 +387,138 @@ html{background:transparent}
 .vc-off-player{position:fixed;top:0;left:0;right:0;bottom:0;background:#080d17;color:#fff;z-index:100020;padding:16px;overflow:auto}
 .vc-off-player .vc-off-video{height:80%;max-height:80%;width:100%;background:#000}
 .vc-off-player-bar button{margin-left:16px}
+
+
+/* Compatibility UI: traditional normal-flow layout, no grid/flex dependency.
+   Theme colours remain defined by the existing literal palette rules. */
+.compat-header{padding:12px 32px 8px}
+.compat-header-inner,.compat-subnav-inner{max-width:1440px;margin:0 auto}
+.compat-topbar{overflow:hidden;padding:3px 2px 8px}
+.compat-brand{margin:0 16px 0 0;line-height:1.4}
+.compat-logo{width:34px;line-height:34px;margin-right:7px;font-size:17px;border-radius:9px}
+.compat-header-search{margin:0 0 2px 16px;width:350px}
+.compat-major-nav{display:block;clear:both;margin:0}
+.compat-major-nav a{font-size:17px;padding:9px 18px;margin:3px 5px 3px 0;border-radius:9px}
+.compat-subnav{padding:4px 32px 6px}
+.compat-subnav a{font-size:14px;padding:7px 12px;margin:2px 4px 2px 0;border-radius:8px}
+.compat-subnav .compat-disclosure{display:inline-block;vertical-align:middle;margin:0}
+.compat-subnav .compat-disclosure-toggle{font-size:14px;padding:7px 12px;margin:2px 0}
+.compat-subnav .compat-disclosure-content{display:inline-block;vertical-align:middle}
+#compat-shell{padding-top:20px}
+.compat-back{margin-bottom:14px}
+.compat-back .compat-button{padding:6px 12px;font-size:14px;border-width:1px}
+.compat-heading{margin:0 0 20px}
+.compat-heading h2{font-size:32px;line-height:1.18;margin:0 0 10px}
+.compat-eyebrow{font-size:11px;letter-spacing:1.5px;margin:0 0 7px}
+.compat-heading .compat-note{max-width:760px;margin:0}
+.compat-hero{padding:26px 32px;margin-bottom:22px}
+.compat-hero-art{width:118px;height:177px;margin:0 0 0 24px}
+.compat-hero h2{font-size:34px}
+.compat-hero .compat-actions{margin-top:12px}
+.compat-shelf{margin:24px 0}
+.compat-row-head h2,.compat-shelf h2{font-size:24px}
+.compat-card{padding:4px;margin:5px 7px 12px;border-radius:12px;overflow:hidden}
+.compat-card-caption{display:block;padding:0 4px}
+.compat-card strong{line-height:1.4;margin-top:9px}
+.compat-card small{font-size:13px;line-height:1.45;margin-top:3px}
+.compat-poster{border-radius:9px;box-shadow:0 4px 12px rgba(0,0,0,.2)}
+.compat-poster img{border-radius:9px}
+.compat-card .compat-progress{margin:6px 4px 3px}
+.compat-card:focus{outline-offset:0}
+.compat-detail{padding:24px;margin:16px 0 24px}
+.compat-media-detail>.compat-poster{width:220px;height:330px;margin-right:26px}
+.compat-detail .compat-heading{margin-bottom:8px}
+.compat-title-meta{font-size:14px;margin:5px 0 12px}
+.compat-title-play{margin:10px 0 20px}
+.compat-title-play .compat-action{display:inline-block;margin:0 8px 0 0;vertical-align:middle}
+.compat-play-primary button{font-weight:bold;min-width:130px;padding:13px 20px;border-width:2px;font-size:17px}
+.compat-title-play .compat-action+.compat-action button{font-size:15px;min-width:0;border-width:1px}
+.compat-title-secondary{margin-top:7px}
+.compat-disclosure{margin:10px 0}
+.compat-disclosure-content .compat-actions{margin:6px 0}
+.compat-disclosure-toggle{font-weight:bold}
+.compat-episode-row{padding:0!important}
+.compat-episode-link{display:block;padding:14px 16px;overflow:hidden;text-decoration:none}
+.compat-episode-link:hover{text-decoration:none}
+.compat-episode-number{float:left;font-size:24px;font-weight:bold;line-height:1.7;min-width:44px;margin-right:16px;text-align:center;opacity:.8}
+.compat-episode-copy{display:inline-block;vertical-align:middle;max-width:74%}
+.compat-episode-copy strong,.compat-episode-copy small{display:block;word-wrap:break-word}
+.compat-episode-copy small{font-size:13px;opacity:.8;margin-top:4px}
+.compat-episode-play{float:right;font-size:18px;line-height:2}
+.compat-pages{margin:10px 0 18px;padding:12px 0}
+.compat-page-current{display:inline-block;vertical-align:middle;font-size:14px;font-weight:bold;padding:0 14px}
+.compat-tool-group{margin:0 0 22px;padding:14px 0;border-bottom:1px solid; border-bottom-color:rgba(128,128,128,.3)}
+.compat-tool-group h3{margin:0 0 12px;font-size:19px}
+.compat-tool-grid{font-size:0}
+.compat-tool-grid a.compat-button{display:inline-block;vertical-align:top;box-sizing:border-box;width:31.6%;margin:0 1.5% 9px 0;min-height:56px;padding:14px 16px;font-size:15px;font-weight:bold;text-align:left}
+.compat-fields label{margin:12px 0 16px}
+.compat-fields .compat-check{min-height:28px;line-height:1.5}
+.compat-fields input[type=checkbox]{width:18px;height:18px;vertical-align:middle}
+.compat-fields button[type=submit]{margin-top:10px;font-weight:bold}
+.compat-fields input[type=text],.compat-fields input[type=number],.compat-fields input[type=password],.compat-fields input[type=url],.compat-fields input[type=file],.compat-fields select,.compat-fields textarea{max-width:100%;width:100%;box-sizing:border-box}
+.compat-fields{overflow:visible}
+.compat-fields label,.compat-filters label{box-sizing:border-box;word-wrap:break-word}
+.compat-header a:focus,.compat-subnav a:focus,.compat-card:focus,.compat-episode-link:focus,button:focus,input:focus,select:focus,textarea:focus{outline-width:3px;outline-style:solid;outline-offset:2px}
+.compat-episode-link:focus{outline-offset:-4px}
+.compat-content-box .compat-tool-grid a.compat-button{width:27%}
+@media screen and (min-width:1200px){
+ .compat-major-nav a{padding:11px 22px;font-size:18px}
+ .compat-card strong{font-size:16px}
+}
+@media screen and (max-width:760px){
+ .compat-header{padding:10px 18px 6px}
+ .compat-subnav{padding:4px 14px}
+ .compat-major-nav a{font-size:15px;padding:8px 12px}
+ .compat-heading h2{font-size:27px}
+ .compat-hero{padding:21px}
+ .compat-hero h2{font-size:29px}
+ .compat-media-detail>.compat-poster{width:150px;height:225px;margin-right:18px}
+ .compat-tool-grid a.compat-button{width:48%;margin-right:2%}
+}
+@media screen and (max-width:480px){
+ .compat-header{padding:10px 12px 5px}
+ .compat-header-search{float:none;width:100%;margin:8px 0 0;text-align:left}
+ .compat-brand{display:inline-block;font-size:21px}
+ .compat-major-nav a{font-size:14px;padding:7px 10px;margin-right:2px}
+ .compat-subnav{padding:3px 9px}
+ .compat-subnav a{font-size:13px;padding:7px 9px}
+ .compat-subnav .compat-disclosure{display:block}
+ .compat-heading h2{font-size:25px}
+ .compat-hero{padding:18px}
+ .compat-hero-art{float:right;width:74px;height:111px;margin:0 0 8px 12px}
+ .compat-hero h2{font-size:25px}
+ .compat-detail{padding:15px}
+ .compat-media-detail>.compat-poster{float:none;width:130px;height:195px;margin:0 auto 16px}
+ .compat-title-play .compat-action{display:block;margin:0 0 6px}
+ .compat-title-play .compat-action button{width:100%;box-sizing:border-box}
+ .compat-card{margin:3px;padding:2px}
+ .compat-tool-grid a.compat-button{display:block;width:auto;margin:0 0 8px;min-height:0}
+ .compat-episode-link{padding:11px 10px}
+ .compat-episode-number{min-width:30px;margin-right:8px;font-size:20px}
+ .compat-episode-copy{max-width:70%}
+}
+.compat-width-small .compat-tool-grid a.compat-button{width:46%}
+.compat-width-tiny .compat-tool-grid a.compat-button{display:block;width:auto;margin:0 0 8px;min-height:0}
+.compat-width-tiny .compat-header-search{float:none;width:100%;margin:8px 0 0;text-align:left}
+.compat-width-tiny .compat-media-detail>.compat-poster{float:none;width:130px;height:195px;margin:0 auto 16px}
+.compat-width-tiny .compat-major-nav a{font-size:14px;padding:7px 10px;margin-right:2px}
+.compat-width-tiny .compat-hero-art{float:right;width:74px;height:111px;margin:0 0 8px 12px}
+.compat-width-tiny .compat-hero h2{font-size:25px}
+
+body.compat-dark .compat-play-primary:first-of-type button{background:#59e9ff;color:#070a13;border-color:#59e9ff}
+
+body.compat-light .compat-play-primary:first-of-type button{background:#086d99;color:#edf3f9;border-color:#086d99}
+
+body.compat-retro-scifi .compat-play-primary:first-of-type button{background:#8affaa;color:#050d09;border-color:#8affaa}
+
+body.compat-steampunk .compat-play-primary:first-of-type button{background:#e2bb72;color:#15110e;border-color:#e2bb72}
+
+body.compat-vintage-tv .compat-play-primary:first-of-type button{background:#e7be68;color:#181914;border-color:#e7be68}
+
+body.compat-after-hours .compat-play-primary:first-of-type button{background:#eeb5bc;color:#160e18;border-color:#eeb5bc}
+
+body.compat-ninja-extreme .compat-play-primary:first-of-type button{background:#ffe280;color:#131b36;border-color:#ffe280}
+
+body.compat-anime .compat-play-primary:first-of-type button{background:#f4b6d1;color:#181a33;border-color:#f4b6d1}
+
+body.compat-manly-man .compat-play-primary:first-of-type button{background:#ffc073;color:#10191c;border-color:#ffc073}

@@ -18,7 +18,7 @@ final class CompatibilityBrowser {
     private static function url(array $params=[]): string { return self::$base.'?'.http_build_query(['compat'=>'on']+$params,'','&',PHP_QUERY_RFC3986); }
     private static function link(string $label,array $params=[]): string { return '<a class="compat-button" href="'.self::esc(self::url($params)).'">'.self::esc($label).'</a>'; }
     private static function form(array $params,string $label,string $action, array $fields=[]): string {
-        $html='<form class="compat-action" method="post" action="'.self::esc(self::url($params)).'"><input type="hidden" name="compat_action" value="'.self::esc($action).'"><input type="hidden" name="compat_token" value="'.self::esc(self::token()).'">';
+        $html='<form class="compat-action'.($action==='play'?' compat-play-primary':'').'" method="post" action="'.self::esc(self::url($params)).'"><input type="hidden" name="compat_action" value="'.self::esc($action).'"><input type="hidden" name="compat_token" value="'.self::esc(self::token()).'">';
         foreach($fields as $key=>$value)$html.='<input type="hidden" name="'.self::esc($key).'" value="'.self::esc($value).'">';
         return $html.'<button type="submit">'.self::esc($label).'</button></form>';
     }
@@ -29,7 +29,11 @@ final class CompatibilityBrowser {
         return $html.'<label>Search <input type="text" name="q" value="'.self::esc($query).'" maxlength="200"></label><button type="submit">Search</button></form>';
     }
     private static function pages(array $params,int $page,bool $more): string {
-        return '<div class="compat-pages">'.($page>1?self::link('Previous',['page'=>$page-1]+$params):'').' Page '.$page.' '.($more?self::link('Next',['page'=>$page+1]+$params):'').'</div>';
+        if($page===1&&!$more)return '';
+        return '<div class="compat-pages" role="navigation" aria-label="Pages">'.($page>1?self::link('← Previous',['page'=>$page-1]+$params):'').'<span class="compat-page-current" aria-current="page">Page '.$page.'</span>'.($more?self::link('Next →',['page'=>$page+1]+$params):'').'</div>';
+    }
+    private static function disclosure(string $id,string $label,string $content,bool $open=false): string {
+        return '<div class="compat-disclosure"><button type="button" class="compat-disclosure-toggle" data-compat-disclosure="'.$id.'" aria-controls="'.$id.'" aria-expanded="true" style="display:none">'.self::esc($label).'</button><div class="compat-disclosure-content" id="'.$id.'" data-compat-open="'.($open?'1':'0').'">'.$content.'</div></div>';
     }
     private static function token(): string { return hash('sha256','compat-form|'.($_COOKIE[Auth::COOKIE] ?? 'anonymous')); }
     private static function personal(): array {
@@ -49,7 +53,7 @@ final class CompatibilityBrowser {
         $html='<ul class="compat-cards">';$count=0;
         foreach($items as $item){if(($item['media_kind'] ?? '')==='rom'||($item['type'] ?? '')==='roms'||!AreaAccess::allowed(self::$viewer,AreaAccess::itemArea($item))||!Parental::allows(self::$viewer,$item))continue;
             $count++;$meta=[];if(!empty($item['year']))$meta[]=$item['year'];if(!empty($item['season_count']))$meta[]=$item['season_count'].' seasons';if(!empty($item['episode']))$meta[]='Episode '.$item['episode'];
-            $html.='<li><a class="compat-card" href="'.self::esc(self::mediaUrl($item,$context)).'">'.self::poster($item).'<strong>'.self::esc($item['title'] ?? 'Untitled').'</strong><small>'.self::esc(implode(' · ',$meta)).'</small>';
+            $html.='<li><a class="compat-card" href="'.self::esc(self::mediaUrl($item,$context)).'" title="'.self::esc($item['title'] ?? 'Untitled').'">'.self::poster($item).'<span class="compat-card-caption"><strong>'.self::esc($item['title'] ?? 'Untitled').'</strong><small>'.self::esc(implode(' · ',$meta)).'</small></span>';
             $progress=$item['progress'] ?? [];$duration=(float)($progress['duration'] ?? 0);$position=(float)($progress['position'] ?? 0);
             if($duration>0 && $position>0)$html.='<span class="compat-progress"><span style="width:'.min(100,(int)round($position/$duration*100)).'%"></span></span>';
             $html.='</a></li>';
@@ -547,13 +551,13 @@ final class CompatibilityBrowser {
             $html.='</select></label><button type="submit">Open season</button></form><ul class="compat-list">';$episodes=array_values(array_filter($episodes,static function($ep){return !empty($ep['id'])&&($ep['available'] ?? true)!==false&&($ep['status'] ?? '')!=='missing';}));
             $visible=array_slice($episodes,($page-1)*16,16);$seen=[];
             if(self::$signed&&$visible){$ids=array_column($visible,'id');$q=\Vaultcast\Database::connection()->prepare('SELECT item_id,payload FROM vaultcast_progress WHERE user_id=? AND item_id IN ('.implode(',',array_fill(0,count($ids),'?')).')');$q->execute(array_merge([self::$viewer['id']],$ids));foreach($q as $row){$p=json_decode($row['payload'],true);$seen[$row['item_id']]=!empty($p['watched'])||Catalogue::progressFinished($p,true);}}
-            foreach($visible as $ep){$watched=!empty($seen[$ep['id']]);$title=(!$watched&&self::preference('hide_spoilers',false))?'Details hidden':($ep['episode_title'] ?? $ep['title'] ?? 'Play');$html.='<li>'.self::link('Episode '.($ep['episode'] ?? '?').' - '.$title.($watched?' · Watched':''),['view'=>'item','id'=>$ep['id']]).'</li>';}
+            foreach($visible as $ep){$watched=!empty($seen[$ep['id']]);$title=(!$watched&&self::preference('hide_spoilers',false))?'Details hidden':($ep['episode_title'] ?? $ep['title'] ?? 'Play');$html.='<li class="compat-episode-row"><a class="compat-episode-link" href="'.self::esc(self::url(['view'=>'item','id'=>$ep['id']])).'"><span class="compat-episode-number">'.self::esc(sprintf('%02d',(int)($ep['episode'] ?? 0))).'</span><span class="compat-episode-copy"><strong>'.self::esc($title).'</strong><small>'.($watched?'Watched':'Episode '.self::esc($ep['episode'] ?? '?')).'</small></span><span class="compat-episode-play" aria-hidden="true">&#9654;</span></a></li>';}
             return $html.'</ul>'.self::pages(['view'=>'show','id'=>$id,'season'=>$season],$page,$page*16<count($episodes));
         }
         if($view==='item'){
             self::allow('library');$item=Catalogue::item($id);if(!$item||AreaAccess::itemArea($item)!=='library')throw new RuntimeException('Media not found.');
             $collection=mb_substr((string)($_GET['collection'] ?? ''),0,100);$playParams=['view'=>'item','id'=>$id];if($collection!=='')$playParams['collection']=$collection;
-            $detail=Catalogue::itemDetail($id);$card=$detail['item'];$html=self::heading(!empty($card['show'])?'EPISODE':'LIBRARY',(string)$card['title']);
+            $detail=Catalogue::itemDetail($id);$card=$detail['item'];$heading=self::heading(!empty($card['show'])?'EPISODE':'LIBRARY',(string)$card['title']);$html=$heading;
             if(($_SERVER['REQUEST_METHOD'] ?? '')==='POST'&&($_POST['compat_action'] ?? '')==='play'){
                 if(!is_file((string)($item['path'] ?? '')))throw new RuntimeException('The media file is unavailable.');
                 $play=Stream::issueToken(self::$viewer,$id);$html.=self::player($play['url'],($play['media_kind'] ?? '')==='audio',$play['subtitles'] ?? [],['autoplay'=>true,'signed'=>self::$signed,'item_id'=>$id,'episode_skip'=>EpisodeSegments::eligible($item)&&(self::$viewer['prefs']['skip_segments'] ?? true)!==false,'auto_skip_intro'=>!empty(self::$viewer['prefs']['auto_skip_intro']),'auto_skip_outro'=>!empty(self::$viewer['prefs']['auto_skip_outro']),'progress'=>(!empty($_POST['from_start']) || !empty($_POST['sequence']))?null:($play['progress'] ?? null),'save_progress'=>(self::$viewer['id'] ?? '')!=='public','remux_url'=>!empty($play['remux_allowed'])?($play['remux_url'] ?? null):null]);
@@ -570,10 +574,11 @@ final class CompatibilityBrowser {
                 else $html.=self::form($playParams,'Play','play',['from_start'=>'1']);
             }
             if(!isset($play) && empty($_GET['paused']) && (self::$viewer['prefs']['autoplay_on_open'] ?? true)!==false){
-                $html=preg_replace('/<form class="compat-action"/','<form id="compat-open-play" class="compat-action"',$html,1);
+                $html=preg_replace('/<form class="compat-action compat-play-primary"/','<form id="compat-open-play" class="compat-action compat-play-primary"',$html,1);
             }
             $next=isset($play)?null:self::nextEpisode($item);if($next)$html.=self::link('Next episode · S'.$next['season'].' E'.$next['episode'],['view'=>'item','id'=>$next['item_id']]);
-            $html.='<div class="compat-detail">'.self::poster($card,'detail').'<div class="compat-detail-copy"><h3>'.self::esc($card['title']).'</h3><p class="compat-note">'.self::esc(implode(' · ',array_filter([$card['year'] ?? null,strtoupper($card['ext'] ?? '')]))).'</p>'.(!empty($card['synopsis'])?'<p class="compat-synopsis">'.self::esc(strip_tags($card['synopsis'])).'</p>':'').self::shelfActions($card).self::watchedControl($item).self::titleFeatures($card).'</div></div>';
+            $controls='';if(!isset($play)){$controls='<div class="compat-title-play">'.substr($html,strlen($heading)).'</div>';$html='';}
+            $html.='<div class="compat-detail compat-media-detail">'.self::poster($card,'detail').'<div class="compat-detail-copy">'.(isset($play)?'<h3>About this title</h3>':$heading).'<p class="compat-note compat-title-meta">'.self::esc(implode(' · ',array_filter([$card['year'] ?? null,strtoupper($card['ext'] ?? '')]))).'</p>'.$controls.(!empty($card['synopsis'])?'<p class="compat-synopsis">'.self::esc(strip_tags($card['synopsis'])).'</p>':'').self::shelfActions($card).self::watchedControl($item).self::titleFeatures($card).'</div></div>';
             return $html;
         }
         if($view==='live')return self::live($id,$page,$query);
@@ -1113,12 +1118,12 @@ final class CompatibilityBrowser {
         }
         $headerSearch='';
         if($home && AreaAccess::allowed(self::$viewer,'library'))$headerSearch='<form class="compat-header-search" role="search" method="get" action="'.self::esc(self::$base).'"><input type="hidden" name="compat" value="on"><input type="hidden" name="view" value="search"><label class="compat-header-search-label" for="compat-header-query">Search movies and shows</label><input id="compat-header-query" type="text" name="q" value="'.self::esc($view==='search'?(string)($_GET['q'] ?? ''):'').'" placeholder="Search movies &amp; shows…" maxlength="200"><button type="submit">Search</button></form>';
-        $nav='<div class="compat-header"><a class="compat-brand" href="'.self::esc(self::url()).'"><span class="compat-logo">&#9654;</span> '.self::esc($site).'</a>'.$headerSearch.'<div class="compat-major-nav">';
+        $nav='<div class="compat-header"><div class="compat-header-inner"><div class="compat-topbar"><a class="compat-brand" href="'.self::esc(self::url()).'"><span class="compat-logo">&#9654;</span> '.self::esc($site).'</a>'.$headerSearch.'</div><div class="compat-major-nav" role="navigation" aria-label="Main navigation">';
         $tabs=['home'=>'Home'];if($home && AreaAccess::allowed(self::$viewer,'library'))$tabs['library']='Library';if(!empty($home['features']['live']))$tabs['live']='Live';if($home && AreaAccess::allowed(self::$viewer,'games'))$tabs['play']='Play';if($home&&self::$signed)$tabs['misc']='Misc';if($home&&self::offlineAvailable())$tabs['offline']='Downloads';$tabs['account']=self::$signed?'Settings':'Sign in';
         foreach($tabs as $key=>$label){$target=$key==='account'&&!self::$signed?'login':$key;$selected=$view===$target || ($key==='play'&&in_array($view,['game','emulator'],true)) || ($key==='library'&&in_array($view,['section','show','item','search','collections','collection','requests'],true)) || ($key==='account'&&in_array($view,['parental','tools','tool','tool-result','configuration','users','edit-user','roles','edit-role','live-admin','factory-reset'],true)) || ($key==='home'&&in_array($view,['favourites','watchlist','calendar','history','arrivals','tonight','cinema','invitations','home-options','lists','friends','inbox','chat'],true));$nav.='<a'.($selected?' class="active" aria-current="page"':'').' href="'.self::esc(self::url(['view'=>$target])).'">'.self::esc($label).'</a>';}
-        $nav.='</div></div>';
+        $nav.='</div></div></div>';
         if($home){
-            $nav.='<div class="compat-subnav">';
+            $nav.='<div class="compat-subnav" role="navigation" aria-label="Section navigation"><div class="compat-subnav-inner">';
             if(in_array($view,['library','section','show','item','search','collections','collection','requests'],true)){
                 $libraryTabs=[['label'=>'Discover','params'=>['view'=>'library'],'active'=>$view==='library']];
                 foreach($home['sections'] ?? [] as $section)if(($section['type'] ?? '')!=='roms')$libraryTabs[]=['label'=>$section['label'] ?? $section['type'],'params'=>['view'=>'section','id'=>$section['id']],'active'=>$view==='section'&&($_GET['id'] ?? '')===$section['id']];
@@ -1133,8 +1138,21 @@ final class CompatibilityBrowser {
                 $settings=['account'=>'Account','parental'=>'Parental controls','tools'=>'Tools'];if((self::$viewer['role'] ?? '')==='admin')$settings+=['configuration'=>'Configuration','users'=>'Users','roles'=>'Roles','live-admin'=>'Live settings'];foreach($settings as $tab=>$label)$nav.='<a'.($view===$tab?' class="active" aria-current="page"':'').' href="'.self::esc(self::url(['view'=>$tab])).'">'.self::esc($label).'</a>';
             }elseif($view==='live'){
                 foreach(['now'=>'On now','relay'=>'Relay','iptv'=>'IPTV','stalker'=>'Stalker','xtream'=>'Xtream','radio'=>'Radio'] as $tab=>$label){$selected=($_GET['tab'] ?? 'now')===$tab;$nav.='<a'.($selected?' class="active" aria-current="page"':'').' href="'.self::esc(self::url(['view'=>'live','tab'=>$tab])).'">'.self::esc($label).'</a>';}
-            }else{foreach(['home'=>'Overview','favourites'=>'Favourites','watchlist'=>'Watchlist','calendar'=>'Release calendar','history'=>'History','arrivals'=>'New arrivals','tonight'=>'Find a watch','cinema'=>'Watch together','invitations'=>'Invitations','home-options'=>'Customise Home','lists'=>'Custom lists','friends'=>'Friends','inbox'=>'Inbox','chat'=>'Chat'] as $key=>$label){if($key!=='home'&&!self::$signed)continue;$nav.='<a'.($view===$key?' class="active" aria-current="page"':'').' href="'.self::esc(self::url($key==='home'?['view'=>'home','overview'=>'1']:['view'=>$key])).'">'.self::esc($label).'</a>';}}
-            $nav.='</div>';
+            }elseif($view==='offline'){
+                $nav.=self::link('My downloads',['view'=>'offline']).self::link('Browse library',['view'=>'library']);
+            }else{
+                $main=['home'=>'Overview','favourites'=>'Favourites','watchlist'=>'Watchlist','calendar'=>'Release calendar','arrivals'=>'New arrivals','friends'=>'Friends','inbox'=>'Inbox'];
+                $secondary=['history'=>'History','tonight'=>'Find a watch','cinema'=>'Watch together','invitations'=>'Invitations','lists'=>'Custom lists','chat'=>'Chat','home-options'=>'Customise Home'];
+                $more='';
+                foreach([$main,$secondary] as $groupIndex=>$group)foreach($group as $key=>$label){
+                    if($key!=='home'&&!self::$signed)continue;
+                    if(in_array($key,['friends','inbox','chat','cinema','invitations'],true)&&!self::socialAllowed())continue;
+                    $anchor='<a'.($view===$key?' class="active" aria-current="page"':'').' href="'.self::esc(self::url($key==='home'?['view'=>'home','overview'=>'1']:['view'=>$key])).'">'.self::esc($label).'</a>';
+                    if($groupIndex===0)$nav.=$anchor;else $more.=$anchor;
+                }
+                if($more!=='')$nav.=self::disclosure('compat-home-more','More Home options',$more,isset($secondary[$view]));
+            }
+            $nav.='</div></div>';
         }
         if($home && $view!=='home'){
             $back=['view'=>'home'];$label='Back to Home';
@@ -1145,7 +1163,7 @@ final class CompatibilityBrowser {
             elseif(in_array($view,['parental','tools','tool','tool-result','configuration','users','edit-user','roles','edit-role','live-admin','factory-reset'],true)){$back=['view'=>'account'];$label='Back to Settings';}
             elseif(in_array($view,['profile','compose','create-room'],true)){$back=['view'=>'friends'];$label='Back to Friends';}
             elseif(in_array($view,['chat','inbox'],true)&&!empty($_GET['id'])){$back=['view'=>$view];$label='Back to conversations';}
-            $body='<div class="compat-back">'.str_replace('<a class=', '<a data-compat-back="1" class=', self::link($label,$back)).'</div>'.$body;
+            $body='<div class="compat-back">'.str_replace('<a class=', '<a data-compat-back="1" class=', self::link('← '.$label,$back)).'</div>'.$body;
         }
         if ((self::$viewer['role'] ?? '')==='admin') {
             $required=MaintenanceRequirements::status()['required'];
@@ -1162,6 +1180,6 @@ final class CompatibilityBrowser {
         $body=str_replace(['<section ','</section>'],['<div ','</div>'],$body);
         $cssVersion=substr(hash_file('sha256',STREAM_ROOT.'/assets/css/compatibility.css'),0,16);$scriptVersion=substr(hash_file('sha256',STREAM_ROOT.'/assets/js/compatibility.js'),0,16);release_request_locks();
         header('Content-Type: text/html; charset=utf-8');
-        echo '<!DOCTYPE html><html lang="en"><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'.self::esc($site).'</title><link rel="stylesheet" href="'.self::esc(AssetDelivery::url($base,'assets/css/compatibility.css',$cssVersion)).'"></head><body class="'.self::esc('compat-'.self::$theme.' ').(self::preference('home_compact',false)?'compat-compact':'').'"><a class="compat-skip" href="#compat-content">Skip to content</a>'.$nav.'<div id="compat-shell"><div id="compat-content" role="main">'.$body.'</div><div class="compat-footer"><span>Compatibility mode · '.self::esc(STREAM_VERSION).'</span><a href="'.self::esc($base.'?compat=auto').'">Automatic detection</a><a href="'.self::esc($base.'?compat=off').'">Full interface</a></div></div><script>window.__VC_COMPAT_BASE__='.json_encode($base,JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT).';</script><script src="'.self::esc(AssetDelivery::url($base,'assets/js/compatibility.js',$scriptVersion)).'"></script></body></html>';
+        echo '<!DOCTYPE html><html lang="en"><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'.self::esc(($view==='home'?'Home':ucwords(str_replace('-',' ',$view))).' · '.$site).'</title><link rel="stylesheet" href="'.self::esc(AssetDelivery::url($base,'assets/css/compatibility.css',$cssVersion)).'"></head><body class="'.self::esc('compat-'.self::$theme.' ').(self::preference('home_compact',false)?'compat-compact ':'').'compat-view-'.self::esc(preg_replace('/[^a-z0-9-]/','',$view)).'"><a class="compat-skip" href="#compat-content">Skip to content</a>'.$nav.'<div id="compat-shell"><div id="compat-content" role="main">'.$body.'</div><div class="compat-footer"><span>Compatibility mode · '.self::esc(STREAM_VERSION).'</span><a href="'.self::esc($base.'?compat=auto').'">Automatic detection</a><a href="'.self::esc($base.'?compat=off').'">Full interface</a></div></div><script>window.__VC_COMPAT_BASE__='.json_encode($base,JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT).';</script><script src="'.self::esc(AssetDelivery::url($base,'assets/js/compatibility.js',$scriptVersion)).'"></script></body></html>';
     }
 }

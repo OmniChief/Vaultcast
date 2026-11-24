@@ -80,9 +80,54 @@
     if(channelDigits.length===3)tuneChannel();else channelTimer=setTimeout(tuneChannel,1800);
     return true;
   }
+  // Restore the exact browsing URL and focused tile rather than returning to
+  // a generic library page. Session storage is optional; no history resubmits.
+  var browseMemory='vc-compat-return-v2',browseRestore='vc-compat-restore-v2';
+  function browseGet(key){try{return window.sessionStorage?JSON.parse(sessionStorage.getItem(key)||'null'):null;}catch(e){return null;}}
+  function browseSet(key,value){try{if(window.sessionStorage)sessionStorage.setItem(key,JSON.stringify(value));}catch(e){}}
+  function browseRemove(key){try{if(window.sessionStorage)sessionStorage.removeItem(key);}catch(e){}}
+  function browseQuery(url,name){var re=new RegExp('[?&]'+name+'=([^&#]*)'),m=re.exec(url);try{return m?decodeURIComponent(m[1].replace(/\+/g,' ')):'';}catch(e){return '';}}
+  function localCompat(url){var a=document.createElement('a');a.href=url;return a.protocol===location.protocol&&a.host===location.host&&a.pathname===(window.__VC_COMPAT_BASE__||'/')&&browseQuery(a.href,'compat')==='on';}
+  function browseKey(url){return url.split('#')[0];}
+  var here=browseKey(location.href),returnMap=browseGet(browseMemory)||{},returnInfo=returnMap[here],backLinks=document.getElementsByTagName('a'),backLink=null,ri;
+  for(ri=0;ri<backLinks.length;ri++)if(backLinks[ri].getAttribute('data-compat-back')==='1'){backLink=backLinks[ri];break;}
+  if(backLink&&returnInfo&&new Date().getTime()-returnInfo.at<86400000&&localCompat(returnInfo.from)&&returnInfo.from!==here){
+    backLink.href=returnInfo.from;compatText(backLink,'← Back to browsing');
+  }
+  function scrollTopValue(){return window.pageYOffset||document.documentElement.scrollTop||document.body.scrollTop||0;}
+  function restoreBrowse(){
+    var restore=browseGet(browseRestore);if(!restore||restore.from!==here)return;browseRemove(browseRestore);
+    var links=document.getElementsByTagName('a'),i;
+    for(i=0;i<links.length;i++)if(browseKey(links[i].href)===restore.to&&remoteUsable(links[i])){remoteFocus(links[i]);break;}
+    window.scrollTo(0,Math.max(0,Number(restore.y)||0));
+  }
+  compatListen(window,'load',restoreBrowse);
+  compatListen(window,'pageshow',restoreBrowse);
+  compatListen(document,'click',function(ev){
+    ev=ev||window.event;if(ev.ctrlKey||ev.metaKey||ev.shiftKey||ev.altKey||(ev.which&&ev.which!==1)||ev.button===2)return;
+    var node=ev.target||ev.srcElement;while(node&&remoteTag(node)!=='a')node=node.parentNode;
+    if(!node||!localCompat(node.href)||node.target&&node.target!=='_self')return;
+    var dest=browseKey(node.href),srcView=browseQuery(here,'view')||'home',dstView=browseQuery(dest,'view')||'home';
+    if(node===backLink&&returnInfo&&dest===returnInfo.from){browseSet(browseRestore,returnInfo);return;}
+    var tile=/(^|\s)compat-card(\s|$)|(^|\s)compat-episode-link(\s|$)/.test(node.className||'');
+    var provider=srcView==='live'&&dstView==='live'&&browseQuery(here,'tab')===browseQuery(dest,'tab')&&((!browseQuery(here,'channel')&&browseQuery(dest,'channel'))||(!browseQuery(here,'item')&&browseQuery(dest,'item'))||(!browseQuery(here,'id')&&browseQuery(dest,'id'))||(!browseQuery(here,'parent')&&browseQuery(dest,'parent')));
+    if(dest===here||(!tile&&!provider))return;
+    var map=browseGet(browseMemory)||{},keys=[],key;for(key in map)if(Object.prototype.hasOwnProperty.call(map,key))keys[keys.length]=key;
+    if(keys.length>=30){keys.sort(function(a,b){return (map[a].at||0)-(map[b].at||0);});delete map[keys[0]];}
+    map[dest]={from:here,to:dest,y:scrollTopValue(),at:new Date().getTime()};browseSet(browseMemory,map);
+  });
+  // Disclosures start expanded in HTML, so no feature is inaccessible without JS.
+  var disclosureButtons=document.getElementsByTagName('button');
+  for(var di=0;di<disclosureButtons.length;di++)(function(button){
+    var id=button.getAttribute('data-compat-disclosure');if(!id)return;
+    var content=document.getElementById(id);if(!content)return;
+    var expanded=content.getAttribute('data-compat-open')==='1',label=button.innerText||button.textContent||'More options';
+    function update(){content.style.display=expanded?'':'none';button.setAttribute('aria-expanded',expanded?'true':'false');compatText(button,label+(expanded?' −':' +'));}
+    button.style.display='inline-block';update();compatListen(button,'click',function(){expanded=!expanded;update();});
+  })(disclosureButtons[di]);
   function remoteUsable(node){
     var tag=remoteTag(node),type=String(node.type||'').toLowerCase(),parent=node,style,rect;
-    if(!node.focus||!node.getBoundingClientRect||node.disabled||type==='hidden'||node.getAttribute('aria-disabled')==='true')return false;
+    if(!node.focus||!node.getBoundingClientRect||node.disabled||type==='hidden'||node.getAttribute('aria-disabled')==='true'||/(^|\s)compat-skip(\s|$)/.test(node.className||''))return false;
     if(node.getAttribute('tabindex')!==null&&node.tabIndex<0)return false;
     if(tag==='a'&&!node.getAttribute('href'))return false;
     while(parent&&parent.nodeType===1){
@@ -115,7 +160,7 @@
     else if(key==='Enter'||key==='Accept'||key==='Select'||key==='OK'||code===23)code=13;
     var from=document.activeElement,tag=remoteTag(from),nativeControl=remoteNative(from),ok=code===13;
     if((code===27||code===10009||key==='Escape'||key==='Back')&&remoteEditing===from){remoteEditing=null;remoteField=from;remoteStop(event);return;}
-    if((code===10009||key==='Back'||key==='BrowserBack')&&!nativeControl){var back=document.querySelector&&document.querySelector('a[data-compat-back]');if(back){remoteStop(event);window.location.href=back.href;return;}}
+    if((code===10009||key==='Back'||key==='BrowserBack')&&(!nativeControl||remoteField===from)){var back=backLink;if(back){remoteStop(event);if(returnInfo&&browseKey(back.href)===returnInfo.from)browseSet(browseRestore,returnInfo);window.location.href=back.href;return;}}
     if(ok){
       if(nativeControl){
         if(remoteField===from){remoteField=null;remoteEditing=from;if(tag==='textarea'||tag==='input'&&String(from.type||'').toLowerCase()!=='file')remoteStop(event);}
@@ -151,9 +196,9 @@
       if(score<bestScore){best=node;bestScore=score;}
     }
     if(visibleBest)best=visibleBest;
-    if(best)remoteFocus(best);
-    // Suppress browser scrolling even at the edge of the focusable layout.
-    remoteStop(event);
+    if(best){remoteFocus(best);remoteStop(event);}
+    // Keep native vertical scrolling available at a boundary (long descriptions
+    // and read-only panels can have no focusable element below them).
   }
   compatListen(document,'keydown',remoteNavigation);
   compatListen(document,'keyup',function(event){event=event||window.event;delete channelHeld['k'+(event.keyCode||event.which)];remoteOKDown=false;});
