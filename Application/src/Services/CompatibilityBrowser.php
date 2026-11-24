@@ -1047,7 +1047,8 @@ final class CompatibilityBrowser {
                 return $html.'</div>';
             }
             $html.=self::link('Programme guide',$watchParams+['guide'=>'1']);
-            $switches='';
+            $switches='';$fallback='';$attempt=max(0,min(7,(int)($_GET['attempt'] ?? 0)));$limit=min(8,count($copies));$nextLabel='';
+            $auto=(self::$viewer['prefs']['autoplay_on_open'] ?? true)!==false;
             if(count($copies)>1){
                 $choices='<div class="compat-choicebar">';
                 foreach($copies as $copy)$choices.=self::choice((string)$copy['connection'].(!empty($copy['compatQuality'])?' · '.$copy['compatQuality']:''),$params+['page'=>$page,'feed'=>$copy['feed'],'channel'=>$copy['id']],(string)$copy['feed']===$selectedFeed&&(string)$copy['id']===$selectedChannel);
@@ -1055,16 +1056,24 @@ final class CompatibilityBrowser {
                 foreach($copies as $n=>$copy)if((string)$copy['feed']===$selectedFeed&&(string)$copy['id']===$selectedChannel){
                     $next=$copies[($n+1)%count($copies)];
                     $switches.=self::link('Try next source',$params+['page'=>$page,'feed'=>$next['feed'],'channel'=>$next['id']]);
+                    if($attempt+1<$limit){$fallback=self::url($params+['page'=>$page,'feed'=>$next['feed'],'channel'=>$next['id'],'attempt'=>$attempt+1]);$nextLabel=(string)$next['connection'].(!empty($next['compatQuality'])?' · '.$next['compatQuality']:'');}
                     break;
                 }
             }
+            $html.='<div class="compat-live-source-info"><strong>Current source:</strong> '.self::esc((string)($item['connection'] ?? 'Provider').(!empty($item['compatQuality'])?' · '.$item['compatQuality']:'')).
+                ($attempt>0?' <span class="compat-note">Automatic attempt '.($attempt+1).'</span>':'').'</div>';
+            if($fallback!=='')$html.='<p class="compat-note">Playback failures will try the next available source automatically.</p>';
             try{
                 $feed=null;foreach($feeds as $candidate)if((string)$candidate['id']===$selectedFeed){$feed=$candidate;break;}
                 if(!$feed)throw new RuntimeException('Connection unavailable.');
                 [$stream,$hls]=self::stalkerSource($feed,(string)$item['id'],'live',['category'=>$item['category']??'','page'=>$item['page']??$page]);
                 if($hls)$html.='<p class="compat-note">This provider supplied an HLS playlist. Older Tizen browsers may not support HLS; Vaultcast cannot change the provider format without transcoding.</p>';
-                $html.=self::player($stream,false,[],['hls'=>$hls]);
-            }catch(Throwable $e){$html.='<p class="compat-note">Playback unavailable. Try another connection or retry the channel.</p>';}
+                $html.=self::player($stream,false,[],['hls'=>$hls,'live_source'=>true,'fallback_url'=>$fallback,'fallback_label'=>$nextLabel,'autoplay'=>$auto||$attempt>0]);
+            }catch(Throwable $e){
+                $html.='<p class="compat-error">This source could not be opened.</p>';
+                if($fallback!=='')$html.='<a class="compat-button" id="compat-failed-source" data-compat-auto="'.($auto||$attempt>0?'1':'0').'" href="'.self::esc($fallback).'">Try '.self::esc($nextLabel).'</a>';
+                else $html.='<p class="compat-note">No further automatic alternatives. Select a source manually or return to the channels.</p>';
+            }
             $keys=array_keys($byName);$index=null;
             foreach($keys as $i=>$key)foreach($byName[$key]['copies'] as $copy)if((string)$copy['id']===$selectedChannel&&(string)$copy['feed']===$selectedFeed){$index=$i;break 2;}
             if($index!==null){
@@ -1439,7 +1448,21 @@ final class CompatibilityBrowser {
             if($view==='item'){$current=Catalogue::item((string)($_GET['id'] ?? ''));if(!empty($current['show'])){$back=['view'=>'show','id'=>Catalogue::showKey((string)$current['section'],(string)$current['show']),'season'=>(int)($current['season'] ?? 0)];$label='Back to show';}elseif(!empty($current['section'])){$back=['view'=>'section','id'=>$current['section']];$label='Back to library';}}
             elseif(in_array($view,['play','game','emulator'],true)){$back=['view'=>'play'];$label='Back to Play';}
             elseif(in_array($view,['section','show','collections','collection','search','requests'],true)){$back=['view'=>'library'];$label='Back to Library';}
-            elseif($view==='live'&&($_GET['tab'] ?? '')==='stalker'){$back=['view'=>'live','tab'=>'stalker','kind'=>(string)($_GET['kind'] ?? 'live')];$label='Back to Stalker';}
+            elseif($view==='live'){
+                $tab=(string)($_GET['tab'] ?? 'now');$back=['view'=>'live','tab'=>$tab];$label='Back to Live';
+                if($tab==='stalker'){
+                    $label='Back to Stalker';$back['kind']=(string)($_GET['kind'] ?? 'live');
+                    if(!empty($_GET['channel'])||!empty($_GET['item'])||!empty($_GET['guide'])){
+                        foreach(['country','section','folder','folder_feed','source_offset','lang','q','page'] as $field)if(isset($_GET[$field])&&is_scalar($_GET[$field]))$back[$field]=(string)$_GET[$field];
+                        if(!empty($_GET['parent'])&&!empty($_GET['feed'])){$back['parent']=(string)$_GET['parent'];$back['feed']=(string)$_GET['feed'];}
+                        $label='Back to results';
+                    }elseif(!empty($_GET['parent'])){$back['lang']=(string)($_GET['lang'] ?? 'UK');$label='Back to Series';}
+                    elseif(!empty($_GET['section'])||!empty($_GET['folder'])){
+                        foreach(['country','lang'] as $field)if(isset($_GET[$field])&&is_scalar($_GET[$field]))$back[$field]=(string)$_GET[$field];
+                        $label='Back to categories';
+                    }
+                }else foreach(['q','page'] as $field)if(isset($_GET[$field])&&is_scalar($_GET[$field]))$back[$field]=(string)$_GET[$field];
+            }
             elseif(in_array($view,['parental','tools','tool','tool-result','configuration','users','edit-user','roles','edit-role','live-admin','factory-reset'],true)){$back=['view'=>'account'];$label='Back to Settings';}
             elseif(in_array($view,['profile','compose','create-room'],true)){$back=['view'=>'friends'];$label='Back to Friends';}
             elseif(in_array($view,['chat','inbox'],true)&&!empty($_GET['id'])){$back=['view'=>$view];$label='Back to conversations';}

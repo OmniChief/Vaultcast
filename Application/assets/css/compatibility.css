@@ -985,3 +985,5 @@ body.compat-manly-man .compat-subnav a.active{color:#ffcc8c;border-bottom-color:
 @media screen and (max-width:760px){.compat-media-detail>.compat-poster-card{width:145px;height:217px}}
 @media screen and (max-width:480px){.compat-media-detail>.compat-poster-card{float:none;width:130px;height:195px;margin:0 auto 16px}}
 .compat-width-tiny .compat-media-detail>.compat-poster-card{float:none;width:130px;height:195px;margin:0 auto 16px}
+
+.compat-live-source-info{padding:10px 0;margin:8px 0;font-size:14px;line-height:1.5}.compat-live-source-info .compat-note{margin-left:10px}
