@@ -600,3 +600,5 @@ body.compat-ninja-extreme a.compat-choice.active{background:#ffe280;color:#131b3
 body.compat-anime a.compat-choice.active{background:#f4b6d1;color:#181a33;border-color:#f4b6d1}
 
 body.compat-manly-man a.compat-choice.active{background:#ffc073;color:#10191c;border-color:#ffc073}
+
+.compat-weather>strong{display:block;font-size:42px;line-height:1.15;margin:10px 0}.compat-weather .compat-list li{padding:9px 12px}.compat-weather p{margin:8px 0}.compat-view-misc .compat-disclosure-content .compat-fields{margin:8px 0 16px}.compat-view-misc .compat-panel .compat-panel{padding:12px}

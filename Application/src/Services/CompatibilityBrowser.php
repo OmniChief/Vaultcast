@@ -112,6 +112,19 @@ final class CompatibilityBrowser {
         return $html.'</'.$tag.'>'.($audio?'':'<button id="compat-centre-play" class="compat-centre-play" type="button" style="display:none" aria-label="Play video"><span aria-hidden="true">&#9654;</span><span id="compat-centre-label">Play</span></button></div>').($tracks?$selector.'<div class="compat-subtitle-files">'.$trackLinks.'</div>':'').'<p id="compat-player-message" role="status"></p><script>window.__VC_COMPAT_PLAYER__='.json_encode($config+['url'=>$url],JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT).';</script><p><a class="compat-button" href="'.self::esc($url).'">Open stream directly</a></p><p class="compat-note">Use the player controls to start. If this browser cannot play the stream, open the link with a compatible media player. HLS and video codecs depend on your device.</p>';
     }
 
+    private static function miscCheck(string $label,string $name,bool $checked=false): string {
+        return '<label class="compat-check"><input type="checkbox" name="'.self::esc($name).'" value="1"'.($checked?' checked="checked"':'').'> '.self::esc($label).'</label>';
+    }
+    private static function eventForm(array $params,array $choices,array $event=[]): string {
+        $editing=!empty($event['id']);$allDay=!empty($event['all_day']);$tzName=(string)($event['tz'] ?? date_default_timezone_get());$tz=new DateTimeZone($tzName);
+        $start=(new DateTimeImmutable('@'.(int)($event['series_start'] ?? time())))->setTimezone($tz);
+        $end=(new DateTimeImmutable('@'.(int)($event['series_end'] ?? time()+3600)))->setTimezone($tz);
+        if($allDay)$end=$end->modify('-1 day');
+        $repeat=(array)($event['repeat'] ?? []);
+        $html=self::beginForm($params,$editing?'extra-event-edit':'extra-event-create',false,['tz'=>$tzName]).'<h3>'.($editing?'Edit event / entire series':'Add event').'</h3>'.self::select('Calendar','calendar_id',$choices,(string)($event['calendar_id'] ?? key($choices))).self::field('Title','title',(string)($event['title'] ?? ''),'text',200).self::miscCheck('All-day event','all_day',$allDay).self::field('Start (YYYY-MM-DD HH:MM, date only for all-day)','start',$start->format($allDay?'Y-m-d':'Y-m-d H:i')).self::field('End (optional; inclusive date for all-day)','end',$editing?$end->format($allDay?'Y-m-d':'Y-m-d H:i'):'').self::field('Location','location',(string)($event['location'] ?? ''),'text',200).'<label>Notes<textarea name="notes" rows="4" maxlength="4000">'.self::esc($event['notes'] ?? '').'</textarea></label>'.self::select('Repeat','repeat',[''=>'None','DAILY'=>'Daily','WEEKLY'=>'Weekly','MONTHLY'=>'Monthly','YEARLY'=>'Yearly'],(string)($repeat['freq'] ?? '')).self::field('Repeat every','interval',(string)($repeat['interval'] ?? 1),'number').'<p class="compat-note">Optional weekly days (default: start day)</p>';
+        foreach(['MO'=>'Monday','TU'=>'Tuesday','WE'=>'Wednesday','TH'=>'Thursday','FR'=>'Friday','SA'=>'Saturday','SU'=>'Sunday'] as $key=>$label)$html.=self::miscCheck($label,'days[]',in_array($key,$repeat['days'] ?? [],true));$html.=self::field('Repeat until (YYYY-MM-DD, optional)','until',(string)($repeat['until'] ?? '')).self::field('Number of occurrences (0 = no limit)','count',(string)($repeat['count'] ?? 0),'number').self::field('Alert minutes before event (comma-separated, blank = none)','reminders',implode(',',(array)($event['reminders'] ?? []))).'<button type="submit">Save event</button></form>';
+        return $html;
+    }
     private static function extraPost(string $view,array $body): ?array {
         $action=(string)($body['compat_action'] ?? '');
         if(strpos($action,'extra-')!==0)return null;
@@ -144,6 +157,22 @@ final class CompatibilityBrowser {
             return ['view'=>'requests','tab'=>$tab];
         }
         $tab=(string)($_GET['tab'] ?? 'calendar');
+        if(strpos($action,'extra-drop-admin-')===0){
+            self::toolPermission('admin');
+            if($action==='extra-drop-admin-settings'){
+                $payload=[];foreach(['enabled','user_role_upload','public_links','anonymous','confirm_anonymous','nginx_downloads'] as $k)$payload[$k]=!empty($body[$k]);
+                foreach(['default_quota_mb','max_file_mb','anon_max_file_mb','anon_quota_mb','anon_max_days'] as $k)$payload[$k]=(int)($body[$k] ?? 0);
+                $payload['quotas']=(array)($body['quotas'] ?? []);
+                CompatibilityApi::call('/drop/admin/settings','POST',$payload);
+            }elseif($action==='extra-drop-admin-delete'){
+                if(($body['confirm'] ?? '')!=='DELETE')throw new RuntimeException('Type DELETE to confirm.');
+                CompatibilityApi::call('/drop/admin/items/'.rawurlencode($id),'DELETE');
+            }elseif($action==='extra-drop-admin-cleanup'){
+                CompatibilityApi::call('/drop/admin/cleanup','POST');
+                return ['view'=>'tool','id'=>'jobs'];
+            }else throw new RuntimeException('Unknown Drop administration action.');
+            return ['view'=>'misc','tab'=>'drop-admin'];
+        }
         if(strpos($action,'extra-board-')===0){
             $data=CompatibilityApi::call('/misc/boards');$boards=$data['boards'] ?? [];$default=$data['default'] ?? '';
             if($action==='extra-board-create'){
@@ -157,7 +186,7 @@ final class CompatibilityBrowser {
                     if($action==='extra-board-default'){$default=$id;break;}
                     if($action==='extra-board-lock'){$board['locked']=empty($board['locked']);break;}
                     if(!empty($board['locked']))throw new RuntimeException('Unlock this board before editing.');
-                    if($action==='extra-board-rename')$board['name']=(string)($body['name'] ?? 'Board');
+                    if($action==='extra-board-rename'){$board['name']=(string)($body['name'] ?? 'Board');if(isset($body['theme']))$board['theme']=(string)$body['theme'];if(isset($body['color']))$board['color']=(string)$body['color'];}
                     elseif($action==='extra-board-delete'){
                         if(($body['confirm'] ?? '')!=='DELETE')throw new RuntimeException('Type DELETE to confirm.');
                         unset($boards[$i]);if($default===$id)$default='';$id='';
@@ -173,8 +202,14 @@ final class CompatibilityBrowser {
                         foreach($board['widgets'] as $j=>&$widget){
                             if($widget['id']!==($body['widget'] ?? ''))continue;$foundWidget=true;
                             if($action==='extra-board-remove-widget')unset($board['widgets'][$j]);
-                            elseif($widget['type']==='notes')$widget['settings']['text']=(string)($body['text'] ?? '');
-                            elseif($widget['type']==='rss')$widget['settings']['url']=(string)($body['url'] ?? '');
+                            elseif($widget['type']==='notes'&&isset($body['text']))$widget['settings']['text']=(string)$body['text'];
+                            elseif($widget['type']==='rss'&&isset($body['url']))$widget['settings']['url']=(string)$body['url'];
+                            elseif($widget['type']==='weather'&&isset($body['lat'],$body['lon'])){
+                                if(!is_numeric($body['lat'])||!is_numeric($body['lon'])||abs((float)$body['lat'])>90||abs((float)$body['lon'])>180)throw new RuntimeException('Enter valid latitude and longitude.');
+                                $widget['settings']['loc']=['name'=>(string)($body['name'] ?? ''),'region'=>(string)($body['region'] ?? ''),'lat'=>(float)$body['lat'],'lon'=>(float)$body['lon']];
+                                $widget['settings']['units']=($body['units'] ?? '')==='f'?'f':'c';
+                            }
+                            if($action==='extra-board-edit-widget')foreach(['x','y','w','h'] as $key)if(isset($body[$key]))$widget[$key]=(int)$body[$key];
                             break;
                         }unset($widget);
                         if(!$foundWidget)throw new RuntimeException('Widget not found.');
@@ -196,9 +231,15 @@ final class CompatibilityBrowser {
             case 'extra-calendar-share': CompatibilityApi::call('/misc/cal/calendars/'.$urlId.'/share','POST',['username'=>(string)($body['username'] ?? ''),'role'=>(string)($body['role'] ?? 'view')]);break;
             case 'extra-calendar-import': CompatibilityApi::call('/misc/cal/calendars/'.$urlId.'/import','POST',['ics'=>(string)($body['ics'] ?? '')]);break;
             case 'extra-event-create':
-                $allDay=!empty($body['all_day']);$start=(string)($body['start'] ?? '');$end=(string)($body['end'] ?? '');
-                if(!$allDay){$start=strtotime($start);$end=$end===''?0:strtotime($end);if(!$start||$end===false)throw new RuntimeException('Enter valid dates and times.');}
-                CompatibilityApi::call('/misc/cal/events','POST',['calendar_id'=>(string)($body['calendar_id'] ?? ''),'title'=>(string)($body['title'] ?? ''),'all_day'=>$allDay,'start'=>$start,'end'=>$allDay?($end?:$start):($end?:($start+3600)),'location'=>(string)($body['location'] ?? ''),'notes'=>(string)($body['notes'] ?? ''),'repeat'=>['freq'=>(string)($body['repeat'] ?? '')]]);break;
+            case 'extra-event-edit':
+                $allDay=!empty($body['all_day']);$start=trim((string)($body['start'] ?? ''));$end=trim((string)($body['end'] ?? ''));$tzName=(string)($body['tz'] ?? date_default_timezone_get());$tz=new DateTimeZone($tzName);
+                if(!$allDay){
+                    $parse=static function(string $value)use($tz){$d=DateTimeImmutable::createFromFormat('!Y-m-d H:i',$value,$tz);if(!$d||$d->format('Y-m-d H:i')!==$value)throw new RuntimeException('Enter dates and times as YYYY-MM-DD HH:MM.');return $d->getTimestamp();};
+                    $start=$parse($start);$end=$end===''?$start+3600:$parse($end);
+                }else{$end=$end?:$start;}
+                $reminders=[];foreach(explode(',',(string)($body['reminders'] ?? '')) as $minute)if(trim($minute)!==''){if(!ctype_digit(trim($minute)))throw new RuntimeException('Enter alert minutes as numbers.');$reminders[]=(int)$minute;}
+                CompatibilityApi::call('/misc/cal/events'.($action==='extra-event-edit'?'/'.$urlId:''),'POST',['calendar_id'=>(string)($body['calendar_id'] ?? ''),'title'=>(string)($body['title'] ?? ''),'all_day'=>$allDay,'start'=>$start,'end'=>$end,'tz'=>$tzName,'location'=>(string)($body['location'] ?? ''),'notes'=>(string)($body['notes'] ?? ''),'repeat'=>['freq'=>(string)($body['repeat'] ?? ''),'interval'=>(int)($body['interval'] ?? 1),'days'=>(array)($body['days'] ?? []),'until'=>(string)($body['until'] ?? ''),'count'=>(int)($body['count'] ?? 0)],'reminders'=>$reminders]);
+                return ['view'=>'misc','tab'=>'calendar','offset'=>(int)($_GET['offset'] ?? 0),'page'=>(int)($_GET['page'] ?? 1)];
             case 'extra-event-delete': CompatibilityApi::call('/misc/cal/events/'.$urlId,'DELETE',[],['occurrence'=>(int)($body['occurrence'] ?? 0)]);break;
             case 'extra-calendar-delete': CompatibilityApi::call('/misc/cal/calendars/'.$urlId,'DELETE');break;
             case 'extra-reminder-create':
@@ -209,7 +250,7 @@ final class CompatibilityBrowser {
                 $old['title']=(string)($body['title'] ?? '');$old['note']=(string)($body['note'] ?? '');$old['time']=(string)($body['time'] ?? '');$old['lead']=(int)($body['lead'] ?? 0);$old['calendar']=!empty($body['calendar']);
                 CompatibilityApi::call('/misc/reminders/'.$urlId,'POST',$old);break;
             case 'extra-reminder-done': CompatibilityApi::call('/misc/reminders/'.$urlId.'/done','POST');break;
-            case 'extra-reminder-snooze': CompatibilityApi::call('/misc/reminders/'.$urlId.'/snooze','POST',['minutes'=>60]);break;
+            case 'extra-reminder-snooze': CompatibilityApi::call('/misc/reminders/'.$urlId.'/snooze','POST',['minutes'=>(int)($body['minutes'] ?? 60)]);break;
             case 'extra-reminder-delete': CompatibilityApi::call('/misc/reminders/'.$urlId,'DELETE');break;
             case 'extra-picture-upload':
                 CompatibilityApi::call('/misc/pictures','POST');break;
@@ -217,9 +258,15 @@ final class CompatibilityBrowser {
                 CompatibilityApi::call('/misc/pictures/'.$urlId,'POST',['name'=>(string)($body['name'] ?? '')]);break;
             case 'extra-picture-delete': CompatibilityApi::call('/misc/pictures/'.$urlId,'DELETE');break;
             case 'extra-drop-create':
-                CompatibilityApi::call('/drop/text','POST',['kind'=>(string)($body['kind'] ?? 'text'),'name'=>(string)($body['name'] ?? ''),'body'=>(string)($body['body'] ?? ''),'inbox'=>!empty($body['inbox'])]);break;
+                CompatibilityApi::call('/drop/text','POST',['kind'=>(string)($body['kind'] ?? 'text'),'name'=>(string)($body['name'] ?? ''),'body'=>(string)($body['body'] ?? ''),'inbox'=>!empty($body['inbox']),'expires_hours'=>(float)($body['expires_hours'] ?? 24),'max_downloads'=>(int)($body['max_downloads'] ?? 0)]);break;
+            case 'extra-drop-update':
+                $payload=['name'=>(string)($body['name'] ?? ''),'max_downloads'=>(int)($body['max_downloads'] ?? 0),'inbox'=>!empty($body['inbox'])];
+                if(trim((string)($body['expires_hours'] ?? ''))!=='')$payload['expires_hours']=(float)$body['expires_hours'];
+                CompatibilityApi::call('/drop/items/'.$urlId,'POST',$payload);break;
+            case 'extra-drop-expire': CompatibilityApi::call('/drop/items/'.$urlId,'POST',['expire_now'=>true]);break;
             case 'extra-drop-share':
-                CompatibilityApi::call('/drop/items/'.$urlId.'/links','POST',['require_login'=>true]);break;
+                CompatibilityApi::call('/drop/items/'.$urlId.'/links','POST',['require_login'=>($body['access'] ?? 'login')!=='public','password'=>(string)($body['password'] ?? ''),'link_hours'=>(float)($body['link_hours'] ?? 0)]);break;
+            case 'extra-drop-extend': CompatibilityApi::call('/drop/links/'.$urlId.'/extend','POST',['hours'=>(float)($body['hours'] ?? 0)]);break;
             case 'extra-drop-revoke': CompatibilityApi::call('/drop/links/'.$urlId.'/revoke','POST');break;
             case 'extra-drop-delete': CompatibilityApi::call('/drop/items/'.$urlId,'DELETE');break;
             default: throw new RuntimeException('Unknown action.');
@@ -285,9 +332,23 @@ final class CompatibilityBrowser {
     private static function extraMisc(int $page): string {
         if(!self::$signed)throw new RuntimeException('Sign in to use Misc.');
         $tab=(string)($_GET['tab'] ?? 'calendar');$base=['view'=>'misc','tab'=>$tab];
-        $names=['calendar'=>'Calendar','reminders'=>'Reminders','pictures'=>'Pictures','drop'=>'Drop','board'=>'Boards','ambient'=>'Ambient'];
+        $names=['calendar'=>'Calendar','reminders'=>'Reminders','pictures'=>'Pictures','drop'=>'Drop','board'=>'Boards','ambient'=>'Ambient','drop-admin'=>'Drop administration'];
         if(!isset($names[$tab]))throw new RuntimeException('Misc page not found.');
         $html=self::heading('MISC',$names[$tab]);
+        if($tab==='drop-admin'){
+            self::toolPermission('admin');$data=CompatibilityApi::call('/drop/admin');$settings=$data['settings'];
+            $html.=self::link('My Drop',['view'=>'misc','tab'=>'drop']).'<div class="compat-panel"><h3>Storage</h3><p>'.self::esc(number_format((float)$data['total_bytes']/1048576,1)).' MiB used · '.self::esc(number_format((float)($data['reclaimable']['bytes'] ?? 0)/1048576,1)).' MiB reclaimable</p>'.self::form($base,'Run cleanup','extra-drop-admin-cleanup').'</div>';
+            $html.=self::beginForm($base,'extra-drop-admin-settings').'<h3>Access and limits</h3>';
+            foreach(['enabled'=>'Enable Drop','user_role_upload'=>'Allow standard users to upload','public_links'=>'Allow public links','anonymous'=>'Allow anonymous uploads','nginx_downloads'=>'Use nginx downloads'] as $key=>$label)$html.=self::miscCheck($label,$key,!empty($settings[$key]));
+            $html.=self::miscCheck('Confirm enabling anonymous uploads','confirm_anonymous');
+            foreach(['default_quota_mb'=>'Default quota (MB)','max_file_mb'=>'Maximum file size (MB)','anon_max_file_mb'=>'Anonymous file limit (MB)','anon_quota_mb'=>'Anonymous quota (MB)','anon_max_days'=>'Anonymous expiry limit (days)'] as $key=>$label)$html.=self::field($label,$key,(string)$settings[$key],'number');
+            foreach($data['roles'] ?? [] as $key=>$role)$html.=self::field(($role['name'] ?? $key).' quota (MB; blank uses default)','quotas['.$key.']',(string)($settings['quotas'][$key] ?? ''),'number');
+            $html.='<button type="submit">Save Drop settings</button></form>';
+            foreach($data['notes'] ?? [] as $note)if(is_scalar($note))$html.='<p class="compat-note">'.self::esc($note).'</p>';
+            $items=$data['items'] ?? [];$html.='<h3>Stored items</h3>';
+            foreach(array_slice($items,($page-1)*16,16) as $row){$p=$base+['id'=>$row['id'],'page'=>$page];$html.='<div class="compat-panel"><strong>'.self::esc($row['name']).'</strong><p>'.self::esc(($row['owner']['name'] ?? 'User').' · '.$row['status'].' · '.number_format($row['bytes']/1048576,1).' MiB').'</p>'.self::link('Delete item',$p+['confirm'=>'drop-admin']);if(($_GET['confirm'] ?? '')==='drop-admin'&&($_GET['id'] ?? '')===$row['id'])$html.=self::beginForm($p,'extra-drop-admin-delete').self::field('Type DELETE','confirm').'<button type="submit">Confirm delete</button></form>';$html.='</div>';}
+            return $html.self::pages($base,$page,$page*16<count($items));
+        }
         if($tab==='calendar'){
             $data=CompatibilityApi::call('/misc/cal/calendars');$choices=[];
             $html.=self::beginForm($base,'extra-calendar-create').'<h3>Create a calendar</h3>'.self::field('Name','name').self::select('Type','kind',['local'=>'Personal','subscribed'=>'Subscribed calendar'],'local').self::field('Subscription URL (optional)','url','','text',2000).self::select('Episode calendar','episodes',[''=>'None','favourites'=>'Favourite shows','library'=>'Library shows'],'').'<label class="compat-check"><input type="checkbox" name="show_reminders" value="1"> Show reminders</label><button type="submit">Create calendar</button></form>';
@@ -314,14 +375,15 @@ final class CompatibilityBrowser {
                 }
                 $html.='</div>';
             }
-            if($choices)$html.=self::beginForm($base,'extra-event-create').'<h3>Add event</h3>'.self::select('Calendar','calendar_id',$choices,(string)key($choices)).self::field('Title','title').'<label class="compat-check"><input type="checkbox" name="all_day" value="1"> All-day event</label>'.self::field('Start (YYYY-MM-DD HH:MM, or date only for all-day)','start',date('Y-m-d H:i')).self::field('End (optional)','end').self::field('Location','location').self::field('Notes','notes','','text',1000).self::select('Repeat','repeat',[''=>'None','DAILY'=>'Daily','WEEKLY'=>'Weekly','MONTHLY'=>'Monthly','YEARLY'=>'Yearly'],'').'<button type="submit">Save event</button></form>';
+            if($choices)$html.=self::disclosure('compat-add-event','Add event',self::eventForm($base,$choices));
             $offset=max(-24,min(24,(int)($_GET['offset'] ?? 0)));$start=strtotime('today')+$offset*30*86400;$end=$start+30*86400;
             $events=CompatibilityApi::call('/misc/cal/events','GET',[],['from'=>$start,'to'=>$end]);
             $html.='<h3>'.self::esc(date('j M Y',$start).' – '.date('j M Y',$end-1)).'</h3>'.self::link('Previous 30 days',$base+['offset'=>$offset-1]).self::link('Next 30 days',$base+['offset'=>$offset+1]).'<ul class="compat-list">';
             foreach(array_slice($events['events'] ?? [],($page-1)*16,16) as $event){
                 $html.='<li><strong>'.self::esc($event['title']).'</strong><p>'.self::esc($event['start_date'] ?? date('j M Y H:i',(int)$event['start'])).'</p>'.self::esc($event['location'] ?? '').'<p>'.self::esc($event['notes'] ?? '').'</p>';
                 if(!empty($event['editable'])){
-                    $p=$base+['offset'=>$offset,'id'=>$event['id'],'page'=>$page];$html.=self::link('Delete event',$p+['confirm'=>'event','occurrence'=>$event['start']]);
+                    $p=$base+['offset'=>$offset,'id'=>$event['id'],'page'=>$page];$html.=self::link('Edit event',$p+['edit'=>'event','occurrence'=>$event['start']]).self::link('Delete event',$p+['confirm'=>'event','occurrence'=>$event['start']]);
+                    if(($_GET['edit'] ?? '')==='event'&&($_GET['id'] ?? '')===$event['id']&&(int)($_GET['occurrence'] ?? 0)===(int)$event['start'])$html.=self::eventForm($p,$choices,$event);
                     if(($_GET['confirm'] ?? '')==='event'&&($_GET['id'] ?? '')===$event['id']&&(int)($_GET['occurrence'] ?? 0)===(int)$event['start']){
                         $html.=self::form($p,'Confirm delete'.(!empty($event['repeat'])?' entire series':''),'extra-event-delete');
                         if(!empty($event['repeat']))$html.=self::form($p,'Delete this occurrence only','extra-event-delete',['occurrence'=>$event['start']]);
@@ -333,7 +395,7 @@ final class CompatibilityBrowser {
         if($tab==='reminders'){
             $data=CompatibilityApi::call('/misc/reminders');
             $html.=self::beginForm($base,'extra-reminder-create').'<h3>New reminder</h3>'.self::field('Title','title').self::field('First date (YYYY-MM-DD)','start',date('Y-m-d')).self::field('Time (HH:MM)','time').self::select('Repeat','repeat',['once'=>'Once','daily'=>'Daily','weekly'=>'Weekly','monthly'=>'Monthly','yearly'=>'Yearly'],'once').self::field('Repeat every','every','1','number').self::field('Note','note','','text',200).'<button type="submit">Add reminder</button></form>';
-            foreach($data['reminders'] ?? [] as $row){$p=$base+['id'=>$row['id']];$html.='<div class="compat-panel"><h3>'.self::esc($row['title']).'</h3><p>'.self::esc(($row['due'] ?? 'No next date').' · '.$row['state']).'</p><p>'.self::esc($row['note']).'</p>'.self::form($p,'Done','extra-reminder-done').self::form($p,'Snooze 1 hour','extra-reminder-snooze').self::link('Edit',$p+['edit'=>'reminder']).self::link('Delete',$p+['confirm'=>'reminder']).'</div>';if(($_GET['edit'] ?? '')==='reminder'&&($_GET['id'] ?? '')===$row['id'])$html.=self::beginForm($p,'extra-reminder-edit').self::field('Title','title',$row['title']).self::field('Note','note',$row['note'],'text',200).self::field('Time (HH:MM)','time',$row['time']).self::field('Alert before due (minutes)','lead',(string)$row['lead'],'number').'<label class="compat-check"><input type="checkbox" name="calendar" value="1"'.(!empty($row['calendar'])?' checked="checked"':'').'> Show on calendar</label><button type="submit">Save reminder</button></form>';if(($_GET['confirm'] ?? '')==='reminder'&&($_GET['id'] ?? '')===$row['id'])$html.=self::form($p,'Confirm delete','extra-reminder-delete');}
+            foreach($data['reminders'] ?? [] as $row){$p=$base+['id'=>$row['id']];$html.='<div class="compat-panel"><h3>'.self::esc($row['title']).'</h3><p>'.self::esc(($row['due'] ?? 'No next date').' · '.$row['state']).'</p><p>'.self::esc($row['note']).'</p>'.self::form($p,'Done','extra-reminder-done').self::form($p,'Snooze 15 min','extra-reminder-snooze',['minutes'=>15]).self::form($p,'Snooze 1 hour','extra-reminder-snooze',['minutes'=>60]).self::form($p,'Snooze 1 day','extra-reminder-snooze',['minutes'=>1440]).self::link('Edit',$p+['edit'=>'reminder']).self::link('Delete',$p+['confirm'=>'reminder']).'</div>';if(($_GET['edit'] ?? '')==='reminder'&&($_GET['id'] ?? '')===$row['id'])$html.=self::beginForm($p,'extra-reminder-edit').self::field('Title','title',$row['title']).self::field('Note','note',$row['note'],'text',200).self::field('Time (HH:MM)','time',$row['time']).self::field('Alert before due (minutes)','lead',(string)$row['lead'],'number').'<label class="compat-check"><input type="checkbox" name="calendar" value="1"'.(!empty($row['calendar'])?' checked="checked"':'').'> Show on calendar</label><button type="submit">Save reminder</button></form>';if(($_GET['confirm'] ?? '')==='reminder'&&($_GET['id'] ?? '')===$row['id'])$html.=self::form($p,'Confirm delete','extra-reminder-delete');}
             return $html;
         }
         if($tab==='pictures'){
@@ -344,13 +406,20 @@ final class CompatibilityBrowser {
         }
         if($tab==='drop'){
             $data=CompatibilityApi::call('/drop/state');
-            if(!empty($data['can_upload']))$html.=self::beginForm($base,'extra-drop-create').'<h3>Save a note or link</h3>'.self::select('Type','kind',['text'=>'Text','link'=>'Web link'],'text').self::field('Name','name').'<label>Content<textarea name="body" rows="5"></textarea></label><label class="compat-check"><input type="checkbox" name="inbox" value="1"> Send to my inbox</label><button type="submit">Save</button></form>';
+            if((self::$viewer['role'] ?? '')==='admin')$html.=self::link('Drop administration',['view'=>'misc','tab'=>'drop-admin']);
+            $html.='<p class="compat-note">'.self::esc(number_format((float)$data['used']/1048576,1)).' MiB used'.($data['quota']>0?' / '.self::esc(number_format($data['quota']/1048576,1)).' MiB':'').'</p>';
+            if(!empty($data['can_upload']))$html.=self::disclosure('compat-drop-create','Save a note or link',self::beginForm($base,'extra-drop-create').self::select('Type','kind',['text'=>'Text','link'=>'Web link'],'text').self::field('Name','name').'<label>Content<textarea name="body" rows="5"></textarea></label>'.self::field('Available for (hours)','expires_hours','24','number').self::field('Maximum downloads (0 = unlimited)','max_downloads','0','number').self::miscCheck('Send to my inbox','inbox').'<button type="submit">Save</button></form>');
             if(!empty($data['can_upload']))$html.='<div class="compat-panel" id="compat-drop-upload" style="display:none"><h3>Upload a file</h3><label>File<input id="compat-drop-file" type="file"></label><button id="compat-drop-send" type="button">Upload</button><p id="compat-drop-status" role="status"></p></div>';
             foreach(array_slice($data['items'] ?? [],($page-1)*16,16) as $row){$p=$base+['id'=>$row['id']];$html.='<div class="compat-panel"><h3>'.self::esc($row['name']).'</h3><p>'.self::esc($row['status']).'</p>';
                 if($row['kind']==='file')$html.='<a class="compat-button" href="'.self::esc(self::$base.'api/drop/items/'.rawurlencode($row['id']).'/download').'">Download</a>';
                 else $html.='<p class="compat-message-text">'.self::esc($row['body'] ?? '').'</p>';
-                if(!empty($data['can_upload'])&&$row['status']==='available')$html.=self::form($p,'Create sign-in link','extra-drop-share');
-                foreach($row['links'] ?? [] as $link)if(empty($link['revoked']))$html.='<p><a href="'.self::esc($link['url']).'">'.self::esc($link['url']).'</a> '.self::form($base+['id'=>$link['token']],'Revoke link','extra-drop-revoke').'</p>';
+                $html.='<p class="compat-note">'.(int)$row['downloads'].' downloads'.($row['max_downloads']?' / '.(int)$row['max_downloads']:'').' · '.($row['expires_at']?'Expires '.self::esc(date('j M Y H:i',$row['expires_at'])):'No expiry').'</p>';
+                $html.=self::disclosure('compat-drop-edit-'.$row['id'],'Item settings',self::beginForm($p,'extra-drop-update').self::field('Name','name',$row['name'],'text',200).self::field('Extend availability by hours from now (blank keeps expiry)','expires_hours','','number').self::field('Maximum downloads (0 = unlimited)','max_downloads',(string)$row['max_downloads'],'number').self::miscCheck('Show in inbox','inbox',!empty($row['inbox'])).'<button type="submit">Save settings</button></form>'.self::form($p,'Expire now','extra-drop-expire'));
+                if(!empty($data['can_upload'])&&$row['status']==='available')$html.=self::disclosure('compat-drop-share-'.$row['id'],'Create share link',self::beginForm($p,'extra-drop-share').self::select('Access','access',['login'=>'Require sign-in']+(!empty($data['public_links'])?['public'=>'Anyone with link']:[]),'login').self::field('Password (optional)','password','','password',72).self::field('Link duration in hours (0 = no separate expiry)','link_hours','0','number').'<button type="submit">Create link</button></form>');
+                foreach($row['links'] ?? [] as $link)if(empty($link['revoked'])){
+                    $lp=$base+['id'=>$link['token']];
+                    $html.='<div class="compat-panel"><a href="'.self::esc($link['url']).'">'.self::esc($link['url']).'</a><p class="compat-note">'.($link['require_login']?'Sign-in required':'Public link').($link['password']?' · Password protected':'').' · '.($link['expires_at']?'Expires '.self::esc(date('j M Y H:i',$link['expires_at'])):'No separate expiry').'</p>'.self::form($lp,'Revoke link','extra-drop-revoke').self::disclosure('compat-drop-extend-'.$link['token'],'Change link expiry',self::beginForm($lp,'extra-drop-extend').self::field('Hours from now (0 = no separate expiry)','hours','24','number').'<button type="submit">Save expiry</button></form>').'</div>';
+                }
                 $html.=self::link('Delete',$p+['confirm'=>'drop']);if(($_GET['confirm'] ?? '')==='drop'&&($_GET['id'] ?? '')===$row['id'])$html.=self::form($p,'Confirm delete','extra-drop-delete');$html.='</div>';
             }return $html.self::pages($base,$page,$page*16<count($data['items'] ?? []));
         }
@@ -371,13 +440,33 @@ final class CompatibilityBrowser {
             $html.='<h3>'.self::esc($board['name']).'</h3>'.self::form($params,$locked?'Unlock board':'Lock board','extra-board-lock').self::form($params,'Set as default','extra-board-default');
             if(!$locked){
                 $choices=[];foreach($data['widgets'] ?? [] as $type)$choices[$type]=ucfirst($type);
-                $html.=self::beginForm($params,'extra-board-rename').self::field('Board name','name',$board['name'],'text',40).'<button type="submit">Rename</button></form>';
+                $html.=self::beginForm($params,'extra-board-rename').self::field('Board name','name',$board['name'],'text',40).self::select('Widget theme','theme',['glass'=>'Glass','solid'=>'Solid','clear'=>'Clear'],(string)($board['theme'] ?? 'glass')).self::field('Board colour (#RRGGBB)','color',(string)($board['color'] ?? '')).'<button type="submit">Save board settings</button></form>';
                 $html.=self::beginForm($params,'extra-board-add').self::select('Widget type','type',$choices,'clock').'<button type="submit">Add widget</button></form>';
             }
-            foreach($board['widgets'] ?? [] as $widget){
+            $widgets=$board['widgets'] ?? [];usort($widgets,static function($a,$b){return [(int)$a['y'],(int)$a['x']]<=>[(int)$b['y'],(int)$b['x']];});
+            foreach($widgets as $widget){
             $type=$widget['type'];$html.='<div class="compat-panel"><h3>'.self::esc(ucfirst($type)).'</h3>';
             if($type==='clock')$html.='<p>'.self::esc(date('D j M Y H:i')).'</p>';
             elseif($type==='notes')$html.='<p class="compat-message-text">'.self::esc($widget['settings']['text'] ?? '').'</p>';
+            elseif($type==='weather'){
+                $loc=$widget['settings']['loc'] ?? null;$units=($widget['settings']['units'] ?? '')==='f'?'f':'c';
+                if(is_array($loc)&&isset($loc['lat'],$loc['lon'])){try{
+                    $wx=CompatibilityApi::call('/misc/widget/weather','GET',[],['lat'=>$loc['lat'],'lon'=>$loc['lon'],'units'=>$units]);$now=$wx['current'];
+                    $html.='<div class="compat-weather"><p>'.self::esc($loc['name'] ?? '').'</p><strong>'.self::esc($now['temp'] ?? '—').self::esc($wx['units']).'</strong><p>Feels like '.self::esc($now['feels'] ?? '—').self::esc($wx['units']).' · Humidity '.self::esc($now['humidity'] ?? '—').'% · Wind '.self::esc($now['wind'] ?? '—').' '.self::esc($wx['wind_units']).'</p><ul class="compat-list">';
+                    foreach(array_slice($wx['days'] ?? [],0,5) as $day)$html.='<li>'.self::esc($day['date']).' · '.self::esc($day['min']).' / '.self::esc($day['max']).self::esc($wx['units']).' · Rain '.self::esc($day['rain']).'%</li>';
+                    $html.='</ul></div>';
+                }catch(Throwable $err){$html.='<p class="compat-note">Weather unavailable. Refresh to retry.</p>';}}
+                else $html.='<p class="compat-note">Choose a location below.</p>';
+                if(!$locked){
+                    $html.='<form method="get" action="'.self::esc(self::$base).'"><input type="hidden" name="compat" value="on"><input type="hidden" name="view" value="misc"><input type="hidden" name="tab" value="board"><input type="hidden" name="id" value="'.self::esc($board['id']).'"><input type="hidden" name="weather_widget" value="'.self::esc($widget['id']).'">'.self::field('Find a town or city','weather_query').'<button type="submit">Find location</button></form>';
+                    if(($_GET['weather_widget'] ?? '')===$widget['id']&&trim((string)($_GET['weather_query'] ?? ''))!=='')try{
+                        $places=CompatibilityApi::call('/misc/widget/geocode','GET',[],['q'=>mb_substr((string)$_GET['weather_query'],0,100)]);
+                        foreach($places['places'] ?? [] as $place)$html.=self::form($params,($place['name'].' · '.$place['region']),'extra-board-edit-widget',['widget'=>$widget['id'],'name'=>$place['name'],'region'=>$place['region'],'lat'=>$place['lat'],'lon'=>$place['lon'],'units'=>$units]);
+                        if(empty($places['places']))$html.='<p>No places found.</p>';
+                    }catch(Throwable $err){$html.='<p>Location search unavailable.</p>';}
+                    $html.=self::beginForm($params,'extra-board-edit-widget',false,['widget'=>$widget['id']]).self::field('Location name','name',(string)($loc['name'] ?? '')).self::field('Latitude','lat',(string)($loc['lat'] ?? ''),'number').self::field('Longitude','lon',(string)($loc['lon'] ?? ''),'number').self::select('Units','units',['c'=>'Celsius','f'=>'Fahrenheit'],$units).'<button type="submit">Save location and units</button></form>';
+                }
+            }
             elseif(in_array($type,['calendar','reminders','drop'],true))$html.=self::link('Open '.ucfirst($type),['view'=>'misc','tab'=>$type]);
             elseif(in_array($type,['health','recent','nowplaying','downloads','recordings'],true)){
                 try{$result=CompatibilityApi::call('/misc/widget/'.$type);$html.=self::readable($result);}catch(RuntimeException $e){$html.='<p>'.self::esc($e->getMessage()).'</p>';}
@@ -401,7 +490,9 @@ final class CompatibilityBrowser {
                     $key=$type==='notes'?'text':'url';
                     $html.=self::beginForm($params,'extra-board-edit-widget',false,['widget'=>$widget['id']]).self::field($type==='notes'?'Note':'Feed URL',$key,(string)($widget['settings'][$key] ?? ''),'text',2000).'<button type="submit">Save widget</button></form>';
                 }
-                $html.=self::form($params,'Remove widget','extra-board-remove-widget',['widget'=>$widget['id']]);
+                $layout=self::beginForm($params,'extra-board-edit-widget',false,['widget'=>$widget['id']]);
+                foreach(['x'=>'Column (0–23)','y'=>'Row (0–400)','w'=>'Width (1–24)','h'=>'Height (1–24)'] as $key=>$label)$layout.=self::field($label,$key,(string)($widget[$key] ?? 0),'number');
+                $html.=self::disclosure('compat-widget-layout-'.$widget['id'],'Edit widget layout',$layout.'<button type="submit">Save layout</button></form>').self::form($params,'Remove widget','extra-board-remove-widget',['widget'=>$widget['id']]);
             }
             $html.='</div>';
         }
@@ -1153,7 +1244,7 @@ final class CompatibilityBrowser {
             }elseif(in_array($view,['play','game','emulator'],true)){
                 foreach(self::playTabs() as $tab=>$label)$nav.='<a'.(($view==='play'?($_GET['tab'] ?? 'games'):$tab)===$tab && ($view==='play'||$tab==='games')?' class="active" aria-current="page"':'').' href="'.self::esc(self::url(['view'=>'play','tab'=>$tab])).'">'.self::esc($label).'</a>';
             }elseif($view==='misc'){
-                foreach(['calendar'=>'Calendar','reminders'=>'Reminders','pictures'=>'Pictures','drop'=>'Drop','board'=>'Boards','ambient'=>'Ambient'] as $tab=>$label)$nav.='<a'.(($_GET['tab'] ?? 'calendar')===$tab?' class="active" aria-current="page"':'').' href="'.self::esc(self::url(['view'=>'misc','tab'=>$tab])).'">'.self::esc($label).'</a>';
+                $miscTabs=['calendar'=>'Calendar','reminders'=>'Reminders','pictures'=>'Pictures','drop'=>'Drop','board'=>'Boards','ambient'=>'Ambient'];if((self::$viewer['role'] ?? '')==='admin')$miscTabs['drop-admin']='Drop settings';foreach($miscTabs as $tab=>$label)$nav.='<a'.(($_GET['tab'] ?? 'calendar')===$tab?' class="active" aria-current="page"':'').' href="'.self::esc(self::url(['view'=>'misc','tab'=>$tab])).'">'.self::esc($label).'</a>';
             }elseif(in_array($view,['account','parental','tools','tool','tool-result','configuration','users','edit-user','roles','edit-role','live-admin','factory-reset'],true)){
                 $settings=['account'=>'Account','parental'=>'Parental controls','tools'=>'Tools'];if((self::$viewer['role'] ?? '')==='admin')$settings+=['configuration'=>'Configuration','users'=>'Users','roles'=>'Roles','live-admin'=>'Live settings'];foreach($settings as $tab=>$label)$nav.='<a'.($view===$tab?' class="active" aria-current="page"':'').' href="'.self::esc(self::url(['view'=>$tab])).'">'.self::esc($label).'</a>';
             }elseif($view==='live'){
