@@ -30,3 +30,8 @@ jobs:
       - name: Check JavaScript syntax
         run: |
           find Application/assets/js Application/netplay Application/src/Workers Application/src/NodeApp -type f -name '*.js' ! -path '*/node_modules/*' -print0 | xargs -0 -n1 node --check
+      - name: Check ES3 compatibility entry points
+        run: |
+          for script in compatibility.js compatibility-play.js compatibility-offline.js; do
+            npm exec --yes --package=acorn@8.15.0 -- acorn --ecma3 --silent "Application/assets/js/$script"
+          done

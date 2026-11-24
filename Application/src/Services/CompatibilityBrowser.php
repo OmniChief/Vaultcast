@@ -961,6 +961,7 @@ final class CompatibilityBrowser {
             return $html.'</ul>'.(!$codes?'<p>No provider categories could be loaded.</p>':'');
         }
         $html.=self::link('Countries',$base);
+        if($errors)$html.='<p class="compat-note">'.self::esc(implode('; ',$errors)).'</p>';
         $countryFolders=array_values(array_filter($folders,static function($f)use($country){return ($f['country']??'ZZ')===$country;}));
         if($section===''&&$folderId===''){
             $html.='<h3>'.self::esc($countryName($country)).' · Provider categories</h3>';
@@ -1012,7 +1013,7 @@ final class CompatibilityBrowser {
                 $options=['feed'=>$feed['id'],'category'=>$source['id'],'page'=>$page];
                 $data=self::stalkerRequest('stalker_live_channels',$options);
                 $more=$more||!empty($data['hasMore']);
-                foreach($data['items']??[] as $item)$channels[]=$item;
+                foreach($data['items']??[] as $item){$item['compatProviderPage']=!empty($data['providerPage']);$channels[]=$item;}
             }catch(RuntimeException $e){$failures[]=$source['connection'].' · '.$e->getMessage();}catch(Throwable $e){$failures[]=$source['connection'].' · '. $source['name'];}
         }
         $byName=[];$selectedRaw=null;$selectedCopies=[];
@@ -1057,10 +1058,10 @@ final class CompatibilityBrowser {
             if(!empty($_GET['guide'])){
                 $html.=self::link('Watch channel',$watchParams).'<div class="compat-panel"><h3>Programme guide</h3>';
                 try{
-                    $data=self::stalkerRequest('stalker_live_guide',['feed'=>$selectedFeed,'category'=>(string)($item['category'] ?? '*'),'page'=>(int)($item['page'] ?? $page)]);
+                    $data=self::stalkerRequest('stalker_live_guide',['feed'=>$selectedFeed,'category'=>(string)($item['category'] ?? '*'),'page'=>(int)($item['page'] ?? $page),'provider_page'=>!empty($item['compatProviderPage'])?1:0]);
                     $events=$data['programmes'][(string)$item['id']] ?? [];
                     if(!$events)$html.='<p class="compat-note">No programme information is available for this channel.</p>';
-                    foreach(array_slice($events,0,16) as $event){$event['startUnix']=(int)($event['start'] ?? 0)*1000;$event['endUnix']=(int)($event['end'] ?? 0)*1000;$html.=self::programme($event);}
+                    foreach(array_slice($events,0,16) as $event){$event['startUnix']=(int)($event['start'] ?? 0)*1000;$event['endUnix']=(int)($event['end'] ?? 0)*1000;$event['subtitle']=(string)($event['description']??'');$html.=self::programme($event);}
                 }catch(Throwable $e){$html.='<p class="compat-note">The programme guide could not be loaded. Try again later.</p>';}
                 return $html.'</div>';
             }
