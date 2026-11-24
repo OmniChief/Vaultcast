@@ -602,3 +602,19 @@ body.compat-anime a.compat-choice.active{background:#f4b6d1;color:#181a33;border
 body.compat-manly-man a.compat-choice.active{background:#ffc073;color:#10191c;border-color:#ffc073}
 
 .compat-weather>strong{display:block;font-size:42px;line-height:1.15;margin:10px 0}.compat-weather .compat-list li{padding:9px 12px}.compat-weather p{margin:8px 0}.compat-view-misc .compat-disclosure-content .compat-fields{margin:8px 0 16px}.compat-view-misc .compat-panel .compat-panel{padding:12px}
+
+/* Native compatibility slideshow and webcam surfaces; avoid animation and video autoplay. */
+.compat-slideshow{margin:12px 0;background:#111;padding:12px;border-radius:10px;color:#fff}
+.compat-slide-stage{height:320px;text-align:center;background:#080808;overflow:hidden;line-height:320px}
+.compat-slide-stage img{max-width:100%;max-height:100%;vertical-align:middle;width:auto;height:auto}
+.compat-slide-cover img{width:100%;height:100%;object-fit:cover}
+.compat-slide-caption{font-weight:bold;margin:8px 0}
+.compat-slide-buttons button{margin:4px 6px 4px 0}
+.compat-slide-index{margin-left:12px}
+.compat-slide-list{padding:6px 0;line-height:2}
+.compat-slide-list a{display:inline-block;margin:2px 6px 2px 0;padding:4px 8px;color:#fff;border:1px solid #888;border-radius:5px;text-decoration:none}
+.compat-camera video{display:block;width:100%;max-height:420px;background:#111}
+.compat-camera{margin:10px 0}
+.compat-ambient-clock{padding:22px 12px;font-size:42px;font-weight:bold;text-align:center;line-height:1.2}
+@media screen and (max-width:480px){.compat-slide-stage{height:190px;line-height:190px}.compat-ambient-clock{font-size:28px}}
+.compat-width-tiny .compat-slide-stage{height:190px;line-height:190px}

@@ -125,6 +125,55 @@ final class CompatibilityBrowser {
         foreach(['MO'=>'Monday','TU'=>'Tuesday','WE'=>'Wednesday','TH'=>'Thursday','FR'=>'Friday','SA'=>'Saturday','SU'=>'Sunday'] as $key=>$label)$html.=self::miscCheck($label,'days[]',in_array($key,$repeat['days'] ?? [],true));$html.=self::field('Repeat until (YYYY-MM-DD, optional)','until',(string)($repeat['until'] ?? '')).self::field('Number of occurrences (0 = no limit)','count',(string)($repeat['count'] ?? 0),'number').self::field('Alert minutes before event (comma-separated, blank = none)','reminders',implode(',',(array)($event['reminders'] ?? []))).'<button type="submit">Save event</button></form>';
         return $html;
     }
+    private static function compatPictureRows(string $source,array $settings=[]): array {
+        $rows=[];
+        if(in_array($source,['library','both'],true)&&AreaAccess::allowed(self::$viewer,'library')&&!Parental::restricted(self::$viewer)){
+            $data=CompatibilityApi::call('/misc/ambient/stills','GET',[],['kind'=>in_array($settings['art'] ?? '',['posters','frames','mixed'],true)?$settings['art']:'posters','type'=>in_array($settings['library'] ?? '',['both','movies','tv'],true)?$settings['library']:'both','n'=>12,'order'=>($settings['order'] ?? '')==='random'?'random':'recent','variant'=>'medium']);
+            foreach($data['stills'] ?? [] as $row)$rows[]=['url'=>rtrim(self::$base,'/').$row['url'],'title'=>$row['title']];
+        }
+        if(in_array($source,['mine','both'],true)){
+            $data=CompatibilityApi::call('/misc/pictures');
+            $pictures=$data['pictures'] ?? [];
+            if(($settings['mode'] ?? '')==='single'&&!empty($settings['picture'])){
+                foreach($pictures as $row)if($row['id']===$settings['picture']){$pictures=[$row];break;}
+            }
+            foreach(array_slice($pictures,0,30) as $row)$rows[]=['url'=>rtrim(self::$base,'/').$row['url'],'title'=>$row['name'],'id'=>$row['id']];
+        }
+        if($source==='urls')foreach(array_slice(preg_split('/\s+/',trim((string)($settings['urls'] ?? ''))),0,30) as $url)if(Webcams::validUrl($url))$rows[]=['url'=>$url,'title'=>''];
+        return $rows;
+    }
+    private static function compatSlideshow(array $rows,array $settings=[]): string {
+        if(!$rows)return '<p class="compat-empty">No pictures available. Choose another source or upload pictures.</p>';
+        if(!empty($settings['shuffle']))shuffle($rows);
+        $rows=array_values(array_slice($rows,0,36));$first=$rows[0];$seconds=max(4,min(3600,(int)($settings['seconds'] ?? 20)));
+        $html='<div class="compat-slideshow" data-compat-slides="1" data-seconds="'.$seconds.'"><div class="compat-slide-stage'.(($settings['fit'] ?? '')==='cover'?' compat-slide-cover':'').'"><img class="compat-slide-image" src="'.self::esc($first['url']).'" alt="'.self::esc($first['title'] ?? '').'"></div><p class="compat-slide-caption">'.self::esc($first['title'] ?? '').'</p>';
+        if(count($rows)>1){
+            $html.='<div class="compat-slide-buttons" style="display:none"><button type="button" data-slide-action="prev">Previous</button><button type="button" data-slide-action="toggle">Play slideshow</button><button type="button" data-slide-action="next">Next</button><span class="compat-slide-index">1 / '.count($rows).'</span></div>';
+            $html.='<div class="compat-slide-list"><p class="compat-note">Select a picture</p>';
+            foreach($rows as $row)$html.='<a class="compat-slide-source" href="'.self::esc($row['url']).'" data-slide-title="'.self::esc($row['title'] ?? '').'">'.self::esc(($row['title'] ?? '')?:'Picture').'</a> ';
+            $html.='</div>';
+        }
+        return $html.'</div>';
+    }
+    private static function compatCamera(array $cam): string {
+        $url=(string)($cam['url'] ?? '');if(!Webcams::validUrl($url))return '<p>Camera address unavailable.</p>';
+        $kind=(string)($cam['kind'] ?? 'auto');$name=(string)($cam['name'] ?? 'Webcam');
+        if($kind==='auto')$kind=preg_match('/\.(?:jpg|jpeg|png|gif|webp)(?:[?#]|$)/i',$url)?'image':(preg_match('/\.(?:mp4|webm|m3u8)(?:[?#]|$)/i',$url)?'video':'embed');
+        $html='<div class="compat-camera"><h3>'.self::esc($name).'</h3>';
+        if(in_array($kind,['image','mjpeg'],true))$html.='<img class="compat-extra-picture" src="'.self::esc($url).'" alt="'.self::esc($name).'">';
+        elseif($kind==='video')$html.='<video controls="controls" preload="none" playsinline="playsinline" src="'.self::esc($url).'">Your device does not support native video.</video>';
+        else $html.='<p class="compat-note">This camera opens in its own player. Embedded and YouTube players may require a newer browser.</p>';
+        return $html.'<a class="compat-button" href="'.self::esc($url).'" target="_blank" rel="noopener noreferrer">Open camera source</a></div>';
+    }
+    private static function compatCamFields(array $cam=[],bool $admin=false): string {
+        $types=['auto'=>'Automatic','image'=>'Still image','mjpeg'=>'MJPEG','video'=>'Native video / HLS','youtube'=>'YouTube','embed'=>'External player'];
+        $html=self::field('Name','name',(string)($cam['name'] ?? ''),'text',120);
+        if(!$admin||!$cam)$html.=self::field('Camera URL','url',(string)($cam['url'] ?? ''),'text',1000);
+        $html.=self::select('Source type','kind',$types,(string)($cam['kind'] ?? 'auto'));
+        if($admin)$html.=self::miscCheck('Available in Ambient','enabled_ambient',!empty($cam['enabled_ambient']));
+        else $html.=self::field('Refresh interval (seconds)','refresh',(string)($cam['refresh'] ?? 30),'number');
+        return $html;
+    }
     private static function extraPost(string $view,array $body): ?array {
         $action=(string)($body['compat_action'] ?? '');
         if(strpos($action,'extra-')!==0)return null;
@@ -157,6 +206,33 @@ final class CompatibilityBrowser {
             return ['view'=>'requests','tab'=>$tab];
         }
         $tab=(string)($_GET['tab'] ?? 'calendar');
+        if(strpos($action,'extra-webcam-admin-')===0){
+            self::toolPermission('admin');$path='/misc/admin/webcams';
+            $payload=['name'=>(string)($body['name'] ?? ''),'kind'=>(string)($body['kind'] ?? 'auto'),'enabled_ambient'=>!empty($body['enabled_ambient'])];
+            if($action==='extra-webcam-admin-add')CompatibilityApi::call($path,'POST',$payload+['url'=>(string)($body['url'] ?? '')]);
+            elseif($action==='extra-webcam-admin-edit')CompatibilityApi::call($path.'/'.rawurlencode($id),'POST',$payload);
+            elseif($action==='extra-webcam-admin-delete'){if(($body['confirm'] ?? '')!=='DELETE')throw new RuntimeException('Type DELETE to confirm.');CompatibilityApi::call($path.'/'.rawurlencode($id),'DELETE');}
+            elseif($action==='extra-webcam-admin-settings')CompatibilityApi::call('/misc/admin/ambient','POST',['idle_minutes'=>(int)($body['idle_minutes'] ?? 0),'radio'=>(string)($body['radio'] ?? '')]);
+            else throw new RuntimeException('Unknown webcam action.');
+            return ['view'=>'misc','tab'=>'ambient-admin'];
+        }
+        if(strpos($action,'extra-webcam-')===0){
+            $data=CompatibilityApi::call('/misc/prefs');$cams=$data['webcams'] ?? [];
+            if($action==='extra-webcam-add'||$action==='extra-webcam-edit'){
+                $url=trim((string)($body['url'] ?? ''));if(!Webcams::validUrl($url))throw new RuntimeException('Enter a valid HTTP or HTTPS camera address.');
+                $cam=['name'=>(string)($body['name'] ?? ''),'url'=>$url,'kind'=>(string)($body['kind'] ?? 'auto'),'refresh'=>(int)($body['refresh'] ?? 30)];
+                if($action==='extra-webcam-add'){if(count($cams)>=40)throw new RuntimeException('Camera limit reached.');$cams[]=$cam+['id'=>bin2hex(random_bytes(4))];}
+                else {$found=false;foreach($cams as &$old)if($old['id']===$id){$old=$cam+['id'=>$id];$found=true;break;}unset($old);if(!$found)throw new RuntimeException('Camera not found.');}
+            }elseif($action==='extra-webcam-delete'){$cams=array_values(array_filter($cams,static function($cam)use($id){return $cam['id']!==$id;}));}
+            else throw new RuntimeException('Unknown webcam action.');
+            CompatibilityApi::call('/misc/prefs','POST',['webcams'=>$cams]);return ['view'=>'misc','tab'=>'webcams'];
+        }
+        if($action==='extra-ambient-prefs'){
+            $data=CompatibilityApi::call('/misc/prefs');$prefs=(array)($data['ambient'] ?? []);
+            $bg=(string)($body['bg'] ?? 'gradient');if(!in_array($bg,['gradient','library','pictures','webcam'],true))throw new RuntimeException('Choose an available background.');
+            $prefs['bg']=$bg;$prefs['library']=(string)($body['library'] ?? 'posters');$prefs['webcam']=(string)($body['webcam'] ?? '');$prefs['clock']=array_replace((array)($prefs['clock'] ?? []),['show'=>!empty($body['clock']),'date'=>!empty($body['date'])]);
+            CompatibilityApi::call('/misc/prefs','POST',['ambient'=>$prefs]);return ['view'=>'misc','tab'=>'ambient'];
+        }
         if(strpos($action,'extra-drop-admin-')===0){
             self::toolPermission('admin');
             if($action==='extra-drop-admin-settings'){
@@ -209,7 +285,16 @@ final class CompatibilityBrowser {
                                 $widget['settings']['loc']=['name'=>(string)($body['name'] ?? ''),'region'=>(string)($body['region'] ?? ''),'lat'=>(float)$body['lat'],'lon'=>(float)$body['lon']];
                                 $widget['settings']['units']=($body['units'] ?? '')==='f'?'f':'c';
                             }
-                            if($action==='extra-board-edit-widget')foreach(['x','y','w','h'] as $key)if(isset($body[$key]))$widget[$key]=(int)$body[$key];
+                            if($action==='extra-board-edit-widget'){
+                                foreach(['x','y','w','h'] as $key)if(isset($body[$key]))$widget[$key]=(int)$body[$key];
+                                if(in_array($widget['type'],['frame','slideshow'],true)&&isset($body['seconds'])){
+                                    $s=&$widget['settings'];$s['seconds']=max(4,min(3600,(int)$body['seconds']));$s['fit']=($body['fit'] ?? '')==='cover'?'cover':'contain';$s['shuffle']=!empty($body['shuffle']);
+                                    if($widget['type']==='frame'){$s['mode']=($body['mode'] ?? '')==='single'?'single':'slideshow';$s['picture']=(string)($body['picture'] ?? '');}
+                                    else {$s['source']=(string)($body['source'] ?? 'library');$s['art']=(string)($body['art'] ?? 'posters');$s['library']=(string)($body['library'] ?? 'both');$s['order']=(string)($body['order'] ?? 'recent');$s['urls']=(string)($body['urls'] ?? '');}
+                                    unset($s);
+                                }
+                                if($widget['type']==='webcams'&&isset($body['camera_selection']))$widget['settings']['ids']=array_values(array_filter(array_map('strval',(array)($body['camera_ids'] ?? []))));
+                            }
                             break;
                         }unset($widget);
                         if(!$foundWidget)throw new RuntimeException('Widget not found.');
@@ -332,7 +417,7 @@ final class CompatibilityBrowser {
     private static function extraMisc(int $page): string {
         if(!self::$signed)throw new RuntimeException('Sign in to use Misc.');
         $tab=(string)($_GET['tab'] ?? 'calendar');$base=['view'=>'misc','tab'=>$tab];
-        $names=['calendar'=>'Calendar','reminders'=>'Reminders','pictures'=>'Pictures','drop'=>'Drop','board'=>'Boards','ambient'=>'Ambient','drop-admin'=>'Drop administration'];
+        $names=['calendar'=>'Calendar','reminders'=>'Reminders','pictures'=>'Pictures','drop'=>'Drop','board'=>'Boards','ambient'=>'Ambient','webcams'=>'My webcams','ambient-admin'=>'Ambient administration','drop-admin'=>'Drop administration'];
         if(!isset($names[$tab]))throw new RuntimeException('Misc page not found.');
         $html=self::heading('MISC',$names[$tab]);
         if($tab==='drop-admin'){
@@ -423,12 +508,40 @@ final class CompatibilityBrowser {
                 $html.=self::link('Delete',$p+['confirm'=>'drop']);if(($_GET['confirm'] ?? '')==='drop'&&($_GET['id'] ?? '')===$row['id'])$html.=self::form($p,'Confirm delete','extra-drop-delete');$html.='</div>';
             }return $html.self::pages($base,$page,$page*16<count($data['items'] ?? []));
         }
+        if($tab==='ambient-admin'){
+            self::toolPermission('admin');$site=CompatibilityApi::call('/misc/ambient');$data=CompatibilityApi::call('/misc/admin/webcams');
+            $html.=self::link('Ambient viewer',['view'=>'misc','tab'=>'ambient']).self::beginForm($base,'extra-webcam-admin-settings').'<h3>Site Ambient defaults</h3>'.self::field('Idle timeout in minutes (0 = disabled)','idle_minutes',(string)$site['idle_minutes'],'number').self::field('Default radio station ID','radio',(string)$site['radio']).'<button type="submit">Save defaults</button></form>';
+            $html.=self::disclosure('compat-cam-create','Register a webcam',self::beginForm($base,'extra-webcam-admin-add').self::compatCamFields([],true).'<button type="submit">Add webcam</button></form>');
+            $rows=$data['webcams'] ?? [];foreach(array_slice($rows,($page-1)*16,16) as $cam){$p=$base+['id'=>$cam['id'],'page'=>$page];$html.='<div class="compat-panel"><h3>'.self::esc($cam['name']?:'Webcam').'</h3><p>'.self::esc($cam['kind']).' · '.(!empty($cam['enabled_ambient'])?'Enabled in Ambient':'Not enabled in Ambient').'</p><p class="compat-message-text">'.self::esc($cam['url']).'</p>'.self::disclosure('compat-cam-'.$cam['id'],'Edit webcam',self::beginForm($p,'extra-webcam-admin-edit').self::compatCamFields($cam,true).'<button type="submit">Save webcam</button></form>').self::link('Remove webcam',$p+['confirm'=>'camera']);
+                if(($_GET['confirm'] ?? '')==='camera'&&($_GET['id'] ?? '')===$cam['id'])$html.=self::beginForm($p,'extra-webcam-admin-delete').self::field('Type DELETE','confirm').'<button type="submit">Confirm removal</button></form>';
+                $html.='</div>';}
+            return $html.self::pages($base,$page,$page*16<count($rows));
+        }
+        if($tab==='webcams'){
+            $prefs=CompatibilityApi::call('/misc/prefs');$cams=$prefs['webcams'] ?? [];
+            $html.=self::disclosure('compat-my-cam-add','Add webcam',self::beginForm($base,'extra-webcam-add').self::compatCamFields().'<button type="submit">Save webcam</button></form>');
+            foreach($cams as $cam){$p=$base+['id'=>$cam['id']];$html.='<div class="compat-panel"><h3>'.self::esc($cam['name']?:'Webcam').'</h3>'.self::link('View webcam',$p+['watch'=>'1']).self::disclosure('compat-my-cam-'.$cam['id'],'Edit webcam',self::beginForm($p,'extra-webcam-edit').self::compatCamFields($cam).'<button type="submit">Save webcam</button></form>').self::link('Remove',$p+['confirm'=>'camera']);
+                if(($_GET['id'] ?? '')===$cam['id']&&!empty($_GET['watch']))$html.=self::compatCamera($cam);
+                if(($_GET['id'] ?? '')===$cam['id']&&($_GET['confirm'] ?? '')==='camera')$html.=self::form($p,'Confirm removal','extra-webcam-delete');
+                $html.='</div>';}
+            return $html.(!$cams?'<p class="compat-empty">No saved webcams.</p>':'');
+        }
         if($tab==='ambient'){
-            self::allow('library');
-            $kind=in_array($_GET['kind'] ?? '',['posters','frames','mixed'],true)?$_GET['kind']:'posters';
-            $data=CompatibilityApi::call('/misc/ambient/stills','GET',[],['kind'=>$kind,'n'=>5,'order'=>'recent','variant'=>'medium']);
-            $html.=self::link('Posters',$base+['kind'=>'posters']).self::link('Film stills',$base+['kind'=>'frames']).self::link('Refresh',$base+['kind'=>$kind]);
-            foreach($data['stills'] ?? [] as $row)$html.='<div class="compat-panel"><img class="compat-extra-picture" src="'.self::esc(rtrim(self::$base,'/').$row['url']).'" alt="'.self::esc($row['title']).'"><h3>'.self::esc($row['title']).'</h3></div>';
+            $prefs=CompatibilityApi::call('/misc/prefs');$s=(array)($prefs['ambient'] ?? []);$site=CompatibilityApi::call('/misc/ambient');$cams=[''=>'Choose camera'];foreach($site['webcams'] ?? [] as $cam)$cams[$cam['id']]=$cam['name'];
+            $bg=(string)($s['bg'] ?? 'gradient');$kind=in_array($_GET['kind'] ?? '',['posters','frames','mixed'],true)?$_GET['kind']:(string)($s['library'] ?? 'posters');$mode=(string)($_GET['mode'] ?? $bg);if(!in_array($mode,['gradient','library','pictures','webcam'],true))$mode='gradient';
+            $html.='<div class="compat-choicebar">'.self::choice('Clock',$base+['mode'=>'gradient'],$mode==='gradient').self::choice('Library artwork',$base+['mode'=>'library'],$mode==='library').self::choice('My pictures',$base+['mode'=>'pictures'],$mode==='pictures').self::choice('Webcams',$base+['mode'=>'webcam'],$mode==='webcam').'</div>';
+            if($mode==='library'||$mode==='pictures'){
+                if($mode==='library')$html.='<div class="compat-choicebar">'.self::choice('Posters',$base+['mode'=>'library','kind'=>'posters'],$kind==='posters').self::choice('Film stills',$base+['mode'=>'library','kind'=>'frames'],$kind==='frames').self::choice('Mixed',$base+['mode'=>'library','kind'=>'mixed'],$kind==='mixed').'</div>';
+                $html.=self::compatSlideshow(self::compatPictureRows($mode==='pictures'?'mine':'library',['art'=>$kind,'order'=>'recent']),['seconds'=>20,'fit'=>'contain']);
+            }elseif($mode==='webcam'){
+                $camId=(string)($_GET['camera'] ?? ($s['webcam'] ?? ''));foreach($site['webcams'] ?? [] as $cam)$html.=self::choice($cam['name'],$base+['mode'=>'webcam','camera'=>$cam['id']],$cam['id']===$camId);
+                foreach($site['webcams'] ?? [] as $cam)if($cam['id']===$camId)$html.=self::compatCamera($cam);
+                if(count($cams)===1)$html.='<p>No webcams enabled by the administrator.</p>';
+            }
+            if($mode==='gradient'||!empty($s['clock']['show']))$html.='<div class="compat-ambient-clock" data-compat-clock="1" data-date="'.($mode==='gradient'||!empty($s['clock']['date'])?'1':'0').'">'.self::esc(date('H:i')).'</div>';
+            $html.=self::disclosure('compat-ambient-prefs','Ambient preferences',self::beginForm($base,'extra-ambient-prefs').self::select('Default background','bg',['gradient'=>'Clock','library'=>'Library artwork','pictures'=>'My pictures','webcam'=>'Webcam'],in_array($bg,['gradient','library','pictures','webcam'],true)?$bg:'gradient').self::select('Library artwork','library',['posters'=>'Posters','frames'=>'Film stills','mixed'=>'Mixed'],$kind).self::select('Default webcam','webcam',$cams,(string)($s['webcam'] ?? '')).self::miscCheck('Show clock','clock',(bool)($s['clock']['show'] ?? true)).self::miscCheck('Show date','date',(bool)($s['clock']['date'] ?? true)).'<button type="submit">Save preferences</button></form>');
+            $html.=self::link('Manage my webcams',['view'=>'misc','tab'=>'webcams']).self::link('Manage pictures',['view'=>'misc','tab'=>'pictures']);
+            if((self::$viewer['role'] ?? '')==='admin')$html.=self::link('Ambient administration',['view'=>'misc','tab'=>'ambient-admin']);
             return $html;
         }
         $data=CompatibilityApi::call('/misc/boards');$boards=$data['boards'] ?? [];
@@ -446,7 +559,7 @@ final class CompatibilityBrowser {
             $widgets=$board['widgets'] ?? [];usort($widgets,static function($a,$b){return [(int)$a['y'],(int)$a['x']]<=>[(int)$b['y'],(int)$b['x']];});
             foreach($widgets as $widget){
             $type=$widget['type'];$html.='<div class="compat-panel"><h3>'.self::esc(ucfirst($type)).'</h3>';
-            if($type==='clock')$html.='<p>'.self::esc(date('D j M Y H:i')).'</p>';
+            if($type==='clock')$html.='<div class="compat-ambient-clock" data-compat-clock="1" data-date="1">'.self::esc(date('D j M Y H:i')).'</div>';
             elseif($type==='notes')$html.='<p class="compat-message-text">'.self::esc($widget['settings']['text'] ?? '').'</p>';
             elseif($type==='weather'){
                 $loc=$widget['settings']['loc'] ?? null;$units=($widget['settings']['units'] ?? '')==='f'?'f':'c';
@@ -467,7 +580,15 @@ final class CompatibilityBrowser {
                     $html.=self::beginForm($params,'extra-board-edit-widget',false,['widget'=>$widget['id']]).self::field('Location name','name',(string)($loc['name'] ?? '')).self::field('Latitude','lat',(string)($loc['lat'] ?? ''),'number').self::field('Longitude','lon',(string)($loc['lon'] ?? ''),'number').self::select('Units','units',['c'=>'Celsius','f'=>'Fahrenheit'],$units).'<button type="submit">Save location and units</button></form>';
                 }
             }
-            elseif(in_array($type,['calendar','reminders','drop'],true))$html.=self::link('Open '.ucfirst($type),['view'=>'misc','tab'=>$type]);
+            elseif(in_array($type,['calendar','reminders','drop'],true)){
+                try{
+                    if($type==='calendar'){$events=CompatibilityApi::call('/misc/cal/events','GET',[],['from'=>time(),'to'=>time()+14*86400]);$rows=array_slice($events['events'] ?? [],0,6);$html.='<ul class="compat-list">';foreach($rows as $row)$html.='<li><strong>'.self::esc($row['title']).'</strong> · '.self::esc($row['start_date'] ?? date('j M H:i',(int)$row['start'])).'</li>';}
+                    elseif($type==='reminders'){$dataR=CompatibilityApi::call('/misc/reminders');$rows=array_slice(array_values(array_filter($dataR['reminders'] ?? [],static function($r){return !empty($r['active']);})),0,6);$html.='<ul class="compat-list">';foreach($rows as $row)$html.='<li><strong>'.self::esc($row['title']).'</strong> · '.self::esc($row['due'] ?? 'No date').'</li>';}
+                    else {$dataD=CompatibilityApi::call('/drop/state');$rows=array_slice(array_values(array_filter($dataD['items'] ?? [],static function($r){return $r['status']==='available';})),0,5);$html.='<ul class="compat-list">';foreach($rows as $row)$html.='<li>'.self::esc($row['name']).($row['kind']==='file'?' <a class="compat-button" href="'.self::esc(self::$base.'api/drop/items/'.rawurlencode($row['id']).'/download').'">Download</a>':'').'</li>';}
+                    $html.=(!$rows?'<li>Nothing upcoming.</li>':'').'</ul>';
+                }catch(Throwable $err){$html.='<p class="compat-note">Widget data unavailable.</p>';}
+                $html.=self::link('Open '.ucfirst($type),['view'=>'misc','tab'=>$type]);
+            }
             elseif(in_array($type,['health','recent','nowplaying','downloads','recordings'],true)){
                 try{$result=CompatibilityApi::call('/misc/widget/'.$type);$html.=self::readable($result);}catch(RuntimeException $e){$html.='<p>'.self::esc($e->getMessage()).'</p>';}
             }elseif($type==='rss'){
@@ -483,7 +604,30 @@ final class CompatibilityBrowser {
             }elseif($type==='leaderboard')$html.=self::link('View leaderboards',['view'=>'play','tab'=>'leaderboards']);
             elseif($type==='media')$html.=self::link('Browse library',['view'=>'library']);
             elseif($type==='pseudotv')$html.=self::link('Watch live TV',['view'=>'live']);
-            elseif(in_array($type,['frame','slideshow','webcams'],true))$html.=self::link('Open ambient viewer',['view'=>'misc','tab'=>'ambient']);
+            elseif(in_array($type,['frame','slideshow'],true)){
+                $s=(array)($widget['settings'] ?? []);$source=$type==='frame'?'mine':(string)($s['source'] ?? 'library');
+                if(in_array($source,['frames','posters','mixed'],true)){$s['art']=$source;$source='library';}
+                try{
+                    $rows=self::compatPictureRows($source,$s);
+                    if($type==='frame'&&($s['mode'] ?? '')==='single'){$chosen=null;foreach($rows as $row)if(($row['id'] ?? '')===($s['picture'] ?? '')){$chosen=$row;break;}$rows=$chosen?[$chosen]:array_slice($rows,0,1);}
+                    $html.=self::compatSlideshow($rows,$s);
+                }catch(Throwable $err){$html.='<p class="compat-note">Pictures unavailable.</p>';}
+                if(!$locked){
+                    $f=self::beginForm($params,'extra-board-edit-widget',false,['widget'=>$widget['id']]);
+                    if($type==='frame'){$pics=CompatibilityApi::call('/misc/pictures');$choices=[''=>'Newest picture'];foreach($pics['pictures'] ?? [] as $pic)$choices[$pic['id']]=$pic['name'];$f.=self::select('Show','mode',['slideshow'=>'Slideshow','single'=>'Single picture'],(string)($s['mode'] ?? 'slideshow')).self::select('Picture','picture',$choices,(string)($s['picture'] ?? ''));}
+                    else $f.=self::select('Source','source',['library'=>'Library artwork','mine'=>'My pictures','both'=>'Both','urls'=>'Image links'],$source).self::select('Artwork','art',['posters'=>'Posters','frames'=>'Film stills','mixed'=>'Mixed'],(string)($s['art'] ?? 'posters')).self::select('Library','library',['both'=>'Films and TV','movies'=>'Films','tv'=>'TV'],(string)($s['library'] ?? 'both')).self::select('Order','order',['recent'=>'Recent','random'=>'Random'],(string)($s['order'] ?? 'recent')).'<label>Image links (one per line)<textarea name="urls" rows="3">'.self::esc($s['urls'] ?? '').'</textarea></label>';
+                    $f.=self::field('Seconds per picture','seconds',(string)($s['seconds'] ?? 20),'number').self::select('Fit','fit',['contain'=>'Whole image','cover'=>'Fill frame'],(string)($s['fit'] ?? 'contain')).self::miscCheck('Shuffle','shuffle',$s['shuffle'] ?? false).'<button type="submit">Save picture settings</button></form>';
+                    $html.=self::disclosure('compat-picture-'.$widget['id'],'Picture settings',$f);
+                }
+                $html.=self::link('Manage pictures',['view'=>'misc','tab'=>'pictures']);
+            }elseif($type==='webcams'){
+                $dataC=CompatibilityApi::call('/misc/prefs');$cams=$dataC['webcams'] ?? [];$s=(array)($widget['settings'] ?? []);$ids=(array)($s['ids'] ?? []);
+                $visibleCams=!empty($s['cams'])&&!isset($s['ids'])?(array)$s['cams']:array_values(array_filter($cams,static function($cam)use($ids){return !$ids||in_array($cam['id'],$ids,true);}));
+                foreach(array_slice($visibleCams,0,6) as $cam){$html.=self::link(($cam['name'] ?? '')?:'Webcam',$params+['camera_widget'=>$widget['id'],'camera'=>(string)($cam['id'] ?? sha1($cam['url']))]);if(($_GET['camera_widget'] ?? '')===$widget['id']&&($_GET['camera'] ?? '')===(string)($cam['id'] ?? sha1($cam['url'])))$html.=self::compatCamera($cam);}
+                if(!$visibleCams)$html.='<p>No webcams configured.</p>';
+                if(!$locked){$f=self::beginForm($params,'extra-board-edit-widget',false,['widget'=>$widget['id'],'camera_selection'=>'1']);foreach($cams as $cam)$f.=self::miscCheck($cam['name']?:'Webcam','camera_ids[]',in_array($cam['id'],$ids,true));$html.=self::disclosure('compat-cam-widget-'.$widget['id'],'Choose webcams',$f.'<p class="compat-note">No selection shows all saved cameras.</p><button type="submit">Save selection</button></form>');}
+                $html.=self::link('Manage webcams',['view'=>'misc','tab'=>'webcams']);
+            }
             else $html.='<p class="compat-note">This widget requires additional browser capabilities.</p>';
             if(!$locked){
                 if(in_array($type,['notes','rss'],true)){
@@ -1244,7 +1388,7 @@ final class CompatibilityBrowser {
             }elseif(in_array($view,['play','game','emulator'],true)){
                 foreach(self::playTabs() as $tab=>$label)$nav.='<a'.(($view==='play'?($_GET['tab'] ?? 'games'):$tab)===$tab && ($view==='play'||$tab==='games')?' class="active" aria-current="page"':'').' href="'.self::esc(self::url(['view'=>'play','tab'=>$tab])).'">'.self::esc($label).'</a>';
             }elseif($view==='misc'){
-                $miscTabs=['calendar'=>'Calendar','reminders'=>'Reminders','pictures'=>'Pictures','drop'=>'Drop','board'=>'Boards','ambient'=>'Ambient'];if((self::$viewer['role'] ?? '')==='admin')$miscTabs['drop-admin']='Drop settings';foreach($miscTabs as $tab=>$label)$nav.='<a'.(($_GET['tab'] ?? 'calendar')===$tab?' class="active" aria-current="page"':'').' href="'.self::esc(self::url(['view'=>'misc','tab'=>$tab])).'">'.self::esc($label).'</a>';
+                $miscTabs=['calendar'=>'Calendar','reminders'=>'Reminders','pictures'=>'Pictures','drop'=>'Drop','board'=>'Boards','ambient'=>'Ambient','webcams'=>'Webcams'];if((self::$viewer['role'] ?? '')==='admin')$miscTabs+=['drop-admin'=>'Drop settings','ambient-admin'=>'Ambient settings'];foreach($miscTabs as $tab=>$label)$nav.='<a'.(($_GET['tab'] ?? 'calendar')===$tab?' class="active" aria-current="page"':'').' href="'.self::esc(self::url(['view'=>'misc','tab'=>$tab])).'">'.self::esc($label).'</a>';
             }elseif(in_array($view,['account','parental','tools','tool','tool-result','configuration','users','edit-user','roles','edit-role','live-admin','factory-reset'],true)){
                 $settings=['account'=>'Account','parental'=>'Parental controls','tools'=>'Tools'];if((self::$viewer['role'] ?? '')==='admin')$settings+=['configuration'=>'Configuration','users'=>'Users','roles'=>'Roles','live-admin'=>'Live settings'];foreach($settings as $tab=>$label)$nav.='<a'.($view===$tab?' class="active" aria-current="page"':'').' href="'.self::esc(self::url(['view'=>$tab])).'">'.self::esc($label).'</a>';
             }elseif($view==='live'){
