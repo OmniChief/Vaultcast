@@ -265,7 +265,7 @@ module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavai
         return response.json(
           await playback.checkMedia(root, feed, id, kind, selected, opts.profile ?? 'stb', signal),
         );
-      const result = await playback.issue(root, feed, id, kind, selected, user.id, signal, Boolean(response.locals.stalkerSessionHash));
+      const result = await playback.issue(root, feed, id, kind, selected, user.id, signal, Boolean(response.locals.stalkerSessionHash) || (action === 'stalker_play' && enabled(opts.compatibility)));
       result.source.url = response.locals.base.slice(0, -1) + result.source.url;
       if (streaming) return response.redirect(307, result.source.url);
       return response.json(result);

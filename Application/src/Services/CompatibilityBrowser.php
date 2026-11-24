@@ -825,27 +825,38 @@ final class CompatibilityBrowser {
         throw new RuntimeException('Page not found.');
     }
     private static function stalkerRequest(string $action,array $selection): array {
+        // Delegate through the ordinary authenticated Node endpoints. A temporary
+        // filesystem ticket is unnecessary for requests originating in this page.
+        // Keep the original session on loopback only, never forward it to a portal.
+        $allowed=['stalker','stalker_live_categories','stalker_live_channels','stalker_live_guide','stalker_vod_catalogue','stalker_play'];
+        if(!in_array($action,$allowed,true))throw new RuntimeException('Invalid provider action.');
         $session=$_COOKIE[Auth::COOKIE]??'';
         $authorization=trim((string)($_SERVER['HTTP_AUTHORIZATION']??$_SERVER['REDIRECT_HTTP_AUTHORIZATION']??''));
-        if(preg_match('/^Bearer[ \t]+(vc_[a-f0-9]{64})$/iD',$authorization,$match))$session=$match[1];
+        $bearer=preg_match('/^Bearer[ \t]+(vc_[a-f0-9]{64})$/iD',$authorization,$match);
+        if($bearer)$session=$match[1];
         if(!self::$signed||!is_string($session)||!preg_match('/^(?:vc_)?[a-f0-9]{64}$/D',$session))
             throw new RuntimeException('Sign in to use the provider catalogue.');
-        $token=NodeMedia::writeTicket(['purpose'=>'stalker-compat','action'=>$action,'selection'=>$selection,
-            'viewer'=>(string)self::$viewer['id'],'sessionHash'=>hash('sha256',$session)]);
-        if($token===null)throw new RuntimeException('The provider service is unavailable.');
-        try{
-            $context=stream_context_create(['http'=>['timeout'=>$action==='stalker_play'?100:65,
-                'ignore_errors'=>true,'follow_location'=>0,'header'=>'Connection: close']]);
-            $body=@file_get_contents(NodeRuntime::loopback('/application/compat/stalker/'.$token),false,$context,0,4194305);
-            if(in_array('x-vaultcast-app-unavailable: 1',array_map('strtolower',$http_response_header??[]),true))throw new RuntimeException('The provider service is unavailable.');
-            $data=is_string($body)&&strlen($body)<=4194304?json_decode($body,true):null;
-            if(empty($data['ok'])){
-                $status=0;foreach($http_response_header??[] as $header)if(preg_match('#^HTTP/\S+\s+(\d{3})#',$header,$m))$status=(int)$m[1];
-                $errors=[401=>'Sign in again to use provider services.',403=>'Provider access was denied for this account.',404=>'The provider service or selection was not found.',410=>'This provider subscription has expired.',422=>'The provider selection is no longer available. Refresh the list.',429=>'The provider is rate limiting requests. Try again later.',502=>'The provider did not return a usable response.',503=>'The Node provider service is unavailable.',504=>'The provider request timed out.'];
-                throw new RuntimeException($errors[$status]??($status?'Provider request failed (HTTP '.$status.').':'The Node provider service did not respond.'));
-            }
-            return $data;
-        }finally{@unlink(STREAM_DATA.'/runtime/node-media/'.$token.'.json');}
+        $headers=['Connection: close','Accept: application/json',$bearer?'Authorization: Bearer '.$session:'Cookie: '.Auth::COOKIE.'='.$session];
+        $play=$action==='stalker_play';
+        $path='/application/live/'.$action;
+        $options=['timeout'=>$play?125:65,'ignore_errors'=>true,'follow_location'=>0,'method'=>$play?'POST':'GET'];
+        if($play){
+            $selection['compatibility']=true;
+            $options['content']=json_encode($selection,JSON_THROW_ON_ERROR);
+            $headers[]='Content-Type: application/json';
+        }elseif($selection)$path.='?'.http_build_query($selection,'','&',PHP_QUERY_RFC3986);
+        $options['header']=implode("\r\n",$headers);
+        $body=@file_get_contents(NodeRuntime::loopback($path),false,stream_context_create(['http'=>$options]),0,4194305);
+        $status=0;foreach($http_response_header??[] as $header)if(preg_match('#^HTTP/\S+\s+(\d{3})#',$header,$m))$status=(int)$m[1];
+        $data=is_string($body)&&strlen($body)<=4194304?json_decode($body,true):null;
+        if($status>=200&&$status<300&&!empty($data['ok']))return $data;
+        $errors=[401=>'Your TV session is no longer signed in. Sign in again.',403=>'The Node provider request was rejected (HTTP 403).',404=>'The provider service or selection was not found.',410=>'This provider subscription has expired.',422=>'The provider selection is no longer available. Refresh the list.',429=>'The provider is rate limiting requests. Try again later.',502=>'The provider did not return a usable response.',503=>'The Node provider service is unavailable.',504=>'The provider request timed out.'];
+        if($status===403){
+            if(($data['code']??'')==='area_denied')throw new RuntimeException('Live access is disabled for this profile.');
+            if(($data['code']??'')==='access_denied')throw new RuntimeException('This profile does not have active account access.');
+            if(($data['error']??'')==='Provider catalogues are unavailable for restricted profiles.')throw new RuntimeException('Provider catalogues are unavailable for restricted profiles.');
+        }
+        throw new RuntimeException($errors[$status]??($status?'Provider request failed (HTTP '.$status.').':'The Node provider service did not respond.'));
     }
     private static function stalkerTitles(array $feed,array $options): array {
         return self::stalkerRequest('stalker_vod_catalogue',$options);
