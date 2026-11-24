@@ -492,7 +492,7 @@ module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavai
   app.get(prefix + '/compat/stalker/:ticket', async (request, response) => {
     const ticket = await takeTicket(request.params.ticket, 'stalker-compat').catch(() => null);
     if (!ticket || !/^[a-f0-9]{64}$/.test(ticket.sessionHash) ||
-        !['stalker_live_categories','stalker_live_channels','stalker_vod_catalogue','stalker_play'].includes(ticket.action)) {
+        !['stalker_live_categories','stalker_live_channels','stalker_live_guide','stalker_vod_catalogue','stalker_play'].includes(ticket.action)) {
       return response.status(403).json({ ok: false, error: 'Invalid TV selection.' });
     }
     response.locals.stalkerSessionHash = ticket.sessionHash;

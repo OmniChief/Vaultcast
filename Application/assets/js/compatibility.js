@@ -140,7 +140,7 @@
     if(!node||!localCompat(node.href)||node.target&&node.target!=='_self')return;
     var dest=browseKey(node.href),srcView=browseQuery(here,'view')||'home',dstView=browseQuery(dest,'view')||'home';
     if(node===backLink&&returnInfo&&dest===returnInfo.from){browseSet(browseRestore,returnInfo);return;}
-    var tile=/(^|\s)(compat-card|compat-episode-link)(\s|$)/.test(node.className||'')||(/(^|\s)compat-browse-row(\s|$)/.test(node.className||'')&&!browseQuery(here,'item')&&!browseQuery(here,'channel')&&!(srcView==='live'&&browseQuery(here,'id')));
+    var tile=/(^|\s)(compat-card|compat-episode-link|compat-live-watch)(\s|$)/.test(node.className||'')||(/(^|\s)compat-browse-row(\s|$)/.test(node.className||'')&&!browseQuery(here,'item')&&!browseQuery(here,'channel')&&!(srcView==='live'&&browseQuery(here,'id')));
     var provider=srcView==='live'&&dstView==='live'&&browseQuery(here,'tab')===browseQuery(dest,'tab')&&((!browseQuery(here,'channel')&&browseQuery(dest,'channel'))||(!browseQuery(here,'item')&&browseQuery(dest,'item'))||(!browseQuery(here,'id')&&browseQuery(dest,'id'))||(!browseQuery(here,'parent')&&browseQuery(dest,'parent')));
     if(dest===here||(!tile&&!provider))return;
     var map=browseGet(browseMemory)||{},keys=[],key;for(key in map)if(Object.prototype.hasOwnProperty.call(map,key))keys[keys.length]=key;

@@ -881,11 +881,7 @@ final class CompatibilityBrowser {
         $selectedChannel=mb_substr((string)($_GET['channel']??''),0,120);
         $selectedFeed=mb_substr((string)($_GET['feed']??''),0,120);
         $channelQuery=mb_substr(trim((string)($_GET['q']??'')),0,120);
-        // Explicit format choices are in the URL, so links work on older Tizen.
-        // Empty string means all named formats are off; untagged streams remain.
-        $formatParam=isset($_GET['formats'])?(string)$_GET['formats']:'UHD,FHD,HD';
-        $enabledFormats=array_values(array_intersect(['UHD','FHD','HD'],array_map('trim',explode(',',$formatParam))));
-        $formatValue=implode(',',$enabledFormats);
+        // Quality variants are grouped together and the best available source is first.
         $sections=['General & entertainment','Sports','Football','Live events & PPV','Movies & on-demand','Kids & family','News, documentary & music','Replays & catch-up','Other categories'];
         $sectionFor=static function(string $label): string {
             $n=mb_strtoupper($label);
@@ -1011,29 +1007,27 @@ final class CompatibilityBrowser {
             // A previously selected channel must remain playable even after
             // the viewer changes a display-only name/quality filter.
             if($selectedChannel!==''&&(string)$item['id']===$selectedChannel&&(string)$item['feed']===$selectedFeed)$selectedRaw=$item;
-            if($channelQuery!==''&&mb_stripos($name,$channelQuery)===false)continue;
             $upper=mb_strtoupper($name);
-            $formats=[];
-            if(preg_match('/(?:^|[^A-Z0-9])(?:UHD|4K|2160P)(?:$|[^A-Z0-9])/',$upper))$formats[]='UHD';
-            if(preg_match('/(?:^|[^A-Z0-9])(?:FHD|FULL\s*HD|1080P)(?:$|[^A-Z0-9])/',$upper))$formats[]='FHD';
-            if(preg_match('/(?:^|[^A-Z0-9])(?:HD|720P)(?:$|[^A-Z0-9])/',$upper)&&strpos($upper,'FULL HD')===false)$formats[]='HD';
-            if(array_diff($formats,$enabledFormats))continue;
-            $key=mb_strtolower(trim(preg_replace('/\s+/u',' ',$name)));
+            $quality='';$rank=0;
+            foreach(['UHD'=>'(?:UHD|4K|2160P)','FHD'=>'(?:FHD|FULL\s*HD|1080P)','HD'=>'(?:HD|720P)','SD'=>'(?:SD|480P|576P)'] as $q=>$pattern){
+                if(preg_match('/(?:^|[^A-Z0-9])'.$pattern.'(?:$|[^A-Z0-9])/',$upper)){$quality=$q;$rank=['UHD'=>4,'FHD'=>3,'HD'=>2,'SD'=>1][$q];break;}
+            }
+            // Strip only terminal quality/codec labels, never channel numbers or regional names.
+            $clean=trim(preg_replace('/(?:\s*[-|:]\s*|\s+|\s*[\[(])(?:UHD|4K|2160P|FHD|FULL\s*HD|1080P|HD|720P|SD|480P|576P|HEVC|H\.?265|H\.?264)(?:[\])])?\s*$/iu','',$name));
+            for($i=0;$i<3;$i++){$next=trim(preg_replace('/(?:\s*[-|:]\s*|\s+|\s*[\[(])(?:UHD|4K|2160P|FHD|FULL\s*HD|1080P|HD|720P|SD|480P|576P|HEVC|H\.?265|H\.?264)(?:[\])])?\s*$/iu','',$clean));if($next===$clean)break;$clean=$next;}
+            if($clean==='')$clean=$name;
+            if($channelQuery!==''&&mb_stripos($name,$channelQuery)===false&&mb_stripos($clean,$channelQuery)===false)continue;
+            $key=mb_strtolower(trim(preg_replace('/\s+/u',' ',$clean)));
             if($key==='')continue;
-            if(!isset($byName[$key]))$byName[$key]=['name'=>$name,'copies'=>[]];
-            $byName[$key]['copies'][]=$item;
+            $item['compatQuality']=$quality;$item['compatQualityRank']=$rank;
+            if(!isset($byName[$key]))$byName[$key]=['name'=>$clean,'copies'=>[]];
+            $byName[$key]['copies'][(string)$item['feed'].'|'.(string)$item['id']]=$item;
         }
+        foreach($byName as &$group){$group['copies']=array_values($group['copies']);usort($group['copies'],static function($a,$b){return $b['compatQualityRank']<=>$a['compatQualityRank'] ?: strcmp((string)$a['feed'],(string)$b['feed']) ?: strcmp((string)$a['id'],(string)$b['id']);});}unset($group);
+        // The following links retain the provider page and selected folder window.
         $rootParams=$base+['country'=>$country]+($section!==''?['section'=>$section]:['folder'=>$folderId,'folder_feed'=>$folderFeed])+['source_offset'=>$sourceOffset];
-        $params=$rootParams+['formats'=>$formatValue,'q'=>$channelQuery];
-        $formatControls='<div class="compat-choicebar"><span class="compat-note">Channel formats: </span>';
-        foreach(['UHD','FHD','HD'] as $format){
-            $toggled=array_values(array_diff($enabledFormats,[$format]));
-            if(!in_array($format,$enabledFormats,true))$toggled[]=$format;
-            $nextFormats=implode(',',array_values(array_intersect(['UHD','FHD','HD'],$toggled)));
-            $formatControls.=self::choice($format,$rootParams+['formats'=>$nextFormats,'q'=>$channelQuery,'page'=>$page],in_array($format,$enabledFormats,true));
-        }
-        $html.=self::disclosure('compat-channel-filters','Quality filters',$formatControls.'</div>',$formatValue!=='UHD,FHD,HD');
-        if($selectedChannel==='')$html.=self::searchForm($rootParams+['formats'=>$formatValue],$channelQuery);
+        $params=$rootParams+['q'=>$channelQuery];
+        if($selectedChannel==='')$html.=self::searchForm($rootParams,$channelQuery);
         $html.='<p class="compat-note">'.count($byName).' matching channels on this page · '.count($slice).' provider folders'.($failures?' · Unavailable: '.self::esc(implode(', ',$failures)):'').'</p>';
         if($selectedChannel!==''){
             $item=null;$copies=[];
@@ -1041,14 +1035,26 @@ final class CompatibilityBrowser {
             if(!$item)$item=$selectedRaw;
             if(!$item)return $html.'<p>This channel is no longer on the selected provider page.</p>'.self::link('Back to channels',$params+['page'=>$page]);
             $html.=self::link('Back to channels',$params+['page'=>$page]).'<h3>'.self::esc($item['name']).'</h3>';
+            $watchParams=$params+['page'=>$page,'feed'=>$selectedFeed,'channel'=>$selectedChannel];
+            if(!empty($_GET['guide'])){
+                $html.=self::link('Watch channel',$watchParams).'<div class="compat-panel"><h3>Programme guide</h3>';
+                try{
+                    $data=self::stalkerRequest('stalker_live_guide',['feed'=>$selectedFeed,'category'=>(string)($item['category'] ?? '*'),'page'=>(int)($item['page'] ?? $page)]);
+                    $events=$data['programmes'][(string)$item['id']] ?? [];
+                    if(!$events)$html.='<p class="compat-note">No programme information is available for this channel.</p>';
+                    foreach(array_slice($events,0,16) as $event){$event['startUnix']=(int)($event['start'] ?? 0)*1000;$event['endUnix']=(int)($event['end'] ?? 0)*1000;$html.=self::programme($event);}
+                }catch(Throwable $e){$html.='<p class="compat-note">The programme guide could not be loaded. Try again later.</p>';}
+                return $html.'</div>';
+            }
+            $html.=self::link('Programme guide',$watchParams+['guide'=>'1']);
             $switches='';
             if(count($copies)>1){
                 $choices='<div class="compat-choicebar">';
-                foreach($copies as $copy)$choices.=self::choice((string)$copy['connection'],$params+['page'=>$page,'feed'=>$copy['feed'],'channel'=>$copy['id']],(string)$copy['feed']===$selectedFeed&&(string)$copy['id']===$selectedChannel);
-                $switches.=self::disclosure('compat-live-sources','Available connections ('.count($copies).')',$choices.'</div>');
+                foreach($copies as $copy)$choices.=self::choice((string)$copy['connection'].(!empty($copy['compatQuality'])?' · '.$copy['compatQuality']:''),$params+['page'=>$page,'feed'=>$copy['feed'],'channel'=>$copy['id']],(string)$copy['feed']===$selectedFeed&&(string)$copy['id']===$selectedChannel);
+                $switches.=self::disclosure('compat-live-sources','Available sources ('.count($copies).')',$choices.'</div>');
                 foreach($copies as $n=>$copy)if((string)$copy['feed']===$selectedFeed&&(string)$copy['id']===$selectedChannel){
                     $next=$copies[($n+1)%count($copies)];
-                    $switches.=self::link('Try next connection',$params+['page'=>$page,'feed'=>$next['feed'],'channel'=>$next['id']]);
+                    $switches.=self::link('Try next source',$params+['page'=>$page,'feed'=>$next['feed'],'channel'=>$next['id']]);
                     break;
                 }
             }
@@ -1059,19 +1065,32 @@ final class CompatibilityBrowser {
                 if($hls)$html.='<p class="compat-note">This provider supplied an HLS playlist. Older Tizen browsers may not support HLS; Vaultcast cannot change the provider format without transcoding.</p>';
                 $html.=self::player($stream,false,[],['hls'=>$hls]);
             }catch(Throwable $e){$html.='<p class="compat-note">Playback unavailable. Try another connection or retry the channel.</p>';}
+            $keys=array_keys($byName);$index=null;
+            foreach($keys as $i=>$key)foreach($byName[$key]['copies'] as $copy)if((string)$copy['id']===$selectedChannel&&(string)$copy['feed']===$selectedFeed){$index=$i;break 2;}
+            if($index!==null){
+                $html.='<div class="compat-choicebar compat-channel-step">';
+                foreach([-1=>'← ',1=>''] as $step=>$prefix)if(isset($keys[$index+$step])){$near=$byName[$keys[$index+$step]];$first=$near['copies'][0];$html.=self::link($prefix.$near['name'].($step===1?' →':''),$params+['page'=>$page,'feed'=>$first['feed'],'channel'=>$first['id']]);}
+                $html.='</div>';
+            }
             return $html.$switches;
         }
         $html.='<ul class="compat-directory compat-channel-directory">';
         foreach($byName as $group){
             $item=$group['copies'][0];
-            $html.='<li>'.self::browseRow($group['name'],count($group['copies']).' connection(s)',$params+['page'=>$page,'feed'=>$item['feed'],'channel'=>$item['id']]).'</li>';
+            $qualities=[];$connections=[];foreach($group['copies'] as $copy){if(!empty($copy['compatQuality']))$qualities[$copy['compatQuality']]=true;$connections[$copy['feed']]=true;}
+            $html.='<li>'.self::browseRow($group['name'],($qualities?implode(' / ',array_keys($qualities)).' · ':'').count($connections).' connection(s) · '.count($group['copies']).' source(s)',$params+['page'=>$page,'feed'=>$item['feed'],'channel'=>$item['id']]).'</li>';
         }
-        if(!$byName)$html.='<li class="compat-empty">No matching channels on this provider page. Try a different filter or the next provider folder.</li>';
+        if(!$byName)$html.='<li class="compat-empty">No matching channels on this provider page. Try a different search or the next provider folder.</li>';
         $html.='</ul>';
         $html.=self::pages($params,$page,$more);
         if($sourceOffset>0)$html.=self::link('Previous provider folders',array_merge($params,['source_offset'=>max(0,$sourceOffset-$window),'page'=>1]));
         if($sourceOffset+$window<count($target))$html.=self::link('More provider folders',array_merge($params,['source_offset'=>$sourceOffset+$window,'page'=>1]));
         return $html;
+    }
+    private static function providerPoster(array $item,string $title): string {
+        $url=(string)($item['poster'] ?? '');
+        $valid=Webcams::validUrl($url)&&parse_url($url,PHP_URL_USER)===null&&parse_url($url,PHP_URL_PASS)===null;
+        return '<span class="compat-poster compat-poster-card"><span class="compat-poster-fallback">'.self::esc($title).'</span>'.($valid?'<img data-compat-poster="1" loading="lazy" referrerpolicy="no-referrer" src="'.self::esc($url).'" alt="" width="240" height="360">':'').'</span>';
     }
     /** Samsung-friendly Movies/Series browsing via the same direct provider pages. */
     private static function stalkerOnDemand(array $feeds,string $kind,int $page): string {
@@ -1192,12 +1211,12 @@ final class CompatibilityBrowser {
             $groups[$key]['sources'][]=$item;
         }
         uasort($groups,static function($a,$b){return strcasecmp($a['title'],$b['title']);});
-        $html.='<p class="compat-note">'.count($groups).' titles loaded'.($failed?' · '.$failed.' unavailable folders':'').'</p>';$titleList='<ul class="compat-directory">';
+        $html.='<p class="compat-note">'.count($groups).' titles loaded'.($failed?' · '.$failed.' unavailable folders':'').'</p>';$titleList='<ul class="compat-cards compat-provider-cards">';
         $params=$base+['lang'=>$lang,'q'=>$query,'source_offset'=>$sourceOffset]+($folderId!==''?['folder'=>$folderId,'folder_feed'=>$folderFeed]:[]);
         foreach($groups as $group){
             $first=$group['sources'][0];
-            $titleList.='<li>'.self::browseRow($group['title'],($group['year']?$group['year'].' · ':'').count($group['sources']).' connection(s)',
-                $params+['page'=>$page,'feed'=>$first['feed'],'item'=>$first['id']],'',(string)$first['id']===$selectedItem&&(string)$first['feed']===$selectedFeed).'</li>';
+            $art=$first;foreach($group['sources'] as $candidate)if(!empty($candidate['poster'])){$art=$candidate;break;}
+            $titleList.='<li><a class="compat-card" href="'.self::esc(self::url($params+['page'=>$page,'feed'=>$first['feed'],'item'=>$first['id']])).'" title="'.self::esc($group['title']).'">'.self::providerPoster($art,$group['title']).'<span class="compat-card-caption"><strong>'.self::esc($group['title']).'</strong><small>'.self::esc(($group['year']?$group['year'].' · ':'').count($group['sources']).' source(s)').'</small></span></a></li>';
         }
         if(!$groups)$titleList.='<li class="compat-empty">No titles on this page.</li>';
         $titleList.='</ul>';
@@ -1208,7 +1227,7 @@ final class CompatibilityBrowser {
             if($found!==null){
                 $html.=self::link('Back to results',$params+['page'=>$page]);
                 if(!empty($found['playable']))$html.=self::stalkerOnDemandPlayer($feedById[$selectedFeed],$found);
-                else $html.='<h3>'.self::esc($found['name']??'Series').'</h3>'.self::link('Browse seasons and episodes',$base+['lang'=>$lang,'parent'=>$found['id'],'feed'=>$selectedFeed]);
+                else $html.='<div class="compat-detail compat-media-detail">'.self::providerPoster($found,(string)($found['name'] ?? 'Series')).'<div class="compat-detail-copy"><h2>'.self::esc($found['name']??'Series').'</h2><p class="compat-note">'.self::esc($found['year'] ?? '').'</p><p class="compat-synopsis">'.self::esc(strip_tags((string)($found['description'] ?? ''))).'</p>'.self::link('Browse seasons and episodes',$base+['lang'=>$lang,'parent'=>$found['id'],'feed'=>$selectedFeed]).'</div></div>';
                 if(count($copies)>1){
                     $sources='<div class="compat-choicebar">';
                     foreach($copies as $source)$sources.=self::choice((string)$source['connection'],
@@ -1232,7 +1251,9 @@ final class CompatibilityBrowser {
     private static function stalkerOnDemandPlayer(array $feed,array $item): string {
         try{
             [$stream,$hls]=self::stalkerSource($feed,(string)$item['id'],(string)($item['kind']??'vod'));
-            return '<h3>'.self::esc($item['name']??'Provider video').'</h3>'.self::player($stream,false,[],['hls'=>$hls]);
+            $title=(string)($item['name']??'Provider video');
+            $details='<div class="compat-detail compat-media-detail">'.self::providerPoster($item,$title).'<div class="compat-detail-copy"><h2>'.self::esc($title).'</h2><p class="compat-note">'.self::esc($item['year'] ?? '').'</p><p class="compat-synopsis">'.self::esc(strip_tags((string)($item['description'] ?? ''))).'</p></div></div>';
+            return $details.self::player($stream,false,[],['hls'=>$hls]);
         }catch(Throwable $e){
             return '<p class="compat-note">Provider video unavailable. Try another connection or return to the catalogue.</p>';
         }
