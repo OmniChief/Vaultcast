@@ -13,10 +13,6 @@ const {
   save,
   pending,
   take,
-  snapshot,
-  saveSnapshot,
-  liveKey,
-  episodeKey,
   transaction,
   locked,
   provider,
@@ -27,7 +23,7 @@ const {
   groups,
   page,
 } = store;
-const { country, genre } = require('../NodeApp/stalker-taxonomy');
+const { savedFeeds } = require('../NodeApp/stalker-feeds');
 const libraryWriter = require('../NodeApp/stalker-library-write');
 
 const key = (job) => [job.feed_id, job.kind, job.generation];
@@ -45,6 +41,7 @@ function portalKey(feed) {
 module.exports = function catalogueWorker(db, root) {
   const library = libraryWriter(db.services().decode);
   const lastJob = new Map();
+  const dirtyFilters = new Set();
   // Keep MariaDB writes serialized on small NAS installations. Provider I/O
   // happens outside this queue, so it still runs across all distinct portals.
   let databaseTail = Promise.resolve();
@@ -95,7 +92,7 @@ module.exports = function catalogueWorker(db, root) {
             : (
                 await q(
                   pool,
-                  "SELECT * FROM vaultcast_stalker_folders WHERE feed_id=? AND kind=? AND generation=? AND status NOT IN ('complete','skipped') ORDER BY folder_id='*',folder_id LIMIT 1",
+                  "SELECT * FROM vaultcast_stalker_folders WHERE feed_id=? AND kind=? AND generation=? AND status NOT IN ('complete','skipped') ORDER BY (status='failed'),next_run,folder_id='*',folder_id LIMIT 1",
                   key(job),
                 )
               )[0],
@@ -105,6 +102,7 @@ module.exports = function catalogueWorker(db, root) {
         await commit(job, async (connection) => {
           await library.publish(connection, feed, job.kind, job.generation, state.staged);
           await deleteStaged(connection, job, state.staged);
+          dirtyFilters.add(job.kind);
           await q(
             connection,
             "UPDATE vaultcast_stalker_jobs SET status='partial',last_hash='publish',error='',next_run=? WHERE feed_id=? AND kind=?",
@@ -115,7 +113,12 @@ module.exports = function catalogueWorker(db, root) {
       }
       folder = state.folder;
       if (folder) {
-        if (Number(folder.next_run) > now()) return;
+        if (folder.status === 'failed' || Number(folder.next_run) > now()) {
+          await commit(job, (connection) => q(connection,
+            'UPDATE vaultcast_stalker_jobs SET status=?,next_run=?,error=? WHERE feed_id=? AND kind=?',
+            [folder.status === 'failed' ? 'failed' : 'waiting', folder.next_run, folder.error, ...scope(job)]));
+          return;
+        }
         if (folder.folder_id === '') {
           const discovered = groups(await client.call(job.kind, 'get_categories'));
           await commit(job, async (connection) => {
@@ -167,6 +170,11 @@ module.exports = function catalogueWorker(db, root) {
         if (!rows.length && processed === 0 && total !== 0)
           throw new Error('Empty folder without an explicit zero total; absence is unverified.');
         await commit(job, async (connection) => {
+          const [checkpoint] = await q(connection,
+            'SELECT status,next_page FROM vaultcast_stalker_folders WHERE feed_id=? AND kind=? AND generation=? AND folder_id=? FOR UPDATE',
+            [...key(job), folder.folder_id]);
+          if (!checkpoint || ['complete','skipped'].includes(checkpoint.status) ||
+              Number(checkpoint.next_page) !== Number(folder.next_page)) return;
           let added = 0;
           for (let offset = 0; offset < rows.length; offset += 100) {
             const batch = rows.slice(offset, offset + 100);
@@ -178,6 +186,13 @@ module.exports = function catalogueWorker(db, root) {
             );
             if (result.affectedRows !== batch.length)
               throw new Error('Overlapping provider folder pages; completeness is unverified.');
+            // A title can belong to several named folders and to All. Record
+            // every membership, but publish each provider ID once per scan.
+            const known = await q(connection,
+              'SELECT item_id FROM vaultcast_stalker_offers WHERE feed_id=? AND kind=? AND generation=? AND item_id IN (' +
+                batch.map(() => '?').join(',') + ')',
+              [...key(job), ...batch.map(row => String(row.id))]);
+            const published = new Set(known.map(row => String(row.item_id)));
             let staged = [], bytes = 0;
             const flush = async () => {
               if (!staged.length) return;
@@ -192,6 +207,7 @@ module.exports = function catalogueWorker(db, root) {
               bytes = 0;
             };
             for (const row of batch) {
+              if (published.has(String(row.id))) continue;
               const value = row.category_name ?? row.category_title ?? folder.title,
                 category =
                   typeof value === 'object'
@@ -213,7 +229,7 @@ module.exports = function catalogueWorker(db, root) {
           await q(
             connection,
             "UPDATE vaultcast_stalker_folders SET status=?,next_page=next_page+1,processed=?,total=?,last_success=?,error='',failures=0,next_run=0 WHERE feed_id=? AND kind=? AND generation=? AND folder_id=?",
-            [rows.length ? 'partial' : 'complete', processed, total, now(), ...key(job), folder.folder_id],
+            [!rows.length || (total != null && processed === total) ? 'complete' : 'partial', processed, total, now(), ...key(job), folder.folder_id],
           );
           await q(
             connection,
@@ -223,9 +239,12 @@ module.exports = function catalogueWorker(db, root) {
         });
         return;
       }
-      if (job.kind === 'series' && (await episodes(feed, job, client))) return;
       let completed = false;
       await commit(job, async (connection) => {
+        const unfinished = await q(connection,
+          "SELECT 1 FROM vaultcast_stalker_folders WHERE feed_id=? AND kind=? AND generation=? AND status NOT IN ('skipped','complete') LIMIT 1",
+          key(job));
+        if (unfinished.length) return;
         const staged = await q(
           connection,
           'SELECT item_id,category,payload FROM vaultcast_stalker_staging WHERE feed_id=? AND kind=? AND generation=? ORDER BY item_id LIMIT 50',
@@ -246,21 +265,34 @@ module.exports = function catalogueWorker(db, root) {
           await q(
             connection,
             "UPDATE vaultcast_stalker_jobs SET status='complete',last_hash=?,error='',next_run=0 WHERE feed_id=? AND kind=?",
-            [job.kind === 'series' ? 'episodes_complete' : 'complete', ...scope(job)],
+            [job.kind === 'series' ? 'titles_complete' : 'complete', ...scope(job)],
           );
           completed = true;
         }
       });
-      if (completed) await database((pool) => library.filters(pool, root, job.kind));
+      if (completed) {
+        await database((pool) => library.filters(pool, root, job.kind));
+        dirtyFilters.delete(job.kind);
+      }
     } catch (error) {
       if (client.signal?.aborted) return;
       await commit(job, async (connection) => {
+        if (folder) {
+          const [current] = await q(connection,
+            'SELECT status,next_page FROM vaultcast_stalker_folders WHERE feed_id=? AND kind=? AND generation=? AND folder_id=? FOR UPDATE',
+            [...key(job), folder.folder_id]);
+          if (!current || ['complete','skipped'].includes(current.status) ||
+              Number(current.next_page) !== Number(folder.next_page)) return;
+        }
+        const folderOnly = folder && folder.folder_id !== '' && !error.authentication &&
+          (!error.retryAt || error.folderLimited);
         const failures = folder ? Number(folder.failures) + 1 : Math.max(1, Number(job.next_page));
         const retryAt =
             error.retryAt ?? now() + Math.min(3600, 60 * 2 ** Math.min(6, failures - 1)) + randomInt(31),
           failed = !error.retryAt && (error.authentication || failures >= 8);
         let message = error.retryAt
-          ? 'HTTP 429; connection requests paused. Checkpoint retained.'
+          ? (error.folderLimited ? 'Provider rate limited this folder. Its page will be retried.' :
+              'Provider rate limited this connection. Import will resume after the cooldown.')
           : error.authentication
             ? 'Authentication rejected; check this connection.'
             : 'Folder/page could not be verified. Checkpoint retained; refresh this connection if provider contents changed.';
@@ -289,14 +321,14 @@ module.exports = function catalogueWorker(db, root) {
           connection,
           'UPDATE vaultcast_stalker_jobs SET status=?,error=?,next_run=?,next_page=? WHERE feed_id=? AND kind=?',
           [
-            failed ? 'failed' : 'waiting',
+            folderOnly ? 'partial' : failed ? 'failed' : 'waiting',
             message,
-            retryAt,
+            folderOnly ? now() : retryAt,
             error.retryAt ? Number(job.next_page) : failures + 1,
             ...scope(job),
           ],
         );
-        if (error.retryAt)
+        if (error.retryAt && !error.folderLimited)
           await q(
             connection,
             "UPDATE vaultcast_stalker_jobs SET next_run=GREATEST(next_run,?) WHERE feed_id=? AND config=? AND status IN ('queued','running','partial','waiting')",
@@ -306,232 +338,7 @@ module.exports = function catalogueWorker(db, root) {
     }
   }
 
-  async function episodes(feed, job, client) {
-    const documentKey = 'stalker-episode-import-' + sha(job.feed_id);
-    let cursor = await database((pool) => doc(pool, documentKey));
-    if (cursor.generation !== job.generation)
-      cursor = {
-        generation: job.generation,
-        after: '',
-        parent: '',
-        page: 1,
-        root: '',
-        children: [],
-        visited: [],
-      };
-    let parent = cursor.parent;
-    if (!parent) {
-      const rows = await database((pool) =>
-        q(
-          pool,
-          "SELECT item_id FROM vaultcast_stalker_offers WHERE feed_id=? AND kind='series' AND item_id>? AND generation=? AND available=1 ORDER BY item_id LIMIT 1",
-          [job.feed_id, cursor.after, job.generation],
-        ),
-      );
-      if (!rows.length) return false;
-      parent = rows[0].item_id;
-      cursor.root = parent;
-      cursor.children = [];
-      cursor.visited = [String(parent)];
-    }
-    if (Number(cursor.page) > 10000) throw new Error('Episode page safety limit reached.');
-    const pageKey = episodeKey(feed, 'page:' + phpJson([String(parent), Number(cursor.page)]));
-    let result = await snapshot(root, pageKey),
-      entries = [];
-    if (result?.episodeGeneration !== job.generation) {
-      const response = await client.ordered(
-        'series',
-        { sortby: 'name', category: '*', search: '', movie_id: parent },
-        Number(cursor.page),
-        page,
-      );
-      const rows = page(response).rows,
-        signature = sha(phpJson(rows.map((row) => row.id)));
-      if (rows.length && Number(cursor.page) > 1) {
-        const previous = await snapshot(
-          root,
-          episodeKey(feed, 'page:' + phpJson([String(parent), Number(cursor.page) - 1])),
-        );
-        if (previous?.episodeGeneration === job.generation && previous.pageSignature === signature)
-          throw new Error('Provider repeated an episode page.');
-      }
-      const items = [];
-      const remember = (id, cmd, episode, item) =>
-        entries.push([
-          episodeKey(feed, 'item:' + id),
-          { cmd, series: episode, metadata: item, episodeGeneration: job.generation, root: cursor.root },
-        ]);
-      for (const row of rows) {
-        const id = String(row.id),
-          meta = library.seriesMetadata(feed, row),
-          cmd = typeof row.cmd === 'object' ? '' : String(row.cmd ?? ''),
-          numbers = Array.isArray(row.series) ? row.series : [];
-        if (parent && numbers.length && cmd) {
-          for (const raw of numbers.slice(0, 200)) {
-            if (raw == null || typeof raw === 'object') continue;
-            const number = String(raw),
-              publicId = 'series:' + id + ':' + number;
-            const item = {
-              ...meta,
-              id: publicId,
-              kind: 'vod',
-              playable: true,
-              feed: feed.id,
-              connection: feed.name,
-              name: meta.name + ' · Episode ' + number,
-              episode: number,
-              episodeTitle: '',
-              seasonId: id,
-            };
-            const season = row.season_number ?? row.season;
-            if (/^\d+$/.test(String(season ?? ''))) item.season = Number(season);
-            item.seasonName = item.season != null ? 'Season ' + item.season : 'Season unknown';
-            remember(publicId, cmd, number, item);
-            items.push(item);
-          }
-          continue;
-        }
-        const playable = Boolean(cmd && !enabled(row.is_series) && !numbers.length && parent),
-          publicId = playable ? 'series:' + id : id;
-        const item = {
-          ...meta,
-          id: publicId,
-          kind: 'series',
-          playable,
-          feed: feed.id,
-          connection: feed.name,
-          hasChildren: !playable && enabled(row.is_series),
-          ...library.descriptive(row),
-        };
-        if (playable) remember(publicId, cmd, String(row.series_number ?? ''), item);
-        items.push(item);
-      }
-      const reportedTotal = Number(response.total_items ?? 0),
-        reportedSize = Number(response.max_page_items ?? 0),
-        perPage = reportedSize > 0 ? reportedSize : Math.max(1, rows.length);
-      const hasMore =
-        reportedTotal > 0
-          ? Number(cursor.page) * perPage < reportedTotal
-          : rows.length > 0 && (reportedSize <= 0 || rows.length >= reportedSize);
-      result = {
-        items,
-        total: reportedTotal > 0 ? reportedTotal : null,
-        hasMore,
-        episodeGeneration: job.generation,
-        pageSignature: signature,
-        root: cursor.root,
-      };
-    }
-    for (const item of result.items) {
-      const id = String(item.id);
-      if (item.hasChildren && !cursor.visited.includes(id)) {
-        cursor.visited.push(id);
-        cursor.children.push(id);
-      }
-    }
-    if (cursor.visited.length > 1000) throw new Error('Series folder safety limit reached.');
-    await commit(job, async (connection) => {
-      for (const [key, value] of entries) await saveSnapshot(root, key, value);
-      await saveSnapshot(root, pageKey, result);
-      if (result.hasMore) {
-        cursor.parent = parent;
-        cursor.page = Number(cursor.page) + 1;
-      } else {
-        cursor.parent = cursor.children.shift() ?? '';
-        cursor.page = 1;
-        if (!cursor.parent) cursor.after = cursor.root;
-      }
-      await save(connection, documentKey, cursor);
-      await q(
-        connection,
-        "UPDATE vaultcast_stalker_jobs SET status='partial',last_hash='episodes',next_page=1,next_run=?,error='' WHERE feed_id=? AND kind='series'",
-        [now(), job.feed_id],
-      );
-    });
-    return true;
-  }
-
-  async function live(feed, job, client) {
-    try {
-      const response = await client.call('itv', 'get_genres'),
-        rows = Object.values(response.data ?? response),
-        categories = [];
-      for (const row of rows) {
-        if (
-          !row ||
-          row.id == null ||
-          typeof row.id === 'object' ||
-          !String(row.id) ||
-          Buffer.byteLength(String(row.id)) > 120
-        )
-          continue;
-        const name = take(row.title ?? row.name ?? row.id, 160);
-        categories.push({ id: String(row.id), name, country: country(name), genre: genre(name) });
-        if (categories.length >= 1000) break;
-      }
-      const bulk = await client.call('itv', 'get_all_channels'),
-        raw = bulk.data ?? bulk;
-      if (
-        !raw ||
-        typeof raw !== 'object' ||
-        Object.keys(raw).length > 50000 ||
-        Number(bulk.total_items ?? 0) > Object.keys(raw).length
-      )
-        throw new Error('Provider returned an incomplete or oversized Live TV list.');
-      const members = new Map();
-      for (const row of Object.values(raw))
-        if (row && row.id != null && typeof row.id !== 'object' && enabled(row.cmd))
-          members.set(String(row.id), row);
-      if (!members.size) throw new Error('Provider returned no playable Live TV channels.');
-      const order = [...members.keys()].sort(
-        (a, b) =>
-          Number(members.get(a).number ?? 0) - Number(members.get(b).number ?? 0) ||
-          (a < b ? -1 : a > b ? 1 : 0),
-      );
-      const channels = new Proxy(Object.fromEntries(members), { ownKeys: () => order });
-      let guide = {};
-      try {
-        const result = await client.call('itv', 'get_epg_info', { period: 48 });
-        if (result && typeof (result.data ?? result) === 'object') guide = result.data ?? result;
-      } catch (error) {
-        if (error.retryAt || client.signal?.aborted) throw error;
-      }
-      await commit(job, async (connection) => {
-        await saveSnapshot(root, liveKey(feed, 'imported-live'), {
-          categories,
-          channels,
-          guide,
-          imported: now(),
-        });
-        await q(
-          connection,
-          "UPDATE vaultcast_stalker_jobs SET status='complete',processed=?,error='',next_run=0 WHERE feed_id=? AND kind='live'",
-          [members.size, feed.id],
-        );
-      });
-    } catch (error) {
-      if (client.signal?.aborted) return;
-      await commit(job, async (connection) => {
-        if (error.retryAt)
-          await q(
-            connection,
-            "UPDATE vaultcast_stalker_jobs SET status='waiting',next_run=GREATEST(next_run,?),error=? WHERE feed_id=? AND config=? AND status IN ('queued','running','partial','waiting')",
-            [
-              error.retryAt,
-              'Provider rate limited requests. Import will resume after the cooldown.',
-              feed.id,
-              job.config,
-            ],
-          );
-        else
-          await q(
-            connection,
-            "UPDATE vaultcast_stalker_jobs SET status='failed',error=?,next_run=0 WHERE feed_id=? AND kind='live'",
-            ['Live TV could not be imported. Check the provider and retry.', feed.id],
-          );
-      });
-    }
-  }
+  const live = require('./stalker-live-import')(root, database, commit);
 
   async function maintenance(_feeds, jobs) {
     await database(async (pool) => {
@@ -546,7 +353,7 @@ module.exports = function catalogueWorker(db, root) {
           )[0];
           if (current?.generation !== job.generation || current.config !== job.config) return;
           const state = await doc(connection, 'live_iptv');
-          const feed = state.feeds?.find(
+          const feed = (savedFeeds(state) ?? []).find(
             (feed) => feed.id === job.feed_id && feed.type === 'stalker' && enabled(feed.enabled),
           );
           const account = feed ? await doc(connection, 'stalker-account-' + configHash(feed)) : {};
@@ -585,14 +392,15 @@ module.exports = function catalogueWorker(db, root) {
             'vaultcast_stalker_folder_items',
             'vaultcast_stalker_folders',
           ]) {
-            const removed = !feed;
+            const removed = !feed || (job.kind === 'live' && current.status === 'complete' &&
+              table === 'vaultcast_stalker_staging');
             await q(
               connection,
               'DELETE FROM ' +
                 table +
                 ' WHERE feed_id=? AND kind=?' +
                 (removed ? '' : ' AND generation<>?') +
-                ' LIMIT 100',
+                ' LIMIT 500',
               removed ? scope(job) : key(job),
             );
           }
@@ -636,7 +444,7 @@ module.exports = function catalogueWorker(db, root) {
       jobs: await q(pool, 'SELECT * FROM vaultcast_stalker_jobs'),
     }));
     const feeds = new Map(
-      (initial.state.feeds ?? [])
+      (savedFeeds(initial.state) ?? [])
         .filter((feed) => feed.type === 'stalker' && enabled(feed.enabled))
         .map((feed) => [feed.id, feed]),
     );
@@ -657,7 +465,8 @@ module.exports = function catalogueWorker(db, root) {
           const reset = await doc(connection, 'stalker-catalogue-reset');
           if (reset.state !== 'purging' || Number(reset.table ?? 0) !== index) return;
           if (index < tables.length) {
-            if (!(await q(connection, 'DELETE FROM ' + tables[index] + ' LIMIT 500')).affectedRows)
+            const mediaScope = index < 3 ? " WHERE kind IN ('vod','series')" : '';
+            if (!(await q(connection, 'DELETE FROM ' + tables[index] + mediaScope + ' LIMIT 500')).affectedRows)
               await save(connection, 'stalker-catalogue-reset', { ...reset, table: index + 1 });
           } else {
             await q(connection, "DELETE FROM vaultcast_stalker_jobs WHERE kind IN ('vod','series')");
@@ -696,6 +505,12 @@ module.exports = function catalogueWorker(db, root) {
       lastJob.set(lane, key(choice.job).join('\0'));
       selected.push(choice);
     }
+    if (dirtyFilters.size && now() - lastFilters >= 120) {
+      const kind = dirtyFilters.values().next().value;
+      await database(pool => library.filters(pool, root, kind));
+      dirtyFilters.delete(kind);
+      lastFilters = now();
+    }
     if (!selected.length) {
       await unlink(join(root, 'data/runtime/stalker-library.active')).catch(() => {});
       if (now() - lastFilters > 30) {
@@ -716,7 +531,23 @@ module.exports = function catalogueWorker(db, root) {
     });
     await Promise.all(selected.map(async ({ job, feed }) => {
       try {
-        await advance(feed, job, signal);
+        // Reuse the MAG session and make several bounded checkpoints while
+        // other portals are in flight. Re-read the job between checkpoints
+        // so a pause, refresh or delayed folder takes effect immediately.
+        const client = await provider(root, feed, signal);
+        await advance(feed, job, signal, client);
+        const until = Date.now() + 3500;
+        for (let i = 0; i < 5 && Date.now() < until; i++) {
+          signal?.throwIfAborted();
+          const [next] = await database(pool => q(pool,
+            'SELECT * FROM vaultcast_stalker_jobs WHERE feed_id=? AND kind=? AND generation=?',
+            key(job)));
+          if (!next || !pending(next.status) || Number(next.next_run) > now()) break;
+          if (next.kind === 'live') {
+            if (next.last_hash !== 'live_pages') break;
+            await live(feed, next, client);
+          } else await step(feed, next, client);
+        }
       } catch (error) {
         if (signal?.aborted) return;
         // An unexpected failure in one provider must not stop other providers
@@ -730,7 +561,7 @@ module.exports = function catalogueWorker(db, root) {
     }));
     return { busy: true };
   }
-  async function advance(feed, job, signal) {
+  async function advance(feed, job, signal, client) {
     signal?.throwIfAborted();
     const cooldown = await cached(root, 'stalker_cooldown_' + sha(phpJson([feed.url, feed.mac])));
     if (Number(cooldown?.until) > now()) {
@@ -748,8 +579,7 @@ module.exports = function catalogueWorker(db, root) {
       );
       return;
     }
-    const client = await provider(root, feed, signal),
-      accountKey = 'stalker-account-' + configHash(feed);
+    const accountKey = 'stalker-account-' + configHash(feed);
     let account = await database((pool) => doc(pool, accountKey, null));
     if (account == null) {
       try {
@@ -802,7 +632,7 @@ module.exports = function catalogueWorker(db, root) {
       throw bad('Catalogue reset is in progress. Wait for it to finish.');
     let discovered;
     if (operation === 'discover') {
-      const feed = initial.state.feeds?.find(
+      const feed = (savedFeeds(initial.state) ?? []).find(
         (feed) => feed.type === 'stalker' && feed.id === feedId && enabled(feed.enabled),
       );
       if (!feed || !['vod', 'series'].includes(kind))
@@ -824,7 +654,7 @@ module.exports = function catalogueWorker(db, root) {
         if ((await doc(connection, 'stalker-catalogue-reset')).state === 'purging')
           throw bad('Catalogue reset is in progress. Wait for it to finish.');
         const state = await doc(connection, 'live_iptv'),
-          feeds = (state.feeds ?? []).filter((feed) => feed.type === 'stalker' && enabled(feed.enabled));
+          feeds = (savedFeeds(state) ?? []).filter((feed) => feed.type === 'stalker' && enabled(feed.enabled));
         if (operation === 'reset_rebuild') {
           if (feedId || kind !== 'all' || body.confirmation !== 'RESET STALKER CATALOGUE')
             throw bad('Confirm a full Stalker Movies and Series reset.');
@@ -842,7 +672,7 @@ module.exports = function catalogueWorker(db, root) {
             throw bad('Choose one connection and Movies or Series.');
           const feed = chosen[0];
           if (operation === 'discover') {
-            const old = initial.state.feeds.find((feed) => feed.id === feedId);
+            const old = (savedFeeds(initial.state) ?? []).find((feed) => feed.id === feedId);
             if (configHash(old) !== configHash(feed))
               throw bad('The connection changed. Discover its folders again.');
             const jobs = await q(
@@ -907,8 +737,10 @@ module.exports = function catalogueWorker(db, root) {
           const allowed = new Set(knownFolders.map((row) => row.folder_id));
           if (ids.some((id) => typeof id !== 'string' || !allowed.has(id)))
             throw bad('Unknown provider folder. Reload the catalogue folder list.');
-          const saved = await doc(connection, 'stalker-catalogue-folder-selection', { sources: {} });
-          if (!saved.sources || Array.isArray(saved.sources)) saved.sources = {};
+          // An empty PHP associative array is stored as JSON []. Properties
+          // assigned to a JS array disappear when JSON.stringify serializes it.
+          const saved = { ...await doc(connection, 'stalker-catalogue-folder-selection') };
+          saved.sources = { ...saved.sources };
           const previous = saved.sources[feedId + '/' + kind];
           const previousIds = previous?.mode === 'include'
             ? Object.values(previous.ids ?? {}).filter((id) => typeof id === 'string') : [];
@@ -919,40 +751,34 @@ module.exports = function catalogueWorker(db, root) {
           await save(connection, 'stalker-catalogue-folder-selection', saved);
           // Saving an unchanged selection must not discard a running scan.
           if (unchanged) return;
-          await queue(connection, root, feed, kind, true);
-          // The generation change fences in-flight worker pages. Keep the
-          // discovered folder names immediately available in the new generation
-          // so an edit doesn't make the UI appear to forget its selection or
-          // require another provider request before scanning can resume.
-          if (previousJob?.config === configHash(feed)) {
-            const readFolders = (after) => q(connection,
-              "SELECT folder_id,title FROM vaultcast_stalker_folders WHERE feed_id=? AND kind=? AND generation=? AND folder_id>? ORDER BY folder_id LIMIT 100",
-              [feedId, kind, previousJob.generation, after]);
-            let folders = await readFolders('');
-            if (!folders.length) return;
-            const next = (
-              await q(connection, 'SELECT generation FROM vaultcast_stalker_jobs WHERE feed_id=? AND kind=?', [feedId, kind])
-            )[0];
-            await q(connection,
-              "INSERT INTO vaultcast_stalker_folders(feed_id,kind,generation,folder_id,title,status,last_success) VALUES(?,?,?,'','Folder discovery','complete',?)",
-              [feedId, kind, next.generation, now()]);
-            const included = new Set(ids);
-            // MariaDB 10.3 on the NAS must not read from the table being
-            // inserted into in the same INSERT ... SELECT statement. Keep
-            // both the reads and the writes bounded for low-memory devices.
-            while (folders.length) {
-              const values = folders.map((folder) => [
-                feedId, kind, next.generation, folder.folder_id, folder.title,
-                body.mode === 'all' || (folder.folder_id !== '*' && included.has(folder.folder_id))
-                  ? 'pending' : 'skipped',
-              ]);
+          if (!previousJob || previousJob.config !== configHash(feed) || !currentFolders.length) {
+            await queue(connection, root, feed, kind, true);
+            return;
+          }
+          // Reuse verified pages. Keep the generation and per-folder cursor so
+          // changing one checkbox does not trigger a full provider rescan.
+          const included = new Set(ids);
+          const folders = await q(connection,
+            "SELECT folder_id,status FROM vaultcast_stalker_folders WHERE feed_id=? AND kind=? AND generation=? AND folder_id<>''",
+            [feedId, kind, previousJob.generation]);
+          const skip = [], resume = [];
+          for (const folder of folders) {
+            const include = body.mode === 'all' || included.has(folder.folder_id);
+            if (!include && !['skipped','complete'].includes(folder.status)) skip.push(folder.folder_id);
+            if (include && ['skipped','failed'].includes(folder.status)) resume.push(folder.folder_id);
+          }
+          for (const [values, status] of [[skip, 'skipped'], [resume, 'pending']]) {
+            for (let i = 0; i < values.length; i += 100) {
+              const batch = values.slice(i, i + 100);
               await q(connection,
-                'INSERT INTO vaultcast_stalker_folders(feed_id,kind,generation,folder_id,title,status) VALUES ' +
-                  values.map(() => '(?,?,?,?,?,?)').join(','), values.flat());
-              const cursor = folders[folders.length - 1].folder_id;
-              folders = folders.length < 100 ? [] : await readFolders(cursor);
+                'UPDATE vaultcast_stalker_folders SET status=?,next_run=0,failures=0,error=\'\' WHERE feed_id=? AND kind=? AND generation=? AND folder_id IN (' +
+                  batch.map(() => '?').join(',') + ')',
+                [status, feedId, kind, previousJob.generation, ...batch]);
             }
           }
+          await q(connection,
+            "UPDATE vaultcast_stalker_jobs SET status='queued',next_run=?,next_page=1,error='' WHERE feed_id=? AND kind=?",
+            [now(), feedId, kind]);
           return;
         }
         for (const feed of chosen)

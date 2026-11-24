@@ -8,12 +8,34 @@
     var compatLayout=function(){var width=document.documentElement.clientWidth||document.body.clientWidth||1024;var size=width<=480?'tiny':width<=760?'small':width<=1100?'medium':'';document.body.className=document.body.className.replace(/ compat-width-[a-z]+/g,'')+(size?' compat-width-'+size:'');};
     compatLayout();compatListen(window,'resize',compatLayout);
   }
+  // Slideshow controls are ES3 syntax and use only native image loading.
+  // Rotation runs only after the viewer presses Play, with no server polling.
+  var slideStops=[],divs=document.getElementsByTagName('div'),di;
+  for(di=0;di<divs.length;di++)if(divs[di].getAttribute('data-compat-slides')==='1')(function(root){
+    var images=root.getElementsByTagName('img'),links=root.getElementsByTagName('a'),buttons=root.getElementsByTagName('button'),p=root.getElementsByTagName('p'),spans=root.getElementsByTagName('span'),sources=[],i,index=0,timer=null,playing=false,toggle=null,delay=Math.max(4,parseInt(root.getAttribute('data-seconds'),10)||20)*1000;
+    if(!images.length)return;
+    for(i=0;i<links.length;i++)if(links[i].className==='compat-slide-source')sources.push(links[i]);
+    if(sources.length<2)return;
+    function draw(n){index=(n+sources.length)%sources.length;var a=sources[index];images[0].src=a.href;images[0].alt=a.getAttribute('data-slide-title')||'';if(p.length)compatText(p[0],images[0].alt);if(spans.length)compatText(spans[0],(index+1)+' / '+sources.length);}
+    function stop(){playing=false;clearTimeout(timer);timer=null;if(toggle)compatText(toggle,'Play slideshow');}
+    function schedule(){clearTimeout(timer);if(playing)timer=setTimeout(function(){if(!document.hidden)draw(index+1);schedule();},delay);}
+    for(i=0;i<buttons.length;i++)(function(button){var action=button.getAttribute('data-slide-action');if(!action)return;button.parentNode.style.display='block';if(action==='toggle')toggle=button;compatListen(button,'click',function(){if(action==='toggle'){if(playing)stop();else{playing=true;compatText(button,'Pause slideshow');schedule();}}else{draw(index+(action==='next'?1:-1));schedule();}});})(buttons[i]);
+    for(i=0;i<sources.length;i++)(function(a,n){compatListen(a,'click',function(ev){ev=ev||window.event;if(ev.ctrlKey||ev.metaKey||ev.shiftKey||ev.altKey)return;if(ev.preventDefault)ev.preventDefault();ev.returnValue=false;draw(n);schedule();});})(sources[i],i);
+    slideStops.push(stop);
+  })(divs[di]);
+  var clocks=[],clockTimer=null;
+  for(di=0;di<divs.length;di++)if(divs[di].getAttribute('data-compat-clock')==='1')clocks.push(divs[di]);
+  function tickClock(){var now=new Date(),h=now.getHours(),m=now.getMinutes(),value=(h<10?'0':'')+h+':'+(m<10?'0':'')+m;for(var i=0;i<clocks.length;i++)compatText(clocks[i],value+(clocks[i].getAttribute('data-date')==='1'?' · '+now.toDateString():''));}
+  function startClock(){if(clocks.length&&clockTimer===null){tickClock();clockTimer=setInterval(tickClock,15000);}}
+  startClock();
+  function stopSlides(){for(var i=0;i<slideStops.length;i++)slideStops[i]();if(clockTimer!==null){clearInterval(clockTimer);clockTimer=null;}}
+  compatListen(window,'pagehide',stopSlides);compatListen(window,'unload',stopSlides);compatListen(window,'pageshow',startClock);
   var featureRequests=[],featuresAlive=true,featureTimers=[];
   function compatRequest(path,body,done){
     if(!featuresAlive||!window.XMLHttpRequest||!window.JSON||!window.JSON.parse||!window.JSON.stringify)return false;
     var xhr,finished=false,timer;
     function finish(error,data){if(finished)return;finished=true;clearTimeout(timer);for(var i=featureRequests.length-1;i>=0;i--)if(featureRequests[i]===xhr)featureRequests.splice(i,1);if(featuresAlive)done(error,data);}
-    try{xhr=new XMLHttpRequest();xhr.open(body===null?'GET':'POST',(window.__VC_COMPAT_BASE__||'/')+'api'+path,true);if(body!==null)xhr.setRequestHeader('Content-Type','application/json');featureRequests.push(xhr);xhr.onreadystatechange=function(){if(xhr.readyState!==4)return;var data;try{data=window.JSON.parse(xhr.responseText);}catch(parseError){finish('Could not read the response.');return;}finish(xhr.status>=200&&xhr.status<300&&data.ok!==false?null:(data.error||'Request failed.'),data);};timer=setTimeout(function(){finish('Request timed out.');try{xhr.abort();}catch(abortError){}},15000);xhr.send(body===null?null:window.JSON.stringify(body));return true;}catch(requestError){finish('Could not contact the server.');return false;}
+    try{xhr=new XMLHttpRequest();xhr.open(body===null?'GET':'POST',(window.__VC_COMPAT_BASE__||'/')+'api'+path,true);xhr.setRequestHeader('X-Vaultcast-Request','same-origin');if(body!==null)xhr.setRequestHeader('Content-Type','application/json');featureRequests.push(xhr);xhr.onreadystatechange=function(){if(xhr.readyState!==4)return;var data;try{data=window.JSON.parse(xhr.responseText);}catch(parseError){finish('Could not read the response.');return;}finish(xhr.status>=200&&xhr.status<300&&data.ok!==false?null:(data.error||'Request failed.'),data);};timer=setTimeout(function(){finish('Request timed out.');try{xhr.abort();}catch(abortError){}},15000);xhr.send(body===null?null:window.JSON.stringify(body));return true;}catch(requestError){finish('Could not contact the server.');return false;}
   }
   compatListen(window,'pagehide',function(){featuresAlive=false;clearTimeout(chatTimer);for(var i=0;i<featureTimers.length;i++)clearTimeout(featureTimers[i]);for(i=0;i<featureRequests.length;i++)try{featureRequests[i].abort();}catch(abortError){}});
   // Optional progressive enhancement: ordinary forms remain available without JSON/XHR.
@@ -80,9 +102,97 @@
     if(channelDigits.length===3)tuneChannel();else channelTimer=setTimeout(tuneChannel,1800);
     return true;
   }
+  // Restore the exact browsing URL and focused tile rather than returning to
+  // a generic library page. Session storage is optional; no history resubmits.
+  var browseMemory='vc-compat-return-v2',browseRestore='vc-compat-restore-v2';
+  function browseGet(key){try{return window.sessionStorage?JSON.parse(sessionStorage.getItem(key)||'null'):null;}catch(e){return null;}}
+  function browseSet(key,value){try{if(window.sessionStorage)sessionStorage.setItem(key,JSON.stringify(value));}catch(e){}}
+  function browseRemove(key){try{if(window.sessionStorage)sessionStorage.removeItem(key);}catch(e){}}
+  function browseQuery(url,name){var re=new RegExp('[?&]'+name+'=([^&#]*)'),m=re.exec(url);try{return m?decodeURIComponent(m[1].replace(/\+/g,' ')):'';}catch(e){return '';}}
+  function localCompat(url){var a=document.createElement('a');a.href=url;return a.protocol===location.protocol&&a.host===location.host&&a.pathname===(window.__VC_COMPAT_BASE__||'/')&&browseQuery(a.href,'compat')==='on';}
+  function browseKey(url){return url.split('#')[0];}
+  var here=browseKey(location.href),returnMap=browseGet(browseMemory)||{},returnInfo=returnMap[here],backLinks=document.getElementsByTagName('a'),backLink=null,ri;
+  for(ri=0;ri<backLinks.length;ri++)if(backLinks[ri].getAttribute('data-compat-back')==='1'){backLink=backLinks[ri];break;}
+  if(backLink&&returnInfo&&new Date().getTime()-returnInfo.at<86400000&&localCompat(returnInfo.from)&&returnInfo.from!==here){
+    backLink.href=returnInfo.from;compatText(backLink,'← Back to browsing');
+  }
+  var validReturn=returnInfo&&new Date().getTime()-returnInfo.at<86400000&&localCompat(returnInfo.from)&&returnInfo.from!==here;
+  function scrollTopValue(){return window.pageYOffset||document.documentElement.scrollTop||document.body.scrollTop||0;}
+  function saveBrowseRecord(dest,record){
+    var map=browseGet(browseMemory)||{},keys=[],key;
+    for(key in map)if(Object.prototype.hasOwnProperty.call(map,key))keys[keys.length]=key;
+    if(keys.length>=30&&!map[dest]){keys.sort(function(a,b){return (map[a].at||0)-(map[b].at||0);});delete map[keys[0]];}
+    map[dest]=record;browseSet(browseMemory,map);
+  }
+  function sameLiveBrowse(dest){
+    if(!localCompat(dest)||browseQuery(here,'view')!=='live'||browseQuery(dest,'view')!=='live')return false;
+    var keys=['tab','kind','country','section','folder','folder_feed','source_offset','lang','q','page','parent'],i;
+    for(i=0;i<keys.length;i++)if(browseQuery(here,keys[i])!==browseQuery(dest,keys[i]))return false;
+    return !!((browseQuery(here,'channel')&&browseQuery(dest,'channel'))||(browseQuery(here,'item')&&browseQuery(dest,'item'))||(browseQuery(here,'id')&&browseQuery(dest,'id')));
+  }
+  function carryBrowse(dest,automatic){
+    if(!validReturn||!sameLiveBrowse(dest))return false;
+    saveBrowseRecord(dest,{from:returnInfo.from,to:automatic?returnInfo.to:dest,y:returnInfo.y,at:new Date().getTime(),fallbackTo:returnInfo.fallbackTo||returnInfo.to});
+    return true;
+  }
+  window.__VC_COMPAT_TRY_SOURCE__=function(url){
+    var a=document.createElement('a');a.href=url;
+    var dest=browseKey(a.href);
+    if(!localCompat(dest)||!sameLiveBrowse(dest)||dest===here)return false;
+    carryBrowse(dest,true);
+    window.location.replace(dest);return true;
+  };
+  var failedSource=document.getElementById('compat-failed-source');
+  if(failedSource&&failedSource.getAttribute('data-compat-auto')==='1'){
+    var failoverTimer=setTimeout(function(){window.__VC_COMPAT_TRY_SOURCE__(failedSource.href);},1200);
+    compatListen(window,'pagehide',function(){clearTimeout(failoverTimer);});
+    compatListen(window,'unload',function(){clearTimeout(failoverTimer);});
+    compatListen(failedSource,'click',function(ev){clearTimeout(failoverTimer);ev=ev||window.event;remoteStop(ev);window.__VC_COMPAT_TRY_SOURCE__(failedSource.href);});
+  }
+  function restoreBrowse(){
+    var restore=browseGet(browseRestore);if(!restore||restore.from!==here)return;browseRemove(browseRestore);
+    var links=document.getElementsByTagName('a'),i;
+    var target=restore.to,found=false;
+    for(i=0;i<links.length;i++)if(browseKey(links[i].href)===target){found=true;break;}
+    if(!found&&restore.fallbackTo)target=restore.fallbackTo;
+    for(i=0;i<links.length;i++)if(browseKey(links[i].href)===target){
+      var ancestor=links[i].parentNode,buttons=document.getElementsByTagName('button'),k;
+      while(ancestor&&ancestor.nodeType===1){
+        if(ancestor.id&&ancestor.getAttribute('data-compat-open')!==null)for(k=0;k<buttons.length;k++){
+          if(buttons[k].getAttribute('data-compat-disclosure')===ancestor.id&&buttons[k].getAttribute('aria-expanded')==='false'&&buttons[k]._compatExpand)buttons[k]._compatExpand();
+        }
+        ancestor=ancestor.parentNode;
+      }
+      if(remoteUsable(links[i])){remoteFocus(links[i]);break;}
+    }
+    window.scrollTo(0,Math.max(0,Number(restore.y)||0));
+  }
+  compatListen(window,'load',restoreBrowse);
+  compatListen(window,'pageshow',restoreBrowse);
+  compatListen(document,'click',function(ev){
+    ev=ev||window.event;if(ev.ctrlKey||ev.metaKey||ev.shiftKey||ev.altKey||(ev.which&&ev.which!==1)||ev.button===2)return;
+    var node=ev.target||ev.srcElement;while(node&&remoteTag(node)!=='a')node=node.parentNode;
+    if(!node||!localCompat(node.href)||node.target&&node.target!=='_self')return;
+    var dest=browseKey(node.href),srcView=browseQuery(here,'view')||'home',dstView=browseQuery(dest,'view')||'home';
+    if(validReturn&&dest===returnInfo.from){browseSet(browseRestore,returnInfo);return;}
+    if(carryBrowse(dest,false))return;
+    var tile=/(^|\s)(compat-card|compat-episode-link|compat-live-watch)(\s|$)/.test(node.className||'')||(/(^|\s)compat-browse-row(\s|$)/.test(node.className||'')&&!browseQuery(here,'item')&&!browseQuery(here,'channel')&&!(srcView==='live'&&browseQuery(here,'id')));
+    var provider=srcView==='live'&&dstView==='live'&&browseQuery(here,'tab')===browseQuery(dest,'tab')&&((!browseQuery(here,'channel')&&browseQuery(dest,'channel'))||(!browseQuery(here,'item')&&browseQuery(dest,'item'))||(!browseQuery(here,'id')&&browseQuery(dest,'id'))||(!browseQuery(here,'parent')&&browseQuery(dest,'parent')));
+    if(dest===here||(!tile&&!provider))return;
+    saveBrowseRecord(dest,{from:here,to:dest,y:scrollTopValue(),at:new Date().getTime()});
+  });
+  // Disclosures start expanded in HTML, so no feature is inaccessible without JS.
+  var disclosureButtons=document.getElementsByTagName('button');
+  for(var di=0;di<disclosureButtons.length;di++)(function(button){
+    var id=button.getAttribute('data-compat-disclosure');if(!id)return;
+    var content=document.getElementById(id);if(!content)return;
+    var expanded=content.getAttribute('data-compat-open')==='1',label=button.innerText||button.textContent||'More options';
+    function update(){content.style.display=expanded?'':'none';button.setAttribute('aria-expanded',expanded?'true':'false');compatText(button,label+(expanded?' −':' +'));}
+    button._compatExpand=function(){expanded=true;update();};button.style.display='inline-block';update();compatListen(button,'click',function(){expanded=!expanded;update();});
+  })(disclosureButtons[di]);
   function remoteUsable(node){
     var tag=remoteTag(node),type=String(node.type||'').toLowerCase(),parent=node,style,rect;
-    if(!node.focus||!node.getBoundingClientRect||node.disabled||type==='hidden'||node.getAttribute('aria-disabled')==='true')return false;
+    if(!node.focus||!node.getBoundingClientRect||node.disabled||type==='hidden'||node.getAttribute('aria-disabled')==='true'||/(^|\s)compat-skip(\s|$)/.test(node.className||''))return false;
     if(node.getAttribute('tabindex')!==null&&node.tabIndex<0)return false;
     if(tag==='a'&&!node.getAttribute('href'))return false;
     while(parent&&parent.nodeType===1){
@@ -109,12 +219,13 @@
     if(channelEntry(event))return;
     // Game engines own arrows and Enter while their play surface has focus.
     var gameFocus=document.activeElement,gameStage=document.getElementById('compat-emulator-stage'),arcadeStage=document.querySelector&&document.querySelector('#compat-play-interactive .vc-game-stage');
-    if(gameStage&&gameStage.contains(gameFocus)||arcadeStage&&arcadeStage.contains(gameFocus))return;
+    var focused=gameFocus;while(focused){if(focused===gameStage||focused===arcadeStage)return;focused=focused.parentNode;}
     var key=event.key,code=event.keyCode||event.which;
     if(key==='ArrowLeft'||key==='Left')code=37;else if(key==='ArrowUp'||key==='Up')code=38;else if(key==='ArrowRight'||key==='Right')code=39;else if(key==='ArrowDown'||key==='Down')code=40;
     else if(key==='Enter'||key==='Accept'||key==='Select'||key==='OK'||code===23)code=13;
     var from=document.activeElement,tag=remoteTag(from),nativeControl=remoteNative(from),ok=code===13;
-    if((code===27||key==='Escape')&&remoteEditing===from){remoteEditing=null;remoteField=from;remoteStop(event);return;}
+    if((code===27||code===10009||key==='Escape'||key==='Back')&&remoteEditing===from){remoteEditing=null;remoteField=from;remoteStop(event);return;}
+    if((code===10009||key==='Back'||key==='BrowserBack')&&(!nativeControl||remoteField===from)){var back=backLink;if(back){remoteStop(event);if(returnInfo&&browseKey(back.href)===returnInfo.from)browseSet(browseRestore,returnInfo);window.location.href=back.href;return;}}
     if(ok){
       if(nativeControl){
         if(remoteField===from){remoteField=null;remoteEditing=from;if(tag==='textarea'||tag==='input'&&String(from.type||'').toLowerCase()!=='file')remoteStop(event);}
@@ -150,9 +261,9 @@
       if(score<bestScore){best=node;bestScore=score;}
     }
     if(visibleBest)best=visibleBest;
-    if(best)remoteFocus(best);
-    // Suppress browser scrolling even at the edge of the focusable layout.
-    remoteStop(event);
+    if(best){remoteFocus(best);remoteStop(event);}
+    // Keep native vertical scrolling available at a boundary (long descriptions
+    // and read-only panels can have no focusable element below them).
   }
   compatListen(document,'keydown',remoteNavigation);
   compatListen(document,'keyup',function(event){event=event||window.event;delete channelHeld['k'+(event.keyCode||event.which)];remoteOKDown=false;});
@@ -160,6 +271,238 @@
   compatListen(window,'pagehide',clearChannelEntry);
   compatListen(document,'focusin',function(event){event=event||window.event;var node=event.target||event.srcElement,tag=remoteTag(node);if(tag==='input'||tag==='textarea'||tag==='select'||node&&node.isContentEditable)clearChannelEntry();});
   compatListen(document,'mousedown',function(){remoteField=null;remoteEditing=null;});
+
+  // Legacy-syntax clients reuse the Node Xtream service and the authenticated
+  // Drop API. No provider credentials are ever inserted into the page.
+  function legacyJson(url, method, body, done, raw, timeout){
+    if(!window.XMLHttpRequest||!window.JSON||!window.JSON.parse||(method!=='GET'&&!raw&&!window.JSON.stringify)){done('This device does not support the required network API.');return null;}
+    var req=new XMLHttpRequest(),finished=false,timer;
+    function finish(error,data){if(finished)return;finished=true;clearTimeout(timer);done(error,data);}
+    try{
+      req.open(method,url,true);
+      req.setRequestHeader('X-Vaultcast-Request','same-origin');
+      if(method!=='GET')req.setRequestHeader('Content-Type',raw?'application/octet-stream':'application/json');
+      req.onreadystatechange=function(){if(req.readyState!==4)return;var data;if(req.status===204){finish(null,{});return;}try{data=window.JSON.parse(req.responseText);}catch(e){finish(req.status===401?'Sign in again.':req.status===403?'Provider request rejected (HTTP 403).':req.status?'Server returned an invalid response (HTTP '+req.status+').':'Could not contact the server.');return;}if(!data||typeof data!=='object'){finish('Invalid server response.');return;}finish(req.status>=200&&req.status<300&&data.ok!==false?null:(data.error||'Request failed (HTTP '+req.status+').'),data);};
+      timer=setTimeout(function(){finish('The server took too long to respond.');try{req.abort();}catch(e){}},timeout||60000);
+      req.send(method==='GET'?null:raw?body:window.JSON.stringify(body||{}));
+    }catch(e){finish('Could not contact the server.');}
+    return req;
+  }
+  function legacyButton(parent,label,fn){
+    var button=document.createElement('button');button.type='button';compatText(button,label);compatListen(button,'click',fn);parent.appendChild(button);return button;
+  }
+  function legacyClear(node){while(node.firstChild)node.removeChild(node.firstChild);}
+  // Provider administration uses the same authenticated Node routes as the full interface.
+  var providerAdmin=document.getElementById('compat-provider-admin');
+  if(providerAdmin)(function(){
+    var endpoint=(window.__VC_COMPAT_BASE__||'/')+'netplay/application/live/',tab=providerAdmin.getAttribute('data-provider-tab'),status=document.getElementById('compat-provider-status'),controls=document.getElementById('compat-provider-controls'),results=document.getElementById('compat-provider-results'),busy=false,selected=null,connections=[],jobs=[],folderJob=null;
+    function say(s){compatText(status,s);}
+    function el(tag,parent,content,cls){var n=document.createElement(tag);if(cls)n.className=cls;if(content!==null&&typeof content!=='undefined')compatText(n,String(content));if(parent)parent.appendChild(n);return n;}
+    function field(parent,label,type,value){var l=el('label',parent,label),n=el('input',l,null);n.type=type||'text';n.value=value==null?'':String(value);return n;}
+    function check(parent,label,on){var l=el('label',parent,null,'compat-check'),n=el('input',l,null);n.type='checkbox';n.checked=!!on;l.appendChild(document.createTextNode(' '+label));return n;}
+    function select(parent,label,options,value){var l=el('label',parent,label),n=el('select',l,null),i,o;for(i=0;i<options.length;i++){o=el('option',n,options[i][1]);o.value=options[i][0];if(o.value===value)o.selected=true;}return n;}
+    function line(parent,s){el('p',parent,s,'compat-note');}
+    function flag(v){return v===true||v===1||v==='1'||v==='true';}
+    function call(action,body,done,timeout){
+      if(busy)return;busy=true;say(body?'Submitting request…':'Loading saved settings…');
+      var buttons=providerAdmin.getElementsByTagName('button'),i;for(i=0;i<buttons.length;i++)buttons[i].disabled=true;
+      legacyJson(endpoint+action,body?'POST':'GET',body,function(err,data){
+        busy=false;for(var k=0;k<buttons.length;k++)buttons[k].disabled=false;
+        if(err){say(err+' Refresh saved settings before retrying a change.');return;}say('Ready.');done(data||{});
+      },false,timeout);
+    }
+    function connectionList(){
+      selected=null;folderJob=null;legacyClear(controls);legacyClear(results);legacyButton(controls,'Retry loading connections',connectionList);
+      call(tab==='stalker'?'stalker':'xtream_connections',null,function(data){
+        connections=data.connections||[];drawConnections();
+      });
+    }
+    function drawConnections(){
+      legacyClear(controls);legacyClear(results);legacyButton(controls,'Add connection',function(){editConnection(null);});legacyButton(controls,'Refresh',connectionList);
+      if(!connections.length)line(results,'No connections configured.');
+      for(var i=0;i<connections.length;i++)(function(row){
+        var panel=el('section',results,null,'compat-provider-card');
+        el('h3',panel,row.name||'Connection');line(panel,(flag(row.enabled)?'Enabled':'Disabled')+(row.expired?' · Account expired':''));
+        legacyButton(panel,'Edit',function(){editConnection(row);});
+        legacyButton(panel,'Check account',function(){
+          var payload=tab==='stalker'?{operation:'check',id:row.id}:{operation:'check',feed:row.id};
+          call(tab+'_manage',payload,function(data){
+            var account=data.account||data,report=el('div',panel,null,'compat-provider-report');
+            el('strong',report,'Connection check completed');
+            if(typeof account.exp_date!=='undefined'){var expiry=Number(account.exp_date);line(report,'Expires: '+(expiry>0?new Date(expiry*1000).toLocaleString():'Not reported'));}
+            var keys=['expiryDate','expiryTime','expiryStatus','channelCount','sampleCount','status','expires','expiry','expiry_date','activeConnections','maxConnections','active_cons','max_connections'],labels=['Expiry date','Expiry time','Expiry status','Channel count','Sample count','Account status','Expires','Expiry','Expiry date','Active connections','Maximum connections','Active connections','Maximum connections'];
+            for(var k=0;k<keys.length;k++)if(account[keys[k]]!==null&&typeof account[keys[k]]!=='undefined'&&typeof account[keys[k]]!=='object')line(report,labels[k]+': '+account[keys[k]]);
+            say('Connection check completed.');
+          },125000);
+        });
+        legacyButton(panel,'Remove',function(){if(!window.confirm('Remove '+(row.name||'this connection')+'?'))return;
+          call(tab+'_manage',tab==='stalker'?{operation:'remove',id:row.id}:{operation:'remove',feed:row.id},function(){connectionList();});
+        });
+      })(connections[i]);
+    }
+    function editConnection(row){
+      selected=row;legacyClear(controls);legacyClear(results);legacyButton(controls,'Back to connections',connectionList);
+      var panel=el('section',results,null,'compat-provider-card');el('h3',panel,row?'Edit connection':'Add connection');
+      var name=field(panel,'Connection name','text',row?row.name:''),url=field(panel,tab==='stalker'?'Portal URL':'Provider URL','text',row?row.url:''),on=check(panel,'Enabled',!row||flag(row.enabled)),fields={},keys=tab==='stalker'?['mac','username','password','serial','deviceId','deviceId2']:['username','password'],labels=tab==='stalker'?['MAC address','Username (optional)','Password (optional)','Serial number (optional)','Device ID (optional)','Device ID 2 (optional)']:['Username','Password'];
+      if(row)line(panel,'Existing credentials are not displayed. Leave fields blank to keep them.');
+      for(var i=0;i<keys.length;i++)fields[keys[i]]=field(panel,labels[i],keys[i]==='password'?'password':'text','');
+      var replace=null;if(row&&tab==='stalker')replace=check(panel,'Replace all credentials (enter the registered MAC again; blank optional fields are cleared)',false);
+      legacyButton(panel,'Save connection',function(){
+        var connection={name:name.value,url:url.value,enabled:on.checked},k;
+        if(!url.value||(!row&&(!fields[tab==='stalker'?'mac':'username'].value||(tab==='xtream'&&!fields.password.value)))){say('Enter the provider address and required account details.');return;}
+        for(k in fields)if(Object.prototype.hasOwnProperty.call(fields,k))connection[k]=fields[k].value;
+        if(replace)connection.replaceCredentials=replace.checked;
+        if(tab==='stalker'&&replace&&replace.checked&&!connection.mac){say('Enter the registered MAC address.');return;}
+        var payload={operation:'save',connection:connection};if(row)payload[tab==='stalker'?'id':'feed']=row.id;
+        call(tab+'_manage',payload,function(){connectionList();});
+      });
+    }
+    function catalogueStatus(){
+      folderJob=null;legacyClear(controls);legacyClear(results);legacyButton(controls,'Retry loading catalogue',catalogueStatus);
+      call('stalker_catalogue_status?summary=1',null,function(data){drawJobs(data);});
+    }
+    function control(operation,feed,kind,extra,done){
+      var payload={operation:operation,feed:feed||'',kind:kind||'all'},k;
+      if(extra)for(k in extra)if(Object.prototype.hasOwnProperty.call(extra,k))payload[k]=extra[k];
+      call('stalker_catalogue_control',payload,function(data){if(done)done(data);else drawJobs(data);},operation==='discover'?150000:60000);
+    }
+    function drawJobs(data){
+      jobs=data.sources||[];legacyClear(controls);legacyClear(results);
+      line(controls,'Worker: '+(data.worker?'Running':'Not running')+' · Reset: '+((data.reset||{}).state||'idle'));
+      legacyButton(controls,'Refresh status',catalogueStatus);
+      legacyButton(controls,'Resume all',function(){control('load','','all');});
+      legacyButton(controls,'Pause all',function(){control('pause','','all');});
+      legacyButton(controls,'Refresh all',function(){if(window.confirm('Refresh all provider catalogues?'))control('refresh','','all');});
+      if(!jobs.length)line(results,'No catalogue sources. Add and enable a Stalker connection first.');
+      for(var i=0;i<jobs.length;i++)(function(job){
+        var panel=el('section',results,null,'compat-provider-card'),kind=job.kind,feed=job.feed_id;
+        el('h3',panel,(job.name||'Connection')+' · '+(kind==='vod'?'Movies':kind==='series'?'Series':'Live TV'));
+        line(panel,String(job.status||'Unknown')+' · '+(job.scanned||0)+' scanned'+(typeof job.foldersTotal!=='undefined'?' · '+(job.foldersComplete||0)+' / '+job.foldersTotal+' folders':''));
+        if(job.active)line(panel,'Currently scanning');
+        if(job.status==='removed'||job.status==='expired')return;
+        legacyButton(panel,'Resume',function(){control('load',feed,kind);});
+        legacyButton(panel,'Pause',function(){control('pause',feed,kind);});
+        legacyButton(panel,'Refresh',function(){if(window.confirm('Refresh this catalogue?'))control('refresh',feed,kind);});
+        if(kind==='vod'||kind==='series'){
+          legacyButton(panel,'Provider folders',function(){
+            call('stalker_catalogue_status',null,function(full){showFolders(full,feed,kind);});
+          });
+        }
+      })(jobs[i]);
+      var danger=el('section',results,null,'compat-provider-card');
+      el('h3',danger,'Reset catalogue');line(danger,'Deletes and rebuilds the Movies and Series catalogue. Enter the confirmation exactly.');
+      var confirm=field(danger,'Type RESET STALKER CATALOGUE','text','');
+      legacyButton(danger,'Reset and rebuild',function(){if(confirm.value!=='RESET STALKER CATALOGUE'){say('Enter the confirmation phrase.');return;}if(window.confirm('Reset the entire Movies and Series catalogue?'))control('reset_rebuild','','all',{confirmation:confirm.value});});
+    }
+    function showFolders(data,feed,kind){
+      var list=data.sources||[],job=null,i;for(i=0;i<list.length;i++)if(list[i].feed_id===feed&&list[i].kind===kind){job=list[i];break;}
+      if(!job){say('Catalogue source no longer available.');return;}
+      legacyClear(controls);legacyClear(results);legacyButton(controls,'Back to catalogue',catalogueStatus);
+      el('h3',results,(job.name||'Connection')+' · '+(kind==='vod'?'Movies':'Series')+' folders');
+      line(results,'Pause scanning before rediscovering folders. Only selected folders are scanned in selection mode.');
+      legacyButton(results,'Discover folders',function(){if(window.confirm('Discover provider folders? The existing scan must be paused.'))control('discover',feed,kind,null,function(full){showFolders(full,feed,kind);});});
+      var mode=select(results,'Scan mode',[['all','All folders'],['include','Selected folders only']],job.folderMode||'all'),rows=job.folders||[],checks=[],holder=el('div',results,null,'compat-folder-choices');
+      for(i=0;i<rows.length;i++)if(rows[i].folder_id&&rows[i].folder_id!=='*'){
+        var n=check(holder,(rows[i].title||rows[i].folder_id)+' · '+(rows[i].status||''),rows[i].selected);checks.push({id:rows[i].folder_id,node:n});
+      }
+      if(!checks.length)line(holder,'No folders discovered yet.');
+      legacyButton(results,'Select all',function(){for(var k=0;k<checks.length;k++)checks[k].node.checked=true;mode.value='include';});
+      legacyButton(results,'Clear selection',function(){for(var k=0;k<checks.length;k++)checks[k].node.checked=false;mode.value='include';});
+      legacyButton(results,'Save folder selection',function(){
+        var ids=[];for(var k=0;k<checks.length;k++)if(checks[k].node.checked)ids.push(String(checks[k].id));
+        if(mode.value==='include'&&!ids.length&&!window.confirm('Select no folders? This catalogue will skip all folders.'))return;
+        control('folders',feed,kind,{mode:mode.value,folders:ids},function(full){showFolders(full,feed,kind);say('Folder selection saved.');});
+      });
+    }
+    if(tab==='catalogue')catalogueStatus();else connectionList();
+  })();
+  var xtream=document.getElementById('compat-xtream');
+  if(xtream){
+    (function(){
+      var base=window.__VC_COMPAT_BASE__||'/',endpoint=base+'netplay/application/live/',status=document.getElementById('compat-xtream-status'),controls=document.getElementById('compat-xtream-controls'),results=document.getElementById('compat-xtream-results'),player=document.getElementById('compat-xtream-player');
+      var feed='',kind='live',category='',series='',page=1,query='',ticket='',heartbeat=null,media=null,sequence=0,serial=0,playing=false,closed=false,playGeneration=0,client='compat-'+String(new Date().getTime())+'-'+String(Math.random()).slice(2);
+      function call(action,params,done,post){var path=endpoint+'xtream_'+action,key,parts=[];if(!post){for(key in params)if(params.hasOwnProperty(key))parts[parts.length]=encodeURIComponent(key)+'='+encodeURIComponent(params[key]);path+='?'+parts.join('&');}return legacyJson(path,post?'POST':'GET',params,done,false);}
+      function say(message){compatText(status,message);}
+      function stop(done,preserveSelection){
+        if(!preserveSelection){playGeneration++;playing=false;}
+        clearInterval(heartbeat);heartbeat=null;
+        if(media){var previous=media;media=null;try{previous.pause();previous.removeAttribute('src');previous.load();}catch(e){}}
+        legacyClear(player);var old=ticket;ticket='';if(old)call('stop',{ticket:old},function(){if(done)done();},true);else if(done)done();
+      }
+      function leavePlayer(){if(ticket||media||playing)stop();}
+      function line(parent,text){var p=document.createElement('p');compatText(p,text);parent.appendChild(p);}
+      function reset(){legacyClear(results);page=1;query='';}
+      function searchControls(){legacyClear(controls);
+        legacyButton(controls,'Connections',function(){feed='';connections();});
+        legacyButton(controls,'Live TV',function(){chooseKind('live');});
+        legacyButton(controls,'Movies',function(){chooseKind('vod');});
+        legacyButton(controls,'Series',function(){chooseKind('series');});
+        if(series||category)legacyButton(controls,series?'Back to series':'Categories',function(){if(series){series='';browse(1);}else categories();});
+      }
+      function connections(){leavePlayer();var request=++serial;reset();legacyClear(controls);say('Loading connections…');call('connections',{},function(error,data){if(request!==serial)return;if(error){say(error);legacyButton(results,'Retry',connections);return;}
+        var list=data.connections||[],i,available=0;for(i=0;i<list.length;i++)(function(row){if(row.enabled===false||row.enabled===0||row.enabled==='0')return;available++;legacyButton(results,row.name||'Connection',function(){feed=row.id;chooseKind('live');});})(list[i]);say(available?'Choose a connection.':'No enabled Xtream connections configured.');
+      });}
+      function chooseKind(value){kind=value;category='';series='';categories();}
+      function categories(){leavePlayer();var request=++serial;reset();category='';series='';searchControls();say('Loading categories…');call('categories',{feed:feed,kind:kind},function(error,data){if(request!==serial)return;if(error){say(error);legacyButton(results,'Retry',categories);return;}var rows=data.categories||[],i;legacyButton(results,'All titles',function(){category='';browse(1);});for(i=0;i<rows.length;i++)(function(row){legacyButton(results,row.name,function(){category=row.id;browse(1);});})(rows[i]);say('Choose a category.');});}
+      function browse(nextPage){leavePlayer();page=nextPage;var request=++serial;legacyClear(results);searchControls();say('Loading titles…');
+        var form=document.createElement('form'),input=document.createElement('input'),button=document.createElement('button');input.type='text';input.value=query;input.setAttribute('aria-label','Search titles');button.type='submit';compatText(button,'Search');form.appendChild(input);form.appendChild(button);controls.appendChild(form);
+        compatListen(form,'submit',function(e){remoteStop(e||window.event);query=input.value;browse(1);return false;});
+        call('browse',{feed:feed,kind:kind,category:category,series:series,q:query,page:page},function(error,data){if(request!==serial)return;if(error){say(error);legacyButton(results,'Retry',function(){browse(page);});return;}
+          var rows=data.items||[],i,ul=document.createElement('ul');ul.className='compat-list';results.appendChild(ul);
+          for(i=0;i<rows.length;i++)(function(row){var li=document.createElement('li');ul.appendChild(li);legacyButton(li,(row.season?'S'+row.season+' E'+row.episode+' · ':'')+row.name,function(){if(kind==='series'&&!series){series=row.id;query='';browse(1);}else play(row);});
+            if(kind==='live')legacyButton(li,'Guide',function(){call('guide',{feed:feed,kind:kind,id:row.id},function(err,d){if(err){say(err);return;}var old=li.getElementsByTagName('div');if(old.length)li.removeChild(old[0]);var box=document.createElement('div');li.appendChild(box);var programmes=d.programmes||[],p;for(p=0;p<programmes.length;p++)line(box,programmes[p].start+' · '+programmes[p].title);if(!programmes.length)line(box,'No programme details.');});});
+          })(rows[i]);
+          say(rows.length?'Page '+page+' · '+data.total+' titles':'No matching titles.');if(page>1)legacyButton(results,'Previous',function(){browse(page-1);});if(page*60<data.total)legacyButton(results,'Next',function(){browse(page+1);});
+        });
+      }
+      function play(row,format){if(playing||closed)return;playing=true;var generation=++playGeneration;
+        if(kind==='live'&&!format){var probe=document.createElement('video'),nativeHls=false;try{nativeHls=!!(probe.canPlayType('application/vnd.apple.mpegurl')||probe.canPlayType('application/x-mpegURL'));}catch(e){}format=nativeHls?'m3u8':'ts';}
+        var selected={feed:feed,kind:kind,category:category,series:series,id:row.id,client:client,sequence:++sequence};if(kind==='live')selected.format=format||'ts';say('Opening '+row.name+'…');
+        stop(function(){if(closed||generation!==playGeneration)return;call('play',selected,function(error,data){
+          var source=data&&data.source&&data.source.url,match=typeof source==='string'&&source.match(/[?&]ticket=([a-f0-9]{64})(?:&|$)/);
+          if(closed||generation!==playGeneration){if(match)call('stop',{ticket:match[1]},function(){},true);return;}
+          playing=false;if(error){say(error);legacyButton(player,'Retry playback',function(){play(row,format);});if(selected.kind==='live')legacyButton(player,format==='ts'?'Try HLS stream':'Try MPEG-TS stream',function(){play(row,format==='ts'?'m3u8':'ts');});return;}
+          if(!match||source.indexOf(base+'netplay/application/live/xtream_stream?')!==0){say('The provider did not return a valid stream.');return;}
+          ticket=match[1];var currentTicket=ticket;legacyClear(player);line(player,row.name);media=document.createElement('video');media.setAttribute('controls','controls');media.setAttribute('playsinline','playsinline');media.setAttribute('preload','none');media.src=source;player.appendChild(media);
+          var currentMedia=media;
+          compatListen(currentMedia,'error',function(){if(media!==currentMedia||ticket!==currentTicket)return;clearInterval(heartbeat);heartbeat=null;ticket='';call('stop',{ticket:currentTicket},function(){},true);say('This device could not play the stream. Try the alternate format or retry playback.');});
+          var link=document.createElement('a');link.href=source;link.className='compat-button';compatText(link,'Open stream directly');player.appendChild(link);
+          legacyButton(player,'Stop playback',function(){stop(function(){say('Playback stopped.');});});
+          if(selected.kind==='live')legacyButton(player,format==='ts'?'Try HLS stream':'Try MPEG-TS stream',function(){play(row,format==='ts'?'m3u8':'ts');});
+          if(data.nextEpisode)legacyButton(player,'Next episode',function(){play(data.nextEpisode);});
+          legacyButton(player,'Retry playback',function(){play(row,format);});
+          heartbeat=setInterval(function(){if(ticket===currentTicket)call('heartbeat',{ticket:currentTicket},function(err){if(err&&ticket===currentTicket){stop();say(err);}},true);},30000);
+          say('Press Play to watch.');try{var started=media.play();if(started&&started['catch'])started['catch'](function(){if(media===currentMedia&&ticket===currentTicket)say('Press Play in the player.');});}catch(e){}if(player.scrollIntoView)player.scrollIntoView(true);
+        },true);},true);
+      }
+      function closePlayer(){if(closed)return;closed=true;stop();}
+      compatListen(window,'pagehide',closePlayer);compatListen(window,'unload',closePlayer);compatListen(window,'pageshow',function(){if(closed){closed=false;connections();}});connections();
+    })();
+  }
+  var dropUpload=document.getElementById('compat-drop-upload');
+  if(dropUpload&&window.File&&window.Blob&&window.XMLHttpRequest&&window.JSON){
+    (function(){
+      var field=document.getElementById('compat-drop-file'),button=document.getElementById('compat-drop-send'),status=document.getElementById('compat-drop-status'),base=window.__VC_COMPAT_BASE__||'/';
+      if(!('files' in field))return;dropUpload.style.display='block';
+      compatListen(button,'click',function(){
+        var file=field.files&&field.files[0];if(!file){compatText(status,'Choose a file.');return;}
+        var slice=file.slice||file.webkitSlice||file.mozSlice;if(!slice){compatText(status,'This browser cannot upload file chunks.');return;}
+        button.disabled=true;compatText(status,'Preparing upload…');
+        legacyJson(base+'api/drop/upload','POST',{name:file.name,size:file.size,mime:file.type},function(error,data){
+          if(error){button.disabled=false;compatText(status,error);return;}
+          var id=data.id,offset=0,chunk=Number(data.chunk);if(!/^[a-f0-9]{32}$/.test(id)||!(chunk>0)){button.disabled=false;compatText(status,'Invalid upload response.');return;}
+          function next(){
+            if(offset>=file.size){compatText(status,'Upload complete.');window.location.reload();return;}
+            var end=Math.min(offset+chunk,file.size);compatText(status,'Uploading '+Math.floor(offset/file.size*100)+'%');
+            legacyJson(base+'api/drop/upload/'+id+'?offset='+offset,'POST',slice.call(file,offset,end),function(err,result){if(err||Number(result.received)!==end){button.disabled=false;compatText(status,err||'Upload interrupted. Remove the incomplete item before retrying.');return;}offset=end;next();},true);
+          }next();
+        },false);
+      });
+    })();
+  }
+
+  var debugReport=document.getElementById('compat-stalker-debug');
+  if(debugReport){try{var debugVideo=document.createElement('video'),debugCaps=['application/vnd.apple.mpegurl','video/mp2t','video/mp4; codecs="avc1.42E01E, mp4a.40.2"','video/mp4; codecs="hvc1"'],debugLines=['','Browser: '+navigator.userAgent],di;for(di=0;di<debugCaps.length;di++)debugLines[debugLines.length]=debugCaps[di]+': '+(debugVideo.canPlayType?debugVideo.canPlayType(debugCaps[di])||'not advertised':'unavailable');debugLines[debugLines.length]='MediaSource: '+!!(window.MediaSource||window.ManagedMediaSource);try{var previous=sessionStorage.getItem('vaultcast-stalker-media-error');if(previous)debugLines[debugLines.length]='Last Stalker media event: '+previous;}catch(ignore){}debugReport.value+=debugLines.join('\n');}catch(debugError){}}
   var config=window.__VC_COMPAT_PLAYER__,media=document.getElementById('compat-media');
   if(!config||!media){var openPlay=document.getElementById('compat-open-play');if(openPlay)openPlay.submit();return;}
   var message=document.getElementById('compat-player-message'),base=config.base||'/',alive=true,hls=null,roll=null,progressTimer=null,requests=[],resume=Number((config.progress||{}).position)||0,resumed=false,remux=false,loadingHls=false,recovered=false,tuning=false,hlsTimer=null,cinemaTimer=null,cinemaBusy=false,cinemaSending=false,cinemaLastPulse=0,cinemaPending=false,cinemaBuffering=false;
@@ -181,12 +524,12 @@
     if(!window.XMLHttpRequest||!window.JSON||!window.JSON.parse||(body!==null&&!window.JSON.stringify)){done('This browser cannot refresh the stream automatically. Use Retune or the channel playlist.');return;}
     var xhr,finished=false,timer;
     function finish(error,data){if(finished)return;finished=true;clearTimeout(timer);for(var i=requests.length-1;i>=0;i--)if(requests[i]===xhr)requests.splice(i,1);if(alive)done(error,data);}
-    try{xhr=new XMLHttpRequest();xhr.open(body===null?'GET':'POST',base+'api'+path,true);if(body!==null)xhr.setRequestHeader('Content-Type','application/json');requests.push(xhr);
+    try{xhr=new XMLHttpRequest();xhr.open(body===null?'GET':'POST',base+'api'+path,true);xhr.setRequestHeader('X-Vaultcast-Request','same-origin');if(body!==null)xhr.setRequestHeader('Content-Type','application/json');requests.push(xhr);
       xhr.onreadystatechange=function(){if(xhr.readyState!==4)return;var data={};if(xhr.status===204){finish(null,data);return;}try{data=window.JSON.parse(xhr.responseText);}catch(e){finish('The server returned an unreadable response.');return;}finish(xhr.status>=200&&xhr.status<300&&data.ok!==false?null:(data.error||'The stream request failed.'),data);};
       timer=setTimeout(function(){finish('The stream request timed out.');try{xhr.abort();}catch(e){}},20000);xhr.send(body===null?null:window.JSON.stringify(body));
     }catch(e){finish('This browser could not contact the server.');}
   }
-  function play(){try{var promise=media.play();if(promise&&promise['catch'])promise['catch'](function(){if(alive)say('Press Play in the player to begin.');});}catch(e){say('Use the direct stream link if this browser has no inline player.');}}
+  function play(){if(!alive||sourceChanging)return;if(config.live_source){sourceRequested=true;armSourceTimer();}if(config.hls&&!remux&&!nativeHls&&!hls){beginHls();return;}try{var promise=media.play();if(promise&&promise['catch'])promise['catch'](function(e){if(!alive)return;if(config.live_source&&e&&e.name==='NotAllowedError'){sourceRequested=false;clearSourceTimer();say('Press Play in the player to begin.');return;}if(config.live_source&&e&&e.name==='NotSupportedError'&&sourceFailure())return;say('Press Play in the player to begin.');});}catch(e){if(!sourceFailure())say('Use the direct stream link if this browser has no inline player.');}}
   function save(final){if(config.item_id&&config.save_progress&&resumed&&isFinite(media.duration)&&media.duration>0){var body={item_id:config.item_id,position:media.currentTime||0,duration:media.duration};if(final===true&&window.JSON&&window.JSON.stringify&&navigator.sendBeacon){try{if(navigator.sendBeacon(base+'api/progress',window.JSON.stringify(body)))return;}catch(e){}}json('/progress',body,function(){});}}
   function liveURL(url){var at=String(url||'').indexOf('api.php?action=');if(at>=0){var tail=url.slice(at+15),split=tail.indexOf('&');return base+'api/live/'+(split<0?tail:tail.slice(0,split)+'?'+tail.slice(split+1));}if(url&&url.charAt(0)!=='/'&&url.indexOf('http://')!==0&&url.indexOf('https://')!==0)return base+'live/'+url;return url;}
   function retune(){
@@ -197,20 +540,38 @@
       var remaining=Number(data.endUnix)-Number(data.serverNow||new Date().getTime());if(remaining>0)roll=setTimeout(retune,Math.min(remaining+1000,2147483647));
     });
   }
-  function hlsError(){say('This browser cannot play this HLS stream. Use Open stream directly in a compatible media player.');}
+  var nativeHls=false,sourceTimer=null,sourceChanging=false,sourceRequested=!!config.autoplay,sourcePlayed=false,sourceLastTime=0;
+  function clearSourceTimer(){clearTimeout(sourceTimer);sourceTimer=null;}
+  function sourceFailure(){
+    if(!alive||!config.live_source||!sourceRequested||sourceChanging)return false;
+    clearSourceTimer();
+    if(!config.fallback_url||typeof window.__VC_COMPAT_TRY_SOURCE__!=='function'){
+      say('This source failed. Automatic alternatives exhausted. Choose a source manually.');return true;
+    }
+    sourceChanging=true;say('Switching to '+(config.fallback_label||'the next source')+'…');
+    if(hls){try{hls.destroy();}catch(e){}hls=null;}
+    try{media.pause();media.removeAttribute('src');media.load();}catch(e){}
+    if(!window.__VC_COMPAT_TRY_SOURCE__(config.fallback_url)){sourceChanging=false;say('Choose another source manually.');}
+    return true;
+  }
+  function armSourceTimer(){
+    if(!config.live_source||!sourceRequested||sourceChanging||sourceTimer!==null)return;
+    sourceTimer=setTimeout(function(){sourceTimer=null;if(alive&&sourceRequested&&!sourceChanging&&(!sourcePlayed||!media.paused))sourceFailure();},30000);
+  }
+  function hlsError(){if(sourceFailure())return;say('This browser cannot play this HLS stream. Use Open stream directly in a compatible media player.');}
   function beginHls(){
-    if(!alive||loadingHls||hls)return;
+    if(!alive||loadingHls||hls||sourceChanging)return;
     if(!window.MediaSource&&!window.ManagedMediaSource){hlsError();return;}
     if(!window.Promise||!window.JSON){hlsError();return;}loadingHls=true;
     function ready(){
-      if(!alive||hls)return;clearTimeout(hlsTimer);loadingHls=false;
+      if(!alive||hls||sourceChanging||!loadingHls)return;clearTimeout(hlsTimer);loadingHls=false;
       try{if(!window.Hls||!window.Hls.isSupported()){hlsError();return;}hls=new window.Hls({enableWorker:false,lowLatencyMode:false,maxBufferLength:15,maxMaxBufferLength:30});
         hls.on(window.Hls.Events.MANIFEST_PARSED,play);hls.on(window.Hls.Events.ERROR,function(event,data){if(!alive||!data||!data.fatal)return;if(data.type===window.Hls.ErrorTypes.MEDIA_ERROR&&!recovered){recovered=true;hls.recoverMediaError();return;}hlsError();});hls.loadSource(config.url);hls.attachMedia(media);
       }catch(e){hlsError();}
     }
-    if(window.Hls){ready();return;}var script=document.createElement('script');script.src=config.hls_url;script.onload=ready;script.onreadystatechange=function(){if(script.readyState==='loaded'||script.readyState==='complete'){script.onreadystatechange=null;if(loadingHls)ready();}};script.onerror=function(){clearTimeout(hlsTimer);loadingHls=false;hlsError();};hlsTimer=setTimeout(function(){if(alive&&loadingHls)hlsError();},20000);document.getElementsByTagName('head')[0].appendChild(script);
+    if(window.Hls){ready();return;}var script=document.createElement('script');script.src=config.hls_url;script.onload=ready;script.onreadystatechange=function(){if(script.readyState==='loaded'||script.readyState==='complete'){script.onreadystatechange=null;if(loadingHls)ready();}};script.onerror=function(){clearTimeout(hlsTimer);loadingHls=false;hlsError();};hlsTimer=setTimeout(function(){if(alive&&loadingHls){loadingHls=false;hlsError();}},20000);document.getElementsByTagName('head')[0].appendChild(script);
   }
-  function cleanup(){if(!alive)return;clearInterval(progressTimer);clearTimeout(cinemaTimer);clearTimeout(roll);clearTimeout(hlsTimer);if(hls)try{hls.destroy();}catch(e){}var pending=requests;requests=[];for(var i=0;i<pending.length;i++)try{pending[i].abort();}catch(e){}save(true);alive=false;}
+  function cleanup(){if(!alive)return;clearSourceTimer();clearInterval(progressTimer);clearTimeout(cinemaTimer);clearTimeout(roll);clearTimeout(hlsTimer);if(hls)try{hls.destroy();}catch(e){}var pending=requests;requests=[];for(var i=0;i<pending.length;i++)try{pending[i].abort();}catch(e){}save(true);alive=false;}
   if(typeof media.play!=='function'||typeof media.canPlayType!=='function'){say('This browser has no usable inline player. Open the stream directly.');return;}
   // Older Tizen native fullscreen does not reliably expose :fullscreen.
   // Keep the crop on the video element so it carries into native fullscreen.
@@ -288,14 +649,29 @@
   if(nextPreference)listen(nextPreference,'change',function(){if(config.signed&&window.JSON&&window.XMLHttpRequest)json('/me/prefs',{autoplay_next:nextPreference.checked},function(error){if(error)say('Next-play setting changed for this video, but could not be saved to your account.');});});
   listen(media,'seeked',function(){resumed=true;});listen(media,'pause',save);
   listen(media,'ended',function(){
-    save(true);if(config.relay){retune();return;}
+    save(true);if(config.live_source&&sourceRequested&&sourceFailure())return;if(config.relay){retune();return;}
     var enabled=document.getElementById('compat-auto-next'),next=document.getElementById('compat-next-play');
     if(enabled&&enabled.checked&&next&&next.form){next.disabled=true;next.form.submit();}
   });
-  listen(media,'error',function(){if(config.hls&&!remux){beginHls();return;}say('The browser could not play this format. Try Open compatible stream when available, or use the direct stream link.');});
+  listen(media,'error',function(){
+    if(config.stalker_direct){try{sessionStorage.setItem('vaultcast-stalker-media-error','error '+(media.error?media.error.code:0)+'; networkState '+media.networkState+'; readyState '+media.readyState);}catch(ignore){}}
+    if(sourceChanging)return;
+    if(config.live_source&&media.error&&media.error.code===1)return;
+    if(config.hls&&!remux&&!hls&&!loadingHls){beginHls();return;}
+    if(sourceFailure())return;
+    say('The browser could not play this format. Try Open compatible stream when available, or use the direct stream link.');
+  });
+  if(config.live_source){
+    listen(media,'play',function(){sourceRequested=true;armSourceTimer();if(config.hls&&!hls&&!loadingHls&&media.error)beginHls();});
+    listen(media,'playing',function(){sourcePlayed=true;clearSourceTimer();if(config.stalker_direct){try{sessionStorage.setItem('vaultcast-stalker-media-error','playing; '+media.videoWidth+'x'+media.videoHeight);}catch(ignore){}}say('');});
+    listen(media,'timeupdate',function(){var at=Number(media.currentTime)||0;if(at>sourceLastTime){sourceLastTime=at;clearSourceTimer();}});
+    listen(media,'waiting',armSourceTimer);listen(media,'stalled',armSourceTimer);
+    listen(media,'pause',function(){if(!sourceChanging&&!media.ended&&!media.error){sourceRequested=false;clearSourceTimer();}});
+    if(sourceRequested)armSourceTimer();
+  }
   if(config.item_id&&config.save_progress&&window.JSON&&window.XMLHttpRequest)progressTimer=setInterval(save,20000);
   if(config.relay&&config.relay.end>new Date().getTime())roll=setTimeout(retune,Math.min(config.relay.end-new Date().getTime()+1000,2147483647));
-  if(config.hls){var nativeHls=false;try{nativeHls=!!(media.canPlayType('application/vnd.apple.mpegurl')||media.canPlayType('application/x-mpegURL'));}catch(e){}if(!nativeHls)beginHls();}
+  if(config.hls){try{nativeHls=!!(media.canPlayType('application/vnd.apple.mpegurl')||media.canPlayType('application/x-mpegURL'));}catch(e){}if(!nativeHls&&config.autoplay)beginHls();else if(config.live_source&&media.error&&sourceRequested)sourceFailure();}else if(config.live_source&&media.error&&sourceRequested)sourceFailure();
   var links=document.getElementsByTagName('a');for(var i=0;i<links.length;i++)if(links[i].getAttribute('data-compat-remux')){
     links[i].onclick=function(event){event=event||window.event;if(!config.remux_url)return true;save();resume=Number(media.currentTime)||resume||0;resumed=resume<5;remux=true;media.src=config.remux_url;play();if(event.preventDefault)event.preventDefault();event.returnValue=false;return false;};
   }

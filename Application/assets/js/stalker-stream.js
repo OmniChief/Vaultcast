@@ -134,8 +134,11 @@
         video.src = url; play();
       } else throw new Error('This browser cannot play HLS streams.');
     }
-    return fetch(url, { credentials: 'same-origin', cache: 'no-store', signal: controller.signal }).then(async function (response) {
-      if (response.url && new URL(response.url).origin === location.origin) url = response.url;
+    var direct = new URL(url, location.href).origin !== location.origin;
+    return fetch(url, { credentials: direct ? 'omit' : 'same-origin', referrerPolicy: 'no-referrer', cache: 'no-store', signal: controller.signal }).then(async function (response) {
+      // A provider CDN redirect changes the base for relative HLS segments.
+      // Only a direct request may adopt a cross-origin response URL.
+      if (response.url && (direct || new URL(response.url).origin === location.origin)) url = response.url;
       if (!response.ok) throw new Error('Provider stream request failed: HTTP ' + response.status + (response.headers.get('X-Vaultcast-Error-Origin') === 'provider' ? ' from provider.' : '.'));
       if (!response.body || !response.body.getReader) throw new Error('This browser does not support streaming responses.');
       reader = response.body.getReader();

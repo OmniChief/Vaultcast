@@ -21,18 +21,18 @@ trait CompatibilityLibraryFeatures {
     }
     private static function titleFeatures(array $card): string {
         $key=(self::isShow($card)?'show:':'item:').(self::isShow($card)?($card['show_key'] ?? $card['id']):$card['id']);
-        $html='<div class="compat-actions">'.self::link('Report a problem',['view'=>'report','id'=>$key]).self::link('Ratings and reviews',['view'=>'reviews','id'=>$key]);
+        $primary='';$html='<div class="compat-actions">'.self::link('Report a problem',['view'=>'report','id'=>$key]);if(self::socialAllowed())$html.=self::link('Ratings and reviews',['view'=>'reviews','id'=>$key]);
         if(!self::isShow($card) && ($card['media_kind'] ?? '')==='video'){
-            if(self::$signed)$html.=self::link('Watch together',['view'=>'cinema-create','id'=>'item:'.$card['id']]);
+            if(self::$signed&&self::socialAllowed())$primary.=self::link('Watch together',['view'=>'cinema-create','id'=>'item:'.$card['id']]);
             if(self::$signed && (Subtitles::uploadAllowed(self::$viewer) || (OpenSubtitles::configured()&&OpenSubtitles::allowed(self::$viewer))))$html.=self::link('Find / upload subtitles',['view'=>'subtitles','id'=>$card['id']]);
-            $html.=self::link('Request compatible copy',['view'=>'convert-request','id'=>$card['id']]);
+            $html.=self::link('Request compatible copy',['view'=>'convert-request','id'=>$card['id']]);if(self::offlineAvailable())$primary.=self::link('Download',['view'=>'offline','id'=>$card['id']]);
         }
         if(self::isShow($card)||in_array($card['media_kind']??'',['video','audio'],true))$html.=self::link('Copy VLC link',['view'=>'vlc-link','id'=>$key]);
-        if(self::$signed)$html.=self::link('Add to a custom list',['view'=>'choose-list','id'=>$key]);
+        if(self::$signed)$primary.=self::link('Add to list',['view'=>'choose-list','id'=>$key]);
         if(Permissions::allowed(self::$viewer,'fix_match'))$html.=self::link('Fix match',['view'=>'match','id'=>$key]);
         if(Permissions::allowed(self::$viewer,'metadata_edit'))$html.=self::link('Edit details / poster',['view'=>'metadata','id'=>$key]);
         if((self::$viewer['role'] ?? '')==='admin')$html.=self::link('Remove from library',['view'=>'remove-library','id'=>$key]);
-        return $html.'</div>';
+        return ($primary!==''?'<div class="compat-actions compat-title-secondary">'.$primary.'</div>':'').self::disclosure('compat-title-more','More title options',$html.'</div>');
     }
     private static function watchedControl(array $item): string {
         if(!self::$signed || ($item['media_kind'] ?? '')!=='video')return '';

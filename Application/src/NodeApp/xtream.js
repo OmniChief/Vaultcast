@@ -223,7 +223,9 @@ async function catalogue(root, feed, input, action, viewer, signal, base) {
   const row = rows[index];
   if (!row) throw fail(422, 'Title no longer available. Refresh the library.');
   const selected = item(row, kind);
-  const ext = kind === 'live' ? 'm3u8' : String(row.container_extension ?? 'mp4');
+  // Older TVs may support the provider's native MPEG-TS output but not HLS.
+  // Retain HLS as the full-interface default and only accept these two live formats.
+  const ext = kind === 'live' ? (input.format === 'ts' ? 'ts' : 'm3u8') : String(row.container_extension ?? 'mp4');
   if (!/^\d+$/.test(selected.id) || !/^[a-z0-9]{1,8}$/i.test(ext)) throw fail(502, 'Provider returned an invalid stream ID or format.');
   const { client } = input, sequence = Number(input.sequence);
   if (typeof client !== 'string' || !/^[\w-]{16,80}$/.test(client) || !Number.isSafeInteger(sequence) || sequence < 1) throw fail(422, 'Reload Xtream Codes before playing.');
@@ -249,7 +251,10 @@ async function stream(root, base, ticket, state, request, response, controller) 
   const current = () => xtreamCurrent(base, session);
   const stopped = () => fail(409, 'Playback was stopped or replaced.');
   if (!await current()) throw stopped();
-  if (request.method === 'HEAD') return response.type(/\.m3u8$/i.test(mediaUrl(target).pathname) ? 'application/vnd.apple.mpegurl' : 'application/octet-stream').end();
+  if (request.method === 'HEAD') {
+    const pathname = mediaUrl(target).pathname;
+    return response.type(/\.m3u8$/i.test(pathname) ? 'application/vnd.apple.mpegurl' : /\.(?:ts|m2ts|mts)$/i.test(pathname) ? 'video/mp2t' : 'application/octet-stream').end();
+  }
   const range = request.headers.range;
   if (range && !/^bytes=(?:\d+-\d*|-\d+)$/.test(range)) throw fail(416, 'Invalid byte range.');
   const lock = await open(base + '.transfer', 'a', 0o600);
@@ -291,7 +296,7 @@ async function stream(root, base, ticket, state, request, response, controller) 
       size += value.length;
       const prefix = Buffer.concat(chunks, size).subarray(0, 1024).toString().trimStart();
       if (prefix.startsWith('#EXTM3U')) isList = true;
-      else if (prefix && !'#EXTM3U'.startsWith(prefix)) break;
+      else if (prefix && !'#EXTM3U'.startsWith(prefix) && (size >= 377 || /^(?:video|audio)\//i.test(type))) break;
     }
     response.set('X-Accel-Buffering', 'no');
     if (isList) {
@@ -305,7 +310,9 @@ async function stream(root, base, ticket, state, request, response, controller) 
       return response.type('application/vnd.apple.mpegurl').send(playlist(Buffer.concat(chunks, size).toString(), result.url,
         { ticket }, sha(session), ticket));
     }
-    response.status(res.statusCode).type(/^(?:video|audio)\//i.test(type) ? type : 'application/octet-stream');
+    const sample = Buffer.concat(chunks, size).subarray(0, 377);
+    const ts = sample.length >= 377 && sample[0] === 0x47 && sample[188] === 0x47 && sample[376] === 0x47;
+    response.status(res.statusCode).type(ts ? 'video/mp2t' : /^(?:video|audio)\//i.test(type) ? type : 'application/octet-stream');
     for (const header of ['content-length', 'accept-ranges', 'content-range']) {
       if (res.headers[header] && !decoder) response.set(header, res.headers[header]);
     }

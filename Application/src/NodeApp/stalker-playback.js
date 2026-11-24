@@ -21,6 +21,7 @@ const {
 } = require('./stalker-provider');
 
 const { playlist, resourceUrl } = require('./provider-playlist');
+const { nativeHls } = require('./stalker-native-hls');
 
 const legacyResourceSecret = randomBytes(32);
 const playbackPath = '/netplay/application/live/stalker_stream';
@@ -68,7 +69,7 @@ async function resolve(client, kind, id, item) {
   if (!item?.cmd)
     throw problem(422, 'This entry is unavailable. Refresh the provider catalogue and select it again.');
   if (kind !== 'live') return { url: await client.resolve(id, item), linkMode: 'create_link' };
-  const extract = (cmd) => /(?:^|\s)(https?:\/\/[^\s]+)/i.exec(cmd)?.[1];
+  const extract = (cmd) => /(?:^|[\s"'])(https?:\/\/[^\s"'<>]+)/i.exec(cmd)?.[1];
   const direct = extract(item.cmd);
   if (direct && item.use_http_tmp_link === false && item.use_load_balancing === false) {
     let url;
@@ -85,19 +86,29 @@ async function resolve(client, kind, id, item) {
     }
   }
   const params = { cmd: item.cmd, forced_storage: 'undefined', disable_ad: 0 };
-  let link = (await client.call('itv', 'create_link', { ...params, series: '', download: 0 })).cmd;
+  const fromReply = reply => extract(String(reply?.cmd ?? '')) || extract(String(reply?.url ?? ''));
+  let link = fromReply(await client.call('itv', 'create_link', { ...params, series: '', download: 0 }));
   if (!link) {
     await client.session(true);
-    link = (await client.call('itv', 'create_link', params)).cmd;
+    link = fromReply(await client.call('itv', 'create_link', params));
   }
-  const url = mediaUrl(extract(link));
+  if (!link) throw problem(422, 'The provider did not return a playable live link.');
+  const url = mediaUrl(link);
   await publicAddresses(url);
   return { url: url.href, linkMode: 'create_link' };
 }
 
-async function issue(root, feed, id, kind, item, viewer, signal, compatibility = false) {
+async function issue(root, feed, id, kind, item, viewer, signal, compatibility = false, sessionHash, delivery = 'relay') {
   const client = await provider(root, feed, signal);
-  const { url } = await resolve(client, kind, id, item);
+  const { url, linkMode } = await resolve(client, kind, id, item);
+  if (delivery === 'direct') {
+    // Only the authorized viewer receives the resolved URL; there is no
+    // upstream media request, probe, redirect relay, or transcoding here.
+    const pathname = new URL(url).pathname;
+    const format = /\.m3u8$/i.test(pathname) ? 'hls' : /\.(?:ts|m2ts|mts|mpegts)$/i.test(pathname) ? 'mpegts'
+      : /\.(?:mp4|m4v|webm|mkv)$/i.test(pathname) ? 'file' : 'unknown';
+    return { ok: true, source: { kind, url, delivery: 'direct', format, linkMode } };
+  }
   const ticket = randomBytes(16).toString('hex');
   const state = {
     viewer: String(viewer),
@@ -109,17 +120,29 @@ async function issue(root, feed, id, kind, item, viewer, signal, compatibility =
     created: now(),
     item,
     childKey: randomBytes(32).toString('hex'),
+    ...(compatibility && /^[a-f0-9]{64}$/.test(sessionHash ?? '') ? { compatibilitySession: sessionHash } : {}),
   };
   await cache(root, ticketKey(ticket), state, lifetime);
   const query = new URLSearchParams({ feed: feed.id, channel: id, ticket });
   const pathname = new URL(url).pathname;
-  const hls = kind === 'live'
-    ? !compatibility || /\.m3u8$/i.test(pathname)
-    : /\.m3u8$/i.test(pathname);
+  const nativeLive = compatibility && kind === 'live';
+  const hls = kind === 'live' ? !nativeLive : /\.m3u8$/i.test(pathname);
   if (hls) query.set('format', '.m3u8');
+  else if (compatibility && kind === 'live') query.set('format', '.ts');
+  else if (compatibility && /\.(?:mp4|m4v|webm|mkv|ts|m2ts|mts)$/i.test(pathname))
+    query.set('format', /\.[a-z0-9]+$/i.exec(pathname)[0].toLowerCase());
   const transport = kind !== 'live' && /\.(?:ts|m2ts|mts|mpegts)$/i.test(pathname)
     ? 'mpegts' : undefined;
-  return { ok: true, source: { kind, url: playbackPath + '?' + query, ...(transport ? { transport } : {}) } };
+  return { ok: true, source: { kind, url: playbackPath + (nativeLive ? '/tv.ts' : '') + '?' + query, delivery: 'relay', ...(transport ? { transport } : {}) } };
+}
+
+async function compatibilitySession(root, { ticket, feed, channel }) {
+  if (typeof ticket !== 'string' || !/^[a-f0-9]{32}$/.test(ticket) ||
+      typeof feed !== 'string' || typeof channel !== 'string') return null;
+  const state = await cached(root, ticketKey(ticket));
+  if (!state || state.feed !== feed || state.id !== channel ||
+      !/^[a-f0-9]{64}$/.test(state.compatibilitySession ?? '') || typeof state.viewer !== 'string') return null;
+  return { sessionHash: state.compatibilitySession, viewer: state.viewer };
 }
 
 async function authorizedTicket(root, feed, id, ticket, viewer) {
@@ -195,7 +218,7 @@ async function probe(root, feed, id, item, signal) {
 const browserAgent =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 async function checkMedia(root, feed, id, kind, item, profile, signal) {
-  if (!(kind === 'live' ? ['stb', 'http1', 'vlc', 'browser'] : ['stb', 'browser']).includes(profile))
+  if (!(kind === 'live' ? ['stb', 'http1', 'vlc', 'browser', 'direct'] : ['stb', 'browser', 'direct']).includes(profile))
     throw problem(422, 'Unknown playback check profile.');
   const client = await provider(root, feed, signal);
   const { url, linkMode } = await resolve(client, kind, id, item);
@@ -203,8 +226,9 @@ async function checkMedia(root, feed, id, kind, item, profile, signal) {
   const options = {
     accept: 'video/*, application/vnd.apple.mpegurl, application/x-mpegURL, */*;q=0.8',
     userAgent:
-      profile === 'browser' ? browserAgent : profile === 'vlc' ? 'VLC/3.0.21 LibVLC/3.0.21' : undefined,
-    referer: ['browser', 'vlc'].includes(profile) ? '' : undefined,
+      ['browser','direct'].includes(profile) ? browserAgent : profile === 'vlc' ? 'VLC/3.0.21 LibVLC/3.0.21' : undefined,
+    referer: ['browser', 'vlc', 'direct'].includes(profile) ? '' : undefined,
+    withoutCookies: profile === 'direct',
     range: profile === 'browser' ? 'bytes=0-8191' : undefined,
   };
   let result = await follow(client, url, { ...options, signal: AbortSignal.timeout(15000) }, 4);
@@ -223,6 +247,7 @@ async function checkMedia(root, feed, id, kind, item, profile, signal) {
   }
   const { res } = result,
     chunks = [];
+  const probeStarted = Date.now();
   let received = 0,
     failed = false;
   try {
@@ -262,9 +287,20 @@ async function checkMedia(root, feed, id, kind, item, profile, signal) {
     linkMode,
     temporaryLink: item.use_http_tmp_link ?? null,
     loadBalancing: item.use_load_balancing ?? null,
-    type,
+    type: /^[a-z0-9.+-]+\/[a-z0-9.+-]+$/i.test(type) ? type : 'unknown',
     format,
     redirects: result.hops,
+    rawHttp: res.statusCode,
+    sampleMs: Date.now() - probeStarted,
+    cookiesSent: profile !== 'direct' ? 'provider session if required' : 'none',
+    cookieRequiredUnknown: true,
+    cors: res.headers['access-control-allow-origin'] === '*' ? 'wildcard' : res.headers['access-control-allow-origin'] ? 'origin-specific' : 'not advertised',
+    setsCookie: Boolean(res.headers['set-cookie']?.length),
+    acceptRanges: res.headers['accept-ranges'] === 'bytes',
+    contentLength: /^\d{1,16}$/.test(String(res.headers['content-length'] ?? '')) ? Number(res.headers['content-length']) : null,
+    endpoint: /\/portal\.php$/i.test(new URL(client.endpoint).pathname) ? 'portal.php' : 'server/load.php',
+    hlsEncrypted: format === 'HLS playlist' ? /#EXT-X-(?:SESSION-)?KEY:(?![^\r\n]*METHOD=NONE)/i.test(data.toString()) : null,
+    hlsFragmentedMp4: format === 'HLS playlist' ? /#EXT-X-MAP:/i.test(data.toString()) : null,
     https: result.url.protocol === 'https:',
     samePortalHost: result.url.hostname === new URL(client.endpoint).hostname,
     cloudflare: /cloudflare/i.test(data.toString()),
@@ -287,6 +323,15 @@ async function serve(root, feed, state, request, response) {
   let res, decoder;
   try {
     const target = resource == null ? null : resourceUrl(resource, state.childKey, playback);
+    // A native player's preliminary HEAD must not consume a one-use live
+    // provider URL. Validate the ticket first, then answer locally.
+    const nativeLive = Boolean(state.compatibilitySession) && state.kind === 'live' && target == null;
+    const nativeTransport = nativeLive && request.path.endsWith('/tv.ts');
+    if (nativeLive && request.method === 'HEAD') {
+      const path = new URL(state.url).pathname;
+      return response.set('Cache-Control','private, no-store')
+        .type(!nativeTransport && /\.m3u8$/i.test(path) ? 'application/vnd.apple.mpegurl' : 'video/mp2t').end();
+    }
     const session = await playbackSession(root, feed, state, playback, controller.signal);
     if (!/^st[0-9a-f]{32}$/.test(session.jar)) throw problem(403, 'Invalid playback session.');
     const jar = join(tmpdir(), 'iptv_hls_cj', session.jar + '.jar');
@@ -299,7 +344,7 @@ async function serve(root, feed, state, request, response) {
         .catch(() => {})
         .then(async () => {
           client.cookies = [];
-          await client.loadCookies();
+          await client.loadJar();
           await client.acceptCookies(url, headers);
         })
         .finally(() => {
@@ -310,27 +355,30 @@ async function serve(root, feed, state, request, response) {
     };
     const range = request.headers.range;
     if (range && !/^bytes=(?:\d+-\d*|-\d+)$/.test(range)) throw problem(416, 'Invalid byte range.');
-    const options = { method: request.method, range, signal: controller.signal };
+    // Live transport streams are not seekable. Some TVs send a byte-zero
+    // range on first open; do not pass that probe to the live provider.
+    const upstreamRange = nativeLive && /^bytes=0-/.test(range ?? '') ? undefined : range;
+    const options = { method: request.method, range: upstreamRange, ifRange: upstreamRange ? request.headers['if-range'] : undefined, signal: controller.signal };
     let mediaOptions = options;
     let result = await follow(client, target ?? session.url, mediaOptions);
     res = result.res;
     const mp4 = () => /^video\/mp4\b/i.test(res.headers['content-type'] ?? '');
     const retry =
       range &&
-      ((res.statusCode === 400 && mp4()) ||
+      ((res.statusCode === 400 && mp4() && /^bytes=0-/.test(range)) ||
         (state.kind !== 'live' &&
           [456, 458].includes(res.statusCode) &&
           /^bytes=0-/.test(range)));
     if (retry) {
       res.destroy();
-      mediaOptions = { ...options, range: undefined };
+      mediaOptions = { ...options, range: undefined, ifRange: undefined };
       result = await follow(client, target ?? session.url, mediaOptions);
       res = result.res;
     }
     // Stalker VOD links can be one-use or expire before the browser opens them.
     // Recover one rejected root request with a fresh device session/create_link;
     // do not re-resolve HLS segments or repeatedly hammer a rejecting portal.
-    if (state.kind !== 'live' && target == null && [456, 458].includes(res.statusCode) &&
+    if ((state.kind !== 'live' || nativeLive) && target == null && [456, 458].includes(res.statusCode) &&
         now() - Number(session.refreshedAt ?? 0) >= 60) {
       const denied = res.statusCode;
       session.refreshedAt = now();
@@ -387,15 +435,17 @@ async function serve(root, feed, state, request, response) {
           isList = true;
           break;
         }
-        if (prefix && !'#EXTM3U'.startsWith(prefix)) break;
+        if (prefix && !'#EXTM3U'.startsWith(prefix) && (size >= 377 || /^(?:video|audio)\//i.test(res.headers['content-type'] ?? ''))) break;
       }
       if (maybeMp4 && (size < 8 || Buffer.concat(chunks, size).toString('ascii', 4, 8) !== 'ftyp'))
         throw problem(400, 'Provider refused the media request.');
     }
     const type = String(res.headers['content-type'] ?? '').split(';')[0];
-    const sample = Buffer.concat(chunks, size).subarray(0, 64);
+    const sample = Buffer.concat(chunks, size).subarray(0, 377);
     const isMp4 = sample.length >= 8 && sample.toString('ascii', 4, 8) === 'ftyp';
-    const mediaType = isMp4 && !/^video\//i.test(type) ? 'video/mp4' : type;
+    const isTs = sample.length >= 377 && sample[0] === 0x47 && sample[188] === 0x47 && sample[376] === 0x47;
+    const mediaType = isTs ? 'video/mp2t' : isMp4 && !/^video\//i.test(type) ? 'video/mp4'
+      : request.method === 'HEAD' && !/^(?:video|audio)\//i.test(type) && /\.(?:ts|m2ts|mts)$/i.test(result.url.pathname) ? 'video/mp2t' : type;
     response.set({
       'Cache-Control': 'private, no-store',
       'X-Accel-Buffering': 'no',
@@ -416,16 +466,23 @@ async function serve(root, feed, state, request, response) {
         if (size > 5000000) throw problem(502, 'Provider playlist exceeds the size limit.');
         chunks.push(value);
       }
+      const body = Buffer.concat(chunks, size).toString();
+      if (nativeTransport) {
+        // No codec conversion. The TV receives one progressive MPEG-TS response
+        // from the existing provider relay, rather than an HLS manifest.
+        res.destroy(); decoder?.destroy(); decoder = null;
+        response.type('video/mp2t').set('Accept-Ranges', 'none');
+        return await nativeHls(body, result.url, response, controller.signal,
+          (url) => follow(client, url, { method: 'GET', signal: controller.signal }));
+      }
       const params = { feed: feed.id, channel: state.id, ticket, playback };
-      return response.end(
-        playlist(Buffer.concat(chunks, size).toString(), result.url, params, state.childKey, playback),
-      );
+      return response.end(playlist(body, result.url, params, state.childKey, playback));
     }
     response.status(maybeMp4 ? 200 : res.statusCode);
-    for (const key of ['content-range', 'content-length', 'accept-ranges']) {
+    for (const key of ['content-range', 'content-length', 'accept-ranges', 'etag', 'last-modified']) {
       if (
         res.headers[key] &&
-        !(key === 'content-length' && encoding !== 'identity') &&
+        !(key === 'content-length' && encoding !== 'identity' && request.method !== 'HEAD') &&
         !(key === 'content-range' && maybeMp4)
       )
         response.set(key, res.headers[key]);
@@ -448,4 +505,4 @@ async function serve(root, feed, state, request, response) {
   }
 }
 
-module.exports = { entry, issue, serve, checkMedia, probe, authorizedTicket };
+module.exports = { entry, issue, serve, checkMedia, probe, authorizedTicket, compatibilitySession };

@@ -19,7 +19,7 @@ trait CompatibilityEnhancements {
         $motion=$prefs['motion_mode']??(in_array($prefs['reduce_motion']??false,[true,1,'1','true'],true)?'reduced':'system');
         $html.=self::select('Theme motion','motion_mode',['system'=>'Follow device','full'=>'Full animation','reduced'=>'Reduced motion'],(string)$motion).'<p class="compat-note">Decorative animation stays off in compatibility mode. This choice applies to the full interface.</p>';
         $html.=self::select('Preferred subtitles','subtitle_language',[''=>'Off','en'=>'English','es'=>'Spanish','fr'=>'French','de'=>'German','it'=>'Italian','pt'=>'Portuguese','ja'=>'Japanese','ko'=>'Korean','zh'=>'Chinese'],(string)($prefs['subtitle_language'] ?? '')).'<button type="submit">Save account settings</button></form>';
-        return $html.self::link('Tools and settings',['view'=>'tools']).self::accountOptions().self::link('Friends',['view'=>'friends']).self::link('Inbox',['view'=>'inbox']).self::link('Live chat',['view'=>'chat']).self::form([],'Sign out','logout');
+        return $html.self::link('Tools and settings',['view'=>'tools']).self::link('Parental controls',['view'=>'parental']).self::accountOptions().(self::socialAllowed()?self::link('Friends',['view'=>'friends']).self::link('Inbox',['view'=>'inbox']).self::link('Live chat',['view'=>'chat']):'').self::form([],'Sign out','logout');
     }
     private static function uploaded(string $name,int $limit): ?array {
         $file=$_FILES[$name] ?? null;if(!$file || ($file['error'] ?? UPLOAD_ERR_NO_FILE)===UPLOAD_ERR_NO_FILE)return null;
@@ -27,6 +27,7 @@ trait CompatibilityEnhancements {
     }
     private static function enhancedPost(string $view,array $body): array {
         $action=(string)($body['compat_action'] ?? '');$user=self::$viewer;$id=(string)($_GET['id'] ?? '');
+        $extra=self::extraPost($view,$body);if($extra!==null)return $extra;
         $play=self::playPost($body);if($play!==null)return $play;
         $viewing=self::viewingPost($view,$body);if($viewing!==null)return $viewing;
         $admin=self::administrationPost($view,$body);if($admin!==null)return $admin;
@@ -101,7 +102,13 @@ trait CompatibilityEnhancements {
         $letter=strtoupper((string)($_GET['letter'] ?? ''));if(!preg_match('/^[A-Z#]$/D',$letter))$letter='';$sort=(string)($_GET['sort'] ?? 'az');if(!in_array($sort,['az','za','newest','oldest'],true))$sort='az';
         $params=['view'=>'section','id'=>$id,'q'=>$query,'genre'=>$genre,'year'=>$year,'letter'=>$letter,'sort'=>$sort];$pack=$shows?Catalogue::browseCacheGet('facets_shows',$id):Catalogue::browseCacheGet('facets_movies',$id);$facets=$pack['facets'] ?? [];$genres=[''=>'All genres'];foreach(array_keys($facets['genres'] ?? []) as $name)$genres[(string)$name]=(string)$name;if($genre!=='')$genres[$genre]=$genre;
         if($shows && count($genres)===1)foreach(['Action','Adventure','Animation','Comedy','Crime','Drama','Fantasy','Horror','Mystery','Romance','Science-Fiction','Thriller'] as $name)$genres[$name]=$name;
-        $html=self::heading('LIBRARY',(string)($section['label'] ?? $section['type']));$html.='<form class="compat-panel compat-filters" method="get" action="'.self::esc(self::$base).'"><input type="hidden" name="compat" value="on"><input type="hidden" name="view" value="section"><input type="hidden" name="id" value="'.self::esc($id).'">'.self::field('Search','q',$query,'text',200).self::select('Genre','genre',$genres,$genre).self::field('Year','year',$year,'text',4).self::select('Sort','sort',['az'=>'Title A–Z','za'=>'Title Z–A','newest'=>'Newest year','oldest'=>'Oldest year'],$sort).'<button type="submit">Apply filters</button>'.self::link('Clear',['view'=>'section','id'=>$id]).'</form><div class="compat-alphabet">';
+        $html=self::heading('LIBRARY',(string)($section['label'] ?? $section['type']));
+        $html.='<div class="compat-browse-toolbar">'.self::searchForm(['view'=>'section','id'=>$id,'genre'=>$genre,'year'=>$year,'letter'=>$letter,'sort'=>$sort],$query);
+        $filters='<form class="compat-panel compat-filters" method="get" action="'.self::esc(self::$base).'"><input type="hidden" name="compat" value="on"><input type="hidden" name="view" value="section"><input type="hidden" name="id" value="'.self::esc($id).'"><input type="hidden" name="q" value="'.self::esc($query).'"><input type="hidden" name="letter" value="'.self::esc($letter).'">'.self::select('Genre','genre',$genres,$genre).self::field('Year','year',$year,'text',4).self::select('Sort','sort',['az'=>'Title A–Z','za'=>'Title Z–A','newest'=>'Newest year','oldest'=>'Oldest year'],$sort).'<button type="submit">Apply filters</button></form>';
+        $activeFilters=array_values(array_filter([$genre,$year,$sort!=='az'?$sort:'']));
+        $html.=self::disclosure('compat-library-filters','Filters & sort'.($activeFilters?' ('.count($activeFilters).')':''),$filters);
+        if($query!==''||$genre!==''||$year!==''||$letter!==''||$sort!=='az')$html.=self::link('Clear all',['view'=>'section','id'=>$id]);
+        $html.='</div><div class="compat-alphabet">';
         foreach(array_merge([''=>'All','#'=>'#'],array_combine(range('A','Z'),range('A','Z'))) as $key=>$label)$html.='<a'.($letter===(string)$key?' class="active" aria-current="true"':'').' href="'.self::esc(self::url(['letter'=>$key,'page'=>1]+$params)).'">'.$label.'</a>';$html.='</div>';
         if($shows && !BrowseIndex::ready()){
             $rows=array_values(array_filter(BrowseIndex::shows($id),static function($row)use($query,$genre,$year,$letter){$title=(string)$row['title'];return ($query===''||mb_stripos($title,$query)!==false)&&($year===''||(int)($row['year'] ?? 0)===(int)$year)&&($genre===''||in_array($genre,$row['genres'] ?? [],true))&&($letter===''||($letter==='#'?!preg_match('/^[a-z]/i',$title):mb_strtoupper(mb_substr($title,0,1))===$letter));}));

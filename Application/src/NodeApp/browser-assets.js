@@ -2,7 +2,7 @@
 
 const { createHash } = require('crypto');
 const { constants } = require('fs');
-const { open, readFile, realpath } = require('fs').promises;
+const { open, readFile, readdir, realpath, stat } = require('fs').promises;
 const { extname, join, relative, isAbsolute, sep } = require('path');
 const { pipeline } = require('stream/promises');
 const { documents, enabled } = require('./account-data');
@@ -42,18 +42,56 @@ function shellConfig(settings, installed, base) {
 }
 
 function mountBrowserAssets(app, prefix, { root, handle, unavailable }) {
-  const shell = readFile(join(root, 'src/Views/app.html'), 'utf8').catch(() => null);
-  const version = readFile(join(root, 'VERSION'), 'utf8').then(value => value.trim()).catch(() => '');
+  const channelPath = join(root, 'data/updates/channel.json');
+  let cachedShell;
+  async function readShell(revision) {
+    const [template, version] = await Promise.all([
+      readFile(join(root, 'src/Views/app.html'), 'utf8'),
+      readFile(join(root, 'VERSION'), 'utf8'),
+    ]);
+    const build = version.trim();
+    const hash = createHash('sha256').update(build).update('\0');
+    if (revision) hash.update(revision);
+    else {
+      // A fresh installation can serve a shell before its first updater run.
+      for (const directory of ['js', 'css']) {
+        const base = join(root, 'assets', directory);
+        for (const name of (await readdir(base)).sort()) {
+          if (!name.endsWith('.' + directory)) continue;
+          const info = await stat(join(base, name));
+          hash.update(JSON.stringify([directory, name, info.size, info.mtimeMs, info.ctimeMs]));
+        }
+      }
+    }
+    return { template, build, cacheKey: hash.digest('hex').slice(0, 16) };
+  }
+  async function installedShell() {
+    let revision = '';
+    try {
+      const state = JSON.parse(await readFile(channelPath, 'utf8'));
+      revision = [state?.commit, state?.tree].find(value => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value)) || '';
+    } catch (error) {
+      if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
+    }
+    if (cachedShell?.revision === revision) return cachedShell.promise;
+    const entry = { revision };
+    entry.promise = readShell(revision).catch(error => {
+      if (cachedShell === entry) cachedShell = undefined;
+      throw error;
+    });
+    cachedShell = entry;
+    return entry.promise;
+  }
   app.get([prefix + '/shell', '/watch/*'], handle(async (_request, response, pool, _bcrypt, settings, current) => {
-    const [template, build] = await Promise.all([shell, version]);
-    if (!template || !/^\d+\.\d+\.\d+$/.test(build)) return unavailable(response);
+    const shell = await installedShell().catch(() => null);
+    if (!shell || !/^\d+\.\d+\.\d+$/.test(shell.build)) return unavailable(response);
+    const { template, build, cacheKey } = shell;
     const { [installation]: installed } = await documents(pool, [installation]);
     const config = shellConfig(settings, installed, response.locals.base);
     if (response.locals.directHttp) config.__VAULTCAST_STANDALONE__ = true;
     config.__VAULTCAST_VIEWER__ = _request.path.startsWith('/watch/');
     if (!current.user && !response.locals.directHttp && _request.path === prefix + '/shell' && settings.auth?.lan_guest_access !== false) return response.sendStatus(404);
     if (!current.user) config.__STREAM_STARTUP__ = { me: { ok: true, authenticated: false, user: null, guest_browsing: false } };
-    const cacheKey = createHash('sha256').update(build).digest('hex').slice(0, 16);
     for (const key of ['stalkerVod', 'stalkerCountries', 'stalkerStream', 'mpegts', 'stalkerAc3', 'stalkerAc3Worker']) {
       config.VaultcastDependencies[key] += '?v=' + cacheKey;
     }
@@ -68,6 +106,7 @@ function mountBrowserAssets(app, prefix, { root, handle, unavailable }) {
     };
     const html = template.replace(/{{[A-Z_]+}}|<!-- VAULTCAST_(?:CONFIG|PAGE) -->/g, token => fields[token] ?? token);
     return response.set({
+      'Cache-Control': 'private, no-store',
       'X-Frame-Options': 'SAMEORIGIN',
       'Referrer-Policy': 'same-origin',
     }).type('html').send(html);

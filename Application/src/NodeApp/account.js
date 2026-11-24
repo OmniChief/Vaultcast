@@ -45,6 +45,9 @@ async function session(pool, request, includeUser, delegatedHash) {
     user: includeUser && entry?.id ? parse(entry.user_payload) : null,
     browserToken: includeUser && !delegatedHash ? browserToken(request) : '',
     delegatedHash,
+    // Internal identity only; never part of a public response. The native TV
+    // media engine may not send the browser cookie on its playback requests.
+    sessionHash: includeUser && entry ? (delegatedHash ?? sha(token)) : undefined,
   };
 }
 
