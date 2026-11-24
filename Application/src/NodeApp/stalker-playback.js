@@ -387,15 +387,17 @@ async function serve(root, feed, state, request, response) {
           isList = true;
           break;
         }
-        if (prefix && !'#EXTM3U'.startsWith(prefix)) break;
+        if (prefix && !'#EXTM3U'.startsWith(prefix) && (size >= 377 || /^(?:video|audio)\//i.test(res.headers['content-type'] ?? ''))) break;
       }
       if (maybeMp4 && (size < 8 || Buffer.concat(chunks, size).toString('ascii', 4, 8) !== 'ftyp'))
         throw problem(400, 'Provider refused the media request.');
     }
     const type = String(res.headers['content-type'] ?? '').split(';')[0];
-    const sample = Buffer.concat(chunks, size).subarray(0, 64);
+    const sample = Buffer.concat(chunks, size).subarray(0, 377);
     const isMp4 = sample.length >= 8 && sample.toString('ascii', 4, 8) === 'ftyp';
-    const mediaType = isMp4 && !/^video\//i.test(type) ? 'video/mp4' : type;
+    const isTs = sample.length >= 377 && sample[0] === 0x47 && sample[188] === 0x47 && sample[376] === 0x47;
+    const mediaType = isTs ? 'video/mp2t' : isMp4 && !/^video\//i.test(type) ? 'video/mp4'
+      : request.method === 'HEAD' && !/^(?:video|audio)\//i.test(type) && /\.(?:ts|m2ts|mts)$/i.test(result.url.pathname) ? 'video/mp2t' : type;
     response.set({
       'Cache-Control': 'private, no-store',
       'X-Accel-Buffering': 'no',
