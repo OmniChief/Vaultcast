@@ -123,6 +123,49 @@ final class CompatibilityBrowser {
             return ['view'=>'requests','tab'=>$tab];
         }
         $tab=(string)($_GET['tab'] ?? 'calendar');
+        if(strpos($action,'extra-board-')===0){
+            $data=CompatibilityApi::call('/misc/boards');$boards=$data['boards'] ?? [];$default=$data['default'] ?? '';
+            if($action==='extra-board-create'){
+                if(count($boards)>=12)throw new RuntimeException('Board limit reached.');
+                $id=bin2hex(random_bytes(5));$boards[]=['id'=>$id,'name'=>(string)($body['name'] ?? 'Board'),'widgets'=>[]];
+                if(!$default)$default=$id;
+            }else{
+                $found=false;
+                foreach($boards as $i=>&$board){
+                    if($board['id']!==$id)continue;$found=true;
+                    if($action==='extra-board-default'){$default=$id;break;}
+                    if($action==='extra-board-lock'){$board['locked']=empty($board['locked']);break;}
+                    if(!empty($board['locked']))throw new RuntimeException('Unlock this board before editing.');
+                    if($action==='extra-board-rename')$board['name']=(string)($body['name'] ?? 'Board');
+                    elseif($action==='extra-board-delete'){
+                        if(($body['confirm'] ?? '')!=='DELETE')throw new RuntimeException('Type DELETE to confirm.');
+                        unset($boards[$i]);if($default===$id)$default='';$id='';
+                    }elseif($action==='extra-board-add'){
+                        $type=(string)($body['type'] ?? '');
+                        if(!in_array($type,$data['widgets'] ?? [],true))throw new RuntimeException('Invalid widget.');
+                        if(count($board['widgets'] ?? [])>=40)throw new RuntimeException('Widget limit reached.');
+                        $y=0;foreach($board['widgets'] ?? [] as $w)$y=max($y,(int)$w['y']+(int)$w['h']);
+                        if($y>400)throw new RuntimeException('Board is full.');
+                        $board['widgets'][]=['id'=>bin2hex(random_bytes(4)),'type'=>$type,'x'=>0,'y'=>$y,'w'=>12,'h'=>3,'settings'=>[]];
+                    }elseif(in_array($action,['extra-board-remove-widget','extra-board-edit-widget'],true)){
+                        $foundWidget=false;
+                        foreach($board['widgets'] as $j=>&$widget){
+                            if($widget['id']!==($body['widget'] ?? ''))continue;$foundWidget=true;
+                            if($action==='extra-board-remove-widget')unset($board['widgets'][$j]);
+                            elseif($widget['type']==='notes')$widget['settings']['text']=(string)($body['text'] ?? '');
+                            elseif($widget['type']==='rss')$widget['settings']['url']=(string)($body['url'] ?? '');
+                            break;
+                        }unset($widget);
+                        if(!$foundWidget)throw new RuntimeException('Widget not found.');
+                        $board['widgets']=array_values($board['widgets']);
+                    }else throw new RuntimeException('Unknown board action.');
+                    break;
+                }unset($board);
+                if(!$found)throw new RuntimeException('Board not found.');
+            }
+            CompatibilityApi::call('/misc/boards','POST',['boards'=>array_values($boards),'default'=>$default,'rotate'=>(int)($data['rotate'] ?? 0)]);
+            return ['view'=>'misc','tab'=>'board']+($id!==''?['id'=>$id]:[]);
+        }
         $urlId=rawurlencode($id);
         switch($action){
             case 'extra-calendar-create':
@@ -273,16 +316,48 @@ final class CompatibilityBrowser {
         $data=CompatibilityApi::call('/misc/boards');$boards=$data['boards'] ?? [];
         $selected=(string)($_GET['id'] ?? ($data['default'] ?: ($boards[0]['id'] ?? '')));
         foreach($boards as $board)$html.=self::link($board['name'],$base+['id'=>$board['id']]);
-        foreach($boards as $board)if($board['id']===$selected){$html.='<h3>'.self::esc($board['name']).'</h3>';foreach($board['widgets'] ?? [] as $widget){
+        $html.=self::beginForm($base,'extra-board-create').self::field('New board name','name','','text',40).'<button type="submit">Create board</button></form>';
+        foreach($boards as $board)if($board['id']===$selected){
+            $params=$base+['id'=>$board['id']];$locked=!empty($board['locked']);
+            $html.='<h3>'.self::esc($board['name']).'</h3>'.self::form($params,$locked?'Unlock board':'Lock board','extra-board-lock').self::form($params,'Set as default','extra-board-default');
+            if(!$locked){
+                $choices=[];foreach($data['widgets'] ?? [] as $type)$choices[$type]=ucfirst($type);
+                $html.=self::beginForm($params,'extra-board-rename').self::field('Board name','name',$board['name'],'text',40).'<button type="submit">Rename</button></form>';
+                $html.=self::beginForm($params,'extra-board-add').self::select('Widget type','type',$choices,'clock').'<button type="submit">Add widget</button></form>';
+            }
+            foreach($board['widgets'] ?? [] as $widget){
             $type=$widget['type'];$html.='<div class="compat-panel"><h3>'.self::esc(ucfirst($type)).'</h3>';
             if($type==='clock')$html.='<p>'.self::esc(date('D j M Y H:i')).'</p>';
             elseif($type==='notes')$html.='<p class="compat-message-text">'.self::esc($widget['settings']['text'] ?? '').'</p>';
             elseif(in_array($type,['calendar','reminders','drop'],true))$html.=self::link('Open '.ucfirst($type),['view'=>'misc','tab'=>$type]);
             elseif(in_array($type,['health','recent','nowplaying','downloads','recordings'],true)){
                 try{$result=CompatibilityApi::call('/misc/widget/'.$type);$html.=self::readable($result);}catch(RuntimeException $e){$html.='<p>'.self::esc($e->getMessage()).'</p>';}
-            }else $html.='<p class="compat-note">This widget requires the full interface.</p>';
+            }elseif($type==='rss'){
+                $url=(string)($widget['settings']['url'] ?? '');
+                if($url==='')$html.='<p>Enter a feed URL below.</p>';
+                else try{
+                    $result=CompatibilityApi::call('/misc/widget/rss','GET',[],['url'=>$url]);
+                    foreach($result['items'] ?? [] as $row){
+                        $href=(string)($row['link'] ?? '');
+                        $html.='<p>'.(preg_match('#^https?://#i',$href)?'<a href="'.self::esc($href).'">'.self::esc($row['title']).'</a>':self::esc($row['title'])).'</p>';
+                    }
+                }catch(Throwable $e){$html.='<p>'.self::esc($e->getMessage()).'</p>';}
+            }elseif($type==='leaderboard')$html.=self::link('View leaderboards',['view'=>'play','tab'=>'leaderboards']);
+            elseif($type==='media')$html.=self::link('Browse library',['view'=>'library']);
+            elseif($type==='pseudotv')$html.=self::link('Watch live TV',['view'=>'live']);
+            elseif(in_array($type,['frame','slideshow','webcams'],true))$html.=self::link('Open ambient viewer',['view'=>'misc','tab'=>'ambient']);
+            else $html.='<p class="compat-note">This widget requires additional browser capabilities.</p>';
+            if(!$locked){
+                if(in_array($type,['notes','rss'],true)){
+                    $key=$type==='notes'?'text':'url';
+                    $html.=self::beginForm($params,'extra-board-edit-widget',false,['widget'=>$widget['id']]).self::field($type==='notes'?'Note':'Feed URL',$key,(string)($widget['settings'][$key] ?? ''),'text',2000).'<button type="submit">Save widget</button></form>';
+                }
+                $html.=self::form($params,'Remove widget','extra-board-remove-widget',['widget'=>$widget['id']]);
+            }
             $html.='</div>';
-        }}
+        }
+            if(!$locked)$html.=self::beginForm($params,'extra-board-delete').self::field('Type DELETE to remove this board','confirm').'<button type="submit">Delete board</button></form>';
+        }
         return $html.(!$boards?'<p>No boards saved.</p>':'').self::link('Refresh board',$base+['id'=>$selected]);
     }
 
