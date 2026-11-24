@@ -223,7 +223,9 @@ async function catalogue(root, feed, input, action, viewer, signal, base) {
   const row = rows[index];
   if (!row) throw fail(422, 'Title no longer available. Refresh the library.');
   const selected = item(row, kind);
-  const ext = kind === 'live' ? 'm3u8' : String(row.container_extension ?? 'mp4');
+  // Older TVs may support the provider's native MPEG-TS output but not HLS.
+  // Retain HLS as the full-interface default and only accept these two live formats.
+  const ext = kind === 'live' ? (input.format === 'ts' ? 'ts' : 'm3u8') : String(row.container_extension ?? 'mp4');
   if (!/^\d+$/.test(selected.id) || !/^[a-z0-9]{1,8}$/i.test(ext)) throw fail(502, 'Provider returned an invalid stream ID or format.');
   const { client } = input, sequence = Number(input.sequence);
   if (typeof client !== 'string' || !/^[\w-]{16,80}$/.test(client) || !Number.isSafeInteger(sequence) || sequence < 1) throw fail(422, 'Reload Xtream Codes before playing.');

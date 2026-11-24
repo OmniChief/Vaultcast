@@ -826,7 +826,7 @@ final class CompatibilityBrowser {
     }
     private static function stalkerRequest(string $action,array $selection): array {
         $session=$_COOKIE[Auth::COOKIE]??'';
-        $authorization=trim((string)($_SERVER['HTTP_AUTHORIZATION']??''));
+        $authorization=trim((string)($_SERVER['HTTP_AUTHORIZATION']??$_SERVER['REDIRECT_HTTP_AUTHORIZATION']??''));
         if(preg_match('/^Bearer[ \t]+(vc_[a-f0-9]{64})$/iD',$authorization,$match))$session=$match[1];
         if(!self::$signed||!is_string($session)||!preg_match('/^(?:vc_)?[a-f0-9]{64}$/D',$session))
             throw new RuntimeException('Sign in to use the provider catalogue.');
@@ -839,7 +839,11 @@ final class CompatibilityBrowser {
             $body=@file_get_contents(NodeRuntime::loopback('/application/compat/stalker/'.$token),false,$context,0,4194305);
             if(in_array('x-vaultcast-app-unavailable: 1',array_map('strtolower',$http_response_header??[]),true))throw new RuntimeException('The provider service is unavailable.');
             $data=is_string($body)&&strlen($body)<=4194304?json_decode($body,true):null;
-            if(empty($data['ok']))throw new RuntimeException('The selected Stalker request could not be completed.');
+            if(empty($data['ok'])){
+                $status=0;foreach($http_response_header??[] as $header)if(preg_match('#^HTTP/\S+\s+(\d{3})#',$header,$m))$status=(int)$m[1];
+                $errors=[401=>'Sign in again to use provider services.',403=>'Provider access was denied for this account.',404=>'The provider service or selection was not found.',410=>'This provider subscription has expired.',422=>'The provider selection is no longer available. Refresh the list.',429=>'The provider is rate limiting requests. Try again later.',502=>'The provider did not return a usable response.',503=>'The Node provider service is unavailable.',504=>'The provider request timed out.'];
+                throw new RuntimeException($errors[$status]??($status?'Provider request failed (HTTP '.$status.').':'The Node provider service did not respond.'));
+            }
             return $data;
         }finally{@unlink(STREAM_DATA.'/runtime/node-media/'.$token.'.json');}
     }
@@ -861,17 +865,20 @@ final class CompatibilityBrowser {
     private static function stalker(int $page): string {
         self::allow('live');
         if(class_exists('Parental') && Parental::filtering())throw new RuntimeException('Provider catalogues are unavailable for restricted profiles.');
-        require_once STREAM_ROOT.'/src/Live/iptv.php';
-        $state=iptv_load();
-        $feeds=array_values(array_filter($state['feeds']??[],static function($f){return ($f['type']??'')==='stalker'&&!empty($f['enabled']);}));
+        // Use the same validated connection list and expiry state as the full interface.
         $base=['view'=>'live','tab'=>'stalker'];
+        $feedError='';$feeds=[];$expired=0;
+        try{$connections=self::stalkerRequest('stalker',[])['connections']??[];foreach($connections as $feed){if(empty($feed['enabled']))continue;if(!empty($feed['expired'])){$expired++;continue;}$feeds[]=$feed;}}
+        catch(RuntimeException $e){$feedError=$e->getMessage();}
         $kind=(string)($_GET['kind']??'live');
         if(!in_array($kind,['live','vod','series'],true))$kind='live';
         $html=self::heading('LIVE · PROVIDERS','Stalker').'<div class="compat-choicebar" role="navigation" aria-label="Stalker content">';
         foreach(['live'=>'Live TV','vod'=>'Movies','series'=>'Series'] as $tab=>$label)
             $html.=self::choice($label,$base+['kind'=>$tab],$kind===$tab);
         $html.='</div>';
-        if(!$feeds)return $html.'<p>No enabled Stalker connections are available.</p>';
+        if($feedError!=='')return $html.'<p class="compat-error">'.self::esc($feedError).'</p>'.self::link('Retry',$base+['kind'=>$kind]);
+        if(!$feeds)return $html.'<p>'.($expired?'All enabled provider subscriptions have expired.':'No enabled Stalker connections are available.').'</p>';
+        if($expired)$html.='<p class="compat-note">'.$expired.' expired connection(s) omitted.</p>';
         if($kind!=='live')return $html.self::stalkerOnDemand($feeds,$kind,$page);
         $country=strtoupper(mb_substr((string)($_GET['country']??''),0,3));
         $section=mb_substr((string)($_GET['section']??''),0,80);
@@ -927,7 +934,7 @@ final class CompatibilityBrowser {
                     $folder['section']=$sectionFor($folder['name']);
                     $folders[]=$folder;
                 }
-            }catch(Throwable $e){$errors[]=(string)$feed['name'].': categories unavailable';}
+            }catch(RuntimeException $e){$errors[]=(string)$feed['name'].': '.$e->getMessage();}catch(Throwable $e){$errors[]=(string)$feed['name'].': categories unavailable';}
         }
         if($country===''){
             $counts=[];
@@ -995,7 +1002,7 @@ final class CompatibilityBrowser {
                 $data=self::stalkerRequest('stalker_live_channels',$options);
                 $more=$more||!empty($data['hasMore']);
                 foreach($data['items']??[] as $item)$channels[]=$item;
-            }catch(Throwable $e){$failures[]=$source['connection'].' · '. $source['name'];}
+            }catch(RuntimeException $e){$failures[]=$source['connection'].' · '.$e->getMessage();}catch(Throwable $e){$failures[]=$source['connection'].' · '. $source['name'];}
         }
         $byName=[];$selectedRaw=null;$selectedCopies=[];
         foreach($channels as $item){
@@ -1070,7 +1077,7 @@ final class CompatibilityBrowser {
                 if($hls)$html.='<p class="compat-note">This provider supplied an HLS playlist. Older Tizen browsers may not support HLS; Vaultcast cannot change the provider format without transcoding.</p>';
                 $html.=self::player($stream,false,[],['hls'=>$hls,'live_source'=>true,'fallback_url'=>$fallback,'fallback_label'=>$nextLabel,'autoplay'=>$auto||$attempt>0]);
             }catch(Throwable $e){
-                $html.='<p class="compat-error">This source could not be opened.</p>';
+                $html.='<p class="compat-error">'.self::esc($e instanceof RuntimeException?$e->getMessage():'This source could not be opened.').'</p>';
                 if($fallback!=='')$html.='<a class="compat-button" id="compat-failed-source" data-compat-auto="'.($auto||$attempt>0?'1':'0').'" href="'.self::esc($fallback).'">Try '.self::esc($nextLabel).'</a>';
                 else $html.='<p class="compat-note">No further automatic alternatives. Select a source manually or return to the channels.</p>';
             }
@@ -1160,7 +1167,7 @@ final class CompatibilityBrowser {
                     $folders[]=['feed'=>$feed['id'],'connection'=>$feed['name'],'id'=>(string)$category['id'],
                         'name'=>$name((string)$category['name']),'language'=>$language((string)$category['name'])];
                 }
-            }catch(Throwable $e){$errors[]=$feed['name'];}
+            }catch(RuntimeException $e){$errors[]=$feed['name'].': '.$e->getMessage();}catch(Throwable $e){$errors[]=$feed['name'];}
         }
         $available=['UK'=>true];
         foreach($folders as $folder)$available[$folder['language']]=true;
@@ -1171,7 +1178,7 @@ final class CompatibilityBrowser {
         if($other!=='')$html.=self::disclosure('compat-vod-languages','Other languages',$other,!in_array($lang,['UK','all'],true));
         $html.='</div>';
         $html.=self::searchForm($base+['lang'=>$lang]+($folderId!==''?['folder'=>$folderId,'folder_feed'=>$folderFeed]:[]),$query);
-        if($errors)$html.='<p class="compat-note">Some provider folders were unavailable.</p>';
+        if($errors)$html.='<p class="compat-note">'.self::esc(implode('; ',$errors)).'</p>';
         $filtered=array_values(array_filter($folders,static function($f)use($lang){return $lang==='all'||$f['language']===$lang;}));
         if($query===''&&$folderId===''){
             $grouped=[];
@@ -1375,7 +1382,8 @@ final class CompatibilityBrowser {
             elseif($route==='misc'){$_GET['view']='misc';$_GET['tab']=$parts[1] ?? 'board';if(!empty($parts[2]))$_GET['id']=$parts[2];}
             elseif($route==='settings'){
                 $section=$parts[1] ?? '';
-                $map=['inbox'=>'inbox','parental'=>'parental','users'=>'users','roles'=>'roles','general'=>'configuration','live'=>'live-admin','updates'=>'tool','system'=>'tool','maintenance'=>'tool','tools'=>'tools'];
+                $map=['inbox'=>'inbox','parental'=>'parental','users'=>'users','roles'=>'roles','general'=>'configuration','live'=>'live-admin','live-stalker'=>'live-admin','live-xtream'=>'live-admin','live-iptv'=>'live-admin','updates'=>'tool','system'=>'tool','maintenance'=>'tool','tools'=>'tools'];
+                if($section==='live-stalker')$_GET['provider']='stalker';elseif($section==='live-xtream')$_GET['provider']='xtream';
                 $_GET['view']=$map[$section] ?? 'account';if(in_array($section,['updates','system','maintenance'],true))$_GET['id']=$section;
             }
             elseif($route==='offline'){$_GET['view']='offline';}

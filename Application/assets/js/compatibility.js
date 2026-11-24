@@ -35,7 +35,7 @@
     if(!featuresAlive||!window.XMLHttpRequest||!window.JSON||!window.JSON.parse||!window.JSON.stringify)return false;
     var xhr,finished=false,timer;
     function finish(error,data){if(finished)return;finished=true;clearTimeout(timer);for(var i=featureRequests.length-1;i>=0;i--)if(featureRequests[i]===xhr)featureRequests.splice(i,1);if(featuresAlive)done(error,data);}
-    try{xhr=new XMLHttpRequest();xhr.open(body===null?'GET':'POST',(window.__VC_COMPAT_BASE__||'/')+'api'+path,true);if(body!==null)xhr.setRequestHeader('Content-Type','application/json');featureRequests.push(xhr);xhr.onreadystatechange=function(){if(xhr.readyState!==4)return;var data;try{data=window.JSON.parse(xhr.responseText);}catch(parseError){finish('Could not read the response.');return;}finish(xhr.status>=200&&xhr.status<300&&data.ok!==false?null:(data.error||'Request failed.'),data);};timer=setTimeout(function(){finish('Request timed out.');try{xhr.abort();}catch(abortError){}},15000);xhr.send(body===null?null:window.JSON.stringify(body));return true;}catch(requestError){finish('Could not contact the server.');return false;}
+    try{xhr=new XMLHttpRequest();xhr.open(body===null?'GET':'POST',(window.__VC_COMPAT_BASE__||'/')+'api'+path,true);xhr.setRequestHeader('X-Vaultcast-Request','same-origin');if(body!==null)xhr.setRequestHeader('Content-Type','application/json');featureRequests.push(xhr);xhr.onreadystatechange=function(){if(xhr.readyState!==4)return;var data;try{data=window.JSON.parse(xhr.responseText);}catch(parseError){finish('Could not read the response.');return;}finish(xhr.status>=200&&xhr.status<300&&data.ok!==false?null:(data.error||'Request failed.'),data);};timer=setTimeout(function(){finish('Request timed out.');try{xhr.abort();}catch(abortError){}},15000);xhr.send(body===null?null:window.JSON.stringify(body));return true;}catch(requestError){finish('Could not contact the server.');return false;}
   }
   compatListen(window,'pagehide',function(){featuresAlive=false;clearTimeout(chatTimer);for(var i=0;i<featureTimers.length;i++)clearTimeout(featureTimers[i]);for(i=0;i<featureRequests.length;i++)try{featureRequests[i].abort();}catch(abortError){}});
   // Optional progressive enhancement: ordinary forms remain available without JSON/XHR.
@@ -275,13 +275,14 @@
   // Legacy-syntax clients reuse the Node Xtream service and the authenticated
   // Drop API. No provider credentials are ever inserted into the page.
   function legacyJson(url, method, body, done, raw, timeout){
-    if(!window.XMLHttpRequest||!window.JSON||!window.JSON.parse||!window.JSON.stringify){done('This device does not support the required network API.');return null;}
+    if(!window.XMLHttpRequest||!window.JSON||!window.JSON.parse||(method!=='GET'&&!raw&&!window.JSON.stringify)){done('This device does not support the required network API.');return null;}
     var req=new XMLHttpRequest(),finished=false,timer;
     function finish(error,data){if(finished)return;finished=true;clearTimeout(timer);done(error,data);}
     try{
       req.open(method,url,true);
+      req.setRequestHeader('X-Vaultcast-Request','same-origin');
       if(method!=='GET')req.setRequestHeader('Content-Type',raw?'application/octet-stream':'application/json');
-      req.onreadystatechange=function(){if(req.readyState!==4)return;var data;try{data=window.JSON.parse(req.responseText);}catch(e){finish('The server did not return a valid response.');return;}finish(req.status>=200&&req.status<300&&data.ok!==false?null:(data.error||'Request failed.'),data);};
+      req.onreadystatechange=function(){if(req.readyState!==4)return;var data;if(req.status===204){finish(null,{});return;}try{data=window.JSON.parse(req.responseText);}catch(e){finish(req.status===401?'Sign in again.':req.status===403?'Provider request rejected (HTTP 403).':req.status?'Server returned an invalid response (HTTP '+req.status+').':'Could not contact the server.');return;}if(!data||typeof data!=='object'){finish('Invalid server response.');return;}finish(req.status>=200&&req.status<300&&data.ok!==false?null:(data.error||'Request failed (HTTP '+req.status+').'),data);};
       timer=setTimeout(function(){finish('The server took too long to respond.');try{req.abort();}catch(e){}},timeout||60000);
       req.send(method==='GET'?null:raw?body:window.JSON.stringify(body||{}));
     }catch(e){finish('Could not contact the server.');}
@@ -437,7 +438,7 @@
         if(series||category)legacyButton(controls,series?'Back to series':'Categories',function(){if(series){series='';browse(1);}else categories();});
       }
       function connections(){var request=++serial;reset();legacyClear(controls);say('Loading connections…');call('connections',{},function(error,data){if(request!==serial)return;if(error){say(error);legacyButton(results,'Retry',connections);return;}
-        var list=data.connections||[],i;for(i=0;i<list.length;i++)(function(row){if(row.enabled===false||row.enabled===0||row.enabled==='0')return;legacyButton(results,row.name||'Connection',function(){feed=row.id;chooseKind('live');});})(list[i]);say(list.length?'Choose a connection.':'No Xtream connections configured.');
+        var list=data.connections||[],i,available=0;for(i=0;i<list.length;i++)(function(row){if(row.enabled===false||row.enabled===0||row.enabled==='0')return;available++;legacyButton(results,row.name||'Connection',function(){feed=row.id;chooseKind('live');});})(list[i]);say(available?'Choose a connection.':'No enabled Xtream connections configured.');
       });}
       function chooseKind(value){kind=value;category='';series='';categories();}
       function categories(){var request=++serial;reset();category='';series='';searchControls();say('Loading categories…');call('categories',{feed:feed,kind:kind},function(error,data){if(request!==serial)return;if(error){say(error);legacyButton(results,'Retry',categories);return;}var rows=data.categories||[],i;legacyButton(results,'All titles',function(){category='';browse(1);});for(i=0;i<rows.length;i++)(function(row){legacyButton(results,row.name,function(){category=row.id;browse(1);});})(rows[i]);say('Choose a category.');});}
@@ -452,13 +453,16 @@
           say(rows.length?'Page '+page+' · '+data.total+' titles':'No matching titles.');if(page>1)legacyButton(results,'Previous',function(){browse(page-1);});if(page*60<data.total)legacyButton(results,'Next',function(){browse(page+1);});
         });
       }
-      function play(row){if(playing)return;playing=true;var selected={feed:feed,kind:kind,category:category,series:series,id:row.id,client:client,sequence:++sequence};say('Opening '+row.name+'…');
+      function play(row,format){if(playing)return;playing=true;
+        if(kind==='live'&&!format){var probe=document.createElement('video'),nativeHls=false;try{nativeHls=!!(probe.canPlayType('application/vnd.apple.mpegurl')||probe.canPlayType('application/x-mpegURL'));}catch(e){}format=nativeHls?'m3u8':'ts';}
+        var selected={feed:feed,kind:kind,category:category,series:series,id:row.id,client:client,sequence:++sequence};if(kind==='live')selected.format=format||'ts';say('Opening '+row.name+'…');
         stop(function(){call('play',selected,function(error,data){playing=false;if(error){say(error);return;}var source=data.source&&data.source.url,match=typeof source==='string'&&source.match(/[?&]ticket=([a-f0-9]{64})(?:&|$)/);
           if(!match||source.indexOf(base+'netplay/application/live/xtream_stream?')!==0){say('The provider did not return a valid stream.');return;}
           ticket=match[1];legacyClear(player);line(player,row.name);media=document.createElement('video');media.setAttribute('controls','controls');media.setAttribute('playsinline','playsinline');media.src=source;player.appendChild(media);
           compatListen(media,'error',function(){say('This device could not play the stream. Try opening it in a compatible player.');});
           var link=document.createElement('a');link.href=source;link.className='compat-button';compatText(link,'Open stream directly');player.appendChild(link);
           legacyButton(player,'Stop playback',function(){stop(function(){say('Playback stopped.');});});
+          if(selected.kind==='live')legacyButton(player,format==='ts'?'Try HLS stream':'Try MPEG-TS stream',function(){play(row,format==='ts'?'m3u8':'ts');});
           if(data.nextEpisode)legacyButton(player,'Next episode',function(){play(data.nextEpisode);});
           heartbeat=setInterval(function(){if(ticket)call('heartbeat',{ticket:ticket},function(err){if(err){stop();say(err);}},true);},30000);
           say('Press Play to watch.');try{media.play();}catch(e){}if(player.scrollIntoView)player.scrollIntoView(true);
@@ -510,7 +514,7 @@
     if(!window.XMLHttpRequest||!window.JSON||!window.JSON.parse||(body!==null&&!window.JSON.stringify)){done('This browser cannot refresh the stream automatically. Use Retune or the channel playlist.');return;}
     var xhr,finished=false,timer;
     function finish(error,data){if(finished)return;finished=true;clearTimeout(timer);for(var i=requests.length-1;i>=0;i--)if(requests[i]===xhr)requests.splice(i,1);if(alive)done(error,data);}
-    try{xhr=new XMLHttpRequest();xhr.open(body===null?'GET':'POST',base+'api'+path,true);if(body!==null)xhr.setRequestHeader('Content-Type','application/json');requests.push(xhr);
+    try{xhr=new XMLHttpRequest();xhr.open(body===null?'GET':'POST',base+'api'+path,true);xhr.setRequestHeader('X-Vaultcast-Request','same-origin');if(body!==null)xhr.setRequestHeader('Content-Type','application/json');requests.push(xhr);
       xhr.onreadystatechange=function(){if(xhr.readyState!==4)return;var data={};if(xhr.status===204){finish(null,data);return;}try{data=window.JSON.parse(xhr.responseText);}catch(e){finish('The server returned an unreadable response.');return;}finish(xhr.status>=200&&xhr.status<300&&data.ok!==false?null:(data.error||'The stream request failed.'),data);};
       timer=setTimeout(function(){finish('The stream request timed out.');try{xhr.abort();}catch(e){}},20000);xhr.send(body===null?null:window.JSON.stringify(body));
     }catch(e){finish('This browser could not contact the server.');}
