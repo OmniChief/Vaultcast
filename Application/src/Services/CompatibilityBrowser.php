@@ -101,8 +101,183 @@ final class CompatibilityBrowser {
         $selector.='</select></label></div>';
         return $html.'</'.$tag.'>'.($audio?'':'<button id="compat-centre-play" class="compat-centre-play" type="button" style="display:none" aria-label="Play video"><span aria-hidden="true">&#9654;</span><span id="compat-centre-label">Play</span></button></div>').($tracks?$selector.'<div class="compat-subtitle-files">'.$trackLinks.'</div>':'').'<p id="compat-player-message" role="status"></p><script>window.__VC_COMPAT_PLAYER__='.json_encode($config+['url'=>$url],JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT).';</script><p><a class="compat-button" href="'.self::esc($url).'">Open stream directly</a></p><p class="compat-note">Use the player controls to start. If this browser cannot play the stream, open the link with a compatible media player. HLS and video codecs depend on your device.</p>';
     }
+
+    private static function extraPost(string $view,array $body): ?array {
+        $action=(string)($body['compat_action'] ?? '');
+        if(strpos($action,'extra-')!==0)return null;
+        $id=(string)($_GET['id'] ?? '');
+        if(!self::$signed)throw new RuntimeException('Sign in first.');
+        if(strpos($action,'extra-request-')===0){
+            self::allow('library');
+            $tab=(string)($_GET['tab'] ?? 'mine');
+            if($action==='extra-request-create'){
+                $payload=['media_type'=>(string)($body['media_type'] ?? ''),'source'=>(string)($body['source'] ?? ''),'ext_id'=>(string)($body['ext_id'] ?? ''),'note'=>(string)($body['note'] ?? ''),'seasons'=>!empty($body['season'])?[(int)$body['season']]:'all'];
+                CompatibilityApi::call('/requests','POST',$payload);$tab='mine';
+            }elseif($action==='extra-request-cancel'){
+                CompatibilityApi::call('/requests/'.rawurlencode($id).'/cancel','POST');
+            }elseif($action==='extra-request-decide'){
+                $change=(string)($body['change'] ?? '');
+                if($change==='delete'&&($body['confirm'] ?? '')!=='DELETE')throw new RuntimeException('Type DELETE to confirm deletion.');
+                CompatibilityApi::call('/requests/manage/decide','POST',['ids'=>[(int)$id],'action'=>$change,'reason'=>(string)($body['reason'] ?? ''),'acquire'=>null]);$tab='manage';
+            }else throw new RuntimeException('Unknown request action.');
+            return ['view'=>'requests','tab'=>$tab];
+        }
+        $tab=(string)($_GET['tab'] ?? 'calendar');
+        $urlId=rawurlencode($id);
+        switch($action){
+            case 'extra-calendar-create':
+                CompatibilityApi::call('/misc/cal/calendars','POST',['name'=>(string)($body['name'] ?? ''),'kind'=>(string)($body['kind'] ?? 'local'),'url'=>(string)($body['url'] ?? ''),'episodes'=>(string)($body['episodes'] ?? ''),'show_reminders'=>!empty($body['show_reminders'])]);break;
+            case 'extra-event-create':
+                $allDay=!empty($body['all_day']);$start=(string)($body['start'] ?? '');$end=(string)($body['end'] ?? '');
+                if(!$allDay){$start=strtotime($start);$end=$end===''?0:strtotime($end);if(!$start||$end===false)throw new RuntimeException('Enter valid dates and times.');}
+                CompatibilityApi::call('/misc/cal/events','POST',['calendar_id'=>(string)($body['calendar_id'] ?? ''),'title'=>(string)($body['title'] ?? ''),'all_day'=>$allDay,'start'=>$start,'end'=>$end?:$start,'location'=>(string)($body['location'] ?? ''),'notes'=>(string)($body['notes'] ?? ''),'repeat'=>['freq'=>(string)($body['repeat'] ?? '')]]);break;
+            case 'extra-reminder-create':
+                CompatibilityApi::call('/misc/reminders','POST',['title'=>(string)($body['title'] ?? ''),'note'=>(string)($body['note'] ?? ''),'time'=>(string)($body['time'] ?? ''),'calendar'=>true,'schedule'=>['type'=>(string)($body['repeat'] ?? 'once'),'start'=>(string)($body['start'] ?? ''),'every'=>max(1,(int)($body['every'] ?? 1))]]);break;
+            case 'extra-reminder-done': CompatibilityApi::call('/misc/reminders/'.$urlId.'/done','POST');break;
+            case 'extra-reminder-snooze': CompatibilityApi::call('/misc/reminders/'.$urlId.'/snooze','POST',['minutes'=>60]);break;
+            case 'extra-reminder-delete': CompatibilityApi::call('/misc/reminders/'.$urlId,'DELETE');break;
+            case 'extra-picture-upload':
+                CompatibilityApi::call('/misc/pictures','POST');break;
+            case 'extra-picture-rename':
+                CompatibilityApi::call('/misc/pictures/'.$urlId,'POST',['name'=>(string)($body['name'] ?? '')]);break;
+            case 'extra-picture-delete': CompatibilityApi::call('/misc/pictures/'.$urlId,'DELETE');break;
+            case 'extra-drop-create':
+                CompatibilityApi::call('/drop/text','POST',['kind'=>(string)($body['kind'] ?? 'text'),'name'=>(string)($body['name'] ?? ''),'body'=>(string)($body['body'] ?? ''),'inbox'=>!empty($body['inbox'])]);break;
+            case 'extra-drop-share':
+                CompatibilityApi::call('/drop/items/'.$urlId.'/links','POST',['require_login'=>true]);break;
+            case 'extra-drop-revoke': CompatibilityApi::call('/drop/links/'.$urlId.'/revoke','POST');break;
+            case 'extra-drop-delete': CompatibilityApi::call('/drop/items/'.$urlId,'DELETE');break;
+            default: throw new RuntimeException('Unknown action.');
+        }
+        return ['view'=>'misc','tab'=>$tab];
+    }
+    private static function extraRequestForm(array $row,int $season=0): string {
+        return self::beginForm(['view'=>'requests','tab'=>'mine'],'extra-request-create',false,['media_type'=>$row['media_type'],'source'=>$row['source'],'ext_id'=>$row['ext_id'],'season'=>$season]).
+            self::field('Note (optional)','note','','text',300).'<button type="submit">'.($season>0?'Request season '.$season:($row['media_type']==='tv'?'Request whole show':'Request film')).'</button></form>';
+    }
+    private static function extraRequests(int $page,string $query): string {
+        self::allow('library');$status=CompatibilityApi::call('/requests/status');
+        $tab=(string)($_GET['tab'] ?? 'discover');$base=['view'=>'requests'];
+        $html=self::heading('LIBRARY','Media requests','Find missing titles and follow their progress.').'<div class="compat-categories">'.self::link('Discover',$base+['tab'=>'discover']).self::link('My requests',$base+['tab'=>'mine']);
+        if(!empty($status['manage']))$html.=self::link('Manage requests',$base+['tab'=>'manage']);
+        $html.='</div>';
+        if(empty($status['enabled'])&&empty($status['manage']))return $html.'<p>Media requests are disabled.</p>';
+        if($tab==='discover'){
+            if(empty($status['create']))return $html.'<p>Your account cannot request titles.</p>';
+            $type=($_GET['type'] ?? '')==='tv'?'tv':'movie';
+            $html.='<form class="compat-panel compat-fields" method="get" action="'.self::esc(self::$base).'"><input type="hidden" name="compat" value="on"><input type="hidden" name="view" value="requests">'.self::field('Title','q',$query,'text',200).self::select('Type','type',['movie'=>'Films','tv'=>'TV shows'],$type).'<button type="submit">Find titles</button></form>';
+            if($query!==''){
+                $data=CompatibilityApi::call('/requests/search','GET',[],['type'=>$type,'q'=>$query]);
+                if(!empty($data['notice']))$html.='<p>'.self::esc($data['notice']).'</p>';
+                foreach($data['results'] ?? [] as $row){
+                    $html.='<div class="compat-panel"><h3>'.self::esc($row['title']).' '.self::esc($row['year'] ?? '').'</h3><p>'.self::esc(strip_tags((string)($row['overview'] ?? ''))).'</p>';
+                    if(!empty($row['library'])){
+                        $lib=$row['library'];$html.=self::link('Open in library',['view'=>$lib['type']==='movie'?'item':'show','id'=>$lib['item_id'] ?? $lib['show_key']]);
+                    }
+                    foreach($row['requests'] ?? [] as $request)$html.='<p class="compat-note">'.self::esc(($request['season']>0?'Season '.$request['season'].' · ':'').$request['status_label']).'</p>';
+                    if($type==='tv')$html.=self::link('Choose seasons',$base+['tab'=>'seasons','source'=>$row['source'],'id'=>$row['ext_id']]);
+                    elseif(empty($row['in_library']))$html.=self::extraRequestForm($row);
+                    $html.='</div>';
+                }
+                if(empty($data['results']))$html.='<p>No matching titles.</p>';
+            }
+            return $html;
+        }
+        if($tab==='seasons'){
+            $data=CompatibilityApi::call('/requests/seasons','GET',[],['source'=>(string)($_GET['source'] ?? ''),'id'=>(string)($_GET['id'] ?? '')]);
+            $row=$data['show'];$html.='<h3>'.self::esc($row['title']).'</h3>'.self::extraRequestForm($row);
+            foreach($data['seasons'] ?? [] as $season){$html.='<div class="compat-panel"><h3>Season '.(int)$season['number'].'</h3>';
+                if(!empty($season['in_library']))$html.='<p>In your library</p>';
+                else $html.=self::extraRequestForm($row,(int)$season['number']);
+                $html.='</div>';
+            }return $html;
+        }
+        $manage=$tab==='manage';$filter=(string)($_GET['status'] ?? 'pending');
+        if($manage){
+            $html.='<form class="compat-panel compat-fields" method="get" action="'.self::esc(self::$base).'"><input type="hidden" name="compat" value="on"><input type="hidden" name="view" value="requests"><input type="hidden" name="tab" value="manage">'.self::select('Status','status',['all'=>'All']+MediaRequests::STATUSES,$filter).self::field('Title','q',$query).'<button type="submit">Filter</button></form>';
+            $data=CompatibilityApi::call('/requests/manage','GET',[],['status'=>$filter,'q'=>$query,'page'=>$page]);
+        }else $data=CompatibilityApi::call('/requests/mine');
+        $rows=$data['requests'] ?? [];
+        foreach($manage?$rows:array_slice($rows,($page-1)*16,16) as $row){
+            $params=$base+['tab'=>$manage?'manage':'mine','id'=>$row['id']];
+            $html.='<div class="compat-panel"><h3>'.self::esc($row['title']).' '.self::esc($row['year']).'</h3><p>'.self::esc($row['scope_label'].' · '.$row['status_label']).'</p><p>'.self::esc($row['reason'] ?: $row['note']).'</p>';
+            if(!empty($row['can_cancel']))$html.=self::form($params,'Cancel my request','extra-request-cancel');
+            if($manage)$html.=self::beginForm($params,'extra-request-decide').self::select('Action','change',['approve'=>'Approve','decline'=>'Decline','retry'=>'Retry acquisition','available'=>'Mark available','reopen'=>'Reopen','delete'=>'Delete'],'approve').self::field('Reason (optional)','reason','','text',400).self::field('For deletion only, type DELETE','confirm').'<button type="submit">Apply</button></form>';
+            $html.='</div>';
+        }
+        return $html.(!$rows?'<p>No requests found.</p>':'').self::pages($base+['tab'=>$tab,'status'=>$filter,'q'=>$query],$page,$manage?!empty($data['has_more']):$page*16<count($rows));
+    }
+    private static function extraMisc(int $page): string {
+        if(!self::$signed)throw new RuntimeException('Sign in to use Misc.');
+        $tab=(string)($_GET['tab'] ?? 'calendar');$base=['view'=>'misc','tab'=>$tab];
+        $names=['calendar'=>'Calendar','reminders'=>'Reminders','pictures'=>'Pictures','drop'=>'Drop','board'=>'Boards','ambient'=>'Ambient'];
+        if(!isset($names[$tab]))throw new RuntimeException('Misc page not found.');
+        $html=self::heading('MISC',$names[$tab]);
+        if($tab==='calendar'){
+            $data=CompatibilityApi::call('/misc/cal/calendars');$choices=[];
+            $html.=self::beginForm($base,'extra-calendar-create').'<h3>Create a calendar</h3>'.self::field('Name','name').self::select('Type','kind',['local'=>'Personal','subscribed'=>'Subscribed calendar'],'local').self::field('Subscription URL (optional)','url','','text',2000).self::select('Episode calendar','episodes',[''=>'None','favourites'=>'Favourite shows','library'=>'Library shows'],'').'<label class="compat-check"><input type="checkbox" name="show_reminders" value="1"> Show reminders</label><button type="submit">Create calendar</button></form>';
+            foreach($data['calendars'] ?? [] as $cal){
+                if(in_array($cal['role'],['owner','edit'],true)&&$cal['kind']==='local')$choices[$cal['id']]=$cal['name'];
+                $html.='<p>'.self::esc($cal['name'].' · '.$cal['role']).' <a class="compat-button" href="'.self::esc(self::$base.'api/misc/cal/calendars/'.rawurlencode($cal['id']).'/export').'">Export ICS</a></p>';
+            }
+            if($choices)$html.=self::beginForm($base,'extra-event-create').'<h3>Add event</h3>'.self::select('Calendar','calendar_id',$choices,(string)key($choices)).self::field('Title','title').'<label class="compat-check"><input type="checkbox" name="all_day" value="1"> All-day event</label>'.self::field('Start (YYYY-MM-DD HH:MM, or date only for all-day)','start',date('Y-m-d H:i')).self::field('End (optional)','end').self::field('Location','location').self::field('Notes','notes','','text',1000).self::select('Repeat','repeat',[''=>'None','DAILY'=>'Daily','WEEKLY'=>'Weekly','MONTHLY'=>'Monthly','YEARLY'=>'Yearly'],'').'<button type="submit">Save event</button></form>';
+            $offset=max(-24,min(24,(int)($_GET['offset'] ?? 0)));$start=strtotime('today')+$offset*30*86400;$end=$start+30*86400;
+            $events=CompatibilityApi::call('/misc/cal/events','GET',[],['from'=>$start,'to'=>$end]);
+            $html.='<h3>'.self::esc(date('j M Y',$start).' – '.date('j M Y',$end-1)).'</h3>'.self::link('Previous 30 days',$base+['offset'=>$offset-1]).self::link('Next 30 days',$base+['offset'=>$offset+1]).'<ul class="compat-list">';
+            foreach(array_slice($events['events'] ?? [],($page-1)*16,16) as $event)$html.='<li><strong>'.self::esc($event['title']).'</strong><p>'.self::esc(date(!empty($event['all_day'])?'j M Y':'j M Y H:i',(int)$event['start'])).'</p>'.self::esc($event['location'] ?? '').'</li>';
+            return $html.'</ul>'.self::pages($base+['offset'=>$offset],$page,$page*16>0&&$page*16<count($events['events'] ?? []));
+        }
+        if($tab==='reminders'){
+            $data=CompatibilityApi::call('/misc/reminders');
+            $html.=self::beginForm($base,'extra-reminder-create').'<h3>New reminder</h3>'.self::field('Title','title').self::field('First date (YYYY-MM-DD)','start',date('Y-m-d')).self::field('Time (HH:MM)','time').self::select('Repeat','repeat',['once'=>'Once','daily'=>'Daily','weekly'=>'Weekly','monthly'=>'Monthly'],'once').self::field('Repeat every','every','1','number').self::field('Note','note','','text',200).'<button type="submit">Add reminder</button></form>';
+            foreach($data['reminders'] ?? [] as $row){$p=$base+['id'=>$row['id']];$html.='<div class="compat-panel"><h3>'.self::esc($row['title']).'</h3><p>'.self::esc(($row['due'] ?? 'No next date').' · '.$row['state']).'</p><p>'.self::esc($row['note']).'</p>'.self::form($p,'Done','extra-reminder-done').self::form($p,'Snooze 1 hour','extra-reminder-snooze').self::link('Delete',$p+['confirm'=>'reminder']).'</div>';if(($_GET['confirm'] ?? '')==='reminder'&&($_GET['id'] ?? '')===$row['id'])$html.=self::form($p,'Confirm delete','extra-reminder-delete');}
+            return $html;
+        }
+        if($tab==='pictures'){
+            $data=CompatibilityApi::call('/misc/pictures');
+            if(!empty($data['can_upload']))$html.=self::beginForm($base,'extra-picture-upload',true).'<label>Choose pictures<input type="file" name="files[]" multiple="multiple" accept="image/*"></label><button type="submit">Upload</button></form>';
+            foreach(array_slice($data['pictures'] ?? [],($page-1)*16,16) as $row){$p=$base+['id'=>$row['id']];$url=rtrim(self::$base,'/').$row['url'];$html.='<div class="compat-panel"><a href="'.self::esc($url).'"><img class="compat-extra-picture" src="'.self::esc($url).'" alt="'.self::esc($row['name']).'"></a>'.self::beginForm($p,'extra-picture-rename').self::field('Name','name',$row['name']).'<button type="submit">Rename</button></form>'.self::link('Delete',$p+['confirm'=>'picture']);if(($_GET['confirm'] ?? '')==='picture'&&($_GET['id'] ?? '')===$row['id'])$html.=self::form($p,'Confirm delete','extra-picture-delete');$html.='</div>';}
+            return $html.self::pages($base,$page,$page*16<count($data['pictures'] ?? []));
+        }
+        if($tab==='drop'){
+            $data=CompatibilityApi::call('/drop/state');
+            if(!empty($data['can_upload']))$html.=self::beginForm($base,'extra-drop-create').'<h3>Save a note or link</h3>'.self::select('Type','kind',['text'=>'Text','link'=>'Web link'],'text').self::field('Name','name').'<label>Content<textarea name="body" rows="5"></textarea></label><label class="compat-check"><input type="checkbox" name="inbox" value="1"> Send to my inbox</label><button type="submit">Save</button></form>';
+            foreach(array_slice($data['items'] ?? [],($page-1)*16,16) as $row){$p=$base+['id'=>$row['id']];$html.='<div class="compat-panel"><h3>'.self::esc($row['name']).'</h3><p>'.self::esc($row['status']).'</p>';
+                if($row['kind']==='file')$html.='<a class="compat-button" href="'.self::esc(self::$base.'api/drop/items/'.rawurlencode($row['id']).'/download').'">Download</a>';
+                else $html.='<p class="compat-message-text">'.self::esc($row['body'] ?? '').'</p>';
+                if(!empty($data['can_upload'])&&$row['status']==='available')$html.=self::form($p,'Create sign-in link','extra-drop-share');
+                foreach($row['links'] ?? [] as $link)if(empty($link['revoked']))$html.='<p><a href="'.self::esc($link['url']).'">'.self::esc($link['url']).'</a> '.self::form($base+['id'=>$link['token']],'Revoke link','extra-drop-revoke').'</p>';
+                $html.=self::link('Delete',$p+['confirm'=>'drop']);if(($_GET['confirm'] ?? '')==='drop'&&($_GET['id'] ?? '')===$row['id'])$html.=self::form($p,'Confirm delete','extra-drop-delete');$html.='</div>';
+            }return $html.self::pages($base,$page,$page*16<count($data['items'] ?? []));
+        }
+        if($tab==='ambient'){
+            self::allow('library');
+            $kind=in_array($_GET['kind'] ?? '',['posters','frames','mixed'],true)?$_GET['kind']:'posters';
+            $data=CompatibilityApi::call('/misc/ambient/stills','GET',[],['kind'=>$kind,'n'=>5,'order'=>'recent','variant'=>'medium']);
+            $html.=self::link('Posters',$base+['kind'=>'posters']).self::link('Film stills',$base+['kind'=>'frames']).self::link('Refresh',$base+['kind'=>$kind]);
+            foreach($data['stills'] ?? [] as $row)$html.='<div class="compat-panel"><img class="compat-extra-picture" src="'.self::esc(rtrim(self::$base,'/').$row['url']).'" alt="'.self::esc($row['title']).'"><h3>'.self::esc($row['title']).'</h3></div>';
+            return $html;
+        }
+        $data=CompatibilityApi::call('/misc/boards');$boards=$data['boards'] ?? [];
+        $selected=(string)($_GET['id'] ?? ($data['default'] ?: ($boards[0]['id'] ?? '')));
+        foreach($boards as $board)$html.=self::link($board['name'],$base+['id'=>$board['id']]);
+        foreach($boards as $board)if($board['id']===$selected){$html.='<h3>'.self::esc($board['name']).'</h3>';foreach($board['widgets'] ?? [] as $widget){
+            $type=$widget['type'];$html.='<div class="compat-panel"><h3>'.self::esc(ucfirst($type)).'</h3>';
+            if($type==='clock')$html.='<p>'.self::esc(date('D j M Y H:i')).'</p>';
+            elseif($type==='notes')$html.='<p class="compat-message-text">'.self::esc($widget['settings']['text'] ?? '').'</p>';
+            elseif(in_array($type,['calendar','reminders','drop'],true))$html.=self::link('Open '.ucfirst($type),['view'=>'misc','tab'=>$type]);
+            elseif(in_array($type,['health','recent','nowplaying','downloads','recordings'],true)){
+                try{$result=CompatibilityApi::call('/misc/widget/'.$type);$html.=self::readable($result);}catch(RuntimeException $e){$html.='<p>'.self::esc($e->getMessage()).'</p>';}
+            }else $html.='<p class="compat-note">This widget requires the full interface.</p>';
+            $html.='</div>';
+        }}
+        return $html.(!$boards?'<p>No boards saved.</p>':'').self::link('Refresh board',$base+['id'=>$selected]);
+    }
+
     private static function content(array $home): string {
         $view=(string)($_GET['view'] ?? 'home');$id=(string)($_GET['id'] ?? '');$page=max(1,min(1000,(int)($_GET['page'] ?? 1)));$query=mb_substr(trim((string)($_GET['q'] ?? '')),0,200);
+        if($view==='requests')return self::extraRequests($page,$query);
+        if($view==='misc')return self::extraMisc($page);
         $play=self::playPage($home,$view,$id,$page,$query);if($play!==null)return $play;
         $viewing=self::viewingPage($view,$id);if($viewing!==null)return $viewing;
         $admin=self::administrationPage($view,$id);if($admin!==null)return $admin;
@@ -696,7 +871,13 @@ final class CompatibilityBrowser {
             if($route==='library'){$_GET['view']=empty($parts[1])?'library':'section';if(!empty($parts[1]))$_GET['id']=$parts[1];}
             elseif($route==='collections'){$_GET['view']=empty($parts[1])?'collections':'collection';if(!empty($parts[1]))$_GET['id']=$parts[1];}
             elseif($route==='play'){$_GET['view']='play';if(isset(self::playTabs()[$parts[1] ?? ''])){$_GET['tab']=$parts[1];$_GET['sub']=implode('/',array_slice($parts,2));}}
-            elseif($route==='live'){$_GET['view']='live';if(in_array($parts[1] ?? '',['now','relay','iptv','radio'],true)){$_GET['tab']=$parts[1];if($parts[1]==='radio'&&!empty($parts[2]))$_GET['id']=$parts[2];}elseif(!empty($parts[1]))$_GET['id']=$parts[1];}
+            elseif($route==='home'){$_GET['view']=($parts[1] ?? '')==='overview'?'home':($parts[1] ?? 'home');if(!empty($parts[2]))$_GET['id']=$parts[2];}
+            elseif($route==='requests'){$_GET['view']='requests';$_GET['tab']=$parts[1] ?? 'discover';}
+            elseif($route==='misc'){$_GET['view']='misc';$_GET['tab']=$parts[1] ?? 'board';if(!empty($parts[2]))$_GET['id']=$parts[2];}
+            elseif($route==='settings'){$_GET['view']=($parts[1] ?? '')==='inbox'?'inbox':'account';}
+            elseif($route==='inbox'||$route==='login'){$_GET['view']=$route;}
+            elseif($route==='games'&&in_array($parts[1] ?? '',['','leaderboards'],true)){$_GET['view']='play';$_GET['tab']=($parts[1] ?? '')==='leaderboards'?'leaderboards':'games';}
+            elseif($route==='live'){$_GET['view']='live';if(in_array($parts[1] ?? '',['now','relay','iptv','radio','stalker'],true)){$_GET['tab']=$parts[1];if($parts[1]==='radio'&&!empty($parts[2]))$_GET['id']=$parts[2];}elseif(!empty($parts[1]))$_GET['id']=$parts[1];}
         }
         $home=$startup['home'] ?? null;$body='';$view=(string)($_GET['view'] ?? 'home');
         if(($_SERVER['REQUEST_METHOD'] ?? '')==='POST' && isset($_POST['compat_action'])){
@@ -723,18 +904,23 @@ final class CompatibilityBrowser {
         $headerSearch='';
         if($home && AreaAccess::allowed(self::$viewer,'library'))$headerSearch='<form class="compat-header-search" role="search" method="get" action="'.self::esc(self::$base).'"><input type="hidden" name="compat" value="on"><input type="hidden" name="view" value="search"><label class="compat-header-search-label" for="compat-header-query">Search movies and shows</label><input id="compat-header-query" type="text" name="q" value="'.self::esc($view==='search'?(string)($_GET['q'] ?? ''):'').'" placeholder="Search movies &amp; shows…" maxlength="200"><button type="submit">Search</button></form>';
         $nav='<div class="compat-header"><a class="compat-brand" href="'.self::esc(self::url()).'"><span class="compat-logo">&#9654;</span> '.self::esc($site).'</a>'.$headerSearch.'<div class="compat-major-nav">';
-        $tabs=['home'=>'Home'];if($home && AreaAccess::allowed(self::$viewer,'library'))$tabs['library']='Library';if(!empty($home['features']['live']))$tabs['live']='Live';if($home && AreaAccess::allowed(self::$viewer,'games'))$tabs['play']='Play';$tabs['account']=self::$signed?'Account':'Sign in';
-        foreach($tabs as $key=>$label){$target=$key==='account'&&!self::$signed?'login':$key;$selected=$view===$target || ($key==='play'&&in_array($view,['game','emulator'],true)) || ($key==='library'&&in_array($view,['section','show','item','search','collections','collection'],true));$nav.='<a'.($selected?' class="active" aria-current="page"':'').' href="'.self::esc(self::url(['view'=>$target])).'">'.self::esc($label).'</a>';}
+        $tabs=['home'=>'Home'];if($home && AreaAccess::allowed(self::$viewer,'library'))$tabs['library']='Library';if(!empty($home['features']['live']))$tabs['live']='Live';if($home && AreaAccess::allowed(self::$viewer,'games'))$tabs['play']='Play';if($home&&self::$signed)$tabs['misc']='Misc';$tabs['account']=self::$signed?'Settings':'Sign in';
+        foreach($tabs as $key=>$label){$target=$key==='account'&&!self::$signed?'login':$key;$selected=$view===$target || ($key==='play'&&in_array($view,['game','emulator'],true)) || ($key==='library'&&in_array($view,['section','show','item','search','collections','collection','requests'],true)) || ($key==='account'&&in_array($view,['tools','tool','tool-result','configuration','users','edit-user','roles','edit-role','live-admin','factory-reset'],true)) || ($key==='home'&&in_array($view,['favourites','watchlist','calendar','history','arrivals','tonight','cinema','invitations','home-options','lists','friends','inbox','chat'],true));$nav.='<a'.($selected?' class="active" aria-current="page"':'').' href="'.self::esc(self::url(['view'=>$target])).'">'.self::esc($label).'</a>';}
         $nav.='</div></div>';
         if($home){
             $nav.='<div class="compat-subnav">';
-            if(in_array($view,['library','section','show','item','search','collections','collection'],true)){
+            if(in_array($view,['library','section','show','item','search','collections','collection','requests'],true)){
                 $libraryTabs=[['label'=>'Discover','params'=>['view'=>'library'],'active'=>$view==='library']];
                 foreach($home['sections'] ?? [] as $section)if(($section['type'] ?? '')!=='roms')$libraryTabs[]=['label'=>$section['label'] ?? $section['type'],'params'=>['view'=>'section','id'=>$section['id']],'active'=>$view==='section'&&($_GET['id'] ?? '')===$section['id']];
                 $libraryTabs[]=['label'=>'Collections','params'=>['view'=>'collections'],'active'=>in_array($view,['collections','collection'],true)];
+                if(self::$signed&&(MediaRequests::config()['enabled']||MediaRequests::canManage(self::$viewer)))$libraryTabs[]=['label'=>'Requests','params'=>['view'=>'requests'],'active'=>$view==='requests'];
                 foreach($libraryTabs as $tab)$nav.='<a'.($tab['active']?' class="active" aria-current="page"':'').' href="'.self::esc(self::url($tab['params'])).'">'.self::esc($tab['label']).'</a>';
             }elseif(in_array($view,['play','game','emulator'],true)){
                 foreach(self::playTabs() as $tab=>$label)$nav.='<a'.(($view==='play'?($_GET['tab'] ?? 'games'):$tab)===$tab && ($view==='play'||$tab==='games')?' class="active" aria-current="page"':'').' href="'.self::esc(self::url(['view'=>'play','tab'=>$tab])).'">'.self::esc($label).'</a>';
+            }elseif($view==='misc'){
+                foreach(['calendar'=>'Calendar','reminders'=>'Reminders','pictures'=>'Pictures','drop'=>'Drop','board'=>'Boards','ambient'=>'Ambient'] as $tab=>$label)$nav.='<a'.(($_GET['tab'] ?? 'calendar')===$tab?' class="active" aria-current="page"':'').' href="'.self::esc(self::url(['view'=>'misc','tab'=>$tab])).'">'.self::esc($label).'</a>';
+            }elseif(in_array($view,['account','tools','tool','tool-result','configuration','users','edit-user','roles','edit-role','live-admin','factory-reset'],true)){
+                $settings=['account'=>'Account','tools'=>'Tools'];if((self::$viewer['role'] ?? '')==='admin')$settings+=['configuration'=>'Configuration','users'=>'Users','roles'=>'Roles','live-admin'=>'Live settings'];foreach($settings as $tab=>$label)$nav.='<a'.($view===$tab?' class="active" aria-current="page"':'').' href="'.self::esc(self::url(['view'=>$tab])).'">'.self::esc($label).'</a>';
             }elseif($view==='live'){
                 foreach(['now'=>'On now','relay'=>'Relay','iptv'=>'IPTV','stalker'=>'Stalker','radio'=>'Radio'] as $tab=>$label){$selected=($_GET['tab'] ?? 'now')===$tab;$nav.='<a'.($selected?' class="active" aria-current="page"':'').' href="'.self::esc(self::url(['view'=>'live','tab'=>$tab])).'">'.self::esc($label).'</a>';}
             }else{foreach(['home'=>'Overview','favourites'=>'Favourites','watchlist'=>'Watchlist','calendar'=>'Release calendar','history'=>'History','arrivals'=>'New arrivals','tonight'=>'Find a watch','cinema'=>'Watch together','invitations'=>'Invitations','home-options'=>'Customise Home','lists'=>'Custom lists','friends'=>'Friends','inbox'=>'Inbox','chat'=>'Chat'] as $key=>$label){if($key!=='home'&&!self::$signed)continue;$nav.='<a'.($view===$key?' class="active" aria-current="page"':'').' href="'.self::esc(self::url($key==='home'?['view'=>'home','overview'=>'1']:['view'=>$key])).'">'.self::esc($label).'</a>';}}
@@ -744,7 +930,9 @@ final class CompatibilityBrowser {
             $back=['view'=>'home'];$label='Back to Home';
             if($view==='item'){$current=Catalogue::item((string)($_GET['id'] ?? ''));if(!empty($current['show'])){$back=['view'=>'show','id'=>Catalogue::showKey((string)$current['section'],(string)$current['show']),'season'=>(int)($current['season'] ?? 0)];$label='Back to show';}elseif(!empty($current['section'])){$back=['view'=>'section','id'=>$current['section']];$label='Back to library';}}
             elseif(in_array($view,['play','game','emulator'],true)){$back=['view'=>'play'];$label='Back to Play';}
-            elseif(in_array($view,['section','show','collections','collection','search'],true)){$back=['view'=>'library'];$label='Back to Library';}
+            elseif(in_array($view,['section','show','collections','collection','search','requests'],true)){$back=['view'=>'library'];$label='Back to Library';}
+            elseif($view==='live'&&($_GET['tab'] ?? '')==='stalker'){$back=['view'=>'live','tab'=>'stalker','kind'=>(string)($_GET['kind'] ?? 'live')];$label='Back to Stalker';}
+            elseif(in_array($view,['tools','tool','tool-result','configuration','users','edit-user','roles','edit-role','live-admin','factory-reset'],true)){$back=['view'=>'account'];$label='Back to Settings';}
             elseif(in_array($view,['profile','compose','create-room'],true)){$back=['view'=>'friends'];$label='Back to Friends';}
             elseif(in_array($view,['chat','inbox'],true)&&!empty($_GET['id'])){$back=['view'=>$view];$label='Back to conversations';}
             $body='<div class="compat-back">'.str_replace('<a class=', '<a data-compat-back="1" class=', self::link($label,$back)).'</div>'.$body;

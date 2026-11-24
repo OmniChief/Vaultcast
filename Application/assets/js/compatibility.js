@@ -114,7 +114,8 @@
     if(key==='ArrowLeft'||key==='Left')code=37;else if(key==='ArrowUp'||key==='Up')code=38;else if(key==='ArrowRight'||key==='Right')code=39;else if(key==='ArrowDown'||key==='Down')code=40;
     else if(key==='Enter'||key==='Accept'||key==='Select'||key==='OK'||code===23)code=13;
     var from=document.activeElement,tag=remoteTag(from),nativeControl=remoteNative(from),ok=code===13;
-    if((code===27||key==='Escape')&&remoteEditing===from){remoteEditing=null;remoteField=from;remoteStop(event);return;}
+    if((code===27||code===10009||key==='Escape'||key==='Back')&&remoteEditing===from){remoteEditing=null;remoteField=from;remoteStop(event);return;}
+    if((code===10009||key==='Back'||key==='BrowserBack')&&!nativeControl){var back=document.querySelector&&document.querySelector('a[data-compat-back]');if(back){remoteStop(event);window.location.href=back.href;return;}}
     if(ok){
       if(nativeControl){
         if(remoteField===from){remoteField=null;remoteEditing=from;if(tag==='textarea'||tag==='input'&&String(from.type||'').toLowerCase()!=='file')remoteStop(event);}
