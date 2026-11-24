@@ -240,7 +240,7 @@
 
   // Legacy-syntax clients reuse the Node Xtream service and the authenticated
   // Drop API. No provider credentials are ever inserted into the page.
-  function legacyJson(url, method, body, done, raw){
+  function legacyJson(url, method, body, done, raw, timeout){
     if(!window.XMLHttpRequest||!window.JSON||!window.JSON.parse||!window.JSON.stringify){done('This device does not support the required network API.');return null;}
     var req=new XMLHttpRequest(),finished=false,timer;
     function finish(error,data){if(finished)return;finished=true;clearTimeout(timer);done(error,data);}
@@ -248,7 +248,7 @@
       req.open(method,url,true);
       if(method!=='GET')req.setRequestHeader('Content-Type',raw?'application/octet-stream':'application/json');
       req.onreadystatechange=function(){if(req.readyState!==4)return;var data;try{data=window.JSON.parse(req.responseText);}catch(e){finish('The server did not return a valid response.');return;}finish(req.status>=200&&req.status<300&&data.ok!==false?null:(data.error||'Request failed.'),data);};
-      timer=setTimeout(function(){finish('The server took too long to respond.');try{req.abort();}catch(e){}},60000);
+      timer=setTimeout(function(){finish('The server took too long to respond.');try{req.abort();}catch(e){}},timeout||60000);
       req.send(method==='GET'?null:raw?body:window.JSON.stringify(body||{}));
     }catch(e){finish('Could not contact the server.');}
     return req;
@@ -257,6 +257,130 @@
     var button=document.createElement('button');button.type='button';compatText(button,label);compatListen(button,'click',fn);parent.appendChild(button);return button;
   }
   function legacyClear(node){while(node.firstChild)node.removeChild(node.firstChild);}
+  // Provider administration uses the same authenticated Node routes as the full interface.
+  var providerAdmin=document.getElementById('compat-provider-admin');
+  if(providerAdmin)(function(){
+    var endpoint=(window.__VC_COMPAT_BASE__||'/')+'netplay/application/live/',tab=providerAdmin.getAttribute('data-provider-tab'),status=document.getElementById('compat-provider-status'),controls=document.getElementById('compat-provider-controls'),results=document.getElementById('compat-provider-results'),busy=false,selected=null,connections=[],jobs=[],folderJob=null;
+    function say(s){compatText(status,s);}
+    function el(tag,parent,content,cls){var n=document.createElement(tag);if(cls)n.className=cls;if(content!==null&&typeof content!=='undefined')compatText(n,String(content));if(parent)parent.appendChild(n);return n;}
+    function field(parent,label,type,value){var l=el('label',parent,label),n=el('input',l,null);n.type=type||'text';n.value=value==null?'':String(value);return n;}
+    function check(parent,label,on){var l=el('label',parent,null,'compat-check'),n=el('input',l,null);n.type='checkbox';n.checked=!!on;l.appendChild(document.createTextNode(' '+label));return n;}
+    function select(parent,label,options,value){var l=el('label',parent,label),n=el('select',l,null),i,o;for(i=0;i<options.length;i++){o=el('option',n,options[i][1]);o.value=options[i][0];if(o.value===value)o.selected=true;}return n;}
+    function line(parent,s){el('p',parent,s,'compat-note');}
+    function flag(v){return v===true||v===1||v==='1'||v==='true';}
+    function call(action,body,done,timeout){
+      if(busy)return;busy=true;say(body?'Submitting request…':'Loading saved settings…');
+      var buttons=providerAdmin.getElementsByTagName('button'),i;for(i=0;i<buttons.length;i++)buttons[i].disabled=true;
+      legacyJson(endpoint+action,body?'POST':'GET',body,function(err,data){
+        busy=false;for(var k=0;k<buttons.length;k++)buttons[k].disabled=false;
+        if(err){say(err+' Refresh saved settings before retrying a change.');return;}say('Ready.');done(data||{});
+      },false,timeout);
+    }
+    function connectionList(){
+      selected=null;folderJob=null;legacyClear(controls);legacyClear(results);legacyButton(controls,'Retry loading connections',connectionList);
+      call(tab==='stalker'?'stalker':'xtream_connections',null,function(data){
+        connections=data.connections||[];drawConnections();
+      });
+    }
+    function drawConnections(){
+      legacyClear(controls);legacyClear(results);legacyButton(controls,'Add connection',function(){editConnection(null);});legacyButton(controls,'Refresh',connectionList);
+      if(!connections.length)line(results,'No connections configured.');
+      for(var i=0;i<connections.length;i++)(function(row){
+        var panel=el('section',results,null,'compat-provider-card');
+        el('h3',panel,row.name||'Connection');line(panel,(flag(row.enabled)?'Enabled':'Disabled')+(row.expired?' · Account expired':''));
+        legacyButton(panel,'Edit',function(){editConnection(row);});
+        legacyButton(panel,'Check account',function(){
+          var payload=tab==='stalker'?{operation:'check',id:row.id}:{operation:'check',feed:row.id};
+          call(tab+'_manage',payload,function(data){
+            var account=data.account||data,report=el('div',panel,null,'compat-provider-report');
+            el('strong',report,'Connection check completed');
+            if(typeof account.exp_date!=='undefined'){var expiry=Number(account.exp_date);line(report,'Expires: '+(expiry>0?new Date(expiry*1000).toLocaleString():'Not reported'));}
+            var keys=['expiryDate','expiryTime','expiryStatus','channelCount','sampleCount','status','expires','expiry','expiry_date','activeConnections','maxConnections','active_cons','max_connections'],labels=['Expiry date','Expiry time','Expiry status','Channel count','Sample count','Account status','Expires','Expiry','Expiry date','Active connections','Maximum connections','Active connections','Maximum connections'];
+            for(var k=0;k<keys.length;k++)if(account[keys[k]]!==null&&typeof account[keys[k]]!=='undefined'&&typeof account[keys[k]]!=='object')line(report,labels[k]+': '+account[keys[k]]);
+            say('Connection check completed.');
+          },125000);
+        });
+        legacyButton(panel,'Remove',function(){if(!window.confirm('Remove '+(row.name||'this connection')+'?'))return;
+          call(tab+'_manage',tab==='stalker'?{operation:'remove',id:row.id}:{operation:'remove',feed:row.id},function(){connectionList();});
+        });
+      })(connections[i]);
+    }
+    function editConnection(row){
+      selected=row;legacyClear(controls);legacyClear(results);legacyButton(controls,'Back to connections',connectionList);
+      var panel=el('section',results,null,'compat-provider-card');el('h3',panel,row?'Edit connection':'Add connection');
+      var name=field(panel,'Connection name','text',row?row.name:''),url=field(panel,tab==='stalker'?'Portal URL':'Provider URL','text',row?row.url:''),on=check(panel,'Enabled',!row||flag(row.enabled)),fields={},keys=tab==='stalker'?['mac','username','password','serial','deviceId','deviceId2']:['username','password'],labels=tab==='stalker'?['MAC address','Username (optional)','Password (optional)','Serial number (optional)','Device ID (optional)','Device ID 2 (optional)']:['Username','Password'];
+      if(row)line(panel,'Existing credentials are not displayed. Leave fields blank to keep them.');
+      for(var i=0;i<keys.length;i++)fields[keys[i]]=field(panel,labels[i],keys[i]==='password'?'password':'text','');
+      var replace=null;if(row&&tab==='stalker')replace=check(panel,'Replace all credentials (enter the registered MAC again; blank optional fields are cleared)',false);
+      legacyButton(panel,'Save connection',function(){
+        var connection={name:name.value,url:url.value,enabled:on.checked},k;
+        if(!url.value||(!row&&(!fields[tab==='stalker'?'mac':'username'].value||(tab==='xtream'&&!fields.password.value)))){say('Enter the provider address and required account details.');return;}
+        for(k in fields)if(Object.prototype.hasOwnProperty.call(fields,k))connection[k]=fields[k].value;
+        if(replace)connection.replaceCredentials=replace.checked;
+        if(tab==='stalker'&&replace&&replace.checked&&!connection.mac){say('Enter the registered MAC address.');return;}
+        var payload={operation:'save',connection:connection};if(row)payload[tab==='stalker'?'id':'feed']=row.id;
+        call(tab+'_manage',payload,function(){connectionList();});
+      });
+    }
+    function catalogueStatus(){
+      folderJob=null;legacyClear(controls);legacyClear(results);legacyButton(controls,'Retry loading catalogue',catalogueStatus);
+      call('stalker_catalogue_status?summary=1',null,function(data){drawJobs(data);});
+    }
+    function control(operation,feed,kind,extra,done){
+      var payload={operation:operation,feed:feed||'',kind:kind||'all'},k;
+      if(extra)for(k in extra)if(Object.prototype.hasOwnProperty.call(extra,k))payload[k]=extra[k];
+      call('stalker_catalogue_control',payload,function(data){if(done)done(data);else drawJobs(data);},operation==='discover'?150000:60000);
+    }
+    function drawJobs(data){
+      jobs=data.sources||[];legacyClear(controls);legacyClear(results);
+      line(controls,'Worker: '+(data.worker?'Running':'Not running')+' · Reset: '+((data.reset||{}).state||'idle'));
+      legacyButton(controls,'Refresh status',catalogueStatus);
+      legacyButton(controls,'Resume all',function(){control('load','','all');});
+      legacyButton(controls,'Pause all',function(){control('pause','','all');});
+      legacyButton(controls,'Refresh all',function(){if(window.confirm('Refresh all provider catalogues?'))control('refresh','','all');});
+      if(!jobs.length)line(results,'No catalogue sources. Add and enable a Stalker connection first.');
+      for(var i=0;i<jobs.length;i++)(function(job){
+        var panel=el('section',results,null,'compat-provider-card'),kind=job.kind,feed=job.feed_id;
+        el('h3',panel,(job.name||'Connection')+' · '+(kind==='vod'?'Movies':kind==='series'?'Series':'Live TV'));
+        line(panel,String(job.status||'Unknown')+' · '+(job.scanned||0)+' scanned'+(typeof job.foldersTotal!=='undefined'?' · '+(job.foldersComplete||0)+' / '+job.foldersTotal+' folders':''));
+        if(job.active)line(panel,'Currently scanning');
+        if(job.status==='removed'||job.status==='expired')return;
+        legacyButton(panel,'Resume',function(){control('load',feed,kind);});
+        legacyButton(panel,'Pause',function(){control('pause',feed,kind);});
+        legacyButton(panel,'Refresh',function(){if(window.confirm('Refresh this catalogue?'))control('refresh',feed,kind);});
+        if(kind==='vod'||kind==='series'){
+          legacyButton(panel,'Provider folders',function(){
+            call('stalker_catalogue_status',null,function(full){showFolders(full,feed,kind);});
+          });
+        }
+      })(jobs[i]);
+      var danger=el('section',results,null,'compat-provider-card');
+      el('h3',danger,'Reset catalogue');line(danger,'Deletes and rebuilds the Movies and Series catalogue. Enter the confirmation exactly.');
+      var confirm=field(danger,'Type RESET STALKER CATALOGUE','text','');
+      legacyButton(danger,'Reset and rebuild',function(){if(confirm.value!=='RESET STALKER CATALOGUE'){say('Enter the confirmation phrase.');return;}if(window.confirm('Reset the entire Movies and Series catalogue?'))control('reset_rebuild','','all',{confirmation:confirm.value});});
+    }
+    function showFolders(data,feed,kind){
+      var list=data.sources||[],job=null,i;for(i=0;i<list.length;i++)if(list[i].feed_id===feed&&list[i].kind===kind){job=list[i];break;}
+      if(!job){say('Catalogue source no longer available.');return;}
+      legacyClear(controls);legacyClear(results);legacyButton(controls,'Back to catalogue',catalogueStatus);
+      el('h3',results,(job.name||'Connection')+' · '+(kind==='vod'?'Movies':'Series')+' folders');
+      line(results,'Pause scanning before rediscovering folders. Only selected folders are scanned in selection mode.');
+      legacyButton(results,'Discover folders',function(){if(window.confirm('Discover provider folders? The existing scan must be paused.'))control('discover',feed,kind,null,function(full){showFolders(full,feed,kind);});});
+      var mode=select(results,'Scan mode',[['all','All folders'],['include','Selected folders only']],job.folderMode||'all'),rows=job.folders||[],checks=[],holder=el('div',results,null,'compat-folder-choices');
+      for(i=0;i<rows.length;i++)if(rows[i].folder_id&&rows[i].folder_id!=='*'){
+        var n=check(holder,(rows[i].title||rows[i].folder_id)+' · '+(rows[i].status||''),rows[i].selected);checks.push({id:rows[i].folder_id,node:n});
+      }
+      if(!checks.length)line(holder,'No folders discovered yet.');
+      legacyButton(results,'Select all',function(){for(var k=0;k<checks.length;k++)checks[k].node.checked=true;mode.value='include';});
+      legacyButton(results,'Clear selection',function(){for(var k=0;k<checks.length;k++)checks[k].node.checked=false;mode.value='include';});
+      legacyButton(results,'Save folder selection',function(){
+        var ids=[];for(var k=0;k<checks.length;k++)if(checks[k].node.checked)ids.push(String(checks[k].id));
+        if(mode.value==='include'&&!ids.length&&!window.confirm('Select no folders? This catalogue will skip all folders.'))return;
+        control('folders',feed,kind,{mode:mode.value,folders:ids},function(full){showFolders(full,feed,kind);say('Folder selection saved.');});
+      });
+    }
+    if(tab==='catalogue')catalogueStatus();else connectionList();
+  })();
   var xtream=document.getElementById('compat-xtream');
   if(xtream){
     (function(){

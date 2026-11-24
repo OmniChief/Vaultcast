@@ -618,3 +618,15 @@ body.compat-manly-man a.compat-choice.active{background:#ffc073;color:#10191c;bo
 .compat-ambient-clock{padding:22px 12px;font-size:42px;font-weight:bold;text-align:center;line-height:1.2}
 @media screen and (max-width:480px){.compat-slide-stage{height:190px;line-height:190px}.compat-ambient-clock{font-size:28px}}
 .compat-width-tiny .compat-slide-stage{height:190px;line-height:190px}
+
+
+/* Compatibility provider management */
+#compat-provider-admin .compat-provider-card{border:1px solid rgba(128,128,128,.5);padding:16px;border-radius:9px;margin:12px 0}
+#compat-provider-admin .compat-provider-card h3{margin:0 0 10px}
+#compat-provider-admin label{display:block;margin:10px 0}
+#compat-provider-admin label input[type=text],#compat-provider-admin label input[type=password],#compat-provider-admin label select{display:block;width:100%;max-width:680px;margin:5px 0;box-sizing:border-box}
+#compat-provider-admin button{margin:5px 6px 5px 0}
+#compat-provider-admin .compat-provider-report{border-top:1px solid currentColor;margin-top:12px;padding-top:12px}
+#compat-provider-admin .compat-folder-choices{margin:12px 0;padding:6px 10px;border:1px solid rgba(128,128,128,.4)}
+#compat-provider-admin .compat-folder-choices label{padding:6px 0;line-height:1.4}
+#compat-provider-admin #compat-provider-status{font-weight:bold;margin:6px 0 12px}
