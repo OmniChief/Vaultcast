@@ -869,11 +869,12 @@ final class CompatibilityBrowser {
         $url=$native['source']['url']??'';
         $path=is_string($url)?parse_url($url,PHP_URL_PATH):null;
         $endpoint='netplay/application/live/stalker_stream';
-        if(!in_array($path,['/'.$endpoint,self::$base.$endpoint],true)||parse_url($url,PHP_URL_HOST)!==null)
+        $native=$kind==='live'&&in_array($path,['/'.$endpoint.'/tv.ts',self::$base.$endpoint.'/tv.ts'],true);
+        if((!$native&&!in_array($path,['/'.$endpoint,self::$base.$endpoint],true))||parse_url($url,PHP_URL_HOST)!==null)
             throw new RuntimeException('Invalid playback selection.');
         $query=(string)parse_url($url,PHP_URL_QUERY);
         parse_str($query,$params);
-        return [self::$base.$endpoint.'?'.$query,($params['format']??'')==='.m3u8'];
+        return [self::$base.$endpoint.($native?'/tv.ts':'').'?'.$query,!$native&&($params['format']??'')==='.m3u8'];
     }
     /** Samsung-safe Stalker country browsing across all enabled connections. */
     private static function stalker(int $page): string {
@@ -1089,7 +1090,8 @@ final class CompatibilityBrowser {
                 $feed=null;foreach($feeds as $candidate)if((string)$candidate['id']===$selectedFeed){$feed=$candidate;break;}
                 if(!$feed)throw new RuntimeException('Connection unavailable.');
                 [$stream,$hls]=self::stalkerSource($feed,(string)$item['id'],'live',['category'=>$item['category']??'','page'=>$item['page']??$page]);
-                if($hls)$html.='<p class="compat-note">This provider supplied an HLS playlist. Older Tizen browsers may not support HLS; Vaultcast cannot change the provider format without transcoding.</p>';
+                if($hls)$html.='<p class="compat-note">This source requires HLS playback.</p>';
+                else $html.='<p class="compat-note">Native TV stream · compatible HLS transport segments are joined without transcoding.</p>';
                 $html.=self::player($stream,false,[],['hls'=>$hls,'live_source'=>true,'fallback_url'=>$fallback,'fallback_label'=>$nextLabel,'autoplay'=>$auto||$attempt>0]);
             }catch(Throwable $e){
                 $html.='<p class="compat-error">'.self::esc($e instanceof RuntimeException?$e->getMessage():'This source could not be opened.').'</p>';

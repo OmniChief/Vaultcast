@@ -234,9 +234,12 @@ module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavai
     if (streaming && opts.ticket != null) {
       const state = await playback.authorizedTicket(root, feed, id, opts.ticket, user.id);
       if (!state) return fail(403, 'Playback selection expired. Select the title again.');
+      if (request.path.endsWith('/tv.ts') && (!state.compatibilitySession || state.kind !== 'live' || opts.resource != null))
+        return fail(403, 'Invalid TV playback selection.');
       return network(response, () => playback.serve(root, feed, state, request, response));
     }
     if (streaming) {
+      if (request.path.endsWith('/tv.ts')) return fail(403, 'Invalid TV playback selection.');
       if (opts.resource != null) return fail(403, 'Invalid playback resource.');
       const channelUrl = lineup.channelUrl(feed.id, id);
       const saved = live_iptv?.channels?.some(
@@ -504,7 +507,7 @@ module.exports = function mountStalkerStatus(app, prefix, { root, handle, unavai
     return operation(request, response);
   });
   app.get(prefix + '/live/:action(stalker|stalker_catalogue_status|stalker_update_status|stalker_offline|stalker_offline_file|stalker_art|' + browseActions.concat(diagnosticActions).join('|') + ')', operation);
-  app.get(prefix + '/live/:action(stalker_stream)', async (request,response) => {
+  app.get([prefix + '/live/:action(stalker_stream)', prefix + '/live/:action(stalker_stream)/tv.ts'], async (request,response) => {
     if (request.headers['sec-fetch-site'] === 'cross-site') return response.sendStatus(403);
     // Native TV players may omit cookies, including on HLS child requests.
     // Only an unguessable, authenticated compatibility playback selection can

@@ -21,6 +21,7 @@ const {
 } = require('./stalker-provider');
 
 const { playlist, resourceUrl } = require('./provider-playlist');
+const { nativeHls } = require('./stalker-native-hls');
 
 const legacyResourceSecret = randomBytes(32);
 const playbackPath = '/netplay/application/live/stalker_stream';
@@ -114,16 +115,15 @@ async function issue(root, feed, id, kind, item, viewer, signal, compatibility =
   await cache(root, ticketKey(ticket), state, lifetime);
   const query = new URLSearchParams({ feed: feed.id, channel: id, ticket });
   const pathname = new URL(url).pathname;
-  const hls = kind === 'live'
-    ? !compatibility || /\.m3u8$/i.test(pathname)
-    : /\.m3u8$/i.test(pathname);
+  const nativeLive = compatibility && kind === 'live';
+  const hls = kind === 'live' ? !nativeLive : /\.m3u8$/i.test(pathname);
   if (hls) query.set('format', '.m3u8');
   else if (compatibility && kind === 'live') query.set('format', '.ts');
   else if (compatibility && /\.(?:mp4|m4v|webm|mkv|ts|m2ts|mts)$/i.test(pathname))
     query.set('format', /\.[a-z0-9]+$/i.exec(pathname)[0].toLowerCase());
   const transport = kind !== 'live' && /\.(?:ts|m2ts|mts|mpegts)$/i.test(pathname)
     ? 'mpegts' : undefined;
-  return { ok: true, source: { kind, url: playbackPath + '?' + query, ...(transport ? { transport } : {}) } };
+  return { ok: true, source: { kind, url: playbackPath + (nativeLive ? '/tv.ts' : '') + '?' + query, ...(transport ? { transport } : {}) } };
 }
 
 async function compatibilitySession(root, { ticket, feed, channel }) {
@@ -303,10 +303,11 @@ async function serve(root, feed, state, request, response) {
     // A native player's preliminary HEAD must not consume a one-use live
     // provider URL. Validate the ticket first, then answer locally.
     const nativeLive = Boolean(state.compatibilitySession) && state.kind === 'live' && target == null;
+    const nativeTransport = nativeLive && request.path.endsWith('/tv.ts');
     if (nativeLive && request.method === 'HEAD') {
       const path = new URL(state.url).pathname;
       return response.set('Cache-Control','private, no-store')
-        .type(/\.m3u8$/i.test(path) ? 'application/vnd.apple.mpegurl' : 'video/mp2t').end();
+        .type(!nativeTransport && /\.m3u8$/i.test(path) ? 'application/vnd.apple.mpegurl' : 'video/mp2t').end();
     }
     const session = await playbackSession(root, feed, state, playback, controller.signal);
     if (!/^st[0-9a-f]{32}$/.test(session.jar)) throw problem(403, 'Invalid playback session.');
@@ -442,10 +443,17 @@ async function serve(root, feed, state, request, response) {
         if (size > 5000000) throw problem(502, 'Provider playlist exceeds the size limit.');
         chunks.push(value);
       }
+      const body = Buffer.concat(chunks, size).toString();
+      if (nativeTransport) {
+        // No codec conversion. The TV receives one progressive MPEG-TS response
+        // from the existing provider relay, rather than an HLS manifest.
+        res.destroy(); decoder?.destroy(); decoder = null;
+        response.type('video/mp2t').set('Accept-Ranges', 'none');
+        return await nativeHls(body, result.url, response, controller.signal,
+          (url) => follow(client, url, { method: 'GET', signal: controller.signal }));
+      }
       const params = { feed: feed.id, channel: state.id, ticket, playback };
-      return response.end(
-        playlist(Buffer.concat(chunks, size).toString(), result.url, params, state.childKey, playback),
-      );
+      return response.end(playlist(body, result.url, params, state.childKey, playback));
     }
     response.status(maybeMp4 ? 200 : res.statusCode);
     for (const key of ['content-range', 'content-length', 'accept-ranges', 'etag', 'last-modified']) {
