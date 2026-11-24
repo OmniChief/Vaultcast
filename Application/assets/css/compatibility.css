@@ -375,3 +375,15 @@ html{background:transparent}
 }
 
 #compat-xtream-controls{margin:12px 0 18px}#compat-xtream-results .compat-list li{padding:10px 14px}#compat-xtream-player:empty{display:none}#compat-xtream-player{margin:18px 0}#compat-xtream-controls input{max-width:65%;margin-right:8px}
+
+/* Shared offline library, styled without CSS grid or flex requirements. */
+#compat-offline-host .vc-off-head{margin:20px 0}
+#compat-offline-host .vc-off-row{overflow:hidden;padding:16px;margin:12px 0;border:1px solid #52667d;border-radius:12px}
+#compat-offline-host .vc-off-poster{float:left;width:76px;height:114px;object-fit:cover;margin:0 18px 8px 0}
+#compat-offline-host .vc-off-copy{overflow:hidden}
+#compat-offline-host .vc-off-copy small{display:block;margin:6px 0}
+#compat-offline-host .vc-off-bar{height:6px;max-width:400px;background:#344759;margin:8px 0}
+#compat-offline-host .vc-off-bar span{display:block;height:6px;background:#70e9fa}
+.vc-off-player{position:fixed;top:0;left:0;right:0;bottom:0;background:#080d17;color:#fff;z-index:100020;padding:16px;overflow:auto}
+.vc-off-player .vc-off-video{height:80%;max-height:80%;width:100%;background:#000}
+.vc-off-player-bar button{margin-left:16px}

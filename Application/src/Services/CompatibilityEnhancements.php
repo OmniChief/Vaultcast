@@ -19,7 +19,7 @@ trait CompatibilityEnhancements {
         $motion=$prefs['motion_mode']??(in_array($prefs['reduce_motion']??false,[true,1,'1','true'],true)?'reduced':'system');
         $html.=self::select('Theme motion','motion_mode',['system'=>'Follow device','full'=>'Full animation','reduced'=>'Reduced motion'],(string)$motion).'<p class="compat-note">Decorative animation stays off in compatibility mode. This choice applies to the full interface.</p>';
         $html.=self::select('Preferred subtitles','subtitle_language',[''=>'Off','en'=>'English','es'=>'Spanish','fr'=>'French','de'=>'German','it'=>'Italian','pt'=>'Portuguese','ja'=>'Japanese','ko'=>'Korean','zh'=>'Chinese'],(string)($prefs['subtitle_language'] ?? '')).'<button type="submit">Save account settings</button></form>';
-        return $html.self::link('Tools and settings',['view'=>'tools']).self::accountOptions().self::link('Friends',['view'=>'friends']).self::link('Inbox',['view'=>'inbox']).self::link('Live chat',['view'=>'chat']).self::form([],'Sign out','logout');
+        return $html.self::link('Tools and settings',['view'=>'tools']).self::link('Parental controls',['view'=>'parental']).self::accountOptions().(self::socialAllowed()?self::link('Friends',['view'=>'friends']).self::link('Inbox',['view'=>'inbox']).self::link('Live chat',['view'=>'chat']):'').self::form([],'Sign out','logout');
     }
     private static function uploaded(string $name,int $limit): ?array {
         $file=$_FILES[$name] ?? null;if(!$file || ($file['error'] ?? UPLOAD_ERR_NO_FILE)===UPLOAD_ERR_NO_FILE)return null;

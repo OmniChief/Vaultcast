@@ -25,7 +25,7 @@ trait CompatibilityLibraryFeatures {
         if(!self::isShow($card) && ($card['media_kind'] ?? '')==='video'){
             if(self::$signed)$html.=self::link('Watch together',['view'=>'cinema-create','id'=>'item:'.$card['id']]);
             if(self::$signed && (Subtitles::uploadAllowed(self::$viewer) || (OpenSubtitles::configured()&&OpenSubtitles::allowed(self::$viewer))))$html.=self::link('Find / upload subtitles',['view'=>'subtitles','id'=>$card['id']]);
-            $html.=self::link('Request compatible copy',['view'=>'convert-request','id'=>$card['id']]);
+            $html.=self::link('Request compatible copy',['view'=>'convert-request','id'=>$card['id']]);if(self::offlineAvailable())$html.=self::link('Download to this device',['view'=>'offline','id'=>$card['id']]);
         }
         if(self::isShow($card)||in_array($card['media_kind']??'',['video','audio'],true))$html.=self::link('Copy VLC link',['view'=>'vlc-link','id'=>$key]);
         if(self::$signed)$html.=self::link('Add to a custom list',['view'=>'choose-list','id'=>$key]);

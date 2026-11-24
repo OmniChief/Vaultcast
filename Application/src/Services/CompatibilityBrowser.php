@@ -47,7 +47,7 @@ final class CompatibilityBrowser {
     }
     private static function cards(array $items,array $context=[]): string {
         $html='<ul class="compat-cards">';$count=0;
-        foreach($items as $item){if(($item['media_kind'] ?? '')==='rom'||($item['type'] ?? '')==='roms'||!AreaAccess::allowed(self::$viewer,AreaAccess::itemArea($item)))continue;
+        foreach($items as $item){if(($item['media_kind'] ?? '')==='rom'||($item['type'] ?? '')==='roms'||!AreaAccess::allowed(self::$viewer,AreaAccess::itemArea($item))||!Parental::allows(self::$viewer,$item))continue;
             $count++;$meta=[];if(!empty($item['year']))$meta[]=$item['year'];if(!empty($item['season_count']))$meta[]=$item['season_count'].' seasons';if(!empty($item['episode']))$meta[]='Episode '.$item['episode'];
             $html.='<li><a class="compat-card" href="'.self::esc(self::mediaUrl($item,$context)).'">'.self::poster($item).'<strong>'.self::esc($item['title'] ?? 'Untitled').'</strong><small>'.self::esc(implode(' · ',$meta)).'</small>';
             $progress=$item['progress'] ?? [];$duration=(float)($progress['duration'] ?? 0);$position=(float)($progress['position'] ?? 0);
@@ -107,6 +107,17 @@ final class CompatibilityBrowser {
         if(strpos($action,'extra-')!==0)return null;
         $id=(string)($_GET['id'] ?? '');
         if(!self::$signed)throw new RuntimeException('Sign in first.');
+        if(in_array($action,['extra-parental-lock','extra-parental-unlock','extra-parental-save'],true)){
+            if($action==='extra-parental-lock')CompatibilityApi::call('/me/parental/lock','POST');
+            elseif($action==='extra-parental-unlock')CompatibilityApi::call('/me/parental/unlock','POST',['pin'=>(string)($body['current_pin'] ?? '')]);
+            else CompatibilityApi::call('/me/parental','POST',self::parentalPayload($body));
+            return ['view'=>'parental'];
+        }
+        if($action==='extra-admin-parental'){
+            self::toolPermission('admin');
+            CompatibilityApi::call('/admin/users/'.rawurlencode($id).'/parental','POST',self::parentalPayload($body,true));
+            return ['view'=>'edit-user','id'=>$id];
+        }
         if(strpos($action,'extra-request-')===0){
             self::allow('library');
             $tab=(string)($_GET['tab'] ?? 'mine');
@@ -169,7 +180,11 @@ final class CompatibilityBrowser {
         $urlId=rawurlencode($id);
         switch($action){
             case 'extra-calendar-create':
-                CompatibilityApi::call('/misc/cal/calendars','POST',['name'=>(string)($body['name'] ?? ''),'kind'=>(string)($body['kind'] ?? 'local'),'url'=>(string)($body['url'] ?? ''),'episodes'=>(string)($body['episodes'] ?? ''),'show_reminders'=>!empty($body['show_reminders'])]);break;
+            case 'extra-calendar-edit':
+                CompatibilityApi::call('/misc/cal/calendars'.($action==='extra-calendar-edit'?'/'.$urlId:''),'POST',['name'=>(string)($body['name'] ?? ''),'kind'=>(string)($body['kind'] ?? 'local'),'url'=>(string)($body['url'] ?? ''),'episodes'=>(string)($body['episodes'] ?? ''),'show_reminders'=>!empty($body['show_reminders']),'colour'=>(string)($body['colour'] ?? '#59e9ff')]);break;
+            case 'extra-calendar-feed': CompatibilityApi::call('/misc/cal/calendars/'.$urlId.'/feed','POST',['action'=>(string)($body['change'] ?? '')]);break;
+            case 'extra-calendar-share': CompatibilityApi::call('/misc/cal/calendars/'.$urlId.'/share','POST',['username'=>(string)($body['username'] ?? ''),'role'=>(string)($body['role'] ?? 'view')]);break;
+            case 'extra-calendar-import': CompatibilityApi::call('/misc/cal/calendars/'.$urlId.'/import','POST',['ics'=>(string)($body['ics'] ?? '')]);break;
             case 'extra-event-create':
                 $allDay=!empty($body['all_day']);$start=(string)($body['start'] ?? '');$end=(string)($body['end'] ?? '');
                 if(!$allDay){$start=strtotime($start);$end=$end===''?0:strtotime($end);if(!$start||$end===false)throw new RuntimeException('Enter valid dates and times.');}
@@ -178,6 +193,11 @@ final class CompatibilityBrowser {
             case 'extra-calendar-delete': CompatibilityApi::call('/misc/cal/calendars/'.$urlId,'DELETE');break;
             case 'extra-reminder-create':
                 CompatibilityApi::call('/misc/reminders','POST',['title'=>(string)($body['title'] ?? ''),'note'=>(string)($body['note'] ?? ''),'time'=>(string)($body['time'] ?? ''),'calendar'=>true,'schedule'=>['type'=>(string)($body['repeat'] ?? 'once'),'start'=>(string)($body['start'] ?? ''),'every'=>max(1,(int)($body['every'] ?? 1))]]);break;
+            case 'extra-reminder-edit':
+                $data=CompatibilityApi::call('/misc/reminders');$old=null;foreach($data['reminders'] ?? [] as $row)if($row['id']===$id)$old=$row;
+                if(!$old)throw new RuntimeException('Reminder not found.');
+                $old['title']=(string)($body['title'] ?? '');$old['note']=(string)($body['note'] ?? '');$old['time']=(string)($body['time'] ?? '');$old['lead']=(int)($body['lead'] ?? 0);$old['calendar']=!empty($body['calendar']);
+                CompatibilityApi::call('/misc/reminders/'.$urlId,'POST',$old);break;
             case 'extra-reminder-done': CompatibilityApi::call('/misc/reminders/'.$urlId.'/done','POST');break;
             case 'extra-reminder-snooze': CompatibilityApi::call('/misc/reminders/'.$urlId.'/snooze','POST',['minutes'=>60]);break;
             case 'extra-reminder-delete': CompatibilityApi::call('/misc/reminders/'.$urlId,'DELETE');break;
@@ -263,7 +283,26 @@ final class CompatibilityBrowser {
             $html.=self::beginForm($base,'extra-calendar-create').'<h3>Create a calendar</h3>'.self::field('Name','name').self::select('Type','kind',['local'=>'Personal','subscribed'=>'Subscribed calendar'],'local').self::field('Subscription URL (optional)','url','','text',2000).self::select('Episode calendar','episodes',[''=>'None','favourites'=>'Favourite shows','library'=>'Library shows'],'').'<label class="compat-check"><input type="checkbox" name="show_reminders" value="1"> Show reminders</label><button type="submit">Create calendar</button></form>';
             foreach($data['calendars'] ?? [] as $cal){
                 if(in_array($cal['role'],['owner','edit'],true)&&$cal['kind']==='local')$choices[$cal['id']]=$cal['name'];
-                $html.='<p>'.self::esc($cal['name'].' · '.$cal['role']).' <a class="compat-button" href="'.self::esc(self::$base.'api/misc/cal/calendars/'.rawurlencode($cal['id']).'/export').'">Export ICS</a></p>';
+                $p=$base+['id'=>$cal['id']];
+                $html.='<div class="compat-panel"><h3>'.self::esc($cal['name']).'</h3><p>'.self::esc($cal['role']).'</p>';
+                if($cal['kind']!=='subscribed')$html.='<a class="compat-button" href="'.self::esc(self::$base.'api/misc/cal/calendars/'.rawurlencode($cal['id']).'/export').'">Export ICS</a>';
+                if($cal['role']==='owner'){
+                    $html.=self::link('Manage calendar',$p+['edit'=>'calendar']);
+                    if(($_GET['edit'] ?? '')==='calendar'&&($_GET['id'] ?? '')===$cal['id']){
+                        $html.=self::beginForm($p,'extra-calendar-edit',false,['kind'=>$cal['kind']]).self::field('Name','name',$cal['name']).self::field('Colour (#RRGGBB)','colour',$cal['colour']);
+                        if($cal['kind']==='subscribed')$html.=self::field('Subscription URL','url',(string)($cal['url'] ?? ''),'text',2000);
+                        else $html.=self::select('Episode calendar','episodes',[''=>'None','favourites'=>'Favourite shows','library'=>'Library shows'],(string)$cal['episodes']);
+                        $html.='<label class="compat-check"><input type="checkbox" name="show_reminders" value="1"'.(!empty($cal['show_reminders'])?' checked="checked"':'').'> Show reminders</label><button type="submit">Save calendar</button></form>';
+                        $html.=self::beginForm($p,'extra-calendar-share').self::field('Username','username').self::select('Access','role',['view'=>'Can view','edit'=>'Can edit','none'=>'Remove access'],'view').'<button type="submit">Update sharing</button></form>';
+                        foreach($cal['shares'] ?? [] as $share)$html.='<p>'.self::esc(($share['user']['name'] ?? 'User').' · '.$share['role']).'</p>';
+                        if(!empty($cal['feed']))$html.='<label>Private ICS feed<input type="text" readonly="readonly" value="'.self::esc($cal['feed']).'"></label>'.self::form($p,'Revoke feed','extra-calendar-feed',['change'=>'revoke']);
+                        else $html.=self::form($p,'Create private ICS feed','extra-calendar-feed',['change'=>'create']);
+                        if($cal['kind']==='local')$html.=self::beginForm($p,'extra-calendar-import').'<label>Paste ICS calendar data<textarea name="ics" rows="5"></textarea></label><button type="submit">Import events</button></form>';
+                        $html.=self::link('Delete calendar',$p+['confirm'=>'calendar']);
+                    }
+                    if(($_GET['confirm'] ?? '')==='calendar'&&($_GET['id'] ?? '')===$cal['id'])$html.='<p>Delete this calendar and all its events?</p>'.self::form($p,'Confirm delete calendar','extra-calendar-delete');
+                }
+                $html.='</div>';
             }
             if($choices)$html.=self::beginForm($base,'extra-event-create').'<h3>Add event</h3>'.self::select('Calendar','calendar_id',$choices,(string)key($choices)).self::field('Title','title').'<label class="compat-check"><input type="checkbox" name="all_day" value="1"> All-day event</label>'.self::field('Start (YYYY-MM-DD HH:MM, or date only for all-day)','start',date('Y-m-d H:i')).self::field('End (optional)','end').self::field('Location','location').self::field('Notes','notes','','text',1000).self::select('Repeat','repeat',[''=>'None','DAILY'=>'Daily','WEEKLY'=>'Weekly','MONTHLY'=>'Monthly','YEARLY'=>'Yearly'],'').'<button type="submit">Save event</button></form>';
             $offset=max(-24,min(24,(int)($_GET['offset'] ?? 0)));$start=strtotime('today')+$offset*30*86400;$end=$start+30*86400;
@@ -284,7 +323,7 @@ final class CompatibilityBrowser {
         if($tab==='reminders'){
             $data=CompatibilityApi::call('/misc/reminders');
             $html.=self::beginForm($base,'extra-reminder-create').'<h3>New reminder</h3>'.self::field('Title','title').self::field('First date (YYYY-MM-DD)','start',date('Y-m-d')).self::field('Time (HH:MM)','time').self::select('Repeat','repeat',['once'=>'Once','daily'=>'Daily','weekly'=>'Weekly','monthly'=>'Monthly','yearly'=>'Yearly'],'once').self::field('Repeat every','every','1','number').self::field('Note','note','','text',200).'<button type="submit">Add reminder</button></form>';
-            foreach($data['reminders'] ?? [] as $row){$p=$base+['id'=>$row['id']];$html.='<div class="compat-panel"><h3>'.self::esc($row['title']).'</h3><p>'.self::esc(($row['due'] ?? 'No next date').' · '.$row['state']).'</p><p>'.self::esc($row['note']).'</p>'.self::form($p,'Done','extra-reminder-done').self::form($p,'Snooze 1 hour','extra-reminder-snooze').self::link('Delete',$p+['confirm'=>'reminder']).'</div>';if(($_GET['confirm'] ?? '')==='reminder'&&($_GET['id'] ?? '')===$row['id'])$html.=self::form($p,'Confirm delete','extra-reminder-delete');}
+            foreach($data['reminders'] ?? [] as $row){$p=$base+['id'=>$row['id']];$html.='<div class="compat-panel"><h3>'.self::esc($row['title']).'</h3><p>'.self::esc(($row['due'] ?? 'No next date').' · '.$row['state']).'</p><p>'.self::esc($row['note']).'</p>'.self::form($p,'Done','extra-reminder-done').self::form($p,'Snooze 1 hour','extra-reminder-snooze').self::link('Edit',$p+['edit'=>'reminder']).self::link('Delete',$p+['confirm'=>'reminder']).'</div>';if(($_GET['edit'] ?? '')==='reminder'&&($_GET['id'] ?? '')===$row['id'])$html.=self::beginForm($p,'extra-reminder-edit').self::field('Title','title',$row['title']).self::field('Note','note',$row['note'],'text',200).self::field('Time (HH:MM)','time',$row['time']).self::field('Alert before due (minutes)','lead',(string)$row['lead'],'number').'<label class="compat-check"><input type="checkbox" name="calendar" value="1"'.(!empty($row['calendar'])?' checked="checked"':'').'> Show on calendar</label><button type="submit">Save reminder</button></form>';if(($_GET['confirm'] ?? '')==='reminder'&&($_GET['id'] ?? '')===$row['id'])$html.=self::form($p,'Confirm delete','extra-reminder-delete');}
             return $html;
         }
         if($tab==='pictures'){
@@ -361,8 +400,65 @@ final class CompatibilityBrowser {
         return $html.(!$boards?'<p>No boards saved.</p>':'').self::link('Refresh board',$base+['id'=>$selected]);
     }
 
+    private static function socialAllowed(): bool {
+        return !Parental::restricted(self::$viewer)||!empty(Parental::settingsFor(self::$viewer)['social']);
+    }
+    private static function guardView(string $view,string $id): void {
+        if(!self::socialAllowed()&&in_array($view,['friends','profile','inbox','chat','compose','create-room','delete-message','chat-options','chat-confirm','edit-message','cinema','cinema-create','invitations','reviews'],true))throw new RuntimeException('Social features are turned off on this profile.');
+        if(in_array($view,['item','subtitles','convert-request'],true)){
+            $item=Catalogue::item($id);
+            if(!$item||!Parental::allows(self::$viewer,$item))throw new RuntimeException('This title is not available on this profile.');
+        }
+        if($view==='show'&&!Parental::allowsShowKey(self::$viewer,$id))throw new RuntimeException('This title is not available on this profile.');
+        if($view==='vlc-link'&&strpos($id,'show:')===0&&!Parental::allowsShowKey(self::$viewer,substr($id,5)))throw new RuntimeException('This title is not available on this profile.');
+    }
+    private static function parentalFields(array $settings,bool $admin=false): string {
+        $html='';$labels=['enabled'=>'Enable content restrictions','kid'=>'Kids profile','live'=>'Allow Live TV','play'=>'Allow Play','social'=>'Allow social features'];
+        if($admin)$labels['self_manage']='Allow this user to manage their own restrictions';
+        foreach($labels as $key=>$label)$html.='<label class="compat-check"><input type="checkbox" name="parental['.$key.']" value="1"'.(!empty($settings[$key])?' checked="checked"':'').'> '.self::esc($label).'</label>';
+        $ratings=[];foreach(Parental::ratingChoices() as $rating)$ratings[$rating['value']]=$rating['label'];
+        return $html.self::select('Maximum age rating','parental[ceiling]',$ratings,(string)($settings['ceiling'] ?? 5)).self::select('Unrated titles','parental[unrated]',['allow'=>'Allow','hide'=>'Hide'],(string)($settings['unrated'] ?? 'allow'));
+    }
+    private static function parentalPayload(array $body,bool $admin=false): array {
+        $raw=(array)($body['parental'] ?? []);$settings=[];
+        foreach(['enabled','kid','live','play','social','self_manage'] as $key)$settings[$key]=!empty($raw[$key]);
+        $settings['ceiling']=(int)($raw['ceiling'] ?? 5);$settings['unrated']=(string)($raw['unrated'] ?? 'allow');
+        return ['settings'=>$settings,'current_pin'=>(string)($body['current_pin'] ?? ''),'new_pin'=>(string)($body['new_pin'] ?? ''),'pin'=>(string)($body['new_pin'] ?? ''),'clear_pin'=>$admin&&!empty($body['clear_pin'])];
+    }
+    private static function parentalPage(): string {
+        if(!self::$signed)throw new RuntimeException('Sign in first.');
+        $data=CompatibilityApi::call('/me/parental');
+        $html=self::heading('SETTINGS','Parental controls');
+        if(!empty($data['admin']))return $html.'<p>Administrator accounts are not restricted. Manage other profiles under Users.</p>'.self::link('Manage users',['view'=>'users']);
+        $html.='<p>'.(!empty($data['restricted'])?'Restrictions are active.':(!empty($data['unlocked_for'])?'Temporarily unlocked.':'Restrictions are not active.')).'</p>';
+        if(!empty($data['has_pin'])){
+            if(!empty($data['unlocked_for']))$html.=self::form(['view'=>'parental'],'Lock this profile','extra-parental-lock');
+            else $html.=self::beginForm(['view'=>'parental'],'extra-parental-unlock').self::field('PIN','current_pin','','password',6).'<button type="submit">Unlock for one hour</button></form>';
+        }
+        if(!empty($data['can_manage']))$html.=self::beginForm(['view'=>'parental'],'extra-parental-save').self::parentalFields($data['settings']).self::field('Current PIN (if set)','current_pin','','password',6).self::field('New PIN (4–6 digits)','new_pin','','password',6).'<button type="submit">Save restrictions</button></form>';
+        else $html.='<p>These settings are managed by an administrator.</p>';
+        return $html;
+    }
+    private static function offlineAvailable(): bool {
+        $settings=Parental::settingsFor(self::$viewer);
+        return self::$signed&&Offline::allowedFor(self::$viewer)&&empty($settings['enabled'])&&empty($settings['kid']);
+    }
+    private static function offlinePage(string $id): string {
+        if(!self::offlineAvailable())throw new RuntimeException('Offline downloads are not available on this profile.');
+        $item=null;if($id!==''){
+            $item=Catalogue::item($id);
+            if(!$item||($item['media_kind'] ?? '')!=='video'||!Parental::allows(self::$viewer,$item))throw new RuntimeException('Video not found.');
+        }
+        $config=['base'=>self::$base,'user'=>['id'=>self::$viewer['id']],'item'=>$item?['id'=>$id,'title'=>$item['title']]:null,'version'=>STREAM_VERSION,'native'=>AssetDelivery::nativeBase(self::$base)!==''];
+        $asset=AssetDelivery::url(self::$base,'assets/js/vc-offline.js',substr(hash_file('sha256',STREAM_ROOT.'/assets/js/vc-offline.js'),0,16));
+        $adapter=AssetDelivery::url(self::$base,'assets/js/compatibility-offline.js',substr(hash_file('sha256',STREAM_ROOT.'/assets/js/compatibility-offline.js'),0,16));
+        return self::heading('ON THIS DEVICE','Offline downloads').($item?self::link('Back to video',['view'=>'item','id'=>$id,'paused'=>'1']):self::link('Browse library',['view'=>'library'])).'<p id="compat-offline-status" role="status">Checking local storage capabilities…</p><div id="compat-offline-host"></div><script>window.__VC_COMPAT_OFFLINE__='.json_encode($config,JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT).';</script><script src="'.self::esc($asset).'"></script><script src="'.self::esc($adapter).'"></script>';
+    }
     private static function content(array $home): string {
         $view=(string)($_GET['view'] ?? 'home');$id=(string)($_GET['id'] ?? '');$page=max(1,min(1000,(int)($_GET['page'] ?? 1)));$query=mb_substr(trim((string)($_GET['q'] ?? '')),0,200);
+        self::guardView($view,$id);
+        if($view==='parental')return self::parentalPage();
+        if($view==='offline')return self::offlinePage($id);
         if($view==='resolve-link'){
             $route=CompatibilityApi::call('/resolve','GET',[],['path'=>(string)($_GET['path'] ?? '')]);
             switch($route['view'] ?? ''){
@@ -983,7 +1079,12 @@ final class CompatibilityBrowser {
             elseif($route==='home'){$_GET['view']=($parts[1] ?? '')==='overview'?'home':($parts[1] ?? 'home');if(!empty($parts[2]))$_GET['id']=$parts[2];}
             elseif($route==='requests'){$_GET['view']='requests';$_GET['tab']=$parts[1] ?? 'discover';}
             elseif($route==='misc'){$_GET['view']='misc';$_GET['tab']=$parts[1] ?? 'board';if(!empty($parts[2]))$_GET['id']=$parts[2];}
-            elseif($route==='settings'){$_GET['view']=($parts[1] ?? '')==='inbox'?'inbox':'account';}
+            elseif($route==='settings'){
+                $section=$parts[1] ?? '';
+                $map=['inbox'=>'inbox','parental'=>'parental','users'=>'users','roles'=>'roles','general'=>'configuration','live'=>'live-admin','updates'=>'tool','system'=>'tool','maintenance'=>'tool','tools'=>'tools'];
+                $_GET['view']=$map[$section] ?? 'account';if(in_array($section,['updates','system','maintenance'],true))$_GET['id']=$section;
+            }
+            elseif($route==='offline'){$_GET['view']='offline';}
             elseif($route==='inbox'||$route==='login'){$_GET['view']=$route;}
             elseif($route==='games'&&in_array($parts[1] ?? '',['','leaderboards'],true)){$_GET['view']='play';$_GET['tab']=($parts[1] ?? '')==='leaderboards'?'leaderboards':'games';}
             elseif($route==='live'){$_GET['view']='live';if(in_array($parts[1] ?? '',['now','relay','iptv','radio','stalker','xtream'],true)){$_GET['tab']=$parts[1];if($parts[1]==='radio'&&!empty($parts[2]))$_GET['id']=$parts[2];}elseif(!empty($parts[1]))$_GET['id']=$parts[1];}
@@ -993,7 +1094,7 @@ final class CompatibilityBrowser {
             if(!hash_equals(self::token(),(string)($_POST['compat_token'] ?? ''))){http_response_code(403);$body='<p class="compat-error">This form expired. Reload the page and try again.</p>';}
             elseif($_POST['compat_action']==='logout'){Auth::destroySession();header('Location: '.self::url(),true,303);return;}
             elseif(!in_array($_POST['compat_action'],['shelf','play'],true)){
-                try{if((!self::$signed && !in_array(($_POST['compat_action'] ?? ''),['report','convert-request'],true)) || !$home)throw new RuntimeException('Sign in to use this form.');$destination=self::enhancedPost($view,$_POST);header('Location: '.self::url($destination),true,303);return;}
+                try{if((!self::$signed && !in_array(($_POST['compat_action'] ?? ''),['report','convert-request'],true)) || !$home)throw new RuntimeException('Sign in to use this form.');self::guardView($view,(string)($_GET['id'] ?? ''));$destination=self::enhancedPost($view,$_POST);header('Location: '.self::url($destination),true,303);return;}
                 catch(Throwable $e){http_response_code(400);$body='<div class="compat-panel compat-error">'.self::esc($e instanceof DomainException || $e instanceof RuntimeException || $e instanceof InvalidArgumentException?$e->getMessage():'Could not save this change.').'</div>'.self::link('Back',['view'=>$view,'id'=>(string)($_GET['id'] ?? '')]+($view==='play'?['tab'=>(string)($_GET['tab'] ?? 'games'),'sub'=>(string)($_GET['sub'] ?? '')]:[]));}
             }
             elseif($_POST['compat_action']==='shelf'){
@@ -1013,8 +1114,8 @@ final class CompatibilityBrowser {
         $headerSearch='';
         if($home && AreaAccess::allowed(self::$viewer,'library'))$headerSearch='<form class="compat-header-search" role="search" method="get" action="'.self::esc(self::$base).'"><input type="hidden" name="compat" value="on"><input type="hidden" name="view" value="search"><label class="compat-header-search-label" for="compat-header-query">Search movies and shows</label><input id="compat-header-query" type="text" name="q" value="'.self::esc($view==='search'?(string)($_GET['q'] ?? ''):'').'" placeholder="Search movies &amp; shows…" maxlength="200"><button type="submit">Search</button></form>';
         $nav='<div class="compat-header"><a class="compat-brand" href="'.self::esc(self::url()).'"><span class="compat-logo">&#9654;</span> '.self::esc($site).'</a>'.$headerSearch.'<div class="compat-major-nav">';
-        $tabs=['home'=>'Home'];if($home && AreaAccess::allowed(self::$viewer,'library'))$tabs['library']='Library';if(!empty($home['features']['live']))$tabs['live']='Live';if($home && AreaAccess::allowed(self::$viewer,'games'))$tabs['play']='Play';if($home&&self::$signed)$tabs['misc']='Misc';$tabs['account']=self::$signed?'Settings':'Sign in';
-        foreach($tabs as $key=>$label){$target=$key==='account'&&!self::$signed?'login':$key;$selected=$view===$target || ($key==='play'&&in_array($view,['game','emulator'],true)) || ($key==='library'&&in_array($view,['section','show','item','search','collections','collection','requests'],true)) || ($key==='account'&&in_array($view,['tools','tool','tool-result','configuration','users','edit-user','roles','edit-role','live-admin','factory-reset'],true)) || ($key==='home'&&in_array($view,['favourites','watchlist','calendar','history','arrivals','tonight','cinema','invitations','home-options','lists','friends','inbox','chat'],true));$nav.='<a'.($selected?' class="active" aria-current="page"':'').' href="'.self::esc(self::url(['view'=>$target])).'">'.self::esc($label).'</a>';}
+        $tabs=['home'=>'Home'];if($home && AreaAccess::allowed(self::$viewer,'library'))$tabs['library']='Library';if(!empty($home['features']['live']))$tabs['live']='Live';if($home && AreaAccess::allowed(self::$viewer,'games'))$tabs['play']='Play';if($home&&self::$signed)$tabs['misc']='Misc';if($home&&self::offlineAvailable())$tabs['offline']='Downloads';$tabs['account']=self::$signed?'Settings':'Sign in';
+        foreach($tabs as $key=>$label){$target=$key==='account'&&!self::$signed?'login':$key;$selected=$view===$target || ($key==='play'&&in_array($view,['game','emulator'],true)) || ($key==='library'&&in_array($view,['section','show','item','search','collections','collection','requests'],true)) || ($key==='account'&&in_array($view,['parental','tools','tool','tool-result','configuration','users','edit-user','roles','edit-role','live-admin','factory-reset'],true)) || ($key==='home'&&in_array($view,['favourites','watchlist','calendar','history','arrivals','tonight','cinema','invitations','home-options','lists','friends','inbox','chat'],true));$nav.='<a'.($selected?' class="active" aria-current="page"':'').' href="'.self::esc(self::url(['view'=>$target])).'">'.self::esc($label).'</a>';}
         $nav.='</div></div>';
         if($home){
             $nav.='<div class="compat-subnav">';
@@ -1028,8 +1129,8 @@ final class CompatibilityBrowser {
                 foreach(self::playTabs() as $tab=>$label)$nav.='<a'.(($view==='play'?($_GET['tab'] ?? 'games'):$tab)===$tab && ($view==='play'||$tab==='games')?' class="active" aria-current="page"':'').' href="'.self::esc(self::url(['view'=>'play','tab'=>$tab])).'">'.self::esc($label).'</a>';
             }elseif($view==='misc'){
                 foreach(['calendar'=>'Calendar','reminders'=>'Reminders','pictures'=>'Pictures','drop'=>'Drop','board'=>'Boards','ambient'=>'Ambient'] as $tab=>$label)$nav.='<a'.(($_GET['tab'] ?? 'calendar')===$tab?' class="active" aria-current="page"':'').' href="'.self::esc(self::url(['view'=>'misc','tab'=>$tab])).'">'.self::esc($label).'</a>';
-            }elseif(in_array($view,['account','tools','tool','tool-result','configuration','users','edit-user','roles','edit-role','live-admin','factory-reset'],true)){
-                $settings=['account'=>'Account','tools'=>'Tools'];if((self::$viewer['role'] ?? '')==='admin')$settings+=['configuration'=>'Configuration','users'=>'Users','roles'=>'Roles','live-admin'=>'Live settings'];foreach($settings as $tab=>$label)$nav.='<a'.($view===$tab?' class="active" aria-current="page"':'').' href="'.self::esc(self::url(['view'=>$tab])).'">'.self::esc($label).'</a>';
+            }elseif(in_array($view,['account','parental','tools','tool','tool-result','configuration','users','edit-user','roles','edit-role','live-admin','factory-reset'],true)){
+                $settings=['account'=>'Account','parental'=>'Parental controls','tools'=>'Tools'];if((self::$viewer['role'] ?? '')==='admin')$settings+=['configuration'=>'Configuration','users'=>'Users','roles'=>'Roles','live-admin'=>'Live settings'];foreach($settings as $tab=>$label)$nav.='<a'.($view===$tab?' class="active" aria-current="page"':'').' href="'.self::esc(self::url(['view'=>$tab])).'">'.self::esc($label).'</a>';
             }elseif($view==='live'){
                 foreach(['now'=>'On now','relay'=>'Relay','iptv'=>'IPTV','stalker'=>'Stalker','xtream'=>'Xtream','radio'=>'Radio'] as $tab=>$label){$selected=($_GET['tab'] ?? 'now')===$tab;$nav.='<a'.($selected?' class="active" aria-current="page"':'').' href="'.self::esc(self::url(['view'=>'live','tab'=>$tab])).'">'.self::esc($label).'</a>';}
             }else{foreach(['home'=>'Overview','favourites'=>'Favourites','watchlist'=>'Watchlist','calendar'=>'Release calendar','history'=>'History','arrivals'=>'New arrivals','tonight'=>'Find a watch','cinema'=>'Watch together','invitations'=>'Invitations','home-options'=>'Customise Home','lists'=>'Custom lists','friends'=>'Friends','inbox'=>'Inbox','chat'=>'Chat'] as $key=>$label){if($key!=='home'&&!self::$signed)continue;$nav.='<a'.($view===$key?' class="active" aria-current="page"':'').' href="'.self::esc(self::url($key==='home'?['view'=>'home','overview'=>'1']:['view'=>$key])).'">'.self::esc($label).'</a>';}}
@@ -1041,7 +1142,7 @@ final class CompatibilityBrowser {
             elseif(in_array($view,['play','game','emulator'],true)){$back=['view'=>'play'];$label='Back to Play';}
             elseif(in_array($view,['section','show','collections','collection','search','requests'],true)){$back=['view'=>'library'];$label='Back to Library';}
             elseif($view==='live'&&($_GET['tab'] ?? '')==='stalker'){$back=['view'=>'live','tab'=>'stalker','kind'=>(string)($_GET['kind'] ?? 'live')];$label='Back to Stalker';}
-            elseif(in_array($view,['tools','tool','tool-result','configuration','users','edit-user','roles','edit-role','live-admin','factory-reset'],true)){$back=['view'=>'account'];$label='Back to Settings';}
+            elseif(in_array($view,['parental','tools','tool','tool-result','configuration','users','edit-user','roles','edit-role','live-admin','factory-reset'],true)){$back=['view'=>'account'];$label='Back to Settings';}
             elseif(in_array($view,['profile','compose','create-room'],true)){$back=['view'=>'friends'];$label='Back to Friends';}
             elseif(in_array($view,['chat','inbox'],true)&&!empty($_GET['id'])){$back=['view'=>$view];$label='Back to conversations';}
             $body='<div class="compat-back">'.str_replace('<a class=', '<a data-compat-back="1" class=', self::link($label,$back)).'</div>'.$body;
